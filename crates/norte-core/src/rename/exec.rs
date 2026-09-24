@@ -244,7 +244,7 @@ impl StepJournal for BatchJournal {
             })
             .await
             .map_err(|e| {
-                tracing::error!(error = %e, "batch rename: fallo al escribir el journal");
+                tracing::error!(error = %e, "batch rename: failed to write the journal");
                 Error::from(e)
             })?;
         Ok(Some(seq))
@@ -454,7 +454,7 @@ pub(crate) async fn run(
                     Landed::Yes => {
                         tracing::warn!(
                             pair_index = s.pair_index,
-                            "el rename falló DESPUÉS de aplicarse; se desanda igual",
+                            "rename failed AFTER applying; unwinding it anyway",
                         );
                         applied.push(Applied::unjournalled(s));
                     }
@@ -467,7 +467,7 @@ pub(crate) async fn run(
                     Landed::Unknown => {
                         tracing::error!(
                             pair_index = s.pair_index,
-                            "no se pudo determinar si el rename llegó a aplicarse",
+                            "could not determine whether the rename got applied",
                         );
                         let unknown = Applied::unjournalled(s).stuck(e.clone(), applied.len());
                         report.lock().expect("batch report lock").uncertain = Some(unknown);
@@ -484,10 +484,10 @@ pub(crate) async fn run(
                     to: s.to.clone(),
                     pair_index: s.pair_index,
                     seq,
-                    // NO siempre `true` (#205): un lote embebido que empieza
-                    // sin journal registra a través de un no-op de principio a
-                    // fin, y decir que quedó journalizado manda al operador a
-                    // buscar un undo que no existe.
+                    // NOT always `true` (#205): an embedded batch that starts
+                    // with no journal records through a no-op from start to
+                    // finish, and saying it was journalled sends the operator
+                    // looking for an undo that doesn't exist.
                     journalled: recorder.records(),
                 });
                 report.lock().expect("batch report lock").applied += 1;
@@ -559,7 +559,7 @@ async fn unwind(
                 error = %error,
                 pair_index = step.pair_index,
                 journalled = step.journalled,
-                "rollback del lote bloqueado: el directorio queda a medio renombrar",
+                "batch rollback blocked: the directory is left half-renamed",
             );
             let stuck = step.stuck(error.clone(), applied.len());
             report.lock().expect("batch report lock").stuck = Some(stuck);
@@ -577,8 +577,8 @@ async fn unwind(
                 tracing::error!(
                     error = %e,
                     pair_index = step.pair_index,
-                    "reversa aplicada pero NO compensada en el journal: el undo de \
-                     esta sesión se bloqueará aquí",
+                    "reversal applied but NOT compensated in the journal: this \
+                     session's undo will block here",
                 );
                 report.lock().expect("batch report lock").compensations_lost += 1;
             }
@@ -657,7 +657,7 @@ mod tests {
         assert!(plan.executable(), "{:?}", plan.collisions);
         plan.steps
             .iter()
-            .map(|s| absolute(dir, s).expect("segmento válido"))
+            .map(|s| absolute(dir, s).expect("valid segment"))
             .collect()
     }
 
@@ -713,7 +713,7 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el lote falla");
+        .expect_err("the batch fails");
         assert!(matches!(err, Error::Internal { .. }), "{err:?}");
 
         // Both names are back: the step whose entry failed was rolled back too.
@@ -722,8 +722,8 @@ mod tests {
         assert!(mem.stat(&dir.join(seg(b"x"))).await.is_err());
         assert!(mem.stat(&dir.join(seg(b"y"))).await.is_err());
         let r = report.lock().expect("report lock");
-        assert_eq!(r.rolled_back, 2, "los dos pasos desandados");
-        assert_eq!(r.applied, 1, "solo el primero llegó a quedar registrado");
+        assert_eq!(r.rolled_back, 2, "both steps unwound");
+        assert_eq!(r.applied, 1, "only the first one got recorded");
         assert_eq!(r.failed_pair, Some(1));
         assert!(r.stuck.is_none());
     }
@@ -777,8 +777,8 @@ mod tests {
             (b"b".to_vec(), b"y".to_vec()),
         ];
         let steps = steps_for(&mem, &dir, &pairs).await;
-        // La PRIMERA mutación que se aplique devuelve un transitorio DESPUÉS
-        // de aplicar su efecto: el `a → x` ocurre y el caller ve un error.
+        // The FIRST mutation that applies returns a transient error AFTER
+        // applying its effect: `a → x` happens and the caller sees an error.
         mem.faults().ambiguous_mutations(1);
         let recorder = FailAt {
             n: AtomicUsize::new(0),
@@ -794,15 +794,18 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el lote falla");
+        .expect_err("the batch fails");
         assert!(matches!(err, Error::ProviderUnavailable { .. }), "{err:?}");
-        assert!(mem.stat(&dir.join(seg(b"a"))).await.is_ok(), "`a` volvió");
+        assert!(
+            mem.stat(&dir.join(seg(b"a"))).await.is_ok(),
+            "`a` came back"
+        );
         assert!(mem.stat(&dir.join(seg(b"x"))).await.is_err());
         let r = report.lock().expect("report lock").clone();
-        assert_eq!(r.applied, 0, "nunca llegó a quedar registrado");
-        assert_eq!(r.rolled_back, 1, "y aun así se desandó");
+        assert_eq!(r.applied, 0, "never got recorded");
+        assert_eq!(r.rolled_back, 1, "and it still got unwound");
         assert!(r.stuck.is_none());
-        // Sin entrada que compensar, la reversa tampoco se registra.
+        // With no entry to compensate, the reversal isn't recorded either.
         assert_eq!(recorder.n.load(Ordering::SeqCst), 0);
     }
 
@@ -826,7 +829,7 @@ mod tests {
             (b"b".to_vec(), b"a".to_vec()),
         ];
         let steps = steps_for(&mem, &dir, &pairs).await;
-        assert_eq!(steps.len(), 3, "dos renames y un rodeo");
+        assert_eq!(steps.len(), 3, "two renames and a detour");
         let temp = steps[0].to.clone();
         mem.faults().fail_rename_at(&temp);
         let report = Mutex::new(BatchReport::default());
@@ -843,22 +846,22 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el lote falla");
+        .expect_err("the batch fails");
         assert!(matches!(err, Error::Io { .. }), "{err:?}");
         let snapshot = report.lock().expect("report lock").clone();
-        let stuck = snapshot.stuck.as_ref().expect("un paso atascado");
+        let stuck = snapshot.stuck.as_ref().expect("a stuck step");
         assert_eq!(
             stuck.from,
             dir.join(seg(b"a")),
-            "el fichero sigue en el temporal"
+            "the file is still at the temporary"
         );
         assert_eq!(stuck.to, temp);
-        assert_eq!(stuck.pair_index, 0, "la fila que el usuario escribió");
+        assert_eq!(stuck.pair_index, 0, "the row the user wrote");
         assert_eq!(stuck.still_applied, 1);
-        assert_eq!(snapshot.rolled_back, 1, "el segundo paso sí volvió");
+        assert_eq!(snapshot.rolled_back, 1, "the second step DID come back");
         assert!(matches!(stuck.error, Error::Io { .. }), "{:?}", stuck.error);
-        // Y el fichero atascado sigue localizable por un nombre que un humano
-        // reconoce como maquinaria (diseño §8: sin barrido automático).
+        // And the stuck file is still findable by a name a human recognizes
+        // as machinery (design §8: no automatic sweep).
         assert!(mem.stat(&temp).await.is_ok());
     }
 
@@ -920,7 +923,7 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el lote falla");
+        .expect_err("the batch fails");
         assert!(matches!(err, Error::Internal { .. }), "{err:?}");
 
         // `b → y` was undone; `a → x` could not be, because `a` is occupied.
@@ -930,14 +933,14 @@ mod tests {
         assert_eq!(
             read_all(&mem, &dir.join(seg(b"a"))).await,
             b"mine".to_vec(),
-            "el fichero del usuario sigue ahí, sin pisar",
+            "the user's file is still there, unclobbered",
         );
         let r = report.lock().expect("report lock");
-        let stuck = r.stuck.as_ref().expect("un paso atascado");
+        let stuck = r.stuck.as_ref().expect("a stuck step");
         assert_eq!(stuck.from, dir.join(seg(b"a")));
         assert_eq!(stuck.to, dir.join(seg(b"x")));
         assert_eq!(stuck.still_applied, 1);
-        assert_eq!(r.rolled_back, 1, "el otro paso sí volvió");
+        assert_eq!(r.rolled_back, 1, "the other step DID come back");
     }
 
     /// Rule 3: the token is observed BETWEEN steps and a cancelled batch
@@ -992,12 +995,12 @@ mod tests {
         let report = Mutex::new(BatchReport::default());
         let err = run(&mem, &recorder, &steps, &cancel, &reporter(), &report)
             .await
-            .expect_err("cancelado");
+            .expect_err("cancelled");
         assert_eq!(err, Error::Cancelled);
         for n in [b"a", b"b", b"c"] {
             assert!(
                 mem.stat(&dir.join(seg(n))).await.is_ok(),
-                "{} sigue en su sitio",
+                "{} is still in place",
                 String::from_utf8_lossy(n),
             );
         }
@@ -1006,7 +1009,7 @@ mod tests {
         }
         let r = report.lock().expect("report lock");
         assert_eq!(r.applied, 1);
-        assert_eq!(r.rolled_back, 1, "el paso aplicado se desanda");
+        assert_eq!(r.rolled_back, 1, "the applied step is unwound");
         assert!(r.stuck.is_none());
         // Rule 4: the compensation is journalled too — 1 forward + 1 back.
         assert_eq!(recorder.n.load(Ordering::SeqCst), 2);
@@ -1064,8 +1067,8 @@ mod tests {
             (b"b".to_vec(), b"y".to_vec()),
         ];
         let steps = steps_for(&mem, &dir, &pairs).await;
-        // La reversa del primer paso tiene que renombrar `x → a`; se bloquea
-        // justo eso, no la ida.
+        // The first step's reversal has to rename `x → a`; that's exactly
+        // what's blocked, not the forward direction.
         mem.faults().fail_rename_at(&dir.join(seg(b"x")));
         let cancel = CancellationToken::new();
         let recorder = CancelAfter {
@@ -1076,30 +1079,30 @@ mod tests {
         let report = Mutex::new(BatchReport::default());
         let err = run(&mem, &recorder, &steps, &cancel, &reporter(), &report)
             .await
-            .expect_err("la reversa se atasca");
+            .expect_err("the reversal gets stuck");
 
         assert_ne!(
             err,
             Error::Cancelled,
-            "una reversa atascada no puede contestar Cancelled: el árbol NO volvió",
+            "a stuck reversal cannot answer Cancelled: the tree did NOT come back",
         );
         assert!(matches!(err, Error::Io { .. }), "{err:?}");
 
         let r = report.lock().expect("report lock").clone();
-        let stuck = r.stuck.as_ref().expect("un paso atascado");
+        let stuck = r.stuck.as_ref().expect("a stuck step");
         assert_eq!(stuck.from, dir.join(seg(b"a")));
         assert_eq!(stuck.to, dir.join(seg(b"x")));
         assert_eq!(stuck.still_applied, 1);
-        assert!(stuck.journalled, "el paso sí llegó a apuntarse");
+        assert!(stuck.journalled, "the step DID get recorded");
         assert_eq!(
             r.rolled_back, 0,
-            "nada volvió: el único paso aplicado se atasca"
+            "nothing came back: the one applied step is stuck"
         );
 
-        // El árbol queda a medio renombrar: `a` no volvió, `x` sigue ahí.
+        // The tree is left half-renamed: `a` did not come back, `x` is still there.
         assert!(mem.stat(&dir.join(seg(b"a"))).await.is_err());
         assert!(mem.stat(&dir.join(seg(b"x"))).await.is_ok());
-        // `b` nunca se tocó: la cancelación se observó ANTES del segundo paso.
+        // `b` was never touched: cancellation was observed BEFORE the second step.
         assert!(mem.stat(&dir.join(seg(b"b"))).await.is_ok());
     }
 
@@ -1122,8 +1125,8 @@ mod tests {
         let pairs = vec![(b"a".to_vec(), b"x".to_vec())];
         let steps = steps_for(&mem, &dir, &pairs).await;
         mem.faults().fail_rename_at(&dir.join(seg(b"a")));
-        // Una operación (el propio rename) todavía pasa; los dos `stat` que
-        // el probe necesita justo después ya no.
+        // One operation (the rename itself) still gets through; the two
+        // `stat`s the probe needs right after it no longer do.
         mem.faults().disconnect_after(1);
         let recorder = FailAt {
             n: AtomicUsize::new(0),
@@ -1139,21 +1142,21 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el lote falla");
+        .expect_err("the batch fails");
         assert!(matches!(err, Error::Io { .. }), "{err:?}");
 
         let r = report.lock().expect("report lock").clone();
-        let uncertain = r.uncertain.as_ref().expect("el probe no pudo responder");
+        let uncertain = r.uncertain.as_ref().expect("the probe could not answer");
         assert_eq!(uncertain.from, dir.join(seg(b"a")));
         assert_eq!(uncertain.to, dir.join(seg(b"x")));
-        assert!(!uncertain.journalled, "nunca llegó a apuntarse");
+        assert!(!uncertain.journalled, "never got recorded");
         assert_eq!(uncertain.still_applied, 1);
         assert!(
             matches!(uncertain.error, Error::Io { .. }),
             "{:?}",
             uncertain.error
         );
-        // Nada se supuso en ninguna dirección: ni aplicado ni descartado.
+        // Nothing was assumed in either direction: neither applied nor discarded.
         assert!(r.stuck.is_none(), "{:?}", r.stuck);
         assert_eq!(r.applied, 0);
         assert_eq!(r.rolled_back, 0);
@@ -1198,20 +1201,20 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el tercer paso falla en el provider");
+        .expect_err("the third step fails at the provider");
         assert!(matches!(err, Error::Io { .. }), "{err:?}");
 
         let r = report.lock().expect("report lock").clone();
-        assert_eq!(r.applied, 2, "los dos primeros pasos sí se apuntaron");
-        assert_eq!(r.rolled_back, 2, "y los dos volvieron físicamente");
+        assert_eq!(r.applied, 2, "the first two steps DID get recorded");
+        assert_eq!(r.rolled_back, 2, "and both physically came back");
         assert_eq!(
             r.compensations_lost, 1,
-            "la reversa del segundo paso no pudo apuntarse",
+            "the second step's reversal could not be recorded",
         );
         assert!(r.stuck.is_none(), "{:?}", r.stuck);
         assert!(r.uncertain.is_none());
 
-        // El árbol SÍ volvió: la pérdida es de contabilidad, no de ficheros.
+        // The tree DID come back: the loss is in the bookkeeping, not the files.
         assert!(mem.stat(&dir.join(seg(b"a"))).await.is_ok());
         assert!(mem.stat(&dir.join(seg(b"b"))).await.is_ok());
         assert!(mem.stat(&dir.join(seg(b"c"))).await.is_ok());
@@ -1238,11 +1241,11 @@ mod tests {
         write_file(&mem, &dir.join(seg(b"a")), b"a").await;
         let pairs = vec![(b"a".to_vec(), b"x".to_vec())];
         let steps = steps_for(&mem, &dir, &pairs).await;
-        // La carrera: `a` desaparece y un desconocido ocupa `x` ANTES de que
-        // el ejecutor llegue a tocar nada.
+        // The race: `a` disappears and a stranger occupies `x` BEFORE the
+        // executor ever touches anything.
         mem.remove(&dir.join(seg(b"a")))
             .await
-            .expect("simula el borrado ajeno");
+            .expect("simulates the stranger's delete");
         write_file(&mem, &dir.join(seg(b"x")), b"stranger").await;
         let recorder = FailAt {
             n: AtomicUsize::new(0),
@@ -1258,23 +1261,23 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el origen ya no está");
+        .expect_err("the source is no longer there");
         assert!(matches!(err, Error::NotFound), "{err:?}");
 
         let r = report.lock().expect("report lock").clone();
         assert!(r.stuck.is_none(), "{:?}", r.stuck);
         assert!(r.uncertain.is_none(), "{:?}", r.uncertain);
         assert_eq!(r.applied, 0);
-        assert_eq!(r.rolled_back, 0, "nada que desandar: no se probó nada");
+        assert_eq!(r.rolled_back, 0, "nothing to unwind: nothing was tried");
 
-        // LA propiedad: el fichero del desconocido sigue siendo suyo.
+        // THE property: the stranger's file is still theirs.
         assert_eq!(
             read_all(&mem, &dir.join(seg(b"x"))).await,
             b"stranger".to_vec(),
         );
         assert!(
             mem.stat(&dir.join(seg(b"a"))).await.is_err(),
-            "sigue sin volver"
+            "still hasn't come back"
         );
     }
 
@@ -1303,12 +1306,12 @@ mod tests {
             (b"b".to_vec(), b"a".to_vec()),
         ];
         let steps = steps_for(&mem, &dir, &pairs).await;
-        assert_eq!(steps.len(), 3, "dos renames y un rodeo");
+        assert_eq!(steps.len(), 3, "two renames and a detour");
         let temp = steps[0].to.clone();
         let third_pair = steps[2].pair_index;
 
-        // El tercer paso (`temp → b`) ATERRIZA en el provider; solo su
-        // apunte de journal falla, así que nada queda armado sobre `temp`.
+        // The third step (`temp → b`) LANDS at the provider; only its
+        // journal entry fails, so nothing stays armed against `temp`.
         let recorder = FailAt {
             n: AtomicUsize::new(0),
             fail_on: 3,
@@ -1323,21 +1326,24 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el tercer apunte falla");
+        .expect_err("the third entry fails");
         assert!(matches!(err, Error::Internal { .. }), "{err:?}");
 
         let r = report.lock().expect("report lock").clone();
-        assert_eq!(r.applied, 2, "los dos primeros pasos se apuntaron");
-        assert_eq!(r.rolled_back, 3, "los tres, rodeo incluido, volvieron");
+        assert_eq!(r.applied, 2, "the first two steps got recorded");
+        assert_eq!(r.rolled_back, 3, "all three, detour included, came back");
         assert_eq!(r.compensations_lost, 0);
         assert!(r.stuck.is_none(), "{:?}", r.stuck);
         assert!(r.uncertain.is_none());
         assert_eq!(r.failed_pair, Some(third_pair));
 
-        // LA propiedad: los bytes, no solo los nombres.
+        // THE property: the bytes, not just the names.
         assert_eq!(read_all(&mem, &dir.join(seg(b"a"))).await, b"a".to_vec());
         assert_eq!(read_all(&mem, &dir.join(seg(b"b"))).await, b"b".to_vec());
-        assert!(mem.stat(&temp).await.is_err(), "el temporal no sobrevive");
+        assert!(
+            mem.stat(&temp).await.is_err(),
+            "the temporary does not survive"
+        );
         assert_eq!(recorder.n.load(Ordering::SeqCst), 5);
     }
 
@@ -1403,18 +1409,21 @@ mod tests {
         assert_eq!(
             read_all(&mem, &dir.join(seg(b"a"))).await,
             b"mine".to_vec(),
-            "el fichero del usuario sobrevive a un provider que pisa",
+            "the user's file survives a provider that clobbers",
         );
         let r = report.lock().expect("report lock").clone();
-        let stuck = r.stuck.as_ref().expect("un paso atascado");
+        let stuck = r.stuck.as_ref().expect("a stuck step");
         assert_eq!(
             stuck.error,
             Error::Conflict {
                 conflict: ConflictKind::Exists
             },
-            "y el veredicto es NUESTRO, no el del provider",
+            "and the verdict is OURS, not the provider's",
         );
-        assert!(stuck.journalled, "este paso sí tiene apunte: el undo puede");
+        assert!(
+            stuck.journalled,
+            "this step DOES have an entry: undo can proceed"
+        );
     }
 
     /// `landed` needs BOTH halves. A destination that exists proves nothing on
@@ -1434,9 +1443,9 @@ mod tests {
             (b"b".to_vec(), b"y".to_vec()),
         ];
         let steps = steps_for(&mem, &dir, &pairs).await;
-        // El segundo paso falla con `b` INTACTO, y alguien ocupa `y`.
+        // The second step fails with `b` INTACT, and someone occupies `y`.
         mem.faults().fail_rename_at(&dir.join(seg(b"b")));
-        write_file(&mem, &dir.join(seg(b"y")), b"suya").await;
+        write_file(&mem, &dir.join(seg(b"y")), b"theirs").await;
         let recorder = FailAt {
             n: AtomicUsize::new(0),
             fail_on: usize::MAX,
@@ -1451,19 +1460,19 @@ mod tests {
             &report,
         )
         .await
-        .expect_err("el lote falla");
+        .expect_err("the batch fails");
         assert!(matches!(err, Error::Io { .. }), "{err:?}");
         assert_eq!(
             read_all(&mem, &dir.join(seg(b"y"))).await,
-            b"suya".to_vec(),
-            "el fichero ajeno sigue siendo suyo",
+            b"theirs".to_vec(),
+            "the stranger's file is still theirs",
         );
         assert!(
             mem.stat(&dir.join(seg(b"b"))).await.is_ok(),
-            "`b` no se movió"
+            "`b` did not move"
         );
         let r = report.lock().expect("report lock").clone();
-        assert_eq!(r.rolled_back, 1, "solo el primer paso había que desandar");
+        assert_eq!(r.rolled_back, 1, "only the first step needed unwinding");
         assert!(r.stuck.is_none());
         assert!(r.uncertain.is_none());
     }
@@ -1490,7 +1499,7 @@ mod tests {
             ) -> Result<Option<i64>, Error> {
                 let i = self.n.fetch_add(1, Ordering::SeqCst);
                 if i + 1 == self.at {
-                    write_file(&self.mem, &self.squat, b"ocupado").await;
+                    write_file(&self.mem, &self.squat, b"occupied").await;
                     return Err(Error::Internal { panic: false });
                 }
                 Ok(Some(i64::try_from(i).unwrap_or(i64::MAX) + 1))
@@ -1502,8 +1511,9 @@ mod tests {
         for n in [b"a", b"b", b"c", b"d"] {
             write_file(&mem, &dir.join(seg(n)), n).await;
         }
-        // Una permutación de cuatro: un rodeo por temporal, y el rodeo es el
-        // único paso cuya reversa se puede bloquear sin bloquear la ida.
+        // A permutation of four: a detour through a temporary, and the
+        // detour is the only step whose reversal can be blocked without
+        // blocking the forward direction.
         let pairs = vec![
             (b"a".to_vec(), b"b".to_vec()),
             (b"b".to_vec(), b"c".to_vec()),
@@ -1511,7 +1521,7 @@ mod tests {
             (b"d".to_vec(), b"a".to_vec()),
         ];
         let steps = steps_for(&mem, &dir, &pairs).await;
-        assert_eq!(steps.len(), 5, "cuatro renames y un rodeo");
+        assert_eq!(steps.len(), 5, "four renames and a detour");
         let temp = steps[0].to.clone();
         mem.faults().fail_rename_at(&temp);
         let recorder = FailAt {
@@ -1529,25 +1539,28 @@ mod tests {
         )
         .await;
         let r = report.lock().expect("report lock").clone();
-        let stuck = r.stuck.as_ref().expect("un paso atascado");
-        // El último paso (temp → destino) muere; los tres de en medio vuelven;
-        // el primero (origen → temp) no puede, y ES el único que sigue puesto.
+        let stuck = r.stuck.as_ref().expect("a stuck step");
+        // The last step (temp → destination) dies; the three in the middle
+        // come back; the first one (source → temp) cannot, and IS the only
+        // one still applied.
         assert_eq!(r.rolled_back, 3);
         assert_eq!(stuck.still_applied, 1);
-        assert!(stuck.journalled, "ese paso sí tiene apunte");
+        assert!(stuck.journalled, "that step DOES have an entry");
 
-        // Y el caso feo: el ÚLTIMO paso es el que se queda puesto, con los
-        // cuatro anteriores debajo — y es el paso SIN apunte de journal, que
-        // por construcción se apila el último y se desapila el primero. Nadie
-        // podrá deshacerlo nunca: el journal no sabe que ocurrió.
+        // And the ugly case: the LAST step is the one left applied, with
+        // the four before it underneath — and it's the step WITH NO journal
+        // entry, which by construction is pushed last and popped first.
+        // Nobody will ever be able to undo it: the journal doesn't know it
+        // happened.
         let mem2 = Arc::new(MemProvider::new());
         for n in [b"a", b"b", b"c", b"d"] {
             write_file(&mem2, &dir.join(seg(n)), n).await;
         }
         let steps2 = steps_for(&mem2, &dir, &pairs).await;
         let temp2 = steps2[0].to.clone();
-        // El quinto apunte falla Y deja ocupado el nombre al que ese mismo paso
-        // tendría que volver (`temp`), así que la reversa se bloquea de entrada.
+        // The fifth entry fails AND leaves occupied the name that same step
+        // would have to return to (`temp`), so the reversal is blocked from
+        // the start.
         let recorder2 = SquatOn {
             mem: Arc::clone(&mem2),
             squat: temp2,
@@ -1565,15 +1578,15 @@ mod tests {
         )
         .await;
         let r2 = report2.lock().expect("report lock").clone();
-        let stuck2 = r2.stuck.as_ref().expect("un paso atascado");
+        let stuck2 = r2.stuck.as_ref().expect("a stuck step");
         assert_eq!(
             stuck2.still_applied, 5,
-            "el bloqueado más los cuatro que quedan debajo",
+            "the blocked one plus the four left underneath it",
         );
         assert_eq!(r2.rolled_back, 0);
         assert!(
             !stuck2.journalled,
-            "y sin apunte: este no lo arregla ningún undo",
+            "and with no entry: no undo can fix this one",
         );
     }
 
@@ -1596,7 +1609,7 @@ mod tests {
             ) -> Result<(), Error> {
                 assert!(
                     matches!(mutation, Mutation::Renamed { batch: None, .. }),
-                    "sin journal no hay lote que agrupar",
+                    "with no journal there's no batch to group into",
                 );
                 self.n.fetch_add(1, Ordering::SeqCst);
                 Ok(())
@@ -1632,7 +1645,11 @@ mod tests {
         )
         .await;
         assert!(mem.stat(&dir.join(seg(b"a"))).await.is_ok());
-        assert_eq!(observer.n.load(Ordering::SeqCst), 2, "la ida y la vuelta");
+        assert_eq!(
+            observer.n.load(Ordering::SeqCst),
+            2,
+            "the forward and the back"
+        );
     }
 
     /// Binding is what stops a hash approved for one directory from being
@@ -1648,8 +1665,8 @@ mod tests {
         let plan = plan_batch(&pairs, &listing, caps);
         let here = DirPlan::bind(&VPath::parse("mem:///here").expect("path"), plan.clone());
         let there = DirPlan::bind(&VPath::parse("mem:///there").expect("path"), plan.clone());
-        assert_eq!(here.plan().hash, there.plan().hash, "el planner es puro");
-        assert_ne!(here.hash(), there.hash(), "el token no lo es");
+        assert_eq!(here.plan().hash, there.plan().hash, "the planner is pure");
+        assert_ne!(here.hash(), there.hash(), "the token is not");
         // And it is stable: the same directory and the same plan, twice.
         let again = DirPlan::bind(&VPath::parse("mem:///here").expect("path"), plan);
         assert_eq!(here.hash(), again.hash());

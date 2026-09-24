@@ -2,16 +2,16 @@ use super::*;
 use norte_ui_host::dto::OrganizeLineKind;
 
 // ---------------------------------------------------------------------------
-// Organizar un directorio desde la ventana (fase 8 del programa WOW).
+// Organizing a directory from the window (phase 8 of the WOW program).
 // ---------------------------------------------------------------------------
 
-/// Un hash cualquiera, en la forma que exige el protocolo.
+/// Any hash, in the shape the protocol requires.
 fn hash() -> norte_proto::methods::PlanHash {
-    norte_proto::methods::PlanHash::parse(&"ab".repeat(32)).expect("64 hex en minúscula")
+    norte_proto::methods::PlanHash::parse(&"ab".repeat(32)).expect("64 lowercase hex")
 }
 
-/// Un doble con un plan de organizar listo y su token.
-fn falso_con_arbol(moves: &[(&str, &str)], con_token: bool) -> Arc<Falso> {
+/// A double with an organize plan ready and its token.
+fn falso_con_arbol(moves: &[(&str, &str)], with_token: bool) -> Arc<Falso> {
     let mut f = Falso::default();
     f.pon(
         "mem:///casa",
@@ -26,20 +26,20 @@ fn falso_con_arbol(moves: &[(&str, &str)], con_token: bool) -> Arc<Falso> {
             .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
             .collect(),
     );
-    f.organizar_hash = con_token.then(hash);
+    f.organizar_hash = with_token.then(hash);
     Arc::new(f)
 }
 
-/// Espera la siguiente actualización que traiga el árbol de organizar.
+/// Waits for the next update that carries the organize tree.
 async fn siguiente_arbol(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::OrganizeView> {
     for _ in 0..40 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización, no un cuelgue")
-            .expect("el host sigue vivo");
-        match siguiente {
+            .expect("an update, not a hang")
+            .expect("the host is still alive");
+        match next {
             Update::Message(m) => {
                 if let UiUpdate::Patch(p) = &m.payload {
                     for c in &p.changes {
@@ -54,25 +54,26 @@ async fn siguiente_arbol(
                     return s.organize.clone();
                 }
             }
-            Update::Lagged => panic!("sin retraso en este test"),
+            Update::Lagged => panic!("no lag in this test"),
         }
     }
-    panic!("ninguna actualización trajo el árbol");
+    panic!("no update ever carried the tree");
 }
 
-/// Pide el plan por la paleta. SIN prompt de instrucción, a diferencia de
-/// renombrar: lo que se pide es «mira este directorio y propón una forma».
+/// Requests the plan through the palette. WITH NO instruction prompt, unlike
+/// renaming: what is asked is "look at this directory and propose a shape".
 async fn pedir_arbol(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
     por_la_paleta(h, sub, "organize").await;
 }
 
-/// El árbol se abre con su recuento, y una carpeta que YA estaba no se pinta
-/// como nueva: pintarlo todo como nuevo enseña un plan más espectacular de lo
-/// que es y esconde que algo cae dentro de algo que el lector ya tenía.
+/// The tree opens with its count, and a folder that ALREADY was there does
+/// not paint as new: painting everything as new shows a more spectacular
+/// plan than it is and hides that something lands inside something the
+/// reader already had.
 #[tokio::test]
-async fn el_arbol_distingue_lo_que_se_crea_de_lo_que_ya_estaba() {
+async fn the_tree_tells_apart_what_is_created_from_what_was_already_there() {
     let mut f = Falso::default();
-    // `facturas` ya existe en el directorio; `nueva` no.
+    // `facturas` already exists in the directory; `nueva` does not.
     f.pon(
         "mem:///casa",
         vec![
@@ -91,49 +92,49 @@ async fn el_arbol_distingue_lo_que_se_crea_de_lo_que_ya_estaba() {
     let mut sub = h.subscribe();
     pedir_arbol(&h, &mut sub).await;
 
-    let v = siguiente_arbol(&mut sub).await.expect("abre");
+    let v = siguiente_arbol(&mut sub).await.expect("opens");
     let facturas = v
         .lines
         .iter()
         .find(|l| l.text.text == "facturas")
-        .expect("está");
+        .expect("is there");
     assert_eq!(facturas.kind, OrganizeLineKind::ExistingDir, "{facturas:?}");
     let nueva = v
         .lines
         .iter()
         .find(|l| l.text.text == "nueva")
-        .expect("está");
+        .expect("is there");
     assert_eq!(nueva.kind, OrganizeLineKind::NewDir, "{nueva:?}");
-    // Y el resumen cuenta UNA carpeta nueva, no dos.
-    assert!(v.summary.contains('1'), "el recuento: {}", v.summary);
+    // And the summary counts ONE new folder, not two.
+    assert!(v.summary.contains('1'), "the count: {}", v.summary);
 }
 
-/// Un plan SIN token no abre revisión.
+/// A plan with NO token opens no review.
 ///
-/// Sin `plan_hash` no hay nada que canjear, así que aprobar sería un botón
-/// que no puede hacer nada — y enseñar el árbol lo prometería.
+/// With no `plan_hash` there is nothing to redeem, so approving would be a
+/// button that can do nothing — and showing the tree would promise it.
 #[tokio::test]
-async fn un_plan_sin_token_no_abre_la_revision() {
+async fn a_plan_with_no_token_does_not_open_the_review() {
     let backend = falso_con_arbol(&[("a.pdf", "facturas/a.pdf")], false);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     pedir_arbol(&h, &mut sub).await;
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
     assert!(
-        foto.organize.is_none(),
-        "sin token no hay revisión: {:?}",
-        foto.organize
+        snap.organize.is_none(),
+        "with no token there is no review: {:?}",
+        snap.organize
     );
     assert!(backend.organizados.lock().expect("organizados").is_empty());
 }
 
-/// Aprobar exige haber recorrido el árbol ENTERO, y recorrerlo con el ratón
-/// cuenta igual que con el teclado.
+/// Approving requires having scrolled through the WHOLE tree, and scrolling
+/// with the mouse counts the same as with the keyboard.
 #[tokio::test]
-async fn aprobar_exige_haber_llegado_al_final() {
-    // Doce ficheros en la raíz: doce líneas, más que la ventana de diez.
+async fn approving_requires_having_reached_the_end() {
+    // Twelve files at the root: twelve lines, more than the ten-row window.
     let moves: Vec<(String, String)> = (0..12)
         .map(|i| (format!("a{i:02}.txt"), format!("b{i:02}.txt")))
         .collect();
@@ -145,48 +146,48 @@ async fn aprobar_exige_haber_llegado_al_final() {
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     pedir_arbol(&h, &mut sub).await;
-    let v = siguiente_arbol(&mut sub).await.expect("abre");
-    assert!(!v.seen_all, "recién abierto no se ha leído entero");
+    let v = siguiente_arbol(&mut sub).await.expect("opens");
+    assert!(!v.seen_all, "just opened, it has not been read in full");
 
-    // Aprobar ahora NO manda nada.
+    // Approving now sends NOTHING.
     h.dispatch(UiAction::OrganizeDecide { approve: true })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     asentar().await;
     assert!(
         backend.organizados.lock().expect("organizados").is_empty(),
-        "sin leerlo entero no se aplica"
+        "without reading it in full it does not apply"
     );
 
-    // Se recorre con el RATÓN hasta el final, y entonces sí.
+    // It is scrolled with the MOUSE to the end, and then it does.
     for _ in 0..12 {
         h.dispatch(UiAction::OrganizeScroll { down: true })
             .await
-            .expect("host vivo");
+            .expect("host alive");
     }
     asentar().await;
     h.dispatch(UiAction::OrganizeDecide { approve: true })
         .await
-        .expect("host vivo");
-    let mandado = hasta(&backend, "el plan aplicado", |f| {
+        .expect("host alive");
+    let sent = hasta(&backend, "the applied plan", |f| {
         let v = f.organizados.lock().expect("organizados");
         (!v.is_empty()).then(|| v.len())
     })
     .await;
-    assert_eq!(mandado, 1, "una sola Task para el lote entero");
-    let hecho = backend.organizados.lock().expect("organizados");
-    assert_eq!(hecho[0].2, hash(), "con el token que vino CON el plan");
-    assert_eq!(hecho[0].1.len(), 12);
+    assert_eq!(sent, 1, "a single Task for the whole batch");
+    let done = backend.organizados.lock().expect("organizados");
+    assert_eq!(done[0].2, hash(), "with the token that came WITH the plan");
+    assert_eq!(done[0].1.len(), 12);
 }
 
-/// A un plugin hay que DARLE los nombres: no lista directorios (regla 9), y
-/// con la lista vacía contesta —correctamente— que no mueve nada.
+/// A plugin has to be GIVEN the names: it does not list directories (rule
+/// 9), and with an empty list it correctly answers that it moves nothing.
 ///
-/// Este es el bug que destapó pilotar la fase 8 en un terminal de verdad: el
-/// árbol nunca se abría y la barra decía «el plan no mueve nada» sobre un
-/// directorio con cinco ficheros dentro.
+/// This is the bug that piloting phase 8 in a real terminal uncovered: the
+/// tree never opened and the bar said "the plan moves nothing" over a
+/// directory with five files inside.
 #[tokio::test]
-async fn a_un_organizer_se_le_dan_los_nombres_del_directorio() {
+async fn an_organizer_is_given_the_directorys_names() {
     let mut f = Falso::default();
     f.pon(
         "mem:///casa",
@@ -204,25 +205,25 @@ async fn a_un_organizer_se_le_dan_los_nombres_del_directorio() {
     let backend = Arc::new(f);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    // Por la PALETA, que es la vía del organizer de un plugin.
+    // Through the PALETTE, which is the path to a plugin's organizer.
     h.dispatch(tecla_mod("p", true, false))
         .await
-        .expect("host vivo");
-    let mut llego = false;
+        .expect("host alive");
+    let mut arrived = false;
     for _ in 0..2_000 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let p = siguiente_foto(&mut sub).await.palette.expect("abierta");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let p = siguiente_foto(&mut sub).await.palette.expect("open");
         if p.rows.iter().any(|r| r.text.contains("Into folders")) {
-            llego = true;
+            arrived = true;
             break;
         }
     }
-    assert!(llego, "la fila del organizer nunca llegó");
+    assert!(arrived, "the organizer's row never arrived");
     for c in "Into folders".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
-    let pedido = hasta(&backend, "la petición al organizer", |f| {
+    h.dispatch(tecla("Enter")).await.expect("host alive");
+    let requested = hasta(&backend, "the request to the organizer", |f| {
         f.organizers_pedidos
             .lock()
             .expect("organizers")
@@ -231,58 +232,59 @@ async fn a_un_organizer_se_le_dan_los_nombres_del_directorio() {
     })
     .await;
     assert_eq!(
-        pedido.2,
+        requested.2,
         vec!["a.pdf".to_owned(), "b.txt".to_owned()],
-        "el operando es el directorio entero, no una lista vacía"
+        "the operand is the whole directory, not an empty list"
     );
 }
 
-/// Descartar no aplica nada y deja la revisión cerrada.
+/// Discarding applies nothing and leaves the review closed.
 #[tokio::test]
-async fn descartar_cierra_y_no_aplica_nada() {
+async fn discarding_closes_and_applies_nothing() {
     let backend = falso_con_arbol(&[("a.pdf", "facturas/a.pdf")], true);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     pedir_arbol(&h, &mut sub).await;
-    siguiente_arbol(&mut sub).await.expect("abre");
+    siguiente_arbol(&mut sub).await.expect("opens");
 
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(tecla("Escape")).await.expect("host alive");
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.organize.is_none(), "se cerró y sigue cerrada");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.organize.is_none(), "it closed and stays closed");
     assert!(backend.organizados.lock().expect("organizados").is_empty());
 }
 
-/// Los nombres del árbol los propone un tercero sobre nombres que escribió
-/// cualquiera: se enmascaran y se DICE.
+/// The tree's names are proposed by a third party over names anyone wrote:
+/// they get masked and it SAYS so.
 #[tokio::test]
-async fn un_nombre_hostil_del_arbol_va_marcado() {
-    // Del corpus canónico, no escrito a mano.
+async fn a_hostile_tree_name_is_marked() {
+    // From the canonical corpus, not hand-written.
     let bytes = hostil("rtl_override");
-    let alterado = String::from_utf8(bytes).expect("el del corpus es UTF-8");
-    let destino = format!("facturas/{alterado}");
-    let backend = falso_con_arbol(&[("a.pdf", destino.as_str())], true);
+    let altered = String::from_utf8(bytes).expect("the corpus one is UTF-8");
+    let target = format!("facturas/{altered}");
+    let backend = falso_con_arbol(&[("a.pdf", target.as_str())], true);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     pedir_arbol(&h, &mut sub).await;
-    let v = siguiente_arbol(&mut sub).await.expect("abre");
-    let fichero = v
+    let v = siguiente_arbol(&mut sub).await.expect("opens");
+    let file = v
         .lines
         .iter()
         .find(|l| l.kind == OrganizeLineKind::Moved)
-        .expect("está");
+        .expect("is there");
     assert!(
-        !fichero.text.text.contains('\u{202E}'),
-        "enmascarado: {:?}",
-        fichero.text
+        !file.text.text.contains('\u{202E}'),
+        "masked: {:?}",
+        file.text
     );
-    assert!(fichero.text.hostile, "y marcado: {:?}", fichero.text);
+    assert!(file.text.hostile, "and marked: {:?}", file.text);
 }
 
-/// El productor puede REHUSAR con un motivo (#332): se dice y no se abre nada.
+/// The producer can REFUSE with a reason (#332): it says so and opens
+/// nothing.
 #[tokio::test]
-async fn un_productor_que_rehusa_lo_dice_y_no_abre_nada() {
+async fn a_refusing_producer_says_so_and_opens_nothing() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"a.pdf".to_vec(), false)]);
     f.organizar_rehusa = Some("aprueba mi capacidad `location`".to_owned());
@@ -291,24 +293,24 @@ async fn un_productor_que_rehusa_lo_dice_y_no_abre_nada() {
     let mut sub = h.subscribe();
     pedir_arbol(&h, &mut sub).await;
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.organize.is_none(), "rehusar no abre revisión");
-    let dicho = foto.status.message.unwrap_or_default();
-    assert!(dicho.contains("location"), "y dice por qué: {dicho}");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.organize.is_none(), "refusing opens no review");
+    let said = snap.status.message.unwrap_or_default();
+    assert!(said.contains("location"), "and says why: {said}");
 }
 
-/// En una ventana de SOLO LECTURA no se pide siquiera el plan: enseñar un
-/// árbol que no se va a poder aplicar es prometer trabajo.
+/// In a READ-ONLY window the plan is not even requested: showing a tree that
+/// will not be applicable is promising work.
 #[tokio::test]
-async fn en_solo_lectura_ni_se_pide() {
+async fn in_read_only_it_is_not_even_requested() {
     let backend = falso_con_arbol(&[("a.pdf", "facturas/a.pdf")], true);
     let (h, _snap) = crate::revisiones::host_solo_lectura(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     pedir_arbol(&h, &mut sub).await;
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.organize.is_none(), "ni se abre");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.organize.is_none(), "it does not even open");
     assert!(backend.organizados.lock().expect("organizados").is_empty());
 }

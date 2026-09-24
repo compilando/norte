@@ -1,17 +1,17 @@
-//! El área de conexión de [`Backend`](super::Backend): cerrar una sesión
-//! remota, confiar una host key (TOFU) y entregar un secreto pedido.
+//! [`Backend`](super::Backend)'s connection area: closing a remote session,
+//! trusting a host key (TOFU) and delivering a requested secret.
 
 use norte_proto::Error;
 
 use super::Backend;
 
 impl Backend {
-    /// Cierra la sesión remota de `path` (#140). `false` = no había ninguna.
+    /// Closes `path`'s remote session (#140). `false` = there wasn't one.
     ///
     /// # Errors
     ///
-    /// Lo que devuelva el transporte. Un daemon N-1 sin el método contesta
-    /// `METHOD_NOT_FOUND` → [`Error::Unsupported`].
+    /// Whatever the transport returns. An N-1 daemon with no such method
+    /// answers `METHOD_NOT_FOUND` → [`Error::Unsupported`].
     pub async fn close_connection(&self, path: &norte_proto::VPath) -> Result<bool, Error> {
         match self {
             Self::Embedded(engine) => Ok(engine.close_connection(path)),
@@ -20,17 +20,18 @@ impl Backend {
         }
     }
 
-    /// Registra la host key de `host:port` tras la confirmación EXPLÍCITA
-    /// del usuario (flujo TOFU: un `Error::HostKeyUnknown` trajo el
-    /// fingerprint, el frontend lo mostró y el usuario aceptó — ADR 0015 D).
-    /// El core re-verifica el fingerprint contra la clave real del host
-    /// antes de registrar (anti-TOCTOU).
+    /// Registers `host:port`'s host key after the user's EXPLICIT
+    /// confirmation (TOFU flow: an `Error::HostKeyUnknown` brought the
+    /// fingerprint, the frontend showed it and the user accepted — ADR 0015
+    /// D). The core re-verifies the fingerprint against the host's real key
+    /// before registering it (anti-TOCTOU).
     ///
     /// # Errors
-    /// Taxonomía del protocolo ([`Error::HostKeyMismatch`] si el host ya no
-    /// presenta esa clave).
-    /// `algo` viaja informativo en el wire (la identidad que se confirma es
-    /// el fingerprint); pásalo tal cual llegó en el `HostKeyUnknown`.
+    /// Protocol taxonomy ([`Error::HostKeyMismatch`] if the host no longer
+    /// presents that key).
+    /// `algo` travels informationally on the wire (the identity being
+    /// confirmed is the fingerprint); pass it exactly as it arrived in the
+    /// `HostKeyUnknown`.
     pub async fn trust_host_key(
         &self,
         host: &str,
@@ -40,7 +41,7 @@ impl Backend {
     ) -> Result<(), Error> {
         match self {
             Self::Embedded(engine) => {
-                let _ = algo; // el engine confirma por fingerprint
+                let _ = algo; // the engine confirms by fingerprint
                 engine.trust_host_key(host, port, fingerprint).await
             }
             #[cfg(unix)]
@@ -48,13 +49,13 @@ impl Backend {
         }
     }
 
-    /// Entrega al core el secreto de `conn` que el humano acaba de teclear,
-    /// tras un [`Error::SecretNeeded`] (#325). Vive en memoria, en el proceso
-    /// que tiene el engine, y hasta que ese proceso pare: no se persiste en
-    /// ningún sitio.
+    /// Delivers to the core the secret for `conn` the human just typed,
+    /// after an [`Error::SecretNeeded`] (#325). Lives in memory, in the
+    /// process holding the engine, and only until that process stops: it is
+    /// never persisted anywhere.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; [`Error::Unsupported`] si no hay conector.
+    /// Protocol taxonomy; [`Error::Unsupported`] if there's no connector.
     pub async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
         match self {
             Self::Embedded(engine) => engine.provide_secret(conn, secret).await,

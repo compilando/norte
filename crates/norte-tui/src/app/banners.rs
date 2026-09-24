@@ -1,6 +1,6 @@
-//! Los avisos persistentes de la barra: degradación de una conexión (#44),
-//! el estado del journal (ocupado, recuperado, ausente) y el de la sesión,
-//! más la frase que resume los tres.
+//! The status bar's persistent notices: a connection's degradation (#44),
+//! the journal's state (busy, recovered, absent) and the session's, plus the
+//! phrase that summarizes the three.
 
 use super::{App, JournalIndicator};
 use norte_i18n::t;
@@ -8,10 +8,10 @@ use norte_i18n::t;
 impl App {
     /// Records a `connection.degraded` notification (#44).
     ///
-    /// La regla —una entrada por scheme, la repetida pasa a ser la más nueva,
-    /// techo en `DEGRADED_MAX`— vive en `norte_frontend::banners`: la ventana
-    /// gráfica tiene el mismo indicador, y dos copias de un aviso de
-    /// SEGURIDAD son dos sitios donde el enmascarado se olvida.
+    /// The rule — one entry per scheme, a repeat becomes the newest, capped
+    /// at `DEGRADED_MAX` — lives in `norte_frontend::banners`: the graphical
+    /// window has the same indicator, and two copies of a SECURITY notice
+    /// are two places where the masking gets forgotten.
     pub fn note_degraded(&mut self, d: norte_proto::methods::ConnectionDegraded) {
         self.degraded.note(d);
     }
@@ -26,23 +26,24 @@ impl App {
         self.degraded.for_scheme(scheme)
     }
 
-    /// El aviso persistente de conexiones en claro, o `None` si no hay
-    /// ninguna. La frase la compone el módulo COMPARTIDO.
+    /// The persistent notice for plaintext connections, or `None` if there
+    /// are none. The SHARED module composes the phrase.
     ///
-    /// Nunca se apaga una vez encendido — ver el campo `degraded` para por
-    /// qué eso es una decisión y no un olvido.
+    /// Never turns off once lit — see the `degraded` field for why that's a
+    /// decision and not an oversight.
     #[must_use]
     pub fn connection_banner(&self) -> Option<String> {
         let b = self.degraded.banner(norte_i18n::active())?;
-        // La barra del TUI es UNA línea de texto, así que aquí sí hay que
-        // juntar la frase y la conexión — pero no como una URL: `scheme://host`
-        // convierte a `banco.example@malo.example` en algo que se lee como
-        // userinfo de un host legítimo. Etiquetado y separado, que es lo que
-        // el resto de los modales de este frontend ya hacen.
+        // The TUI's status bar is ONE line of text, so here the phrase and
+        // the connection do have to be joined — but not like a URL:
+        // `scheme://host` turns `bank.example@evil.example` into something
+        // that reads as the userinfo of a legitimate host. Labeled and
+        // separated, which is what the rest of this frontend's modals
+        // already do.
         //
-        // El motivo va también (#279): sin él, un motivo que este binario no
-        // conoce se leía exactamente igual que «FTP en claro».
-        let linea = norte_i18n::ta(
+        // The reason travels too (#279): without it, a reason this binary
+        // doesn't know read exactly like "plaintext FTP".
+        let line = norte_i18n::ta(
             "status-degraded-subject",
             &[
                 ("banner", &b.text),
@@ -51,27 +52,28 @@ impl App {
                 ("reason", &b.reason),
             ],
         );
-        // Y el detalle detrás, cuando lo hay — o sea solo con un motivo
-        // desconocido, que es cuando el contrato del proto dice apoyarse en
-        // él. Va enmascarado y acotado desde el módulo compartido.
+        // And the detail behind it, when there is one — which only happens
+        // with an unknown reason, which is when the proto contract says to
+        // lean on it. Masked and capped from the shared module.
         Some(match &b.detail {
-            Some(d) => format!("{linea}: {d}"),
-            None => linea,
+            Some(d) => format!("{line}: {d}"),
+            None => line,
         })
     }
 
-    /// Una conexión NO se pudo abrir, y por qué (#322).
+    /// A connection could NOT be opened, and why (#322).
     ///
-    /// Va a `message` y no al indicador persistente a propósito: la
-    /// degradación describe una sesión que existe y sigue existiendo mientras
-    /// se mira, esto describe un intento que ya terminó. Un indicador
-    /// permanente sobre algo que no está abierto no se apagaría nunca.
+    /// Goes to `message` and not to the persistent indicator on purpose: the
+    /// degradation describes a session that exists and keeps existing while
+    /// it's being looked at, this describes an attempt that already ended.
+    /// A permanent indicator over something that isn't open would never
+    /// turn off.
     ///
-    /// Pisa el mensaje anterior porque el anterior es, casi siempre, la
-    /// CATEGORÍA del mismo fallo —`PermissionDenied`— que es exactamente lo
-    /// que #322 existe para mejorar. La frase la compone el módulo COMPARTIDO,
-    /// por la regla de siempre: dos copias de un aviso sobre una conexión son
-    /// dos sitios donde el enmascarado se olvida.
+    /// Overwrites the previous message because the previous one is, almost
+    /// always, the CATEGORY of the same failure — `PermissionDenied` —
+    /// which is exactly what #322 exists to improve. The SHARED module
+    /// composes the phrase, for the usual rule: two copies of a notice
+    /// about a connection are two places where the masking gets forgotten.
     pub fn note_connection_failed(&mut self, f: &norte_proto::methods::ConnectionFailed) {
         self.message = Some(norte_frontend::banners::failure_line(
             norte_i18n::active(),
@@ -80,85 +82,93 @@ impl App {
     }
 
     /// Records a `plugin.notice` (0.69.0, ADR 0100): what a hook plugin said,
-    /// attributed to it, as the transient status message. La frase la compone
-    /// el módulo COMPARTIDO, que es quien enmascara.
+    /// attributed to it, as the transient status message. The SHARED module,
+    /// which does the masking, composes the phrase.
     pub fn note_plugin_notice(&mut self, n: &norte_proto::methods::PluginNotice) {
         if let Some(l) = norte_frontend::banners::plugin_notice_line(norte_i18n::active(), n) {
             self.message = Some(l);
         }
     }
 
-    /// Anota que esta sesión no está registrando sus mutaciones (#177).
+    /// Notes that this session isn't recording its mutations (#177).
     ///
-    /// Idempotente: el core avisa una vez por EPISODIO, y si alguna vez avisara
-    /// dos, la segunda solo reescribe el mismo hecho.
+    /// Idempotent: the core warns once per EPISODE, and if it ever warned
+    /// twice, the second one just rewrites the same fact.
     pub fn note_no_journal(&mut self, why: norte_core::embedded::NoJournal) {
         self.no_journal = Some(JournalIndicator::NotRecorded(why));
     }
 
-    /// El journal lleva minutos ocupado y NO hay daemon escuchando (#203).
+    /// The journal has been busy for minutes and there's NO daemon listening
+    /// (#203).
     ///
-    /// Es el MISMO hecho que un `Busy` —la sesión muta sin registro— con una
-    /// explicación distinta, así que enciende el indicador de siempre y además
-    /// marca que ya no hay una razón inocente a mano. La barra lo dice con otra
-    /// frase: la suave sale también cuando no pasa nada, y es la que el lector
-    /// ya aprendió a no mirar.
+    /// It's the SAME fact as a `Busy` — the session mutates without
+    /// recording — with a different explanation, so it lights up the usual
+    /// indicator and also marks that there's no longer an innocent reason at
+    /// hand. The status bar says it with a different phrase: the soft one
+    /// also comes out when nothing's wrong, and it's the one the reader has
+    /// already learned not to look at.
     pub fn note_journal_squatted(&mut self) {
         self.no_journal = Some(JournalIndicator::Squatted);
     }
 
-    /// Y que volvió a registrarlas (#179): la ventana de propiedad se reabrió.
+    /// And that it started recording again (#179): the ownership window
+    /// reopened.
     ///
-    /// Apagar el indicador es la mitad que importa. Un «NO se registra» que no
-    /// sabe volverse «ya sí» miente en cuanto el ocupante de paso suelta el
-    /// fichero, y miente sobre lo único que la barra dice de TODA la sesión.
+    /// Turning off the indicator is the half that matters. A "NOT being
+    /// recorded" that doesn't know how to become "now it is" lies as soon as
+    /// the passing occupant releases the file, and it lies about the only
+    /// thing the status bar says about the WHOLE session.
     ///
-    /// **Lo que el indicador no sabe decir** es que una operación ya en marcha
-    /// conserva el veredicto con el que empezó (#205): si se recupera el
-    /// journal mientras un borrado largo sigue corriendo sin registrar, la
-    /// barra se apaga y ese borrado sigue sin dejar filas. El aviso de
-    /// recuperación lo dice con todas las letras —«desde tu PRÓXIMA
-    /// operación»— pero lo borra la siguiente tecla. Distinguirlo en la barra
-    /// pediría que el core expusiera cuántas Tasks van fijadas a no-registrar,
-    /// y no lo hace.
+    /// **What the indicator can't say** is that an operation already
+    /// underway keeps the verdict it started with (#205): if the journal
+    /// recovers while a long delete keeps running without recording, the
+    /// status bar turns off and that delete still leaves no rows. The
+    /// recovery notice spells it out — "starting with your NEXT operation" —
+    /// but the next key erases it. Distinguishing this on the status bar
+    /// would require the core to expose how many Tasks are pinned to
+    /// not-recording, and it doesn't.
     pub fn note_journal_recovered(&mut self) {
         self.no_journal = None;
     }
 
-    /// El aviso PERSISTENTE de sesión sin journal, o `None` si sí se registra.
+    /// The PERSISTENT notice for a session with no journal, or `None` if it
+    /// is being recorded.
     ///
-    /// Frase fija y sin el motivo: el motivo salió por `message` cuando ocurrió
-    /// (con el error del core saneado), y la barra de estado tiene que caber.
+    /// Fixed phrase and no reason: the reason went out via `message` when it
+    /// happened (with the core's error sanitized), and the status bar has to
+    /// fit.
     ///
-    /// **DOS frases, porque son dos hechos distintos (#178).** `Busy` es «esto
-    /// pasó y no quedó anotado» — la sesión muta, sin registro. `Failed` es
-    /// «esto NO va a pasar»: la sesión rehúsa mutar hasta que el fichero se
-    /// arregle. Enseñar «no se puede deshacer» sobre la segunda diría lo
-    /// contrario de lo que ocurre, y esa clase de indicador es justo lo que
-    /// #178 vino a quitar.
+    /// **TWO phrases, because they're two different facts (#178).** `Busy`
+    /// is "this happened and wasn't recorded" — the session mutates, without
+    /// recording. `Failed` is "this is NOT going to happen": the session
+    /// refuses to mutate until the file gets fixed. Showing "can't be
+    /// undone" for the second one would say the opposite of what's
+    /// happening, and that kind of indicator is exactly what #178 came to
+    /// remove.
     #[must_use]
     pub fn journal_banner(&self) -> Option<String> {
         use norte_core::embedded::NoJournal as N;
         self.no_journal.as_ref().map(|state| match state {
-            // #203: el mismo hecho que un `Busy` con otra explicación. La
-            // frase suave sale también cuando hay un daemon vivo —el caso
-            // corriente— así que sobre un ocupante sin explicar dice
-            // demasiado poco.
+            // #203: the same fact as a `Busy` with a different explanation.
+            // The soft phrase also comes out when there's a live daemon —
+            // the usual case — so over an unexplained occupant it says too
+            // little.
             JournalIndicator::Squatted => t("status-journal-squatted"),
             JournalIndicator::NotRecorded(N::Failed(_)) => t("status-journal-refused"),
-            // `Busy` y cualquier motivo futuro: el mensaje conservador es el
-            // que no promete que la mutación se haya parado.
+            // `Busy` and any future reason: the conservative message is the
+            // one that doesn't promise the mutation has stopped.
             JournalIndicator::NotRecorded(_) => t("status-no-journal"),
         })
     }
 
-    /// Los dos indicadores persistentes de la barra, JUNTOS.
+    /// The status bar's two persistent indicators, TOGETHER.
     ///
-    /// Juntos y no en ramas distintas del `if` de la barra: son dos hechos
-    /// simultáneos y de la misma clase —seguridad, hasta el final de la
-    /// sesión—, así que elegir uno escondería el otro para siempre. El del
-    /// journal va primero: «nada de esto se puede deshacer» pesa más que «esta
-    /// conexión va en claro», y es el único que habla de TODA la sesión.
+    /// Together and not in different branches of the status bar's `if`:
+    /// they're two simultaneous facts of the same class — security, until
+    /// the end of the session — so choosing one would hide the other
+    /// forever. The journal's goes first: "none of this can be undone"
+    /// outweighs "this connection is plaintext", and it's the only one that
+    /// talks about the WHOLE session.
     #[must_use]
     pub fn persistent_banner(&self) -> Option<String> {
         let parts: Vec<String> = [
@@ -172,16 +182,16 @@ impl App {
         (!parts.is_empty()).then(|| parts.join("  "))
     }
 
-    /// El aviso PERSISTENTE de ventana SUELTA, o `None` si ésta es la dueña
-    /// de la sesión (#232).
+    /// The PERSISTENT notice for a DETACHED window, or `None` if this one
+    /// owns the session (#232).
     ///
-    /// Una ventana suelta no escribe nunca: es una segunda ventana, un core
-    /// sin el lock, o una que encontró un cuerpo de una versión más nueva. Se
-    /// decía con un `message` al arrancar, y el primer mensaje que llegara
-    /// después lo borraba — a partir de ahí la ventana dejaba de guardar la
-    /// pantalla sin nada que lo dijera. Misma disciplina que el resto de esta
-    /// línea: un estado que dura toda la sesión se pinta en cada frame, no
-    /// una vez.
+    /// A detached window never writes: it's a second window, a core with no
+    /// lock, or one that found a body from a newer version. It used to be
+    /// said with a `message` at startup, and the first message that arrived
+    /// afterward erased it — from then on the window stopped saving the
+    /// screen with nothing to say so. Same discipline as the rest of this
+    /// line: a state that lasts the whole session gets painted every frame,
+    /// not once.
     #[must_use]
     pub fn session_banner(&self) -> Option<String> {
         self.session.detached.then(|| t("status-session-detached"))
@@ -194,47 +204,50 @@ mod tests {
     use crate::app::pane::Pane;
     use crate::app::testutil::*;
 
-    /// #44 guardaba la degradación como PROSA ya formateada: el scheme y el
-    /// host se metían en el mensaje y se tiraban, así que «¿qué conexión se
-    /// degradó?» no tenía respuesta. H3d la necesita por pane.
+    /// #44 used to save the degradation as already-formatted PROSE: the
+    /// scheme and host got folded into the message and thrown away, so
+    /// "which connection degraded?" had no answer. H3d needs it per pane.
     #[test]
     fn la_degradacion_se_guarda_por_scheme() {
         let mut app = app_dos_panes();
-        app.note_degraded(degradacion_de_test("sftp", "ejemplo.org"));
-        let d = app.degraded_for("sftp").expect("la degradación se retuvo");
-        assert_eq!(d.host, "ejemplo.org", "el host sobrevive, no solo la frase");
+        app.note_degraded(degradacion_de_test("sftp", "example.org"));
+        let d = app.degraded_for("sftp").expect("the degradation was kept");
+        assert_eq!(
+            d.host, "example.org",
+            "the host survives, not just the phrase"
+        );
         assert_eq!(d.reason, "ftp-plaintext");
         assert!(app.degraded_for("file").is_none());
     }
 
-    /// #322: un fallo de conexión llega a la barra con su MOTIVO, no con la
-    /// categoría del error.
+    /// #322: a connection failure reaches the status bar with its REASON,
+    /// not with the error's category.
     ///
-    /// Y a `message`, no al indicador persistente: no hay ninguna sesión
-    /// abierta de la que seguir avisando, así que un indicador permanente no
-    /// se apagaría nunca.
+    /// And to `message`, not to the persistent indicator: there's no open
+    /// session to keep warning about, so a permanent indicator would never
+    /// turn off.
     #[test]
     fn un_fallo_de_conexion_dice_el_motivo_en_la_barra() {
         let mut app = app_dos_panes();
         app.note_connection_failed(&norte_proto::methods::ConnectionFailed {
             conn: Some("rosetta".to_owned()),
             scheme: "s3".to_owned(),
-            host: "cubo.example".to_owned(),
+            host: "bucket.example".to_owned(),
             reason: "secret-empty".to_owned(),
-            detail: Some("el secreto está vacío".to_owned()),
+            detail: Some("the secret is empty".to_owned()),
         });
-        let msg = app.message.clone().expect("la barra lo dice");
-        assert!(msg.contains("cubo.example"), "{msg}");
+        let msg = app.message.clone().expect("the status bar says so");
+        assert!(msg.contains("bucket.example"), "{msg}");
         assert!(msg.contains("rosetta"), "{msg}");
         assert!(msg.contains(&t("failed-reason-secret-empty")), "{msg}");
         assert!(
             app.connection_banner().is_none(),
-            "un fallo no enciende el indicador PERSISTENTE de degradación"
+            "a failure doesn't light the PERSISTENT degradation indicator"
         );
     }
 
-    /// ADR 0100: la frase de un hook llega a la barra atribuida al plugin, y
-    /// no enciende ningún indicador persistente.
+    /// ADR 0100: a hook's phrase reaches the status bar attributed to the
+    /// plugin, and lights no persistent indicator.
     #[test]
     fn el_aviso_de_un_hook_llega_a_la_barra_con_su_plugin_delante() {
         let mut app = app_dos_panes();
@@ -243,14 +256,15 @@ mod tests {
             kind: "notify".to_owned(),
             text: Some("renamed 3 files".to_owned()),
         });
-        let msg = app.message.clone().expect("la barra lo dice");
+        let msg = app.message.clone().expect("the status bar says so");
         assert!(msg.contains("org.norte.rename-log"), "{msg}");
         assert!(msg.contains("renamed 3 files"), "{msg}");
         assert!(app.connection_banner().is_none());
     }
 
-    /// Y dos conexiones degradadas no se pisan: antes la última ganaba y la
-    /// primera desaparecía de la barra sin que nada la hubiera resuelto.
+    /// And two degraded connections don't step on each other: the last one
+    /// used to win and the first vanished from the status bar without
+    /// anything having resolved it.
     #[test]
     fn dos_degradaciones_conviven() {
         let mut app = app_dos_panes();
@@ -258,45 +272,50 @@ mod tests {
         app.note_degraded(degradacion_de_test("ftp", "b.org"));
         assert!(app.degraded_for("sftp").is_some());
         assert!(app.degraded_for("ftp").is_some());
-        // Y la barra deja de mentir sobre cuántas hay. Nombra la ÚLTIMA y dice
-        // cuántas más: un recuento pelado («2 conexiones en texto plano»), con
-        // el aviso que jamás se limpia, dejaba al lector sin poder averiguar
-        // NUNCA cuáles eran — y esa es la única pregunta que este indicador
-        // existe para contestar.
-        let banner = app.connection_banner().expect("hay aviso");
+        // And the status bar stops lying about how many there are. It names
+        // the LATEST one and says how many more: a bare count ("2 plaintext
+        // connections"), with a notice that never clears, left the reader
+        // NEVER able to find out which ones they were — and that's the only
+        // question this indicator exists to answer.
+        let banner = app.connection_banner().expect("there is a notice");
         assert!(
             banner.contains("b.org"),
-            "la más reciente se nombra: {banner}"
+            "the most recent one is named: {banner}"
         );
-        assert!(banner.contains('1'), "y cuántas más hay: {banner}");
+        assert!(
+            banner.contains('1'),
+            "and how many more there are: {banner}"
+        );
     }
 
-    /// #177: «esta sesión no queda registrada» tiene que sobrevivir a la
-    /// siguiente tecla. Llega UNA vez, en mitad de una operación que el usuario
-    /// acaba de lanzar, y `app.message` lo borra la pulsación siguiente — que
-    /// es como decir que no se avisó.
-    /// #203: el ocupante SIN daemon que lo explique se dice con otra frase.
+    /// #177: "this session isn't being recorded" has to survive the next
+    /// key. It arrives ONCE, in the middle of an operation the user just
+    /// launched, and `app.message` gets erased by the very next keystroke —
+    /// which amounts to saying it was never announced.
+    /// #203: an occupant with NO daemon to explain it is said with a
+    /// different phrase.
     ///
-    /// El hecho es el mismo que un `Busy` —la sesión muta sin quedar
-    /// registrada— y por eso el indicador sigue encendido; lo que cambia es que
-    /// la frase suave sale también cuando hay un daemon vivo, o sea casi
-    /// siempre, y es la que el lector ya aprendió a no mirar.
+    /// It's the same fact as a `Busy` — the session mutates without being
+    /// recorded — and that's why the indicator stays lit; what changes is
+    /// that the soft phrase also comes out when there's a live daemon, i.e.
+    /// almost always, and it's the one the reader has already learned not to
+    /// look at.
     #[test]
     fn el_ocupante_sin_daemon_tiene_su_propia_frase() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
-        let soft = app.journal_banner().expect("indicador encendido");
+        let soft = app.journal_banner().expect("indicator lit");
 
         app.note_journal_squatted();
-        let strong = app.journal_banner().expect("sigue encendido");
-        assert_ne!(soft, strong, "dos hechos distintos, dos frases");
+        let strong = app.journal_banner().expect("still lit");
+        assert_ne!(soft, strong, "two different facts, two phrases");
 
-        // Y se apaga igual: una recuperación borra los dos.
+        // And it turns off the same way: a recovery clears both.
         app.note_journal_recovered();
         assert!(app.journal_banner().is_none());
 
-        // Un `Busy` posterior vuelve a la frase suave y no se queda con la
-        // fuerte pegada.
+        // A later `Busy` goes back to the soft phrase and doesn't get stuck
+        // with the strong one.
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
         assert_eq!(app.journal_banner().as_deref(), Some(soft.as_str()));
     }
@@ -304,85 +323,86 @@ mod tests {
     #[test]
     fn la_sesion_sin_journal_tiene_indicador_persistente() {
         let mut app = app_dos_panes();
-        assert!(app.journal_banner().is_none(), "por defecto sí se registra");
+        assert!(app.journal_banner().is_none(), "recorded by default");
 
-        app.message = Some("algo".to_owned());
+        app.message = Some("something".to_owned());
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
-        // Lo que borra el `message` en el run loop, tecla a tecla.
+        // What clears `message` in the run loop, key by key.
         app.message = None;
         assert!(
             app.journal_banner().is_some(),
-            "el indicador no se va con el mensaje"
+            "the indicator doesn't leave with the message"
         );
     }
 
-    /// Y no compite con el de #44: los dos son persistentes, de la misma clase
-    /// y simultáneos, así que elegir uno escondería el otro para el resto de la
-    /// sesión.
+    /// And it doesn't compete with #44's: both are persistent, of the same
+    /// class and simultaneous, so choosing one would hide the other for the
+    /// rest of the session.
     #[test]
     fn los_dos_indicadores_persistentes_caben_juntos() {
         let mut app = app_dos_panes();
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
         app.note_degraded(degradacion_de_test("sftp", "a.org"));
-        let banner = app.persistent_banner().expect("hay aviso");
+        let banner = app.persistent_banner().expect("there is a notice");
         assert!(
             banner.contains("a.org"),
-            "la conexión sigue nombrada: {banner}"
+            "the connection is still named: {banner}"
         );
         assert!(
-            banner.starts_with(&app.journal_banner().expect("hay journal_banner")),
-            "y el del journal va primero: {banner}"
+            banner.starts_with(&app.journal_banner().expect("there is a journal_banner")),
+            "and the journal's goes first: {banner}"
         );
     }
 
-    /// #232: una ventana SUELTA lo dice una vez y luego se le olvida.
+    /// #232: a DETACHED window says it once and then forgets.
     ///
-    /// El mensaje de arranque lo borra la siguiente tecla, y a partir de ahí
-    /// la ventana no guarda la pantalla sin nada en pantalla que lo diga.
+    /// The startup message gets erased by the next key, and from then on
+    /// the window doesn't save the screen with nothing on screen to say so.
     #[test]
     fn la_ventana_suelta_tiene_indicador_persistente() {
         let mut app = app_dos_panes();
-        assert!(app.session_banner().is_none(), "la dueña no avisa de nada");
+        assert!(app.session_banner().is_none(), "the owner warns of nothing");
 
         app.session.detached = true;
-        app.message = Some("algo".to_owned());
-        // Lo que borra el `message` en el run loop, tecla a tecla.
+        app.message = Some("something".to_owned());
+        // What clears `message` in the run loop, key by key.
         app.message = None;
-        let banner = app.persistent_banner().expect("hay aviso");
+        let banner = app.persistent_banner().expect("there is a notice");
         assert_eq!(
             banner,
-            app.session_banner().expect("hay session_banner"),
-            "sin nada más encendido, la barra es justo ese aviso: {banner}"
+            app.session_banner().expect("there is a session_banner"),
+            "with nothing else lit, the status bar is exactly that notice: {banner}"
         );
     }
 
-    /// Y convive con los otros dos: son tres hechos simultáneos de la misma
-    /// clase, y el de la sesión es el que menos pesa, así que va el último.
+    /// And it coexists with the other two: three simultaneous facts of the
+    /// same class, and the session's is the one that weighs least, so it
+    /// goes last.
     #[test]
     fn los_tres_indicadores_persistentes_caben_juntos() {
         let mut app = app_dos_panes();
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
         app.note_degraded(degradacion_de_test("sftp", "a.org"));
         app.session.detached = true;
-        let banner = app.persistent_banner().expect("hay aviso");
+        let banner = app.persistent_banner().expect("there is a notice");
         assert!(
-            banner.starts_with(&app.journal_banner().expect("hay journal_banner")),
-            "el del journal sigue primero: {banner}"
+            banner.starts_with(&app.journal_banner().expect("there is a journal_banner")),
+            "the journal's still goes first: {banner}"
         );
         assert!(
             banner.contains("a.org"),
-            "la conexión sigue nombrada: {banner}"
+            "the connection is still named: {banner}"
         );
         assert!(
-            banner.ends_with(&app.session_banner().expect("hay session_banner")),
-            "y el de la sesión cierra: {banner}"
+            banner.ends_with(&app.session_banner().expect("there is a session_banner")),
+            "and the session's closes it: {banner}"
         );
     }
 
-    /// MINOR-5: el `Option<String>` de #44 estaba acotado por construcción;
-    /// una colección con clave que viene del WIRE no lo está. El tope es
-    /// generoso —hay siete schemes— así que solo lo alcanza algo anómalo, y
-    /// cuando pasa se tira lo más viejo y se conserva lo que acaba de llegar.
+    /// MINOR-5: #44's `Option<String>` was bounded by construction; a
+    /// collection keyed off the WIRE isn't. The cap is generous — there are
+    /// seven schemes — so only something anomalous reaches it, and when it
+    /// does the oldest gets dropped and the one that just arrived is kept.
     #[test]
     fn las_degradaciones_tienen_tope() {
         let mut app = app_dos_panes();
@@ -392,43 +412,44 @@ mod tests {
         assert_eq!(app.degraded.len(), norte_frontend::banners::DEGRADED_MAX);
         assert!(
             app.degraded_for("s0").is_none(),
-            "la más vieja es la que se cae"
+            "the oldest one is the one that drops"
         );
         assert!(
             app.degraded_for(&format!("s{}", norte_frontend::banners::DEGRADED_MAX + 9))
                 .is_some(),
-            "la última en llegar se queda"
+            "the last one to arrive stays"
         );
     }
 
-    /// El host lo elige el OTRO extremo, y la barra de estado es el sitio
-    /// donde llegaba crudo mientras el resto de la TUI enmascara. Un host con
-    /// controles o bidi es exactamente lo que se le manda a un indicador de
-    /// seguridad para que mienta.
+    /// The OTHER end picks the host, and the status bar is the place it used
+    /// to arrive raw while the rest of the TUI masks. A host with controls
+    /// or bidi is exactly what gets sent to a security indicator to make it
+    /// lie.
     #[test]
     fn el_aviso_enmascara_un_host_hostil() {
         let mut app = app_dos_panes();
         app.note_degraded(degradacion_de_test("sftp", "ma\u{202e}gro.org\n"));
-        let banner = app.connection_banner().expect("hay aviso");
+        let banner = app.connection_banner().expect("there is a notice");
         assert!(
             !banner.contains('\u{202e}') && !banner.contains('\n'),
-            "el host llegó crudo a la barra: {banner:?}"
+            "the host reached the status bar raw: {banner:?}"
         );
         assert!(
             banner.contains('\u{FFFD}'),
-            "y el enmascarado se VE (jamás pérdida silenciosa): {banner:?}"
+            "and the masking is VISIBLE (never a silent loss): {banner:?}"
         );
     }
 
-    /// Sin degradación no hay aviso, y con UNA el aviso es el de siempre
-    /// (#44): scheme y host, formateados desde el valor estructurado.
+    /// With no degradation there's no notice, and with ONE the notice is
+    /// the usual one (#44): scheme and host, formatted from the structured
+    /// value.
     #[test]
     fn el_aviso_de_una_sola_degradacion_nombra_la_conexion() {
         let mut app = app_dos_panes();
         assert!(app.connection_banner().is_none());
-        app.note_degraded(degradacion_de_test("sftp", "remoto.example"));
-        let banner = app.connection_banner().expect("hay aviso");
+        app.note_degraded(degradacion_de_test("sftp", "remote.example"));
+        let banner = app.connection_banner().expect("there is a notice");
         assert!(banner.contains("sftp"), "{banner}");
-        assert!(banner.contains("remoto.example"), "{banner}");
+        assert!(banner.contains("remote.example"), "{banner}");
     }
 }

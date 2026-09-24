@@ -1,53 +1,54 @@
-//! El ancla de un directorio: qué nodo estaba mirando el humano (#295).
+//! A directory's anchor: which node the human was looking at (#295).
 //!
-//! Un [`DirAnchor`] es lo que un listado devuelve y lo que la copia o el
-//! movimiento devuelven para decir «el directorio destino era ESE». Sirve para
-//! lo único que ADR 0072 deja abierto: un enlace **ya plantado** cuando el core
-//! mira por primera vez es, desde dentro del core, indistinguible de un
-//! `~/copias -> /mnt/disco/copias` legítimo. Desde fuera sí hay algo que los
-//! distingue — el humano no estaba mirando ese otro nodo.
+//! A [`DirAnchor`] is what a listing returns and what a copy or move returns
+//! to say "the destination directory was THAT ONE". It serves the one thing
+//! ADR 0072 leaves open: a link **already planted** by the time the core
+//! first looks is, from inside the core, indistinguishable from a legitimate
+//! `~/copies -> /mnt/disk/copies`. From outside there is something that does
+//! distinguish them — the human wasn't looking at that other node.
 //!
-//! # Por qué es opaco
+//! # Why it is opaque
 //!
-//! Lo que identifica un nodo es un par (volumen, índice), o sea el dispositivo
-//! y el inodo. Mandarlos crudos por el wire diría a cualquier cliente —un
-//! agente con scope, un plugin— qué dos rutas son el mismo fichero y qué
-//! números de inodo existen, que no es asunto suyo. Así que lo que viaja es
-//! `sha256(secreto || volumen || índice)` recortado a 128 bits: la igualdad se
-//! conserva, que es lo único que se necesita, y el nodo no se puede deducir ni
-//! el ancla fabricar.
+//! What identifies a node is a (volume, index) pair, i.e. the device and the
+//! inode. Sending them raw over the wire would tell any client —a scoped
+//! agent, a plugin— which two paths are the same file and which inode
+//! numbers exist, which is none of its business. So what travels is
+//! `sha256(secret || volume || index)` truncated to 128 bits: equality is
+//! preserved, which is the only thing needed, and the node cannot be
+//! deduced nor the anchor forged.
 //!
-//! El secreto se sortea UNA vez por proceso. Un daemon que reinicia renueva el
-//! secreto y con él todas las anclas, pero un cliente que reconecta ha perdido
-//! su listado de todas formas y vuelve a pedirlo: la ventana que importa
-//! —mirar, aprobar, escribir— cae entera dentro de una sesión.
+//! The secret is drawn ONCE per process. A daemon that restarts renews the
+//! secret and with it every anchor, but a client that reconnects has lost
+//! its listing anyway and asks for it again: the window that matters
+//! —looking, approving, writing— falls entirely within one session.
 
 use norte_proto::DirAnchor;
 use norte_vfs::NodeId;
 
-/// El secreto del proceso. Se sortea en el primer uso.
-static SECRETO: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
+/// The process secret. Drawn on first use.
+static SECRET: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
 
-fn secreto() -> &'static [u8; 32] {
-    SECRETO.get_or_init(|| {
+fn secret() -> &'static [u8; 32] {
+    SECRET.get_or_init(|| {
         let mut bytes = [0u8; 32];
-        // Un fallo del CSPRNG del sistema no puede degradar a un secreto
-        // predecible: sin secreto de verdad, un cliente podría fabricar el
-        // ancla de un nodo que no ha visto y la comprobación dejaría de
-        // comprobar. `getrandom` solo falla si el sistema no tiene entropía,
-        // que aquí es tan fatal como no tener sistema de ficheros.
-        getrandom::fill(&mut bytes).expect("el sistema no da entropía para el secreto de anclas");
+        // A failure of the system CSPRNG must not degrade to a predictable
+        // secret: without a real secret, a client could forge the anchor of
+        // a node it has never seen and the check would stop checking.
+        // `getrandom` only fails if the system has no entropy, which here
+        // is as fatal as having no filesystem.
+        getrandom::fill(&mut bytes).expect("the system provides no entropy for the anchor secret");
         bytes
     })
 }
 
-/// El ancla de `id`: la misma para el mismo nodo mientras viva el proceso,
-/// distinta para nodos distintos, y sin nada dentro que lo delate.
+/// The anchor for `id`: the same for the same node while the process lives,
+/// different for different nodes, and with nothing inside that gives it
+/// away.
 #[must_use]
 pub fn de_nodo(id: NodeId) -> DirAnchor {
     use sha2::{Digest as _, Sha256};
     let mut h = Sha256::new();
-    h.update(secreto());
+    h.update(secret());
     h.update(id.volume.to_le_bytes());
     h.update(id.index.to_le_bytes());
     let d = h.finalize();
@@ -59,58 +60,57 @@ pub fn de_nodo(id: NodeId) -> DirAnchor {
     DirAnchor::new(hex)
 }
 
-/// ¿El ancla que trae la petición nombra al nodo `id`?
+/// Does the anchor the request brings name node `id`?
 ///
-/// Un ancla mal formada no casa con nada: no hace falta un caso aparte para
-/// ella, porque [`de_nodo`] jamás produce una, y fallar cerrado es lo correcto
-/// —el ancla existe para autorizar, no para dispensar—.
+/// A malformed anchor matches nothing: no separate case is needed for it,
+/// because [`de_nodo`] never produces one, and failing closed is correct
+/// here —the anchor exists to authorize, not to dispense—.
 #[must_use]
 pub fn casa(esperada: &DirAnchor, id: NodeId) -> bool {
     de_nodo(id) == *esperada
 }
 
-/// Las anclas de los directorios que un cliente ha LISTADO, con tope y orden
-/// de llegada (#301).
+/// The anchors of the directories a client has LISTED, with a cap and
+/// arrival order (#301).
 ///
-/// El gemelo de la que `norte-client` guarda en su `Inner` para el camino
-/// remoto, y existe por lo mismo: quien lista es el panel y quien escribe
-/// después puede ser otro clon del mismo backend, así que la memoria vive
-/// junto al estado compartido y no en el frontend. En el camino EMBEBIDO ese
-/// estado compartido es el [`Engine`](crate::Engine), que es lo único que un
-/// `Backend::Embedded` clonado comparte.
+/// The twin of the one `norte-client` keeps in its `Inner` for the remote
+/// path, and exists for the same reason: whoever lists is the panel and
+/// whoever writes afterward can be another clone of the same backend, so
+/// the memory lives alongside the shared state rather than in the frontend.
+/// On the EMBEDDED path that shared state is the [`Engine`](crate::Engine),
+/// which is the only thing a cloned `Backend::Embedded` shares.
 ///
-/// Acotado y best-effort: son directorios que un humano tiene abiertos, o sea
-/// unidades. Perder uno cuesta la comprobación de esa escritura, jamás la
-/// escritura.
+/// Capped and best-effort: these are directories a human has open, i.e. a
+/// handful. Losing one costs that write's check, never the write itself.
 ///
-/// **Duplicada a propósito y no compartida con el SDK**: exportarla desde
-/// `norte-client` ataría el camino embebido —que existe para funcionar SIN
-/// daemon, y compila en plataformas donde el transporte del SDK no— a un
-/// crate que no necesita para nada. Son cuarenta líneas y un tope.
+/// **Duplicated on purpose and not shared with the SDK**: exporting it from
+/// `norte-client` would tie the embedded path —which exists to work WITHOUT
+/// a daemon, and compiles on platforms where the SDK's transport does not—
+/// to a crate it needs for nothing. It's forty lines and a cap.
 #[derive(Debug, Default)]
 pub(crate) struct AnchorCache {
     by_dir: std::collections::HashMap<norte_proto::VPath, DirAnchor>,
     order: std::collections::VecDeque<norte_proto::VPath>,
 }
 
-/// Cuántos directorios se recuerdan a la vez. El mismo número que el SDK.
+/// How many directories are remembered at once. Same number as the SDK.
 const ANCHORS_MAX: usize = 64;
 
 impl AnchorCache {
-    /// Recuerda (o refresca) el ancla de `dir`.
+    /// Remembers (or refreshes) `dir`'s anchor.
     ///
-    /// `None` BORRA la que hubiera, y eso es deliberado: un listado que ya no
-    /// trae ancla —porque el provider dejó de saber darla— no puede dejar viva
-    /// la de antes. Una escritura que mandara un ancla vieja se rechazaría a sí
-    /// misma sin motivo.
+    /// `None` DELETES whatever there was, and that is deliberate: a listing
+    /// that no longer brings an anchor —because the provider stopped being
+    /// able to give one— cannot leave the old one alive. A write that sent
+    /// a stale anchor would reject itself for no reason.
     ///
-    /// El desalojo es **LRU y no FIFO**: refrescar mueve el directorio al final
-    /// de la cola. Con FIFO —que es lo que hacía, y lo que sigue haciendo el
-    /// SDK— el directorio del panel activo se desalojaba en cuanto pasaban 64
-    /// directorios DISTINTOS por el mismo backend, por mucho que se estuviera
-    /// relistando cada segundo; y entonces la comprobación de la siguiente
-    /// escritura desaparecía sin que nadie lo dijera, que es fallar abierto en
-    /// silencio.
+    /// Eviction is **LRU, not FIFO**: refreshing moves the directory to the
+    /// back of the queue. With FIFO —which is what this did, and what the
+    /// SDK still does— the active panel's directory would get evicted as
+    /// soon as 64 DIFFERENT directories passed through the same backend, no
+    /// matter that it was being relisted every second; and then the next
+    /// write's check would disappear without anyone saying so, which is
+    /// failing open in silence.
     pub(crate) fn remember(&mut self, dir: &norte_proto::VPath, anchor: Option<DirAnchor>) {
         let Some(anchor) = anchor else {
             self.by_dir.remove(dir);
@@ -122,13 +122,13 @@ impl AnchorCache {
         }
         self.order.push_back(dir.clone());
         while self.order.len() > ANCHORS_MAX {
-            if let Some(viejo) = self.order.pop_front() {
-                self.by_dir.remove(&viejo);
+            if let Some(old) = self.order.pop_front() {
+                self.by_dir.remove(&old);
             }
         }
     }
 
-    /// El ancla retenida de `dir`, si se listó.
+    /// `dir`'s retained anchor, if it was listed.
     pub(crate) fn get(&self, dir: &norte_proto::VPath) -> Option<DirAnchor> {
         self.by_dir.get(dir).cloned()
     }
@@ -139,33 +139,33 @@ mod tests {
     use super::*;
 
     fn vpd(wire: &str) -> norte_proto::VPath {
-        norte_proto::VPath::parse(wire).expect("wire de test")
+        norte_proto::VPath::parse(wire).expect("test wire")
     }
 
     #[test]
-    fn se_recuerda_lo_listado_y_solo_eso() {
+    fn only_what_was_listed_is_remembered() {
         let mut c = AnchorCache::default();
-        let dir = vpd("file:///casa");
+        let dir = vpd("file:///home");
         let a = DirAnchor::new("a".repeat(32));
         c.remember(&dir, Some(a.clone()));
         assert_eq!(c.get(&dir), Some(a));
-        assert_eq!(c.get(&vpd("file:///otro")), None);
+        assert_eq!(c.get(&vpd("file:///other")), None);
     }
 
-    /// Un listado SIN ancla borra la de antes: mandar la vieja sería que la
-    /// escritura se rechazara a sí misma.
+    /// A listing WITHOUT an anchor deletes the old one: sending the stale one
+    /// would make the write reject itself.
     #[test]
-    fn un_listado_sin_ancla_borra_la_de_antes() {
+    fn a_listing_with_no_anchor_deletes_the_old_one() {
         let mut c = AnchorCache::default();
-        let dir = vpd("file:///casa");
+        let dir = vpd("file:///home");
         c.remember(&dir, Some(DirAnchor::new("b".repeat(32))));
         c.remember(&dir, None);
         assert_eq!(c.get(&dir), None);
     }
 
-    /// El tope echa al que hace más que no se toca.
+    /// The cap evicts whichever one went longest untouched.
     #[test]
-    fn el_tope_echa_al_mas_viejo() {
+    fn the_cap_evicts_the_oldest() {
         let mut c = AnchorCache::default();
         for i in 0..=ANCHORS_MAX {
             c.remember(
@@ -173,21 +173,21 @@ mod tests {
                 Some(DirAnchor::new(format!("{i:032x}"))),
             );
         }
-        assert_eq!(c.get(&vpd("file:///d0")), None, "el primero se fue");
+        assert_eq!(c.get(&vpd("file:///d0")), None, "the first one is gone");
         assert!(c.get(&vpd(&format!("file:///d{ANCHORS_MAX}"))).is_some());
     }
 
-    /// Y refrescar lo SALVA: es LRU y no FIFO. Con FIFO, el directorio del
-    /// panel activo se desalojaba a los 64 directorios distintos aunque se
-    /// estuviera relistando todo el rato, y la comprobación de la siguiente
-    /// escritura desaparecía sin decir nada.
+    /// And refreshing SAVES it: it's LRU, not FIFO. With FIFO, the active
+    /// panel's directory would get evicted at 64 distinct directories even
+    /// while it was being relisted the whole time, and the next write's
+    /// check would disappear without saying anything.
     #[test]
-    fn refrescar_salva_del_desalojo() {
+    fn refreshing_saves_from_eviction() {
         let mut c = AnchorCache::default();
         let panel = vpd("file:///panel");
         c.remember(&panel, Some(DirAnchor::new("a".repeat(32))));
         for i in 0..ANCHORS_MAX {
-            // Cada vuelta relista el panel, como hace un refresco de verdad.
+            // Each round relists the panel, like a real refresh does.
             c.remember(&panel, Some(DirAnchor::new("a".repeat(32))));
             c.remember(
                 &vpd(&format!("file:///d{i}")),
@@ -196,12 +196,12 @@ mod tests {
         }
         assert!(
             c.get(&panel).is_some(),
-            "lo que se sigue mirando no se desaloja"
+            "what keeps being looked at is not evicted"
         );
     }
 
     #[test]
-    fn el_mismo_nodo_da_la_misma_ancla_y_otro_nodo_no() {
+    fn the_same_node_gives_the_same_anchor_and_another_node_does_not() {
         let a = NodeId {
             volume: 7,
             index: 42,
@@ -217,10 +217,10 @@ mod tests {
     }
 
     #[test]
-    fn el_ancla_no_lleva_dentro_el_inodo_ni_el_volumen() {
-        // El caso que hace la prueba interesante: dos nodos que solo se
-        // diferencian en el volumen. Si el ancla llevara los números, uno
-        // sería prefijo o vecino del otro.
+    fn the_anchor_does_not_carry_the_inode_or_the_volume_inside() {
+        // The case that makes the test interesting: two nodes that only
+        // differ in the volume. If the anchor carried the numbers, one
+        // would be a prefix of or neighbor to the other.
         let a = NodeId {
             volume: 1,
             index: 999_999,
@@ -231,21 +231,25 @@ mod tests {
         };
         let (x, y) = (de_nodo(a), de_nodo(b));
         assert_ne!(x, y);
-        assert!(!x.as_str().contains("999999"), "no lleva el índice dentro");
+        assert!(
+            !x.as_str().contains("999999"),
+            "does not carry the index inside"
+        );
         assert!(x.is_well_formed() && y.is_well_formed());
     }
 
     #[test]
-    fn un_ancla_mal_formada_no_casa_con_nada() {
+    fn a_malformed_anchor_matches_nothing() {
         let id = NodeId {
             volume: 3,
             index: 3,
         };
         assert!(!casa(&DirAnchor::new(String::new()), id));
         assert!(!casa(&DirAnchor::new("../etc".to_owned()), id));
-        // Y tampoco la que alguien fabricaría sin el secreto: el hash del par
-        // a pelo, que es lo que se le ocurriría a quien conozca el formato.
-        let sin_secreto = {
+        // Nor does the one someone would forge without the secret: the
+        // bare hash of the pair, which is what someone who knows the
+        // format would come up with.
+        let no_secret = {
             use sha2::{Digest as _, Sha256};
             let mut h = Sha256::new();
             h.update(id.volume.to_le_bytes());
@@ -258,6 +262,9 @@ mod tests {
             }
             DirAnchor::new(hex)
         };
-        assert!(!casa(&sin_secreto, id), "sin el secreto no se fabrica");
+        assert!(
+            !casa(&no_secret, id),
+            "without the secret, nothing is forged"
+        );
     }
 }

@@ -1,51 +1,51 @@
-//! Resolución de un `Ask` de policy (M3-3): el engine suspende la llamada hasta
-//! que un frontend aprueba/deniega. El default es `DenyAll` (headless
-//! fail-closed); el daemon inyecta un resolver que difunde
-//! `policy.approval_required` y await-ea `policy.decide` (M3-3b).
+//! Resolution of a policy `Ask` (M3-3): the engine suspends the call until a
+//! frontend approves/denies it. The default is `DenyAll` (headless
+//! fail-closed); the daemon injects a resolver that broadcasts
+//! `policy.approval_required` and awaits `policy.decide` (M3-3b).
 
 use async_trait::async_trait;
 
 use crate::journal::Actor;
 use crate::policy::PolicyOp;
 
-/// Descripción de la op a aprobar (preview para el frontend).
+/// Description of the op to approve (a preview for the frontend).
 #[derive(Debug, Clone)]
 pub struct ApprovalRequest {
-    /// Quién la pide.
+    /// Who is asking.
     pub actor: Actor,
-    /// Qué operación.
+    /// Which operation.
     pub op: PolicyOp,
-    /// Rutas implicadas (wire). Puede ser un PREFIJO de las que la decisión
-    /// cubre: ver `paths_total`.
+    /// Paths involved (wire). May be a PREFIX of the ones the decision
+    /// covers: see `paths_total`.
     pub paths: Vec<String>,
-    /// Cuántas rutas cubre la decisión de verdad. Un lote de renames trae dos
-    /// por paso y puede traer miles; `paths` se recorta para no inundar la
-    /// notificación, y este número es lo que impide que el recorte se le
-    /// enseñe al humano como si fuera la lista entera.
+    /// How many paths the decision actually covers. A batch rename brings
+    /// two per step and can bring thousands; `paths` is trimmed so as not to
+    /// flood the notification, and this number is what stops the trimmed
+    /// list from being shown to the human as if it were the whole thing.
     pub paths_total: u64,
 }
 
-/// Resultado de la aprobación.
+/// Outcome of the approval.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalOutcome {
-    /// Aprobada por el humano.
+    /// Approved by the human.
     Approved,
-    /// Denegada.
+    /// Denied.
     Denied,
-    /// TTL vencido sin decisión.
+    /// TTL expired with no decision.
     TimedOut,
 }
 
-/// Resuelve un `Ask`. Implementaciones: `DenyAll` (default) y el router del
-/// daemon (M3-3b).
+/// Resolves an `Ask`. Implementations: `DenyAll` (default) and the daemon's
+/// router (M3-3b).
 #[async_trait]
 pub trait ApprovalResolver: Send + Sync {
-    /// Pide aprobación y espera el veredicto.
+    /// Requests approval and waits for the verdict.
     async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome;
 }
 
-/// Deniega todo (headless fail-closed): sin frontend interactivo, un `Ask` no se
-/// puede aprobar → se deniega.
+/// Denies everything (headless fail-closed): with no interactive frontend, an
+/// `Ask` cannot be approved → it is denied.
 pub struct DenyAll;
 
 #[async_trait]

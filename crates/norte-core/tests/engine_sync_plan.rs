@@ -1,14 +1,15 @@
-//! Integración `Engine::sync_plan_as` (tarea 8 del plan de sincronización de
-//! directorios): la Task de [`TaskKind::SyncPlan`], el tee al spool y al lote,
-//! el cierre con `sync.plan_done` y los rechazos que no llegan a ser Task.
+//! `Engine::sync_plan_as` integration (task 8 of the directory-sync plan): the
+//! [`TaskKind::SyncPlan`] Task, the tee to the spool and to the batch, closing
+//! with `sync.plan_done`, and the rejections that never become a Task.
 //!
-//! El transductor es de `norte-sync` y ya tiene sus tests contra filas hechas a
-//! mano y contra `compare()` real; el spool es de `sync::spool` y tiene los
-//! suyos. Aquí se prueba SOLO lo que el core añade al juntarlos: el lote, el
-//! contador, la retención, la identidad de las raíces y el final.
+//! The transducer belongs to `norte-sync` and already has its tests against
+//! hand-made rows and against a real `compare()`; the spool belongs to
+//! `sync::spool` and has its own too. Here only what the core adds by joining
+//! them is tested: the batch, the counter, the retention, the roots' identity
+//! and the ending.
 //!
-//! No hay journal que comprobar: planificar no escribe un byte en ninguno de los
-//! dos árboles (regla dura 4 no aplica; quien escribe es `sync.apply`).
+//! There is no journal to check: planning writes not a single byte to either
+//! tree (hard rule 4 does not apply; `sync.apply` is the one that writes).
 
 use std::sync::Arc;
 
@@ -25,15 +26,15 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 fn rel(wire: &str) -> RelPath {
-    RelPath::parse_wire(wire).expect("rel válido")
+    RelPath::parse_wire(wire).expect("valid rel")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
@@ -44,17 +45,17 @@ async fn mkdir(mem: &MemProvider, wire: &str) {
     mem.mkdir(&vp(wire)).await.expect("mkdir");
 }
 
-/// Engine + `MemProvider` + EL spool bajo un tempdir propio.
+/// Engine + `MemProvider` + THE spool under its own tempdir.
 ///
-/// El `TempDir` se devuelve para que viva lo que dure el test: al soltarlo se
-/// borra el directorio de spools con él.
+/// The `TempDir` is returned so it lives as long as the test does: dropping it
+/// deletes the spool directory with it.
 fn setup() -> (Engine, Arc<MemProvider>, tempfile::TempDir) {
     setup_with(MemProvider::new())
 }
 
-/// El mismo montaje sobre un provider ya configurado: lo que cambia entre las
-/// variantes es la PAPELERA del destino, que es lo único que decide si un plan
-/// se puede deshacer.
+/// The same setup over an already-configured provider: what changes between
+/// the variants is the destination's TRASH, which is the only thing that
+/// decides whether a plan can be undone.
 fn setup_with(mem: MemProvider) -> (Engine, Arc<MemProvider>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let engine = Engine::new();
@@ -75,7 +76,7 @@ fn params(source: &str, dest: &str) -> SyncPlanParams {
     }
 }
 
-/// Los pasos de todos los lotes y el cierre, en el orden en que salieron.
+/// The steps from every batch and the closing event, in the order they came out.
 struct Planned {
     batches: Vec<Vec<SyncStep>>,
     done: Option<SyncPlanDone>,
@@ -90,11 +91,11 @@ impl Planned {
     fn done(&self) -> &SyncPlanDone {
         self.done
             .as_ref()
-            .expect("el plan cerró con sync.plan_done")
+            .expect("the plan closed with sync.plan_done")
     }
 }
 
-/// Lanza el plan y drena su canal hasta el cierre.
+/// Launches the plan and drains its channel until closing.
 async fn plan(engine: &Engine, p: SyncPlanParams) -> Planned {
     let (handle, mut rx) = engine
         .sync_plan_as(p, 1, Actor::User)
@@ -107,13 +108,13 @@ async fn plan(engine: &Engine, p: SyncPlanParams) -> Planned {
             SyncPlanEvent::Steps(batch) => {
                 assert!(
                     done.is_none(),
-                    "un lote DESPUÉS del cierre: sync.plan_done tiene que ser el último"
+                    "a batch AFTER closing: sync.plan_done has to be last"
                 );
-                assert_eq!(batch.task_id, handle.id(), "el lote lleva SU task_id");
+                assert_eq!(batch.task_id, handle.id(), "the batch carries ITS task_id");
                 batches.push(batch.steps);
             }
             SyncPlanEvent::Done(d) => {
-                assert!(done.is_none(), "dos cierres para un plan");
+                assert!(done.is_none(), "two closings for one plan");
                 assert_eq!(d.task_id, handle.id());
                 done = Some(d);
             }
@@ -127,17 +128,17 @@ async fn plan(engine: &Engine, p: SyncPlanParams) -> Planned {
     }
 }
 
-/// Cuántos ficheros hay en el directorio de spools (el `.part` incluido).
+/// How many files are in the spool directory (the `.part` included).
 fn spooled(engine: &Engine) -> usize {
-    let spool = engine.spool().expect("hay spool");
+    let spool = engine.spool().expect("there is a spool");
     match std::fs::read_dir(spool.dir()) {
         Ok(rd) => rd.count(),
-        // Nunca se creó: cero.
+        // Never created: zero.
         Err(_) => 0,
     }
 }
 
-/// Dos ficheros en el origen y un destino vacío: dos copias, sin bloqueos.
+/// Two files at the source and an empty destination: two copies, no blockers.
 async fn simple(mem: &MemProvider) {
     mkdir(mem, "mem:///s").await;
     mkdir(mem, "mem:///d").await;
@@ -146,10 +147,10 @@ async fn simple(mem: &MemProvider) {
 }
 
 // 1 ───────────────────────────────────────────────────────────────────────
-/// Los lotes van ACOTADOS y coalescidos, el mismo contrato que `compare.rows`:
-/// medio millón de pasos no puede convertirse en medio millón de frames.
+/// Batches are BOUNDED and coalesced, the same contract as `compare.rows`:
+/// half a million steps cannot turn into half a million frames.
 #[tokio::test]
-async fn los_pasos_llegan_en_lotes_acotados_y_coalescidos() {
+async fn steps_arrive_in_bounded_coalesced_batches() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///s").await;
     mkdir(&mem, "mem:///d").await;
@@ -161,23 +162,24 @@ async fn los_pasos_llegan_en_lotes_acotados_y_coalescidos() {
     assert_eq!(out.state, TaskState::Completed);
     assert!(
         out.batches.iter().all(|b| b.len() <= SYNC_STEPS_MAX_BATCH),
-        "lote por encima del tope: {:?}",
+        "a batch above the cap: {:?}",
         out.batches.iter().map(Vec::len).collect::<Vec<_>>()
     );
-    assert_eq!(out.steps().len(), 600, "un paso por fichero del origen");
+    assert_eq!(out.steps().len(), 600, "one step per source file");
     assert!(
         out.batches.len() < 600,
-        "una frame por paso no es coalescer: {} lotes",
+        "one frame per step is not coalescing: {} batches",
         out.batches.len()
     );
     assert_eq!(out.done().counts.copy, 600);
 }
 
 // 2 ───────────────────────────────────────────────────────────────────────
-/// El plan CIERRA con su hash, sus contadores y su veredicto, y todo eso sale
-/// del resumen del spool — no se recalcula aquí ni en el daemon.
+/// The plan CLOSES with its hash, its counters and its verdict, and all of
+/// that comes from the spool's summary — it is not recomputed here nor in the
+/// daemon.
 #[tokio::test]
-async fn el_plan_cierra_con_hash_contadores_y_executable() {
+async fn the_plan_closes_with_hash_counters_and_executable() {
     let (engine, mem, _dir) = setup();
     simple(&mem).await;
 
@@ -194,7 +196,7 @@ async fn el_plan_cierra_con_hash_contadores_y_executable() {
     );
     assert!(
         out.steps().iter().all(SyncStep::shape_is_consistent),
-        "el core no puede emitir pasos incoherentes: {:#?}",
+        "the core cannot emit inconsistent steps: {:#?}",
         out.steps()
     );
     assert!(
@@ -204,16 +206,17 @@ async fn el_plan_cierra_con_hash_contadores_y_executable() {
     );
 }
 
-/// El cierre dice qué PAPELERA tiene el destino, que es lo único que
-/// distingue un plan que se puede deshacer de otro idéntico que no.
+/// The closing event says which TRASH the destination has, which is the only
+/// thing that tells apart a plan that can be undone from an identical one
+/// that cannot.
 ///
-/// Los dos planes de este test tienen los mismos pasos sobre los mismos
-/// ficheros; lo que cambia es si el undo va a devolver algo. Sin este campo el
-/// diálogo de aprobación no lo podría decir (spec 2, tarea 12).
+/// This test's two plans have the same steps over the same files; what
+/// changes is whether undo is going to return anything. Without this field
+/// the approval dialog could not say so (spec 2, task 12).
 #[tokio::test]
-async fn el_cierre_dice_que_papelera_tiene_el_destino() {
-    // `MemProvider` declara papelera y no promete restaurar: es la papelera
-    // MUDA de macOS y Windows, donde no vuelve ni una copia.
+async fn the_closing_event_says_which_trash_the_destination_has() {
+    // `MemProvider` declares a trash and does not promise to restore: it is
+    // macOS's and Windows's MUTE trash, which returns not even one copy.
     let (engine, mem, _dir) = setup();
     simple(&mem).await;
     let out = plan(&engine, params("mem:///s", "mem:///d")).await;
@@ -222,11 +225,11 @@ async fn el_cierre_dice_que_papelera_tiene_el_destino() {
         out.steps()
             .iter()
             .all(|s| s.reversal == Some(StepReversal::Irreversible)),
-        "con una papelera muda no vuelve ni una copia: {:#?}",
+        "with a mute trash not even one copy comes back: {:#?}",
         out.steps()
     );
 
-    // Y con la papelera lógica, la MISMA comparación se deshace entera.
+    // And with the logical trash, the SAME comparison undoes entirely.
     let (engine, mem, _dir2) = setup_with(MemProvider::new().with_logical_trash());
     simple(&mem).await;
     let out = plan(&engine, params("mem:///s", "mem:///d")).await;
@@ -237,13 +240,14 @@ async fn el_cierre_dice_que_papelera_tiene_el_destino() {
             .all(|s| s.reversal == Some(StepReversal::Delete))
     );
 
-    // Y sin papelera NINGUNA —un bucket, un SFTP—, que es el caso por el que
-    // el campo existe: la copia sigue anunciando `delete` en el wire y el undo
-    // se la va a saltar, así que el cierre es lo ÚNICO que distingue este plan
-    // del de arriba. Los dos llevan los mismos pasos con la misma reversa.
-    let sin_papelera = norte_proto::CapabilityFlags::CASE_SENSITIVE
+    // And with NO trash at all — a bucket, an SFTP —, which is the case the
+    // field exists for: the copy still announces `delete` on the wire and
+    // undo is going to skip it, so the closing event is the ONLY thing that
+    // tells this plan apart from the one above. Both carry the same steps
+    // with the same reversal.
+    let no_trash = norte_proto::CapabilityFlags::CASE_SENSITIVE
         | norte_proto::CapabilityFlags::CASE_PRESERVING;
-    let (engine, mem, _dir3) = setup_with(MemProvider::with_flags(sin_papelera));
+    let (engine, mem, _dir3) = setup_with(MemProvider::with_flags(no_trash));
     simple(&mem).await;
     let out = plan(&engine, params("mem:///s", "mem:///d")).await;
     assert_eq!(out.done().dest_trash, DestTrash::Absent);
@@ -251,36 +255,36 @@ async fn el_cierre_dice_que_papelera_tiene_el_destino() {
         out.steps()
             .iter()
             .all(|s| s.reversal == Some(StepReversal::Delete)),
-        "la copia anuncia `delete` sin papelera de la que volver: {:#?}",
+        "the copy announces `delete` with no trash to come back from: {:#?}",
         out.steps()
     );
 }
 
 // 3 ───────────────────────────────────────────────────────────────────────
-/// Un directorio contra un fichero del mismo nombre es un bloqueo estructural
-/// (`TypeMismatchDir`): reemplazar un árbol por un fichero merece un humano, y
-/// el plan deja de ser ejecutable.
+/// A directory against a file of the same name is a structural blocker
+/// (`TypeMismatchDir`): replacing a tree with a file deserves a human, and the
+/// plan stops being executable.
 #[tokio::test]
-async fn un_bloqueo_deja_el_plan_no_ejecutable() {
+async fn a_blocker_leaves_the_plan_not_executable() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///s").await;
     mkdir(&mem, "mem:///d").await;
-    write_file(&mem, "mem:///s/x", b"soy un fichero").await;
+    write_file(&mem, "mem:///s/x", b"I am a file").await;
     mkdir(&mem, "mem:///d/x").await;
 
     let out = plan(&engine, params("mem:///s", "mem:///d")).await;
     assert_eq!(out.state, TaskState::Completed);
     let done = out.done();
-    assert!(!done.executable, "un bloqueo NO se puede aprobar");
+    assert!(!done.executable, "a blocker CANNOT be approved");
     assert_eq!(done.blockers.len(), 1, "{:#?}", done.blockers);
     assert_eq!(done.blockers_total, 1);
 }
 
 // 4 ───────────────────────────────────────────────────────────────────────
-/// La LISTA de bloqueos se recorta; el TOTAL no. Un humano necesita saber que
-/// hay 266 aunque solo se le puedan enseñar 256.
+/// The blocker LIST is trimmed; the TOTAL is not. A human needs to know there
+/// are 266 even if only 256 can be shown.
 #[tokio::test]
-async fn los_bloqueos_se_recortan_pero_el_total_no() {
+async fn blockers_are_trimmed_but_the_total_is_not() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///s").await;
     mkdir(&mem, "mem:///d").await;
@@ -299,10 +303,10 @@ async fn los_bloqueos_se_recortan_pero_el_total_no() {
 }
 
 // 5 ───────────────────────────────────────────────────────────────────────
-/// Raíces solapadas: se rechazan ANTES de recorrer nada, y el error dice CUÁL
-/// está dentro de cuál — no es lo mismo para quien lo pinta.
+/// Overlapping roots: rejected BEFORE walking anything, and the error says
+/// WHICH one is inside which — it is not the same for whoever paints it.
 #[tokio::test]
-async fn raices_solapadas_se_rechazan_antes_de_recorrer() {
+async fn overlapping_roots_are_rejected_before_walking() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///a").await;
     mkdir(&mem, "mem:///a/sub").await;
@@ -311,7 +315,7 @@ async fn raices_solapadas_se_rechazan_antes_de_recorrer() {
         .sync_plan_as(params("mem:///a", "mem:///a/sub"), 1, Actor::User)
         .await
     else {
-        panic!("el destino está dentro del origen");
+        panic!("the destination is inside the source");
     };
     assert!(
         matches!(
@@ -320,14 +324,14 @@ async fn raices_solapadas_se_rechazan_antes_de_recorrer() {
                 relation: RootOverlap::DestInsideSource
             }
         ),
-        "fue {err:?}"
+        "was {err:?}"
     );
 
     let Err(err) = engine
         .sync_plan_as(params("mem:///a/sub", "mem:///a"), 1, Actor::User)
         .await
     else {
-        panic!("el origen está dentro del destino");
+        panic!("the source is inside the destination");
     };
     assert!(
         matches!(
@@ -336,16 +340,16 @@ async fn raices_solapadas_se_rechazan_antes_de_recorrer() {
                 relation: RootOverlap::SourceInsideDest
             }
         ),
-        "fue {err:?}"
+        "was {err:?}"
     );
-    assert_eq!(spooled(&engine), 0, "un rechazo no crea Task ni spool");
+    assert_eq!(spooled(&engine), 0, "a rejection creates no Task nor spool");
 }
 
 // 6 ───────────────────────────────────────────────────────────────────────
-/// Dos raíces IGUALES no son «una dentro de la otra»: son la misma, y el error
-/// lo dice en vez de elegir un lado por convenio.
+/// Two EQUAL roots are not "one inside the other": they are the same one, and
+/// the error says so instead of picking a side by convention.
 #[tokio::test]
-async fn raices_identicas_lo_dicen_en_vez_de_nombrar_un_lado() {
+async fn identical_roots_say_so_instead_of_naming_a_side() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///a").await;
 
@@ -353,7 +357,7 @@ async fn raices_identicas_lo_dicen_en_vez_de_nombrar_un_lado() {
         .sync_plan_as(params("mem:///a", "mem:///a"), 1, Actor::User)
         .await
     else {
-        panic!("una raíz contra sí misma");
+        panic!("a root against itself");
     };
     assert!(
         matches!(
@@ -362,17 +366,17 @@ async fn raices_identicas_lo_dicen_en_vez_de_nombrar_un_lado() {
                 relation: RootOverlap::Same
             }
         ),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }
 
 // 7 ───────────────────────────────────────────────────────────────────────
-/// Y la mitad que la comprobación estructural NO puede ver: una raíz que es un
-/// symlink al mismo directorio que la otra. Los dos `VPath` son distintos byte a
-/// byte y las filas del walk cuelgan todas de la raíz symlinkeada, así que ni la
-/// igualdad estructural ni el guard del walk lo cogen. Lo coge `node_id`.
+/// And the half the structural check CANNOT see: a root that is a symlink to
+/// the same directory as the other. The two `VPath`s are different byte for
+/// byte and the walk's rows all hang from the symlinked root, so neither
+/// structural equality nor the walk's guard catches it. `node_id` catches it.
 #[tokio::test]
-async fn una_raiz_symlinkeada_contra_su_destino_es_el_mismo_arbol() {
+async fn a_symlinked_root_against_its_destination_is_the_same_tree() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///real").await;
     write_file(&mem, "mem:///real/a.txt", b"x").await;
@@ -384,7 +388,7 @@ async fn una_raiz_symlinkeada_contra_su_destino_es_el_mismo_arbol() {
         .sync_plan_as(params("mem:///alias", "mem:///real"), 1, Actor::User)
         .await
     else {
-        panic!("las dos raíces son el mismo directorio");
+        panic!("both roots are the same directory");
     };
     assert!(
         matches!(
@@ -393,23 +397,23 @@ async fn una_raiz_symlinkeada_contra_su_destino_es_el_mismo_arbol() {
                 relation: RootOverlap::Same
             }
         ),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }
 
 // 7 bis ───────────────────────────────────────────────────────────────────
-/// Y la OTRA mitad que ninguna de las dos ve: la contención que solo existe si
-/// se pliega la caja. `mem:///Data` contra `mem:///data/backup` no son iguales
-/// byte a byte, no cuelga una de la otra byte a byte, y sus `node_id` son
-/// distintos porque son directorios distintos — pero en un volumen que pliega
-/// son el MISMO directorio nombrado dos veces, o sea que el plan copiaría un
-/// árbol dentro de sí mismo. Es el resultado que todo el aparato de solape
-/// existe para impedir.
+/// And the OTHER half neither of the two sees: the containment that only
+/// exists if the case is folded. `mem:///Data` against `mem:///data/backup`
+/// are not equal byte for byte, one does not hang from the other byte for
+/// byte, and their `node_id`s are different because they are different
+/// directories — but on a folding volume they are the SAME directory named
+/// twice, meaning the plan would copy a tree inside itself. This is the result
+/// the whole overlap apparatus exists to prevent.
 #[tokio::test]
-async fn la_contencion_que_solo_se_ve_plegando_la_caja_tambien_se_rechaza() {
+async fn containment_only_visible_by_folding_the_case_is_also_rejected() {
     let dir = tempfile::tempdir().expect("tempdir");
     let engine = Engine::new();
-    // Sin `CASE_SENSITIVE`: APFS, NTFS, un ext4 `+F`.
+    // Without `CASE_SENSITIVE`: APFS, NTFS, an ext4 `+F`.
     let mem = Arc::new(MemProvider::with_flags(
         norte_proto::CapabilityFlags::CASE_PRESERVING | norte_proto::CapabilityFlags::RENAME_ATOMIC,
     ));
@@ -422,7 +426,7 @@ async fn la_contencion_que_solo_se_ve_plegando_la_caja_tambien_se_rechaza() {
         .sync_plan_as(params("mem:///Data", "mem:///data/backup"), 1, Actor::User)
         .await
     else {
-        panic!("el destino cuelga del origen en cuanto se pliega la caja");
+        panic!("the destination hangs from the source as soon as the case is folded");
     };
     assert!(
         matches!(
@@ -431,15 +435,15 @@ async fn la_contencion_que_solo_se_ve_plegando_la_caja_tambien_se_rechaza() {
                 relation: RootOverlap::DestInsideSource
             }
         ),
-        "fue {err:?}"
+        "was {err:?}"
     );
 
-    // Y al revés, y las dos grafías de la MISMA raíz.
+    // And the other way around, and the two spellings of the SAME root.
     let Err(err) = engine
         .sync_plan_as(params("mem:///data/backup", "mem:///DATA"), 1, Actor::User)
         .await
     else {
-        panic!("el origen cuelga del destino");
+        panic!("the source hangs from the destination");
     };
     assert!(
         matches!(
@@ -448,13 +452,13 @@ async fn la_contencion_que_solo_se_ve_plegando_la_caja_tambien_se_rechaza() {
                 relation: RootOverlap::SourceInsideDest
             }
         ),
-        "fue {err:?}"
+        "was {err:?}"
     );
     let Err(err) = engine
         .sync_plan_as(params("mem:///Data", "mem:///dAtA"), 1, Actor::User)
         .await
     else {
-        panic!("son la misma raíz escrita dos veces");
+        panic!("they are the same root written twice");
     };
     assert!(
         matches!(
@@ -463,18 +467,18 @@ async fn la_contencion_que_solo_se_ve_plegando_la_caja_tambien_se_rechaza() {
                 relation: RootOverlap::Same
             }
         ),
-        "fue {err:?}"
+        "was {err:?}"
     );
 }
 
 // 7 ter ───────────────────────────────────────────────────────────────────
-/// Y el plegado NO se aplica donde no toca: con los dos lados distinguiendo
-/// caja, `mem:///Data` y `mem:///data/backup` son de verdad dos árboles
-/// distintos y el plan se sirve. Rechazarlo negaría una sincronización legítima
-/// sobre ext4, que es la mitad de la decisión que la prueba de arriba no puede
-/// enseñar.
+/// And the fold is NOT applied where it does not belong: with both sides
+/// distinguishing case, `mem:///Data` and `mem:///data/backup` really are two
+/// different trees and the plan is served. Rejecting it would deny a
+/// legitimate sync on ext4, which is the half of the decision the test above
+/// cannot show.
 #[tokio::test]
-async fn con_los_dos_lados_sensibles_a_la_caja_no_hay_solape_que_plegar() {
+async fn with_both_sides_case_sensitive_there_is_no_overlap_to_fold() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///Data").await;
     mkdir(&mem, "mem:///data").await;
@@ -485,121 +489,121 @@ async fn con_los_dos_lados_sensibles_a_la_caja_no_hay_solape_que_plegar() {
 }
 
 // 8 ───────────────────────────────────────────────────────────────────────
-/// Dos campos de `compare` no son del llamante en `sync.plan`. Mandarlos es un
-/// rechazo, jamás un valor que el core pise en silencio: servir un recorrido
-/// distinto del pedido es peor que no ofrecerlo.
+/// Two `compare` fields are not the caller's in `sync.plan`. Sending them is a
+/// rejection, never a value the core silently overrides: serving a walk
+/// different from the one requested is worse than not offering it.
 #[tokio::test]
-async fn el_llamante_no_fija_las_opciones_del_planificador() {
+async fn the_caller_does_not_set_the_planners_options() {
     let (engine, mem, _dir) = setup();
     simple(&mem).await;
 
     let mut p = params("mem:///s", "mem:///d");
     p.compare.follow_symlinks = true;
     let Err(err) = engine.sync_plan_as(p, 1, Actor::User).await else {
-        panic!("follow_symlinks no se sirve en silencio");
+        panic!("follow_symlinks is not silently served");
     };
-    assert!(matches!(err, ProtoError::Unsupported), "fue {err:?}");
+    assert!(matches!(err, ProtoError::Unsupported), "was {err:?}");
 
     let mut p = params("mem:///s", "mem:///d");
     p.compare.descend_orphans = Some(norte_proto::methods::DescendSide::Right);
     let Err(err) = engine.sync_plan_as(p, 1, Actor::User).await else {
-        panic!("descend_orphans lo fija el planificador");
+        panic!("descend_orphans is set by the planner");
     };
-    assert!(matches!(err, ProtoError::Unsupported), "fue {err:?}");
+    assert!(matches!(err, ProtoError::Unsupported), "was {err:?}");
     assert_eq!(spooled(&engine), 0);
 }
 
 // 9 ───────────────────────────────────────────────────────────────────────
-/// Un `include` por encima del tope se REHÚSA. Recortarlo en silencio
-/// sincronizaría algo que nadie pidió, y el humano lo aprobaría creyendo que lo
-/// vio entero.
+/// An `include` above the cap is REFUSED. Trimming it silently would sync
+/// something nobody asked for, and the human would approve it believing they
+/// saw it whole.
 #[tokio::test]
-async fn un_include_por_encima_del_tope_se_rehusa_en_vez_de_recortarse() {
+async fn an_include_above_the_cap_is_refused_instead_of_trimmed() {
     let (engine, mem, _dir) = setup();
     simple(&mem).await;
 
     let mut p = params("mem:///s", "mem:///d");
     p.include = Some(vec![rel("x"); SYNC_MAX_INCLUDE + 1]);
     let Err(err) = engine.sync_plan_as(p, 1, Actor::User).await else {
-        panic!("por encima del tope");
+        panic!("above the cap");
     };
-    assert!(matches!(err, ProtoError::InvalidPath), "fue {err:?}");
+    assert!(matches!(err, ProtoError::InvalidPath), "was {err:?}");
 }
 
 // 10 ──────────────────────────────────────────────────────────────────────
-/// El `include` recorta lo que SALE, y el hash va con lo recortado: dos planes
-/// del mismo árbol con selecciones distintas no pueden compartir digest, o
-/// aprobar uno autorizaría el otro.
+/// `include` trims what COMES OUT, and the hash goes with the trimmed set: two
+/// plans of the same tree with different selections cannot share a digest, or
+/// approving one would authorize the other.
 #[tokio::test]
-async fn el_include_recorta_los_pasos_y_el_hash_va_con_ellos() {
+async fn include_trims_the_steps_and_the_hash_goes_with_them() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///s").await;
     mkdir(&mem, "mem:///d").await;
     mkdir(&mem, "mem:///s/sub").await;
     write_file(&mem, "mem:///s/a.txt", b"a").await;
-    write_file(&mem, "mem:///s/sub/dentro.txt", b"b").await;
+    write_file(&mem, "mem:///s/sub/inside.txt", b"b").await;
 
-    let todo = plan(&engine, params("mem:///s", "mem:///d")).await;
-    assert_eq!(todo.state, TaskState::Completed);
-    assert_eq!(todo.done().counts.copy, 2, "a.txt y sub/dentro.txt");
+    let everything = plan(&engine, params("mem:///s", "mem:///d")).await;
+    assert_eq!(everything.state, TaskState::Completed);
+    assert_eq!(everything.done().counts.copy, 2, "a.txt and sub/inside.txt");
 
-    // Solo la carpeta: arrastra su contenido y deja fuera a `a.txt`.
+    // Only the folder: it drags its content and leaves `a.txt` out.
     let mut p = params("mem:///s", "mem:///d");
     p.include = Some(vec![rel("sub")]);
-    let parte = plan(&engine, p).await;
-    assert_eq!(parte.state, TaskState::Completed);
-    let rels: Vec<String> = parte.steps().iter().map(|s| s.rel.to_wire()).collect();
-    assert_eq!(rels, vec!["sub".to_owned(), "sub/dentro.txt".to_owned()]);
-    assert_eq!(parte.done().counts.copy, 1);
-    assert_eq!(parte.done().counts.create_dir, 1);
+    let part = plan(&engine, p).await;
+    assert_eq!(part.state, TaskState::Completed);
+    let rels: Vec<String> = part.steps().iter().map(|s| s.rel.to_wire()).collect();
+    assert_eq!(rels, vec!["sub".to_owned(), "sub/inside.txt".to_owned()]);
+    assert_eq!(part.done().counts.copy, 1);
+    assert_eq!(part.done().counts.create_dir, 1);
     assert_ne!(
-        parte.done().plan_hash,
-        todo.done().plan_hash,
-        "dos selecciones distintas no pueden compartir hash"
+        part.done().plan_hash,
+        everything.done().plan_hash,
+        "two different selections cannot share a hash"
     );
 }
 
 // 10b ─────────────────────────────────────────────────────────────────────
-/// Y el arrastre hacia ARRIBA, que es el que falta: el panel deja seleccionar la
-/// fila del FICHERO, y sin el `CreateDir` de su carpeta el plan copiaría dentro
-/// de un directorio que no existe — rompiendo además la regla que
-/// `SyncStepsBatch::steps` publica («un `CreateDir` precede a toda copia dentro
-/// de él»).
+/// And the drag UPWARD, which is the one that is missing: the pane lets the
+/// FILE'S row be selected, and without its folder's `CreateDir` the plan would
+/// copy inside a directory that does not exist — also breaking the rule
+/// `SyncStepsBatch::steps` publishes ("a `CreateDir` precedes every copy
+/// inside it").
 #[tokio::test]
-async fn seleccionar_un_fichero_arrastra_el_createdir_de_su_carpeta() {
+async fn selecting_a_file_drags_its_folders_createdir() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///s").await;
     mkdir(&mem, "mem:///d").await;
-    mkdir(&mem, "mem:///s/nueva").await;
-    write_file(&mem, "mem:///s/nueva/a.txt", b"a").await;
-    write_file(&mem, "mem:///s/nueva/b.txt", b"b").await;
+    mkdir(&mem, "mem:///s/new").await;
+    write_file(&mem, "mem:///s/new/a.txt", b"a").await;
+    write_file(&mem, "mem:///s/new/b.txt", b"b").await;
 
     let mut p = params("mem:///s", "mem:///d");
-    p.include = Some(vec![rel("nueva/a.txt")]);
+    p.include = Some(vec![rel("new/a.txt")]);
     let out = plan(&engine, p).await;
     assert_eq!(out.state, TaskState::Completed);
 
     let steps = out.steps();
     let rels: Vec<String> = steps.iter().map(|s| s.rel.to_wire()).collect();
-    assert_eq!(rels, vec!["nueva".to_owned(), "nueva/a.txt".to_owned()]);
+    assert_eq!(rels, vec!["new".to_owned(), "new/a.txt".to_owned()]);
     assert_eq!(steps[0].kind, SyncStepKind::CreateDir);
-    assert_eq!(out.done().counts.copy, 1, "b.txt no estaba seleccionado");
+    assert_eq!(out.done().counts.copy, 1, "b.txt was not selected");
     assert_eq!(out.done().counts.create_dir, 1);
 }
 
 // 11 ──────────────────────────────────────────────────────────────────────
-/// Regla dura 3 en la frontera de la Task, y la consecuencia que importa: un
-/// plan cancelado **no deja nada aprobable**. El digest parcial de un plan
-/// cortado por la mitad sería perfectamente válido para un plan que dice
-/// sincronizar un árbol que se recorrió un tercio.
+/// Hard rule 3 at the Task boundary, and the consequence that matters: a
+/// cancelled plan **leaves nothing approvable**. The partial digest of a plan
+/// cut halfway would be perfectly valid for a plan that claims to sync a tree
+/// that was only a third walked.
 #[tokio::test]
-async fn cancelar_el_plan_no_deja_spool() {
+async fn cancelling_the_plan_leaves_no_spool() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///s").await;
     mkdir(&mem, "mem:///d").await;
-    // Bastantes pasos para LLENAR el canal (capacidad 8 lotes de 256): con el
-    // emisor bloqueado en `send`, el plan no puede terminar antes de que el test
-    // corte. Sin eso el test sería una carrera contra el reloj.
+    // Enough steps to FILL the channel (capacity 8 batches of 256): with the
+    // sender blocked in `send`, the plan cannot finish before the test cuts
+    // it. Without that this test would be a race against the clock.
     for i in 0..3_000 {
         write_file(&mem, &format!("mem:///s/f{i}.txt"), b"x").await;
     }
@@ -608,7 +612,7 @@ async fn cancelar_el_plan_no_deja_spool() {
         .sync_plan_as(params("mem:///s", "mem:///d"), 1, Actor::User)
         .await
         .expect("sync.plan");
-    let first = rx.recv().await.expect("al menos un evento");
+    let first = rx.recv().await.expect("at least one event");
     assert!(matches!(first, SyncPlanEvent::Steps(_)));
     handle.cancel();
 
@@ -619,26 +623,26 @@ async fn cancelar_el_plan_no_deja_spool() {
         }
     }
     assert_eq!(handle.join().await, TaskState::Cancelled);
-    assert!(done.is_none(), "un plan cancelado NO cierra");
+    assert!(done.is_none(), "a cancelled plan does NOT close");
     assert_eq!(
         spooled(&engine),
         0,
-        "un plan cancelado no es un plan aprobable"
+        "a cancelled plan is not an approvable plan"
     );
 }
 
 // 12 ──────────────────────────────────────────────────────────────────────
-/// El dueño que deja de recibir tampoco deja plan: lo que retendríamos sería un
-/// plan que nadie llegó a ver entero, y soltar el canal es además lo que para el
-/// walk.
+/// An owner that stops receiving also leaves no plan: what would be retained
+/// is a plan nobody ever saw in full, and dropping the channel is also what
+/// stops the walk.
 #[tokio::test]
-async fn un_dueno_que_deja_de_recibir_no_deja_plan_aprobable() {
+async fn an_owner_that_stops_receiving_leaves_no_approvable_plan() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///s").await;
     mkdir(&mem, "mem:///d").await;
-    // Bastantes pasos para LLENAR el canal (capacidad 8 lotes de 256): con el
-    // emisor bloqueado en `send`, el plan no puede terminar antes de que el test
-    // corte. Sin eso el test sería una carrera contra el reloj.
+    // Enough steps to FILL the channel (capacity 8 batches of 256): with the
+    // sender blocked in `send`, the plan cannot finish before the test cuts
+    // it. Without that this test would be a race against the clock.
     for i in 0..3_000 {
         write_file(&mem, &format!("mem:///s/f{i}.txt"), b"x").await;
     }
@@ -647,7 +651,7 @@ async fn un_dueno_que_deja_de_recibir_no_deja_plan_aprobable() {
         .sync_plan_as(params("mem:///s", "mem:///d"), 1, Actor::User)
         .await
         .expect("sync.plan");
-    rx.recv().await.expect("al menos un evento");
+    rx.recv().await.expect("at least one event");
     drop(rx);
 
     assert_eq!(handle.join().await, TaskState::Cancelled);
@@ -655,11 +659,11 @@ async fn un_dueno_que_deja_de_recibir_no_deja_plan_aprobable() {
 }
 
 // 13 ──────────────────────────────────────────────────────────────────────
-/// Un plan que termina deja EXACTAMENTE un spool, y se abre con el hash que
-/// viajó en el cierre. Es la precondición del ejecutor: `sync.apply` no lleva
-/// las raíces, así que salen de ahí.
+/// A plan that finishes leaves EXACTLY one spool, and it opens with the hash
+/// that traveled in the closing event. This is the executor's precondition:
+/// `sync.apply` does not carry the roots, so they come from there.
 #[tokio::test]
-async fn un_plan_completo_deja_un_spool_abrible_con_su_hash() {
+async fn a_completed_plan_leaves_one_spool_openable_with_its_hash() {
     let (engine, mem, _dir) = setup();
     simple(&mem).await;
 
@@ -667,26 +671,26 @@ async fn un_plan_completo_deja_un_spool_abrible_con_su_hash() {
     assert_eq!(out.state, TaskState::Completed);
     assert_eq!(spooled(&engine), 1);
 
-    let spool = engine.spool().expect("hay spool");
+    let spool = engine.spool().expect("there is a spool");
     let reader = spool
         .open(1, &out.done().plan_hash)
         .await
-        .expect("el plan se abre con su hash");
+        .expect("the plan opens with its hash");
     assert_eq!(reader.header().options.source_root, vp("mem:///s"));
     assert_eq!(reader.header().options.dest_root, vp("mem:///d"));
     assert!(reader.summary().executable);
 
-    // Y otra conexión no lo abre, aunque conozca el hash.
+    // And another connection does not open it, even knowing the hash.
     assert!(spool.open(2, &out.done().plan_hash).await.is_err());
 }
 
 // 13b ─────────────────────────────────────────────────────────────────────
-/// Un plan que no emite NI UN paso —dos árboles idénticos— nunca toca su canal,
-/// así que no puede enterarse de que su dueño se fue por la vía del `flush`. Es
-/// el caso que hace que la propiedad «un plan sin dueño no queda retenido» tenga
-/// que decidirse en el spool y no en el canal.
+/// A plan that emits NOT ONE step — two identical trees — never touches its
+/// channel, so it cannot find out its owner left through `flush`. This is the
+/// case that forces the property "a plan with no owner is not retained" to be
+/// decided in the spool and not in the channel.
 #[tokio::test]
-async fn un_plan_de_cero_pasos_cuyo_dueno_se_fue_no_queda_retenido() {
+async fn a_zero_step_plan_whose_owner_left_is_not_retained() {
     let (engine, mem, _dir) = setup();
     mkdir(&mem, "mem:///s").await;
     mkdir(&mem, "mem:///d").await;
@@ -697,43 +701,45 @@ async fn un_plan_de_cero_pasos_cuyo_dueno_se_fue_no_queda_retenido() {
         .sync_plan_as(params("mem:///s", "mem:///d"), 1, Actor::User)
         .await
         .expect("sync.plan");
-    // El dueño se va antes de que la Task llegue a nada, y el spool se entera
-    // por el desmontaje de la conexión, no por el canal.
+    // The owner leaves before the Task gets to anything, and the spool finds
+    // out through the connection's teardown, not through the channel.
     engine
         .spool()
-        .expect("hay spool")
+        .expect("there is a spool")
         .drop_connection(1)
         .await
         .expect("drop");
     drop(rx);
 
-    // Hay DOS órdenes posibles y este test no puede fijar cuál sale: el
-    // desmontaje puede llegar antes de que la Task termine, o después. Bajo
-    // `cargo llvm-cov` sale el segundo con bastante frecuencia, y afirmar
-    // `!= Completed` era afirmar una carrera —rojo intermitente, que aquí es
-    // un bug y no ruido—.
+    // There are TWO possible orderings and this test cannot pin down which
+    // one comes out: the teardown can arrive before the Task finishes, or
+    // after. Under `cargo llvm-cov` the second happens quite often, and
+    // asserting `!= Completed` was asserting a race — an intermittent red,
+    // which here is a bug and not noise.
     //
-    // La propiedad NO depende del orden, y es la única que este test existe
-    // para fijar: pase lo que pase, no queda un plan retenido de una conexión
-    // que ya no está. Si además la Task no llegó a completar, es que el
-    // desmontaje ganó, que es el otro camino y también vale.
-    let estado = handle.join().await;
-    assert_eq!(spooled(&engine), 0, "un plan sin dueño no se retiene");
+    // The property does NOT depend on the order, and it is the only one this
+    // test exists to pin down: whatever happens, no plan from a connection
+    // that is no longer there stays retained. If on top of that the Task did
+    // not get to complete, that means the teardown won, which is the other
+    // path and is also fine.
+    let state = handle.join().await;
+    assert_eq!(spooled(&engine), 0, "an ownerless plan is not retained");
     assert!(
         matches!(
-            estado,
+            state,
             TaskState::Completed | TaskState::Failed { .. } | TaskState::Cancelled
         ),
-        "la Task termina de una de las tres formas, fue {estado:?}"
+        "the Task ends in one of the three ways, was {state:?}"
     );
 }
 
 // 14 ──────────────────────────────────────────────────────────────────────
-/// Sin spool instalado no se planifica: un plan que no se puede retener tampoco
-/// se puede aplicar, y enseñar un diálogo de aprobación sobre algo que después
-/// no existe es peor que no ofrecerlo (fail-closed, como el índice).
+/// Without a spool installed, nothing is planned: a plan that cannot be
+/// retained cannot be applied either, and showing an approval dialog over
+/// something that does not exist afterward is worse than not offering it
+/// (fail-closed, like the index).
 #[tokio::test]
-async fn sin_spool_instalado_no_se_planifica() {
+async fn without_a_spool_installed_nothing_is_planned() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
@@ -744,28 +750,27 @@ async fn sin_spool_instalado_no_se_planifica() {
         .sync_plan_as(params("mem:///s", "mem:///d"), 1, Actor::User)
         .await
     else {
-        panic!("sin retención no hay plan");
+        panic!("without retention there is no plan");
     };
-    assert!(matches!(err, ProtoError::Unsupported), "fue {err:?}");
+    assert!(matches!(err, ProtoError::Unsupported), "was {err:?}");
 }
 
 // 15 ──────────────────────────────────────────────────────────────────────
-// Los tres cruces de provider que la spec pide POR NOMBRE
+// The three provider crossings the spec asks for BY NAME
 // (`planning_into_an_archive_blocks_instead_of_attempting_and_failing`,
 // `comparing_against_an_archive_source_copies_on_unknown_and_says_so`,
 // `a_destination_without_a_trash_takes_the_irreversible_path_for_real`).
 //
-// Son el único sitio donde la confianza `Unknown` y la reversa `Irreversible`
-// se encuentran con providers DE VERDAD —un zip que es de solo lectura y que no
-// tiene fecha en la que confiar, un destino que no declara papelera— en vez de
-// con `Capabilities` fabricadas a mano. El transductor ya tiene sus tablas
-// probadas contra filas sintéticas; lo que aquí se comprueba es que lo que un
-// provider real DICE llega hasta el paso.
+// These are the only place where `Unknown` confidence and `Irreversible`
+// reversal meet REAL providers — a read-only zip with no date to trust, a
+// destination that declares no trash — instead of hand-made `Capabilities`.
+// The transducer already has its tables tested against synthetic rows; what
+// is checked here is that what a real provider SAYS reaches the step.
 
-/// Un zip en memoria con `files` (nombre crudo, bytes) y SIN fechas: el par DOS
-/// sale a cero, que es inválido, así que el índice deja `mtime_ms: None` —
-/// exactamente lo que hace un zip real cuyo escritor no rellenó el campo. De
-/// ahí sale el `Unknown` del segundo test.
+/// An in-memory zip with `files` (raw name, bytes) and WITHOUT dates: the pair
+/// comes out at zero, which is invalid, so the index leaves `mtime_ms: None` —
+/// exactly what a real zip whose writer did not fill the field does. That is
+/// where the second test's `Unknown` comes from.
 fn zip_bytes(files: &[(&[u8], &[u8])]) -> Vec<u8> {
     let mut smith = norte_testkit::ZipSmith::new().undated();
     for (name, body) in files {
@@ -774,28 +779,28 @@ fn zip_bytes(files: &[(&[u8], &[u8])]) -> Vec<u8> {
     smith.build()
 }
 
-/// Engine con el `MemProvider` de siempre y un contenedor `a.zip` dentro de él,
-/// alcanzable como `zip+mem:///a.zip/!` (ADR 0018: scheme compuesto, sin
-/// registro previo del provider de archivo).
+/// Engine with the usual `MemProvider` and an `a.zip` container inside it,
+/// reachable as `zip+mem:///a.zip/!` (ADR 0018: composite scheme, with no
+/// prior registration of the archive provider).
 async fn setup_with_zip(files: &[(&[u8], &[u8])]) -> (Engine, Arc<MemProvider>, tempfile::TempDir) {
     let (engine, mem, dir) = setup();
     let bytes = zip_bytes(files);
-    let mut sink = mem.write(&vp("mem:///a.zip")).await.expect("write abre");
+    let mut sink = mem.write(&vp("mem:///a.zip")).await.expect("write opens");
     sink.write(Bytes::from(bytes)).await.expect("chunk");
     sink.commit().await.expect("commit");
     (engine, mem, dir)
 }
 
-/// Planificar HACIA un archivo bloquea: `norte-vfs-archive` es de solo lectura,
-/// y eso tiene que salir del PLAN —un bloqueo, antes de que nadie apruebe
-/// nada— y no de medio lote de escrituras fallidas.
+/// Planning TOWARD an archive blocks: `norte-vfs-archive` is read-only, and
+/// that has to come out of the PLAN — a blocker, before anyone approves
+/// anything — and not from half a batch of failed writes.
 ///
-/// Y el bloqueo CIERRA el plan: no se emite un solo paso, porque la lista de
-/// pasos de un plan que no se puede ejecutar solo sirve para que alguien la
-/// mire y crea que sí.
+/// And the blocker CLOSES the plan: not a single step is emitted, because the
+/// step list of a plan that cannot run only serves to make someone look at it
+/// and believe it will.
 #[tokio::test]
-async fn planificar_hacia_un_archivo_bloquea_en_vez_de_intentarlo() {
-    let (engine, mem, _dir) = setup_with_zip(&[(b"dentro.txt", b"x")]).await;
+async fn planning_into_an_archive_blocks_instead_of_attempting_and_failing() {
+    let (engine, mem, _dir) = setup_with_zip(&[(b"inside.txt", b"x")]).await;
     mkdir(&mem, "mem:///s").await;
     write_file(&mem, "mem:///s/a.txt", b"aaa").await;
 
@@ -804,33 +809,34 @@ async fn planificar_hacia_un_archivo_bloquea_en_vez_de_intentarlo() {
     let done = planned.done();
     assert!(
         !done.executable,
-        "un destino de solo lectura no es ejecutable"
+        "a read-only destination is not executable"
     );
     assert_eq!(done.blockers.len(), 1);
     assert_eq!(done.blockers[0].kind, SyncBlockerKind::DestReadOnly);
     assert!(
         done.blockers[0].rel.is_root(),
-        "un destino de solo lectura no es de un sitio concreto"
+        "a read-only destination is not about a specific spot"
     );
     assert!(
         planned.steps().is_empty(),
-        "ni un paso: el bloqueo termina el stream antes de tirar de la primera fila"
+        "not one step: the blocker ends the stream before pulling the first row"
     );
 }
 
-/// Un ORIGEN que es un archivo: sus fechas no merecen confianza (el par DOS de
-/// este zip es inválido, así que el índice no inventa ninguna). La cascada
-/// contesta `Same`/`Unknown`, y `on_unknown: Copy` —el default— ESCRIBE.
+/// A SOURCE that is an archive: its dates deserve no trust (this zip's second
+/// pair is invalid, so the index makes none up). The cascade answers
+/// `Same`/`Unknown`, and `on_unknown: Copy` — the default — WRITES.
 ///
-/// Que escriba no es lo interesante: lo interesante es que el paso se lleva la
-/// confianza con la que se decidió, que es lo que ADR 0048 promete y lo que
-/// permite que el diálogo diga «esto se copia porque nadie pudo verificarlo».
+/// That it writes is not the interesting part: the interesting part is that
+/// the step carries the confidence it was decided with, which is what ADR
+/// 0048 promises and what lets the dialog say "this is copied because nobody
+/// could verify it".
 #[tokio::test]
-async fn un_origen_archivo_copia_lo_incierto_y_dice_por_que() {
+async fn an_archive_source_copies_the_uncertain_and_says_why() {
     let (engine, mem, _dir) = setup_with_zip(&[(b"same-bytes.txt", b"12345")]).await;
     mkdir(&mem, "mem:///d").await;
-    // MISMO tamaño en los dos lados: el rung de tamaño no decide y la cascada
-    // pasa al de fecha, que es el que se queda sin respuesta.
+    // SAME size on both sides: the size rung does not decide and the cascade
+    // moves to the date one, which is the one left without an answer.
     write_file(&mem, "mem:///d/same-bytes.txt", b"54321").await;
 
     let planned = plan(&engine, params("zip+mem:///a.zip/!", "mem:///d")).await;
@@ -839,27 +845,27 @@ async fn un_origen_archivo_copia_lo_incierto_y_dice_por_que() {
     let s = steps
         .iter()
         .find(|s| s.rel == rel("same-bytes.txt"))
-        .expect("el fichero emparejado tiene paso");
+        .expect("the paired file has a step");
     assert_eq!(s.kind, SyncStepKind::Overwrite);
     assert_eq!(
         s.confidence,
         norte_proto::methods::CompareConfidence::Unknown,
-        "una fecha que no existe no se convierte en `Probable`"
+        "a date that does not exist does not turn into `Probable`"
     );
     assert_eq!(s.criterion, norte_proto::methods::CompareCriterion::Mtime);
     assert!(planned.done().executable);
 }
 
-/// Un destino que NO declara papelera: la sobrescritura es `Irreversible` y el
-/// plan lo dice con su motivo, antes de que nadie apruebe. Nada simulado —
-/// `MemProvider::with_flags` sin `TRASH` es lo que declara un bucket o un SFTP,
-/// y el origen es el provider local de verdad.
+/// A destination that declares NO trash: the overwrite is `Irreversible` and
+/// the plan says so with its reason, before anyone approves. Nothing
+/// simulated — `MemProvider::with_flags` without `TRASH` is what a bucket or
+/// an SFTP declares, and the source is the real local provider.
 #[tokio::test]
-async fn un_destino_sin_papelera_toma_el_camino_irreversible_de_verdad() {
+async fn a_destination_without_a_trash_takes_the_irreversible_path_for_real() {
     let spool_dir = tempfile::tempdir().expect("tempdir");
-    let local_dir = tempfile::tempdir().expect("tempdir local");
+    let local_dir = tempfile::tempdir().expect("local tempdir");
     std::fs::create_dir(local_dir.path().join("s")).expect("mkdir s");
-    std::fs::write(local_dir.path().join("s/a.txt"), b"origen nuevo").expect("write a.txt");
+    std::fs::write(local_dir.path().join("s/a.txt"), b"new source").expect("write a.txt");
 
     let engine = Engine::new();
     engine.register_provider(
@@ -872,21 +878,21 @@ async fn un_destino_sin_papelera_toma_el_camino_irreversible_de_verdad() {
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     engine.set_spool(Spool::new(spool_dir.path()));
     mkdir(&mem, "mem:///d").await;
-    write_file(&mem, "mem:///d/a.txt", b"viejo").await;
+    write_file(&mem, "mem:///d/a.txt", b"old").await;
 
     let planned = plan(&engine, params("file:///s", "mem:///d")).await;
     assert_eq!(planned.state, TaskState::Completed);
     let done = planned.done();
     assert!(
         done.counts.irreversible > 0,
-        "sin papelera, sobrescribir no se deshace: {:?}",
+        "with no trash, overwriting is not undone: {:?}",
         done.counts
     );
     let steps = planned.steps();
     let s = steps
         .iter()
         .find(|s| s.rel == rel("a.txt"))
-        .expect("el fichero emparejado tiene paso");
+        .expect("the paired file has a step");
     assert_eq!(s.kind, SyncStepKind::Overwrite);
     assert_eq!(
         s.reversal,

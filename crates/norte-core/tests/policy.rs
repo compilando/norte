@@ -1,5 +1,6 @@
-//! Integración policy↔engine (M3-3a): el gate PRE-efecto decide allow/ask/deny
-//! por operación; el actor real llega al journal; el undo pasa por la policy.
+//! policy↔engine integration (M3-3a): the PRE-effect gate decides allow/ask/deny
+//! per operation; the real actor reaches the journal; undo goes through the
+//! policy too.
 
 use std::sync::Arc;
 
@@ -31,7 +32,7 @@ impl ApprovalResolver for AlwaysApprove {
     }
 }
 
-/// Engine con journal + `ScopedPolicy` y un resolver dado.
+/// Engine with a journal + `ScopedPolicy` and a given resolver.
 async fn engine_with_policy(
     config: PolicyConfig,
     scopes: ScopeRegistry,
@@ -77,14 +78,14 @@ async fn agent_out_of_scope_copy_is_denied_without_touching_fs() {
         )
         .await
         .err()
-        .expect("denegada");
+        .expect("denied");
     assert!(
         matches!(err, Error::PolicyDenied { ref rule } if rule == "out-of-scope"),
-        "policy fuera-de-scope: {err:?}"
+        "out-of-scope policy: {err:?}"
     );
     assert!(
         matches!(mem.stat(&vp("mem:///dst.txt")).await, Err(Error::NotFound)),
-        "no tocó el FS"
+        "did not touch the FS"
     );
 }
 
@@ -103,7 +104,7 @@ async fn agent_in_scope_with_allow_rule_proceeds_and_journals_actor() {
         .await
         .expect("submit");
     assert_eq!(h.join().await, TaskState::Completed);
-    // El journal registró la creación con actor AGENT (cierra deuda M2 de M3-2).
+    // The journal recorded the creation with actor AGENT (closes M2 debt from M3-2).
     let es = journal.journal().entries().await.expect("entries");
     let created = es.iter().find(|e| e.op == "created").expect("created");
     assert_eq!(created.actor_kind, "agent");
@@ -123,7 +124,7 @@ async fn ask_rule_suspends_until_resolver_approves() {
             agent(),
         )
         .await
-        .expect("aprobada procede");
+        .expect("approved proceeds");
     assert_eq!(h.join().await, TaskState::Completed);
     assert!(mem.stat(&vp("mem:///dst.txt")).await.is_ok());
 }
@@ -131,7 +132,7 @@ async fn ask_rule_suspends_until_resolver_approves() {
 #[tokio::test]
 async fn ask_denied_by_resolver_blocks_the_op() {
     let cfg = PolicyConfig::parse("[[rule]]\naction=\"ask\"").expect("cfg");
-    // DenyAll resolver → Ask se resuelve Denied.
+    // DenyAll resolver → Ask resolves to Denied.
     let (engine, mem, _j) = engine_with_policy(cfg, full_scope(), Arc::new(DenyAll)).await;
     write_file(&mem, "mem:///src.txt", b"x").await;
     let err = engine
@@ -143,10 +144,10 @@ async fn ask_denied_by_resolver_blocks_the_op() {
         )
         .await
         .err()
-        .expect("denegada");
+        .expect("denied");
     assert!(
         matches!(err, Error::PolicyDenied { ref rule } if rule == "not-approved"),
-        "Ask denegado por el resolver: {err:?}"
+        "Ask denied by the resolver: {err:?}"
     );
     assert!(matches!(
         mem.stat(&vp("mem:///dst.txt")).await,
@@ -156,7 +157,7 @@ async fn ask_denied_by_resolver_blocks_the_op() {
 
 #[tokio::test]
 async fn user_bypasses_policy() {
-    // Sin scope ni reglas, un User copia igual (no se sandboxea).
+    // Without scope or rules, a User copies all the same (no sandboxing).
     let (engine, mem, _j) = engine_with_policy(
         PolicyConfig::default(),
         ScopeRegistry::new(),
@@ -173,8 +174,8 @@ async fn user_bypasses_policy() {
 
 #[tokio::test]
 async fn undo_of_agent_is_blocked_when_reverse_op_denied_by_policy() {
-    // copy permitido, delete denegado. Un agente crea (copy allow); el undo de
-    // ese Created es un delete → la policy lo bloquea.
+    // copy allowed, delete denied. An agent creates (copy allow); the undo of
+    // that Created is a delete → the policy blocks it.
     let cfg = PolicyConfig::parse(
         "[[rule]]\nop=\"copy\"\naction=\"allow\"\n[[rule]]\nop=\"delete\"\naction=\"deny\"",
     )
@@ -195,44 +196,44 @@ async fn undo_of_agent_is_blocked_when_reverse_op_denied_by_policy() {
     let (uh, report) = engine.undo_session(agent()).await.expect("undo submit");
     assert_eq!(uh.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
-    assert_eq!(r.undone, 0, "el undo (delete) lo deniega la policy");
-    // #171: una denegación de policy es una FILA del informe, no un `blocked`.
-    // `blocked` sigue significando «paré por drift y el árbol quedó
-    // consistente»; esto significa «esta unidad no se tocó, y seguí».
-    assert!(r.blocked.is_none(), "no es un bloqueo: {:?}", r.blocked);
+    assert_eq!(r.undone, 0, "the undo (delete) is denied by policy");
+    // #171: a policy denial is a ROW in the report, not a `blocked`.
+    // `blocked` still means "I stopped because of drift and the tree stayed
+    // consistent"; this means "this unit was not touched, and I kept going".
+    assert!(r.blocked.is_none(), "not a block: {:?}", r.blocked);
     assert_eq!(r.denied_total, 1);
     assert!(
         matches!(r.denied.first(), Some((_, Error::PolicyDenied { rule })) if rule == "policy-rule"),
-        "denegado por policy: {:?}",
+        "denied by policy: {:?}",
         r.denied
     );
-    // No pisó: dst sigue existiendo (el undo no llegó a borrarlo).
+    // Nothing was overwritten: dst still exists (undo never got to delete it).
     assert!(mem.stat(&vp("mem:///dst.txt")).await.is_ok());
 }
 
-/// **#171: una unidad denegada no se lleva por delante a las demás.**
+/// **#171: a denied unit does not take the others down with it.**
 ///
-/// El undo va en LIFO, así que aquí la denegada es la PRIMERA que se procesa:
-/// si parase ahí —que es lo que hacía antes— el `move` de debajo nunca
-/// volvería. Es la misma regla que el ejecutor hacia delante: `Deny` es una
-/// fila de informe y el trabajo sigue.
+/// Undo runs LIFO, so here the denied one is the FIRST one processed: if it
+/// stopped right there — which is what it used to do — the `move` underneath
+/// would never come back. It is the same rule as the forward executor: `Deny`
+/// is a report row and the work continues.
 #[tokio::test]
-async fn una_unidad_denegada_no_para_el_undo_de_las_demas() {
-    // `move` permitido, `delete` denegado: el undo de un `Created` es un
-    // delete (denegado) y el de un `Moved` es un rename_back (permitido).
+async fn a_denied_unit_does_not_stop_the_undo_of_the_others() {
+    // `move` allowed, `delete` denied: the undo of a `Created` is a delete
+    // (denied) and the undo of a `Moved` is a rename_back (allowed).
     let cfg = PolicyConfig::parse(
         "[[rule]]\nop=\"copy\"\naction=\"allow\"\n[[rule]]\nop=\"move\"\naction=\"allow\"\n[[rule]]\nop=\"delete\"\naction=\"deny\"",
     )
     .expect("cfg");
     let (engine, mem, _j) = engine_with_policy(cfg, full_scope(), Arc::new(DenyAll)).await;
-    write_file(&mem, "mem:///origen.txt", b"x").await;
-    write_file(&mem, "mem:///otro.txt", b"y").await;
+    write_file(&mem, "mem:///source.txt", b"x").await;
+    write_file(&mem, "mem:///other.txt", b"y").await;
 
-    // 1) Un move: su undo es un rename_back, PERMITIDO.
+    // 1) A move: its undo is a rename_back, ALLOWED.
     let h = engine
         .move_with_as(
-            &vp("mem:///otro.txt"),
-            &vp("mem:///movido.txt"),
+            &vp("mem:///other.txt"),
+            &vp("mem:///moved.txt"),
             norte_core::TransferOptions::default(),
             agent(),
         )
@@ -240,12 +241,12 @@ async fn una_unidad_denegada_no_para_el_undo_de_las_demas() {
         .expect("move");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    // 2) Una copia: su undo es un delete, DENEGADO. Va después, así que el
-    //    LIFO la procesa PRIMERO.
+    // 2) A copy: its undo is a delete, DENIED. It comes after, so LIFO
+    //    processes it FIRST.
     let h = engine
         .copy_with_as(
-            &vp("mem:///origen.txt"),
-            &vp("mem:///copia.txt"),
+            &vp("mem:///source.txt"),
+            &vp("mem:///copy.txt"),
             norte_core::TransferOptions::default(),
             agent(),
         )
@@ -257,37 +258,41 @@ async fn una_unidad_denegada_no_para_el_undo_de_las_demas() {
     assert_eq!(uh.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
 
-    assert_eq!(r.denied_total, 1, "la copia: su delete está denegado");
+    assert_eq!(r.denied_total, 1, "the copy: its delete is denied");
     assert!(r.blocked.is_none());
-    assert!(r.undone >= 1, "y el move de debajo SÍ volvió: {r:?}");
-    // El árbol lo confirma: la copia sigue puesta y el move volvió a su sitio.
-    assert!(mem.stat(&vp("mem:///copia.txt")).await.is_ok());
-    assert!(mem.stat(&vp("mem:///otro.txt")).await.is_ok());
-    assert!(mem.stat(&vp("mem:///movido.txt")).await.is_err());
+    assert!(
+        r.undone >= 1,
+        "and the move underneath DID come back: {r:?}"
+    );
+    // The tree confirms it: the copy is still there and the move is back in place.
+    assert!(mem.stat(&vp("mem:///copy.txt")).await.is_ok());
+    assert!(mem.stat(&vp("mem:///other.txt")).await.is_ok());
+    assert!(mem.stat(&vp("mem:///moved.txt")).await.is_err());
 }
 
-/// **El undo de un cambio de permisos pide `set-mode`, no `delete`** (#314).
+/// **Undoing a permission change asks for `set-mode`, not `delete`** (#314).
 ///
-/// `set-mode` y `delete` son permisos INDEPENDIENTES, así que preguntar por el
-/// segundo tenía las dos caras malas: un actor con `delete` deshacía un chmod
-/// que la política no le concede, y uno con `set-mode` no podía deshacer el
-/// suyo — y con el LIFO estricto eso bloquea la sesión entera detrás. Es el
-/// mismo bug que este fichero ya arregló una vez para `move`.
+/// `set-mode` and `delete` are INDEPENDENT permissions, so asking for the
+/// latter had both bad sides: an actor with `delete` could undo a chmod the
+/// policy did not grant them, and one with `set-mode` could not undo their
+/// own — and with strict LIFO that blocks the whole session behind it. It is
+/// the same bug this file already fixed once for `move`.
 #[tokio::test]
-async fn el_undo_de_un_chmod_pide_permiso_de_chmod() {
-    // DOS engines sobre el MISMO journal y el mismo provider: en el primero el
-    // agente puede cambiar permisos, en el segundo ya no. Es la forma de
-    // separar lo que la política concede HACIA DELANTE de lo que concede al
-    // deshacer, que es justo la distinción que este test mide — un permiso
-    // caducado o revocado entre una cosa y la otra.
+async fn undoing_a_chmod_asks_for_chmod_permission() {
+    // TWO engines over the SAME journal and the same provider: in the first
+    // the agent can change permissions, in the second it no longer can. This
+    // is how to separate what the policy grants GOING FORWARD from what it
+    // grants when undoing, which is exactly the distinction this test
+    // measures — a permission expired or revoked between the two.
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("j"),
     ));
     let mem = Arc::new(MemProvider::new());
-    let permite = PolicyConfig::parse("[[rule]]\nop=\"set-mode\"\naction=\"allow\"").expect("cfg");
-    // Todo permitido MENOS `set-mode`: si la reversa preguntara por `delete`
-    // —que aquí sí está— pasaría, y este test no vería el bug.
-    let deniega = PolicyConfig::parse(
+    let allows = PolicyConfig::parse("[[rule]]\nop=\"set-mode\"\naction=\"allow\"").expect("cfg");
+    // Everything allowed EXCEPT `set-mode`: if the reversal asked for `delete`
+    // — which IS allowed here — it would pass, and this test would not catch
+    // the bug.
+    let denies = PolicyConfig::parse(
         "[[rule]]\nop=\"delete\"\naction=\"allow\"\n\
          [[rule]]\nop=\"move\"\naction=\"allow\"\n\
          [[rule]]\nop=\"copy\"\naction=\"allow\"\n\
@@ -296,7 +301,7 @@ async fn el_undo_de_un_chmod_pide_permiso_de_chmod() {
          [[rule]]\nop=\"set-mode\"\naction=\"deny\"",
     )
     .expect("cfg");
-    let motor = |cfg: PolicyConfig| {
+    let engine_with = |cfg: PolicyConfig| {
         let e = Engine::with_journal(Arc::clone(&journal)).with_policy(
             Arc::new(ScopedPolicy::new(full_scope(), cfg)),
             Arc::new(DenyAll) as Arc<dyn ApprovalResolver>,
@@ -305,9 +310,9 @@ async fn el_undo_de_un_chmod_pide_permiso_de_chmod() {
         e
     };
 
-    let antes = motor(permite);
+    let before = engine_with(allows);
     write_file(&mem, "mem:///a.sh", b"x").await;
-    let h = antes
+    let h = before
         .set_mode_as(
             norte_proto::methods::FsSetModeParams {
                 paths: vec![vp("mem:///a.sh")],
@@ -318,34 +323,34 @@ async fn el_undo_de_un_chmod_pide_permiso_de_chmod() {
             agent(),
         )
         .await
-        .expect("con `set-mode` concedido, el agente cambia permisos");
+        .expect("with `set-mode` granted, the agent changes permissions");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    let despues = motor(deniega);
-    let (uh, report) = despues.undo_session(agent()).await.expect("undo submit");
+    let after = engine_with(denies);
+    let (uh, report) = after.undo_session(agent()).await.expect("undo submit");
     assert_eq!(uh.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
     assert_eq!(
         r.denied_total, 1,
-        "la reversa de un chmod se pregunta por `set-mode`, y aquí está denegada: {r:?}"
+        "undoing a chmod asks for `set-mode`, and it is denied here: {r:?}"
     );
-    assert_eq!(r.undone, 0, "y por tanto no se deshizo nada");
+    assert_eq!(r.undone, 0, "and therefore nothing was undone");
 }
 
-/// **La pregunta que se le hace al humano dice QUÉ modo** (#314, 0.61.0).
+/// **The question asked to the human states WHICH mode** (#314, 0.61.0).
 ///
-/// `set-mode` es la primera op donde dos peticiones con la misma op y las
-/// mismas rutas significan cosas opuestas —`0600` y `4777`—, así que sin el
-/// modo el humano no está consintiendo lo que cree. Es el mismo argumento que
-/// `paths_total` hace para el recuento.
+/// `set-mode` is the first op where two requests with the same op and the same
+/// paths mean opposite things — `0600` and `4777` — so without the mode the
+/// human is not consenting to what they think they are. It is the same
+/// argument `paths_total` makes for the count.
 #[tokio::test]
-async fn la_aprobacion_de_un_chmod_dice_el_modo() {
+async fn approving_a_chmod_states_the_mode() {
     use norte_core::approval::{ApprovalOutcome, ApprovalRequest, ApprovalResolver};
 
-    /// Un resolver que se queda con lo que le preguntaron y deniega.
-    struct Fisgon(std::sync::Mutex<Vec<norte_core::PolicyOp>>);
+    /// A resolver that keeps what it was asked and denies.
+    struct Snoop(std::sync::Mutex<Vec<norte_core::PolicyOp>>);
     #[async_trait::async_trait]
-    impl ApprovalResolver for Fisgon {
+    impl ApprovalResolver for Snoop {
         async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome {
             self.0.lock().expect("lock").push(req.op);
             ApprovalOutcome::Denied
@@ -353,11 +358,11 @@ async fn la_aprobacion_de_un_chmod_dice_el_modo() {
     }
 
     let cfg = PolicyConfig::parse("[[rule]]\nop=\"set-mode\"\naction=\"ask\"").expect("cfg");
-    let fisgon = Arc::new(Fisgon(std::sync::Mutex::new(Vec::new())));
+    let snoop = Arc::new(Snoop(std::sync::Mutex::new(Vec::new())));
     let (engine, mem, _j) = engine_with_policy(
         cfg,
         full_scope(),
-        Arc::clone(&fisgon) as Arc<dyn ApprovalResolver>,
+        Arc::clone(&snoop) as Arc<dyn ApprovalResolver>,
     )
     .await;
     write_file(&mem, "mem:///a.sh", b"x").await;
@@ -374,21 +379,21 @@ async fn la_aprobacion_de_un_chmod_dice_el_modo() {
         )
         .await;
 
-    let preguntas = fisgon.0.lock().expect("lock").clone();
-    assert_eq!(preguntas.len(), 1, "se preguntó una vez: {preguntas:?}");
+    let questions = snoop.0.lock().expect("lock").clone();
+    assert_eq!(questions.len(), 1, "asked once: {questions:?}");
     assert!(
-        matches!(preguntas[0], norte_core::PolicyOp::SetMode { mode, .. } if mode == 0o750),
-        "y la pregunta lleva el MODO, no solo la op: {:?}",
-        preguntas[0]
+        matches!(questions[0], norte_core::PolicyOp::SetMode { mode, .. } if mode == 0o750),
+        "and the question carries the MODE, not just the op: {:?}",
+        questions[0]
     );
 }
 
-/// El ejemplo commiteado de policy (`docs/policy-example.toml`) parsea SIEMPRE
-/// (M3-4 T4): si la sintaxis de reglas cambia, este test lo delata — el
-/// ejemplo jamás se pudre.
+/// The committed policy example (`docs/policy-example.toml`) ALWAYS parses
+/// (M3-4 T4): if the rule syntax changes, this test catches it — the example
+/// never goes stale.
 #[test]
-fn policy_example_toml_parsea() {
+fn policy_example_toml_parses() {
     let cfg = norte_core::PolicyConfig::parse(include_str!("../../../docs/policy-example.toml"))
-        .expect("el ejemplo de docs/ parsea");
-    assert!(!cfg.rules.is_empty(), "trae al menos la regla ask");
+        .expect("the example in docs/ parses");
+    assert!(!cfg.rules.is_empty(), "brings at least the ask rule");
 }

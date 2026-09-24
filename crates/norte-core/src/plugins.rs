@@ -1,26 +1,26 @@
-//! Registro de plugins del daemon (M4-P3): descubre el catálogo local
-//! ([`norte_plugin_host::Catalog`]), le fusiona el estado aprobado/activado que
-//! persiste el usuario, y lo expone por protocolo ([`norte_proto::methods`]).
+//! Daemon plugin registry (M4-P3): discovers the local catalog
+//! ([`norte_plugin_host::Catalog`]), merges in the approved/enabled state the
+//! user persists, and exposes it over the protocol ([`norte_proto::methods`]).
 //!
-//! El [`PluginEntry`](norte_plugin_host::PluginEntry) del catálogo nace SIEMPRE
-//! `approved = false` / `enabled = false` (el descubridor no conoce el estado
-//! del usuario): la verdad del estado vive en `plugins-state.toml` y este
-//! registro es quien la fusiona.
+//! The catalog's [`PluginEntry`](norte_plugin_host::PluginEntry) is ALWAYS born
+//! `approved = false` / `enabled = false` (the discoverer does not know the
+//! user's state): the state's truth lives in `plugins-state.toml` and this
+//! registry is what merges it in.
 //!
-//! ## Formato de `plugins-state.toml`
+//! ## `plugins-state.toml` format
 //!
-//! El id de un plugin es reverse-DNS (`org.norte.demo`) — CON PUNTOS. Escrito a
-//! pelo como cabecera (`[org.norte.demo]`) TOML lo leería como tablas anidadas
-//! (`org` → `norte` → `demo`), NO como una clave literal. Por eso el estado va
-//! bajo una tabla `[plugins]` con la clave ENTRECOMILLADA:
+//! A plugin's id is reverse-DNS (`org.norte.demo`) — WITH DOTS. Written raw as
+//! a header (`[org.norte.demo]`), TOML would read it as nested tables
+//! (`org` → `norte` → `demo`), NOT as a literal key. That is why the state
+//! goes under a `[plugins]` table with the key QUOTED:
 //!
 //! ```toml
 //! [plugins]
 //! "org.norte.demo" = { approved = true, enabled = false }
 //! ```
 //!
-//! `toml_edit` entrecomilla la clave con puntos al re-emitir, así que el
-//! round-trip descubrir → persistir → descubrir conserva el id intacto.
+//! `toml_edit` quotes a key with dots when re-emitting, so the
+//! discover → persist → discover round trip keeps the id intact.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -32,24 +32,25 @@ use norte_proto::methods::{
 };
 use toml_edit::{DocumentMut, InlineTable, Item, Table, Value};
 
-/// Los bytes CRUDOS de un `OsStr`, o `None` si esta plataforma no los tiene.
+/// The RAW bytes of an `OsStr`, or `None` if this platform does not have them.
 ///
-/// En Unix son los bytes literales y no hay más que decir.
+/// On Unix they are the literal bytes and there is nothing more to say.
 ///
-/// Fuera de Unix devuelve `None` **a propósito**, y no la forma lossy. Mandar
-/// lossy sería peor que no mandar nada: el receptor toma `dir_bytes` por
-/// crudos, así que unos bytes ya convertidos le devuelven `lossy = false,
-/// masked = false` —un nombre alterado declarándose fiel— y además DESACTIVAN
-/// la heurística de respaldo, que es lo único que hoy marca un sustituto
-/// suelto de Windows. Con `None` el receptor cae a `dir` y a esa heurística,
-/// que es exactamente lo que hacía antes de #265.
+/// Outside Unix it returns `None` **on purpose**, not the lossy form. Sending
+/// lossy would be worse than sending nothing: the receiver treats `dir_bytes`
+/// as raw, so bytes that were already converted would give it back
+/// `lossy = false, masked = false` —an altered name declaring itself
+/// faithful— and would also DISABLE the fallback heuristic, which today is
+/// the only thing that flags a loose Windows substitute. With `None` the
+/// receiver falls back to `dir` and to that heuristic, which is exactly what
+/// it did before #265.
 ///
-/// La conversión correcta allí es WTF-8 (la convención que documenta
-/// `norte_proto::methods::Volume::label`), y llegará con el resto del soporte
-/// de Windows.
-// En Unix el `None` no existe —lo elimina el `cfg`— y clippy ve un `Option`
-// que siempre es `Some`. Fuera de Unix es la única rama, y es la que hace
-// correcto al campo del wire.
+/// The correct conversion there is WTF-8 (the convention
+/// `norte_proto::methods::Volume::label` documents), and it will arrive with
+/// the rest of Windows support.
+// On Unix the `None` case does not exist —the `cfg` removes it— and clippy
+// sees an `Option` that is always `Some`. Outside Unix it is the only branch,
+// and it is the one that makes the wire field correct.
 #[cfg_attr(unix, allow(clippy::unnecessary_wraps))]
 fn bytes_de(s: &std::ffi::OsStr) -> Option<Vec<u8>> {
     #[cfg(unix)]
@@ -64,130 +65,131 @@ fn bytes_de(s: &std::ffi::OsStr) -> Option<Vec<u8>> {
     }
 }
 
-/// Estado que el usuario fija sobre un plugin descubierto. Ausente = ambos
-/// `false` (descubierto pero sin aprobar ni activar).
+/// State the user sets on a discovered plugin. Absent = both `false`
+/// (discovered but neither approved nor enabled).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct PluginState {
-    /// Un humano aprobó las capabilities declaradas.
+    /// A human approved the declared capabilities.
     pub approved: bool,
-    /// Un humano lo tiene activado.
+    /// A human has it enabled.
     pub enabled: bool,
-    /// Digest (hex sha256) de las capabilities que el humano vio al aprobar
-    /// (issue #69, defensa confused-deputy TOCTOU). `None` = aprobación sin
-    /// digest anclado (estado heredado de antes de esta defensa, o sin aprobar):
-    /// se trata fail-closed como NO-casante, forzando un re-consentimiento. Al
-    /// aprobar se fija al digest ACTUAL del manifiesto; al revocar se limpia.
+    /// Digest (hex sha256) of the capabilities the human saw when approving
+    /// (issue #69, TOCTOU confused-deputy defense). `None` = approval without
+    /// an anchored digest (state inherited from before this defense, or not
+    /// approved): treated fail-closed as NOT matching, forcing
+    /// re-consent. Set to the manifest's CURRENT digest when approving; wiped
+    /// when revoking.
     pub approved_digest: Option<String>,
 }
 
-/// Fallo al ejecutar un comando de plugin. Los tres primeros variantes son el
-/// veredicto fail-closed del consentimiento (desconocido / sin aprobar /
-/// desactivado); los dos últimos, fallos de artefacto o de runtime.
+/// Failure running a plugin command. The first three variants are the
+/// fail-closed consent verdict (unknown / not approved / disabled); the last
+/// two are artifact or runtime failures.
 #[derive(Debug, thiserror::Error)]
 pub enum PluginRunError {
-    /// No hay ningún plugin descubierto con ese id.
-    #[error("plugin desconocido: {0}")]
+    /// No plugin discovered with that id.
+    #[error("unknown plugin: {0}")]
     Unknown(String),
-    /// El plugin existe pero su kind no exporta `command` (un decorator, unas
-    /// columnas, un provider, un renamer): no hay nada que ejecutar. Se dice
-    /// ANTES de instanciar —instanciarlo con el world `norte-plugin` fallaba
-    /// dentro de wasmtime y salía como «internal error», y un cliente 0.66
-    /// que ve un renamer como comando (0.67.0) pagaba una instanciación por
-    /// clic para recibir eso.
-    #[error("el plugin {0} no ejecuta comandos")]
+    /// The plugin exists but its kind does not export `command` (a decorator,
+    /// some columns, a provider, a renamer): there is nothing to run. This is
+    /// said BEFORE instantiating —instantiating it with the `norte-plugin`
+    /// world failed inside wasmtime and came out as "internal error", and a
+    /// 0.66 client that sees a renamer as a command (0.67.0) paid for one
+    /// instantiation per click just to receive that.
+    #[error("plugin {0} does not run commands")]
     NotRunnable(String),
-    /// El plugin existe pero un humano no ha aprobado sus capabilities.
-    #[error("plugin sin aprobar: {0}")]
+    /// The plugin exists but a human has not approved its capabilities.
+    #[error("plugin not approved: {0}")]
     NotApproved(String),
-    /// El plugin está aprobado pero desactivado.
-    #[error("plugin desactivado: {0}")]
+    /// The plugin is approved but disabled.
+    #[error("plugin disabled: {0}")]
     Disabled(String),
-    /// El plugin no tiene `plugin.wasm` en su directorio. Lleva el ID (no la
-    /// ruta absoluta: revelaría el home del usuario a un agente que llame a
-    /// `plugin.run_command` — coherente con la redacción de `list()`,
+    /// The plugin has no `plugin.wasm` in its directory. Carries the ID (not
+    /// the absolute path: it would reveal the user's home to an agent calling
+    /// `plugin.run_command` — consistent with `list()`'s redaction,
     /// security-reviewer M4-P4).
-    #[error("el plugin {0} no tiene binario (plugin.wasm)")]
+    #[error("plugin {0} has no binary (plugin.wasm)")]
     NoBinary(String),
-    /// El runtime WASM falló al compilar, instanciar o ejecutar el componente.
+    /// The WASM runtime failed to compile, instantiate, or run the component.
     #[error("runtime: {0}")]
     Runtime(#[from] norte_plugin_host::RuntimeError),
 }
 
-/// Fallo al fijar UN valor de `[config]` vía [`PluginRegistry::set_config`]
-/// (0.28.0, G3c). Igual que [`ConfigValueError`](norte_plugin_host::ConfigValueError)
-/// (que envuelve en [`Self::Invalid`]), NINGUNA variante lleva el VALOR
-/// submitted — solo la clave (issue #73, mismo criterio).
+/// Failure setting ONE `[config]` value via [`PluginRegistry::set_config`]
+/// (0.28.0, G3c). Like [`ConfigValueError`](norte_plugin_host::ConfigValueError)
+/// (which it wraps in [`Self::Invalid`]), NO variant carries the submitted
+/// VALUE — only the key (issue #73, same criterion).
 #[derive(Debug, thiserror::Error)]
 pub enum PluginConfigSetError {
-    /// No hay ningún plugin descubierto con ese id.
-    #[error("plugin desconocido: {0}")]
+    /// No plugin discovered with that id.
+    #[error("unknown plugin: {0}")]
     Unknown(String),
-    /// `key` no está declarada en `[config]` del manifiesto.
-    #[error("clave de config desconocida: {0}")]
+    /// `key` is not declared in the manifest's `[config]`.
+    #[error("unknown config key: {0}")]
     UnknownKey(String),
-    /// El valor no valida contra el tipo/rango/enum de la clave.
-    #[error("valor inválido: {0}")]
+    /// The value does not validate against the key's type/range/enum.
+    #[error("invalid value: {0}")]
     Invalid(#[from] norte_plugin_host::ConfigValueError),
-    /// Fallo de I/O al persistir o al re-resolver tras escribir.
+    /// I/O failure persisting or re-resolving after writing.
     #[error("i/o: {0}")]
     Io(#[source] io::Error),
 }
 
-/// Tope de bytes que el core lee de un archivo al PREVISUALIZAR (1 MiB,
-/// anti-DoS): el handler del daemon lee como mucho esto y se lo pasa al guest.
-/// El guest de M4-P2 tiene ADEMÁS su propio límite; este es la primera barrera,
-/// en el lado del host, para no cargar un archivo enorme en memoria solo porque
-/// alguien pidió su preview.
+/// Byte cap the core reads from a file when PREVIEWING (1 MiB, anti-DoS): the
+/// daemon's handler reads at most this much and hands it to the guest. The
+/// M4-P2 guest ADDITIONALLY has its own limit; this is the first barrier, on
+/// the host side, so as not to load a huge file into memory just because
+/// someone asked for its preview.
 pub(crate) const PREVIEW_MAX_BYTES: u64 = 1024 * 1024;
 
-/// Tope del ancho en celdas que un cliente puede pedir a un previewer (D4,
-/// proto 0.66.0). El campo es una PISTA y el guest está encerrado (memoria y
-/// reloj acotados), así que un `u32::MAX` no rompe nada; pero un cliente
-/// hostil no tiene por qué poder hacer que cada previewer del catálogo se
-/// gaste su presupuesto entero reescalando una foto que nadie va a ver.
-/// Más ancho que cualquier terminal.
+/// Cap on the width in cells a client can ask a previewer for (D4, proto
+/// 0.66.0). The field is a HINT and the guest is confined (memory and clock
+/// bounded), so a `u32::MAX` breaks nothing; but a hostile client has no
+/// reason to be able to make every previewer in the catalog spend its whole
+/// budget rescaling a photo nobody is going to see. Wider than any terminal.
 pub(crate) const PREVIEW_MAX_COLUMNS: u32 = 1024;
 
-/// Acota el ancho pedido a [`PREVIEW_MAX_COLUMNS`]; `None` sigue siendo
-/// `None`. El único embudo entre el wire (o el brazo embebido) y el guest.
+/// Clamps the requested width to [`PREVIEW_MAX_COLUMNS`]; `None` stays
+/// `None`. The one funnel between the wire (or the embedded arm) and the
+/// guest.
 pub(crate) fn clamp_preview_columns(columns: Option<u32>) -> Option<u32> {
     columns.map(|c| c.min(PREVIEW_MAX_COLUMNS))
 }
 
-/// Decodifica los bytes ACOTADOS de un fichero para pasárselos al previewer
-/// (§6.2, #29): el texto detectado (por `norte-encoding`) viaja como UTF-8 —
-/// jamás bytes crudos sobre los que el guest asuma UTF-8 — y un binario
-/// (sin encoding de texto) cae a los bytes tal cual (un guest de texto hará su
-/// propio lossy). `bytes` YA viene acotado a [`PREVIEW_MAX_BYTES`].
+/// Decodes a file's CAPPED bytes to hand them to the previewer (§6.2, #29):
+/// text detected (by `norte-encoding`) travels as UTF-8 — never raw bytes the
+/// guest would assume are UTF-8 — and a binary (no text encoding) falls back
+/// to the bytes as is (a text guest will do its own lossy conversion).
+/// `bytes` is ALREADY capped to [`PREVIEW_MAX_BYTES`].
 ///
-/// Devuelve `(contenido, lossy)`: `lossy` es `true` si la decodificación de
-/// texto fue LOSSY (`had_errors` — bytes inválidos → `�`), para que el
-/// frontend lo señale en modo preview igual que el raw viewer ya marca su
-/// propio `had_errors` (#101, `PluginPreview::lossy` en el wire). Un binario
-/// (sin encoding de texto) nunca es lossy: sus bytes viajan crudos.
+/// Returns `(content, lossy)`: `lossy` is `true` if the text decoding was
+/// LOSSY (`had_errors` — invalid bytes → `�`), so the frontend can flag it in
+/// preview mode the same way the raw viewer already flags its own
+/// `had_errors` (#101, `PluginPreview::lossy` on the wire). A binary (no text
+/// encoding) is never lossy: its bytes travel raw.
 pub(crate) fn decode_for_preview(bytes: Vec<u8>) -> (Vec<u8>, bool) {
-    // `< CAP` = el fichero cabía entero (si == CAP pudo quedar truncado: se
-    // trata como incompleto, dirección segura — a lo sumo se omite el último
-    // char multibyte, jamás se corrompe con `�`).
+    // `< CAP` = the file fit whole (if `== CAP` it may have been truncated:
+    // treated as incomplete, the safe direction — at most the last multibyte
+    // char is dropped, it is never corrupted into `�`).
     let complete = (bytes.len() as u64) < PREVIEW_MAX_BYTES;
     match norte_encoding::detect(&bytes) {
         norte_encoding::Detection::Text { encoding, .. } => {
             let decoded = norte_encoding::decode(&bytes, encoding, complete);
-            // SIN cortar por líneas, a propósito (revisión del ADR 0141): un
-            // corte callado daba una vista con estilo que parecía el fichero
-            // entero y escondía lo que hubiera pasada la línea del corte. Un
-            // resultado de más de diez mil líneas lo sigue rechazando el host
-            // y el visor se queda con la vista cruda, que está entera.
+            // NOT cut by lines, on purpose (ADR 0141 review): a silent cut
+            // gave a styled view that looked like the whole file and hid
+            // whatever came after the cut line. A result over ten thousand
+            // lines is still rejected by the host and the viewer falls back
+            // to the raw view, which is whole.
             (decoded.text.into_bytes(), decoded.had_errors)
         }
         norte_encoding::Detection::Binary => (bytes, false),
     }
 }
 
-/// Adivina el mimetype por EXTENSIÓN (heurística ligera, sin dep de sniffing).
-/// Un archivo sin extensión reconocible → `application/octet-stream` (ningún
-/// previewer `text/*` lo tomará). NO lee el contenido. `pub(crate)` para el
-/// handler del daemon.
+/// Guesses the mimetype by EXTENSION (light heuristic, no sniffing
+/// dependency). A file with no recognizable extension →
+/// `application/octet-stream` (no `text/*` previewer will claim it). Does NOT
+/// read the content. `pub(crate)` for the daemon's handler.
 pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
     let ext = path
         .file_name()
@@ -204,7 +206,7 @@ pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
         Some("xml") => "text/xml",
         Some("js") => "text/javascript",
         Some("css") => "text/css",
-        // Pictures (D4): un previewer de imagen las reclama por tipo exacto.
+        // Pictures (D4): an image previewer claims them by exact type.
         Some("png") => "image/png",
         Some("jpg" | "jpeg") => "image/jpeg",
         Some("gif") => "image/gif",
@@ -213,24 +215,23 @@ pub(crate) fn guess_mimetype(path: &norte_proto::VPath) -> &'static str {
     }
 }
 
-/// Convierte las líneas del `render-styled` del runtime de plugins
-/// (`Vec<Vec<norte_plugin_host::previewer_iface::Span>>`) al tipo de WIRE
-/// (`Vec<Vec<norte_proto::methods::SpanWire>>`, G3a, ADR 0037). Comparte esta
-/// única conversión el brazo EMBEBIDO de `Backend::plugin_preview_styled` y
-/// el handler `plugin.preview_styled` del daemon (`daemon::server`), para no
-/// duplicarla.
+/// Converts the plugin runtime's `render-styled` lines
+/// (`Vec<Vec<norte_plugin_host::previewer_iface::Span>>`) to the WIRE type
+/// (`Vec<Vec<norte_proto::methods::SpanWire>>`, G3a, ADR 0037). This single
+/// conversion is shared by `Backend::plugin_preview_styled`'s EMBEDDED arm and
+/// the daemon's `plugin.preview_styled` handler (`daemon::server`), so it is
+/// not duplicated.
 ///
-/// `role` viaja SIN VALIDAR (límite de responsabilidad, enmienda de ADR
-/// 0037 decisión 3 en el propio ADR: `norte-core` headless NO depende de
-/// `norte-theme`, dueño del conjunto cerrado `Role` — validar aquí exigiría
-/// esa dependencia estructural solo para esta superficie). El texto NO se
-/// enmascara aquí tampoco: `norte-core` es headless (regla 7, sin display),
-/// el enmascarado por span es responsabilidad del FRONTEND (mismo criterio
-/// que `PluginPreview::output`, que tampoco se enmascara en el core). Los
-/// topes de tamaño (líneas/spans/bytes) YA se aplicaron en
-/// `render_styled_preview` (`norte-plugin-host::runtime::cap_styled_text`,
-/// POST-retorno del guest) — esta función solo re-forma el tipo, no vuelve a
-/// acotar.
+/// `role` travels UNVALIDATED (a responsibility boundary, amendment to ADR
+/// 0037 decision 3 in the ADR itself: headless `norte-core` does NOT depend on
+/// `norte-theme`, owner of the closed `Role` set — validating here would
+/// require that structural dependency just for this surface). The text is
+/// NOT masked here either: `norte-core` is headless (rule 7, no display), the
+/// per-span masking is the FRONTEND's responsibility (same criterion as
+/// `PluginPreview::output`, which is also not masked in the core). The size
+/// caps (lines/spans/bytes) were ALREADY applied in `render_styled_preview`
+/// (`norte-plugin-host::runtime::cap_styled_text`, POST guest return) — this
+/// function only reshapes the type, it does not cap again.
 pub(crate) fn to_wire_lines(
     lines: Vec<Vec<norte_plugin_host::previewer_iface::Span>>,
 ) -> Vec<Vec<norte_proto::methods::SpanWire>> {
@@ -249,16 +250,16 @@ pub(crate) fn to_wire_lines(
         .collect()
 }
 
-/// Convierte las rutas VISIBLES de una página a las entradas CRUDAS que
-/// cruzan al WIT `decorator::decorate`/`columns::column-values` (ADR 0037
-/// decisión 2): el BASENAME en bytes crudos (regla 1), NUNCA la ruta
-/// completa. Decisión de privacidad, no solo de forma: un decorator/columns
-/// ve el nombre de cada entrada visible, no dónde vive en el árbol — el
-/// mismo criterio que el guest real (`examples-wasm/decorator-demo`, T2) ya
-/// asume en su contrato (`decorator_wit_e2e_positional_roundtrip_wasm_real`
-/// pasa basenames como `b"module.rs"`, no paths). POSICIONAL 1:1 con
-/// `paths` — una entrada SIN nombre de fichero (path raíz) entrega un
-/// basename vacío, nunca se omite, para no romper el contrato posicional.
+/// Converts a page's VISIBLE paths to the RAW entries that cross to the WIT
+/// `decorator::decorate`/`columns::column-values` (ADR 0037 decision 2): the
+/// BASENAME in raw bytes (rule 1), NEVER the full path. A privacy decision,
+/// not just a shape one: a decorator/columns sees the name of each visible
+/// entry, not where it lives in the tree — the same criterion the real guest
+/// (`examples-wasm/decorator-demo`, T2) already assumes in its contract
+/// (`decorator_wit_e2e_positional_roundtrip_wasm_real` passes basenames like
+/// `b"module.rs"`, not paths). POSITIONAL 1:1 with `paths` — an entry WITHOUT
+/// a file name (root path) delivers an empty basename, it is never omitted,
+/// so as not to break the positional contract.
 pub(crate) fn paths_to_basenames(paths: &[norte_proto::VPath]) -> Vec<Vec<u8>> {
     paths
         .iter()
@@ -270,23 +271,23 @@ pub(crate) fn paths_to_basenames(paths: &[norte_proto::VPath]) -> Vec<Vec<u8>> {
         .collect()
 }
 
-/// Las entradas que ve un guest DECORATOR (ADR 0105): el nombre de cada
-/// ruta y su clase, POSICIONALES con `paths`. `kinds` es lo que el frontend
-/// listó; puede venir vacío (un cliente 0.71) o corto, y entonces lo que
-/// falta es `other` —la clase que un guest trata como fichero—, nunca un
-/// error: la clase es cosmética para el icono, no una condición del lote.
+/// The entries a DECORATOR guest sees (ADR 0105): the name of each path and
+/// its class, POSITIONAL with `paths`. `kinds` is what the frontend listed;
+/// it can arrive empty (a 0.71 client) or short, and then what is missing is
+/// `other` —the class a guest treats as a file—, never an error: the class is
+/// cosmetic for the icon, not a condition of the batch.
 pub(crate) fn paths_to_entries(
     paths: &[norte_proto::VPath],
     kinds: &[norte_proto::EntryKind],
 ) -> Vec<norte_plugin_host::decorator_iface::Entry> {
     use norte_plugin_host::decorator_iface::EntryKind as Wit;
     if !kinds.is_empty() && kinds.len() != paths.len() {
-        // Vacío es un cliente 0.71; corto es un cliente 0.72 con un error,
-        // y degradar en silencio lo escondería para siempre.
+        // Empty is a 0.71 client; short is a 0.72 client with an error, and
+        // degrading silently would hide it forever.
         tracing::warn!(
             paths = paths.len(),
             kinds = kinds.len(),
-            "decorate: kinds no casa paths, lo que falta se trata como other"
+            "decorate: kinds does not match paths, what is missing is treated as other"
         );
     }
     paths_to_basenames(paths)
@@ -304,7 +305,7 @@ pub(crate) fn paths_to_entries(
         .collect()
 }
 
-/// El hueco de un decorador, del manifiesto al wire (ADR 0105).
+/// A decorator's slot, from the manifest to the wire (ADR 0105).
 pub(crate) fn slot_to_wire(
     slot: norte_plugin_host::DecoratorSlot,
 ) -> norte_proto::methods::DecorationSlot {
@@ -314,17 +315,17 @@ pub(crate) fn slot_to_wire(
     }
 }
 
-/// Convierte el LOTE bruto que devuelve un guest DECORATOR
-/// (`DecoratorInstance::decorate`) al tipo de wire
-/// (`Vec<norte_proto::methods::DecorationWire>`), VALIDANDO el contrato
-/// posicional 1:1 (ADR 0037 tabla de decisión 1) antes de re-formar: si
-/// `out.len() != expected_len` el guest violó el contrato (bug del plugin, o
-/// runtime que se saltó `cap_total_bytes` de otra forma) — `None` fail-closed
-/// (el caller DESCARTA las decoraciones de ESE plugin entero, con aviso; el
-/// resto de la página se pinta igual, mismo criterio de fallback que un
-/// previewer que no aplica). `role` viaja SIN VALIDAR (mismo límite de
-/// responsabilidad que [`to_wire_lines`] — el frontend, no `norte-core`
-/// headless, conoce `norte_theme::Role`).
+/// Converts the raw BATCH a DECORATOR guest returns
+/// (`DecoratorInstance::decorate`) to the wire type
+/// (`Vec<norte_proto::methods::DecorationWire>`), VALIDATING the 1:1
+/// positional contract (ADR 0037 decision table 1) before reshaping: if
+/// `out.len() != expected_len` the guest violated the contract (a plugin bug,
+/// or a runtime that skipped `cap_total_bytes` some other way) — `None`
+/// fail-closed (the caller DISCARDS that whole plugin's decorations, with a
+/// warning; the rest of the page is painted the same, the same fallback
+/// criterion as a previewer that does not apply). `role` travels UNVALIDATED
+/// (the same responsibility boundary as [`to_wire_lines`] — the frontend, not
+/// headless `norte-core`, knows `norte_theme::Role`).
 pub(crate) fn decorations_to_wire_checked(
     out: Vec<norte_plugin_host::decorator_iface::Decoration>,
     expected_len: usize,
@@ -342,11 +343,11 @@ pub(crate) fn decorations_to_wire_checked(
     )
 }
 
-/// Valida el contrato posicional 1:1 del LOTE bruto que devuelve un guest
-/// COLUMNS (`ColumnsInstance::column_values`): `None` fail-closed si
-/// `out.len() != expected_len` (ver [`decorations_to_wire_checked`], mismo
-/// criterio). Ya tiene la forma de wire (`Vec<Option<String>>`) — esta
-/// función solo GUARDA el contrato, no re-forma.
+/// Validates the 1:1 positional contract of the raw BATCH a COLUMNS guest
+/// returns (`ColumnsInstance::column_values`): `None` fail-closed if
+/// `out.len() != expected_len` (see [`decorations_to_wire_checked`], same
+/// criterion). It already has the wire shape (`Vec<Option<String>>`) — this
+/// function only GUARDS the contract, it does not reshape.
 pub(crate) fn column_values_checked(
     out: Vec<Option<String>>,
     expected_len: usize,
@@ -354,14 +355,13 @@ pub(crate) fn column_values_checked(
     (out.len() == expected_len).then_some(out)
 }
 
-/// Convierte UNA entrada de [`PluginRegistry::config_keys`] a su forma de
-/// wire (0.28.0, G3c, `plugin.get_config`): `kind`/`default`/`min`/`max`/
-/// `values`/`description` salen del ESQUEMA (`spec`), `value` del efectivo
-/// ya resuelto (parámetro separado, no del esquema). `default` se codifica
-/// con el MISMO criterio canónico que
-/// `norte_plugin_host::resolve_settings` (`bool` → `"true"`/`"false"`,
-/// `int` → decimal) para que `default`/`value` sean directamente
-/// comparables por un frontend.
+/// Converts ONE [`PluginRegistry::config_keys`] entry to its wire form
+/// (0.28.0, G3c, `plugin.get_config`): `kind`/`default`/`min`/`max`/`values`/
+/// `description` come from the SCHEMA (`spec`), `value` from the already
+/// resolved effective one (a separate parameter, not from the schema).
+/// `default` is encoded with the SAME canonical criterion as
+/// `norte_plugin_host::resolve_settings` (`bool` → `"true"`/`"false"`, `int`
+/// → decimal) so `default`/`value` are directly comparable by a frontend.
 pub(crate) fn config_key_to_wire(
     key: String,
     spec: &norte_plugin_host::ConfigKeySpec,
@@ -428,7 +428,7 @@ pub(crate) fn config_key_to_wire(
     }
 }
 
-/// ¿El glob `pat` (`text/*` o exacto `application/json`) casa `mime`?
+/// Does the glob `pat` (`text/*` or the exact `application/json`) match `mime`?
 fn mimetype_matches(pat: &str, mime: &str) -> bool {
     match pat.strip_suffix("/*") {
         Some(prefix) => mime.split('/').next() == Some(prefix),
@@ -436,122 +436,125 @@ fn mimetype_matches(pat: &str, mime: &str) -> bool {
     }
 }
 
-/// Techo de los bytes que se le dan a un guest de miniaturas (ADR 0107):
-/// una foto, no un vídeo. El sandbox del guest tiene 64 MiB de memoria y
-/// tiene que decodificar lo que recibe.
+/// Ceiling on the bytes handed to a thumbnail guest (ADR 0107): a photo, not a
+/// video. The guest's sandbox has 64 MiB of memory and has to decode what it
+/// receives.
 pub const THUMBNAIL_MAX_BYTES: u64 = 8 * 1024 * 1024;
 
-/// Resultado de [`PluginRegistry::resolve_previewer`]: `(id, name,
-/// wasm_path, capabilities, settings)` — factorizado a un alias (en vez de un
-/// tuple de 5 elementos in-line) porque clippy `type_complexity` lo pide;
-/// `settings` es P2 Task 4a, ver el rustdoc del método.
+/// Result of [`PluginRegistry::resolve_previewer`]: `(id, name, wasm_path,
+/// capabilities, settings)` — factored into an alias (instead of a 5-element
+/// tuple in-line) because clippy `type_complexity` asks for it; `settings` is
+/// P2 Task 4a, see the method's rustdoc.
 pub type ResolvedPreviewer = (
     String,
     String,
-    // Ruta Y huella aprobada (ADR 0142): el runtime rechaza bytes que no
-    // sean los aprobados.
+    // Path AND approved fingerprint (ADR 0142): the runtime rejects bytes
+    // that are not the approved ones.
     norte_plugin_host::WasmArtifact,
     norte_plugin_host::Capabilities,
     BTreeMap<String, String>,
 );
 
-/// Resultado de un elemento de [`PluginRegistry::resolve_decorators`] o de
-/// [`PluginRegistry::resolve_columns`]: misma forma `(id, name, wasm_path,
-/// capabilities, settings)` que [`ResolvedPreviewer`] — mismo alias en vez de
-/// repetir el tuple de 5 elementos (clippy `type_complexity`). Un decorador
-/// viene además con su HUECO (ADR 0105), aparte, como los hooks vienen con
-/// sus eventos.
+/// Result of an item from [`PluginRegistry::resolve_decorators`] or
+/// [`PluginRegistry::resolve_columns`]: the same `(id, name, wasm_path,
+/// capabilities, settings)` shape as [`ResolvedPreviewer`] — the same alias
+/// instead of repeating the 5-element tuple (clippy `type_complexity`). A
+/// decorator additionally comes with its SLOT (ADR 0105), separately, the way
+/// hooks come with their events.
 pub type ResolvedDecorator = ResolvedPreviewer;
 
-/// Resultado de [`PluginRegistry::resolve_provider`]: el provider plugin
-/// consentido que sirve un scheme, con lo que hace falta para instanciarlo
-/// SIN volver a fiarse del disco.
+/// Result of [`PluginRegistry::resolve_provider`]: the consented provider
+/// plugin that serves a scheme, with what is needed to instantiate it WITHOUT
+/// trusting the disk again.
 ///
-/// Un struct y no la tupla de los otros resolvers porque lleva dos cosas más
-/// que ellos no necesitan: el digest del binario que el humano aprobó
-/// (quien instancia compara los bytes que lee contra él) y el puerto por
-/// defecto de la contribución (a qué se concede red).
+/// A struct and not the other resolvers' tuple because it carries two more
+/// things they do not need: the digest of the binary the human approved
+/// (whoever instantiates compares the bytes it reads against it) and the
+/// contribution's default port (what network access is granted to).
 #[derive(Debug, Clone)]
 pub struct ResolvedProvider {
-    /// Id del plugin.
+    /// Plugin id.
     pub id: String,
-    /// Nombre legible (texto de tercero).
+    /// Readable name (third-party text).
     pub name: String,
-    /// Ruta canónica de `plugin.wasm`, verificada dentro del directorio, con
-    /// su huella aprobada (ADR 0142).
+    /// Canonical path to `plugin.wasm`, verified inside the directory, with
+    /// its approved fingerprint (ADR 0142).
     pub wasm: norte_plugin_host::WasmArtifact,
-    /// Digest del `plugin.wasm` tal como lo ancló el catálogo al descubrir:
-    /// lo que la aprobación cubre (#241). Quien instancie DEBE leer los
-    /// bytes, hashearlos y comparar — una ruta no es una promesa.
+    /// Digest of `plugin.wasm` as the catalog anchored it on discovery: what
+    /// the approval covers (#241). Whoever instantiates MUST read the bytes,
+    /// hash them, and compare — a path is not a promise.
     pub wasm_digest: String,
-    /// Capabilities del manifiesto (el sandbox las hace cumplir).
+    /// Manifest capabilities (the sandbox enforces them).
     pub capabilities: norte_plugin_host::Capabilities,
-    /// Valores de `[config]` resueltos, para `set_settings`.
+    /// Resolved `[config]` values, for `set_settings`.
     pub settings: BTreeMap<String, String>,
-    /// `default-port` de la contribución que declara el scheme, si lo trae.
+    /// `default-port` of the contribution that declares the scheme, if it
+    /// carries one.
     pub default_port: Option<u16>,
 }
 
-/// El trabajo de leer el `help.md` de UN plugin ya resuelto, listo para
-/// ejecutarse fuera del reactor (H3e). Se obtiene con
-/// [`PluginRegistry::help_job`] y se consume con [`HelpJob::read`].
+/// The job of reading ONE already-resolved plugin's `help.md`, ready to run
+/// outside the reactor (H3e). Obtained with [`PluginRegistry::help_job`] and
+/// consumed with [`HelpJob::read`].
 ///
-/// Es OPACO: lleva dentro el `dir` que el catálogo guardó al descubrir, y no lo
-/// expone. Ese es todo el punto — el llamador consigue algo que puede mover a un
-/// `spawn_blocking` sin haber recibido nunca una ruta que pudiera re-derivar del
-/// id que vino por el wire, así que la guarda de escape se queda entera dentro
-/// del registro en vez de convertirse en una obligación del que llama.
+/// It is OPAQUE: it carries the `dir` the catalog stored on discovery inside,
+/// and does not expose it. That is the whole point — the caller gets
+/// something it can move to a `spawn_blocking` without ever having received a
+/// path it could re-derive from the id that came over the wire, so the escape
+/// guard stays entirely inside the registry instead of becoming an obligation
+/// of the caller.
 #[derive(Debug, Clone)]
 pub(crate) struct HelpJob {
     dir: PathBuf,
 }
 
 impl HelpJob {
-    /// Verifica y LEE, acotado, el `help.md` del plugin. Sin página legible
-    /// (ausente, ilegible o escapada del directorio) devuelve la página en
-    /// blanco, indistinguible de un `help.md` vacío: la ayuda es cosmética y no
-    /// tiene por qué distinguir esos casos — quien los distingue es
-    /// `norte doctor`.
+    /// Verifies and READS, capped, the plugin's `help.md`. With no readable
+    /// page (absent, unreadable, or escaping the directory) returns the blank
+    /// page, indistinguishable from an empty `help.md`: help is cosmetic and
+    /// has no reason to distinguish those cases — the one that distinguishes
+    /// them is `norte doctor`.
     ///
-    /// La guarda de escape ([`norte_plugin_host::verified_child`]) se aplica
-    /// AQUÍ, no al construir el trabajo: son tres syscalls y este método corre
-    /// en `spawn_blocking`, mientras que construirlo es memoria pura y ocurre
-    /// bajo el lock del registro.
+    /// The escape guard ([`norte_plugin_host::verified_child`]) is applied
+    /// HERE, not when the job is built: it is three syscalls and this method
+    /// runs in `spawn_blocking`, while building it is pure memory and happens
+    /// under the registry's lock.
     ///
-    /// EL TOPE SE APLICA AL LEER, no al decodificar. La guarda comprueba que hay
-    /// un fichero regular y NADA sobre su tamaño, así que un plugin puede enviar
-    /// `help.md` como un fichero DISPERSO de 100 GiB —unos pocos bytes en un
-    /// tarball— y una sola llamada a `plugin.help` intentaría reservar 100 GiB:
-    /// abortar por fallo de reserva, o el OOM killer llevándose el daemon con su
-    /// journal y toda task en vuelo. Como el método está ABIERTO a un agente y
-    /// el plugin no necesita ni aprobación ni activación, sería la primera
-    /// lectura sin tope disparable por un agente en el daemon. Se leen como
-    /// mucho `max_bytes + 1` bytes: el byte de más es lo que deja a
-    /// [`norte_help::cut_and_decode_untrusted`] ver que sobraba y marcar
-    /// `truncated` honestamente, en vez de servir un fichero cortado como si
-    /// estuviera completo.
+    /// THE CAP IS APPLIED WHEN READING, not when decoding. The guard checks
+    /// that there is a regular file and NOTHING about its size, so a plugin
+    /// can send `help.md` as a SPARSE 100 GiB file —a few bytes in a
+    /// tarball— and a single `plugin.help` call would try to reserve 100
+    /// GiB: aborting on a reservation failure, or the OOM killer taking down
+    /// the daemon with its journal and every task in flight. Since the method
+    /// is OPEN to an agent and the plugin needs neither approval nor
+    /// enablement, this would be the first uncapped read an agent could
+    /// trigger in the daemon. At most `max_bytes + 1` bytes are read: the
+    /// extra byte is what lets
+    /// [`norte_help::cut_and_decode_untrusted`] see that there was more and
+    /// mark `truncated` honestly, instead of serving a cut file as if it were
+    /// complete.
     ///
-    /// El texto que devuelve NO está enmascarado: lleva verbatim los peligros de
-    /// terminal que el plugin escribiera (ESC, controles C0, anulaciones bidi).
-    /// Se parsea con `norte_help::parse_untrusted`, que enmascara al construir el
-    /// modelo; nunca se pinta ni se loguea en crudo.
+    /// The text it returns is NOT masked: it carries verbatim whatever
+    /// terminal dangers the plugin wrote (ESC, C0 controls, bidi overrides).
+    /// It is parsed with `norte_help::parse_untrusted`, which masks while
+    /// building the model; it is never painted or logged raw.
     ///
-    /// I/O SÍNCRONA: el llamador async lo mete en `spawn_blocking` (regla 2).
+    /// SYNCHRONOUS I/O: the async caller puts it in `spawn_blocking` (rule 2).
     #[must_use]
     pub(crate) fn read(self) -> norte_proto::methods::PluginHelpResult {
         use std::io::Read as _;
 
-        let tope = u64::try_from(norte_help::Limits::untrusted().max_bytes)
+        let cap = u64::try_from(norte_help::Limits::untrusted().max_bytes)
             .unwrap_or(u64::MAX)
             .saturating_add(1);
         let bytes = norte_plugin_host::verified_child(&self.dir, "help.md")
             .and_then(|p| {
                 let f = std::fs::File::open(p).ok()?;
                 let mut buf = Vec::new();
-                // Un fallo a mitad de lectura degrada a página en blanco, igual
-                // que un `help.md` que no se puede abrir: servir lo leído hasta
-                // el error lo presentaría como completo.
-                f.take(tope).read_to_end(&mut buf).ok()?;
+                // A failure mid-read degrades to a blank page, the same as a
+                // `help.md` that cannot be opened: serving what was read up
+                // to the error would present it as complete.
+                f.take(cap).read_to_end(&mut buf).ok()?;
                 Some(buf)
             })
             .unwrap_or_default();
@@ -564,7 +567,7 @@ impl HelpJob {
     }
 }
 
-/// Registro de plugins: catálogo descubierto + estado persistido fusionado.
+/// Plugin registry: discovered catalog + merged persisted state.
 #[derive(Debug)]
 pub struct PluginRegistry {
     config_dir: PathBuf,
@@ -573,18 +576,18 @@ pub struct PluginRegistry {
 }
 
 impl PluginRegistry {
-    /// Nombre del fichero de estado dentro de `config_dir`.
+    /// Name of the state file inside `config_dir`.
     const STATE_FILE: &'static str = "plugins-state.toml";
 
-    /// Descubre el catálogo en `config_dir/plugins/<id>/plugin.toml` y le fusiona
-    /// el estado de `config_dir/plugins-state.toml`.
+    /// Discovers the catalog at `config_dir/plugins/<id>/plugin.toml` and
+    /// merges in the state from `config_dir/plugins-state.toml`.
     ///
-    /// Un `config_dir/plugins` inexistente = catálogo vacío (no es error). Un
-    /// `plugins-state.toml` ausente = estado vacío.
+    /// A nonexistent `config_dir/plugins` = empty catalog (not an error). An
+    /// absent `plugins-state.toml` = empty state.
     ///
     /// # Errors
-    /// [`io::ErrorKind::InvalidData`] si `plugins-state.toml` existe pero no es
-    /// TOML válido; cualquier otro error de I/O al leerlo se propaga tal cual.
+    /// [`io::ErrorKind::InvalidData`] if `plugins-state.toml` exists but is not
+    /// valid TOML; any other I/O error reading it propagates as is.
     pub fn discover(config_dir: &Path) -> io::Result<Self> {
         let catalog = Catalog::load_dir(&config_dir.join("plugins"));
         let state = Self::read_state(&config_dir.join(Self::STATE_FILE))?;
@@ -595,11 +598,11 @@ impl PluginRegistry {
         })
     }
 
-    /// Un registro VACÍO anclado en `config_dir`, sin tocar el FS: catálogo sin
-    /// plugins y estado sin fusionar. Lo usa el daemon como degradación si el
-    /// descubrimiento falla (p. ej. `plugins-state.toml` corrupto): un fichero
-    /// de estado roto no debe impedir arrancar. Persistir sobre él re-crea el
-    /// estado desde cero bajo `config_dir`.
+    /// An EMPTY registry anchored at `config_dir`, without touching the FS: a
+    /// catalog with no plugins and no merged state. The daemon uses it as a
+    /// fallback if discovery fails (e.g. a corrupt `plugins-state.toml`): a
+    /// broken state file must not prevent startup. Persisting over it
+    /// re-creates the state from scratch under `config_dir`.
     #[must_use]
     pub fn empty(config_dir: &Path) -> Self {
         Self {
@@ -609,19 +612,19 @@ impl PluginRegistry {
         }
     }
 
-    /// Lo que un plugin OFRECE, en el orden del manifiesto: primero los
-    /// comandos, después los renamers (0.67.0, ADR 0095) y después los
-    /// organizers (0.77.0, fase 8), cada uno con su `kind`.
+    /// What a plugin OFFERS, in manifest order: first the commands, then the
+    /// renamers (0.67.0, ADR 0095), and then the organizers (0.77.0, phase
+    /// 8), each with its `kind`.
     ///
-    /// Las tres clases viajan en la MISMA lista porque contestan la misma
-    /// pregunta —«qué me ofrece este plugin»—, y la paleta las pinta juntas
-    /// con un rótulo que dice de cuál se trata. Lo que cambia entre ellas es
-    /// a qué método despacha cada fila, y eso es exactamente lo que el `kind`
-    /// lleva.
+    /// The three classes travel in the SAME list because they answer the
+    /// same question —"what does this plugin offer me"—, and the palette
+    /// paints them together with a label saying which one it is. What
+    /// changes between them is which method each row dispatches to, and that
+    /// is exactly what `kind` carries.
     ///
-    /// Es DESCUBRIMIENTO: no se gatea por aprobado ni habilitado, igual que
-    /// las columnas y los paneles — qué ofrece un plugin es justo lo que un
-    /// humano mira ANTES de aprobarlo.
+    /// It is DISCOVERY: it is not gated by approved or enabled, same as the
+    /// columns and the panels — what a plugin offers is exactly what a human
+    /// looks at BEFORE approving it.
     #[must_use]
     fn comandos_de(c: &norte_plugin_host::Contributions) -> Vec<PluginCommandInfo> {
         c.command
@@ -644,8 +647,8 @@ impl PluginRegistry {
             .collect()
     }
 
-    /// El catálogo descubierto fusionado con el estado persistido, en la forma
-    /// del protocolo.
+    /// The discovered catalog merged with the persisted state, in the
+    /// protocol's shape.
     #[must_use]
     pub fn list(&self) -> PluginListResult {
         let plugins = self
@@ -660,10 +663,11 @@ impl PluginRegistry {
                     publisher: e.manifest.publisher.clone(),
                     version: e.manifest.version.clone(),
                     category: e.manifest.category.as_str().to_string(),
-                    // Las insignias del manifiesto MÁS el scheme que un
-                    // provider reclama (`provider:webdav`): es lo que aprobar
-                    // concede —ponerse delante de `webdav://`— y hasta aquí
-                    // el humano aprobaba un provider sin ver para qué scheme.
+                    // The manifest's badges PLUS the scheme a provider claims
+                    // (`provider:webdav`): that is what approving grants
+                    // —standing in front of `webdav://`— and until now the
+                    // human approved a provider without seeing for which
+                    // scheme.
                     capabilities: e
                         .manifest
                         .capabilities
@@ -675,12 +679,12 @@ impl PluginRegistry {
                                 .provider
                                 .iter()
                                 .map(|c| format!("provider:{}", c.scheme))
-                                // Y los eventos de un hook (ADR 0100), por
-                                // lo mismo: lo que el plugin va a RECIBIR
-                                // —la ruta de cada mutación de esa clase—
-                                // es lo que el humano aprueba, y un hook
-                                // sin capabilities no puede aprobarse
-                                // sobre una lista vacía.
+                                // And a hook's events (ADR 0100), for the
+                                // same reason: what the plugin is going to
+                                // RECEIVE —the path of each mutation of that
+                                // class— is what the human approves, and a
+                                // hook with no capabilities cannot be
+                                // approved over an empty list.
                                 .chain(
                                     e.manifest
                                         .contributions
@@ -690,10 +694,11 @@ impl PluginRegistry {
                                 ),
                         )
                         .collect(),
-                    // Aprobación EFECTIVA (issue #69): `approved` en el fichero
-                    // pero con el digest de capabilities CASANDO el del manifiesto
-                    // actual. Si las capabilities cambiaron en disco tras aprobar,
-                    // la UI ve `approved = false` y vuelve a pedir consentimiento.
+                    // EFFECTIVE approval (issue #69): `approved` in the file
+                    // but with the capabilities digest MATCHING the current
+                    // manifest's. If the capabilities changed on disk after
+                    // approving, the UI sees `approved = false` and asks for
+                    // consent again.
                     approved: Self::approval_is_current(&st, e),
                     enabled: st.enabled,
                     // (P1) manifest `description` is cosmetic/untrusted, same
@@ -718,11 +723,11 @@ impl PluginRegistry {
                             header: c.header.clone(),
                         })
                         .collect(),
-                    // Y los paneles (0.74.0, fase 3), con el MISMO criterio
-                    // que las columnas: orden del manifiesto y puro
-                    // descubrimiento, sin gatear por aprobado ni
-                    // habilitado. Qué huecos pide un plugin es justo lo
-                    // que un humano mira ANTES de aprobarlo.
+                    // And the panels (0.74.0, phase 3), with the SAME
+                    // criterion as the columns: manifest order and pure
+                    // discovery, not gated by approved or enabled. What
+                    // slots a plugin asks for is exactly what a human looks
+                    // at BEFORE approving it.
                     panels: e
                         .manifest
                         .contributions
@@ -735,38 +740,39 @@ impl PluginRegistry {
                             min_rows: p.min_rows,
                         })
                         .collect(),
-                    // El ancla que el humano está MIRANDO (#282): es lo que
-                    // devuelve al confirmar, y lo que el daemon compara con la
-                    // suya antes de conceder. Cubre `category` y
-                    // `contributions` —cuándo y cómo se dispara— además de las
-                    // capabilities, o sea justo lo que la lista pintada NO
-                    // dice.
+                    // The anchor the human is LOOKING AT (#282): it is what
+                    // it returns when confirming, and what the daemon
+                    // compares against its own before granting. It covers
+                    // `category` and `contributions` —when and how it
+                    // fires— besides the capabilities, i.e. exactly what the
+                    // painted list does NOT say.
                     manifest_digest: Some(norte_plugin_host::PluginEntry::approval_anchor(e)),
-                    // (H3e, 0.34.0) NO gateado por approved/enabled — la
-                    // documentación de un plugin es justo lo que un humano lee
-                    // ANTES de aprobarlo, mismo criterio que
+                    // (H3e, 0.34.0) NOT gated by approved/enabled — a
+                    // plugin's documentation is exactly what a human reads
+                    // BEFORE approving it, same criterion as
                     // `capabilities`/`commands`/`columns`.
                     //
-                    // La bandera del WIRE es la ESTRICTA de las dos: el
-                    // `is_present` del catálogo es un `is_file` que SIGUE
-                    // enlaces (presencia, no permiso — así lo dice su propio
-                    // comentario), mientras que `is_servable` ya pasó la
-                    // MISMA guarda que aplicará el lector. Si divergen, el par
-                    // (`has_help: true`, `markdown: ""`) es exactamente el
-                    // oráculo "esa ruta existe y es un fichero regular", y las
-                    // dos mitades las lee un agente por `plugin.list` +
-                    // `plugin.help`, ninguno de los dos gateado por policy. Y
-                    // aun sin el agente, la barra lateral pintaría un nodo que
-                    // se abre en blanco.
+                    // The WIRE flag is the STRICT one of the two: the
+                    // catalog's `is_present` is an `is_file` that FOLLOWS
+                    // links (presence, not permission — its own comment
+                    // says so), while `is_servable` already passed the SAME
+                    // guard the reader will apply. If they diverge, the
+                    // pair (`has_help: true`, `markdown: ""`) is exactly the
+                    // oracle "that path exists and is a regular file", and
+                    // both halves are read by an agent via `plugin.list` +
+                    // `plugin.help`, neither gated by policy. And even
+                    // without the agent, the sidebar would paint a node that
+                    // opens blank.
                     //
-                    // Se LEE, no se calcula: `list()` corre en el reactor async
-                    // y bajo el lock global de plugins (`handle_plugin_list` lo
-                    // llama síncrono desde `dispatch`), así que aplicar la
-                    // guarda aquí serían tres syscalls por plugin bloqueando a
-                    // todas las demás conexiones sobre un directorio que puede
-                    // estar en autofs o NFS — y `plugin.list` está ABIERTO a un
-                    // agente. El veredicto se calcula al DESCUBRIR, donde la
-                    // I/O ya vive fuera del reactor.
+                    // It is READ, not computed: `list()` runs in the async
+                    // reactor and under the global plugins lock
+                    // (`handle_plugin_list` calls it synchronously from
+                    // `dispatch`), so applying the guard here would be
+                    // three syscalls per plugin blocking every other
+                    // connection over a directory that may be on autofs or
+                    // NFS — and `plugin.list` is OPEN to an agent. The
+                    // verdict is computed at DISCOVERY time, where the I/O
+                    // already lives outside the reactor.
                     has_help: e.help.is_servable(),
                 }
             })
@@ -776,22 +782,24 @@ impl PluginRegistry {
             .errors
             .iter()
             .map(|e| {
-                // Solo el NOMBRE del directorio del plugin, nunca la ruta
-                // absoluta: revelaría el home del usuario (`~/.config/norte/...`)
-                // a un agente que llame a `plugin.list`. El basename basta para
-                // que un humano identifique el plugin roto.
-                // `file_name()` es `None` para un path acabado en `..`; caer
-                // ahí a `as_os_str()` mandaría la ruta ABSOLUTA, que es justo
-                // lo que el rustdoc del campo promete que nunca pasa (revela
-                // el home del usuario a un agente que llame a `plugin.list`).
+                // Only the plugin directory's NAME, never the absolute path:
+                // it would reveal the user's home (`~/.config/norte/...`) to
+                // an agent calling `plugin.list`. The basename is enough for
+                // a human to identify the broken plugin.
+                // `file_name()` is `None` for a path ending in `..`; falling
+                // back there to `as_os_str()` would send the ABSOLUTE path,
+                // which is exactly what the field's rustdoc promises never
+                // happens (reveals the user's home to an agent calling
+                // `plugin.list`).
                 let base = e.dir.file_name().unwrap_or_else(|| "?".as_ref());
                 PluginLoadError {
                     dir: base.to_string_lossy().into_owned(),
-                    // Y los BYTES al lado (#265): el `to_string_lossy` de
-                    // arriba pone `U+FFFD`, que NO es un peligro de terminal,
-                    // así que ninguna heurística del receptor puede recuperar
-                    // que hubo conversión. Con los bytes la hace él y la
-                    // marca, que es la regla de siempre.
+                    // And the BYTES alongside it (#265): the
+                    // `to_string_lossy` above puts `U+FFFD`, which is NOT a
+                    // terminal danger, so no heuristic on the receiver's
+                    // side can recover that a conversion happened. With the
+                    // bytes it can do that itself and flag it, the usual
+                    // rule.
                     dir_bytes: bytes_de(base),
                     reason: e.error.to_string(),
                 }
@@ -800,35 +808,35 @@ impl PluginRegistry {
         PluginListResult { plugins, errors }
     }
 
-    /// Los directorios que NO cargaron, con su causa TIPADA (a diferencia de
-    /// [`Self::list`], que la aplana a texto para el wire). Para quien
-    /// diagnostica en local —`norte doctor`— y quiere distinguir un
-    /// manifiesto roto de un binario compilado contra otro WIT (ADR 0094).
+    /// The directories that did NOT load, with their TYPED cause (unlike
+    /// [`Self::list`], which flattens it to text for the wire). For whoever
+    /// diagnoses locally —`norte doctor`— and wants to distinguish a broken
+    /// manifest from a binary compiled against a different WIT (ADR 0094).
     #[must_use]
     pub fn load_errors(&self) -> &[norte_plugin_host::LoadError] {
         &self.catalog.errors
     }
 
-    /// El directorio de configuración donde vive `plugins-state.toml`. Lo usa el
-    /// daemon para persistir FUERA del lock (regla 2): captura el dir bajo el
-    /// lock y escribe en `spawn_blocking`.
+    /// The config directory where `plugins-state.toml` lives. The daemon uses
+    /// it to persist OUTSIDE the lock (rule 2): capture the dir under the
+    /// lock and write in `spawn_blocking`.
     #[must_use]
     pub fn config_dir(&self) -> &Path {
         &self.config_dir
     }
 
-    /// Valores EFECTIVOS de `[config]` (P2) para `id`: defaults del esquema
-    /// del manifiesto con `config.toml` ya superpuesto y validado —
-    /// resueltos al descubrir ([`norte_plugin_host::Catalog::load_dir`], que
-    /// excluye a `errors` cualquier plugin cuyo `config.toml` no valide, así
-    /// que lo que llega aquí SIEMPRE es válido). `None` si `id` no está en el
-    /// catálogo — NUNCA por un `[config]` vacío/ausente, que da `Some` de un
-    /// mapa vacío (mismo criterio que
+    /// EFFECTIVE `[config]` values (P2) for `id`: the manifest schema's
+    /// defaults with `config.toml` already overlaid and validated — resolved
+    /// at discovery time ([`norte_plugin_host::Catalog::load_dir`], which
+    /// excludes from `errors` any plugin whose `config.toml` does not
+    /// validate, so what arrives here is ALWAYS valid). `None` if `id` is not
+    /// in the catalog — NEVER because of an empty/absent `[config]`, which
+    /// gives `Some` of an empty map (same criterion as
     /// [`norte_plugin_host::Manifest::config`]).
     ///
-    /// Host-side ONLY (P2 decisión 5): no cruza el wire directamente — lo
-    /// consume `norte doctor` (que corre embebido) y, desde G3c,
-    /// [`Self::config_keys`] (que SÍ cruza el wire vía
+    /// Host-side ONLY (P2 decision 5): it does not cross the wire directly —
+    /// it is consumed by `norte doctor` (which runs embedded) and, since
+    /// G3c, by [`Self::config_keys`] (which DOES cross the wire via
     /// `plugin.get_config`).
     #[must_use]
     pub fn settings_of(&self, id: &str) -> Option<&BTreeMap<String, String>> {
@@ -839,63 +847,67 @@ impl PluginRegistry {
             .map(|p| &p.settings)
     }
 
-    /// El `help.md` de `id`, ACOTADO para el wire (H3e).
+    /// `id`'s `help.md`, CAPPED for the wire (H3e).
     ///
-    /// `None` si `id` no está en el catálogo. Eso es lo que hace segura la
-    /// llamada: `id` viene del WIRE y se usa como CLAVE DE BÚSQUEDA contra los
-    /// plugins descubiertos, nunca compuesta en una ruta — la ruta sale del
-    /// `dir` que el catálogo guardó al descubrir, así que un `../` en el id no
-    /// llega a tocar el sistema de ficheros, solo falla el lookup.
+    /// `None` if `id` is not in the catalog. That is what makes the call
+    /// safe: `id` comes from the WIRE and is used as a LOOKUP KEY against the
+    /// discovered plugins, never composed into a path — the path comes from
+    /// the `dir` the catalog stored on discovery, so a `../` in the id never
+    /// touches the filesystem, it just fails the lookup.
     ///
-    /// El fichero debe CANONICALIZAR DENTRO del directorio del plugin
-    /// ([`norte_plugin_host::verified_child`], la misma guarda que
-    /// `plugin.wasm`): un
-    /// `help.md` que es un symlink a `~/.ssh/id_ed25519` o a `/etc/…` se lee
-    /// como si no hubiera página. La razón es que esto cruza el wire y un
-    /// AGENTE puede pedirlo: sin la guarda, `plugin.help` sería una lectura de
-    /// fichero arbitrario POR FUERA del motor de policy y de sus scopes.
+    /// The file must CANONICALIZE INSIDE the plugin's directory
+    /// ([`norte_plugin_host::verified_child`], the same guard as
+    /// `plugin.wasm`): a `help.md` that is a symlink to `~/.ssh/id_ed25519`
+    /// or to `/etc/…` is read as if there were no page. The reason is that
+    /// this crosses the wire and an AGENT can request it: without the guard,
+    /// `plugin.help` would be an arbitrary file read OUTSIDE the policy
+    /// engine and its scopes.
     ///
-    /// Lo que hace segura la apertura NO es una aprobación: `help_of` NO está
-    /// gateado por `approved`/`enabled` (la documentación es justo lo que se lee
-    /// ANTES de aprobar), así que el directorio del plugin fue DESCUBIERTO, no
-    /// consentido. Lo seguro es la conjunción de tres cosas: el contenido está
-    /// ACOTADO (`HelpJob::read`), la ruta NO la controla quien llama
-    /// (sale del catálogo, no del wire), y la guarda impide que apunte fuera del
-    /// directorio donde el humano ya dejó caer el bundle.
+    /// What makes the opening safe is NOT an approval: `help_of` is NOT
+    /// gated by `approved`/`enabled` (the documentation is exactly what is
+    /// read BEFORE approving), so the plugin's directory was DISCOVERED, not
+    /// consented to. What is safe is the conjunction of three things: the
+    /// content is CAPPED (`HelpJob::read`), the path is NOT controlled by
+    /// the caller (it comes from the catalog, not from the wire), and the
+    /// guard prevents it from pointing outside the directory where the human
+    /// already dropped the bundle.
     ///
-    /// Un plugin conocido SIEMPRE devuelve `Some`, aunque su `help.md` falte,
-    /// no se pueda leer o escape del directorio: en esos casos `markdown` es la
-    /// cadena vacía. La ayuda es cosmética y no tiene por qué distinguirse de
-    /// "página en blanco" — lo que sí distingue es `norte doctor`, que gatea por
-    /// [`Self::announces_help`] (la bandera LAXA, sin la guarda) y toma de aquí
-    /// el contenido, y así puede reportar el fichero ausente, ilegible o
-    /// escapado; desde el lado del lector, un `help.md` que apunta fuera es
-    /// indistinguible de un autor que no escribió nada, y eso merece un aviso.
+    /// A known plugin ALWAYS returns `Some`, even if its `help.md` is
+    /// missing, unreadable, or escapes the directory: in those cases
+    /// `markdown` is the empty string. Help is cosmetic and has no reason to
+    /// be distinguished from "blank page" — the one that DOES distinguish it
+    /// is `norte doctor`, which gates on [`Self::announces_help`] (the LAX
+    /// flag, without the guard) and takes the content from here, and so can
+    /// report the file as absent, unreadable, or escaped; from the reader's
+    /// side, a `help.md` that points outside is indistinguishable from an
+    /// author who wrote nothing, and that deserves a warning.
     ///
-    /// El texto que devuelve NO está enmascarado: lleva verbatim los peligros
-    /// de terminal que el plugin escribiera (ESC, controles C0, anulaciones
-    /// bidi). Se parsea con `norte_help::parse_untrusted`, que enmascara al
-    /// construir el modelo; nunca se pinta ni se loguea en crudo.
+    /// The text it returns is NOT masked: it carries verbatim whatever
+    /// terminal dangers the plugin wrote (ESC, C0 controls, bidi overrides).
+    /// It is parsed with `norte_help::parse_untrusted`, which masks while
+    /// building the model; it is never painted or logged raw.
     ///
-    /// I/O SÍNCRONA: el llamador async va por `help_job` +
-    /// `spawn_blocking` (regla 2), que además saca la verificación del lock.
+    /// SYNCHRONOUS I/O: the async caller goes through `help_job` +
+    /// `spawn_blocking` (rule 2), which also takes the verification out of
+    /// the lock.
     #[must_use]
     pub fn help_of(&self, id: &str) -> Option<norte_proto::methods::PluginHelpResult> {
         self.help_job(id).map(HelpJob::read)
     }
 
-    /// El trabajo de leer el `help.md` de `id`, resuelto contra el catálogo pero
-    /// SIN tocar todavía el disco (H3e). `None` si `id` no está descubierto.
+    /// The job of reading `id`'s `help.md`, resolved against the catalog but
+    /// WITHOUT touching the disk yet (H3e). `None` if `id` is not discovered.
     ///
-    /// Es la mitad de [`Self::help_of`] que se puede hacer bajo un lock: aquí
-    /// solo hay una búsqueda en memoria. La verificación (tres syscalls) y la
-    /// lectura viven en [`HelpJob::read`], que el llamador async ejecuta en
-    /// `spawn_blocking` con el lock ya soltado (regla 2).
+    /// It is the half of [`Self::help_of`] that can be done under a lock:
+    /// here there is only an in-memory lookup. The verification (three
+    /// syscalls) and the read live in [`HelpJob::read`], which the async
+    /// caller runs in `spawn_blocking` with the lock already released (rule
+    /// 2).
     ///
-    /// Devuelve un valor OPACO a propósito: el `dir` que lleva dentro no es
-    /// accesible, así que quien lo recibe no puede re-derivar una ruta a partir
-    /// del id del wire ni saltarse la guarda. La garantía se queda entera dentro
-    /// del registro.
+    /// Returns an OPAQUE value on purpose: the `dir` it carries inside is not
+    /// accessible, so whoever receives it cannot re-derive a path from the
+    /// wire's id nor skip the guard. The guarantee stays entirely inside the
+    /// registry.
     #[must_use]
     pub(crate) fn help_job(&self, id: &str) -> Option<HelpJob> {
         let entry = self.catalog.plugins.iter().find(|e| e.manifest.id == id)?;
@@ -904,18 +916,19 @@ impl PluginRegistry {
         })
     }
 
-    /// `true` si `id` trae un fichero `help.md`, SIN aplicar la guarda de
-    /// escape (H3e): la bandera LAXA, el `is_file` que sigue enlaces.
+    /// `true` if `id` carries a `help.md` file, WITHOUT applying the escape
+    /// guard (H3e): the LAX flag, the `is_file` that follows links.
     ///
-    /// Existe porque hay dos preguntas distintas y una sola no sirve para las
-    /// dos. `PluginInfo::has_help`, que cruza el WIRE, es la ESTRICTA (la misma
-    /// guarda que el lector: anunciar `true` y servir `""` sería un oráculo de
-    /// rutas). Un DIAGNÓSTICO local necesita la laxa: "el autor puso un
-    /// `help.md` y el host se niega a servirlo" es justo el hallazgo que hay que
-    /// dar, y con la estricta ese caso desaparece sin dejar rastro — se vuelve
-    /// indistinguible de un plugin que no se documentó.
+    /// It exists because there are two distinct questions and one alone does
+    /// not serve both. `PluginInfo::has_help`, which crosses the WIRE, is the
+    /// STRICT one (the same guard as the reader: announcing `true` and
+    /// serving `""` would be a path oracle). A local DIAGNOSIS needs the lax
+    /// one: "the author put in a `help.md` and the host refuses to serve it"
+    /// is exactly the finding that needs to be reported, and with the strict
+    /// one that case disappears without a trace — it becomes indistinguishable
+    /// from a plugin that was never documented.
     ///
-    /// No la use nada que responda por el wire.
+    /// Nothing that answers over the wire should use it.
     #[must_use]
     pub fn announces_help(&self, id: &str) -> bool {
         self.catalog
@@ -924,21 +937,19 @@ impl PluginRegistry {
             .any(|e| e.manifest.id == id && e.help.is_present())
     }
 
-    /// Esquema `[config]` de `id` + valores EFECTIVOS, EMPAREJADOS en orden
-    /// de clave del manifiesto (0.28.0, G3c): la fuente que alimenta
-    /// `plugin.get_config` — cada `(key, spec, value)` se traduce 1:1 a un
-    /// `PluginConfigKeyWire` en `norte-core/daemon/server.rs`. `None` si
-    /// `id` no está en el catálogo (mismo criterio que
-    /// [`Self::settings_of`]); un `[config]` vacío/ausente da `Some(vec![])`,
-    /// nunca `None` — el catálogo SÍ conoce el plugin, solo no declara
-    /// ninguna clave.
+    /// `id`'s `[config]` schema + EFFECTIVE values, PAIRED in the manifest's
+    /// key order (0.28.0, G3c): the source that feeds `plugin.get_config` —
+    /// each `(key, spec, value)` is translated 1:1 to a `PluginConfigKeyWire`
+    /// in `norte-core/daemon/server.rs`. `None` if `id` is not in the catalog
+    /// (same criterion as [`Self::settings_of`]); an empty/absent `[config]`
+    /// gives `Some(vec![])`, never `None` — the catalog DOES know the
+    /// plugin, it just declares no key.
     ///
-    /// Invariante: `entry.settings` (resuelto por
-    /// [`norte_plugin_host::resolve_settings`] al descubrir) SIEMPRE
-    /// contiene un valor para cada clave de `entry.manifest.config` — un
-    /// `unwrap_or_default` cubriría una violación de ese invariante sin
-    /// panicar (defensa en profundidad, nunca debería activarse en la
-    /// práctica).
+    /// Invariant: `entry.settings` (resolved by
+    /// [`norte_plugin_host::resolve_settings`] on discovery) ALWAYS contains
+    /// a value for every key in `entry.manifest.config` — an
+    /// `unwrap_or_default` would cover a violation of that invariant without
+    /// panicking (defense in depth, should never trigger in practice).
     #[must_use]
     pub fn config_keys(
         &self,
@@ -958,21 +969,21 @@ impl PluginRegistry {
         )
     }
 
-    /// Valida `value` contra el esquema `[config.<key>]` de `id` (la MISMA
-    /// validación que `config.toml`, vía
-    /// [`norte_plugin_host::encode_wire_value`]) y, si pasa, persiste +
-    /// RE-RESUELVE `settings_of`/[`Self::config_keys`] EN MEMORIA para que
-    /// una instanciación futura (o una `plugin.get_config` inmediatamente
-    /// después) vea el valor nuevo (0.28.0, G3c). Nunca persiste si la
-    /// validación falla (spec S2: "validated against the schema BEFORE
-    /// writing").
+    /// Validates `value` against `id`'s `[config.<key>]` schema (the SAME
+    /// validation as `config.toml`, via
+    /// [`norte_plugin_host::encode_wire_value`]) and, if it passes, persists
+    /// + RE-RESOLVES `settings_of`/[`Self::config_keys`] IN MEMORY so a
+    /// future instantiation (or a `plugin.get_config` right after) sees the
+    /// new value (0.28.0, G3c). Never persists if validation fails (spec S2:
+    /// "validated against the schema BEFORE writing").
     ///
     /// # Errors
-    /// [`PluginConfigSetError::Unknown`] si `id` no está en el catálogo;
-    /// [`PluginConfigSetError::UnknownKey`] si `key` no está declarada en
-    /// `[config]`; [`PluginConfigSetError::Invalid`] si el valor no valida
-    /// contra el tipo/rango/enum de la clave; [`PluginConfigSetError::Io`]
-    /// si falla la escritura o la re-resolución tras escribir.
+    /// [`PluginConfigSetError::Unknown`] if `id` is not in the catalog;
+    /// [`PluginConfigSetError::UnknownKey`] if `key` is not declared in
+    /// `[config]`; [`PluginConfigSetError::Invalid`] if the value does not
+    /// validate against the key's type/range/enum;
+    /// [`PluginConfigSetError::Io`] if the write or the re-resolution after
+    /// writing fails.
     pub fn set_config(
         &mut self,
         id: &str,
@@ -999,60 +1010,62 @@ impl PluginRegistry {
         let dir = self.catalog.plugins[idx].dir.clone();
         let refreshed = norte_plugin_host::resolve_settings(&manifest, &dir).map_err(|e| {
             PluginConfigSetError::Io(io::Error::other(format!(
-                "re-resolver config tras escribir: {e}"
+                "re-resolving config after write: {e}"
             )))
         })?;
         self.catalog.plugins[idx].settings = refreshed;
         Ok(())
     }
 
-    /// Ruta esperada del binario de `id`: `<config_dir>/plugins/<id>/plugin.wasm`.
-    /// Para un caller que solo necesita comprobar PRESENCIA sin cargar el
-    /// runtime WASM (p. ej. `norte doctor`, H2) — evita que ese caller
-    /// duplique el layout con su propio `config_dir.join("plugins")...`.
-    /// NO es el mismo camino que `Self::verified_wasm` (que además
-    /// canonicaliza y verifica que el binario no escape del directorio del
-    /// plugin vía symlink, issue #69 — una defensa que este cálculo puro de
-    /// ruta no aplica) ni consulta el catálogo: por convención
-    /// (`PluginEntry::dir`'s propio rustdoc) el directorio de un plugin
-    /// descubierto es `plugins/<id>/`, pero esta función no lo verifica, solo
-    /// lo asume.
+    /// `id`'s expected binary path: `<config_dir>/plugins/<id>/plugin.wasm`.
+    /// For a caller that only needs to check PRESENCE without loading the
+    /// WASM runtime (e.g. `norte doctor`, H2) — keeps that caller from
+    /// duplicating the layout with its own `config_dir.join("plugins")...`.
+    /// It is NOT the same path as `Self::verified_wasm` (which additionally
+    /// canonicalizes and verifies the binary does not escape the plugin's
+    /// directory via a symlink, issue #69 — a defense this pure path
+    /// computation does not apply) nor does it consult the catalog: by
+    /// convention (`PluginEntry::dir`'s own rustdoc) a discovered plugin's
+    /// directory is `plugins/<id>/`, but this function does not verify that,
+    /// it only assumes it.
     #[must_use]
     pub fn wasm_path(&self, id: &str) -> PathBuf {
         self.config_dir.join("plugins").join(id).join("plugin.wasm")
     }
 
-    /// Copia del estado aprobado/activado, para persistir fuera del lock (el
-    /// daemon lo mueve a `spawn_blocking` junto a [`Self::config_dir`], regla 2).
+    /// Copy of the approved/enabled state, to persist outside the lock (the
+    /// daemon moves it to `spawn_blocking` alongside [`Self::config_dir`],
+    /// rule 2).
     #[must_use]
     pub fn state_snapshot(&self) -> BTreeMap<String, PluginState> {
         self.state.clone()
     }
 
-    /// Muta EN MEMORIA el estado `approved` de un plugin descubierto, SIN I/O.
+    /// Mutates a discovered plugin's `approved` state IN MEMORY, WITHOUT I/O.
     ///
-    /// Devuelve `true` si el plugin existe en el catálogo (y se aplicó), o
-    /// `false` si el id es desconocido — en cuyo caso no se toca nada (no se
-    /// ensucia el estado con plugins fantasma). La persistencia es
-    /// responsabilidad del llamante (daemon: `persist_state` en
-    /// `spawn_blocking`; embebido: [`Self::set_approval`]).
+    /// Returns `true` if the plugin exists in the catalog (and it was
+    /// applied), or `false` if the id is unknown — in which case nothing is
+    /// touched (the state is not dirtied with phantom plugins). Persistence
+    /// is the caller's responsibility (daemon: `persist_state` in
+    /// `spawn_blocking`; embedded: [`Self::set_approval`]).
     pub fn set_approval_in_memory(&mut self, id: &str, approved: bool) -> bool {
-        // Se ancla el digest de las capabilities que el humano está viendo AHORA
-        // (issue #69): si el `plugin.toml` cambia después, el digest dejará de
-        // casar y `resolve_*` re-pedirá consentimiento. Requiere que el id exista
-        // en el catálogo (de lo contrario no hay manifiesto que digestar).
+        // The digest of the capabilities the human is looking at RIGHT NOW is
+        // anchored (issue #69): if `plugin.toml` changes afterward, the
+        // digest will stop matching and `resolve_*` will ask for consent
+        // again. Requires the id to exist in the catalog (otherwise there is
+        // no manifest to digest).
         let Some(digest) = self.manifest_digest(id) else {
             return false;
         };
         let st = self.state.entry(id.to_string()).or_default();
         st.approved = approved;
-        // Al aprobar se guarda el digest visto; al revocar se limpia (una futura
-        // re-aprobación volverá a anclarlo).
+        // The seen digest is saved when approving; it is wiped when
+        // revoking (a future re-approval will anchor it again).
         st.approved_digest = approved.then_some(digest);
         true
     }
 
-    /// Muta EN MEMORIA el estado `enabled`. Semántica idéntica a
+    /// Mutates the `enabled` state IN MEMORY. Identical semantics to
     /// [`Self::set_approval_in_memory`].
     pub fn set_enabled_in_memory(&mut self, id: &str, enabled: bool) -> bool {
         if !self.is_known(id) {
@@ -1062,44 +1075,48 @@ impl PluginRegistry {
         true
     }
 
-    /// Olvida EN MEMORIA un plugin que [`uninstall`] acaba de borrar del
-    /// disco: sale del catálogo y su estado queda apagado y sin aprobar, que
-    /// es exactamente lo que `uninstall` dejó escrito en `plugins-state.toml`.
+    /// Forgets IN MEMORY a plugin that [`uninstall`] just deleted from disk:
+    /// it leaves the catalog and its state is left disabled and unapproved,
+    /// which is exactly what `uninstall` left written in
+    /// `plugins-state.toml`.
     ///
-    /// Devuelve `true` si estaba en el catálogo. Un plugin ROTO —que
-    /// `uninstall` borra igual— no está en `plugins` sino en `errors`, y se
-    /// olvida de ahí: si no, el daemon seguía anunciándolo como «no cargó»
-    /// hasta reiniciar, el mismo cadáver con otro nombre. Sin esto el daemon
-    /// seguía listando lo borrado, y decorando con ello, hasta reiniciar.
+    /// Returns `true` if it was in the catalog. A BROKEN plugin —which
+    /// `uninstall` deletes just the same— is not in `plugins` but in
+    /// `errors`, and is forgotten from there: otherwise the daemon kept
+    /// announcing it as "failed to load" until restart, the same corpse
+    /// under another name. Without this the daemon kept listing what was
+    /// deleted, and decorating with it, until restart.
     ///
-    /// Un id que no es un id no toca nada: la entrada de estado que se
-    /// inserta se escribe a `plugins-state.toml` en el siguiente persist, como
-    /// clave, y esta función es `pub`.
+    /// An id that is not an id touches nothing: the state entry that gets
+    /// inserted is written to `plugins-state.toml` on the next persist, as a
+    /// key, and this function is `pub`.
     pub fn forget_in_memory(&mut self, id: &str) -> bool {
         if !norte_plugin_host::is_valid_plugin_id(id) {
             return false;
         }
-        let antes = self.catalog.plugins.len();
+        let before = self.catalog.plugins.len();
         self.catalog.plugins.retain(|e| e.manifest.id != id);
         self.catalog
             .errors
             .retain(|e| e.dir.file_name() != Some(std::ffi::OsStr::new(id)));
         self.state.insert(id.to_owned(), PluginState::default());
-        self.catalog.plugins.len() != antes
+        self.catalog.plugins.len() != before
     }
 
-    /// Fija el estado `approved` de un plugin descubierto y lo persiste, todo en
-    /// el MISMO hilo. Es la API para el uso EMBEBIDO, que ya corre dentro de un
-    /// `spawn_blocking` (backend del frontend). El daemon NO usa esto: separa la
-    /// mutación ([`Self::set_approval_in_memory`]) de la persistencia
-    /// (`persist_state`) para no bloquear el reactor (regla 2).
+    /// Sets a discovered plugin's `approved` state and persists it, all on
+    /// the SAME thread. It is the API for EMBEDDED use, which already runs
+    /// inside a `spawn_blocking` (the frontend's backend). The daemon does
+    /// NOT use this: it separates the mutation
+    /// ([`Self::set_approval_in_memory`]) from the persistence
+    /// (`persist_state`) so as not to block the reactor (rule 2).
     ///
-    /// Devuelve `Ok(true)` si el plugin existe (y se aplicó+persistió), o
-    /// `Ok(false)` si el id es desconocido — sin persistir nada.
+    /// Returns `Ok(true)` if the plugin exists (and it was
+    /// applied+persisted), or `Ok(false)` if the id is unknown — without
+    /// persisting anything.
     ///
     /// # Errors
-    /// Errores de I/O al re-leer o escribir `plugins-state.toml`, o
-    /// [`io::ErrorKind::InvalidData`] si el fichero existente es TOML corrupto.
+    /// I/O errors re-reading or writing `plugins-state.toml`, or
+    /// [`io::ErrorKind::InvalidData`] if the existing file is corrupt TOML.
     pub fn set_approval(&mut self, id: &str, approved: bool) -> io::Result<bool> {
         if !self.set_approval_in_memory(id, approved) {
             return Ok(false);
@@ -1108,11 +1125,11 @@ impl PluginRegistry {
         Ok(true)
     }
 
-    /// Fija el estado `enabled` de un plugin descubierto y lo persiste (uso
-    /// EMBEBIDO). Semántica de retorno idéntica a [`Self::set_approval`].
+    /// Sets a discovered plugin's `enabled` state and persists it (EMBEDDED
+    /// use). Return semantics identical to [`Self::set_approval`].
     ///
     /// # Errors
-    /// Igual que [`Self::set_approval`].
+    /// Same as [`Self::set_approval`].
     pub fn set_enabled(&mut self, id: &str, enabled: bool) -> io::Result<bool> {
         if !self.set_enabled_in_memory(id, enabled) {
             return Ok(false);
@@ -1121,26 +1138,27 @@ impl PluginRegistry {
         Ok(true)
     }
 
-    /// Valida el consentimiento (fail-closed) y RESUELVE el `.wasm` +
-    /// capabilities + `[config]` YA resuelto de un plugin, SIN ejecutarlo. Es
-    /// BARATO (lectura del catálogo/estado en memoria + un `is_file`): pensado
-    /// para correr bajo el `Mutex<PluginRegistry>` del daemon, que después
-    /// ejecuta lo PESADO (`PluginRuntime::instantiate` + `run_command`, que
-    /// compila el componente WASM) FUERA del lock, en un `spawn_blocking`
-    /// (regla 2). El `.wasm` es `<dir>/plugin.wasm` por convención (ADR 0022
-    /// D6); las capabilities son las DEL MANIFIESTO (el sandbox de M4-P2 las
-    /// hace cumplir).
+    /// Validates consent (fail-closed) and RESOLVES a plugin's `.wasm` +
+    /// capabilities + ALREADY resolved `[config]`, WITHOUT running it. It is
+    /// CHEAP (catalog/state read in memory + an `is_file`): meant to run
+    /// under the daemon's `Mutex<PluginRegistry>`, which afterward runs the
+    /// HEAVY part (`PluginRuntime::instantiate` + `run_command`, which
+    /// compiles the WASM component) OUTSIDE the lock, in a `spawn_blocking`
+    /// (rule 2). The `.wasm` is `<dir>/plugin.wasm` by convention (ADR 0022
+    /// D6); the capabilities are the MANIFEST's (M4-P2's sandbox enforces
+    /// them).
     ///
-    /// `settings` (P2 Task 4a) son los valores de `[config]` YA resueltos
-    /// (Task 2) — el caller debe pasarlos a `PluginInstance::set_settings`
-    /// ANTES de invocar el comando para que el guest los vea vía `host-config`
-    /// (Task 3); [`Self::run_command`] ya lo hace, y `handle_plugin_run_command`
-    /// del daemon (que resuelve bajo lock y ejecuta fuera de él, sin poder
-    /// reusar `run_command` directamente) también.
+    /// `settings` (P2 Task 4a) are the `[config]` values ALREADY resolved
+    /// (Task 2) — the caller must pass them to
+    /// `PluginInstance::set_settings` BEFORE invoking the command so the
+    /// guest sees them via `host-config` (Task 3); [`Self::run_command`]
+    /// already does this, and so does the daemon's
+    /// `handle_plugin_run_command` (which resolves under lock and runs
+    /// outside it, unable to reuse `run_command` directly).
     ///
     /// # Errors
-    /// [`PluginRunError`] `Unknown`/`NotApproved`/`Disabled`/`NoBinary` según el
-    /// veredicto de consentimiento; nunca `Runtime` (no ejecuta nada).
+    /// [`PluginRunError`] `Unknown`/`NotApproved`/`Disabled`/`NoBinary`
+    /// according to the consent verdict; never `Runtime` (it runs nothing).
     pub fn resolve_runnable(
         &self,
         id: &str,
@@ -1158,8 +1176,9 @@ impl PluginRegistry {
             .iter()
             .find(|p| p.manifest.id == id)
             .ok_or_else(|| PluginRunError::Unknown(id.to_string()))?;
-        // Solo el world `norte-plugin` exporta `command`; los demás kinds no
-        // tienen nada que correr, y decirlo aquí evita instanciar para nada.
+        // Only the `norte-plugin` world exports `command`; the other kinds
+        // have nothing to run, and saying so here avoids instantiating for
+        // nothing.
         if !matches!(
             entry.manifest.category,
             norte_plugin_host::Category::Command | norte_plugin_host::Category::Previewer
@@ -1167,9 +1186,10 @@ impl PluginRegistry {
             return Err(PluginRunError::NotRunnable(id.to_string()));
         }
         let st = self.state.get(id).cloned().unwrap_or_default();
-        // Fail-closed: sin aprobación vigente cuyo digest CASE las capabilities
-        // actuales (issue #69), se trata como sin aprobar — aunque el flag
-        // `approved` siga a `true` en disco (el manifiesto cambió tras aprobar).
+        // Fail-closed: without a current approval whose digest MATCHES the
+        // current capabilities (issue #69), it is treated as not approved —
+        // even if the `approved` flag is still `true` on disk (the manifest
+        // changed after approving).
         if !Self::approval_is_current(&st, entry) {
             return Err(PluginRunError::NotApproved(id.to_string()));
         }
@@ -1185,49 +1205,51 @@ impl PluginRegistry {
         ))
     }
 
-    /// Resuelve el previewer APROBADO y ACTIVADO que declara `mime`,
-    /// devolviendo `(id, name, wasm_path, capabilities, settings)`; `None` si
-    /// ninguno aplica. Fail-closed: un previewer no consentido jamás se
-    /// elige. Barato: el caller lee los bytes del archivo y ejecuta fuera del
-    /// lock.
+    /// Resolves the APPROVED and ENABLED previewer that declares `mime`,
+    /// returning `(id, name, wasm_path, capabilities, settings)`; `None` if
+    /// none applies. Fail-closed: a non-consented previewer is never chosen.
+    /// Cheap: the caller reads the file's bytes and runs outside the lock.
     ///
-    /// **Exacto antes que glob** (D3, ADR 0037 enmienda): un plugin que
-    /// declara `text/markdown` gana a uno que declara `text/*` para un
-    /// `.md`, esté donde esté en el orden del catálogo; entre iguales, el
-    /// primero por orden de catálogo (`category, id`). Sin esto, quién
-    /// pintaba un Markdown lo decidía el alfabeto de los ids.
+    /// **Exact before glob** (D3, ADR 0037 amendment): a plugin that declares
+    /// `text/markdown` beats one that declares `text/*` for a `.md`, wherever
+    /// it is in the catalog's order; among equals, the first by catalog
+    /// order (`category, id`). Without this, which one painted a Markdown
+    /// was decided by the alphabet of the ids.
     ///
-    /// `settings` (P2 Task 4a) son los valores de `[config]` YA resueltos
-    /// ([`Self::settings_of`]) — el caller debe pasarlos a
-    /// `PluginInstance::set_settings` ANTES de `render_preview` para que el
-    /// guest los vea vía `host-config` (Task 3), igual que
-    /// [`Self::run_command`] ya hace para los comandos.
+    /// `settings` (P2 Task 4a) are the `[config]` values ALREADY resolved
+    /// ([`Self::settings_of`]) — the caller must pass them to
+    /// `PluginInstance::set_settings` BEFORE `render_preview` so the guest
+    /// sees them via `host-config` (Task 3), the same as [`Self::run_command`]
+    /// already does for commands.
     #[must_use]
     pub fn resolve_previewer(&self, mime: &str) -> Option<ResolvedPreviewer> {
-        // Dos pasadas: la exacta gana a la de comodín aunque venga después.
+        // Two passes: the exact one wins over the wildcard even if it comes
+        // later.
         let exact = self.previewer_matching(|pat| pat == mime);
         exact.or_else(|| self.previewer_matching(|pat| mimetype_matches(pat, mime)))
     }
 
-    /// El primer plugin de MINIATURAS consentido que casa `mime` (ADR
-    /// 0107), con las mismas reglas que [`Self::resolve_previewer`]: la
-    /// declaración exacta gana a la de comodín, y solo entran los aprobados
-    /// con digest vigente y encendidos.
+    /// The first consented THUMBNAIL plugin that matches `mime` (ADR 0107),
+    /// with the same rules as [`Self::resolve_previewer`]: the exact
+    /// declaration beats the wildcard one, and only ones approved with a
+    /// current digest and enabled are considered.
     #[must_use]
     pub fn resolve_thumbnailer(&self, mime: &str) -> Option<ResolvedPreviewer> {
         let exact = self.thumbnailer_matching(|pat| pat == mime);
         exact.or_else(|| self.thumbnailer_matching(|pat| mimetype_matches(pat, mime)))
     }
 
-    /// El plugin consentido que pinta ese panel, si lo hay (0.74.0, fase 3).
+    /// The consented plugin that paints that panel, if there is one (0.74.0,
+    /// phase 3).
     ///
-    /// Por id Y kind, no por orden: un panel se abre por su nombre de hueco
-    /// (`plugin:<id>:<kind>`), así que aquí no hay nada que resolver por
-    /// prioridad — o ese plugin ofrece ese panel, o no hay marco.
+    /// By id AND kind, not by order: a panel opens by its slot name
+    /// (`plugin:<id>:<kind>`), so there is nothing here to resolve by
+    /// priority — either that plugin offers that panel, or there is no
+    /// frame.
     ///
-    /// Fail-closed con el digest vigente, como los demás: un plugin cuyo
-    /// manifiesto cambió tras aprobarse no pinta hasta que se vuelva a
-    /// consentir.
+    /// Fail-closed with the current digest, like the others: a plugin whose
+    /// manifest changed after being approved does not paint until consent is
+    /// given again.
     #[must_use]
     pub fn resolve_panel(&self, plugin_id: &str, kind: &str) -> Option<ResolvedPreviewer> {
         self.catalog.plugins.iter().find_map(|e| {
@@ -1258,7 +1280,10 @@ impl PluginRegistry {
         })
     }
 
-    fn thumbnailer_matching(&self, casa: impl Fn(&str) -> bool) -> Option<ResolvedPreviewer> {
+    fn thumbnailer_matching(
+        &self,
+        matches_pat: impl Fn(&str) -> bool,
+    ) -> Option<ResolvedPreviewer> {
         self.catalog.plugins.iter().find_map(|e| {
             let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
             if !Self::approval_is_current(&st, e) || !st.enabled {
@@ -1270,7 +1295,7 @@ impl PluginRegistry {
                 .thumbnail
                 .iter()
                 .flat_map(|c| c.mimetypes.iter())
-                .any(|pat| casa(pat));
+                .any(|pat| matches_pat(pat));
             if !handles {
                 return None;
             }
@@ -1285,13 +1310,14 @@ impl PluginRegistry {
         })
     }
 
-    /// El primer previewer consentido, en orden de catálogo, con alguna
-    /// declaración de mimetype que satisfaga `casa`.
-    fn previewer_matching(&self, casa: impl Fn(&str) -> bool) -> Option<ResolvedPreviewer> {
+    /// The first consented previewer, in catalog order, with some mimetype
+    /// declaration that satisfies `matches_pat`.
+    fn previewer_matching(&self, matches_pat: impl Fn(&str) -> bool) -> Option<ResolvedPreviewer> {
         self.catalog.plugins.iter().find_map(|e| {
             let st = self.state.get(&e.manifest.id).cloned().unwrap_or_default();
-            // Fail-closed con digest vigente (issue #69): un previewer cuyo
-            // manifiesto cambió tras aprobar NO se elige hasta re-consentir.
+            // Fail-closed with a current digest (issue #69): a previewer
+            // whose manifest changed after approval is NOT chosen until
+            // consent is given again.
             if !Self::approval_is_current(&st, e) || !st.enabled {
                 return None;
             }
@@ -1301,7 +1327,7 @@ impl PluginRegistry {
                 .previewer
                 .iter()
                 .flat_map(|c| c.mimetypes.iter())
-                .any(|pat| casa(pat));
+                .any(|pat| matches_pat(pat));
             if !handles {
                 return None;
             }
@@ -1316,17 +1342,16 @@ impl PluginRegistry {
         })
     }
 
-    /// Resuelve TODOS los decorators APROBADOS y ACTIVADOS (ADR 0037
-    /// decisión 2), a diferencia de [`Self::resolve_previewer`] (que elige
-    /// el PRIMERO que casa): una página se decora con la superposición de
-    /// TODOS los plugins `decorator` consentidos — un badge de
-    /// "modificado por git" y otro de "bajo revisión" pueden convivir en la
-    /// misma entrada. Filtra por `category == Decorator` (a diferencia de
-    /// `resolve_previewer`, que no filtra por categoría porque
-    /// previewer/command comparten el MISMO world `norte-plugin`; decorator
-    /// tiene su PROPIO world `norte-decorator`, así que solo un plugin cuyo
-    /// binario lo implementa debe entrar aquí). Orden: el del catálogo
-    /// (`category, id` — determinista, ver [`Catalog::load_dir`]).
+    /// Resolves ALL APPROVED and ENABLED decorators (ADR 0037 decision 2),
+    /// unlike [`Self::resolve_previewer`] (which chooses the FIRST one that
+    /// matches): a page is decorated with the overlay of ALL consented
+    /// `decorator` plugins — a "modified by git" badge and a "under review"
+    /// one can coexist on the same entry. Filters by `category == Decorator`
+    /// (unlike `resolve_previewer`, which does not filter by category
+    /// because previewer/command share the SAME `norte-plugin` world;
+    /// decorator has its OWN `norte-decorator` world, so only a plugin whose
+    /// binary implements it should enter here). Order: the catalog's
+    /// (`category, id` — deterministic, see [`Catalog::load_dir`]).
     #[must_use]
     pub fn resolve_decorators(&self) -> Vec<(ResolvedDecorator, norte_plugin_host::DecoratorSlot)> {
         self.catalog
@@ -1341,9 +1366,10 @@ impl PluginRegistry {
                     return None;
                 }
                 let wasm = Self::verified_wasm(e)?;
-                // El hueco lo dice la PRIMERA contribución: un decorador
-                // declara una, y si declarase dos con huecos distintos no
-                // habría forma de saber cuál de sus respuestas va a cuál.
+                // The FIRST contribution says the slot: a decorator declares
+                // one, and if it declared two with different slots there
+                // would be no way to know which of its responses goes to
+                // which.
                 let slot = e
                     .manifest
                     .contributions
@@ -1364,29 +1390,30 @@ impl PluginRegistry {
             .collect()
     }
 
-    /// Resuelve el provider plugin APROBADO y ACTIVADO que declara `scheme`
-    /// en `contributions.provider[].scheme`: el que sirve `scheme://`.
+    /// Resolves the APPROVED and ENABLED provider plugin that declares
+    /// `scheme` in `contributions.provider[].scheme`: the one that serves
+    /// `scheme://`.
     ///
-    /// Hasta aquí un provider se declaraba, se aprobaba y se activaba, y
-    /// NADIE lo resolvía: el `ConnectionManager` casaba schemes a mano contra
-    /// los providers del core y un guest FTP embebido. Esta es la mitad del
-    /// registro que faltaba; la otra es que el manager pregunte.
+    /// Until now a provider was declared, approved and enabled, and NOBODY
+    /// resolved it: the `ConnectionManager` matched schemes by hand against
+    /// the core's providers and an embedded FTP guest. This is the half of
+    /// the registry that was missing; the other half is the manager asking.
     ///
-    /// Primero que case, como [`Self::resolve_columns`]: dos plugins
-    /// consentidos que reclamen el mismo scheme son una colisión de
-    /// configuración, y el orden del catálogo (`category, id`) la hace al
-    /// menos determinista. Filtra por `category == Provider`, mismo
-    /// razonamiento de world dedicado que [`Self::resolve_decorators`]: solo
-    /// un binario que implementa `norte-provider` debe instanciarse como tal.
+    /// First one that matches, like [`Self::resolve_columns`]: two consented
+    /// plugins claiming the same scheme is a user configuration collision,
+    /// and the catalog's order (`category, id`) at least makes it
+    /// deterministic. Filters by `category == Provider`, the same dedicated
+    /// world reasoning as [`Self::resolve_decorators`]: only a binary that
+    /// implements `norte-provider` should be instantiated as one.
     ///
-    /// Los schemes del core ([`norte_plugin_host::CORE_SCHEMES`]) no se
-    /// sirven NUNCA desde aquí, aunque una entrada del catálogo los declare:
-    /// el manifiesto ya los rechaza al parsear, y esta es la segunda puerta,
-    /// la que se puede probar sin pasar por la primera.
+    /// The core's schemes ([`norte_plugin_host::CORE_SCHEMES`]) are NEVER
+    /// served from here, even if a catalog entry declares them: the manifest
+    /// already rejects them when parsing, and this is the second gate, the
+    /// one that can be tested without going through the first.
     ///
-    /// Un plugin que declara el scheme pero no está consentido se anota en el
-    /// log: la respuesta al usuario es `Unsupported` —la misma que un scheme
-    /// que nadie sirve— y el panel de registro es donde se lee el porqué.
+    /// A plugin that declares the scheme but is not consented to is logged:
+    /// the answer to the user is `Unsupported` —the same as a scheme nobody
+    /// serves— and the log panel is where the reason is read.
     #[must_use]
     pub fn resolve_provider(&self, scheme: &str) -> Option<ResolvedProvider> {
         if norte_plugin_host::CORE_SCHEMES.contains(&scheme) {
@@ -1407,7 +1434,7 @@ impl PluginRegistry {
                 tracing::warn!(
                     plugin = %e.manifest.id,
                     scheme,
-                    "declara el scheme pero no está aprobado y activado"
+                    "declares the scheme but is not approved and enabled"
                 );
                 return None;
             }
@@ -1425,24 +1452,24 @@ impl PluginRegistry {
         })
     }
 
-    /// Resuelve el plugin `columns` APROBADO y ACTIVADO que declara la
-    /// columna `column_id` en `contributions.columns[].id` (M4 declaró la
-    /// contribución, ADR 0037 la respalda con WIT/host). A diferencia de
-    /// `resolve_decorators`, aquí SÍ el primero que casa basta (una columna
-    /// con ese id la aporta como mucho un plugin con sentido — dos plugins
-    /// declarando el MISMO id de columna es una colisión de configuración
-    /// del usuario, no algo que este método deba resolver mezclando
-    /// valores). Filtra por `category == Columns`, mismo razonamiento de
-    /// world dedicado que [`Self::resolve_decorators`].
+    /// Resolves the APPROVED and ENABLED `columns` plugin that declares the
+    /// `column_id` column in `contributions.columns[].id` (M4 declared the
+    /// contribution, ADR 0037 backs it with WIT/host). Unlike
+    /// `resolve_decorators`, here the first one that matches DOES suffice (a
+    /// column with that id is contributed by at most one plugin that makes
+    /// sense — two plugins declaring the SAME column id is a user
+    /// configuration collision, not something this method should resolve by
+    /// mixing values). Filters by `category == Columns`, the same dedicated
+    /// world reasoning as [`Self::resolve_decorators`].
     #[must_use]
     pub fn resolve_columns(&self, column_id: &str) -> Option<ResolvedDecorator> {
         self.resolve_columns_of(None, column_id)
     }
 
-    /// El plugin `renamer` consentido `plugin_id` que declara `renamer_id`
-    /// (C3, ADR 0095): ESE o ninguno, aprobado y encendido, con su `.wasm`
-    /// verificado contra el digest aprobado. Misma forma que
-    /// [`Self::resolve_columns_of`] con el plugin exigido.
+    /// The consented `renamer` plugin `plugin_id` that declares `renamer_id`
+    /// (C3, ADR 0095): THAT one or none, approved and on, with its `.wasm`
+    /// verified against the approved digest. Same shape as
+    /// [`Self::resolve_columns_of`] with the plugin required.
     #[must_use]
     pub fn resolve_renamer(&self, plugin_id: &str, renamer_id: &str) -> Option<ResolvedDecorator> {
         self.catalog.plugins.iter().find_map(|e| {
@@ -1477,10 +1504,10 @@ impl PluginRegistry {
         })
     }
 
-    /// El plugin `organizer` consentido `plugin_id` que declara
-    /// `organizer_id` (fase 8): ESE o ninguno, aprobado y encendido, con su
-    /// `.wasm` verificado contra el digest aprobado. Misma forma exacta que
-    /// [`Self::resolve_renamer`], con su categoría.
+    /// The consented `organizer` plugin `plugin_id` that declares
+    /// `organizer_id` (phase 8): THAT one or none, approved and on, with its
+    /// `.wasm` verified against the approved digest. The exact same shape as
+    /// [`Self::resolve_renamer`], with its category.
     #[must_use]
     pub fn resolve_organizer(
         &self,
@@ -1519,10 +1546,10 @@ impl PluginRegistry {
         })
     }
 
-    /// Los plugins `hook` consentidos (ADR 0100), cada uno con los eventos
-    /// que escucha, en orden de catálogo. Misma forma que
-    /// [`Self::resolve_renamer`]: aprobado y encendido, `.wasm` verificado
-    /// contra el digest aprobado, y con sus settings resueltos.
+    /// The consented `hook` plugins (ADR 0100), each with the events it
+    /// listens to, in catalog order. Same shape as [`Self::resolve_renamer`]:
+    /// approved and on, `.wasm` verified against the approved digest, and
+    /// with its settings resolved.
     #[must_use]
     pub fn resolve_hooks(&self) -> Vec<(ResolvedDecorator, Vec<String>)> {
         self.catalog
@@ -1558,21 +1585,21 @@ impl PluginRegistry {
             .collect()
     }
 
-    /// Como [`Self::resolve_columns`], pero pudiendo exigir QUÉ plugin
+    /// Like [`Self::resolve_columns`], but able to demand WHICH plugin
     /// (0.35.0, #120).
     ///
-    /// Con `plugin_id = Some(p)` solo se considera `p`: si no está aprobado,
-    /// activado, o no declara `column_id`, la respuesta es `None` — JAMÁS otro
-    /// plugin. Caer al primero que case sería el fallo original con un
-    /// parámetro más: dos plugins consentidos que declaren `status` hacían que
-    /// una columna configurada como `plugin:a/status` pintara los valores de
-    /// `b`, y ninguna capa lo notaba porque cada una comprobaba lo suyo (el
-    /// frontend, que el plugin configurado declare la columna; el host, que
-    /// alguien la declare).
+    /// With `plugin_id = Some(p)` only `p` is considered: if it is not
+    /// approved, enabled, or does not declare `column_id`, the answer is
+    /// `None` — NEVER another plugin. Falling back to the first one that
+    /// matches would be the original bug with one more parameter: two
+    /// consented plugins declaring `status` made a column configured as
+    /// `plugin:a/status` paint `b`'s values, and no layer noticed because
+    /// each checked its own thing (the frontend, that the configured plugin
+    /// declares the column; the host, that someone declares it).
     ///
-    /// Con `plugin_id = None` se conserva el comportamiento anterior —
-    /// primero que case— porque es lo que un cliente 0.34 espera, y lo que ya
-    /// se comía.
+    /// With `plugin_id = None` the previous behavior is kept — first one
+    /// that matches — because that is what a 0.34 client expects, and what
+    /// it already put up with.
     #[must_use]
     pub fn resolve_columns_of(
         &self,
@@ -1610,23 +1637,24 @@ impl PluginRegistry {
         })
     }
 
-    /// Ejecuta un comando de un plugin APROBADO y ACTIVADO (fail-closed: un
-    /// plugin no consentido JAMÁS se ejecuta). Delega la validación en
-    /// [`Self::resolve_runnable`] y ejecuta a continuación. SÍNCRONO (compila e
-    /// instancia el componente): el caller lo corre en `spawn_blocking` (regla
-    /// 2). El daemon prefiere separar resolución (bajo lock) y ejecución (fuera
-    /// del lock) llamando a [`Self::resolve_runnable`] directamente — su
-    /// `handle_plugin_run_command` entrega `settings` de la MISMA forma, solo
-    /// que en dos pasos en vez de una llamada a este método.
+    /// Runs an APPROVED and ENABLED plugin's command (fail-closed: a
+    /// non-consented plugin is NEVER run). Delegates validation to
+    /// [`Self::resolve_runnable`] and runs it right after. SYNCHRONOUS
+    /// (compiles and instantiates the component): the caller runs it in
+    /// `spawn_blocking` (rule 2). The daemon prefers to separate resolution
+    /// (under lock) from execution (outside the lock) by calling
+    /// [`Self::resolve_runnable`] directly — its `handle_plugin_run_command`
+    /// delivers `settings` the SAME way, just in two steps instead of one
+    /// call to this method.
     ///
-    /// Entrega al guest los valores de `[config]` YA resueltos que devuelve
-    /// [`Self::resolve_runnable`] (P2 Task 2) vía `host-config` (P2 Task 3)
-    /// ANTES de invocar el comando — un plugin sin `[config]` recibe el mapa
-    /// vacío.
+    /// Delivers to the guest the `[config]` values ALREADY resolved that
+    /// [`Self::resolve_runnable`] returns (P2 Task 2) via `host-config` (P2
+    /// Task 3) BEFORE invoking the command — a plugin with no `[config]`
+    /// receives the empty map.
     ///
     /// # Errors
-    /// [`PluginRunError`] si el plugin no existe, no está aprobado, está
-    /// desactivado, no tiene binario, o el runtime falla.
+    /// [`PluginRunError`] if the plugin does not exist, is not approved, is
+    /// disabled, has no binary, or the runtime fails.
     pub fn run_command(
         &self,
         runtime: &norte_plugin_host::PluginRuntime,
@@ -1640,20 +1668,20 @@ impl PluginRegistry {
         Ok(inst.run_command(command, arg)?)
     }
 
-    /// `true` si `id` corresponde a un plugin realmente descubierto.
+    /// `true` if `id` corresponds to an actually discovered plugin.
     fn is_known(&self, id: &str) -> bool {
         self.catalog.plugins.iter().any(|e| e.manifest.id == id)
     }
 
-    /// El ancla de aprobación de `id` tal como está AHORA en el catálogo, o
-    /// `None` si el id no está descubierto (issue #69).
+    /// `id`'s approval anchor as it is NOW in the catalog, or `None` if the
+    /// id is not discovered (issue #69).
     ///
-    /// Cubre el MANIFIESTO —capabilities, `category` y `contributions`, o sea
-    /// qué pide y cuándo se dispara— **y el binario** (#241).
+    /// Covers the MANIFEST —capabilities, `category` and `contributions`,
+    /// i.e. what it asks for and when it fires— **and the binary** (#241).
     ///
-    /// Es lo que ancla una aprobación al darla, lo que el daemon compara para
-    /// contestar «¿sigue siendo el que enseñaste?» (#282), y lo que
-    /// `plugin.list` pone en `PluginInfo::manifest_digest`.
+    /// It is what anchors an approval when giving it, what the daemon
+    /// compares to answer "is it still the one you showed me?" (#282), and
+    /// what `plugin.list` puts in `PluginInfo::manifest_digest`.
     #[must_use]
     pub fn manifest_digest(&self, id: &str) -> Option<String> {
         self.catalog
@@ -1663,32 +1691,33 @@ impl PluginRegistry {
             .map(norte_plugin_host::PluginEntry::approval_anchor)
     }
 
-    /// `true` si la aprobación es VIGENTE (issue #69): el humano aprobó Y el
-    /// ancla guardada casa la de AHORA — el manifiesto (capabilities,
-    /// `category`, `contributions`: qué pide y cuándo se dispara) **y el
-    /// binario** (#241). Un `approved_digest` ausente (aprobación heredada sin
-    /// ancla) NUNCA casa → re-consentimiento.
+    /// `true` if the approval is CURRENT (issue #69): the human approved AND
+    /// the stored anchor matches the one NOW — the manifest (capabilities,
+    /// `category`, `contributions`: what it asks for and when it fires)
+    /// **and the binary** (#241). An absent `approved_digest` (an approval
+    /// inherited without an anchor) NEVER matches → re-consent.
     fn approval_is_current(st: &PluginState, entry: &norte_plugin_host::PluginEntry) -> bool {
         st.approved && st.approved_digest.as_deref() == Some(entry.approval_anchor().as_str())
     }
 
-    /// Resuelve `<dir>/plugin.wasm` y verifica, canonicalizando, que el binario
-    /// real cae DENTRO del directorio del plugin (issue #69, defensa en
-    /// profundidad contra un `plugin.wasm` que sea un symlink a `/etc/...` o a
-    /// otro plugin). `None` si no existe, no es fichero o escapa del dir. Nota:
-    /// quien puede escribir el symlink ya puede reemplazar el binario entero
-    /// (misma frontera de confianza), por eso es defensa en profundidad, no una
-    /// barrera fuerte. Devuelve la ruta CANÓNICA (ya resuelta) para no re-seguir
-    /// enlaces al abrirla.
-    /// La guarda vive en `norte-plugin-host` (ver
-    /// [`norte_plugin_host::verified_child`], que documenta lo que NO cubre):
-    /// el catálogo la necesita al descubrir y este crate al leer o ejecutar, y
-    /// una segunda copia de un guard de seguridad es peor que la dependencia.
+    /// Resolves `<dir>/plugin.wasm` and verifies, by canonicalizing, that the
+    /// real binary falls INSIDE the plugin's directory (issue #69, defense
+    /// in depth against a `plugin.wasm` that is a symlink to `/etc/...` or to
+    /// another plugin). `None` if it does not exist, is not a file, or
+    /// escapes the dir. Note: whoever can write the symlink can already
+    /// replace the whole binary (same trust boundary), which is why this is
+    /// defense in depth, not a strong barrier. Returns the CANONICAL (already
+    /// resolved) path so links are not re-followed when opening it.
+    /// The guard lives in `norte-plugin-host` (see
+    /// [`norte_plugin_host::verified_child`], which documents what it does
+    /// NOT cover): the catalog needs it at discovery and this crate when
+    /// reading or running, and a second copy of a security guard is worse
+    /// than the dependency.
     ///
-    /// Y con la HUELLA que ancló el catálogo (ADR 0142): el runtime compara
-    /// los bytes que compila contra ella. Sin huella —un binario que no se
-    /// pudo leer al descubrir— no hay artefacto, que es lo mismo que no
-    /// tener binario.
+    /// And with the FINGERPRINT the catalog anchored (ADR 0142): the runtime
+    /// compares the bytes it compiles against it. With no fingerprint —a
+    /// binary that could not be read at discovery— there is no artifact,
+    /// which is the same as having no binary.
     fn verified_wasm(
         e: &norte_plugin_host::PluginEntry,
     ) -> Option<norte_plugin_host::WasmArtifact> {
@@ -1697,7 +1726,7 @@ impl PluginRegistry {
         Some(norte_plugin_host::WasmArtifact::approved(path, digest))
     }
 
-    /// Lee el estado persistido. Ausente = vacío; corrupto = `InvalidData`.
+    /// Reads the persisted state. Absent = empty; corrupt = `InvalidData`.
     fn read_state(path: &Path) -> io::Result<BTreeMap<String, PluginState>> {
         let src = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -1729,26 +1758,25 @@ impl PluginRegistry {
     }
 }
 
-/// Numera los temporales de [`persist_state`] dentro de este proceso: dos
-/// escrituras en vuelo desde dos hilos con el mismo nombre renombraban a
-/// medias la una sobre la otra.
-static SERIE_DE_ESCRITURA: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// Numbers [`persist_state`]'s temp files within this process: two writes in
+/// flight from two threads with the same name were half-renaming over one
+/// another.
+static WRITE_SERIAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Re-emite `config_dir/plugins-state.toml` preservando el resto del fichero,
-/// con una entrada por cada plugin con estado. La clave con puntos se
-/// entrecomilla.
+/// Re-emits `config_dir/plugins-state.toml` preserving the rest of the file,
+/// with one entry per plugin that has state. A key with dots is quoted.
 ///
-/// Es una función LIBRE (no un método) para que el daemon pueda persistir en un
-/// `spawn_blocking` a partir de un snapshot del estado, sin sostener el
-/// `Mutex<PluginRegistry>` a través del `.await` (regla 2).
+/// It is a FREE function (not a method) so the daemon can persist in a
+/// `spawn_blocking` from a snapshot of the state, without holding the
+/// `Mutex<PluginRegistry>` across the `.await` (rule 2).
 ///
-/// El write es ATÓMICO: se escribe a un temporal en el MISMO directorio y luego
-/// `rename` sobre el destino. Un crash a mitad no corrompe el store durable de
-/// una decisión de seguridad (consentimiento de capabilities).
+/// The write is ATOMIC: it writes to a temp file in the SAME directory and
+/// then `rename`s onto the destination. A crash midway does not corrupt the
+/// durable store for a security decision (capability consent).
 ///
 /// # Errors
-/// Errores de I/O al re-leer, escribir el temporal o renombrar; o
-/// [`io::ErrorKind::InvalidData`] si el fichero existente es TOML corrupto.
+/// I/O errors re-reading, writing the temp file, or renaming; or
+/// [`io::ErrorKind::InvalidData`] if the existing file is corrupt TOML.
 pub(crate) fn persist_state(
     config_dir: &Path,
     state: &BTreeMap<String, PluginState>,
@@ -1765,33 +1793,35 @@ pub(crate) fn persist_state(
     if !root.get("plugins").is_some_and(Item::is_table_like) {
         root.insert("plugins", Item::Table(Table::new()));
     }
-    // `insert` con una clave con puntos guarda la clave LITERAL; toml_edit la
-    // entrecomilla al render (no la interpreta como tablas anidadas).
+    // `insert` with a key that has dots stores the LITERAL key; toml_edit
+    // quotes it on render (it does not interpret it as nested tables).
     let plugins = root["plugins"]
         .as_table_mut()
-        .expect("plugins es una tabla: se acaba de garantizar arriba");
+        .expect("plugins is a table: just guaranteed above");
     for (id, st) in state {
         let mut inline = InlineTable::new();
         inline.insert("approved", Value::from(st.approved));
         inline.insert("enabled", Value::from(st.enabled));
-        // El digest de capabilities anclado a la aprobación (issue #69) persiste
-        // junto al flag; sin él una re-discover no podría revalidar el
-        // consentimiento y forzaría re-aprobar en cada arranque.
+        // The capabilities digest anchored to the approval (issue #69)
+        // persists alongside the flag; without it a re-discover could not
+        // revalidate the consent and would force re-approval on every
+        // startup.
         if let Some(digest) = &st.approved_digest {
             inline.insert("digest", Value::from(digest.clone()));
         }
         plugins.insert(id, Item::Value(Value::InlineTable(inline)));
     }
-    // Write atómico: temporal en el mismo dir (mismo filesystem → rename atómico)
-    // + rename sobre el destino. El sufijo con el pid evita pisar el temporal de
-    // otro proceso que persista a la vez; el contador, el de otro HILO de este
-    // (el daemon persiste desde `spawn_blocking`, y dos escrituras en vuelo
-    // con el mismo nombre renombraban a medias la una sobre la otra).
+    // Atomic write: temp file in the same dir (same filesystem → atomic
+    // rename) + rename onto the destination. The pid suffix avoids stepping
+    // on the temp file of another process persisting at the same time; the
+    // counter, on that of another THREAD of this one (the daemon persists
+    // from `spawn_blocking`, and two writes in flight with the same name
+    // were half-renaming over one another).
     let tmp = config_dir.join(format!(
         "{}.tmp.{}.{}",
         PluginRegistry::STATE_FILE,
         std::process::id(),
-        SERIE_DE_ESCRITURA.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        WRITE_SERIAL.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::write(&tmp, doc.to_string())?;
     std::fs::rename(&tmp, &path)
@@ -1802,15 +1832,16 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    /// #282: el ancla que un humano LEE tiene que cambiar cuando cambia lo
-    /// que se le enseñó, o `expected_digest` no protege de nada.
+    /// #282: the anchor a human READS has to change when what was shown to
+    /// them changes, or `expected_digest` protects against nothing.
     ///
-    /// Es la premisa del campo, no su uso: el uso está en el daemon
-    /// (`handle_plugin_set_approval`) y en el `Backend` embebido, que es donde
-    /// de verdad hay ventana — redescubre el catálogo en CADA llamada.
+    /// This is the field's premise, not its use: the use is in the daemon
+    /// (`handle_plugin_set_approval`) and in the embedded `Backend`, which
+    /// is where there really is a window — it rediscovers the catalog on
+    /// EVERY call.
     #[test]
-    fn el_ancla_de_un_manifiesto_cambia_cuando_cambia_lo_que_declara() {
-        const ANTES: &str = r#"
+    fn a_manifests_anchor_changes_when_what_it_declares_changes() {
+        const BEFORE: &str = r#"
 [plugin]
 id = "org.norte.anchor"
 name = "Anchor"
@@ -1818,11 +1849,11 @@ publisher = "norte"
 version = "0.1.0"
 category = "command"
 "#;
-        // Lo que cambia NO son las capabilities: es `contributions`, o sea
-        // CUÁNDO y CÓMO se dispara. Es justo lo que la lista pintada no dice y
-        // el ancla sí cubre — por eso la comparación de capabilities que hace
-        // el cliente no basta.
-        const DESPUES: &str = r#"
+        // What changes is NOT the capabilities: it is `contributions`, i.e.
+        // WHEN and HOW it fires. That is exactly what the painted list does
+        // not say and the anchor does cover — that is why the client's
+        // capabilities comparison is not enough.
+        const AFTER: &str = r#"
 [plugin]
 id = "org.norte.anchor"
 name = "Anchor"
@@ -1835,95 +1866,94 @@ command = [{ id = "run", title = "Run" }]
         let cfg = TempDir::new().expect("tempdir");
         let dir = cfg.path().join("plugins").join("org.norte.anchor");
         std::fs::create_dir_all(&dir).expect("mkdir");
-        std::fs::write(dir.join("plugin.toml"), ANTES).expect("write");
+        std::fs::write(dir.join("plugin.toml"), BEFORE).expect("write");
         std::fs::write(dir.join("plugin.wasm"), b"\0asm\x01\0\0\0").expect("write wasm");
 
         let reg = PluginRegistry::discover(cfg.path()).expect("discover");
-        let antes = reg
+        let before = reg
             .manifest_digest("org.norte.anchor")
-            .expect("el catálogo trae el ancla sin necesidad de un wasm real");
+            .expect("the catalog carries the anchor with no need for a real wasm");
 
-        std::fs::write(dir.join("plugin.toml"), DESPUES).expect("rewrite");
+        std::fs::write(dir.join("plugin.toml"), AFTER).expect("rewrite");
         let reg2 = PluginRegistry::discover(cfg.path()).expect("rediscover");
-        let despues = reg2
+        let after = reg2
             .manifest_digest("org.norte.anchor")
-            .expect("sigue descubierto");
+            .expect("still discovered");
         assert_ne!(
-            antes, despues,
-            "el ancla no se movió: `expected_digest` no protegería de un \
-             manifiesto cambiado bajo los pies"
+            before, after,
+            "the anchor did not move: `expected_digest` would not protect \
+             against a manifest changed under its feet"
         );
     }
 
-    /// #29/§6.2: `decode_for_preview` entrega TEXTO decodificado al previewer;
-    /// UTF-8 válido no es lossy (#101).
+    /// #29/§6.2: `decode_for_preview` delivers decoded TEXT to the previewer;
+    /// valid UTF-8 is not lossy (#101).
     #[test]
-    fn decode_for_preview_texto_utf8_pasa_igual() {
+    fn decode_for_preview_utf8_text_passes_through_unchanged() {
         assert_eq!(
-            decode_for_preview(b"hola mundo".to_vec()),
-            (b"hola mundo".to_vec(), false)
+            decode_for_preview(b"hello world".to_vec()),
+            (b"hello world".to_vec(), false)
         );
     }
 
-    /// Revisión del ADR 0141: el texto llega al previewer ENTERO (dentro
-    /// del tope de bytes), nunca cortado por líneas: un corte callado daba
-    /// una vista con estilo que parecía el fichero completo y escondía el
-    /// final.
+    /// ADR 0141 review: the text arrives at the previewer WHOLE (within the
+    /// byte cap), never cut by lines: a silent cut gave a styled view that
+    /// looked like the complete file and hid the end.
     #[test]
-    fn decode_for_preview_no_corta_por_lineas() {
-        let largo: Vec<u8> = (0..20_000)
-            .flat_map(|i| format!("línea {i}\n").into_bytes())
+    fn decode_for_preview_does_not_cut_by_lines() {
+        let long: Vec<u8> = (0..20_000)
+            .flat_map(|i| format!("line {i}\n").into_bytes())
             .collect();
-        let (texto, _) = decode_for_preview(largo.clone());
-        assert_eq!(texto, largo, "entero");
+        let (text, _) = decode_for_preview(long.clone());
+        assert_eq!(text, long, "whole");
     }
 
     #[test]
-    fn decode_for_preview_utf16le_bom_se_decodifica_a_utf8() {
-        // BOM UTF-16LE (FF FE) + "hi" → detect Text, decode a UTF-8 "hi".
+    fn decode_for_preview_utf16le_bom_decodes_to_utf8() {
+        // UTF-16LE BOM (FF FE) + "hi" → detect Text, decode to UTF-8 "hi".
         let utf16 = vec![0xFF, 0xFE, b'h', 0x00, b'i', 0x00];
         assert_eq!(decode_for_preview(utf16), (b"hi".to_vec(), false));
     }
 
     #[test]
-    fn decode_for_preview_binario_pasa_los_bytes_crudos() {
-        // Cabecera PNG (controles + NUL): detect Binary → bytes tal cual,
-        // jamás lossy (#101).
+    fn decode_for_preview_binary_passes_raw_bytes_through() {
+        // PNG header (controls + NUL): detect Binary → bytes as is, never
+        // lossy (#101).
         let png = b"\x89PNG\r\n\x1a\n\x00\x00\x00".to_vec();
         assert_eq!(decode_for_preview(png.clone()), (png, false));
     }
 
-    /// #101: bytes detectados como texto pero con una secuencia INVÁLIDA para
-    /// ese encoding → decodificación LOSSY (`�`) marcada `lossy = true`. La
-    /// aguja vive en el corpus canónico del testkit (`utf8_bom_invalid`), no
-    /// inline, por la regla de CLAUDE.md sobre regresiones de encoding.
+    /// #101: bytes detected as text but with a sequence INVALID for that
+    /// encoding → LOSSY decoding (`�`) flagged `lossy = true`. The needle
+    /// lives in the testkit's canonical corpus (`utf8_bom_invalid`), not
+    /// inline, per CLAUDE.md's rule on encoding regressions.
     #[test]
-    fn decode_for_preview_texto_invalido_es_lossy() {
+    fn decode_for_preview_invalid_text_is_lossy() {
         let fx = norte_testkit::corpus::lossy_content_fixtures()
             .into_iter()
             .find(|f| f.id == "utf8_bom_invalid")
-            .expect("corpus lossy trae utf8_bom_invalid");
+            .expect("lossy corpus carries utf8_bom_invalid");
         let (out, lossy) = decode_for_preview(fx.bytes.clone());
-        assert!(lossy, "byte inválido debe marcar lossy");
+        assert!(lossy, "invalid byte must flag lossy");
         assert_eq!(
             String::from_utf8_lossy(&out),
             fx.decoded,
-            "la salida es el decode canónico con `�`"
+            "the output is the canonical decode with `�`"
         );
     }
 
-    /// G3a (ADR 0037): `to_wire_lines` re-forma el tipo del runtime al de
-    /// wire 1:1, SIN validar `role` (esa validación vive en el frontend, ver
-    /// su rustdoc) ni volver a acotar tamaños (ya acotados por
+    /// G3a (ADR 0037): `to_wire_lines` reshapes the runtime's type to the
+    /// wire's 1:1, WITHOUT validating `role` (that validation lives in the
+    /// frontend, see its rustdoc) nor capping sizes again (already capped by
     /// `render_styled_preview`).
     #[test]
-    fn to_wire_lines_reforma_1_a_1_sin_validar_role() {
+    fn to_wire_lines_reshapes_1_to_1_without_validating_role() {
         use norte_plugin_host::previewer_iface::Span;
         let lines = vec![
             vec![
                 Span {
                     text: "42".to_owned(),
-                    role: Some("number".to_owned()), // no es un Role válido: pasa igual
+                    role: Some("number".to_owned()), // not a valid Role: passes through anyway
                     fg: None,
                     bg: None,
                 },
@@ -1935,28 +1965,28 @@ command = [{ id = "run", title = "Run" }]
                 },
             ],
             vec![Span {
-                text: "plano".to_owned(),
+                text: "plain".to_owned(),
                 role: None,
                 fg: None,
                 bg: None,
             }],
         ];
         let wire = to_wire_lines(lines);
-        assert_eq!(wire.len(), 2, "2 líneas de entrada → 2 líneas de salida");
-        assert_eq!(wire[0].len(), 2, "spans conservados 1:1");
+        assert_eq!(wire.len(), 2, "2 input lines → 2 output lines");
+        assert_eq!(wire[0].len(), 2, "spans kept 1:1");
         assert_eq!(wire[0][0].text, "42");
         assert_eq!(
             wire[0][0].role.as_deref(),
             Some("number"),
-            "role viaja SIN VALIDAR (no es un Role válido y aun así pasa)"
+            "role travels UNVALIDATED (not a valid Role and still passes)"
         );
         assert_eq!(wire[0][0].fg, None);
-        assert_eq!(wire[0][1].fg, Some([255, 200, 0]), "tupla → array [u8;3]");
-        assert_eq!(wire[1][0].text, "plano");
+        assert_eq!(wire[0][1].fg, Some([255, 200, 0]), "tuple → [u8;3] array");
+        assert_eq!(wire[1][0].text, "plain");
         assert_eq!(wire[1][0].role, None);
     }
 
-    /// Manifiesto válido mínimo (copiado del doctest de `norte-plugin-host`).
+    /// Minimal valid manifest (copied from `norte-plugin-host`'s doctest).
     const DEMO_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.demo"
@@ -1968,15 +1998,15 @@ category = "command"
 fs-read = "scoped"
 "#;
 
-    /// Crea `config_dir/plugins/<id>/plugin.toml` con `src`.
+    /// Creates `config_dir/plugins/<id>/plugin.toml` with `src`.
     fn write_plugin(config_dir: &Path, id: &str, src: &str) {
         let dir = config_dir.join("plugins").join(id);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("plugin.toml"), src).unwrap();
     }
 
-    /// Un provider plugin, con binario: `resolve_provider` exige el `.wasm`
-    /// verificado como cualquier otro resolver.
+    /// A provider plugin, with a binary: `resolve_provider` requires the
+    /// verified `.wasm` like any other resolver.
     const PROVIDER_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.memplug"
@@ -1997,40 +2027,42 @@ scheme = "memplug"
         .unwrap();
     }
 
-    /// Un `[[contributions.provider]]` se declaraba, se aprobaba y se
-    /// activaba, y NADIE lo resolvía: `connect.rs` casaba schemes a mano. Esta
-    /// es la mitad del registro: dado un scheme, el plugin consentido que lo
-    /// declara — o nada.
+    /// A `[[contributions.provider]]` was declared, approved and enabled,
+    /// and NOBODY resolved it: `connect.rs` matched schemes by hand. This is
+    /// the half of the registry that was missing: given a scheme, the
+    /// consented plugin that declares it — or nothing.
     #[test]
-    fn resolve_provider_elige_el_plugin_consentido_que_declara_el_scheme() {
+    fn resolve_provider_picks_the_consented_plugin_that_declares_the_scheme() {
         let tmp = TempDir::new().unwrap();
         write_provider(tmp.path(), "org.norte.memplug", PROVIDER_MANIFEST);
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
 
-        // Sin consentir: nada, aunque el scheme case (fail-closed).
+        // Not consented: nothing, even if the scheme matches (fail-closed).
         assert!(reg.resolve_provider("memplug").is_none());
         reg.set_approval("org.norte.memplug", true).unwrap();
         assert!(
             reg.resolve_provider("memplug").is_none(),
-            "aprobado pero apagado"
+            "approved but off"
         );
         reg.set_enabled("org.norte.memplug", true).unwrap();
 
         let r = reg
             .resolve_provider("memplug")
-            .expect("consentido y activado");
+            .expect("consented and enabled");
         assert_eq!(r.id, "org.norte.memplug");
         assert_eq!(r.name, "Mem plug");
         assert!(r.wasm.path().ends_with("plugin.wasm"));
         assert_eq!(
             r.wasm_digest,
             norte_plugin_host::wasm_digest_of(b"\0asm"),
-            "el digest que se devuelve es el del binario anclado"
+            "the returned digest is the one of the anchored binary"
         );
         assert_eq!(r.default_port, None);
-        // Otro scheme no lo sirve: el plugin sirve lo que DECLARA.
+        // Another scheme is not served by it: the plugin serves what it
+        // DECLARES.
         assert!(reg.resolve_provider("webdav").is_none());
-        // Y lo que aprobar concede se ENSEÑA: el scheme va en las insignias.
+        // And what approving grants is SHOWN: the scheme goes into the
+        // badges.
         let info = reg.list().plugins.into_iter().next().unwrap();
         assert!(
             info.capabilities.iter().any(|c| c == "provider:memplug"),
@@ -2038,37 +2070,37 @@ scheme = "memplug"
             info.capabilities
         );
 
-        // Sin binario no hay nada que instanciar, consentido o no.
+        // With no binary there is nothing to instantiate, consented or not.
         std::fs::remove_file(tmp.path().join("plugins/org.norte.memplug/plugin.wasm")).unwrap();
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(reg.resolve_provider("memplug").is_none());
     }
 
-    /// La segunda puerta: aunque una entrada del catálogo declare un scheme
-    /// del core (el manifiesto lo rechaza, así que hay que colarla a mano),
-    /// el registro no lo sirve. Es lo que hace del guard del manager una
-    /// optimización y no la única defensa.
+    /// The second gate: even if a catalog entry declares a core scheme (the
+    /// manifest rejects it, so it has to be smuggled in by hand), the
+    /// registry does not serve it. This is what makes the manager's guard an
+    /// optimization and not the only defense.
     #[test]
-    fn resolve_provider_nunca_sirve_un_scheme_del_core() {
+    fn resolve_provider_never_serves_a_core_scheme() {
         let tmp = TempDir::new().unwrap();
         write_provider(tmp.path(), "org.norte.memplug", PROVIDER_MANIFEST);
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
         reg.set_approval("org.norte.memplug", true).unwrap();
         reg.set_enabled("org.norte.memplug", true).unwrap();
-        // Se reclama `sftp` por detrás del parser.
+        // `sftp` is claimed behind the parser's back.
         reg.catalog.plugins[0].manifest.contributions.provider[0].scheme = "sftp".to_owned();
-        // El ancla cambia con las contribuciones, así que se re-aprueba en
-        // memoria para que lo único que quede en pie sea la puerta.
+        // The anchor changes with the contributions, so it is re-approved in
+        // memory so the only thing left standing is the gate.
         reg.set_approval_in_memory("org.norte.memplug", true);
         assert!(reg.resolve_provider("sftp").is_none());
     }
 
-    /// Un plugin de otra categoría con una contribución `provider` colada no
-    /// entra: `provider` tiene su propio world, y solo un binario que lo
-    /// implementa debe instanciarse como tal (mismo criterio que
-    /// `resolve_decorators`).
+    /// A plugin of another category with a smuggled-in `provider`
+    /// contribution does not get in: `provider` has its own world, and only
+    /// a binary that implements it should be instantiated as one (same
+    /// criterion as `resolve_decorators`).
     #[test]
-    fn resolve_provider_ignora_otras_categorias() {
+    fn resolve_provider_ignores_other_categories() {
         let tmp = TempDir::new().unwrap();
         write_provider(
             tmp.path(),
@@ -2091,7 +2123,7 @@ scheme = "memplug"
     }
 
     #[test]
-    fn plugins_discover_lista_un_plugin_sin_estado() {
+    fn plugins_discover_lists_a_plugin_with_no_state() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
 
@@ -2106,15 +2138,15 @@ scheme = "memplug"
         assert!(!p.enabled);
         assert!(p.capabilities.iter().any(|c| c == "fs-read"));
         assert!(list.errors.is_empty());
-        // (P1) DEMO_MANIFEST no declara description ni comandos.
-        assert_eq!(p.description, None, "sin description en el manifiesto");
-        assert!(p.commands.is_empty(), "sin contributions.command");
+        // (P1) DEMO_MANIFEST declares neither description nor commands.
+        assert_eq!(p.description, None, "no description in the manifest");
+        assert!(p.commands.is_empty(), "no contributions.command");
     }
 
-    /// (P1) manifiesto con `description` + un `contributions.command`: ambos
-    /// deben llegar íntegros a `PluginInfo` por `list()`.
+    /// (P1) a manifest with `description` + one `contributions.command`:
+    /// both must reach `PluginInfo` intact via `list()`.
     #[test]
-    fn plugins_discover_propaga_description_y_commands() {
+    fn plugins_discover_propagates_description_and_commands() {
         const WITH_DESC_AND_COMMANDS: &str = r#"
 [plugin]
 id = "org.norte.demo"
@@ -2122,7 +2154,7 @@ name = "Demo"
 publisher = "norte"
 version = "0.1.0"
 category = "command"
-description = "Saluda desde la paleta de comandos."
+description = "Greets from the command palette."
 [contributions]
 command = [
     { id = "greet", title = "Greet" },
@@ -2141,21 +2173,21 @@ fs-read = "scoped"
         let p = &list.plugins[0];
         assert_eq!(
             p.description.as_deref(),
-            Some("Saluda desde la paleta de comandos.")
+            Some("Greets from the command palette.")
         );
-        assert_eq!(p.commands.len(), 2, "los dos comandos declarados");
-        // Orden de manifiesto preservado (no reordenado).
+        assert_eq!(p.commands.len(), 2, "the two declared commands");
+        // Manifest order preserved (not reordered).
         assert_eq!(p.commands[0].id, "greet");
         assert_eq!(p.commands[0].title, "Greet");
         assert_eq!(p.commands[1].id, "wave");
         assert_eq!(p.commands[1].title, "Wave");
     }
 
-    /// `wasm_path` es un cálculo puro de ruta (single source of truth del
-    /// layout `plugins/<id>/plugin.wasm`, review H2): no requiere que el
-    /// binario exista.
+    /// `wasm_path` is a pure path computation (single source of truth for the
+    /// `plugins/<id>/plugin.wasm` layout, review H2): it does not require the
+    /// binary to exist.
     #[test]
-    fn wasm_path_sigue_el_layout_plugins_id() {
+    fn wasm_path_follows_the_plugins_id_layout() {
         let tmp = TempDir::new().unwrap();
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert_eq!(
@@ -2167,7 +2199,7 @@ fs-read = "scoped"
         );
     }
 
-    /// Manifiesto con `[config]` (P2 Task 2), para `settings_of`.
+    /// Manifest with `[config]` (P2 Task 2), for `settings_of`.
     const CONFIG_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.cfg"
@@ -2183,19 +2215,19 @@ max = 10
 "#;
 
     #[test]
-    fn settings_of_sin_config_toml_devuelve_los_defaults() {
+    fn settings_of_with_no_config_toml_returns_the_defaults() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cfg", CONFIG_MANIFEST);
 
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         let settings = reg
             .settings_of("org.norte.cfg")
-            .unwrap_or_else(|| panic!("se esperaba un plugin descubierto"));
+            .unwrap_or_else(|| panic!("expected a discovered plugin"));
         assert_eq!(settings.get("retries").map(String::as_str), Some("3"));
     }
 
     #[test]
-    fn settings_of_con_override_refleja_el_valor_de_config_toml() {
+    fn settings_of_with_override_reflects_config_toml_value() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cfg", CONFIG_MANIFEST);
         std::fs::write(
@@ -2213,14 +2245,14 @@ max = 10
     }
 
     #[test]
-    fn settings_of_id_desconocido_es_none() {
+    fn settings_of_unknown_id_is_none() {
         let tmp = TempDir::new().unwrap();
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
-        assert!(reg.settings_of("org.norte.fantasma").is_none());
+        assert!(reg.settings_of("org.norte.ghost").is_none());
     }
 
     #[test]
-    fn plugins_set_estado_se_refleja_y_persiste() {
+    fn plugins_set_state_is_reflected_and_persists() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
 
@@ -2232,42 +2264,42 @@ max = 10
         assert!(p.approved);
         assert!(p.enabled);
 
-        // Una NUEVA discover del mismo dir lo recuerda (persistió).
+        // A NEW discover of the same dir remembers it (it persisted).
         let reg2 = PluginRegistry::discover(tmp.path()).unwrap();
         let p2 = &reg2.list().plugins[0];
-        assert!(p2.approved, "approved debe persistir");
-        assert!(p2.enabled, "enabled debe persistir");
+        assert!(p2.approved, "approved must persist");
+        assert!(p2.enabled, "enabled must persist");
         assert_eq!(
             p2.id, "org.norte.demo",
-            "el id-con-puntos debe volver intacto"
+            "the id-with-dots must come back intact"
         );
     }
 
     #[test]
-    fn plugins_set_de_id_inexistente_no_persiste_basura() {
+    fn plugins_set_of_nonexistent_id_does_not_persist_garbage() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
 
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
-        assert!(!reg.set_approval("org.norte.fantasma", true).unwrap());
-        assert!(!reg.set_enabled("org.norte.fantasma", true).unwrap());
+        assert!(!reg.set_approval("org.norte.ghost", true).unwrap());
+        assert!(!reg.set_enabled("org.norte.ghost", true).unwrap());
 
-        // No se creó el fichero de estado (nada que persistir).
+        // The state file was not created (nothing to persist).
         assert!(
             !tmp.path().join("plugins-state.toml").exists(),
-            "un id desconocido no debe crear plugins-state.toml"
+            "an unknown id must not create plugins-state.toml"
         );
     }
 
-    /// #241: cambiar el BINARIO invalida la aprobación, aunque el manifiesto
-    /// no se toque.
+    /// #241: changing the BINARY invalidates the approval, even if the
+    /// manifest is not touched.
     ///
-    /// El ancla del issue #69 cubría el `plugin.toml` —qué pide y cuándo se
-    /// dispara— y dejaba la otra puerta del bundle abierta: quien pudiera
-    /// escribir el `.wasm` sin tocar el `.toml` se quedaba con las
-    /// capacidades que un humano aprobó para OTRO código.
+    /// Issue #69's anchor covered `plugin.toml` —what it asks for and when
+    /// it fires— and left the bundle's other door open: whoever could write
+    /// the `.wasm` without touching the `.toml` kept the capabilities a
+    /// human approved for OTHER code.
     #[test]
-    fn cambiar_el_binario_invalida_la_aprobacion() {
+    fn changing_the_binary_invalidates_the_approval() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
         let wasm = tmp
@@ -2275,83 +2307,88 @@ max = 10
             .join("plugins")
             .join("org.norte.demo")
             .join("plugin.wasm");
-        std::fs::write(&wasm, b"\0asm-uno").unwrap();
+        std::fs::write(&wasm, b"\0asm-one").unwrap();
 
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(reg.set_approval("org.norte.demo", true).unwrap());
         assert!(
             reg.list().plugins[0].approved,
-            "aprobado con este binario delante"
+            "approved with this binary in front"
         );
 
-        // El manifiesto NO se toca; solo el binario.
-        std::fs::write(&wasm, b"\0asm-otro").unwrap();
+        // The manifest is NOT touched; only the binary.
+        std::fs::write(&wasm, b"\0asm-other").unwrap();
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(
             !reg.list().plugins[0].approved,
-            "otro binario es otra pregunta: hay que volver a consentir"
+            "a different binary is a different question: consent must be given again"
         );
 
-        // Y devolver el binario de antes devuelve la aprobación: el ancla es
-        // el CONTENIDO, no un contador de cambios.
-        std::fs::write(&wasm, b"\0asm-uno").unwrap();
+        // And putting the previous binary back returns the approval: the
+        // anchor is the CONTENT, not a change counter.
+        std::fs::write(&wasm, b"\0asm-one").unwrap();
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(reg.list().plugins[0].approved);
     }
 
     #[test]
-    fn plugins_manifiesto_roto_aparece_en_errors_sin_tumbar_discover() {
+    fn plugins_broken_manifest_appears_in_errors_without_taking_discover_down() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
-        write_plugin(tmp.path(), "roto", "esto no es toml [ valido =");
+        write_plugin(tmp.path(), "broken", "this is not toml [ valid =");
 
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         let list = reg.list();
 
-        assert_eq!(list.plugins.len(), 1, "el válido sigue cargando");
-        assert_eq!(list.errors.len(), 1, "el roto se reporta, no desaparece");
-        assert!(list.errors[0].dir.contains("roto"));
+        assert_eq!(list.plugins.len(), 1, "the valid one still loads");
+        assert_eq!(
+            list.errors.len(),
+            1,
+            "the broken one is reported, not dropped"
+        );
+        assert!(list.errors[0].dir.contains("broken"));
     }
 
     #[test]
-    fn plugins_state_id_con_puntos_round_trip() {
+    fn plugins_state_id_with_dots_round_trips() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
 
-        // Persistimos estado para un id con PUNTOS.
+        // We persist state for an id with DOTS.
         {
             let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
             assert!(reg.set_approval("org.norte.demo", true).unwrap());
         }
 
-        // El fichero debe llevar la clave ENTRECOMILLADA, no anidada.
+        // The file must carry the QUOTED key, not nested.
         let raw = std::fs::read_to_string(tmp.path().join("plugins-state.toml")).unwrap();
         assert!(
             raw.contains("\"org.norte.demo\""),
-            "la clave debe ir entrecomillada, no como [org.norte.demo]: {raw}"
+            "the key must be quoted, not as [org.norte.demo]: {raw}"
         );
 
-        // Y una discover fresca recupera el MISMO id con su estado.
+        // And a fresh discover recovers the SAME id with its state.
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         let st = reg.state.get("org.norte.demo").cloned().unwrap();
         assert!(st.approved && !st.enabled);
-        // El ancla guardada al aprobar (issue #69, #241) también sobrevive al
-        // round-trip y casa la de AHORA — que es manifiesto Y binario.
-        let entrada = reg
+        // The anchor saved on approval (issue #69, #241) also survives the
+        // round trip and matches the current one — which is manifest AND
+        // binary.
+        let entry = reg
             .catalog
             .plugins
             .iter()
             .find(|e| e.manifest.id == "org.norte.demo")
-            .expect("descubierto");
+            .expect("discovered");
         assert_eq!(
             st.approved_digest.as_deref(),
-            Some(entrada.approval_anchor().as_str()),
-            "el ancla debe persistir y casar el bundle"
+            Some(entry.approval_anchor().as_str()),
+            "the anchor must persist and match the bundle"
         );
     }
 
-    /// Manifiesto `command` mínimo, sin capabilities especiales, para los tests
-    /// de ejecución fail-closed.
+    /// Minimal `command` manifest, with no special capabilities, for the
+    /// fail-closed execution tests.
     const CMD_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.cmd"
@@ -2362,23 +2399,23 @@ category = "command"
 "#;
 
     #[test]
-    fn plugins_run_command_sin_aprobar_es_not_approved() {
+    fn plugins_run_command_with_no_approval_is_not_approved() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         let rt = norte_plugin_host::PluginRuntime::new().unwrap();
 
         let err = reg
-            .run_command(&rt, "org.norte.cmd", "echo", "hola")
+            .run_command(&rt, "org.norte.cmd", "echo", "hello")
             .unwrap_err();
         assert!(
             matches!(err, PluginRunError::NotApproved(ref id) if id == "org.norte.cmd"),
-            "un plugin sin aprobar JAMÁS se ejecuta: {err:?}"
+            "a plugin with no approval is NEVER run: {err:?}"
         );
     }
 
     #[test]
-    fn plugins_run_command_aprobado_sin_activar_es_disabled() {
+    fn plugins_run_command_approved_but_not_enabled_is_disabled() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
@@ -2386,16 +2423,16 @@ category = "command"
         let rt = norte_plugin_host::PluginRuntime::new().unwrap();
 
         let err = reg
-            .run_command(&rt, "org.norte.cmd", "echo", "hola")
+            .run_command(&rt, "org.norte.cmd", "echo", "hello")
             .unwrap_err();
         assert!(
             matches!(err, PluginRunError::Disabled(ref id) if id == "org.norte.cmd"),
-            "aprobado pero desactivado no se ejecuta: {err:?}"
+            "approved but disabled does not run: {err:?}"
         );
     }
 
     #[test]
-    fn plugins_run_command_activado_sin_wasm_es_no_binary() {
+    fn plugins_run_command_enabled_with_no_wasm_is_no_binary() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
@@ -2404,37 +2441,37 @@ category = "command"
         let rt = norte_plugin_host::PluginRuntime::new().unwrap();
 
         let err = reg
-            .run_command(&rt, "org.norte.cmd", "echo", "hola")
+            .run_command(&rt, "org.norte.cmd", "echo", "hello")
             .unwrap_err();
         assert!(
             matches!(&err, PluginRunError::NoBinary(id) if id == "org.norte.cmd"),
-            "sin plugin.wasm el runtime no arranca: {err:?}"
+            "with no plugin.wasm the runtime does not start: {err:?}"
         );
     }
 
     #[test]
-    fn plugins_run_command_id_inexistente_es_unknown() {
+    fn plugins_run_command_nonexistent_id_is_unknown() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         let rt = norte_plugin_host::PluginRuntime::new().unwrap();
 
         let err = reg
-            .run_command(&rt, "org.norte.fantasma", "echo", "hola")
+            .run_command(&rt, "org.norte.ghost", "echo", "hello")
             .unwrap_err();
         assert!(
-            matches!(err, PluginRunError::Unknown(ref id) if id == "org.norte.fantasma"),
-            "un id desconocido es Unknown: {err:?}"
+            matches!(err, PluginRunError::Unknown(ref id) if id == "org.norte.ghost"),
+            "an unknown id is Unknown: {err:?}"
         );
     }
 
     #[test]
-    fn plugins_state_corrupto_es_invalid_data() {
+    fn plugins_corrupt_state_is_invalid_data() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
         std::fs::write(
             tmp.path().join("plugins-state.toml"),
-            "esto no es [ toml valido =",
+            "this is not [ valid toml =",
         )
         .unwrap();
 
@@ -2442,7 +2479,7 @@ category = "command"
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
-    /// Manifiesto de un previewer que declara `text/*`.
+    /// Manifest of a previewer that declares `text/*`.
     const PREV_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.prev"
@@ -2459,7 +2496,7 @@ mimetypes = ["text/*"]
     }
 
     #[test]
-    fn plugins_guess_mimetype_por_extension() {
+    fn plugins_guess_mimetype_by_extension() {
         assert_eq!(guess_mimetype(&vpath("file:///a.txt")), "text/plain");
         assert_eq!(guess_mimetype(&vpath("file:///a.json")), "application/json");
         assert_eq!(guess_mimetype(&vpath("file:///README.md")), "text/markdown");
@@ -2474,10 +2511,10 @@ mimetypes = ["text/*"]
         assert_eq!(guess_mimetype(&vpath("file:///a.webp")), "image/webp");
     }
 
-    /// D4: el ancho que pide un cliente llega al guest acotado; la ausencia
-    /// sigue siendo ausencia (el guest elige), no un cero ni el tope.
+    /// D4: the width a client asks for reaches the guest capped; absence
+    /// stays absence (the guest chooses), not a zero nor the cap.
     #[test]
-    fn clamp_preview_columns_acota_y_respeta_none() {
+    fn clamp_preview_columns_caps_and_respects_none() {
         assert_eq!(clamp_preview_columns(None), None);
         assert_eq!(clamp_preview_columns(Some(80)), Some(80));
         assert_eq!(
@@ -2495,20 +2532,20 @@ mimetypes = ["text/*"]
     }
 
     #[test]
-    fn plugins_mimetype_matches_glob_y_exacto() {
+    fn plugins_mimetype_matches_glob_and_exact() {
         assert!(mimetype_matches("text/*", "text/plain"));
         assert!(!mimetype_matches("text/*", "application/json"));
         assert!(mimetype_matches("application/json", "application/json"));
-        // No casa parcial: prefijo textual sin la barra no es glob.
+        // Does not partially match: a textual prefix without the slash is not a glob.
         assert!(!mimetype_matches("application/json", "application/json5"));
         assert!(!mimetype_matches("text/plain", "text/plai"));
     }
 
     #[test]
-    fn plugins_resolve_previewer_fail_closed_y_por_mimetype() {
+    fn plugins_resolve_previewer_fail_closed_and_by_mimetype() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.prev", PREV_MANIFEST);
-        // `plugin.wasm` VACÍO: `is_file()` no valida contenido, solo presencia.
+        // EMPTY `plugin.wasm`: `is_file()` does not validate content, only presence.
         std::fs::write(
             tmp.path()
                 .join("plugins")
@@ -2520,42 +2557,42 @@ mimetypes = ["text/*"]
 
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
 
-        // Descubierto pero SIN aprobar/activar → fail-closed.
+        // Discovered but NOT approved/enabled → fail-closed.
         assert!(
             reg.resolve_previewer("text/plain").is_none(),
-            "un previewer no consentido jamás se elige"
+            "a non-consented previewer is never chosen"
         );
 
-        // Aprobado + activado → resuelve para el mimetype que casa el glob.
+        // Approved + enabled → resolves for the mimetype that matches the glob.
         assert!(reg.set_approval_in_memory("org.norte.prev", true));
         assert!(reg.set_enabled_in_memory("org.norte.prev", true));
 
         let got = reg.resolve_previewer("text/plain");
-        assert!(got.is_some(), "text/plain casa text/*");
+        assert!(got.is_some(), "text/plain matches text/*");
         let (id, name, wasm, _caps, settings) = got.unwrap();
         assert_eq!(id, "org.norte.prev");
         assert_eq!(name, "Prev");
         assert!(wasm.path().ends_with("plugin.wasm"));
         assert!(
             settings.is_empty(),
-            "PREV_MANIFEST no declara [config]: mapa vacío"
+            "PREV_MANIFEST declares no [config]: empty map"
         );
 
-        // Un mimetype que no casa el glob declarado → None.
+        // A mimetype that does not match the declared glob → None.
         assert!(
             reg.resolve_previewer("application/json").is_none(),
-            "application/json no casa text/*"
+            "application/json does not match text/*"
         );
     }
 
-    /// D3: un previewer que declara el mimetype EXACTO gana a uno que declara
-    /// el comodín, aunque el catálogo lo ordene después. Sin esto, quién
-    /// pintaba un `.md` lo decidía el alfabeto de los ids: `org.norte.md`
-    /// ganaba a `org.norte.syntect`, y `org.zzz.md` perdía.
+    /// D3: a previewer that declares the EXACT mimetype beats one that
+    /// declares the wildcard, even if the catalog orders it after. Without
+    /// this, which one painted a `.md` was decided by the alphabet of the
+    /// ids: `org.norte.md` beat `org.norte.syntect`, and `org.zzz.md` lost.
     #[test]
-    fn plugins_resolve_previewer_prefiere_exacto_sobre_glob() {
+    fn plugins_resolve_previewer_prefers_exact_over_glob() {
         let tmp = TempDir::new().unwrap();
-        // El comodín va PRIMERO en orden de catálogo (id menor).
+        // The wildcard goes FIRST in catalog order (lower id).
         write_plugin(tmp.path(), "org.norte.prev", PREV_MANIFEST);
         write_plugin(
             tmp.path(),
@@ -2580,15 +2617,21 @@ previewer = [{ mimetypes = ["text/markdown"] }]
             assert!(reg.set_enabled_in_memory(id, true));
         }
         let (id, ..) = reg.resolve_previewer("text/markdown").unwrap();
-        assert_eq!(id, "org.zzz.md", "exacto gana a text/* aunque vaya después");
+        assert_eq!(
+            id, "org.zzz.md",
+            "exact beats text/* even if it comes after"
+        );
         let (id, ..) = reg.resolve_previewer("text/plain").unwrap();
-        assert_eq!(id, "org.norte.prev", "y el comodín sigue con el resto");
+        assert_eq!(
+            id, "org.norte.prev",
+            "and the wildcard still handles the rest"
+        );
     }
 
     #[test]
-    fn plugins_resolve_previewer_sin_wasm_es_none() {
+    fn plugins_resolve_previewer_with_no_wasm_is_none() {
         let tmp = TempDir::new().unwrap();
-        // Sin escribir plugin.wasm: aunque esté consentido, no hay binario.
+        // Without writing plugin.wasm: even if consented, there is no binary.
         write_plugin(tmp.path(), "org.norte.prev", PREV_MANIFEST);
 
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
@@ -2597,16 +2640,16 @@ previewer = [{ mimetypes = ["text/markdown"] }]
 
         assert!(
             reg.resolve_previewer("text/plain").is_none(),
-            "sin plugin.wasm no hay nada que ejecutar"
+            "with no plugin.wasm there is nothing to run"
         );
     }
 
-    /// Sobrescribe el `plugin.toml` de `<config>/plugins/<id>/` con `src`.
+    /// Overwrites `<config>/plugins/<id>/`'s `plugin.toml` with `src`.
     fn rewrite_manifest(config_dir: &Path, id: &str, src: &str) {
         std::fs::write(config_dir.join("plugins").join(id).join("plugin.toml"), src).unwrap();
     }
 
-    /// Manifiesto `command` SIN capabilities peligrosas (para el test TOCTOU).
+    /// `command` manifest with NO dangerous capabilities (for the TOCTOU test).
     const TOCTOU_BEFORE: &str = r#"
 [plugin]
 id = "org.norte.toctou"
@@ -2616,9 +2659,9 @@ version = "0.1.0"
 category = "command"
 "#;
 
-    /// La frase de un guest cruza enmascarada y con tope (#332).
+    /// A guest's phrase crosses masked and capped (#332).
     #[test]
-    fn la_frase_del_guest_cruza_sin_escapes_y_acotada() {
+    fn the_guests_phrase_crosses_with_no_escapes_and_capped() {
         let hostile = format!("approve {}location", '\u{1b}');
         let out = guest_reason(&hostile);
         assert!(!out.contains('\u{1b}'), "{out}");
@@ -2630,19 +2673,20 @@ category = "command"
         assert_eq!(guest_reason("plain"), "plain");
     }
 
-    /// Un renamer (0.67.0): un cliente 0.66 lo ve como comando y pide
-    /// `run_command` con su id. La respuesta es «no ejecuta comandos», antes
-    /// de mirar consentimiento o binario, y sin instanciar nada.
+    /// A renamer (0.67.0): a 0.66 client sees it as a command and asks for
+    /// `run_command` with its id. The answer is "does not run commands",
+    /// before looking at consent or binary, and without instantiating
+    /// anything.
     #[test]
-    fn un_kind_que_no_exporta_command_no_es_ejecutable() {
+    fn a_kind_that_does_not_export_command_is_not_runnable() {
         let tmp = TempDir::new().unwrap();
         write_plugin(
             tmp.path(),
-            "org.norte.renombra",
+            "org.norte.renamer",
             r#"
 [plugin]
-id = "org.norte.renombra"
-name = "Renombra"
+id = "org.norte.renamer"
+name = "Renamer"
 publisher = "norte"
 version = "0.1.0"
 category = "renamer"
@@ -2653,15 +2697,15 @@ title = "By date"
 "#,
         );
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
-        let err = reg.resolve_runnable("org.norte.renombra").unwrap_err();
+        let err = reg.resolve_runnable("org.norte.renamer").unwrap_err();
         assert!(
-            matches!(err, PluginRunError::NotRunnable(ref id) if id == "org.norte.renombra"),
+            matches!(err, PluginRunError::NotRunnable(ref id) if id == "org.norte.renamer"),
             "{err:?}"
         );
     }
 
-    /// El MISMO plugin, pero con capabilities AMPLIADAS (fs-read + net) que el
-    /// humano nunca aprobó.
+    /// The SAME plugin, but with EXPANDED capabilities (fs-read + net) that
+    /// the human never approved.
     const TOCTOU_AFTER: &str = r#"
 [plugin]
 id = "org.norte.toctou"
@@ -2675,11 +2719,12 @@ net = { hosts = ["evil.example"] }
 "#;
 
     #[test]
-    fn plugins_capabilities_cambiadas_tras_aprobar_re_piden_consentimiento() {
-        // Issue #69: el humano aprueba unas capabilities; luego el plugin.toml
-        // cambia en disco a otras más amplias y ocurre un nuevo discover. La
-        // aprobación (flag true en disco) NO debe valer para las capabilities
-        // NUEVAS: el digest anclado ya no casa → NotApproved (re-consentimiento).
+    fn plugins_capabilities_changed_after_approval_ask_for_consent_again() {
+        // Issue #69: the human approves some capabilities; then plugin.toml
+        // changes on disk to broader ones and a new discover happens. The
+        // approval (flag true on disk) must NOT hold for the NEW
+        // capabilities: the anchored digest no longer matches → NotApproved
+        // (re-consent).
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.toctou", TOCTOU_BEFORE);
         {
@@ -2688,42 +2733,43 @@ net = { hosts = ["evil.example"] }
             assert!(reg.set_enabled("org.norte.toctou", true).unwrap());
         }
 
-        // El atacante reescribe el manifiesto con capabilities ampliadas.
+        // The attacker rewrites the manifest with expanded capabilities.
         rewrite_manifest(tmp.path(), "org.norte.toctou", TOCTOU_AFTER);
 
-        // Nueva discover: lee el estado (approved=true + digest VIEJO) y el
-        // manifiesto NUEVO.
+        // New discover: reads the state (approved=true + OLD digest) and the
+        // NEW manifest.
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
 
-        // list() muestra la aprobación como NO vigente (la UI re-pide consentir).
+        // list() shows the approval as NOT current (the UI asks for consent again).
         let info = &reg.list().plugins[0];
         assert!(
             !info.approved,
-            "capabilities cambiadas ⇒ aprobación efectiva=false"
+            "changed capabilities ⇒ effective approval=false"
         );
         assert!(
             info.capabilities.iter().any(|c| c == "net"),
-            "y muestra las capabilities NUEVAS para que el humano las vea"
+            "and shows the NEW capabilities so the human sees them"
         );
 
-        // Y resolve_runnable rechaza fail-closed con NotApproved.
+        // And resolve_runnable rejects fail-closed with NotApproved.
         let err = reg.resolve_runnable("org.norte.toctou").unwrap_err();
         assert!(
             matches!(err, PluginRunError::NotApproved(ref id) if id == "org.norte.toctou"),
-            "el digest anclado ya no casa: {err:?}"
+            "the anchored digest no longer matches: {err:?}"
         );
 
-        // Re-aprobar re-ancla el digest a las capabilities NUEVAS y vuelve a
-        // resolver (el humano consintió lo que ahora hay).
+        // Re-approving re-anchors the digest to the NEW capabilities and
+        // resolves again (the human consented to what is there now).
         let mut reg = reg;
         assert!(reg.set_approval("org.norte.toctou", true).unwrap());
         assert!(reg.list().plugins[0].approved);
     }
 
     #[test]
-    fn plugins_aprobacion_heredada_sin_digest_re_pide_consentimiento() {
-        // Estado persistido de ANTES de la defensa (issue #69): approved=true sin
-        // `digest`. Fail-closed: se trata como no vigente hasta re-aprobar.
+    fn plugins_inherited_approval_with_no_digest_asks_for_consent_again() {
+        // State persisted from BEFORE the defense (issue #69): approved=true
+        // with no `digest`. Fail-closed: treated as not current until
+        // re-approved.
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
         std::fs::write(
@@ -2735,27 +2781,27 @@ net = { hosts = ["evil.example"] }
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(
             !reg.list().plugins[0].approved,
-            "aprobación sin digest anclado no es vigente"
+            "an approval with no anchored digest is not current"
         );
         let err = reg.resolve_runnable("org.norte.cmd").unwrap_err();
         assert!(
             matches!(err, PluginRunError::NotApproved(_)),
-            "fail-closed sin digest: {err:?}"
+            "fail-closed with no digest: {err:?}"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn plugins_wasm_symlink_fuera_del_dir_es_no_binary() {
-        // Issue #69 (defensa en profundidad): `plugin.wasm` es un symlink que
-        // apunta FUERA del directorio del plugin. Se rechaza (NoBinary), no se
-        // ejecuta un binario ajeno.
+    fn plugins_wasm_symlink_outside_the_dir_is_no_binary() {
+        // Issue #69 (defense in depth): `plugin.wasm` is a symlink pointing
+        // OUTSIDE the plugin's directory. It is rejected (NoBinary), a
+        // foreign binary is not run.
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
-        // Un binario "de fuera" (contenido irrelevante: el symlink se rechaza
-        // antes de intentar compilarlo).
-        let outside = tmp.path().join("ajeno.wasm");
-        std::fs::write(&outside, b"binario ajeno").unwrap();
+        // An "outside" binary (content irrelevant: the symlink is rejected
+        // before trying to compile it).
+        let outside = tmp.path().join("foreign.wasm");
+        std::fs::write(&outside, b"foreign binary").unwrap();
         let link = tmp
             .path()
             .join("plugins")
@@ -2770,39 +2816,39 @@ net = { hosts = ["evil.example"] }
         let err = reg.resolve_runnable("org.norte.cmd").unwrap_err();
         assert!(
             matches!(err, PluginRunError::NoBinary(ref id) if id == "org.norte.cmd"),
-            "un plugin.wasm que escapa del dir se rechaza: {err:?}"
+            "a plugin.wasm that escapes the dir is rejected: {err:?}"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn plugins_wasm_symlink_dentro_del_dir_se_acepta() {
-        // Un symlink que resuelve DENTRO del dir del plugin es legítimo (p. ej.
-        // un build que enlaza al artefacto real junto a él).
+    fn plugins_wasm_symlink_inside_the_dir_is_accepted() {
+        // A symlink that resolves INSIDE the plugin's dir is legitimate
+        // (e.g. a build that links to the real artifact next to it).
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
         let plugin_dir = tmp.path().join("plugins").join("org.norte.cmd");
         let real = plugin_dir.join("real.wasm");
-        std::fs::write(&real, b"artefacto").unwrap();
+        std::fs::write(&real, b"artifact").unwrap();
         std::os::unix::fs::symlink(&real, plugin_dir.join("plugin.wasm")).unwrap();
 
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(reg.set_approval_in_memory("org.norte.cmd", true));
         assert!(reg.set_enabled_in_memory("org.norte.cmd", true));
 
-        // resolve_runnable no debe fallar por NoBinary (llega a devolver la ruta).
+        // resolve_runnable must not fail with NoBinary (it gets to return the path).
         let resolved = reg.resolve_runnable("org.norte.cmd");
         assert!(
             resolved.is_ok(),
-            "un symlink dentro del dir es válido: {resolved:?}"
+            "a symlink inside the dir is valid: {resolved:?}"
         );
     }
 
     // -------------------------------------------------------------------
-    // G3b (ADR 0037): `resolve_decorators`/`resolve_columns` + los helpers
-    // de validación posicional.
+    // G3b (ADR 0037): `resolve_decorators`/`resolve_columns` + the
+    // positional validation helpers.
 
-    /// Manifiesto `decorator` mínimo.
+    /// Minimal `decorator` manifest.
     const DECOR_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.decor"
@@ -2813,9 +2859,8 @@ category = "decorator"
 [[contributions.decorator]]
 "#;
 
-    /// Un segundo decorator, para probar que `resolve_decorators` devuelve
-    /// TODOS los consentidos (no el primero, a diferencia de
-    /// `resolve_previewer`).
+    /// A second decorator, to test that `resolve_decorators` returns ALL
+    /// consented ones (not the first, unlike `resolve_previewer`).
     const DECOR_MANIFEST_2: &str = r#"
 [plugin]
 id = "org.norte.decor2"
@@ -2826,7 +2871,7 @@ category = "decorator"
 [[contributions.decorator]]
 "#;
 
-    /// Manifiesto `columns` que declara una columna `size-human`.
+    /// `columns` manifest that declares a `size-human` column.
     const COLUMNS_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.cols"
@@ -2840,7 +2885,7 @@ header = "Size"
 "#;
 
     #[test]
-    fn resolve_decorators_fail_closed_sin_consentir() {
+    fn resolve_decorators_fail_closed_with_no_consent() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.decor", DECOR_MANIFEST);
         std::fs::write(
@@ -2854,12 +2899,12 @@ header = "Size"
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(
             reg.resolve_decorators().is_empty(),
-            "un decorator no consentido jamás se resuelve"
+            "a non-consented decorator is never resolved"
         );
     }
 
     #[test]
-    fn resolve_decorators_devuelve_todos_los_consentidos_no_solo_el_primero() {
+    fn resolve_decorators_returns_all_consented_ones_not_just_the_first() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.decor", DECOR_MANIFEST);
         write_plugin(tmp.path(), "org.norte.decor2", DECOR_MANIFEST_2);
@@ -2873,29 +2918,25 @@ header = "Size"
         assert!(reg.set_enabled_in_memory("org.norte.decor2", true));
 
         let resolved = reg.resolve_decorators();
-        assert_eq!(
-            resolved.len(),
-            2,
-            "AMBOS decorators consentidos: {resolved:?}"
-        );
+        assert_eq!(resolved.len(), 2, "BOTH decorators consented: {resolved:?}");
         let ids: Vec<&str> = resolved.iter().map(|((id, ..), _)| id.as_str()).collect();
         assert!(ids.contains(&"org.norte.decor"));
         assert!(ids.contains(&"org.norte.decor2"));
     }
 
-    /// ADR 0105: el hueco viene del manifiesto —`icon` cuando lo declara,
-    /// `badge` si no—, y de la PRIMERA contribución.
+    /// ADR 0105: the slot comes from the manifest —`icon` when it declares
+    /// it, `badge` otherwise—, and from the FIRST contribution.
     #[test]
-    fn resolve_decorators_lee_el_hueco_del_manifiesto() {
+    fn resolve_decorators_reads_the_slot_from_the_manifest() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.decor", DECOR_MANIFEST);
         write_plugin(
             tmp.path(),
-            "org.norte.iconos",
+            "org.norte.icons",
             r#"
             [plugin]
-            id = "org.norte.iconos"
-            name = "Iconos"
+            id = "org.norte.icons"
+            name = "Icons"
             publisher = "norte"
             version = "0.1.0"
             category = "decorator"
@@ -2904,40 +2945,40 @@ header = "Size"
             [capabilities]
         "#,
         );
-        for id in ["org.norte.decor", "org.norte.iconos"] {
+        for id in ["org.norte.decor", "org.norte.icons"] {
             std::fs::write(tmp.path().join("plugins").join(id).join("plugin.wasm"), b"").unwrap();
         }
         let mut reg = PluginRegistry::discover(tmp.path()).unwrap();
-        for id in ["org.norte.decor", "org.norte.iconos"] {
+        for id in ["org.norte.decor", "org.norte.icons"] {
             assert!(reg.set_approval_in_memory(id, true));
             assert!(reg.set_enabled_in_memory(id, true));
         }
-        let huecos: std::collections::HashMap<String, norte_plugin_host::DecoratorSlot> = reg
+        let slots: std::collections::HashMap<String, norte_plugin_host::DecoratorSlot> = reg
             .resolve_decorators()
             .into_iter()
             .map(|((id, ..), slot)| (id, slot))
             .collect();
         assert_eq!(
-            huecos["org.norte.decor"],
+            slots["org.norte.decor"],
             norte_plugin_host::DecoratorSlot::Badge
         );
         assert_eq!(
-            huecos["org.norte.iconos"],
+            slots["org.norte.icons"],
             norte_plugin_host::DecoratorSlot::Icon
         );
         assert_eq!(
-            slot_to_wire(huecos["org.norte.iconos"]),
+            slot_to_wire(slots["org.norte.icons"]),
             norte_proto::methods::DecorationSlot::Icon
         );
     }
 
     #[test]
-    fn resolve_decorators_ignora_categoria_distinta_aunque_declare_contrib() {
-        // Un plugin `command` no entra por `resolve_decorators` aunque, por
-        // hipótesis, alguien copiara `[[contributions.decorator]]` en su
-        // manifiesto: el world dedicado (`norte-decorator`) exige que la
-        // categoría PRIMARIA sea `decorator` (a diferencia de
-        // previewer/command, que comparten world).
+    fn resolve_decorators_ignores_a_different_category_even_if_it_declares_contrib() {
+        // A `command` plugin does not get in through `resolve_decorators`
+        // even if, hypothetically, someone copied
+        // `[[contributions.decorator]]` into its manifest: the dedicated
+        // world (`norte-decorator`) requires the PRIMARY category to be
+        // `decorator` (unlike previewer/command, which share a world).
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cmd", CMD_MANIFEST);
         std::fs::write(
@@ -2955,7 +2996,7 @@ header = "Size"
     }
 
     #[test]
-    fn resolve_columns_fail_closed_y_por_id() {
+    fn resolve_columns_fail_closed_and_by_id() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.cols", COLUMNS_MANIFEST);
         std::fs::write(
@@ -2978,19 +3019,19 @@ header = "Size"
 
         let (id, name, wasm, _caps, _settings) = reg
             .resolve_columns("size-human")
-            .expect("la columna declarada resuelve");
+            .expect("the declared column resolves");
         assert_eq!(id, "org.norte.cols");
         assert_eq!(name, "Cols");
         assert!(wasm.path().ends_with("plugin.wasm"));
 
         assert!(
-            reg.resolve_columns("no-declarada").is_none(),
-            "un id de columna no declarado no resuelve"
+            reg.resolve_columns("not-declared").is_none(),
+            "an undeclared column id does not resolve"
         );
     }
 
     #[test]
-    fn paths_to_basenames_extrae_el_nombre_no_la_ruta_completa() {
+    fn paths_to_basenames_extracts_the_name_not_the_full_path() {
         let paths = vec![
             norte_proto::VPath::parse("file:///a/b/module.rs").unwrap(),
             norte_proto::VPath::parse("file:///a/README.md").unwrap(),
@@ -3000,7 +3041,7 @@ header = "Size"
     }
 
     #[test]
-    fn decorations_to_wire_checked_longitud_correcta_pasa() {
+    fn decorations_to_wire_checked_correct_length_passes() {
         use norte_plugin_host::decorator_iface::Decoration;
         let out = vec![
             Decoration {
@@ -3012,14 +3053,14 @@ header = "Size"
                 role: None,
             },
         ];
-        let wire = decorations_to_wire_checked(out, 2).expect("longitud casa: Some");
+        let wire = decorations_to_wire_checked(out, 2).expect("length matches: Some");
         assert_eq!(wire.len(), 2);
         assert_eq!(wire[0].badge.as_deref(), Some("M"));
         assert_eq!(wire[1].badge, None);
     }
 
     #[test]
-    fn decorations_to_wire_checked_longitud_distinta_es_none_fail_closed() {
+    fn decorations_to_wire_checked_different_length_is_none_fail_closed() {
         use norte_plugin_host::decorator_iface::Decoration;
         let out = vec![Decoration {
             badge: Some("M".to_string()),
@@ -3027,41 +3068,39 @@ header = "Size"
         }];
         assert!(
             decorations_to_wire_checked(out, 2).is_none(),
-            "un guest que rompe el contrato posicional se descarta entero"
+            "a guest that breaks the positional contract is discarded whole"
         );
     }
 
-    /// El token muere con la llamada: el `Drop` de la sesión ES el mecanismo
-    /// de expiración, y por eso no hay TTL que ajustar ni barrido que olvidar.
+    /// The token dies with the call: the session's `Drop` IS the expiration
+    /// mechanism, and that is why there is no TTL to tune nor sweep to
+    /// remember.
     #[test]
-    fn el_token_muere_con_la_llamada() {
+    fn the_token_dies_with_the_call() {
         let dir = tempfile::tempdir().unwrap();
-        let vpath = crate::policy::local_root_vpath(dir.path()).expect("vpath del tempdir");
+        let vpath = crate::policy::local_root_vpath(dir.path()).expect("tempdir's vpath");
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
         let token = {
-            let sesion = mint.mint_for(&vpath, None, false).expect("acuña");
-            let token = sesion.token().to_owned();
-            assert!(
-                mint.resolve(&token).is_ok(),
-                "vivo mientras dura la llamada"
-            );
+            let session = mint.mint_for(&vpath, None, false).expect("mint");
+            let token = session.token().to_owned();
+            assert!(mint.resolve(&token).is_ok(), "alive while the call lasts");
             assert_eq!(mint.live_tokens(), 1);
             token
         };
         assert!(
             mint.resolve(&token).is_err(),
-            "un token de la página anterior está muerto"
+            "a token from the previous page is dead"
         );
-        assert_eq!(mint.live_tokens(), 0, "y no queda nada retenido");
+        assert_eq!(mint.live_tokens(), 0, "and nothing is left held");
     }
 
-    /// Dos tokens distintos no se cruzan, y ninguno es adivinable.
+    /// Two different tokens never cross, and neither is guessable.
     #[test]
-    fn dos_ubicaciones_no_comparten_token() {
+    fn two_locations_do_not_share_a_token() {
         use norte_plugin_host::LocationHost as _;
         let a = tempfile::tempdir().unwrap();
         let b = tempfile::tempdir().unwrap();
-        std::fs::write(a.path().join("solo-en-a"), b"x").unwrap();
+        std::fs::write(a.path().join("only-in-a"), b"x").unwrap();
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
         let sa = mint
             .mint_for(
@@ -3069,66 +3108,66 @@ header = "Size"
                 None,
                 false,
             )
-            .expect("acuña a");
+            .expect("mint a");
         let sb = mint
             .mint_for(
                 &crate::policy::local_root_vpath(b.path()).unwrap(),
                 None,
                 false,
             )
-            .expect("acuña b");
+            .expect("mint b");
         assert_ne!(sa.token(), sb.token());
-        assert_eq!(sa.token().len(), 64, "32 bytes en hex");
-        assert!(mint.read(sa.token(), b"solo-en-a").is_ok());
+        assert_eq!(sa.token().len(), 64, "32 bytes in hex");
+        assert!(mint.read(sa.token(), b"only-in-a").is_ok());
         assert!(
-            mint.read(sb.token(), b"solo-en-a").is_err(),
-            "el token de B no alcanza el árbol de A"
+            mint.read(sb.token(), b"only-in-a").is_err(),
+            "B's token does not reach A's tree"
         );
     }
 
-    /// Sin ruta local no hay token: el guest lee de un descriptor de
-    /// directorio, y un `sftp://` no tiene ninguno.
+    /// With no local path there is no token: the guest reads from a
+    /// directory descriptor, and an `sftp://` has none.
     #[test]
-    fn una_ubicacion_que_no_es_file_no_acuna_token() {
+    fn a_location_that_is_not_file_mints_no_token() {
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
         let remote = norte_proto::VPath::parse("sftp://host/dir").unwrap();
         assert!(
             mint.mint_for(&remote, None, false).is_none(),
-            "sin ruta local no hay token"
+            "with no local path there is no token"
         );
-        let archivo = norte_proto::VPath::parse("zip+file:///a.zip/!/dentro").unwrap();
+        let archive = norte_proto::VPath::parse("zip+file:///a.zip/!/inside").unwrap();
         assert!(
-            mint.mint_for(&archivo, None, false).is_none(),
-            "dentro de un archivo tampoco"
+            mint.mint_for(&archive, None, false).is_none(),
+            "not inside an archive either"
         );
     }
 
-    /// ADR 0052: una raíz protegida no se rodea porque quien pregunta sea un
-    /// plugin en vez de un agente.
+    /// ADR 0052: a protected root is not bypassed just because whoever asks
+    /// is a plugin instead of an agent.
     #[test]
-    fn el_directorio_de_estado_sigue_sin_leerse_por_aqui() {
-        let estado = tempfile::tempdir().unwrap();
-        let raiz = crate::policy::local_root_vpath(estado.path()).unwrap();
-        std::fs::create_dir(estado.path().join("dentro")).unwrap();
+    fn the_state_directory_still_cannot_be_read_through_here() {
+        let state = tempfile::tempdir().unwrap();
+        let root = crate::policy::local_root_vpath(state.path()).unwrap();
+        std::fs::create_dir(state.path().join("inside")).unwrap();
         let mint =
-            LocationMint::with_protected(vec![raiz.clone()], norte_vfs_local::Bounds::default());
+            LocationMint::with_protected(vec![root.clone()], norte_vfs_local::Bounds::default());
         assert!(
-            mint.mint_for(&raiz, None, false).is_none(),
-            "la raíz protegida, no"
+            mint.mint_for(&root, None, false).is_none(),
+            "the protected root, no"
         );
-        let hijo = crate::policy::local_root_vpath(&estado.path().join("dentro")).unwrap();
+        let child = crate::policy::local_root_vpath(&state.path().join("inside")).unwrap();
         assert!(
-            mint.mint_for(&hijo, None, false).is_none(),
-            "ni nada bajo ella"
+            mint.mint_for(&child, None, false).is_none(),
+            "nor anything under it"
         );
     }
 
-    /// El marcador de raíz de proyecto: con `.git` declarado, lo que se abre
-    /// es el ANCESTRO que lo contiene, y el prefijo dice qué mira el usuario.
-    /// Sin esto la columna solo funcionaría con el panel justo en la raíz del
-    /// repositorio, porque un token NO puede subir.
+    /// The project-root marker: with `.git` declared, what opens is the
+    /// ANCESTOR that contains it, and the prefix says what the user is
+    /// looking at. Without this the column would only work with the pane
+    /// right at the repository's root, because a token CANNOT climb.
     #[test]
-    fn el_marcador_abre_el_ancestro_y_dice_el_prefijo() {
+    fn the_marker_opens_the_ancestor_and_states_the_prefix() {
         use norte_plugin_host::LocationHost as _;
         let repo = tempfile::tempdir().unwrap();
         std::fs::create_dir(repo.path().join(".git")).unwrap();
@@ -3137,220 +3176,219 @@ header = "Size"
         let dir = crate::policy::local_root_vpath(&repo.path().join("src/deep")).unwrap();
 
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
-        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
-        assert_eq!(sesion.as_ref().prefix, b"src/deep");
+        let session = mint.mint_for(&dir, Some(".git"), true).expect("mint");
+        assert_eq!(session.as_ref().prefix, b"src/deep");
         assert_eq!(
-            mint.read(sesion.token(), b".git/index").unwrap(),
+            mint.read(session.token(), b".git/index").unwrap(),
             b"DIRC",
-            "la raíz abierta es el repositorio, no el directorio visible"
+            "the opened root is the repository, not the visible directory"
         );
     }
 
-    /// #241: un marcador que es un SYMLINK no cuenta, ni colgando.
+    /// #241: a marker that is a SYMLINK does not count, not even dangling.
     ///
-    /// `ln -s /nada /tmp/.git` — y crear un nombre en `/tmp` puede cualquiera,
-    /// el sticky bit solo impide borrar los ajenos — hacía que todo panel bajo
-    /// `/tmp` le entregase al plugin el `/tmp` entero. Un `.git` legítimo es un
-    /// directorio o el fichero `gitdir:` de un worktree; enlace, nunca.
+    /// `ln -s /nothing /tmp/.git` — and anyone can create a name in `/tmp`,
+    /// the sticky bit only stops deleting others' — made every pane under
+    /// `/tmp` hand the plugin the whole of `/tmp`. A legitimate `.git` is a
+    /// directory or a worktree's `gitdir:` file; a link, never.
     #[test]
-    fn un_marcador_que_es_symlink_no_abre_el_ancestro() {
-        let raiz = tempfile::tempdir().unwrap();
-        std::os::unix::fs::symlink("/no-existe", raiz.path().join(".git")).unwrap();
-        std::fs::create_dir(raiz.path().join("sub")).unwrap();
-        let dir = crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap();
+    fn a_marker_that_is_a_symlink_does_not_open_the_ancestor() {
+        let root = tempfile::tempdir().unwrap();
+        std::os::unix::fs::symlink("/does-not-exist", root.path().join(".git")).unwrap();
+        std::fs::create_dir(root.path().join("sub")).unwrap();
+        let dir = crate::policy::local_root_vpath(&root.path().join("sub")).unwrap();
 
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
-        // Se llama a la SUBIDA directamente, y no solo a `mint_for`, para que
-        // un fallo nombre el ancestro culpable. Con el prefijo a secas, este
-        // test decía «se subió» y no a dónde, que es la mitad del dato
-        // (#308): dos días de intermitencia sin saber qué directorio tenía el
-        // marcador.
-        let (raiz_hallada, prefix, _) =
-            mint.climb_to_marker(&dir, &raiz.path().join("sub"), ".git");
+        // The CLIMB is called directly, not just `mint_for`, so a failure
+        // names the guilty ancestor. With the bare prefix, this test said
+        // "it climbed" and not to where, which is half the data (#308): two
+        // days of intermittency without knowing which directory had the
+        // marker.
+        let (found_root, prefix, _) = mint.climb_to_marker(&dir, &root.path().join("sub"), ".git");
         assert!(
             prefix.is_empty(),
-            "no se subió: la raíz es el directorio visible, no el ancestro. \
-             Subió hasta {} (partiendo de {})",
-            raiz_hallada.display(),
-            raiz.path().join("sub").display()
+            "it did not climb: the root is the visible directory, not the ancestor. \
+             It climbed to {} (starting from {})",
+            found_root.display(),
+            root.path().join("sub").display()
         );
-        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
-        assert!(sesion.as_ref().prefix.is_empty());
+        let session = mint.mint_for(&dir, Some(".git"), true).expect("mint");
+        assert!(session.as_ref().prefix.is_empty());
     }
 
-    /// Un marcador en un directorio QUE ESCRIBE CUALQUIERA no abre nada (#308).
+    /// A marker in a directory ANYONE CAN WRITE TO opens nothing (#308).
     ///
-    /// #241 cerró el caso del symlink y dejó abierto el que menos trabajo da:
-    /// `mkdir /tmp/.git`. El sticky bit de `/tmp` impide BORRAR nombres
-    /// ajenos, no impide CREAR el tuyo, y un `.git` que es un directorio de
-    /// verdad pasaba la comprobación —está escrita para rechazar enlaces, y un
-    /// directorio no es un enlace—. A partir de ahí, cualquier panel bajo
-    /// `/tmp` le entregaba al plugin `/tmp` ENTERO: los ficheros temporales de
-    /// todos los usuarios de la máquina.
+    /// #241 closed the symlink case and left open the one that takes the
+    /// least effort: `mkdir /tmp/.git`. `/tmp`'s sticky bit stops DELETING
+    /// others' names, it does not stop CREATING your own, and a `.git` that
+    /// is a real directory passed the check —it is written to reject links,
+    /// and a directory is not a link—. From there, any pane under `/tmp`
+    /// handed the plugin the WHOLE of `/tmp`: the temp files of every user
+    /// on the machine.
     ///
-    /// Se descubrió porque este test es intermitente en máquinas donde alguien
-    /// ha dejado un `/tmp/.git`. No era un test frágil: era el test viendo el
-    /// agujero cada vez que la condición existía.
+    /// It was discovered because this test is intermittent on machines where
+    /// someone has left a `/tmp/.git`. It was not a flaky test: it was the
+    /// test seeing the hole every time the condition existed.
     #[test]
-    fn un_marcador_en_un_directorio_que_escribe_cualquiera_no_abre_nada() {
+    fn a_marker_in_a_directory_anyone_can_write_to_opens_nothing() {
         use std::os::unix::fs::PermissionsExt as _;
 
-        let raiz = tempfile::tempdir().unwrap();
-        // Un `.git` de VERDAD, no un enlace: es lo que la comprobación anterior
-        // aceptaba.
-        std::fs::create_dir(raiz.path().join(".git")).unwrap();
-        std::fs::create_dir(raiz.path().join("sub")).unwrap();
-        // 1777, como `/tmp`: escribible por todos, con sticky bit.
-        std::fs::set_permissions(raiz.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
+        let root = tempfile::tempdir().unwrap();
+        // A REAL `.git`, not a link: this is what the previous check
+        // accepted.
+        std::fs::create_dir(root.path().join(".git")).unwrap();
+        std::fs::create_dir(root.path().join("sub")).unwrap();
+        // 1777, like `/tmp`: writable by everyone, with the sticky bit.
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o1777)).unwrap();
 
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
-        let (hallada, prefix, _) = mint.climb_to_marker(
-            &crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap(),
-            &raiz.path().join("sub"),
+        let (found, prefix, _) = mint.climb_to_marker(
+            &crate::policy::local_root_vpath(&root.path().join("sub")).unwrap(),
+            &root.path().join("sub"),
             ".git",
         );
         assert!(
             prefix.is_empty(),
-            "un directorio que escribe cualquiera no es la raíz de un proyecto: \
-             subió hasta {}",
-            hallada.display()
+            "a directory anyone can write to is not a project's root: \
+             it climbed to {}",
+            found.display()
         );
     }
 
-    /// Y un repositorio NORMAL sigue abriéndose: el arreglo no puede costar el
-    /// caso de uso entero.
+    /// And a NORMAL repository still opens: the fix cannot cost the whole
+    /// use case.
     #[test]
-    fn un_repositorio_con_permisos_normales_sigue_abriendo() {
-        let raiz = tempfile::tempdir().unwrap();
-        std::fs::create_dir(raiz.path().join(".git")).unwrap();
-        std::fs::create_dir(raiz.path().join("sub")).unwrap();
+    fn a_repository_with_normal_permissions_still_opens() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir(root.path().join(".git")).unwrap();
+        std::fs::create_dir(root.path().join("sub")).unwrap();
 
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
         let (_, prefix, _) = mint.climb_to_marker(
-            &crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap(),
-            &raiz.path().join("sub"),
+            &crate::policy::local_root_vpath(&root.path().join("sub")).unwrap(),
+            &root.path().join("sub"),
             ".git",
         );
-        assert_eq!(prefix, b"sub", "un repo de verdad sí abre su raíz");
+        assert_eq!(prefix, b"sub", "a real repo does open its root");
     }
 
-    /// Y el fichero `gitdir:` de un worktree SÍ cuenta: es un `.git` de verdad,
-    /// y exigir un directorio habría roto los worktrees y los submódulos.
+    /// And a worktree's `gitdir:` file DOES count: it is a real `.git`, and
+    /// requiring a directory would have broken worktrees and submodules.
     #[test]
-    fn un_marcador_que_es_fichero_si_abre_el_ancestro() {
-        let raiz = tempfile::tempdir().unwrap();
-        std::fs::write(raiz.path().join(".git"), b"gitdir: /otro/sitio").unwrap();
-        std::fs::create_dir(raiz.path().join("sub")).unwrap();
-        let dir = crate::policy::local_root_vpath(&raiz.path().join("sub")).unwrap();
+    fn a_marker_that_is_a_file_does_open_the_ancestor() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join(".git"), b"gitdir: /somewhere/else").unwrap();
+        std::fs::create_dir(root.path().join("sub")).unwrap();
+        let dir = crate::policy::local_root_vpath(&root.path().join("sub")).unwrap();
 
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
-        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
-        assert_eq!(sesion.as_ref().prefix, b"sub");
+        let session = mint.mint_for(&dir, Some(".git"), true).expect("mint");
+        assert_eq!(session.as_ref().prefix, b"sub");
     }
 
-    /// #241: la subida NO pasa de `$HOME`.
+    /// #241: the climb does NOT go past `$HOME`.
     ///
-    /// `touch $HOME/.git` —un archivo mal extraído, un instalador descuidado,
-    /// cualquier proceso del usuario— convertía cada directorio suyo que no
-    /// fuera un repositorio en una raíz que abarcaba la casa entera:
-    /// `MAX_CLIMB` es 64 y no había nada más. El marcador EN `$HOME` sigue
-    /// valiendo; lo que no se hace es pasar de ahí.
+    /// `touch $HOME/.git` —a badly extracted archive, a careless installer,
+    /// any process of the user's— turned every one of their directories that
+    /// was not a repository into a root spanning the whole home:
+    /// `MAX_CLIMB` is 64 and there was nothing else. A marker IN `$HOME` is
+    /// still valid; what is not done is going past it.
     #[test]
-    fn la_subida_se_para_en_home() {
-        let casa = tempfile::tempdir().unwrap();
-        // Un `.git` por ENCIMA de la casa: el caso que hay que no alcanzar.
-        std::fs::write(casa.path().join(".git"), b"gitdir: /x").unwrap();
-        let hijo = casa.path().join("proyectos/uno");
-        std::fs::create_dir_all(&hijo).unwrap();
-        let dir = crate::policy::local_root_vpath(&hijo).unwrap();
+    fn the_climb_stops_at_home() {
+        let home = tempfile::tempdir().unwrap();
+        // A `.git` ABOVE the home: the case that must not be reached.
+        std::fs::write(home.path().join(".git"), b"gitdir: /x").unwrap();
+        let child = home.path().join("projects/one");
+        std::fs::create_dir_all(&child).unwrap();
+        let dir = crate::policy::local_root_vpath(&child).unwrap();
 
-        // Con la casa EN el ancestro que lleva el marcador: se abre ese, que es
-        // el caso legítimo — el techo es no pasar de la casa, no ignorar lo
-        // que hay en ella.
+        // With the home IN the ancestor that carries the marker: that one
+        // opens, which is the legitimate case — the ceiling is not going
+        // past the home, not ignoring what is in it.
         let mint = LocationMint::with_protected_and_home(
             Vec::new(),
             norte_vfs_local::Bounds::default(),
-            Some(casa.path().to_path_buf()),
+            Some(home.path().to_path_buf()),
         );
-        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
-        assert_eq!(sesion.as_ref().prefix, b"proyectos/uno");
+        let session = mint.mint_for(&dir, Some(".git"), true).expect("mint");
+        assert_eq!(session.as_ref().prefix, b"projects/one");
 
-        // Y con la casa en el hijo, la subida se para ahí: el `.git` de encima
-        // ya no cuenta.
+        // And with the home at the child, the climb stops there: the `.git`
+        // above no longer counts.
         let mint = LocationMint::with_protected_and_home(
             Vec::new(),
             norte_vfs_local::Bounds::default(),
-            Some(hijo.clone()),
+            Some(child.clone()),
         );
-        let sesion = mint.mint_for(&dir, Some(".git"), true).expect("acuña");
+        let session = mint.mint_for(&dir, Some(".git"), true).expect("mint");
         assert!(
-            sesion.as_ref().prefix.is_empty(),
-            "no se subió por encima de la casa"
+            session.as_ref().prefix.is_empty(),
+            "it did not climb past the home"
         );
     }
 
-    /// Sin `climb` no se sube: un agente acotado a su scope no gana un ancestro
-    /// porque el plugin declare un marcador.
+    /// Without `climb` there is no climbing: an agent confined to its scope
+    /// does not gain an ancestor just because the plugin declares a marker.
     #[test]
-    fn sin_climb_la_raiz_es_el_directorio_visible() {
+    fn without_climb_the_root_is_the_visible_directory() {
         use norte_plugin_host::LocationHost as _;
         let repo = tempfile::tempdir().unwrap();
         std::fs::create_dir(repo.path().join(".git")).unwrap();
         std::fs::create_dir(repo.path().join("src")).unwrap();
         let dir = crate::policy::local_root_vpath(&repo.path().join("src")).unwrap();
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
-        let sesion = mint.mint_for(&dir, Some(".git"), false).expect("acuña");
-        assert!(sesion.as_ref().prefix.is_empty());
+        let session = mint.mint_for(&dir, Some(".git"), false).expect("mint");
+        assert!(session.as_ref().prefix.is_empty());
         assert!(
-            mint.read(sesion.token(), b".git/index").is_err(),
-            "sin subir, el repositorio queda fuera"
+            mint.read(session.token(), b".git/index").is_err(),
+            "without climbing, the repository is left out"
         );
     }
 
-    /// Un marcador que no aparece por encima no hace subir a ningún sitio: la
-    /// raíz sigue siendo el directorio visible.
+    /// A marker that does not appear above does not climb anywhere: the root
+    /// stays the visible directory.
     #[test]
-    fn un_marcador_ausente_no_sube_por_si_acaso() {
+    fn an_absent_marker_does_not_climb_just_in_case() {
         let dir_t = tempfile::tempdir().unwrap();
         std::fs::create_dir(dir_t.path().join("sub")).unwrap();
         let dir = crate::policy::local_root_vpath(&dir_t.path().join("sub")).unwrap();
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
-        let sesion = mint
-            .mint_for(&dir, Some(".no-existe"), true)
-            .expect("acuña");
-        assert!(sesion.as_ref().prefix.is_empty());
+        let session = mint
+            .mint_for(&dir, Some(".does-not-exist"), true)
+            .expect("mint");
+        assert!(session.as_ref().prefix.is_empty());
     }
 
-    /// La subida se para en una raíz protegida: el directorio de estado no se
-    /// convierte en la raíz de nadie (ADR 0052).
+    /// The climb stops at a protected root: the state directory does not
+    /// become anyone's root (ADR 0052).
     #[test]
-    fn la_subida_se_para_en_una_raiz_protegida() {
-        let estado = tempfile::tempdir().unwrap();
-        // El marcador está en el PADRE protegido; el directorio visible cuelga
-        // de él.
-        std::fs::create_dir(estado.path().join(".git")).unwrap();
-        std::fs::create_dir(estado.path().join("dentro")).unwrap();
-        let raiz = crate::policy::local_root_vpath(estado.path()).unwrap();
-        let dir = crate::policy::local_root_vpath(&estado.path().join("dentro")).unwrap();
+    fn the_climb_stops_at_a_protected_root() {
+        let state = tempfile::tempdir().unwrap();
+        // The marker is in the protected PARENT; the visible directory hangs
+        // from it.
+        std::fs::create_dir(state.path().join(".git")).unwrap();
+        std::fs::create_dir(state.path().join("inside")).unwrap();
+        let root = crate::policy::local_root_vpath(state.path()).unwrap();
+        let dir = crate::policy::local_root_vpath(&state.path().join("inside")).unwrap();
         let mint =
-            LocationMint::with_protected(vec![raiz.clone()], norte_vfs_local::Bounds::default());
+            LocationMint::with_protected(vec![root.clone()], norte_vfs_local::Bounds::default());
         assert!(
             mint.mint_for(&dir, Some(".git"), true).is_none(),
-            "ni el directorio visible se sirve, porque ya está bajo la raíz protegida"
+            "not even the visible directory is served, because it is already under the protected root"
         );
     }
 
-    /// Sin la capability aprobada no se acuña NADA: ni se abre el directorio.
-    /// Es el mismo gate que hace cumplir el host, un paso antes.
+    /// With no approved capability NOTHING is minted: not even the directory
+    /// is opened. It is the same gate the host enforces, one step earlier.
     #[test]
-    fn sin_capability_no_se_acuna_ni_se_abre_el_directorio() {
+    fn with_no_capability_nothing_is_minted_and_the_directory_is_not_opened() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("f"), b"x").unwrap();
         let vpath = crate::policy::local_root_vpath(dir.path()).unwrap();
         let mint = LocationMint::with_protected(Vec::new(), norte_vfs_local::Bounds::default());
-        // `run_column_values` solo llama a `mint_for` cuando la capability
-        // está concedida; aquí se pinea la mitad observable: con capabilities
-        // por defecto, `granted()` es falso.
+        // `run_column_values` only calls `mint_for` when the capability is
+        // granted; here the observable half is pinned: with default
+        // capabilities, `granted()` is false.
         assert!(
             !norte_plugin_host::Capabilities::default()
                 .location
@@ -3361,7 +3399,7 @@ header = "Size"
     }
 
     #[test]
-    fn column_values_checked_longitud_correcta_y_distinta() {
+    fn column_values_checked_correct_and_different_length() {
         assert_eq!(
             column_values_checked(vec![Some("1".into()), None], 2),
             Some(vec![Some("1".to_string()), None])
@@ -3370,16 +3408,16 @@ header = "Size"
     }
 
     // -------------------------------------------------------------------
-    // H3e: `has_help` al descubrir + `help_of` bajo demanda.
+    // H3e: `has_help` at discovery + `help_of` on demand.
 
     #[test]
-    fn el_tope_del_wire_y_el_del_host_son_el_mismo_numero() {
-        // `PLUGIN_HELP_MAX_BYTES` es NORMATIVO: el contrato invita a un
-        // receptor a dimensionar contra él. El host recorta por
-        // `Limits::untrusted()`. Son dos crates que no se conocen, así que sin
-        // este ancla podrían separarse en silencio y el wire prometería un tope
-        // que nadie aplica. `norte-core` depende de los dos: es el único sitio
-        // donde la igualdad se puede afirmar.
+    fn the_wires_cap_and_the_hosts_are_the_same_number() {
+        // `PLUGIN_HELP_MAX_BYTES` is NORMATIVE: the contract invites a
+        // receiver to size against it. The host trims via
+        // `Limits::untrusted()`. These are two crates that do not know each
+        // other, so without this anchor they could silently drift apart and
+        // the wire would promise a cap nobody enforces. `norte-core` depends
+        // on both: it is the only place where the equality can be asserted.
         assert_eq!(
             norte_proto::methods::PLUGIN_HELP_MAX_BYTES,
             norte_help::Limits::untrusted().max_bytes
@@ -3387,223 +3425,232 @@ header = "Size"
     }
 
     #[test]
-    fn help_of_devuelve_el_markdown_acotado_del_plugin() {
+    fn help_of_returns_the_plugins_capped_markdown() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
         std::fs::write(
             tmp.path().join("plugins/org.norte.demo/help.md"),
-            "+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n+++\ncuerpo",
+            "+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n+++\nbody",
         )
         .unwrap();
 
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
-        assert!(reg.list().plugins[0].has_help, "list lo anuncia");
-        let help = reg.help_of("org.norte.demo").expect("hay página");
-        assert!(help.markdown.contains("cuerpo"));
+        assert!(reg.list().plugins[0].has_help, "list announces it");
+        let help = reg.help_of("org.norte.demo").expect("there is a page");
+        assert!(help.markdown.contains("body"));
         assert!(!help.truncated && !help.lossy);
     }
 
     #[test]
-    fn help_of_de_un_id_desconocido_es_none() {
-        // Fail-closed: el id viene del WIRE. Se resuelve contra el catálogo y
-        // jamás se compone en una ruta — un `../` no llega a tocar el FS.
+    fn help_of_an_unknown_id_is_none() {
+        // Fail-closed: the id comes from the WIRE. It is resolved against
+        // the catalog and never composed into a path — a `../` never
+        // touches the FS.
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(reg.help_of("../../etc/passwd").is_none());
-        assert!(reg.help_of("otro.plugin").is_none());
+        assert!(reg.help_of("other.plugin").is_none());
     }
 
     #[test]
-    fn help_of_acota_un_help_md_enorme_y_lo_declara() {
+    fn help_of_caps_a_huge_help_md_and_declares_it() {
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
-        let gordo = "a".repeat(norte_help::Limits::untrusted().max_bytes + 4096);
-        std::fs::write(tmp.path().join("plugins/org.norte.demo/help.md"), &gordo).unwrap();
+        let big = "a".repeat(norte_help::Limits::untrusted().max_bytes + 4096);
+        std::fs::write(tmp.path().join("plugins/org.norte.demo/help.md"), &big).unwrap();
 
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
-        let help = reg.help_of("org.norte.demo").expect("hay página");
-        assert!(help.truncated, "un fichero por encima del tope se declara");
+        let help = reg.help_of("org.norte.demo").expect("there is a page");
+        assert!(help.truncated, "a file over the cap is declared");
         assert!(help.markdown.len() <= norte_help::Limits::untrusted().max_bytes);
-        assert!(help.markdown.len() < gordo.len(), "y de verdad se cortó");
+        assert!(help.markdown.len() < big.len(), "and it really was cut");
     }
 
     #[test]
-    fn un_help_md_gigante_no_se_carga_entero_en_memoria() {
-        // Un `help.md` DISPERSO de 100 GiB son unos pocos bytes en un tarball.
-        // Leerlo entero para acotarlo DESPUÉS aborta por fallo de reserva, o
-        // invita al OOM killer a llevarse el daemon con su journal y toda task
-        // en vuelo. Y `plugin.help` está ABIERTO a un agente sobre un plugin
-        // que no necesita ni aprobación ni activación: sería la primera lectura
-        // SIN TOPE disparable por un agente en el daemon. El tope se aplica al
-        // LEER, no al decodificar.
+    fn a_giant_help_md_is_not_loaded_whole_into_memory() {
+        // A SPARSE 100 GiB `help.md` is a few bytes in a tarball. Reading it
+        // whole to cap it AFTERWARD aborts on a reservation failure, or
+        // invites the OOM killer to take down the daemon with its journal
+        // and every task in flight. And `plugin.help` is OPEN to an agent on
+        // a plugin that needs neither approval nor enablement: it would be
+        // the first UNCAPPED read an agent could trigger in the daemon. The
+        // cap is applied when READING, not when decoding.
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
         let f = std::fs::File::create(tmp.path().join("plugins/org.norte.demo/help.md")).unwrap();
-        // Disperso: ni un byte escrito, así que el fixture cabe en cualquier CI.
+        // Sparse: not a byte written, so the fixture fits in any CI.
         f.set_len(100 * 1024 * 1024 * 1024).unwrap();
         drop(f);
 
-        let inicio = std::time::Instant::now();
+        let start = std::time::Instant::now();
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
-        let help = reg.help_of("org.norte.demo").expect("hay página");
+        let help = reg.help_of("org.norte.demo").expect("there is a page");
         assert!(
-            inicio.elapsed() < std::time::Duration::from_secs(10),
-            "la lectura acotada no depende del tamaño del fichero"
+            start.elapsed() < std::time::Duration::from_secs(10),
+            "the capped read does not depend on the file's size"
         );
         assert!(
             !help.markdown.is_empty(),
-            "la página se sirve CORTADA, no se pierde: sin tope, la reserva de \
-             100 GiB falla y el fichero se degrada a «no hay página» (y donde \
-             la reserva sí entra, se la lleva el OOM killer)"
+            "the page is served CUT, not lost: with no cap, the 100 GiB \
+             reservation fails and the file degrades to \"no page\" (and \
+             where the reservation does go through, the OOM killer takes it)"
         );
         assert!(
             help.markdown.len() <= norte_help::Limits::untrusted().max_bytes,
-            "lo que cruza el wire sigue acotado"
+            "what crosses the wire is still capped"
         );
         assert!(
             help.truncated,
-            "y el recorte se declara: leer max_bytes+1 es lo que deja a \
-             `cut_and_decode_untrusted` ver que sobraba"
+            "and the cut is declared: reading max_bytes+1 is what lets \
+             `cut_and_decode_untrusted` see that there was more"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn un_help_md_que_apunta_fuera_del_directorio_no_se_lee() {
-        // El `help.md` cruza el wire y un AGENTE puede pedirlo: un symlink que
-        // sale del directorio del plugin convertiría `plugin.help` en una
-        // lectura de fichero arbitrario POR FUERA del motor de policy (misma
-        // forma que el `plugin.wasm` del issue #69). Se lee como página vacía.
+    fn a_help_md_that_points_outside_the_directory_is_not_read() {
+        // `help.md` crosses the wire and an AGENT can request it: a symlink
+        // leaving the plugin's directory would turn `plugin.help` into an
+        // arbitrary file read OUTSIDE the policy engine (the same shape as
+        // issue #69's `plugin.wasm`). It is read as a blank page.
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
-        let fuera = tmp.path().join("ajeno.md");
-        std::fs::write(&fuera, "secreto-de-otro-sitio").unwrap();
+        let outside = tmp.path().join("foreign.md");
+        std::fs::write(&outside, "secret-from-elsewhere").unwrap();
         let link = tmp.path().join("plugins/org.norte.demo/help.md");
-        std::os::unix::fs::symlink(&fuera, &link).unwrap();
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
 
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
         assert!(
             !reg.list().plugins[0].has_help,
-            "la bandera del wire usa la MISMA guarda que el lector: anunciar \
-             `true` y servir `\"\"` es el oráculo «esa ruta existe y es un \
-             fichero regular», y las dos mitades las lee un agente"
+            "the wire flag uses the SAME guard as the reader: announcing \
+             `true` and serving `\"\"` is the oracle \"that path exists and \
+             is a regular file\", and both halves are read by an agent"
         );
         assert!(
             reg.announces_help("org.norte.demo"),
-            "y la bandera LAXA sigue diciendo que el autor puso el fichero: sin \
-             ella, «lo puso y el host se niega a servirlo» sería indistinguible \
-             de «no se documentó», y `norte doctor` no tendría qué reportar"
+            "and the LAX flag still says the author put the file in: \
+             without it, \"they put it in and the host refuses to serve \
+             it\" would be indistinguishable from \"never documented\", and \
+             `norte doctor` would have nothing to report"
         );
-        let help = reg.help_of("org.norte.demo").expect("el plugin existe");
-        assert_eq!(help.markdown, "", "no hay página, y no es un error");
+        let help = reg.help_of("org.norte.demo").expect("the plugin exists");
+        assert_eq!(
+            help.markdown, "",
+            "there is no page, and it is not an error"
+        );
         assert!(
-            !help.markdown.contains("secreto-de-otro-sitio"),
-            "el contenido de fuera del dir JAMÁS cruza el wire"
+            !help.markdown.contains("secret-from-elsewhere"),
+            "content from outside the dir NEVER crosses the wire"
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn un_help_md_enlazado_dentro_del_directorio_si_se_lee() {
-        // La guarda es "no escapar del dir", NO "nada de symlinks": un plugin
-        // que organiza su propio directorio con enlaces no hace nada malo.
+    fn a_help_md_linked_inside_the_directory_is_read() {
+        // The guard is "do not escape the dir", NOT "no symlinks at all": a
+        // plugin that organizes its own directory with links does nothing
+        // wrong.
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
         let dir = tmp.path().join("plugins/org.norte.demo");
         std::fs::write(
             dir.join("README.md"),
-            "+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n+++\ncuerpo",
+            "+++\nid = \"org.norte.demo\"\ntitle = \"Demo\"\n+++\nbody",
         )
         .unwrap();
         std::os::unix::fs::symlink(dir.join("README.md"), dir.join("help.md")).unwrap();
 
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
-        assert!(reg.list().plugins[0].has_help, "is_file sigue el enlace");
-        let help = reg.help_of("org.norte.demo").expect("hay página");
-        assert!(help.markdown.contains("cuerpo"));
+        assert!(reg.list().plugins[0].has_help, "is_file follows the link");
+        let help = reg.help_of("org.norte.demo").expect("there is a page");
+        assert!(help.markdown.contains("body"));
     }
 
     #[test]
-    fn un_help_md_ilegible_es_pagina_vacia_no_error() {
-        // La ayuda es cosmética: un `help.md` que no se puede leer nunca
-        // tumba el plugin ni la llamada.
+    fn an_unreadable_help_md_is_a_blank_page_not_an_error() {
+        // Help is cosmetic: a `help.md` that cannot be read never takes down
+        // the plugin nor the call.
         let tmp = TempDir::new().unwrap();
         write_plugin(tmp.path(), "org.norte.demo", DEMO_MANIFEST);
         std::fs::create_dir_all(tmp.path().join("plugins/org.norte.demo/help.md")).unwrap();
 
         let reg = PluginRegistry::discover(tmp.path()).unwrap();
-        let help = reg.help_of("org.norte.demo").expect("el plugin existe");
+        let help = reg.help_of("org.norte.demo").expect("the plugin exists");
         assert_eq!(help.markdown, "");
     }
 }
 
-/// Qué hizo [`install`].
+/// What [`install`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InstallReport {
-    /// Id del plugin instalado (leído del manifiesto, no del nombre del
-    /// directorio de origen).
+    /// Id of the installed plugin (read from the manifest, not from the
+    /// source directory's name).
     pub id: String,
-    /// Nombre legible declarado en el manifiesto.
+    /// Readable name declared in the manifest.
     pub name: String,
-    /// `true` si había ya un plugin con ese id y se reemplazó (solo con
-    /// `force`). Cuando es `true`, su consentimiento se ha RETIRADO.
+    /// `true` if a plugin with that id already existed and was replaced
+    /// (only with `force`). When `true`, its consent has been WITHDRAWN.
     pub replaced: bool,
 }
 
-/// Por qué no se pudo instalar.
+/// Why installation could not happen.
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
-    /// El origen no tiene `plugin.toml`, o no se puede leer.
-    #[error("no hay `plugin.toml` legible en {0}")]
+    /// The source has no readable `plugin.toml`.
+    #[error("no readable `plugin.toml` at {0}")]
     NoManifest(PathBuf),
-    /// El manifiesto no valida (id, capabilities, hooks…).
-    #[error("`plugin.toml` inválido: {0}")]
+    /// The manifest does not validate (id, capabilities, hooks…).
+    #[error("invalid `plugin.toml`: {0}")]
     Manifest(#[from] norte_plugin_host::ManifestError),
-    /// El origen no tiene `plugin.wasm`.
-    #[error("no hay `plugin.wasm` en {0}")]
+    /// The source has no `plugin.wasm`.
+    #[error("no `plugin.wasm` at {0}")]
     NoWasm(PathBuf),
-    /// El `plugin.wasm` supera el tope de artefacto del runtime: ni el
-    /// catálogo lo leería ni el runtime lo instanciaría, así que no se copia.
-    #[error("`plugin.wasm` mide {len} bytes y el tope es {cap}")]
+    /// `plugin.wasm` exceeds the runtime's artifact cap: neither would the
+    /// catalog read it nor would the runtime instantiate it, so it is not
+    /// copied.
+    #[error("`plugin.wasm` is {len} bytes and the cap is {cap}")]
     WasmTooLarge {
-        /// Bytes del fichero.
+        /// Bytes of the file.
         len: u64,
-        /// El tope.
+        /// The cap.
         cap: u64,
     },
-    /// Ya hay un plugin instalado con ese id y no se pidió reemplazarlo.
+    /// A plugin with that id is already installed and replacing it was not requested.
     #[error(
-        "`{0}` ya está instalado; reemplazarlo RETIRA su consentimiento — repite con `--force` si es lo que quieres"
+        "`{0}` is already installed; replacing it WITHDRAWS its consent — repeat with `--force` if that is what you want"
     )]
     AlreadyInstalled(String),
-    /// Error de I/O copiando.
-    #[error("instalando: {0}")]
+    /// I/O error while copying.
+    #[error("installing: {0}")]
     Io(#[from] io::Error),
 }
 
-/// Instala el plugin de `src` (un directorio con `plugin.toml` + `plugin.wasm`)
-/// bajo `config_dir/plugins/<id>/`.
+/// Installs `src`'s plugin (a directory with `plugin.toml` + `plugin.wasm`)
+/// under `config_dir/plugins/<id>/`.
 ///
-/// El id sale del MANIFIESTO, nunca del nombre del directorio de origen: es lo
-/// que el descubridor va a usar, y dejar que un directorio llamado de otra
-/// forma decidiera dónde aterriza sería una vía para pisar a un tercero.
+/// The id comes from the MANIFEST, never from the source directory's name:
+/// it is what the discoverer is going to use, and letting a directory named
+/// something else decide where it lands would be a way to stomp on someone
+/// else's.
 ///
-/// **Instalar no es consentir.** El plugin queda descubierto y sin aprobar; lo
-/// aprueba y lo activa un humano en el gestor. Un instalador que consintiera
-/// por su cuenta convertiría «traigo este fichero» en «le doy sus
-/// capabilities», que es la decisión entera.
+/// **Installing is not consenting.** The plugin is left discovered and
+/// unapproved; a human approves and enables it in the manager. An installer
+/// that consented on its own would turn "I'm bringing this file" into "I'm
+/// giving it its capabilities", which is the whole decision.
 ///
-/// **Reemplazar RETIRA el consentimiento**, y esta es la parte que no es
-/// cosmética: el digest de aprobación cubre el MANIFIESTO —capabilities,
-/// categoría, contribuciones— y no el `.wasm`. Sin retirarlo, instalar encima
-/// de un plugin ya aprobado dejaría un binario nuevo corriendo bajo el permiso
-/// que un humano le dio a otro. Por eso reemplazar exige `force` y, cuando
-/// ocurre, el estado del id se borra.
+/// **Replacing WITHDRAWS consent**, and this is the part that is not
+/// cosmetic: the approval digest covers the MANIFEST —capabilities,
+/// category, contributions— and not the `.wasm`. Without withdrawing it,
+/// installing over an already approved plugin would leave a new binary
+/// running under the permission a human gave to another one. That is why
+/// replacing requires `force` and, when it happens, the id's state is wiped.
 ///
 /// # Errors
-/// [`InstallError`] si falta el manifiesto o el `.wasm`, si el manifiesto no
-/// valida, si el id ya está instalado sin `force`, o por I/O.
+/// [`InstallError`] if the manifest or the `.wasm` is missing, if the
+/// manifest does not validate, if the id is already installed without
+/// `force`, or on I/O.
 pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallReport, InstallError> {
     let manifest_path = src.join("plugin.toml");
     let raw = std::fs::read_to_string(&manifest_path)
@@ -3614,9 +3661,9 @@ pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallRepo
     if !wasm_src.is_file() {
         return Err(InstallError::NoWasm(wasm_src));
     }
-    // El tope del artefacto se aplica en la puerta: un binario que el
-    // catálogo no va a leer (y el runtime no va a instanciar) no se copia a
-    // la config para que cada descubrimiento lo liste como roto.
+    // The artifact cap is applied at the door: a binary the catalog is not
+    // going to read (and the runtime is not going to instantiate) is not
+    // copied into the config just so every discovery lists it as broken.
     let len = std::fs::metadata(&wasm_src)?.len();
     if len > norte_plugin_host::MAX_ARTIFACT_BYTES {
         return Err(InstallError::WasmTooLarge {
@@ -3634,22 +3681,23 @@ pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallRepo
     std::fs::create_dir_all(&dest)?;
     std::fs::write(dest.join("plugin.toml"), &raw)?;
     std::fs::copy(&wasm_src, dest.join("plugin.wasm"))?;
-    // La ayuda viaja con el plugin si la trae (H3e); su ausencia no es error.
+    // Help travels with the plugin if it brings one (H3e); its absence is not an error.
     let help_src = src.join("help.md");
     if help_src.is_file() {
         std::fs::copy(&help_src, dest.join("help.md"))?;
     }
 
     if replaced {
-        // Consentimiento retirado: el `.wasm` es otro y el digest del
-        // manifiesto no lo habría notado.
+        // Consent withdrawn: the `.wasm` is different and the manifest's
+        // digest would not have noticed.
         //
-        // Se SOBRESCRIBE la entrada a "sin aprobar" en vez de borrarla del
-        // mapa: `persist_state` fusiona sobre el documento existente, así que
-        // quitar la clave del mapa la dejaría intacta en el fichero — el
-        // plugin seguiría aprobado y nada lo diría. Escribir la entrada apagada
-        // es además lo que un humano querría leer en `plugins-state.toml`:
-        // "esto estuvo aprobado y ya no", no un hueco.
+        // The entry is OVERWRITTEN to "not approved" instead of removed from
+        // the map: `persist_state` merges onto the existing document, so
+        // removing the key from the map would leave it intact in the file —
+        // the plugin would stay approved and nothing would say so. Writing
+        // the disabled entry is also what a human would want to read in
+        // `plugins-state.toml`: "this was approved and no longer is", not a
+        // gap.
         let mut state = PluginRegistry::read_state(&config_dir.join(PluginRegistry::STATE_FILE))?;
         state.insert(manifest.id.clone(), PluginState::default());
         persist_state(config_dir, &state)?;
@@ -3662,24 +3710,24 @@ pub fn install(config_dir: &Path, src: &Path, force: bool) -> Result<InstallRepo
     })
 }
 
-/// Los schemes del core, que ningún provider plugin sirve (ADR 0093). Se
-/// re-exporta para quien no depende de `norte-plugin-host` (la CLI).
+/// The core's schemes, which no provider plugin serves (ADR 0093).
+/// Re-exported for whoever does not depend on `norte-plugin-host` (the CLI).
 pub use norte_plugin_host::CORE_SCHEMES;
-/// Los errores de carga TIPADOS del catálogo, para quien diagnostica sin
-/// depender de `norte-plugin-host` (`norte doctor`, ADR 0094).
+/// The catalog's TYPED load errors, for whoever diagnoses without depending
+/// on `norte-plugin-host` (`norte doctor`, ADR 0094).
 pub use norte_plugin_host::{LoadError, ManifestError};
 
-/// Los schemes que declaran los provider plugins INSTALADOS bajo
-/// `config_dir`, consentidos o no, ordenados y sin repetir.
+/// The schemes the provider plugins INSTALLED under `config_dir` declare,
+/// consented to or not, sorted and deduplicated.
 ///
-/// Es para quien tiene que decidir si un argumento es una URL antes de que
-/// nadie conecte (la CLI): enrutar `webdav://x` como URL no concede nada, y
-/// la conexión sigue siendo fail-closed en [`PluginRegistry::resolve_provider`].
-/// Un catálogo ilegible es una lista vacía: la CLI no puede hacer nada mejor
-/// que tratar el argumento como fichero.
+/// This is for whoever has to decide whether an argument is a URL before
+/// anyone connects (the CLI): routing `webdav://x` as a URL grants nothing,
+/// and the connection is still fail-closed in
+/// [`PluginRegistry::resolve_provider`]. An unreadable catalog is an empty
+/// list: the CLI can do no better than treat the argument as a file.
 ///
-/// Lee SOLO los manifiestos: el catálogo entero hashea cada `plugin.wasm` y
-/// resuelve cada `[config]`, y esto se pregunta para enrutar un argumento.
+/// Reads ONLY the manifests: the full catalog hashes every `plugin.wasm` and
+/// resolves every `[config]`, and this is asked in order to route an argument.
 #[must_use]
 pub fn installed_provider_schemes(config_dir: &Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(config_dir.join("plugins")) else {
@@ -3697,54 +3745,54 @@ pub fn installed_provider_schemes(config_dir: &Path) -> Vec<String> {
     schemes
 }
 
-/// Qué hizo [`uninstall`].
+/// What [`uninstall`] did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UninstallReport {
-    /// Id desinstalado.
+    /// Uninstalled id.
     pub id: String,
-    /// `true` si el plugin tenía consentimiento (aprobado en el estado): el
-    /// informe lo dice porque es lo que acaba de dejar de existir.
+    /// `true` if the plugin had consent (approved in the state): the report
+    /// says so because that is what just stopped existing.
     pub was_approved: bool,
 }
 
-/// Por qué no se pudo desinstalar.
+/// Why uninstallation could not happen.
 #[derive(Debug, thiserror::Error)]
 pub enum UninstallError {
-    /// El id no es un id de plugin (reverse-DNS). Se rechaza ANTES de tocar el
-    /// disco: el id se convierte en una ruta bajo `plugins/`, y un `..` sería
-    /// un borrado fuera de ella.
-    #[error("id de plugin inválido: se espera reverse-DNS (p. ej. `org.foo.bar`)")]
+    /// The id is not a plugin id (reverse-DNS). Rejected BEFORE touching the
+    /// disk: the id becomes a path under `plugins/`, and a `..` would be a
+    /// delete outside it.
+    #[error("invalid plugin id: reverse-DNS expected (e.g. `org.foo.bar`)")]
     InvalidId,
-    /// No hay ningún plugin instalado con ese id.
-    #[error("`{0}` no está instalado")]
+    /// No plugin installed with that id.
+    #[error("`{0}` is not installed")]
     NotInstalled(String),
-    /// Error de I/O borrando o escribiendo el estado.
-    #[error("desinstalando: {0}")]
+    /// I/O error deleting or writing the state.
+    #[error("uninstalling: {0}")]
     Io(#[from] io::Error),
 }
 
-/// Desinstala el plugin `id`: borra `config_dir/plugins/<id>/` y deja su
-/// entrada de `plugins-state.toml` APAGADA.
+/// Uninstalls plugin `id`: deletes `config_dir/plugins/<id>/` and leaves its
+/// `plugins-state.toml` entry DISABLED.
 ///
-/// Apagada y no borrada, por la misma razón que [`install`] con `force`:
-/// `persist_state` fusiona sobre el documento existente, así que quitar la
-/// clave del mapa la dejaría intacta en el fichero — y un plugin con el mismo
-/// id que se instalase después heredaría un consentimiento que nadie le dio.
+/// Disabled and not removed, for the same reason as [`install`] with
+/// `force`: `persist_state` merges onto the existing document, so removing
+/// the key from the map would leave it intact in the file — and a plugin
+/// with the same id installed later would inherit a consent nobody gave it.
 ///
-/// El estado se LEE antes de borrar nada: si `plugins-state.toml` está
-/// corrupto, se falla con el directorio intacto. Al revés, un borrado seguido
-/// de una lectura fallida dejaría la aprobación viva en el fichero y un
-/// segundo `uninstall` contestando «no está instalado» para siempre. El
-/// borrado va antes de ESCRIBIR el estado por la razón contraria: si falla a
-/// medias, lo que queda es un plugin roto que el descubridor lista en
-/// `errors`, no un plugin entero con el consentimiento retirado en silencio.
+/// The state is READ before anything is deleted: if `plugins-state.toml` is
+/// corrupt, it fails with the directory intact. The other way around, a
+/// delete followed by a failed read would leave the approval alive in the
+/// file and a second `uninstall` answering "not installed" forever. The
+/// delete goes before WRITING the state for the opposite reason: if it fails
+/// halfway, what is left is a broken plugin the discoverer lists in
+/// `errors`, not a whole plugin with its consent silently withdrawn.
 ///
-/// Un daemon en marcha sigue con su registro en memoria hasta que vuelve a
-/// descubrir; conectar por scheme redescubre siempre, ejecutar un comando
-/// falla por falta de binario.
+/// A running daemon keeps its in-memory registry until it discovers again;
+/// connecting by scheme always rediscovers, running a command fails for
+/// lack of a binary.
 ///
 /// # Errors
-/// [`UninstallError`] si el id no es un id, si no está instalado, o por I/O.
+/// [`UninstallError`] if the id is not an id, if it is not installed, or on I/O.
 pub fn uninstall(config_dir: &Path, id: &str) -> Result<UninstallReport, UninstallError> {
     if !norte_plugin_host::is_valid_plugin_id(id) {
         return Err(UninstallError::InvalidId);
@@ -3768,102 +3816,102 @@ pub fn uninstall(config_dir: &Path, id: &str) -> Result<UninstallReport, Uninsta
     })
 }
 
-// ---------- ubicación para plugins de columnas (ADR 0057) ----------
+// ---------- location for columns plugins (ADR 0057) ----------
 
-/// Acuña los tokens OPACOS con los que un guest de columnas lee bajo el
-/// directorio que se está listando, y los resuelve mientras la llamada vive.
+/// Mints the OPAQUE tokens a columns guest uses to read under the directory
+/// being listed, and resolves them while the call lives.
 ///
-/// El guest jamás recibe la ruta. Recibe una cadena aleatoria que solo
-/// significa algo dentro de este proceso y solo mientras dura la llamada que
-/// la acuñó: cuando la [`LocationSession`] se suelta, el token deja de
-/// resolver. Un token de la página anterior está muerto, y un guest que lo
-/// guarde no gana nada con él.
+/// The guest never receives the path. It receives a random string that only
+/// means something inside this process and only for as long as the call that
+/// minted it lasts: when the [`LocationSession`] is dropped, the token stops
+/// resolving. A token from the previous page is dead, and a guest that keeps
+/// it gains nothing from it.
 #[derive(Debug)]
 pub(crate) struct LocationMint {
     bounds: norte_vfs_local::Bounds,
-    /// Raíces que NO se abren aunque las pida un plugin (ADR 0052: el
-    /// directorio de estado del daemon no se rodea porque el que pregunta sea
-    /// un plugin en vez de un agente).
+    /// Roots that are NOT opened even if a plugin asks for them (ADR 0052:
+    /// the daemon's state directory is not bypassed just because whoever
+    /// asks is a plugin instead of an agent).
     protected: Vec<norte_proto::VPath>,
-    /// El techo de la subida al marcador de raíz (#241): por encima de la casa
-    /// no hay proyectos, hay sistema. `None` = sin `$HOME`, y entonces manda
-    /// `MAX_CLIMB` sola.
+    /// The ceiling for climbing to the root marker (#241): above the home
+    /// there are no projects, there is system. `None` = no `$HOME`, and then
+    /// `MAX_CLIMB` rules alone.
     home: Option<std::path::PathBuf>,
     live: std::sync::Mutex<
         std::collections::HashMap<String, std::sync::Arc<norte_vfs_local::ConfinedRoot>>,
     >,
 }
 
-/// El HOME del usuario, si el entorno lo dice. Techo de la subida (#241).
-fn home_del_entorno() -> Option<std::path::PathBuf> {
+/// The user's HOME, if the environment says so. Ceiling for the climb (#241).
+fn home_from_env() -> Option<std::path::PathBuf> {
     std::env::var_os("HOME")
         .filter(|h| !h.is_empty())
         .map(std::path::PathBuf::from)
 }
 
-/// Si `p` lo puede escribir CUALQUIER usuario de la máquina.
+/// Whether `p` can be written by ANY user on the machine.
 ///
-/// Un marcador de raíz de proyecto dentro de un directorio así no significa
-/// nada: lo pone quien quiera. #241 cerró el caso del enlace —`ln -s /nada
-/// /tmp/.git`— y dejó abierto el que menos trabajo cuesta, `mkdir /tmp/.git`,
-/// porque la comprobación estaba escrita para rechazar ENLACES y un
-/// directorio de verdad no lo es. El sticky bit de `/tmp` impide borrar
-/// nombres ajenos; no impide crear el tuyo. Con el marcador plantado, todo
-/// panel bajo `/tmp` le entregaba al plugin `/tmp` entero: los temporales de
-/// todos los usuarios.
+/// A project-root marker inside a directory like that means nothing: anyone
+/// can put it there. #241 closed the link case —`ln -s /nothing /tmp/.git`—
+/// and left open the one that takes the least effort, `mkdir /tmp/.git`,
+/// because the check was written to reject LINKS and a real directory is not
+/// one. `/tmp`'s sticky bit stops deleting others' names; it does not stop
+/// creating your own. With the marker planted, every pane under `/tmp`
+/// handed the plugin the whole of `/tmp`: every user's temp files.
 ///
-/// Se mira el bit `o+w` del DIRECTORIO que tiene el marcador, no el del
-/// marcador: lo que decide quién puede plantarlo es el permiso del contenedor.
-/// Un repositorio normal es 0755 y no se ve afectado.
+/// The `o+w` bit of the DIRECTORY that carries the marker is checked, not the
+/// marker's: what decides who can plant it is the container's permission. A
+/// normal repository is 0755 and is not affected.
 ///
-/// Un `stat` que falla dice `true` —fail-closed—: si no se puede saber quién
-/// escribe ahí, no se entrega esa raíz.
+/// A `stat` that fails says `true` —fail-closed—: if it cannot be known who
+/// writes there, that root is not handed out.
 #[cfg(unix)]
-fn lo_escribe_cualquiera(p: &std::path::Path) -> bool {
+fn anyone_can_write_it(p: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt as _;
-    // Escrito en negativo a propósito: es «true salvo que se DEMUESTRE que no».
-    // Un `is_ok_and(… != 0)` diría `false` cuando el stat falla, o sea abriría
-    // la raíz precisamente cuando no se sabe de quién es.
+    // Written in the negative on purpose: it is "true unless it is PROVEN
+    // otherwise". An `is_ok_and(… != 0)` would say `false` when the stat
+    // fails, i.e. it would open the root precisely when it is not known
+    // whose it is.
     !std::fs::metadata(p).is_ok_and(|m| m.permissions().mode() & 0o002 == 0)
 }
 
-/// En sistemas sin bits POSIX esta comprobación no aplica: Windows tiene su
-/// propia historia de ACL y el confinamiento allí lo lleva #217.
+/// On systems with no POSIX bits this check does not apply: Windows has its
+/// own ACL story and confinement there is carried by #217.
 #[cfg(not(unix))]
-fn lo_escribe_cualquiera(_p: &std::path::Path) -> bool {
+fn anyone_can_write_it(_p: &std::path::Path) -> bool {
     false
 }
 
-/// `(dev, ino)` de una ruta, o `None` si no se pudo mirar.
+/// `(dev, ino)` of a path, or `None` if it could not be looked at.
 ///
-/// `None` no relaja nada por su cuenta: quien lo recibe abre sin verificar,
-/// que es lo que se hacía antes de #241 — y una ruta que no se puede `stat`ear
-/// tampoco se va a poder abrir dos líneas después.
-fn node_id_de(p: &std::path::Path) -> Option<(u64, u64)> {
+/// `None` does not relax anything on its own: whoever receives it opens
+/// without verifying, which is what was done before #241 — and a path that
+/// cannot be `stat`ed is not going to be openable two lines later either.
+fn node_id_of(p: &std::path::Path) -> Option<(u64, u64)> {
     use std::os::unix::fs::MetadataExt as _;
     std::fs::metadata(p).ok().map(|m| (m.dev(), m.ino()))
 }
 
 impl LocationMint {
-    /// Un acuñador con las raíces protegidas de este proceso.
+    /// A minter with this process's protected roots.
     pub(crate) fn new(bounds: norte_vfs_local::Bounds) -> std::sync::Arc<Self> {
         Self::with_protected(crate::policy::protected_roots(), bounds)
     }
 
-    /// Como [`Self::new`], diciendo qué raíces están protegidas (tests).
+    /// Like [`Self::new`], stating which roots are protected (tests).
     pub(crate) fn with_protected(
         protected: Vec<norte_proto::VPath>,
         bounds: norte_vfs_local::Bounds,
     ) -> std::sync::Arc<Self> {
-        Self::with_protected_and_home(protected, bounds, home_del_entorno())
+        Self::with_protected_and_home(protected, bounds, home_from_env())
     }
 
-    /// Como [`Self::with_protected`] diciendo también dónde está la casa
-    /// (tests): `$HOME` es el techo de la subida (#241) y un test no puede
-    /// tocarlo —`std::env::set_var` es `unsafe` en la edición 2024 y la regla
-    /// 5 lo prohíbe fuera de `norte-vfs-local`—, así que el techo se INYECTA.
-    /// Leerlo una vez al construir, y no en cada subida, es además lo correcto:
-    /// la casa no cambia a media vida del proceso.
+    /// Like [`Self::with_protected`], also stating where the home is
+    /// (tests): `$HOME` is the ceiling for the climb (#241) and a test
+    /// cannot touch it —`std::env::set_var` is `unsafe` in the 2024 edition
+    /// and rule 5 forbids it outside `norte-vfs-local`—, so the ceiling is
+    /// INJECTED. Reading it once at construction, and not on every climb, is
+    /// also the correct thing: the home does not change mid-process.
     pub(crate) fn with_protected_and_home(
         protected: Vec<norte_proto::VPath>,
         bounds: norte_vfs_local::Bounds,
@@ -3877,26 +3925,26 @@ impl LocationMint {
         })
     }
 
-    /// Tope de niveles que sube la búsqueda del marcador de raíz. Un proyecto
-    /// anidado 64 directorios por debajo de su raíz no es un proyecto.
+    /// Cap on the levels the root-marker search climbs. A project nested 64
+    /// directories below its root is not a project.
     const MAX_CLIMB: usize = 64;
 
-    /// Acuña un token para `dir`, o `None` si esa ubicación no se sirve: no es
-    /// un `file://` local, cae bajo una raíz protegida, o no se pudo abrir.
-    /// `None` NO es un error de la petición — la columna se queda vacía y el
-    /// panel sigue.
+    /// Mints a token for `dir`, or `None` if that location is not served: it
+    /// is not a local `file://`, it falls under a protected root, or it
+    /// could not be opened. `None` is NOT an error for the request — the
+    /// column stays empty and the pane goes on.
     ///
-    /// `marker` es el marcador de raíz de proyecto que declara el manifiesto
-    /// (`.git`): si viene, lo que se abre es el ANCESTRO más cercano que lo
-    /// contenga, y el `prefix` de la sesión dice qué parte de esa raíz está
-    /// mirando el usuario. Sin marcador —o si no aparece por encima— la raíz
-    /// es `dir` y el prefijo va vacío.
+    /// `marker` is the project-root marker the manifest declares (`.git`):
+    /// if given, what opens is the nearest ANCESTOR that contains it, and
+    /// the session's `prefix` says which part of that root the user is
+    /// looking at. With no marker —or if it does not appear above— the root
+    /// is `dir` and the prefix is empty.
     ///
-    /// `climb` lo decide el llamante: solo se sube para el actor HUMANO. Un
-    /// agente o un plugin están acotados a su scope, y subir por encima de él
-    /// sería justo lo que el gate de lectura impide.
+    /// `climb` is decided by the caller: climbing only happens for the HUMAN
+    /// actor. An agent or a plugin are confined to their scope, and climbing
+    /// past it would be exactly what the read gate prevents.
     ///
-    /// BLOQUEANTE (abre directorios): va dentro de `spawn_blocking`.
+    /// BLOCKING (opens directories): goes inside `spawn_blocking`.
     pub(crate) fn mint_for(
         self: &std::sync::Arc<Self>,
         dir: &norte_proto::VPath,
@@ -3907,40 +3955,40 @@ impl LocationMint {
             return None;
         }
         if self.is_protected(dir) {
-            tracing::debug!("columns: ubicación bajo una raíz protegida, sin token");
+            tracing::debug!("columns: location under a protected root, no token");
             return None;
         }
         let native = norte_vfs_local::vpath_to_native(dir).ok()?;
-        let (root_native, prefix, esperado) = if let Some(marker) = marker.filter(|_| climb) {
+        let (root_native, prefix, expected) = if let Some(marker) = marker.filter(|_| climb) {
             self.climb_to_marker(dir, &native, marker)
         } else {
-            let id = node_id_de(&native);
+            let id = node_id_of(&native);
             (native, Vec::new(), id)
         };
-        // Las raíces protegidas viajan a la confinación (#238): que la raíz no
-        // ESTÉ bajo una de ellas —lo que comprueba `is_protected` arriba— no
-        // dice nada sobre si CONTIENE alguna, y contenerla es el caso normal
-        // (`$XDG_CONFIG_HOME` contiene `norte/`). Sin esto, un panel abierto en
-        // el directorio de configuración le servía al plugin el journal, los
-        // secretos y el fichero de conexiones.
-        let vetadas: Vec<std::path::PathBuf> = self
+        // Protected roots travel to the confinement (#238): the root not
+        // BEING under one of them —what `is_protected` checks above— says
+        // nothing about whether it CONTAINS one, and containing it is the
+        // normal case (`$XDG_CONFIG_HOME` contains `norte/`). Without this,
+        // a pane opened in the config directory served the plugin the
+        // journal, the secrets, and the connections file.
+        let denied: Vec<std::path::PathBuf> = self
             .protected
             .iter()
             .filter_map(|p| norte_vfs_local::vpath_to_native(p).ok())
             .collect();
-        // `open_verified` y no `open`: lo que se abre tiene que ser el nodo que
-        // esta función miró para decidir que era la raíz (#241).
+        // `open_verified` and not `open`: what opens has to be the node this
+        // function looked at to decide it was the root (#241).
         let root = norte_vfs_local::ConfinedRoot::open_verified(
             &root_native,
             self.bounds,
-            &vetadas,
-            esperado,
+            &denied,
+            expected,
         )
         .ok()?;
         let token = mint_token();
         self.live
             .lock()
-            .expect("live lock sano")
+            .expect("live lock is sound")
             .insert(token.clone(), std::sync::Arc::new(root));
         Some(LocationSession {
             mint: std::sync::Arc::clone(self),
@@ -3955,12 +4003,12 @@ impl LocationMint {
             .any(|root| crate::policy::is_under(root, path))
     }
 
-    /// ¿Es `dir` un techo que no se abre como ubicación de un hook (ADR
-    /// 0100)? La raíz del sistema —un `VPath` sin padre— y la casa: por
-    /// encima de `$HOME` hay sistema, y la casa entera es lo que un hook que
-    /// mira «el directorio de la mutación» no tiene por qué recibir cuando
-    /// la mutación fue un `mkdir ~/proyecto`. Lo que no es `file://` local
-    /// no es un techo: `mint_for` ya lo rehúsa por otro motivo.
+    /// Is `dir` a ceiling that is not opened as a hook's location (ADR
+    /// 0100)? The system root —a `VPath` with no parent— and the home: above
+    /// `$HOME` there is system, and the whole home is what a hook looking at
+    /// "the mutation's directory" has no reason to receive when the mutation
+    /// was a `mkdir ~/project`. What is not a local `file://` is not a
+    /// ceiling: `mint_for` already refuses it for another reason.
     pub(crate) fn is_ceiling(&self, dir: &norte_proto::VPath) -> bool {
         if dir.scheme() != "file" || dir.authority().is_some() {
             return false;
@@ -3974,26 +4022,26 @@ impl LocationMint {
         }
     }
 
-    /// El ancestro más cercano que contiene una entrada llamada `marker`, y el
-    /// camino desde él hasta `dir` en bytes. Si no hay ninguno, `dir` mismo con
-    /// prefijo vacío — nunca se sube «por si acaso».
+    /// The nearest ancestor that contains an entry named `marker`, and the
+    /// path from it to `dir` in bytes. If there is none, `dir` itself with an
+    /// empty prefix — it never climbs "just in case".
     ///
-    /// La subida se corta **en `$HOME`** (#241) y a los [`Self::MAX_CLIMB`]
-    /// niveles.
+    /// The climb is cut off **at `$HOME`** (#241) and at [`Self::MAX_CLIMB`]
+    /// levels.
     ///
-    /// El techo de `$HOME` es lo que impide que un `touch $HOME/.git` —un
-    /// archivo mal extraído, un instalador descuidado, cualquier proceso del
-    /// usuario— convierta cada directorio suyo que no sea un repositorio en
-    /// una raíz que abarca la casa entera. El marcador EN `$HOME` sí vale: el
-    /// techo es no pasar de ahí, no ignorar lo que hay ahí. Por encima de
-    /// `$HOME` no hay proyectos, hay sistema.
+    /// The `$HOME` ceiling is what stops a `touch $HOME/.git` —a badly
+    /// extracted archive, a careless installer, any process of the user's—
+    /// from turning every one of their directories that is not a repository
+    /// into a root spanning the whole home. A marker IN `$HOME` is still
+    /// valid: the ceiling is not going past it, not ignoring what is there.
+    /// Above `$HOME` there are no projects, there is system.
     ///
-    /// Antes había también un corte en la primera raíz protegida. Era código
-    /// muerto y decía hacer algo: `is_protected(p)` significa «p está bajo una
-    /// raíz protegida», y si lo está un ANCESTRO lo está también `dir`, con lo
-    /// que [`Self::mint_for`] ya devolvió `None` antes de llegar aquí. Lo que
-    /// de verdad hace falta —no entregar una raíz que CONTIENE una protegida—
-    /// lo hace la confinación con sus `vetadas` (#238).
+    /// There used to also be a cutoff at the first protected root. It was
+    /// dead code claiming to do something: `is_protected(p)` means "p is
+    /// under a protected root", and if an ANCESTOR is, so is `dir`, so
+    /// [`Self::mint_for`] already returned `None` before getting here. What
+    /// is really needed —not handing out a root that CONTAINS a protected
+    /// one— is done by the confinement with its `denied` list (#238).
     fn climb_to_marker(
         &self,
         dir: &norte_proto::VPath,
@@ -4001,54 +4049,55 @@ impl LocationMint {
         marker: &str,
     ) -> (std::path::PathBuf, Vec<u8>, Option<(u64, u64)>) {
         use std::os::unix::ffi::OsStrExt as _;
-        let casa = self.home.as_deref();
+        let home = self.home.as_deref();
         let mut prefix: Vec<Vec<u8>> = Vec::new();
-        let mut actual_v = dir.clone();
-        let mut actual_n = native.to_path_buf();
+        let mut current_v = dir.clone();
+        let mut current_n = native.to_path_buf();
         for _ in 0..=Self::MAX_CLIMB {
-            // El marcador NO puede ser un symlink (#241). Con
-            // `symlink_metadata().is_ok()` a secas valía hasta uno colgando:
-            // `ln -s /nada /tmp/.git` —y `/tmp` lo escribe cualquiera, que el
-            // sticky bit impida BORRAR nombres ajenos no impide CREAR uno—
-            // hacía que cualquier panel bajo `/tmp` le entregara al plugin
-            // todo `/tmp`. Un `.git` de verdad es un directorio, o el fichero
-            // `gitdir:` de un worktree; ninguno de los dos es un enlace, y
-            // aceptar enlaces solo compra el ataque.
-            if actual_n
+            // The marker CANNOT be a symlink (#241). With a bare
+            // `symlink_metadata().is_ok()`, even a dangling one worked: `ln
+            // -s /nothing /tmp/.git` —and anyone can write to `/tmp`, since
+            // the sticky bit stopping DELETION of others' names does not
+            // stop CREATING one— made any pane under `/tmp` hand the plugin
+            // all of `/tmp`. A real `.git` is a directory, or a worktree's
+            // `gitdir:` file; neither is a link, and accepting links only
+            // buys the attack.
+            if current_n
                 .join(marker)
                 .symlink_metadata()
                 .is_ok_and(|m| !m.file_type().is_symlink())
-                && !lo_escribe_cualquiera(&actual_n)
+                && !anyone_can_write_it(&current_n)
             {
-                // El nodo que se MIRÓ, para exigirlo al abrir: entre esta
-                // decisión y el `open` la ruta se resuelve otra vez desde `/`,
-                // siguiendo enlaces, y renombrar un componente por medio
-                // cambiaba la raíz por la que quisiera quien pudo renombrarlo
-                // (#241).
-                let id = node_id_de(&actual_n);
-                return (actual_n, prefix.join(&b'/'), id);
+                // The node that was LOOKED AT, to demand it when opening:
+                // between this decision and the `open`, the path is resolved
+                // again from `/`, following links, and renaming a component
+                // in between would swap the root for whichever one the
+                // renamer wanted (#241).
+                let id = node_id_of(&current_n);
+                return (current_n, prefix.join(&b'/'), id);
             }
-            // El techo: se mira el marcador EN `$HOME` (arriba) y de ahí no se
-            // pasa. Sin esto, `MAX_CLIMB` era el único límite y un `.git`
-            // suelto en la casa se llevaba la casa entera (#241).
-            if casa == Some(actual_n.as_path()) {
+            // The ceiling: the marker is checked IN `$HOME` (above) and
+            // nothing past it. Without this, `MAX_CLIMB` was the only limit
+            // and a loose `.git` in the home would take the whole home with
+            // it (#241).
+            if home == Some(current_n.as_path()) {
                 break;
             }
-            let Some(padre_v) = actual_v.parent() else {
+            let Some(parent_v) = current_v.parent() else {
                 break;
             };
-            let Some(padre_n) = actual_n.parent().map(std::path::Path::to_path_buf) else {
+            let Some(parent_n) = current_n.parent().map(std::path::Path::to_path_buf) else {
                 break;
             };
-            let nombre = actual_n
+            let name = current_n
                 .file_name()
                 .map(|n| n.as_bytes().to_vec())
                 .unwrap_or_default();
-            prefix.insert(0, nombre);
-            actual_v = padre_v;
-            actual_n = padre_n;
+            prefix.insert(0, name);
+            current_v = parent_v;
+            current_n = parent_n;
         }
-        (native.to_path_buf(), Vec::new(), node_id_de(native))
+        (native.to_path_buf(), Vec::new(), node_id_of(native))
     }
 
     fn resolve(
@@ -4057,44 +4106,44 @@ impl LocationMint {
     ) -> Result<std::sync::Arc<norte_vfs_local::ConfinedRoot>, String> {
         self.live
             .lock()
-            .expect("live lock sano")
+            .expect("live lock is sound")
             .get(token)
             .cloned()
-            .ok_or_else(|| "token desconocido".to_owned())
+            .ok_or_else(|| "unknown token".to_owned())
     }
 
     fn retire(&self, token: &str) {
-        self.live.lock().expect("live lock sano").remove(token);
+        self.live.lock().expect("live lock is sound").remove(token);
     }
 
-    /// Cuántos tokens siguen vivos. Un número que no sea 0 entre páginas es un
-    /// escape de sesión, así que los tests lo miran.
+    /// How many tokens are still alive. A number other than 0 between pages
+    /// is a session leak, so the tests watch it.
     #[cfg(test)]
     pub(crate) fn live_tokens(&self) -> usize {
-        self.live.lock().expect("live lock sano").len()
+        self.live.lock().expect("live lock is sound").len()
     }
 }
 
-/// El token de UNA llamada. Al soltarse, el token deja de resolver: ese es
-/// todo el mecanismo de expiración, y por eso no hay TTL que ajustar.
+/// One call's token. When dropped, the token stops resolving: that is the
+/// whole expiration mechanism, and that is why there is no TTL to tune.
 #[derive(Debug)]
 pub(crate) struct LocationSession {
     pub(crate) mint: std::sync::Arc<LocationMint>,
     token: String,
-    /// Qué parte de la raíz está mirando el usuario, en bytes y sin barra
-    /// final. Vacío = la raíz ES el directorio visible.
+    /// What part of the root the user is looking at, in bytes and with no
+    /// trailing slash. Empty = the root IS the visible directory.
     prefix: Vec<u8>,
 }
 
 impl LocationSession {
-    /// El token que se le pasa al guest. Solo lo miran los tests: el camino
-    /// real usa [`Self::as_ref`], que lleva token Y prefijo juntos.
+    /// The token passed to the guest. Only the tests look at it: the real
+    /// path uses [`Self::as_ref`], which carries token AND prefix together.
     #[cfg(test)]
     pub(crate) fn token(&self) -> &str {
         &self.token
     }
 
-    /// El par (token, prefijo) tal y como cruza al guest.
+    /// The (token, prefix) pair as it crosses to the guest.
     pub(crate) fn as_ref(&self) -> norte_plugin_host::columns_iface::LocationRef {
         norte_plugin_host::columns_iface::LocationRef {
             token: self.token.clone(),
@@ -4102,13 +4151,14 @@ impl LocationSession {
         }
     }
 
-    /// El mismo par, para un guest de PANEL (fase 3).
+    /// The same pair, for a PANEL guest (phase 3).
     ///
-    /// Un método aparte y no un genérico porque los dos tipos son distintos
-    /// aunque tengan la misma forma: `norte:panel` es otro paquete WIT, y WIT
-    /// no comparte tipos entre paquetes (ADR 0094). Lo que se comparte es la
-    /// sesión —un solo token, una sola retirada en su `Drop`—, que es lo que
-    /// de verdad importa que no se duplique.
+    /// A separate method and not a generic because the two types are
+    /// distinct even though they have the same shape: `norte:panel` is
+    /// another WIT package, and WIT does not share types between packages
+    /// (ADR 0094). What is shared is the session —a single token, a single
+    /// retirement in its `Drop`—, which is what really matters not to
+    /// duplicate.
     pub(crate) fn as_ref_panel(&self) -> norte_plugin_host::panel_iface::LocationRef {
         norte_plugin_host::panel_iface::LocationRef {
             token: self.token.clone(),
@@ -4123,12 +4173,12 @@ impl Drop for LocationSession {
     }
 }
 
-/// 32 bytes aleatorios en hex: ni adivinable ni derivable de la ruta.
+/// 32 random bytes in hex: neither guessable nor derivable from the path.
 fn mint_token() -> String {
     let mut bytes = [0u8; 32];
-    // Del CSPRNG del sistema: un token derivable de la ruta o de un contador
-    // sería adivinable desde OTRO plugin del mismo proceso.
-    getrandom::fill(&mut bytes).expect("el CSPRNG del sistema no falla");
+    // From the system's CSPRNG: a token derivable from the path or from a
+    // counter would be guessable from ANOTHER plugin in the same process.
+    getrandom::fill(&mut bytes).expect("the system's CSPRNG does not fail");
     let mut out = String::with_capacity(64);
     for b in bytes {
         use std::fmt::Write as _;
@@ -4173,66 +4223,70 @@ impl norte_plugin_host::LocationHost for LocationMint {
     }
 }
 
-/// Lo que cambia de un repintado a otro: dónde mira el panel, qué tamaño
-/// tiene, qué se guardó el guest y qué acaba de pasar.
+/// What changes from one repaint to the next: where the panel is looking,
+/// what size it has, what the guest saved, and what just happened.
 ///
-/// Juntos en una estructura y no como seis parámetros porque son UNA cosa —la
-/// llamada— y porque separados eran ocho argumentos, que es más de los que
-/// nadie lee de corrido.
+/// Together in one struct and not as six parameters because they are ONE
+/// thing —the call— and because separated they were eight arguments, which
+/// is more than anyone reads in one go.
 #[derive(Debug, Clone, Copy)]
 pub struct PanelCall<'a> {
-    /// El directorio que el panel está mirando. Es la raíz de la ubicación
-    /// TAL CUAL, no su padre (#239).
+    /// The directory the panel is looking at. It is the location's root AS
+    /// IS, not its parent (#239).
     pub dir: &'a norte_proto::VPath,
-    /// Si se puede subir buscando la marca de raíz del proyecto. Solo el
-    /// humano.
+    /// Whether it can climb looking for the project's root marker. Only the
+    /// human.
     pub climb: bool,
-    /// Cuál de los paneles del plugin se pinta.
+    /// Which of the plugin's panels is painted.
     pub kind: &'a str,
-    /// Tamaño, idioma y fila bajo el cursor.
+    /// Size, language, and the row under the cursor.
+    // NOTE(translation): field name kept as `contexto` — constructed by
+    // name in core/src/daemon/server.rs (T04) and core/src/backend/plugins.rs
+    // (T03), outside this task's scope. See phase-1 report.
     pub contexto: &'a norte_plugin_host::panel_iface::PanelContext,
-    /// Lo que el guest se guardó la última vez, opaco.
+    /// What the guest saved last time, opaque.
     pub state: &'a [u8],
-    /// Qué provocó este repintado.
+    /// What triggered this repaint.
+    // NOTE(translation): field name kept as `evento`, same cross-file reason.
     pub evento: &'a norte_plugin_host::panel_iface::PanelEvent,
 }
 
-/// Pinta el panel `kind` de un plugin YA resuelto, bloqueando.
+/// Paints an ALREADY resolved plugin's `kind` panel, blocking.
 ///
-/// La misma función para el daemon y para el backend embebido, y eso es el
-/// punto: son dos caminos hasta el mismo guest, y escribir dos veces cuándo se
-/// acuña una ubicación —o hasta cuándo vive— es la divergencia que persigue el
-/// ADR 0077. Aquí el `ntc` sin daemon y el `ntc` con daemon no pueden pintar
-/// distinto.
+/// The same function for the daemon and for the embedded backend, and that
+/// is the point: they are two paths to the same guest, and writing twice
+/// when a location is minted —or how long it lives— is the divergence ADR
+/// 0077 goes after. Here `ntc` with no daemon and `ntc` with a daemon cannot
+/// paint differently.
 ///
-/// Devuelve el id junto al marco porque el tuple ya lo traía y quien lo manda
-/// al wire lo necesita.
+/// Returns the id alongside the frame because the tuple already carried it
+/// and whoever sends it to the wire needs it.
 ///
-/// `climb` solo lo pone el HUMANO: un agente está acotado a su scope, y trepar
-/// por encima buscando la raíz del proyecto es lo que el gate de lectura
-/// impide.
+/// `climb` is only set by the HUMAN: an agent is confined to its scope, and
+/// climbing past it looking for the project's root is what the read gate
+/// prevents.
 ///
 /// # Errors
-/// Lo que diga el runtime: instanciar puede fallar y el guest puede reventar o
-/// pasarse de época. Un fallo aquí es «no hay marco», nunca una pantalla con
-/// un error — lo cosmético se degrada.
+/// Whatever the runtime says: instantiating can fail and the guest can crash
+/// or run past its epoch. A failure here is "no frame", never a screen with
+/// an error — the cosmetic degrades.
 pub fn render_panel_blocking(
     runtime: &norte_plugin_host::PluginRuntime,
-    resuelto: ResolvedPreviewer,
-    llamada: &PanelCall<'_>,
+    resolved: ResolvedPreviewer,
+    call: &PanelCall<'_>,
 ) -> Result<(String, norte_plugin_host::PanelFrame), norte_plugin_host::RuntimeError> {
     let &PanelCall {
         dir,
         climb,
         kind,
-        contexto,
+        contexto: context,
         state,
-        evento,
-    } = llamada;
-    let (id, _name, wasm, caps, settings) = resuelto;
-    // El mint de PRODUCCIÓN, que trae las raíces protegidas de la policy; sin
-    // permiso no se acuña nada y el panel se pinta con lo que el contexto le
-    // cuenta, que es una degradación honesta.
+        evento: event,
+    } = call;
+    let (id, _name, wasm, caps, settings) = resolved;
+    // The PRODUCTION mint, which brings the policy's protected roots; with
+    // no permission nothing is minted and the panel is painted with what
+    // the context tells it, which is an honest degradation.
     let mint = LocationMint::new(norte_vfs_local::Bounds::default());
     let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
         caps.location.granted().then(|| {
@@ -4240,50 +4294,49 @@ pub fn render_panel_blocking(
         });
     let mut inst = runtime.instantiate_panel(&wasm, caps.clone(), host)?;
     inst.set_settings(settings);
-    // La sesión vive lo que dura ESTA llamada y se retira sola al caer: lo que
-    // se conserva entre repintados es el estado opaco del guest, nunca el
-    // permiso de leer.
-    let sesion = caps
+    // The session lives as long as THIS call and retires itself when
+    // dropped: what is kept between repaints is the guest's opaque state,
+    // never the read permission.
+    let session = caps
         .location
         .granted()
         .then(|| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
         .flatten();
-    let refe = sesion.as_ref().map(LocationSession::as_ref_panel);
-    let marco = inst.render_panel(kind, contexto, refe.as_ref(), state, evento)?;
-    Ok((id, marco))
+    let location_ref = session.as_ref().map(LocationSession::as_ref_panel);
+    let frame = inst.render_panel(kind, context, location_ref.as_ref(), state, event)?;
+    Ok((id, frame))
 }
 
-/// El marco que devolvió el guest, en la forma del wire.
+/// The frame the guest returned, in the wire's shape.
 ///
-/// Compartida por el mismo motivo que [`render_panel_blocking`]: dos copias de
-/// esta traducción acabarían discrepando en algo pequeño —el color como tres
-/// bytes o como cadena, el estado vacío viajando o no— y la discrepancia solo
-/// se vería con un plugin delante.
+/// Shared for the same reason as [`render_panel_blocking`]: two copies of
+/// this translation would end up disagreeing on something small —color as
+/// three bytes or as a string, whether an empty state travels or not— and
+/// the discrepancy would only show up with a plugin in front of it.
 #[must_use]
 pub fn panel_frame_to_wire(
     plugin_id: String,
-    marco: norte_plugin_host::PanelFrame,
+    frame: norte_plugin_host::PanelFrame,
 ) -> norte_proto::methods::PanelFrame {
-    let lines = marco
+    let lines = frame
         .lines
         .into_iter()
-        .map(|linea| {
-            linea
-                .into_iter()
+        .map(|line| {
+            line.into_iter()
                 .map(|s| norte_proto::methods::SpanWire {
                     text: s.text,
                     role: s.role,
-                    // El MISMO tipo que una preview estilada, y con la misma
-                    // forma de color: tres bytes, no una cadena hex. Una
-                    // segunda codificación del mismo concepto es la que
-                    // alguien acaba validando distinto.
+                    // The SAME type as a styled preview, and with the same
+                    // color shape: three bytes, not a hex string. A second
+                    // encoding of the same concept is what someone ends up
+                    // validating differently.
                     fg: s.fg.map(|(r, g, b)| [r, g, b]),
                     bg: s.bg.map(|(r, g, b)| [r, g, b]),
                 })
                 .collect()
         })
         .collect();
-    let hits = marco
+    let hits = frame
         .hits
         .into_iter()
         .map(|h| norte_proto::methods::PanelHit {
@@ -4298,20 +4351,20 @@ pub fn panel_frame_to_wire(
         plugin_id,
         lines,
         hits,
-        // Los bytes tal cual: el wire los codifica y los acota por su cuenta
-        // (`panel_state_wire`). Un estado vacío no viaja.
-        state: (!marco.state.is_empty()).then_some(marco.state),
+        // The bytes as is: the wire encodes and caps them on its own
+        // (`panel_state_wire`). An empty state does not travel.
+        state: (!frame.state.is_empty()).then_some(frame.state),
     }
 }
 
-/// El evento del wire, en la forma que entiende el guest.
+/// The wire's event, in the shape the guest understands.
 ///
-/// `Refresh` Y lo que este binario no conoce, juntos a propósito: son el mismo
-/// caso. [`norte_proto::methods::PanelEvent`] es `#[non_exhaustive]` para poder
-/// crecer sin romper a nadie, así que un cliente más nuevo puede mandar una
-/// variante futura, y el destino correcto es el evento NEUTRO — el panel se
-/// repinta con lo que hay. Descartarla dejaría el hueco congelado sin decir por
-/// qué.
+/// `Refresh` AND what this binary does not know, together on purpose: they
+/// are the same case. [`norte_proto::methods::PanelEvent`] is
+/// `#[non_exhaustive]` so it can grow without breaking anyone, so a newer
+/// client can send a future variant, and the correct destination is the
+/// NEUTRAL event — the panel repaints with what is there. Discarding it
+/// would leave the slot frozen without saying why.
 #[must_use]
 pub fn panel_event_to_host(
     ev: &norte_proto::methods::PanelEvent,
@@ -4334,16 +4387,16 @@ mod panel_helpers_tests {
     use norte_plugin_host::panel_iface as pif;
     use norte_proto::methods::PanelEvent;
 
-    /// Cada evento del wire llega al guest como el suyo, y lo que este binario
-    /// no conoce llega como el NEUTRO.
+    /// Every wire event reaches the guest as its own, and what this binary
+    /// does not know reaches it as the NEUTRAL one.
     ///
-    /// La última parte es la que importa: `PanelEvent` es `#[non_exhaustive]`
-    /// para poder crecer, así que un cliente más nuevo puede mandar una
-    /// variante que este daemon no tiene. Descartarla dejaría el hueco
-    /// congelado sin decir por qué; repintar con lo que hay es la degradación
-    /// honesta. El test existe porque ese comodín se lee como un descuido.
+    /// The last part is what matters: `PanelEvent` is `#[non_exhaustive]` so
+    /// it can grow, so a newer client can send a variant this daemon does
+    /// not have. Discarding it would leave the slot frozen without saying
+    /// why; repainting with what is there is the honest degradation. The
+    /// test exists because that wildcard reads like an oversight.
     #[test]
-    fn un_evento_desconocido_se_traduce_al_neutro() {
+    fn an_unknown_event_translates_to_the_neutral_one() {
         assert!(matches!(
             super::panel_event_to_host(&PanelEvent::Click { row: 2, col: 5 }),
             pif::PanelEvent::Click(pif::Cell { row: 2, col: 5 })
@@ -4387,26 +4440,26 @@ fn meta_to_wire(meta: &norte_vfs_local::LocationMeta) -> norte_plugin_host::loca
     }
 }
 
-/// Corre `column-values` de UN plugin ya resuelto, con ubicación si se le
-/// aprobó. El ÚNICO sitio donde eso se hace: el daemon y el backend embebido
-/// llaman aquí, porque una capacidad exigida en un camino y no en el otro es
-/// el fallo que este repositorio ya se ha escrito tres veces (#165, #201,
-/// #181).
+/// Runs `column-values` of ONE already resolved plugin, with a location if it
+/// was granted one. The ONLY place where that happens: the daemon and the
+/// embedded backend call here, because a capability required on one path and
+/// not on the other is the bug this repository has already been written
+/// three times over (#165, #201, #181).
 ///
-/// Fail-closed en todos sus bordes — no instancia, trapea, rompe el contrato
-/// posicional, o la ubicación no se puede abrir: la página sale con celdas
-/// vacías, jamás un error que tumbe el listado.
+/// Fail-closed at every edge — it does not instantiate, it traps, it breaks
+/// the positional contract, or the location cannot be opened: the page comes
+/// out with empty cells, never an error that takes down the listing.
 ///
-/// BLOQUEANTE (instancia WASM y abre un directorio): va en `spawn_blocking`.
-/// [`run_column_values`] para los e2e: mismo camino exacto que el daemon y el
-/// backend embebido, expuesto porque el test que importa —el plugin oficial
-/// instalado como el de un tercero— vive fuera de este crate. Reexportar la
-/// función es preferible a que el test monte su propia versión del camino,
-/// que es como dos caminos se separan.
-/// **Solo con la feature `testing`** (#241): en la biblioteca publicada esto
-/// era un camino de acuñado SIN política —toma `location_dir` y `climb` tal
-/// cual, y el `climb` solo es del actor humano—, disponible para cualquiera
-/// que dependa de este crate.
+/// BLOCKING (instantiates WASM and opens a directory): goes in
+/// `spawn_blocking`. [`run_column_values`] for the e2e tests: the exact same
+/// path as the daemon and the embedded backend, exposed because the test
+/// that matters —the official plugin installed like a third party's— lives
+/// outside this crate. Re-exporting the function is preferable to the test
+/// building its own version of the path, which is how two paths drift apart.
+/// **Only with the `testing` feature** (#241): in the published library this
+/// was a minting path with NO policy —it takes `location_dir` and `climb` as
+/// is, and `climb` is only the human actor's—, available to anyone depending
+/// on this crate.
 #[cfg(any(test, feature = "testing"))]
 #[doc(hidden)]
 #[must_use]
@@ -4430,13 +4483,13 @@ pub fn run_column_values_for_test(
     )
 }
 
-/// Cuántos caracteres de la frase de un guest cruzan el wire (#332).
+/// How many characters of a guest's phrase cross the wire (#332).
 pub const GUEST_REASON_MAX_CHARS: usize = 200;
 
-/// La frase con la que un guest rehusó, lista para enseñarse (#332): texto
-/// de un TERCERO, así que se enmascaran los peligros de terminal (escapes,
-/// controles, bidi) y se recorta a [`GUEST_REASON_MAX_CHARS`]. El mismo
-/// criterio que `built_against` en `doctor`: nunca crudo, nunca sin tope.
+/// The phrase a guest refused with, ready to be shown (#332): THIRD-PARTY
+/// text, so terminal dangers (escapes, controls, bidi) are masked and it is
+/// cut to [`GUEST_REASON_MAX_CHARS`]. The same criterion as `built_against`
+/// in `doctor`: never raw, never uncapped.
 #[must_use]
 pub fn guest_reason(raw: &str) -> String {
     let masked = norte_encoding::mask_terminal_hazards(raw);
@@ -4448,24 +4501,24 @@ pub fn guest_reason(raw: &str) -> String {
     cut
 }
 
-/// Lo que devuelve [`run_rename_plan`]: el plan, o por qué no lo hay.
+/// What [`run_rename_plan`] returns: the plan, or why there is none.
 #[derive(Debug)]
 pub enum RenamePlanOutcome {
-    /// Los pares que el plugin propone, ya sin identidades ni nombres que no
-    /// estaban en la petición.
+    /// The pairs the plugin proposes, already stripped of identities and of
+    /// names that were not in the request.
     Plan(Vec<norte_proto::methods::AiRenameEntry>),
-    /// El guest rehusó con una frase para el lector. Texto de un tercero.
+    /// The guest refused with a phrase for the reader. Third-party text.
     Refused(String),
-    /// El guest no instanció, atrapó, o se pasó de los topes.
+    /// The guest did not instantiate, trapped, or exceeded the caps.
     Failed,
 }
 
-/// Le pide a un plugin `renamer` (C3, ADR 0095) su plan para `names` en
-/// `location_dir`, con la MISMA sesión de ubicación que una columna: se
-/// acuña aquí y muere al salir. El plan que sale es el de `ai.rename_plan`
-/// por otro productor, y lo que hace segura la operación viene después —
-/// la revisión, `fs.rename_batch_plan`, el journal—, así que aquí solo se
-/// limpia: fuera los pares de identidad y los `current` que no se pidieron.
+/// Asks a `renamer` plugin (C3, ADR 0095) for its plan for `names` in
+/// `location_dir`, with the SAME location session as a column: it is minted
+/// here and dies on exit. The plan that comes out is `ai.rename_plan`'s, by
+/// another producer, and what makes the operation safe comes afterward —the
+/// review, `fs.rename_batch_plan`, the journal—, so here it is only cleaned:
+/// out go the identity pairs and the `current`s that were not requested.
 pub fn run_rename_plan(
     runtime: &norte_plugin_host::PluginRuntime,
     resolved: ResolvedDecorator,
@@ -4475,40 +4528,40 @@ pub fn run_rename_plan(
     names: &[String],
 ) -> RenamePlanOutcome {
     let (id, _name, wasm, caps, settings) = resolved;
-    let sesion = if caps.location.granted() {
+    let session = if caps.location.granted() {
         let mint = LocationMint::new(norte_vfs_local::Bounds::default());
         location_dir.and_then(|dir| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
     } else {
         None
     };
     let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
-        sesion.as_ref().map(|s| {
+        session.as_ref().map(|s| {
             std::sync::Arc::clone(&s.mint) as std::sync::Arc<dyn norte_plugin_host::LocationHost>
         });
     let Ok(mut inst) = runtime.instantiate_renamer_with_location(&wasm, caps, host) else {
-        tracing::warn!(plugin = %id, "renamer: fallo al instanciar");
+        tracing::warn!(plugin = %id, "renamer: failed to instantiate");
         return RenamePlanOutcome::Failed;
     };
     inst.set_settings(settings);
-    let refe = sesion.as_ref().map(LocationSession::as_ref).map(|r| {
+    let location_ref = session.as_ref().map(LocationSession::as_ref).map(|r| {
         norte_plugin_host::renamer_iface::LocationRef {
             token: r.token,
             prefix: r.prefix,
         }
     });
-    let pares = match inst.plan(renamer_id, refe.as_ref(), names) {
+    let pairs = match inst.plan(renamer_id, location_ref.as_ref(), names) {
         Ok(Ok(p)) => p,
-        Ok(Err(frase)) => return RenamePlanOutcome::Refused(frase),
+        Ok(Err(reason)) => return RenamePlanOutcome::Refused(reason),
         Err(e) => {
-            tracing::warn!(plugin = %id, error = %e, "renamer: fallo al ejecutar");
+            tracing::warn!(plugin = %id, error = %e, "renamer: failed to run");
             return RenamePlanOutcome::Failed;
         }
     };
-    let pedidos: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+    let requested: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
     RenamePlanOutcome::Plan(
-        pares
+        pairs
             .into_iter()
-            .filter(|p| p.current != p.proposed && pedidos.contains(p.current.as_str()))
+            .filter(|p| p.current != p.proposed && requested.contains(p.current.as_str()))
             .map(|p| norte_proto::methods::AiRenameEntry {
                 from: p.current,
                 to: p.proposed,
@@ -4517,38 +4570,38 @@ pub fn run_rename_plan(
     )
 }
 
-/// Lo que devuelve [`run_organize_plan`] (fase 8): el plan, o por qué no lo
-/// hay.
+/// What [`run_organize_plan`] returns (phase 8): the plan, or why there is
+/// none.
 #[derive(Debug)]
 pub enum OrganizePlanOutcome {
-    /// Los movimientos que el plugin propone, ya limpios y VALIDADOS.
+    /// The moves the plugin proposes, already cleaned and VALIDATED.
     Plan(Vec<norte_proto::methods::OrganizeMove>),
-    /// El guest rehusó con una frase para el lector. Texto de un tercero.
+    /// The guest refused with a phrase for the reader. Third-party text.
     Refused(String),
-    /// El guest no instanció, atrapó, o se pasó de los topes.
+    /// The guest did not instantiate, trapped, or exceeded the caps.
     Failed,
-    /// El guest propuso un destino que se sale del directorio (un `..`, una
-    /// ruta absoluta, un segmento vacío…).
+    /// The guest proposed a destination that leaves the directory (a `..`, an
+    /// absolute path, an empty segment…).
     ///
-    /// Es un caso APARTE de [`Self::Failed`] a propósito: un plugin que
-    /// atrapa está roto, y uno que propone escribir fuera del directorio
-    /// está haciendo otra cosa. El lector merece saber cuál de las dos, y el
-    /// operador tiene la traza con el id del plugin.
+    /// It is a case SEPARATE from [`Self::Failed`] on purpose: a plugin that
+    /// traps is broken, and one that proposes writing outside the directory
+    /// is doing something else. The reader deserves to know which of the
+    /// two, and the operator has the trace with the plugin's id.
     Escapes,
 }
 
-/// Le pide a un plugin `organizer` (fase 8) su plan para `names` en
-/// `location_dir`, con la misma sesión de ubicación que un renamer.
+/// Asks an `organizer` plugin (phase 8) for its plan for `names` in
+/// `location_dir`, with the same location session as a renamer.
 ///
-/// **Aquí sí se valida el destino, y es lo que distingue este camino del del
-/// renamer.** Un renamer propone un nombre, que `Segment` ya acota; un
-/// organizer propone una RUTA, y un `..` ahí es una escritura fuera del
-/// directorio que el humano está mirando. Se comprueba con
-/// [`norte_proto::methods::validar_proposed_rel`] — la MISMA función que
-/// aplica el core al ejecutar y la misma que valida el plan de un modelo —
-/// y un solo destino malo tumba el plan entero: aplicar «lo que se pudo» de
-/// una propuesta que traía eso sería quedarse con la mitad de algo que nadie
-/// revisó.
+/// **Here the destination IS validated, and that is what distinguishes this
+/// path from the renamer's.** A renamer proposes a name, which `Segment`
+/// already caps; an organizer proposes a PATH, and a `..` there is a write
+/// outside the directory the human is looking at. It is checked with
+/// [`norte_proto::methods::validar_proposed_rel`] — the SAME function the
+/// core applies when executing and the same one that validates a model's
+/// plan — and one single bad destination brings down the whole plan:
+/// applying "what could be done" from a proposal that carried that would be
+/// keeping half of something nobody reviewed.
 pub fn run_organize_plan(
     runtime: &norte_plugin_host::PluginRuntime,
     resolved: ResolvedDecorator,
@@ -4558,54 +4611,54 @@ pub fn run_organize_plan(
     names: &[String],
 ) -> OrganizePlanOutcome {
     let (id, _name, wasm, caps, settings) = resolved;
-    let sesion = if caps.location.granted() {
+    let session = if caps.location.granted() {
         let mint = LocationMint::new(norte_vfs_local::Bounds::default());
         location_dir.and_then(|dir| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
     } else {
         None
     };
     let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
-        sesion.as_ref().map(|s| {
+        session.as_ref().map(|s| {
             std::sync::Arc::clone(&s.mint) as std::sync::Arc<dyn norte_plugin_host::LocationHost>
         });
     let Ok(mut inst) = runtime.instantiate_organizer_with_location(&wasm, caps, host) else {
-        tracing::warn!(plugin = %id, "organizer: fallo al instanciar");
+        tracing::warn!(plugin = %id, "organizer: failed to instantiate");
         return OrganizePlanOutcome::Failed;
     };
     inst.set_settings(settings);
-    let refe = sesion.as_ref().map(LocationSession::as_ref).map(|r| {
+    let location_ref = session.as_ref().map(LocationSession::as_ref).map(|r| {
         norte_plugin_host::organizer_iface::LocationRef {
             token: r.token,
             prefix: r.prefix,
         }
     });
-    let movs = match inst.plan(organizer_id, refe.as_ref(), names) {
+    let moves = match inst.plan(organizer_id, location_ref.as_ref(), names) {
         Ok(Ok(p)) => p,
-        Ok(Err(frase)) => return OrganizePlanOutcome::Refused(frase),
+        Ok(Err(reason)) => return OrganizePlanOutcome::Refused(reason),
         Err(e) => {
-            tracing::warn!(plugin = %id, error = %e, "organizer: fallo al ejecutar");
+            tracing::warn!(plugin = %id, error = %e, "organizer: failed to run");
             return OrganizePlanOutcome::Failed;
         }
     };
-    let pedidos: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
-    let mut out = Vec::with_capacity(movs.len());
-    for m in movs {
-        // Un `current` que no se pidió es un plan sobre otro directorio: se
-        // descarta en silencio, como hace el renamer.
-        if !pedidos.contains(m.current.as_str()) {
+    let requested: std::collections::HashSet<&str> = names.iter().map(String::as_str).collect();
+    let mut out = Vec::with_capacity(moves.len());
+    for m in moves {
+        // A `current` that was not requested is a plan for another
+        // directory: it is silently discarded, as the renamer does.
+        if !requested.contains(m.current.as_str()) {
             continue;
         }
-        // Un destino que se sale NO se descarta en silencio: tumba el plan y
-        // se dice. Descartarlo dejaría al lector revisando una propuesta a la
-        // que le faltan filas sin saber por qué.
+        // A destination that escapes is NOT silently discarded: it brings
+        // down the plan and is reported. Discarding it would leave the
+        // reader looking at a proposal missing rows with no idea why.
         if norte_proto::methods::validar_proposed_rel(&m.proposed_rel).is_err() {
             tracing::warn!(
                 plugin = %id,
-                "organizer: propuso un destino fuera del directorio; se rechaza el plan entero"
+                "organizer: proposed a destination outside the directory; the whole plan is rejected"
             );
             return OrganizePlanOutcome::Escapes;
         }
-        // Un movimiento a donde ya está no es un movimiento.
+        // A move to where it already is is not a move.
         if m.proposed_rel == m.current {
             continue;
         }
@@ -4627,122 +4680,122 @@ pub(crate) fn run_column_values(
     expected_len: usize,
 ) -> Vec<Option<String>> {
     let (id, _name, wasm, caps, settings) = resolved;
-    // La sesión vive hasta el final de esta función y ni un instante más: al
-    // soltarse, el token deja de resolver.
-    let sesion = if caps.location.granted() {
+    // The session lives until the end of this function and not an instant
+    // longer: when dropped, the token stops resolving.
+    let session = if caps.location.granted() {
         let mint = LocationMint::new(norte_vfs_local::Bounds::default());
         location_dir.and_then(|dir| mint.mint_for(dir, caps.location_root_marker.as_deref(), climb))
     } else {
         None
     };
     let host: Option<std::sync::Arc<dyn norte_plugin_host::LocationHost>> =
-        sesion.as_ref().map(|s| {
+        session.as_ref().map(|s| {
             std::sync::Arc::clone(&s.mint) as std::sync::Arc<dyn norte_plugin_host::LocationHost>
         });
     let Ok(mut inst) = runtime.instantiate_columns_with_location(&wasm, caps, host) else {
-        tracing::warn!(plugin = %id, "columns: fallo al instanciar, celdas vacías");
+        tracing::warn!(plugin = %id, "columns: failed to instantiate, empty cells");
         return vec![None; expected_len];
     };
     inst.set_settings(settings);
-    let refe = sesion.as_ref().map(LocationSession::as_ref);
-    let Ok(raw) = inst.column_values(column_id, refe.as_ref(), entries) else {
-        tracing::warn!(plugin = %id, "columns: fallo al ejecutar, celdas vacías");
+    let location_ref = session.as_ref().map(LocationSession::as_ref);
+    let Ok(raw) = inst.column_values(column_id, location_ref.as_ref(), entries) else {
+        tracing::warn!(plugin = %id, "columns: failed to run, empty cells");
         return vec![None; expected_len];
     };
     column_values_checked(raw, expected_len).unwrap_or_else(|| {
         tracing::warn!(
             plugin = %id,
-            "columns: longitud no casa el contrato posicional, celdas vacías"
+            "columns: length does not match the positional contract, empty cells"
         );
         vec![None; expected_len]
     })
 }
 
-/// Cuántas instancias vivas se retienen a la vez. Ocho porque una página son
-/// dos paneles y unas pocas columnas: por encima de eso lo que se retiene es
-/// memoria de directorios que ya nadie mira.
+/// How many live instances are kept at once. Eight because a page is two
+/// panels and a few columns: above that, what is kept is memory for
+/// directories nobody is looking at anymore.
 const POOL_MAX: usize = 8;
 
-/// Cuánto sobrevive una instancia sin usarse. Un minuto es "el lector sigue
-/// paginando por aquí"; más allá, quien vuelve prefiere no estar pagando la
-/// memoria del guest de un directorio que dejó atrás.
+/// How long an instance survives unused. One minute is "the reader is still
+/// paging around here"; past that, whoever comes back would rather not be
+/// paying for the guest's memory for a directory they left behind.
 const POOL_TTL: std::time::Duration = std::time::Duration::from_mins(1);
 
-/// Una instancia de columnas VIVA, con lo que hace falta para saber si sigue
-/// sirviendo.
+/// A LIVE columns instance, with what is needed to know whether it is still
+/// serving.
 struct EnPool {
-    /// `(id del plugin, wasm, ubicación en wire)`. La ubicación entra en la
-    /// clave porque es lo que el guest cachea dentro: un `.git/index` parseado
-    /// no vale para otro proyecto.
-    // El artefacto lleva la huella aprobada (ADR 0142): una instancia del
-    // pool no sirve a un binario aprobado de nuevo.
-    clave: (String, norte_plugin_host::WasmArtifact, String),
-    /// Los permisos con los que se instanció. Si el catálogo resuelve otros
-    /// —un consentimiento retirado, un manifiesto reinstalado— la instancia se
-    /// TIRA: reutilizarla sería correr con permisos que ya nadie concede.
+    /// `(plugin id, wasm, location on the wire)`. The location goes into the
+    /// key because it is what the guest caches inside: a parsed
+    /// `.git/index` is worthless for another project.
+    // The artifact carries the approved fingerprint (ADR 0142): a pool
+    // instance does not serve a newly approved binary.
+    key: (String, norte_plugin_host::WasmArtifact, String),
+    /// The permissions it was instantiated with. If the catalog resolves
+    /// different ones —a withdrawn consent, a reinstalled manifest— the
+    /// instance is DISCARDED: reusing it would mean running with permissions
+    /// nobody grants anymore.
     caps: norte_plugin_host::Capabilities,
-    /// Quién resuelve los tokens de esta instancia. Sobrevive a la llamada; lo
-    /// que no sobrevive es la SESIÓN, que se acuña y se suelta en cada una.
+    /// Who resolves this instance's tokens. Survives the call; what does not
+    /// survive is the SESSION, minted and dropped on every one.
     mint: std::sync::Arc<LocationMint>,
     inst: norte_plugin_host::ColumnsInstance,
-    ultima: std::time::Instant,
+    last_used: std::time::Instant,
 }
 
-/// Instancias de columnas reutilizadas entre páginas (#224).
+/// Columns instances reused across pages (#224).
 ///
-/// El coste medido de una página de veinte filas sobre un índice git de dos
-/// mil entradas era **167 ms**, con el componente WASM instanciado y el
-/// `.git/index` parseado desde cero en cada llamada. Nada de eso es trabajo
-/// que cambie entre la página 1 y la página 2 del mismo directorio.
+/// The measured cost of a twenty-row page over a two-thousand-entry git index
+/// was **167 ms**, with the WASM component instantiated and `.git/index`
+/// parsed from scratch on every call. None of that is work that changes
+/// between page 1 and page 2 of the same directory.
 ///
-/// **Lo que el pool compra no es solo reloj.** La frescura es deliberadamente
-/// problema del guest (el host no puede saber de qué depende su respuesta), y
-/// un guest que no sobrevive a la llamada no puede cachear NADA: sin pool, esa
-/// caché no está sin usar, está prohibida.
+/// **What the pool buys is not just wall clock.** Freshness is deliberately
+/// the guest's problem (the host cannot know what its answer depends on),
+/// and a guest that does not survive the call cannot cache ANYTHING: without
+/// a pool, that cache is not merely unused, it is forbidden.
 ///
-/// Vive aquí, al lado de `run_column_values` —privada, así que sin enlace—,
-/// porque hacen falta los dos
-/// caminos: el daemon lo cuelga de su estado compartido y el backend embebido
-/// del suyo. Uno sí y el otro no recrearía justo la asimetría de #165/#201/#181.
+/// Lives here, next to `run_column_values` —private, so no link—, because
+/// both paths need it: the daemon hangs it off its shared state and the
+/// embedded backend off its own. Recreating it for one and not the other is
+/// exactly the #165/#201/#181 asymmetry.
 ///
-/// **Lo que el pool NO retiene es un token vivo.** La sesión de ubicación se
-/// acuña al empezar cada llamada y se suelta al acabarla —su `Drop` la retira
-/// del acuñador—, así que entre página y página la instancia guardada tiene un
-/// `LocationHost` que no resuelve nada.
+/// **What the pool does NOT keep is a live token.** The location session is
+/// minted at the start of each call and dropped at its end —its `Drop`
+/// retires it from the minter—, so between page and page the stored instance
+/// has a `LocationHost` that resolves nothing.
 #[derive(Default)]
 pub struct ColumnPool {
-    /// Más reciente al final. Ocho como mucho, así que un `Vec` con búsqueda
-    /// lineal es más rápido —y mucho más fácil de leer— que un mapa con orden
-    /// de uso al lado.
-    vivas: std::sync::Mutex<Vec<EnPool>>,
-    /// Cuántas llamadas encontraron su instancia ya viva.
+    /// Most recent last. Eight at most, so a `Vec` with linear search is
+    /// faster —and much easier to read— than a map with usage order on the
+    /// side.
+    live: std::sync::Mutex<Vec<EnPool>>,
+    /// How many calls found their instance already alive.
     ///
-    /// Es lo que hace TESTEABLE el pool sin cronómetro: que la segunda página
-    /// tarde menos es el síntoma, y un síntoma medido en milisegundos se pone
-    /// rojo el día que la máquina va cargada. Que la instancia se reutilizó es
-    /// el hecho, y es determinista.
+    /// This is what makes the pool TESTABLE without a stopwatch: that the
+    /// second page takes less time is the symptom, and a symptom measured in
+    /// milliseconds turns red the day the machine is under load. That the
+    /// instance was reused is the fact, and it is deterministic.
     reutilizadas: std::sync::atomic::AtomicU64,
 }
 
 impl std::fmt::Debug for ColumnPool {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // A mano y no derivado porque una `ColumnsInstance` no tiene `Debug`
-        // útil (su `Store` de wasmtime no lo tiene), así que lo que se imprime
-        // es CUÁNTAS hay, no cuáles.
-        let n = self.vivas.lock().map_or(0, |v| v.len());
+        // By hand and not derived because a `ColumnsInstance` has no useful
+        // `Debug` (its wasmtime `Store` does not have one), so what is
+        // printed is HOW MANY there are, not which ones.
+        let n = self.live.lock().map_or(0, |v| v.len());
         f.debug_struct("ColumnPool")
-            .field("vivas", &n)
+            .field("live", &n)
             .field("reutilizadas", &self.reutilizadas)
             .finish()
     }
 }
 
 impl ColumnPool {
-    /// Los valores de la columna, reutilizando la instancia de esta
-    /// `(plugin, ubicación)` si sigue viva y con los mismos permisos.
+    /// The column's values, reusing this `(plugin, location)`'s instance if
+    /// it is still alive and with the same permissions.
     ///
-    /// Cuántas llamadas encontraron su instancia viva. Ver
-    /// [`Self::reutilizadas`].
+    /// How many calls found their instance alive. See [`Self::reutilizadas`].
     #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     #[must_use]
@@ -4750,16 +4803,16 @@ impl ColumnPool {
         self.reutilizadas.load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// [`Self::column_values`] para los e2e, por el mismo motivo y con la misma
-    /// advertencia que [`run_column_values_for_test`]: el test que importa vive
-    /// fuera de este crate, y montar ahí una versión propia del camino es como
-    /// dos caminos se separan.
+    /// [`Self::column_values`] for the e2e tests, for the same reason and
+    /// with the same caveat as [`run_column_values_for_test`]: the test that
+    /// matters lives outside this crate, and building its own version of the
+    /// path there is how two paths drift apart.
     #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
-        reason = "la MISMA lista que `run_column_values`, y a propósito"
+        reason = "the SAME list as `run_column_values`, on purpose"
     )]
     pub fn column_values_for_test(
         &self,
@@ -4782,12 +4835,13 @@ impl ColumnPool {
         )
     }
 
-    /// Mismo contrato que `run_column_values` hasta en la degradación: lo
-    /// que no se puede hacer sale como celdas vacías, jamás como un error que
-    /// tumbe el listado. Y BLOQUEANTE igual: va en `spawn_blocking`.
+    /// The same contract as `run_column_values`, down to the degradation:
+    /// what cannot be done comes out as empty cells, never as an error that
+    /// takes down the listing. And equally BLOCKING: it goes in
+    /// `spawn_blocking`.
     #[expect(
         clippy::too_many_arguments,
-        reason = "la MISMA lista que `run_column_values`, y a propósito"
+        reason = "the SAME list as `run_column_values`, on purpose"
     )]
     pub(crate) fn column_values(
         &self,
@@ -4800,17 +4854,17 @@ impl ColumnPool {
         expected_len: usize,
     ) -> Vec<Option<String>> {
         let (id, name, wasm, caps, settings) = resolved;
-        let clave = (
+        let key = (
             id.clone(),
             wasm.clone(),
             location_dir
                 .map(norte_proto::VPath::to_wire)
                 .unwrap_or_default(),
         );
-        let Ok(mut vivas) = self.vivas.lock() else {
-            // El mutex envenenado no es motivo para dejar sin columnas a nadie:
-            // se cae al camino sin pool, que es el de siempre.
-            tracing::warn!("columns: pool envenenado, se instancia sin reutilizar");
+        let Ok(mut live) = self.live.lock() else {
+            // A poisoned mutex is no reason to leave everyone without
+            // columns: it falls back to the no-pool path, the usual one.
+            tracing::warn!("columns: poisoned pool, instantiating without reuse");
             return run_column_values(
                 runtime,
                 (id, name, wasm, caps, settings),
@@ -4821,18 +4875,19 @@ impl ColumnPool {
                 expected_len,
             );
         };
-        let ahora = std::time::Instant::now();
-        vivas.retain(|e| ahora.duration_since(e.ultima) < POOL_TTL);
-        let hallada = vivas
+        let now = std::time::Instant::now();
+        live.retain(|e| now.duration_since(e.last_used) < POOL_TTL);
+        let found = live
             .iter()
-            .position(|e| e.clave == clave && e.caps == caps)
-            .map(|i| vivas.remove(i));
-        // La instancia sale del pool mientras se usa: el mutex se suelta antes
-        // de entrar al guest, que es la llamada larga, y dos páginas del mismo
-        // directorio a la vez instancian por separado en vez de serializarse.
-        drop(vivas);
+            .position(|e| e.key == key && e.caps == caps)
+            .map(|i| live.remove(i));
+        // The instance leaves the pool while it is used: the mutex is
+        // released before entering the guest, which is the long call, and
+        // two pages of the same directory at once instantiate separately
+        // instead of serializing.
+        drop(live);
 
-        let mut entrada = if let Some(e) = hallada {
+        let mut entry = if let Some(e) = found {
             self.reutilizadas
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             e
@@ -4847,61 +4902,62 @@ impl ColumnPool {
                 };
             let Ok(inst) = runtime.instantiate_columns_with_location(&wasm, caps.clone(), host)
             else {
-                tracing::warn!(plugin = %id, "columns: fallo al instanciar, celdas vacías");
+                tracing::warn!(plugin = %id, "columns: failed to instantiate, empty cells");
                 return vec![None; expected_len];
             };
             EnPool {
-                clave,
+                key,
                 caps,
                 mint,
                 inst,
-                ultima: ahora,
+                last_used: now,
             }
         };
 
-        // La sesión se acuña AQUÍ y muere al final de esta función, la use una
-        // instancia nueva o una reutilizada: lo que se retiene entre páginas es
-        // el guest y su memoria, nunca el permiso de leer.
-        let sesion = if entrada.caps.location.granted() {
+        // The session is minted HERE and dies at the end of this function,
+        // whether a new or a reused instance uses it: what is kept between
+        // pages is the guest and its memory, never the read permission.
+        let session = if entry.caps.location.granted() {
             location_dir.and_then(|dir| {
-                entrada
+                entry
                     .mint
-                    .mint_for(dir, entrada.caps.location_root_marker.as_deref(), climb)
+                    .mint_for(dir, entry.caps.location_root_marker.as_deref(), climb)
             })
         } else {
             None
         };
-        entrada.inst.set_settings(settings);
-        let refe = sesion.as_ref().map(LocationSession::as_ref);
-        let salida = entrada
+        entry.inst.set_settings(settings);
+        let location_ref = session.as_ref().map(LocationSession::as_ref);
+        let output = entry
             .inst
-            .column_values(column_id, refe.as_ref(), entries);
-        drop(sesion);
+            .column_values(column_id, location_ref.as_ref(), entries);
+        drop(session);
 
-        let raw = match salida {
+        let raw = match output {
             Ok(raw) => raw,
             Err(e) => {
-                // Una instancia que falló NO vuelve al pool: un guest que
-                // atrapó puede haber dejado su memoria lineal a medias, y
-                // reutilizarla es servir esa mitad en la página siguiente.
-                tracing::warn!(plugin = %id, error = %e, "columns: fallo al ejecutar, celdas vacías");
+                // A failed instance does NOT go back to the pool: a guest
+                // that trapped may have left its linear memory half done,
+                // and reusing it would mean serving that half on the next
+                // page.
+                tracing::warn!(plugin = %id, error = %e, "columns: failed to run, empty cells");
                 return vec![None; expected_len];
             }
         };
-        entrada.ultima = std::time::Instant::now();
-        if let Ok(mut vivas) = self.vivas.lock() {
-            vivas.push(entrada);
-            // Por arriba caen las MÁS VIEJAS, que es lo que hace de esto una
-            // LRU: cada uso vuelve a poner la suya al final.
-            if vivas.len() > POOL_MAX {
-                let sobran = vivas.len() - POOL_MAX;
-                vivas.drain(..sobran);
+        entry.last_used = std::time::Instant::now();
+        if let Ok(mut live) = self.live.lock() {
+            live.push(entry);
+            // The OLDEST fall off the top, which is what makes this an
+            // LRU: every use puts its own back at the end.
+            if live.len() > POOL_MAX {
+                let excess = live.len() - POOL_MAX;
+                live.drain(..excess);
             }
         }
         column_values_checked(raw, expected_len).unwrap_or_else(|| {
             tracing::warn!(
                 plugin = %id,
-                "columns: longitud no casa el contrato posicional, celdas vacías"
+                "columns: length does not match the positional contract, empty cells"
             );
             vec![None; expected_len]
         })

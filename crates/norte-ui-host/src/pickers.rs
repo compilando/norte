@@ -1,20 +1,21 @@
-//! El tema y el selector de volúmenes.
+//! The theme and the volumes picker.
 //!
-//! Dos superficies pequeñas y una sola idea: enseñar lo que hay sin poder
-//! tocarlo todavía.
+//! Two small surfaces and a single idea: show what is there without being
+//! able to touch it yet.
 //!
-//! - El **tema** se ve por dentro: qué color tiene cada ROL, que es lo que un
-//!   tema de norte nombra de verdad, y qué efectos declara que esta ventana
-//!   no sabe pintar. Decirlo es la mitad del contrato: un tema retro que no
-//!   se ve distinto es un tema que el usuario cree roto.
-//! - Los **volúmenes** se eligen y se navega a ellos, que es lectura.
+//! - The **theme** is seen from the inside: what color each ROLE has, which
+//!   is what a norte theme really names, and what effects it declares that
+//!   this window does not know how to paint. Saying so is half the contract:
+//!   a retro theme that does not look different is a theme the user believes
+//!   is broken.
+//! - **Volumes** are chosen and navigated to, which is reading.
 //!
-//! El selector de CONEXIONES que la tarea 4.5 nombra a su lado no está, y la
-//! ausencia es una decisión: leer `connections.toml` obliga a meter
-//! `norte-connect` —con russh, opendal, suppaftp, age y el llavero— en esta
-//! ventana, para una lista que todavía no puede abrir ninguna conexión.
-//! Llega con la fase 5, que necesita ese crate de todas formas; hasta
-//! entonces `pane.connect` contesta «aquí no», que es verdad.
+//! The CONNECTIONS picker that task 4.5 names alongside these is not here,
+//! and the absence is a decision: reading `connections.toml` would force
+//! pulling `norte-connect` — with russh, opendal, suppaftp, age and the
+//! keyring — into this window, for a list that still cannot open a single
+//! connection. It arrives with phase 5, which needs that crate anyway; until
+//! then `pane.connect` answers "not here", which is true.
 
 use norte_i18n::Lang;
 use norte_proto::VPath;
@@ -22,24 +23,25 @@ use norte_proto::VPath;
 use crate::bridge::clamp_display;
 use crate::dto::{PickerRowView, PickerView, ThemeRoleView, ThemeView};
 
-/// Las claves de `[effects]` que la ventana interpreta (spec 2026-09-11,
-/// V6). Todo lo demás se enseña en la vista del tema como «sin soporte».
-pub const EFECTOS_DE_LA_VENTANA: &[&str] = &["backdrop"];
+/// The `[effects]` keys the window interprets (spec 2026-09-11, V6). Everything
+/// else is shown in the theme view as "unsupported".
+pub const WINDOW_EFFECTS: &[&str] = &["backdrop"];
 
-/// La CORRESPONDENCIA: nombre de variable CSS, rol que lo llena, y si toma
-/// el fondo (`true`) o el frente (`false`) de ese rol.
+/// The MAPPING: CSS variable name, the role that fills it, and whether it
+/// takes that role's background (`true`) or foreground (`false`).
 ///
-/// Es una tabla y no una secuencia de llamadas porque hacen falta las dos
-/// preguntas por separado, y antes se respondían a la vez: **qué nombres
-/// existen** (independiente de todo tema, ver [`nombres_de_tema`]) y **qué
-/// colores tiene ESTE tema** (ver [`roles_de_tema`], que omite lo que el tema
-/// calla). Mezcladas, un tema que no define un rol hacía desaparecer su
-/// nombre de la lista, y el guardián de variables huérfanas del renderer leía
-/// esa ausencia como «nadie alimenta esa variable».
+/// It is a table and not a sequence of calls because two separate questions
+/// are needed, and they used to be answered together: **which names exist**
+/// (independent of any theme, see [`nombres_de_tema`]) and **what colors THIS
+/// theme has** (see [`roles_de_tema`], which omits what the theme leaves
+/// unsaid). Mixed together, a theme that did not define a role made its name
+/// disappear from the list, and the renderer's orphaned-variable guard read
+/// that absence as "nobody feeds that variable".
 ///
-/// Un rol puede aparecer DOS veces, una por lado: `Role::Selection` llena
-/// `selection-bg` y `selection-fg`, y el terminal lo usa como estilo entero.
-const CORRESPONDENCIA: &[(&str, norte_theme::Role, bool)] = {
+/// A role can appear TWICE, once per side: `Role::Selection` fills
+/// `selection-bg` and `selection-fg`, and the terminal uses it as a whole
+/// style.
+const CSS_VARIABLE_MAP: &[(&str, norte_theme::Role, bool)] = {
     use norte_theme::Role;
     &[
         ("bg", Role::Background, true),
@@ -50,8 +52,8 @@ const CORRESPONDENCIA: &[(&str, norte_theme::Role, bool)] = {
         ("border-focus", Role::BorderFocus, false),
         ("selection-bg", Role::Selection, true),
         ("selection-fg", Role::Selection, false),
-        // El cursor del panel SIN foco y los botones de diálogo (spec
-        // 2026-09-10): dos roles nuevos, dos parejas nuevas.
+        // The UNFOCUSED pane's cursor and the dialog buttons (spec
+        // 2026-09-10): two new roles, two new pairs.
         ("selection-unfocused-bg", Role::SelectionUnfocused, true),
         ("selection-unfocused-fg", Role::SelectionUnfocused, false),
         ("button-bg", Role::Button, true),
@@ -59,27 +61,28 @@ const CORRESPONDENCIA: &[(&str, norte_theme::Role, bool)] = {
         ("mark-bg", Role::Mark, true),
         ("hostile-fg", Role::HostileBadge, false),
         ("status-bg", Role::StatusBar, true),
-        // Y su primer plano. Faltaba, y `Role::StatusBar` es una PAREJA: el
-        // terminal lo usa como estilo entero. Mandando solo el fondo, todo lo
-        // que la ventana pinte encima tiene que adivinar el texto — la
-        // cabecera del visor adivinaba `title-fg`, y con un tema cuya barra de
-        // estado es clara eso es claro sobre claro: la ruta, el encoding, el
-        // EOL y las pérdidas salían INVISIBLES. Un visor que no dice qué mira
-        // miente por omisión.
+        // And its foreground. It was missing, and `Role::StatusBar` is a
+        // PAIR: the terminal uses it as a whole style. Sending only the
+        // background, everything the window paints on top has to guess the
+        // text — the viewer's header used to guess `title-fg`, and with a
+        // theme whose status bar is light that is light on light: the path,
+        // the encoding, the EOL and the losses came out INVISIBLE. A viewer
+        // that does not say what it is looking at lies by omission.
         ("status-fg", Role::StatusBar, false),
         ("title-fg", Role::Title, false),
         ("error-fg", Role::Error, false),
-        // Los dos roles que una DECORACIÓN de plugin puede pedir además de
-        // `error`. Sin ellos, una insignia `warning` caía al color del título
-        // y era indistinguible de una `info`: el rol es vocabulario cerrado
-        // justamente para que signifique algo en pantalla.
+        // The two roles a plugin DECORATION can ask for besides `error`.
+        // Without them, a `warning` badge fell back to the title's color and
+        // was indistinguishable from an `info` one: the role is a closed
+        // vocabulary precisely so it means something on screen.
         ("warning-fg", Role::Warning, false),
         ("info-fg", Role::Info, false),
-        // El cromo de la ventana (spec 2026-09-11, F2). Los diez NO están en
-        // `Role::CORE`, así que un tema puede callarlos —y los ocho presets
-        // de siempre los callan— y entonces la hoja de estilos los DERIVA de
-        // un color que el tema sí tiene: `var(--hover, var(--panel-focus-bg))`.
-        // Por eso su nombre existe aquí aunque su color no llegue.
+        // The window's chrome (spec 2026-09-11, F2). These ten are NOT in
+        // `Role::CORE`, so a theme can leave them unsaid — and the eight
+        // long-standing presets do — and then the style sheet DERIVES them
+        // from a color the theme does have:
+        // `var(--hover, var(--panel-focus-bg))`. That is why its name
+        // exists here even when its color does not arrive.
         ("hover", Role::Hover, true),
         ("input-bg", Role::InputBackground, true),
         ("input-border", Role::InputBorder, false),
@@ -91,211 +94,213 @@ const CORRESPONDENCIA: &[(&str, norte_theme::Role, bool)] = {
         ("separator", Role::Separator, false),
         ("focus-border", Role::FocusBorder, false),
         ("muted", Role::Muted, false),
-        // El pijama del listado (spec 2026-09-20). Solo FONDO: el color del
-        // nombre lo sigue poniendo `[files.ext]`, y una banda que además
-        // recolorease el nombre taparía de qué CLASE es el fichero.
+        // The listing's striped rows (spec 2026-09-20). BACKGROUND only: the
+        // name's color is still set by `[files.ext]`, and a stripe that also
+        // recolored the name would hide what CLASS the file is.
         ("stripe-bg", Role::Stripe, true),
     ]
 };
 
-/// Los nombres de variable CSS que la ventana conoce, existan o no en un tema
-/// concreto. Es el ACUERDO con `style.css`, y lo comprueba el guardián de
-/// variables huérfanas del renderer (`tests/variables_de_tema.rs`).
+/// The CSS variable names the window knows, whether or not they exist in a
+/// given theme. This is the AGREEMENT with `style.css`, and the renderer's
+/// orphaned-variable guard checks it (`tests/variables_de_tema.rs`).
 #[must_use]
 pub fn nombres_de_tema() -> Vec<&'static str> {
-    CORRESPONDENCIA.iter().map(|(n, _, _)| *n).collect()
+    CSS_VARIABLE_MAP.iter().map(|(n, _, _)| *n).collect()
 }
 
-/// Los roles del tema con su color, en el orden en que se nombran. Un rol que
-/// el tema NO define se omite: la hoja de estilos lo deriva (ver la tabla
-/// `CORRESPONDENCIA` de este módulo), y mandar un color inventado desde aquí
-/// le quitaría esa posibilidad.
+/// The theme's roles with their color, in the order they are named. A role
+/// the theme does NOT define is omitted: the style sheet derives it (see this
+/// module's `CSS_VARIABLE_MAP` table), and sending a made-up color from here
+/// would take away that possibility.
 ///
-/// La correspondencia es EXPLÍCITA y no automática: una variable de la hoja
-/// de estilos que nadie alimenta se ve (queda el valor por defecto), pero un
-/// volcado automático de `Role` convertiría cada rol nuevo en una variable que
-/// nadie usa y cada rename en un color que desaparece sin ruido.
+/// The mapping is EXPLICIT and not automatic: a style sheet variable nobody
+/// feeds is still visible (the default value stays), but an automatic dump of
+/// `Role` would turn every new role into a variable nobody uses and every
+/// rename into a color that disappears without a sound.
 ///
-/// Vive AQUÍ y no en quien hospeda, aunque los nombres sean los de sus
-/// variables CSS, por una razón concreta: desde que el selector de tema elige,
-/// el host tiene que resolver por nombre un tema que nadie le ha pasado, y
-/// dos listas —una para pintar y otra para enseñar— es exactamente lo que el
-/// comentario original decía que no podía pasar. Quien hospeda la consume.
+/// Lives HERE and not in whoever hosts it, even though the names are its CSS
+/// variables', for a specific reason: since the theme picker chooses, the
+/// host has to resolve by name a theme nobody handed it, and two lists — one
+/// to paint and another to show — is exactly what the original comment said
+/// could not happen. Whoever hosts it consumes this.
 #[must_use]
 pub fn roles_de_tema(theme: &norte_theme::Theme) -> Vec<(String, String)> {
-    CORRESPONDENCIA
+    CSS_VARIABLE_MAP
         .iter()
-        .filter_map(|&(nombre, role, fondo)| {
+        .filter_map(|&(name, role, background)| {
             let style = theme.style(role);
-            let color = if fondo { style.bg } else { style.fg };
-            color.map(|c| (nombre.to_owned(), c.to_hex()))
+            let color = if background { style.bg } else { style.fg };
+            color.map(|c| (name.to_owned(), c.to_hex()))
         })
         .collect()
 }
 
-/// El tema que esta ventana tiene puesto.
+/// The theme this window currently has set.
 ///
-/// La correspondencia rol → color es [`roles_de_tema`], la misma que alimenta
-/// las variables CSS de quien hospeda: lo que se ve en esta pantalla es lo que
-/// pinta.
+/// The role → color mapping is [`roles_de_tema`], the same one that feeds the
+/// CSS variables of whoever hosts it: what is seen on this screen is what it
+/// paints.
 #[derive(Debug, Clone, Default)]
 pub struct HostTheme {
-    /// Cómo se llama.
+    /// What it is called.
     pub name: String,
-    /// Cada rol con su color `#rrggbb`, en el orden en que se declaran.
+    /// Each role with its `#rrggbb` color, in declaration order.
     pub roles: Vec<(String, String)>,
-    /// Los efectos que el tema declara. TODOS son «no soportados» hoy: este
-    /// renderer es una webview y no interpreta ninguno.
+    /// The effects the theme declares. ALL are "unsupported" today: this
+    /// renderer is a webview and does not interpret any of them.
     pub effects: Vec<String>,
-    /// El tema ENTERO, no solo sus roles.
+    /// The WHOLE theme, not just its roles.
     ///
-    /// Hace falta porque `[files.kind]` y `[files.ext]` no se pueden proyectar
-    /// como variables CSS: los roles son un conjunto CERRADO y las extensiones
-    /// son ABIERTO —un tema puede colorear `.rs`, `.parquet` o lo que le
-    /// apetezca—, así que no hay lista de nombres que declarar por adelantado.
-    /// El color de UNA entrada se resuelve aquí, contra los bytes de su
-    /// nombre, y viaja en su fila; que es lo que el terminal hace desde
-    /// siempre (`norte_tui::theme`).
+    /// Needed because `[files.kind]` and `[files.ext]` cannot be projected as
+    /// CSS variables: roles are a CLOSED set and extensions are OPEN — a
+    /// theme can color `.rs`, `.parquet` or whatever it feels like — so there
+    /// is no list of names to declare ahead of time. ONE entry's color is
+    /// resolved here, against its name's bytes, and travels in its row; which
+    /// is what the terminal has always done (`norte_tui::theme`).
     pub resuelto: norte_theme::Theme,
-    /// La variante de `[ui] theme_light`, ya resuelta, si la hay.
+    /// The `[ui] theme_light` variant, already resolved, if there is one.
     ///
-    /// Las variantes existen desde V6 y hasta ahora solo viajaban como
-    /// VARIABLES CSS, que el renderer enchufa según `prefers-color-scheme`.
-    /// Con el color de las entradas cocido en la fila (puente 66) eso deja de
-    /// bastar: el host tiene que resolver contra la MISMA variante que el
-    /// renderer está pintando, o la mitad de la pantalla sale del otro tema.
-    /// En `Box` porque `HostTheme` viaja DENTRO del futuro de arranque, y dos
-    /// `Theme` inline lo cruzaban el umbral de `clippy::large_futures` — que
-    /// no es capricho del lint: ese futuro se mueve entero entre `await`s.
-    /// Son datos fríos, se leen una vez por fila.
+    /// Variants have existed since V6 and until now only traveled as CSS
+    /// VARIABLES, which the renderer plugs in according to
+    /// `prefers-color-scheme`. With entries' colors baked into the row
+    /// (bridge 66) that stops being enough: the host has to resolve against
+    /// the SAME variant the renderer is painting, or half the screen comes
+    /// out in the other theme. In a `Box` because `HostTheme` travels INSIDE
+    /// the startup future, and two inline `Theme`s crossed
+    /// `clippy::large_futures`'s threshold — which is not the lint being
+    /// fussy: that future moves whole between `await`s. This is cold data,
+    /// read once per row.
     pub variante_clara: Option<Box<norte_theme::Theme>>,
-    /// La de `[ui] theme_dark`. Ver [`HostTheme::variante_clara`].
+    /// The `[ui] theme_dark` one. See [`HostTheme::variante_clara`].
     pub variante_oscura: Option<Box<norte_theme::Theme>>,
 }
 
-/// Cómo pinta el TEMA el nombre de una entrada (`[files.ext]`, que gana, o
+/// How the THEME paints an entry's name (`[files.ext]`, which wins, or
 /// `[files.kind]`).
 ///
-/// Todo a cero = el tema no dice nada de ella. Son los cuatro atributos que
-/// una webview sabe pintar; ver [`HostTheme::estilo_de_entrada`] para por qué
-/// `bg` y `reverse` no están.
-// Cuatro banderas INDEPENDIENTES de estilo de terminal, no un enum ni flags
-// empaquetadas: son un subconjunto literal de `norte_theme::Style`, que lleva
-// este mismo `expect` por la misma razón. Empaquetarlas aquí obligaría a
-// desempaquetarlas en la frontera del wire, que es donde vuelven a ser cuatro.
+/// All zero = the theme says nothing about it. These are the four attributes
+/// a webview knows how to paint; see [`HostTheme::estilo_de_entrada`] for why
+/// `bg` and `reverse` are not here.
+// Four INDEPENDENT terminal-style flags, not an enum or packed flags: they
+// are a literal subset of `norte_theme::Style`, which carries this same
+// `expect` for the same reason. Packing them here would force unpacking them
+// at the wire boundary, which is where they become four again.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "subconjunto de norte_theme::Style: cuatro atributos independientes"
+    reason = "subset of norte_theme::Style: four independent attributes"
 )]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct EstiloDeEntrada {
-    /// `#rrggbb`, o vacío. Ya validado.
+pub struct EntryStyle {
+    /// `#rrggbb`, or empty. Already validated.
     pub color: String,
-    /// Negrita (un directorio, un ejecutable).
+    /// Bold (a directory, an executable).
     pub bold: bool,
-    /// Atenuado (los archivos comprimidos de los presets retro).
+    /// Dimmed (the compressed files in the retro presets).
     pub dim: bool,
-    /// Cursiva.
+    /// Italic.
     pub italic: bool,
-    /// Subrayado.
+    /// Underline.
     pub underline: bool,
 }
 
 impl HostTheme {
-    /// El tema que se llama así, resuelto.
+    /// The theme with this name, resolved.
     ///
-    /// El nombre que se guarda es el PEDIDO, y los colores los del tema que
-    /// de verdad se resolvió: con los presets de fábrica son siempre el
-    /// mismo, y quien la llama ya comprobó que existe.
+    /// The name that gets stored is the REQUESTED one, and the colors are
+    /// from the theme that was actually resolved: with the factory presets
+    /// they are always the same, and whoever calls this has already checked
+    /// it exists.
     #[must_use]
-    pub fn de(nombre: &str, theme: &norte_theme::Theme) -> Self {
+    pub fn de(name: &str, theme: &norte_theme::Theme) -> Self {
         Self {
-            name: nombre.to_owned(),
+            name: name.to_owned(),
             roles: roles_de_tema(theme),
-            // Los efectos que la ventana SÍ interpreta no se enseñan como
-            // «sin soporte»: `backdrop` (spec 2026-09-11, V6) lo traduce el
-            // catálogo de la ventana a una variable CSS.
+            // Effects the window DOES interpret are not shown as
+            // "unsupported": `backdrop` (spec 2026-09-11, V6) is translated
+            // by the window's catalog into a CSS variable.
             effects: theme
                 .effect_names()
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|e| !EFECTOS_DE_LA_VENTANA.contains(&e.as_str()))
+                .filter(|e| !WINDOW_EFFECTS.contains(&e.as_str()))
                 .collect(),
             resuelto: theme.clone(),
-            // Las pone quien arranca, que es el único que lee la
-            // configuración; `de` construye el tema BASE.
+            // Set by whoever starts up, who is the only one that reads the
+            // configuration; `de` builds the BASE theme.
             variante_clara: None,
             variante_oscura: None,
         }
     }
 
-    /// El tema con el que pintar, según el esquema que pide el escritorio.
+    /// The theme to paint with, according to the scheme the desktop asks for.
     ///
-    /// **La misma regla que `themeFor` del renderer** (`ui/src/main.ts`), y
-    /// que está escrita dos veces por una razón concreta: el renderer
-    /// necesita las variables CSS de forma SÍNCRONA al arrancar —pasar por
-    /// el host le costaría un parpadeo con el tema equivocado— y el host
-    /// necesita el `Theme` entero para resolver `[files.ext]`, que no cabe
-    /// en variables. Lo que impide que diverjan es
-    /// `la_regla_de_variante_es_la_del_renderer`, que las pinea contra los
-    /// mismos tres casos.
+    /// **The same rule as the renderer's `themeFor`** (`ui/src/main.ts`), and
+    /// it is written twice for a specific reason: the renderer needs the CSS
+    /// variables SYNCHRONOUSLY at startup — going through the host would cost
+    /// it a flash of the wrong theme — and the host needs the whole `Theme`
+    /// to resolve `[files.ext]`, which does not fit in variables. What
+    /// prevents them from drifting apart is
+    /// `the_variant_rule_is_the_renderers`, which pins them against the
+    /// same three cases.
     #[must_use]
-    pub fn para_esquema(&self, oscuro: bool) -> &norte_theme::Theme {
-        let variante = if oscuro {
+    pub fn for_scheme(&self, dark: bool) -> &norte_theme::Theme {
+        let variant = if dark {
             self.variante_oscura.as_ref()
         } else {
             self.variante_clara.as_ref()
         };
-        variante.map_or(&self.resuelto, Box::as_ref)
+        variant.map_or(&self.resuelto, Box::as_ref)
     }
 
-    /// El color y el peso con que se pinta el NOMBRE de una entrada, según
-    /// `[files.ext]` (gana) y `[files.kind]` del tema.
+    /// The color and weight an entry's NAME is painted with, according to
+    /// `[files.ext]` (wins) and `[files.kind]` of the theme.
     ///
-    /// `name` son los BYTES del nombre (regla 1): la extensión se casa contra
-    /// bytes, nunca contra una cadena, porque un nombre no tiene por qué ser
-    /// UTF-8 y el enmascarado para pintar no es inyectivo — dos nombres
-    /// distintos pueden pintarse igual y no comparten extensión por ello.
+    /// `name` is the name's BYTES (rule 1): the extension is matched against
+    /// bytes, never against a string, because a name does not have to be
+    /// UTF-8 and the masking done for painting is not injective — two
+    /// different names can paint the same and do not share an extension
+    /// because of it.
     ///
-    /// `oscuro` es el esquema que pide el escritorio: se resuelve contra la
-    /// VARIANTE que el renderer está pintando (ver [`Self::para_esquema`]) y
-    /// no contra `[ui] theme` a secas. Con `theme_light`/`theme_dark` puestos,
-    /// resolver contra el base dejaba los nombres con los colores del OTRO
-    /// tema — y un `dir` azul de un tema oscuro sobre el blanco del claro da
-    /// 2,6:1.
+    /// `dark` is the scheme the desktop asks for: it is resolved against
+    /// the VARIANT the renderer is painting (see [`Self::for_scheme`]) and
+    /// not against `[ui] theme` alone. With `theme_light`/`theme_dark` set,
+    /// resolving against the base left names with the OTHER theme's colors —
+    /// and a `dir` that is blue in a dark theme over the light theme's white
+    /// gives 2.6:1.
     ///
-    /// Todo a cero = el tema no dice nada de esta entrada y el renderer usa el
-    /// color normal del listado. No se devuelve el `regular` resuelto a
-    /// propósito: mandarlo en cada fila serían seis bytes por entrada para
-    /// repetir lo que la hoja de estilos ya sabe.
+    /// All zero = the theme says nothing about this entry and the renderer
+    /// uses the listing's normal color. The resolved `regular` is not
+    /// returned on purpose: sending it on every row would be six bytes per
+    /// entry to repeat what the style sheet already knows.
     ///
-    /// Van los CUATRO atributos que una webview sabe pintar, no solo el
-    /// color: `retro-crt` y `retro-crt-amber` atenúan `zip`/`tar`/`gz` con
-    /// `dim = true`, así que llevar solo `fg` dejaba esos ficheros
-    /// apagados en el terminal y a plena luz en la ventana — el tipo de
-    /// divergencia silenciosa que ADR 0077 existe para evitar. `bg` y
-    /// `reverse` se quedan fuera y eso SÍ es una decisión: el fondo de una
-    /// fila ya lo disputan el cursor, el hover y la marca, y meter un quinto
-    /// dueño haría que el tema tapara dónde está el cursor.
+    /// All FOUR attributes a webview knows how to paint travel, not just the
+    /// color: `retro-crt` and `retro-crt-amber` dim `zip`/`tar`/`gz` with
+    /// `dim = true`, so carrying only `fg` left those files dimmed in the
+    /// terminal and at full brightness in the window — the kind of silent
+    /// divergence ADR 0077 exists to prevent. `bg` and `reverse` are left
+    /// out and that IS a decision: a row's background is already contested
+    /// by the cursor, the hover and the mark, and adding a fifth owner would
+    /// let the theme hide where the cursor is.
     #[must_use]
     pub fn estilo_de_entrada(
         &self,
         name: &[u8],
         kind: norte_theme::FileKind,
-        oscuro: bool,
-    ) -> EstiloDeEntrada {
-        self.para_esquema(oscuro)
+        dark: bool,
+    ) -> EntryStyle {
+        self.for_scheme(dark)
             .files
             .style_for(name, kind)
-            .map_or_else(EstiloDeEntrada::default, |s| EstiloDeEntrada {
-                // Por `color_valido` como cualquier otro color que acabe en
-                // una propiedad CSS: hoy `to_hex` es total y no puede dar otra
-                // cosa, pero ese invariante lo sostenían los llamantes y no el
-                // tipo, y este es el tercero.
+            .map_or_else(EntryStyle::default, |s| EntryStyle {
+                // Through `valid_color` like any other color that ends up in
+                // a CSS property: today `to_hex` is total and cannot produce
+                // anything else, but that invariant was held up by the
+                // callers and not the type, and this is the third one.
                 color: s
                     .fg
                     .map(norte_theme::Color::to_hex)
-                    .map(|c| color_valido(&c))
+                    .map(|c| valid_color(&c))
                     .unwrap_or_default(),
                 bold: s.bold,
                 dim: s.dim,
@@ -304,13 +309,14 @@ impl HostTheme {
             })
     }
 
-    /// La proyección.
+    /// The projection.
     #[must_use]
     pub(crate) fn vista(&self) -> ThemeView {
         ThemeView {
             name: clamp_display(self.name.clone()),
-            // La lista y el cursor los pone quien tiene el SELECTOR: este
-            // tipo es el tema puesto, no la elección en curso.
+            // The list and the cursor are set by whoever holds the SELECTOR:
+            // this type is the theme that is set, not the choice in
+            // progress.
             choices: Vec::new(),
             cursor: 0,
             roles: self
@@ -318,19 +324,19 @@ impl HostTheme {
                 .iter()
                 .map(|(role, color)| ThemeRoleView {
                     role: clamp_display(role.clone()),
-                    color: color_valido(color),
+                    color: valid_color(color),
                 })
                 .collect(),
             unsupported_effects: self
                 .effects
                 .iter()
                 .map(|e| {
-                    // La clave sale del fichero de tema: se enmascara, y se
-                    // DICE que se enmascaró (#266).
-                    let (pintable, hostil) = norte_frontend::display_name(e.as_bytes());
+                    // The key comes from the theme file: it gets masked, and
+                    // it is SAID that it was masked (#266).
+                    let (paintable, hostile) = norte_frontend::display_name(e.as_bytes());
                     crate::dto::ThemeEffectView {
-                        key: clamp_display(pintable),
-                        hostile: hostil,
+                        key: clamp_display(paintable),
+                        hostile,
                     }
                 })
                 .collect(),
@@ -338,96 +344,101 @@ impl HostTheme {
     }
 }
 
-/// Un color `#rrggbb`, o vacío.
+/// A `#rrggbb` color, or empty.
 ///
-/// El renderer lo mete en `style.setProperty("background-color", …)`. Hoy
-/// llega siempre de `Theme::to_hex()`, así que es seguro — pero el invariante
-/// lo sostenía UN llamante y nada lo decía en el tipo. El CSSOM tira un valor
-/// que no parsea en vez de partirlo por `;`, o sea que esto no es un agujero
-/// de inyección; es que la garantía no estaba escrita en ninguna parte.
+/// The renderer puts it into
+/// `style.setProperty("background-color", …)`. Today it always comes from
+/// `Theme::to_hex()`, so it is safe — but the invariant was held up by ONE
+/// caller and nothing said so in the type. The CSSOM drops a value that does
+/// not parse instead of splitting it on `;`, so this is not an injection
+/// hole; it is that the guarantee was not written down anywhere.
 ///
-/// Uno que no case se manda VACÍO: la muestra sin pintar dice que el tema
-/// tiene un color que no vale, y una cadena arbitraria en una propiedad CSS
-/// no dice nada.
-fn color_valido(color: &str) -> String {
-    let bien = color.len() == 7
+/// One that does not match is sent EMPTY: the unpainted swatch says the theme
+/// has an invalid color, and an arbitrary string in a CSS property says
+/// nothing.
+fn valid_color(color: &str) -> String {
+    let valid = color.len() == 7
         && color.starts_with('#')
         && color[1..].bytes().all(|b| b.is_ascii_hexdigit());
-    if bien {
+    if valid {
         color.to_owned()
     } else {
         String::new()
     }
 }
 
-/// Un selector abierto.
+/// An open picker.
 pub(crate) struct Selector {
-    filas: Vec<Fila>,
+    rows: Vec<Row>,
     cursor: usize,
-    /// La lista está vacía y esta es la clave Fluent que lo explica.
-    vacio: &'static str,
-    /// Cómo se llama, en clave Fluent. Estaba CLAVADO en el de volúmenes, que
-    /// era el único; con tres, un título fijo miente en dos de ellos.
-    titulo: &'static str,
-    /// A qué hueco navega lo elegido.
+    /// The list is empty and this is the Fluent key that explains it.
+    empty_key: &'static str,
+    /// What it is called, as a Fluent key. It was PINNED to the volumes one,
+    /// which used to be the only one; with three, a fixed title lies about
+    /// two of them.
+    title: &'static str,
+    /// Which slot the chosen entry navigates to.
     ///
-    /// Explícito y no «el activo»: `pane.select-drive-left` nombra un LADO de
-    /// la pantalla, y el lado se resuelve al ABRIR. Leerlo al elegir haría
-    /// que mover el foco mientras la lista está puesta cambiara el panel que
-    /// acaba montando el volumen.
+    /// Explicit and not "the active one": `pane.select-drive-left` names a
+    /// SIDE of the screen, and the side is resolved when OPENING. Reading it
+    /// at choice time would let moving focus while the list is up change
+    /// which pane ends up mounting the volume.
     slot: u32,
-    /// Qué lista es, para los verbos que solo significan algo sobre algunas.
+    /// Which list this is, for the verbs that only mean something on some of
+    /// them.
     ///
-    /// Fue un `bool` de «es la de favoritos» mientras hubo UNA lista que se
-    /// editaba (#309). Con la historia y los populares (spec 2026-09-15 D2) son
-    /// tres, y tres bools serían tres campos que se pueden contradecir.
-    tipo: TipoSelector,
-    /// El filtro de una lista de historia mientras se teclea (spec 2026-09-15
-    /// D2). `None` sin filtrar y en las demás listas.
-    filtro: Option<String>,
+    /// It used to be a `bool` for "is it the favorites one" while there was
+    /// ONE editable list (#309). With history and the popular ones (spec
+    /// 2026-09-15 D2) there are three, and three bools would be three fields
+    /// that can contradict each other.
+    kind: SelectorKind,
+    /// A history list's filter while it is being typed (spec 2026-09-15 D2).
+    /// `None` when unfiltered and in the other lists.
+    filter: Option<String>,
 }
 
-/// Qué lista es un selector, en lo que a sus verbos importa.
+/// Which list a picker is, as far as its verbs are concerned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TipoSelector {
-    /// Volúmenes, conexiones: se eligen y nada más.
-    Otro,
-    /// Los favoritos: se añaden y se quitan (#309).
+enum SelectorKind {
+    /// Volumes, connections: they are chosen and nothing more.
+    Other,
+    /// Favorites: they are added and removed (#309).
     Hotlist,
-    /// La historia de un hueco: se quita y se vacía.
-    Historia,
-    /// Los populares de la sesión: igual que la historia.
-    Populares,
+    /// A slot's history: it is removed and cleared.
+    History,
+    /// The session's popular ones: same as history.
+    Popular,
 }
 
-/// Una fila con lo que hace falta para ACTUAR, además de para pintar.
-struct Fila {
-    vista: PickerRowView,
-    /// A dónde navega.
-    destino: Option<VPath>,
-    /// El nombre CRUDO, cuando la fila se puede editar (#309): es la clave con
-    /// la que un favorito se quita del `norte.toml`, y no puede salir de la
-    /// etiqueta, que va saneada y recortada para pintarse.
-    nombre: Option<String>,
+/// A row with what is needed to ACT, besides what is needed to paint.
+struct Row {
+    view: PickerRowView,
+    /// Where it navigates to.
+    destination: Option<VPath>,
+    /// The RAW name, when the row can be edited (#309): it is the key a
+    /// favorite is removed from `norte.toml` with, and it cannot come from
+    /// the label, which is sanitized and clamped for painting.
+    name: Option<String>,
 }
 
 impl Selector {
-    /// El selector de volúmenes, todavía sin la lista: se pide y llega.
+    /// The volumes picker, still without its list: it is requested and
+    /// arrives later.
     pub(crate) fn volumenes(slot: u32) -> Self {
-        Self::volumenes_con_titulo(slot, "picker-volumes-title")
+        Self::volumes_with_title(slot, "picker-volumes-title")
     }
 
-    /// El selector de volúmenes de un LADO de la pantalla.
+    /// The volumes picker for one SIDE of the screen.
     ///
-    /// El título lo dice, porque nada más puede decirlo: el slot no cruza el
-    /// puente y los dos lados abren la misma lista. En Total Commander lo
-    /// dice la posición de la ventana; aquí, con el foco en el otro panel,
-    /// sin el título no hay forma de saber dónde se va a montar hasta que se
-    /// monta (ADR 0058 D9, #293).
-    pub(crate) fn volumenes_de_lado(slot: u32, derecha: bool) -> Self {
-        Self::volumenes_con_titulo(
+    /// The title says so, because nothing else can: the slot does not cross
+    /// the bridge and both sides open the same list. In Total Commander the
+    /// window's position says so; here, with focus on the other pane, without
+    /// the title there is no way to know where it is going to mount until it
+    /// mounts (ADR 0058 D9, #293).
+    pub(crate) fn volumenes_de_lado(slot: u32, right: bool) -> Self {
+        Self::volumes_with_title(
             slot,
-            if derecha {
+            if right {
                 "picker-volumes-title-right"
             } else {
                 "picker-volumes-title-left"
@@ -435,414 +446,418 @@ impl Selector {
         )
     }
 
-    fn volumenes_con_titulo(slot: u32, titulo: &'static str) -> Self {
+    fn volumes_with_title(slot: u32, title: &'static str) -> Self {
         Self {
-            filas: Vec::new(),
+            rows: Vec::new(),
             cursor: 0,
-            vacio: "picker-volumes-loading",
-            titulo,
+            empty_key: "picker-volumes-loading",
+            title,
             slot,
-            tipo: TipoSelector::Otro,
-            filtro: None,
+            kind: SelectorKind::Other,
+            filter: None,
         }
     }
 
-    /// El selector de CONEXIONES, todavía sin la lista: se pide al daemon y
-    /// llega (#264).
+    /// The CONNECTIONS picker, still without its list: it is requested from
+    /// the daemon and arrives later (#264).
     ///
-    /// Vacío al abrir, como el de volúmenes y con la misma carrera: la lista
-    /// viene de una respuesta, así que su `generation` es lo que impide que un
-    /// click pintado sobre una lista se atienda sobre otra.
+    /// Empty on open, like the volumes one and with the same race: the list
+    /// comes from a response, so its `generation` is what stops a click
+    /// painted over one list from being applied to another.
     pub(crate) fn conexiones(slot: u32) -> Self {
         Self {
-            filas: Vec::new(),
+            rows: Vec::new(),
             cursor: 0,
-            vacio: "picker-connections-loading",
-            titulo: "picker-connections-title",
+            empty_key: "picker-connections-loading",
+            title: "picker-connections-title",
             slot,
-            tipo: TipoSelector::Otro,
-            filtro: None,
+            kind: SelectorKind::Other,
+            filter: None,
         }
     }
 
-    /// Rellena el selector de conexiones con lo que contestó el daemon.
+    /// Fills the connections picker with what the daemon answered.
     ///
-    /// **La URL se enmascara como una autoridad y no como una ruta**: un host
-    /// puede llamarse `banco.example@malo.example` sin llevar un solo carácter
-    /// que se enmascare, y eso se lee como userinfo de un host legítimo. Es el
-    /// mismo cuidado que el aviso de sesión degradada, y por el mismo motivo:
-    /// aquí «¿a qué máquina me estoy conectando?» es la única pregunta.
+    /// **The URL is masked as an authority and not as a path**: a host can be
+    /// named `banco.example@malo.example` without carrying a single
+    /// character that gets masked, and that reads as the userinfo of a
+    /// legitimate host. It is the same care as the degraded-session notice,
+    /// and for the same reason: here "what machine am I connecting to?" is
+    /// the only question.
     ///
-    /// Lo que se navega es la URL: ir ahí ESTABLECE la sesión por el camino de
-    /// siempre. Una que no parsea como `VPath` se enseña sin destino — se ve
-    /// que está configurada y que no se puede abrir, que es más honesto que
-    /// esconderla.
+    /// What gets navigated is the URL: going there ESTABLISHES the session
+    /// the usual way. One that does not parse as a `VPath` is shown with no
+    /// destination — it is visible that it is configured and cannot be
+    /// opened, which is more honest than hiding it.
     ///
-    /// Las que el daemon no supo LEER (#365) entran por la misma puerta y
-    /// detrás de las buenas: sin destino, y con el motivo donde iría la URL.
-    /// Antes de 0.84.0 no llegaba ninguna, porque una sola entrada mala hacía
-    /// fallar la llamada y el selector se abría vacío con un error.
+    /// The ones the daemon could not READ (#365) enter through the same door
+    /// and behind the good ones: with no destination, and with the reason
+    /// where the URL would go. Before 0.84.0 none of them arrived, because a
+    /// single bad entry made the call fail and the picker opened empty with
+    /// an error.
     pub(crate) fn con_conexiones(
         &mut self,
         conexiones: Vec<norte_proto::methods::ConnectionEntry>,
         inservibles: Vec<norte_proto::methods::ConnectionProblem>,
     ) {
-        self.filas = conexiones
+        self.rows = conexiones
             .into_iter()
             .map(|c| {
-                let (nombre, nombre_hostil) = norte_frontend::display_name(c.name.as_bytes());
-                let (url, url_hostil) = norte_frontend::display_name(c.url.as_bytes());
-                Fila {
-                    vista: PickerRowView {
-                        label: clamp_display(nombre),
-                        hostile: nombre_hostil || url_hostil,
+                let (name, name_hostile) = norte_frontend::display_name(c.name.as_bytes());
+                let (url, url_hostile) = norte_frontend::display_name(c.url.as_bytes());
+                Row {
+                    view: PickerRowView {
+                        label: clamp_display(name),
+                        hostile: name_hostile || url_hostile,
                         detail: clamp_display(url),
                     },
-                    destino: VPath::parse(&c.url).ok(),
-                    nombre: None,
+                    destination: VPath::parse(&c.url).ok(),
+                    name: None,
                 }
             })
             .chain(inservibles.into_iter().map(|p| {
-                let (nombre, nombre_hostil) = norte_frontend::display_name(p.name.as_bytes());
-                // El motivo lo escribió un parser sobre un fichero del
-                // usuario, así que se enmascara igual que un nombre: es texto
-                // de fuera, no una cadena nuestra.
-                let (motivo, motivo_hostil) = norte_frontend::display_name(p.reason.as_bytes());
-                Fila {
-                    vista: PickerRowView {
-                        label: clamp_display(nombre),
-                        hostile: nombre_hostil || motivo_hostil,
-                        detail: clamp_display(motivo),
+                let (name, name_hostile) = norte_frontend::display_name(p.name.as_bytes());
+                // The reason was written by a parser over a user file, so it
+                // gets masked just like a name: it is outside text, not one
+                // of our own strings.
+                let (reason, reason_hostile) = norte_frontend::display_name(p.reason.as_bytes());
+                Row {
+                    view: PickerRowView {
+                        label: clamp_display(name),
+                        hostile: name_hostile || reason_hostile,
+                        detail: clamp_display(reason),
                     },
-                    destino: None,
-                    nombre: None,
+                    destination: None,
+                    name: None,
                 }
             }))
             .collect();
         self.cursor = 0;
-        self.vacio = if self.filas.is_empty() {
+        self.empty_key = if self.rows.is_empty() {
             "picker-connections-empty"
         } else {
             ""
         };
     }
 
-    /// Una lista de historia —la de un hueco o los populares de la sesión—
-    /// desde las filas COMPARTIDAS ([`norte_frontend::history::history_rows`]).
+    /// A history list — a slot's or the session's popular ones — from the
+    /// SHARED rows ([`norte_frontend::history::history_rows`]).
     ///
-    /// Qué filas salen, en qué orden y con qué marca no puede depender de quién
-    /// lo pinta: lo decide el crate compartido, igual que en el terminal. La
-    /// marca («aquí», «adelante») va en el detalle de la fila, y el cursor
-    /// empieza en la siguiente a la actual.
+    /// Which rows come out, in what order and with what mark cannot depend on
+    /// who paints it: it is decided by the shared crate, same as in the
+    /// terminal. The mark ("here", "forward") goes in the row's detail, and
+    /// the cursor starts on the one right after the current one.
     ///
-    /// `pintar` pone la ruta en pantalla —con la reinterpretación del panel, o
-    /// sin ninguna para los populares— y lo decide quien sabe de qué panel es
-    /// la lista.
+    /// `paint` puts the path on screen — with the pane's reinterpretation,
+    /// or with none for the popular ones — and it is decided by whoever knows
+    /// which pane the list belongs to.
     pub(crate) fn historia(
         slot: u32,
-        filas: &[norte_frontend::history::HistoryRow],
-        pintar: impl Fn(&VPath) -> (String, bool),
+        rows: &[norte_frontend::history::HistoryRow],
+        paint: impl Fn(&VPath) -> (String, bool),
         lang: Lang,
-        titulo: &'static str,
-        populares: bool,
-        filtro: Option<String>,
+        title: &'static str,
+        popular: bool,
+        filter: Option<String>,
     ) -> Self {
-        let vistas = filas
+        let projected = rows
             .iter()
             .map(|r| {
-                let (pintable, hostile) = pintar(&r.path);
-                let detalle = norte_frontend::history::mark_key(r.mark)
+                let (paintable, hostile) = paint(&r.path);
+                let detail = norte_frontend::history::mark_key(r.mark)
                     .map_or_else(String::new, |k| norte_i18n::t_in(lang, k));
-                Fila {
-                    vista: PickerRowView {
-                        label: clamp_display(pintable),
+                Row {
+                    view: PickerRowView {
+                        label: clamp_display(paintable),
                         hostile,
-                        detail: clamp_display(detalle),
+                        detail: clamp_display(detail),
                     },
-                    destino: Some(r.path.clone()),
-                    nombre: None,
+                    destination: Some(r.path.clone()),
+                    name: None,
                 }
             })
             .collect();
         Self {
-            filas: vistas,
-            cursor: norte_frontend::history::start_cursor(filas),
-            vacio: if populares {
+            rows: projected,
+            cursor: norte_frontend::history::start_cursor(rows),
+            empty_key: if popular {
                 "picker-popular-empty"
             } else {
                 "picker-history-empty"
             },
-            titulo,
+            title,
             slot,
-            tipo: if populares {
-                TipoSelector::Populares
+            kind: if popular {
+                SelectorKind::Popular
             } else {
-                TipoSelector::Historia
+                SelectorKind::History
             },
-            filtro,
+            filter,
         }
     }
 
-    /// Los favoritos de la configuración.
+    /// The configuration's favorites.
     ///
-    /// Un favorito cuya ruta no parsea SE QUEDA, con su aviso y sin destino:
-    /// la hotlist es data del usuario, y uno que desaparece en silencio es un
-    /// fallo que nadie puede ver (mismo criterio que la barra lateral).
+    /// A favorite whose path does not parse STAYS, with its notice and no
+    /// destination: the hotlist is user data, and one that disappears
+    /// silently is a failure nobody can see (same criterion as the side
+    /// panel).
     pub(crate) fn hotlist(
         slot: u32,
-        favoritos: &[(String, Result<VPath, String>)],
+        favorites: &[(String, Result<VPath, String>)],
         lang: Lang,
     ) -> Self {
-        let filas = favoritos
+        let rows = favorites
             .iter()
-            .map(|(nombre, destino)| {
-                // El nombre de un favorito son BYTES tanto como una ruta: lo
-                // escribió una persona en un fichero y puede llevar bidi.
-                let (nombre_pintable, nombre_hostil) =
-                    norte_frontend::display_name(nombre.as_bytes());
-                let (detalle, detalle_hostil, destino) = match destino {
+            .map(|(name, destination)| {
+                // A favorite's name is BYTES just as much as a path: a person
+                // wrote it into a file and it can carry bidi.
+                let (name_paintable, name_hostile) = norte_frontend::display_name(name.as_bytes());
+                let (detail, detail_hostile, resolved_destination) = match destination {
                     Ok(p) => {
-                        let (pintable, hostile) = norte_frontend::display::path_display(p);
-                        (pintable, hostile, Some(p.clone()))
+                        let (paintable, hostile) = norte_frontend::display::path_display(p);
+                        (paintable, hostile, Some(p.clone()))
                     }
                     Err(_) => (norte_i18n::t_in(lang, "hotlist-invalid"), false, None),
                 };
-                Fila {
-                    vista: PickerRowView {
-                        label: clamp_display(nombre_pintable),
-                        hostile: nombre_hostil || detalle_hostil,
-                        detail: clamp_display(detalle),
+                Row {
+                    view: PickerRowView {
+                        label: clamp_display(name_paintable),
+                        hostile: name_hostile || detail_hostile,
+                        detail: clamp_display(detail),
                     },
-                    destino,
-                    // El nombre CRUDO viaja con la fila: es con lo que se
-                    // quita el favorito del `norte.toml` (#309).
-                    nombre: Some(nombre.clone()),
+                    destination: resolved_destination,
+                    // The RAW name travels with the row: it is what the
+                    // favorite gets removed from `norte.toml` with (#309).
+                    name: Some(name.clone()),
                 }
             })
             .collect();
         Self {
-            filas,
+            rows,
             cursor: 0,
-            vacio: "picker-hotlist-empty",
-            titulo: "picker-hotlist-title",
+            empty_key: "picker-hotlist-empty",
+            title: "picker-hotlist-title",
             slot,
-            tipo: TipoSelector::Hotlist,
-            filtro: None,
+            kind: SelectorKind::Hotlist,
+            filter: None,
         }
     }
 
-    /// A qué hueco navega lo que se elija aquí.
+    /// Which slot what gets chosen here navigates to.
     pub(crate) fn slot(&self) -> u32 {
         self.slot
     }
 
-    /// ¿Es el selector de FAVORITOS? (#309)
+    /// Is this the FAVORITES picker? (#309)
     ///
-    /// Lo pregunta quien atiende `dialog.add`/`dialog.remove`: los favoritos
-    /// son la única lista de esta ventana que se edita —los volúmenes los
-    /// monta el sistema y las disposiciones se guardan por otro camino—, así
-    /// que esos dos verbos solo significan algo aquí.
+    /// Asked by whoever handles `dialog.add`/`dialog.remove`: favorites are
+    /// the only list in this window that is edited — volumes are mounted by
+    /// the system and layouts are saved through another path — so those two
+    /// verbs only mean something here.
     pub(crate) fn es_hotlist(&self) -> bool {
-        self.tipo == TipoSelector::Hotlist
+        self.kind == SelectorKind::Hotlist
     }
 
-    /// ¿Es una lista de HISTORIA, la de un hueco o los populares? Lo pregunta
-    /// quien atiende `dialog.remove`/`dialog.clear` (spec 2026-09-15 D2).
+    /// Is this a HISTORY list, a slot's or the popular ones? Asked by
+    /// whoever handles `dialog.remove`/`dialog.clear` (spec 2026-09-15 D2).
     pub(crate) fn es_historia(&self) -> bool {
-        matches!(self.tipo, TipoSelector::Historia | TipoSelector::Populares)
+        matches!(self.kind, SelectorKind::History | SelectorKind::Popular)
     }
 
-    /// ¿Es la de populares?
+    /// Is it the popular-ones one?
     pub(crate) fn es_populares(&self) -> bool {
-        self.tipo == TipoSelector::Populares
+        self.kind == SelectorKind::Popular
     }
 
-    /// La fila del cursor, para rehacer la lista sin perder el sitio.
+    /// The cursor's row, to rebuild the list without losing the spot.
     pub(crate) fn cursor(&self) -> usize {
         self.cursor
     }
 
-    /// La clave Fluent del título, para rehacer la lista con el mismo.
+    /// The title's Fluent key, to rebuild the list with the same one.
     pub(crate) fn titulo(&self) -> &'static str {
-        self.titulo
+        self.title
     }
 
-    /// El filtro de una lista de historia, si se está filtrando.
+    /// A history list's filter, if it is being filtered.
     pub(crate) fn filtro(&self) -> Option<&str> {
-        self.filtro.as_deref()
+        self.filter.as_deref()
     }
 
-    /// El NOMBRE de la fila del cursor, sin pintar.
+    /// The cursor row's RAW NAME, unpainted.
     ///
-    /// Crudo y no la etiqueta de la vista: lo que se pinta va saneado y
-    /// recortado, y quitar un favorito por su etiqueta borraría el que no era
-    /// —o ninguno— en cuanto el nombre llevara bidi o midiera de más.
+    /// Raw and not the view's label: what gets painted is sanitized and
+    /// clamped, and removing a favorite by its label would delete the wrong
+    /// one — or none — as soon as the name carried bidi or measured too long.
     pub(crate) fn nombre_crudo(&self) -> Option<&str> {
-        self.filas.get(self.cursor)?.nombre.as_deref()
+        self.rows.get(self.cursor)?.name.as_deref()
     }
 
-    /// Mete los volúmenes que contestó el host.
+    /// Feeds in the volumes the host answered with.
     pub(crate) fn set_volumenes(&mut self, vols: &[norte_proto::methods::Volume], lang: Lang) {
-        self.vacio = "picker-volumes-empty";
-        self.filas = vols
+        self.empty_key = "picker-volumes-empty";
+        self.rows = vols
             .iter()
             .map(|v| {
-                // Un punto de montaje es un `VPath`, o sea BYTES: se pinta
-                // por el camino compartido y viaja con su marca.
-                let (pintable, hostile) = norte_frontend::display::path_display(&v.mount);
-                let (detail, detail_hostil) = detalle_de(v, lang);
-                Fila {
-                    vista: PickerRowView {
-                        label: clamp_display(pintable),
-                        // El punto de montaje O la ETIQUETA. La etiqueta es
-                        // `Option<Vec<u8>>` y en Windows cruza como WTF-8: un
-                        // surrogate suelto que una etiqueta FAT/NTFS puede
-                        // llevar legalmente sobrevive en vez de convertirse
-                        // en U+FFFD. Se enmascaraba y la marca se TIRABA,
-                        // mientras la MISMA etiqueta en la barra lateral sí
-                        // se marcaba: dos superficies, dos respuestas, los
-                        // mismos bytes.
-                        hostile: hostile || detail_hostil,
+                // A mount point is a `VPath`, i.e. BYTES: it is painted the
+                // shared way and travels with its mark.
+                let (paintable, hostile) = norte_frontend::display::path_display(&v.mount);
+                let (detail, detail_hostile) = detail_of(v, lang);
+                Row {
+                    view: PickerRowView {
+                        label: clamp_display(paintable),
+                        // The mount point OR the LABEL. The label is
+                        // `Option<Vec<u8>>` and on Windows crosses as WTF-8:
+                        // a lone surrogate a FAT/NTFS label can legally carry
+                        // survives instead of turning into U+FFFD. It used to
+                        // be masked and the mark got THROWN AWAY, while the
+                        // SAME label in the side panel was marked: two
+                        // surfaces, two answers, the same bytes.
+                        hostile: hostile || detail_hostile,
                         detail: clamp_display(detail),
                     },
-                    destino: Some(v.mount.clone()),
-                    nombre: None,
+                    destination: Some(v.mount.clone()),
+                    name: None,
                 }
             })
             .collect();
-        self.cursor = self.cursor.min(self.filas.len().saturating_sub(1));
+        self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
     }
 
-    /// Mueve el cursor sin salirse.
+    /// Moves the cursor without going out of bounds.
     pub(crate) fn mover(&mut self, delta: i64) {
-        if self.filas.is_empty() {
+        if self.rows.is_empty() {
             return;
         }
-        let destino = i64::try_from(self.cursor)
+        let target = i64::try_from(self.cursor)
             .unwrap_or(0)
             .saturating_add(delta);
-        self.cursor = usize::try_from(destino.max(0))
+        self.cursor = usize::try_from(target.max(0))
             .unwrap_or(0)
-            .min(self.filas.len() - 1);
+            .min(self.rows.len() - 1);
     }
 
-    /// Pone el cursor en una fila (un click). Fuera de rango no hace nada.
-    pub(crate) fn senalar(&mut self, fila: usize) {
-        if fila < self.filas.len() {
-            self.cursor = fila;
+    /// Puts the cursor on a row (a click). Out of range does nothing.
+    pub(crate) fn senalar(&mut self, row: usize) {
+        if row < self.rows.len() {
+            self.cursor = row;
         }
     }
 
-    /// Hay una fila bajo el cursor, tenga destino o no.
+    /// There is a row under the cursor, whether it has a destination or not.
     ///
-    /// Distingue «la lista está vacía» de «esta fila no lleva a ninguna
-    /// parte» —un favorito cuya ruta no parsea—, que son dos respuestas
-    /// distintas y sin esto se contestaban igual: con silencio.
+    /// Distinguishes "the list is empty" from "this row does not lead
+    /// anywhere" — a favorite whose path does not parse — which are two
+    /// different answers and without this were both answered the same way:
+    /// with silence.
     pub(crate) fn hay_fila(&self) -> bool {
-        self.filas.get(self.cursor).is_some()
+        self.rows.get(self.cursor).is_some()
     }
 
-    /// A dónde navega la fila del cursor, si hay alguna.
+    /// Where the cursor's row navigates to, if there is one.
     pub(crate) fn elegir(&self) -> Option<VPath> {
-        self.filas.get(self.cursor)?.destino.clone()
+        self.rows.get(self.cursor)?.destination.clone()
     }
 
-    /// La proyección.
+    /// The projection.
     pub(crate) fn vista(&self, lang: Lang) -> PickerView {
         PickerView {
-            // El filtro de una historia se DICE en el título (spec 2026-09-15
-            // D2): sin verlo, la lista encoge sin motivo aparente. Enmascarado:
-            // lo teclea el lector, pero un pegado puede colar bidi.
-            title: clamp_display(match &self.filtro {
+            // A history's filter is SAID in the title (spec 2026-09-15 D2):
+            // without seeing it, the list shrinks for no apparent reason.
+            // Masked: the reader types it, but a paste can smuggle in bidi.
+            title: clamp_display(match &self.filter {
                 Some(f) => format!(
                     "{} — /{}",
-                    norte_i18n::t_in(lang, self.titulo),
+                    norte_i18n::t_in(lang, self.title),
                     norte_frontend::display_name(f.as_bytes()).0
                 ),
-                None => norte_i18n::t_in(lang, self.titulo),
+                None => norte_i18n::t_in(lang, self.title),
             }),
-            rows: self.filas.iter().map(|f| f.vista.clone()).collect(),
-            cursor: (!self.filas.is_empty()).then_some(self.cursor as u64),
-            empty: if self.filas.is_empty() {
-                clamp_display(norte_i18n::t_in(lang, self.vacio))
+            rows: self.rows.iter().map(|f| f.view.clone()).collect(),
+            cursor: (!self.rows.is_empty()).then_some(self.cursor as u64),
+            empty: if self.rows.is_empty() {
+                clamp_display(norte_i18n::t_in(lang, self.empty_key))
             } else {
                 String::new()
             },
-            // La pone el controlador, que es quien sabe cuántas veces ha
-            // cambiado el conjunto: el selector no se entera de sus propias
-            // reaperturas.
+            // Set by the controller, which is the one that knows how many
+            // times the set has changed: the picker does not learn about its
+            // own reopenings.
             generation: 0,
         }
     }
 }
 
-/// El detalle de un volumen: su sistema de ficheros, el espacio y si es de
-/// solo lectura.
+/// A volume's detail: its file system, the space, and whether it is
+/// read-only.
 ///
-/// El espacio que el sistema no contestó se DICE, jamás se pinta un `0`: cero
-/// libre se lee como «lleno», que es lo contrario de «no lo sé».
+/// Space the system did not answer is SAID, a `0` is never painted: zero free
+/// reads as "full", which is the opposite of "unknown".
 ///
-/// Devuelve TAMBIÉN si lo pintado difiere de lo real: la etiqueta la da el
-/// sistema y son bytes, así que la marca la produce esta función y quien la
-/// llama tiene que llevarla a la fila. Antes se calculaba y se tiraba.
-fn detalle_de(v: &norte_proto::methods::Volume, lang: Lang) -> (String, bool) {
-    let mut trozos: Vec<String> = Vec::new();
+/// ALSO returns whether what is painted differs from the real thing: the
+/// label is given by the system and is bytes, so the flag is produced by this
+/// function and whoever calls it has to carry it to the row. It used to be
+/// computed and thrown away.
+fn detail_of(v: &norte_proto::methods::Volume, lang: Lang) -> (String, bool) {
+    let mut parts: Vec<String> = Vec::new();
     if !v.fs_type.is_empty() {
-        trozos.push(norte_frontend::display_name(v.fs_type.as_bytes()).0);
+        parts.push(norte_frontend::display_name(v.fs_type.as_bytes()).0);
     }
-    // El espacio y el solo-lectura, por el crate COMPARTIDO: aquí y en la
-    // barra lateral estaban escritos aparte y ya diferían.
-    trozos.push(norte_frontend::places::PlacesState::volume_detail(
+    // Space and read-only, through the SHARED crate: here and in the side
+    // panel they used to be written separately and already differed.
+    parts.push(norte_frontend::places::PlacesState::volume_detail(
         v.free_bytes,
         v.total_bytes,
         v.read_only,
         false,
         lang,
     ));
-    // La etiqueta que da el sistema son BYTES —ninguna plataforma promete
-    // UTF-8— así que entra por el mismo camino que un nombre de fichero.
-    let mut hostil = false;
+    // The label the system gives is BYTES — no platform promises UTF-8 — so
+    // it enters through the same path as a file name.
+    let mut hostile = false;
     if let Some(label) = &v.label {
-        let (pintable, h) = norte_frontend::display_name(label);
-        hostil = h;
-        trozos.push(pintable);
+        let (paintable, h) = norte_frontend::display_name(label);
+        hostile = h;
+        parts.push(paintable);
     }
-    (trozos.join(" · "), hostil)
+    (parts.join(" · "), hostile)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{EstiloDeEntrada, HostTheme, nombres_de_tema, roles_de_tema};
+    use super::{EntryStyle, HostTheme, nombres_de_tema, roles_de_tema};
 
-    /// **Un rol de PAREJA cruza con sus dos mitades.**
+    /// **A PAIRED role crosses with both its halves.**
     ///
-    /// `Role::StatusBar` es fondo Y texto: el terminal lo aplica como estilo
-    /// entero. Aquí solo viajaba el fondo, así que todo lo que la ventana
-    /// pintase encima tenía que ADIVINAR el color del texto — la cabecera del
-    /// visor adivinaba `title-fg`, y con un tema cuya barra de estado es clara
-    /// eso es claro sobre claro: la ruta, el encoding, el EOL y las pérdidas
-    /// salían invisibles. Se vio pintando la ventana de verdad, no en un test.
+    /// `Role::StatusBar` is background AND text: the terminal applies it as a
+    /// whole style. Only the background used to travel here, so everything
+    /// the window painted on top had to GUESS the text color — the viewer's
+    /// header used to guess `title-fg`, and with a theme whose status bar is
+    /// light that is light on light: the path, the encoding, the EOL and the
+    /// losses came out invisible. This was seen painting the real window, not
+    /// in a test.
     ///
-    /// La lista se comprueba entera y a mano, por lo que dice el rustdoc de
-    /// `roles_de_tema`: es un acuerdo con una hoja de estilos que no comparte
-    /// tipos, así que quitar una clave tiene que ponerse rojo aquí en vez de
-    /// descubrirse mirando la pantalla.
+    /// The list is checked whole and by hand, per what `roles_de_tema`'s
+    /// rustdoc says: it is an agreement with a style sheet that shares no
+    /// types, so removing a key has to go red here instead of being
+    /// discovered by looking at the screen.
     #[test]
-    fn el_tema_cruza_las_dos_mitades_de_la_barra_de_estado() {
+    fn the_theme_crosses_both_halves_of_the_status_bar() {
         let theme = norte_theme::Theme::preset_default();
         let roles = roles_de_tema(&theme);
-        let nombres: Vec<&str> = roles.iter().map(|(n, _)| n.as_str()).collect();
+        let names: Vec<&str> = roles.iter().map(|(n, _)| n.as_str()).collect();
 
-        for mitad in ["status-bg", "status-fg"] {
+        for half in ["status-bg", "status-fg"] {
             assert!(
-                nombres.contains(&mitad),
-                "falta `{mitad}`: sin las dos, quien pinte encima adivina — \
-                 y adivinó claro sobre claro ({nombres:?})"
+                names.contains(&half),
+                "missing `{half}`: without both, whoever paints on top guesses \
+                 — and guessed light on light ({names:?})"
             );
         }
 
         assert_eq!(
-            nombres,
+            names,
             [
                 "bg",
                 "fg",
@@ -864,30 +879,32 @@ mod tests {
                 "error-fg",
                 "warning-fg",
                 "info-fg",
-                // El pijama SÍ lo define cada preset (spec 2026-09-20), y por
-                // eso viaja: la banda no se puede derivar en la hoja como el
-                // resto del cromo — es un salto sobre el fondo del panel que
-                // cada paleta da distinto, y uno calculado en CSS queda
-                // invisible en un tema y chillón en el siguiente.
+                // The striped rows ARE defined by every preset (spec
+                // 2026-09-20), and that is why they travel: the stripe
+                // cannot be derived in the style sheet like the rest of the
+                // chrome — it is a step over the pane's background that each
+                // palette gives differently, and one computed in CSS ends up
+                // invisible in one theme and garish in the next.
                 "stripe-bg",
             ],
-            "lo que el preset por defecto PROYECTA: calla los diez de cromo, \
-             que la hoja deriva, y dice el pijama, que no se deriva"
+            "what the default preset PROJECTS: leaves unsaid the ten chrome \
+             ones, which the sheet derives, and states the striped rows, \
+             which are not derived"
         );
 
-        // El acuerdo con `style.css` es `nombres_de_tema`, no lo de arriba:
-        // los nombres existen aunque el tema no los llene, y confundir las
-        // dos cosas es lo que hacía que el guardián de huérfanas del renderer
-        // leyera «nadie alimenta esto» donde en realidad ponía «este tema no
-        // lo dice».
-        let nombres_todos = nombres_de_tema();
-        for n in &nombres {
+        // The agreement with `style.css` is `nombres_de_tema`, not the list
+        // above: the names exist even when the theme does not fill them, and
+        // confusing the two is what made the renderer's orphan guard read
+        // "nobody feeds this" where it actually said "this theme does not
+        // say so".
+        let all_names = nombres_de_tema();
+        for n in &names {
             assert!(
-                nombres_todos.contains(n),
-                "`{n}` se proyecta y no está en el acuerdo"
+                all_names.contains(n),
+                "`{n}` is projected and is not in the agreement"
             );
         }
-        for cromo in [
+        for chrome in [
             "hover",
             "input-bg",
             "input-border",
@@ -901,28 +918,28 @@ mod tests {
             "muted",
         ] {
             assert!(
-                nombres_todos.contains(&cromo),
-                "falta `{cromo}` en el acuerdo con la hoja"
+                all_names.contains(&chrome),
+                "missing `{chrome}` in the agreement with the sheet"
             );
             assert!(
-                !nombres.contains(&cromo),
-                "`{cromo}` no debería proyectarse: el preset por defecto no \
-                 lo define, y la hoja lo deriva"
+                !names.contains(&chrome),
+                "`{chrome}` should not be projected: the default preset does \
+                 not define it, and the sheet derives it"
             );
         }
 
-        // Y cada uno lleva un color de verdad, no una cadena vacía que la
-        // hoja aceptaría en silencio.
-        for (nombre, color) in &roles {
+        // And each one carries a real color, not an empty string the sheet
+        // would silently accept.
+        for (name, color) in &roles {
             assert!(
                 color.starts_with('#') && color.len() == 7,
-                "`{nombre}` no es un color: {color:?}"
+                "`{name}` is not a color: {color:?}"
             );
         }
     }
 
-    /// Un tema de prueba con una regla de extensión y otra de tipo.
-    fn tema_con_ficheros() -> HostTheme {
+    /// A test theme with one extension rule and one kind rule.
+    fn theme_with_files() -> HostTheme {
         let t = norte_theme::Theme::from_toml(
             "name = \"t\"\n\
              [files.kind]\n\
@@ -931,118 +948,121 @@ mod tests {
              rs = { fg = \"#d7875f\" }\n\
              zip = { fg = \"#d75f5f\", dim = true }\n",
         )
-        .expect("parsea");
+        .expect("parses");
         HostTheme::de("t", &t)
     }
 
-    /// La extensión se casa contra BYTES, y por eso un nombre que no es UTF-8
-    /// válido conserva su color.
+    /// The extension is matched against BYTES, and that is why a name that
+    /// is not valid UTF-8 keeps its color.
     ///
-    /// Es el invariante que sostenía un comentario y nada más. El fixture es
-    /// `lossy_collapse_ff` del corpus canónico (`\xFF.rs`): quien refactorice
-    /// esto a decodificar el nombre ENTERO —que es la llamada más cómoda,
-    /// porque `texto` ya está construido ahí al lado— verá pasar todos los
-    /// tests, porque todos los nombres de todos los tests son ASCII, y
-    /// romperá en silencio cada fichero cuyo nombre no lo sea.
+    /// This is the invariant a comment and nothing else used to uphold. The
+    /// fixture is `lossy_collapse_ff` from the canonical corpus (`\xFF.rs`):
+    /// whoever refactors this into decoding the WHOLE name — which is the
+    /// more convenient call, because `text` is already built right there —
+    /// will see every test pass, because every test's names are ASCII, and
+    /// will silently break every file whose name is not.
     ///
-    /// `norte_theme::FileColors::style_for` valida con `from_utf8` SOLO el
-    /// trozo de la extensión, y el byte separador (`.`, 0x2E) no puede
-    /// aparecer dentro de una secuencia UTF-8 multibyte: por eso el corte es
-    /// seguro y por eso esto funciona.
+    /// `norte_theme::FileColors::style_for` validates with `from_utf8` ONLY
+    /// the extension's chunk, and the separator byte (`.`, 0x2E) cannot
+    /// appear inside a multibyte UTF-8 sequence: that is why the cut is safe
+    /// and why this works.
     #[test]
-    fn la_extension_se_casa_contra_bytes_y_sobrevive_a_un_nombre_no_utf8() {
-        let tema = tema_con_ficheros();
-        let valido = tema.estilo_de_entrada(b"main.rs", norte_theme::FileKind::Regular, false);
-        assert_eq!(valido.color, "#d7875f");
+    fn the_extension_matches_against_bytes_and_survives_a_non_utf8_name() {
+        let theme = theme_with_files();
+        let valid = theme.estilo_de_entrada(b"main.rs", norte_theme::FileKind::Regular, false);
+        assert_eq!(valid.color, "#d7875f");
 
-        // `\xFF.rs`: byte inválido en solitario. La extensión sigue siendo
-        // `rs` y el color tiene que ser el MISMO.
-        let hostil = tema.estilo_de_entrada(b"\xff.rs", norte_theme::FileKind::Regular, false);
+        // `\xFF.rs`: a lone invalid byte. The extension is still `rs` and the
+        // color has to be the SAME.
+        let hostile = theme.estilo_de_entrada(b"\xff.rs", norte_theme::FileKind::Regular, false);
         assert_eq!(
-            hostil.color, valido.color,
-            "un nombre no-UTF8 perdió el color de su extensión: alguien está \
-             decodificando el nombre entero"
+            hostile.color, valid.color,
+            "a non-UTF8 name lost its extension's color: someone is decoding \
+             the whole name"
         );
     }
 
-    /// Los CUATRO atributos que la ventana sabe pintar cruzan, no solo el
-    /// color: `retro-crt` atenúa los comprimidos con `dim`, y llevando solo
-    /// `fg` salían apagados en el terminal y a plena luz en la ventana.
+    /// The FOUR attributes the window knows how to paint travel, not just the
+    /// color: `retro-crt` dims the compressed ones with `dim`, and carrying
+    /// only `fg` made them come out dimmed in the terminal and at full
+    /// brightness in the window.
     #[test]
-    fn los_atributos_del_estilo_cruzan_y_no_solo_el_color() {
-        let tema = tema_con_ficheros();
-        let zip = tema.estilo_de_entrada(b"backup.zip", norte_theme::FileKind::Regular, false);
+    fn the_style_attributes_cross_and_not_just_the_color() {
+        let theme = theme_with_files();
+        let zip = theme.estilo_de_entrada(b"backup.zip", norte_theme::FileKind::Regular, false);
         assert_eq!(zip.color, "#d75f5f");
-        assert!(zip.dim, "`dim = true` del tema no llegó a la fila");
+        assert!(zip.dim, "the theme's `dim = true` did not reach the row");
 
-        let dir = tema.estilo_de_entrada(b"src", norte_theme::FileKind::Dir, false);
-        assert!(dir.bold, "un directorio va en negrita");
+        let dir = theme.estilo_de_entrada(b"src", norte_theme::FileKind::Dir, false);
+        assert!(dir.bold, "a directory is bold");
     }
 
-    /// El color de una entrada sale de la VARIANTE que el escritorio pide,
-    /// no de `[ui] theme` a secas.
+    /// An entry's color comes from the VARIANT the desktop asks for, not
+    /// from `[ui] theme` alone.
     ///
-    /// Con `theme_dark`/`theme_light` puestos, el renderer enchufa las
-    /// variables de la variante y el host resolvía contra el base: el cromo
-    /// salía de un tema y los NOMBRES del otro. Con el par `vscode-*` eso
-    /// dejaba directorios azules del oscuro sobre el blanco del claro, a
-    /// 2,6:1 — por debajo del suelo que esos mismos presets prometen en su
-    /// cabecera.
+    /// With `theme_dark`/`theme_light` set, the renderer plugs in the
+    /// variant's variables and the host used to resolve against the base:
+    /// the chrome came from one theme and the NAMES from the other. With the
+    /// `vscode-*` pair that left directories blue from the dark one over the
+    /// light one's white, at 2.6:1 — below the floor those same presets
+    /// promise in their header.
     #[test]
-    fn el_color_de_una_entrada_sale_de_la_variante_del_escritorio() {
-        let claro =
+    fn the_color_of_an_entry_comes_from_the_desktops_variant() {
+        let light =
             norte_theme::Theme::from_toml("name = \"c\"\n[files.ext]\nrs = { fg = \"#895503\" }\n")
-                .expect("parsea");
-        let oscuro =
+                .expect("parses");
+        let dark =
             norte_theme::Theme::from_toml("name = \"o\"\n[files.ext]\nrs = { fg = \"#e2c08d\" }\n")
-                .expect("parsea");
-        let mut tema = tema_con_ficheros();
-        tema.variante_clara = Some(Box::new(claro));
-        tema.variante_oscura = Some(Box::new(oscuro));
+                .expect("parses");
+        let mut theme = theme_with_files();
+        theme.variante_clara = Some(Box::new(light));
+        theme.variante_oscura = Some(Box::new(dark));
 
         let kind = norte_theme::FileKind::Regular;
         assert_eq!(
-            tema.estilo_de_entrada(b"main.rs", kind, true).color,
+            theme.estilo_de_entrada(b"main.rs", kind, true).color,
             "#e2c08d",
-            "el escritorio pide oscuro"
+            "the desktop asks for dark"
         );
         assert_eq!(
-            tema.estilo_de_entrada(b"main.rs", kind, false).color,
+            theme.estilo_de_entrada(b"main.rs", kind, false).color,
             "#895503",
-            "el escritorio pide claro"
+            "the desktop asks for light"
         );
     }
 
-    /// La regla de variante es LA MISMA que la de `themeFor` del renderer
-    /// (`ui/src/main.ts`): la variante de ese lado si la hay, y `theme` si no.
+    /// The variant rule is THE SAME as the renderer's `themeFor`
+    /// (`ui/src/main.ts`): that side's variant if there is one, and `theme`
+    /// if not.
     ///
-    /// Está escrita dos veces —el renderer necesita las variables CSS de
-    /// forma síncrona para no parpadear, el host necesita el `Theme` entero
-    /// para `[files.ext]`— así que lo que impide que diverjan es esto: los
-    /// tres casos, pineados. Si alguien cambia una de las dos, este test
-    /// tiene que cambiar, y al cambiarlo se ve la otra.
+    /// It is written twice — the renderer needs the CSS variables
+    /// synchronously so it does not flash, the host needs the whole `Theme`
+    /// for `[files.ext]` — so what keeps them from drifting apart is this:
+    /// the three cases, pinned. If someone changes one of the two, this test
+    /// has to change, and changing it reveals the other.
     #[test]
-    fn la_regla_de_variante_es_la_del_renderer() {
-        let base = tema_con_ficheros();
-        // Sin variantes: manda el base en los dos lados.
-        assert_eq!(base.para_esquema(true).name.as_deref(), Some("t"));
-        assert_eq!(base.para_esquema(false).name.as_deref(), Some("t"));
+    fn the_variant_rule_is_the_renderers() {
+        let base = theme_with_files();
+        // No variants: the base rules on both sides.
+        assert_eq!(base.for_scheme(true).name.as_deref(), Some("t"));
+        assert_eq!(base.for_scheme(false).name.as_deref(), Some("t"));
 
-        // Solo la oscura: el lado claro sigue con el base.
-        let mut solo_oscura = tema_con_ficheros();
-        solo_oscura.variante_oscura = Some(Box::new(
-            norte_theme::Theme::from_toml("name = \"o\"\n").expect("parsea"),
+        // Only the dark one: the light side stays with the base.
+        let mut dark_only = theme_with_files();
+        dark_only.variante_oscura = Some(Box::new(
+            norte_theme::Theme::from_toml("name = \"o\"\n").expect("parses"),
         ));
-        assert_eq!(solo_oscura.para_esquema(true).name.as_deref(), Some("o"));
-        assert_eq!(solo_oscura.para_esquema(false).name.as_deref(), Some("t"));
+        assert_eq!(dark_only.for_scheme(true).name.as_deref(), Some("o"));
+        assert_eq!(dark_only.for_scheme(false).name.as_deref(), Some("t"));
     }
 
-    /// Un tema que no dice nada de una entrada no inventa un color: el
-    /// renderer usa el normal del listado, que la hoja de estilos ya sabe.
+    /// A theme that says nothing about an entry does not invent a color: the
+    /// renderer uses the listing's normal one, which the style sheet already
+    /// knows.
     #[test]
-    fn sin_regla_no_hay_color() {
-        let tema = tema_con_ficheros();
-        let nada = tema.estilo_de_entrada(b"notas.txt", norte_theme::FileKind::Regular, false);
-        assert_eq!(nada, EstiloDeEntrada::default());
+    fn without_a_rule_there_is_no_color() {
+        let theme = theme_with_files();
+        let nothing = theme.estilo_de_entrada(b"notas.txt", norte_theme::FileKind::Regular, false);
+        assert_eq!(nothing, EntryStyle::default());
     }
 }

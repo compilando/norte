@@ -1,58 +1,59 @@
-//! ¿Puede el destino sujetar sus propias escrituras? (#164, ADR 0054)
+//! Can the destination hold its own writes? (#164, ADR 0054)
 //!
-//! Un `Copy` recursivo compone `destino + relativo` paso a paso, y un symlink
-//! puesto en un componente INTERMEDIO entre que el humano dice que sí y que los
-//! bytes se escriben manda la copia a otro sitio. Donde el sistema sabe abrir
-//! relativo a un descriptor —Linux y macOS— el core abre la raíz una vez y ese
-//! desvío deja de existir. Donde no —Windows, SFTP, un bucket—, la copia se
-//! hace igual, por ruta, como se ha hecho siempre.
+//! A recursive `Copy` composes `destination + relative` step by step, and a
+//! symlink placed on an INTERMEDIATE component between the human saying yes
+//! and the bytes being written sends the copy somewhere else. Where the
+//! system knows how to open relative to a descriptor — Linux and macOS — the
+//! core opens the root once and that detour stops existing. Where it does
+//! not — Windows, SFTP, a bucket — the copy is done the same way it always
+//! has been, by path.
 //!
-//! Aquí se AVISA de eso segundo, y no se rehúsa. El mismo contrato que
-//! [`crate::space`]: se pone el hecho delante y decide el humano. Rehusar
-//! dejaría sin copiar a los destinos que no pueden dar esa defensa, que es un
-//! precio muchísimo más alto que la carrera que evita — y esa carrera pide que
-//! alguien con acceso al árbol de destino plante un symlink en el momento
-//! exacto.
+//! What happens here is a WARNING about that second case, not a refusal. The
+//! same contract as [`crate::space`]: put the fact in front and let the human
+//! decide. Refusing would leave unable to copy exactly the destinations that
+//! cannot offer that defense, which is a far higher price than the race it
+//! avoids — and that race requires someone with access to the destination
+//! tree to plant a symlink at the exact moment.
 //!
-//! # Lo que la línea NO promete
+//! # What the line does NOT promise
 //!
-//! Su ausencia dice que el destino SABE confinar. Desde #219 eso alcanza a
-//! TODA transferencia y no solo a las recursivas: una hoja suelta también
-//! cuelga de un árbol aprobado —su directorio destino, que es el que el humano
-//! eligió— y el core le abre raíz. El razonamiento que decía lo contrario
-//! («una hoja no tiene ventana que aprovechar») era falso: entre el gate y los
-//! bytes hay el `stat` de la colisión, la creación del staging, su publicación
-//! y hasta tres reintentos, cada uno resolviendo la ruta otra vez.
+//! Its absence says the destination KNOWS how to confine. Since #219 that
+//! reaches EVERY transfer, not only recursive ones: a lone leaf also hangs
+//! off an approved tree — its destination directory, the one the human chose
+//! — and the core opens its root. The reasoning that said otherwise ("a leaf
+//! has no window to exploit") was false: between the gate and the bytes there
+//! is the collision `stat`, the staging creation, its publish and up to three
+//! retries, each one resolving the path again.
 //!
-//! Lo que sigue sin cubrir, y por eso esto no promete «esta operación va
-//! confinada» sino «este sitio sabe confinar»: un componente INTERMEDIO del
-//! directorio aprobado sustituido antes de abrirlo. El ancla se consigue
-//! abriendo una ruta, así que esa primera resolución es por ruta por
-//! definición — es el mismo residuo que una copia recursiva acepta para su
-//! propio destino. Lo que la capability describe es la UBICACIÓN, que es de lo
-//! que va ADR 0054.
+//! What remains uncovered, and why this does not promise "this operation is
+//! confined" but "this place knows how to confine": an INTERMEDIATE component
+//! of the approved directory swapped out before it is opened. The anchor is
+//! obtained by opening a path, so that first resolution is by path by
+//! definition — it is the same residue a recursive copy accepts for its own
+//! destination. What the capability describes is the LOCATION, which is what
+//! ADR 0054 is about.
 
 use norte_i18n::{Lang, t_in};
 use norte_proto::{Capabilities, CapabilityFlags};
 
-/// El aviso, o `None` cuando el destino sabe confinar.
+/// The warning, or `None` when the destination knows how to confine.
 ///
-/// Que sepa NO se anuncia: una línea en cada copia es ruido, y el ruido enseña
-/// a saltarse la línea justo el día que dice algo.
+/// Knowing how is NOT announced: a line on every copy is noise, and noise
+/// teaches people to skip the line on the exact day it says something.
 ///
 /// ```
 /// use norte_frontend::confine::warning;
 /// use norte_i18n::Lang;
 /// use norte_proto::{Capabilities, CapabilityFlags};
 ///
-/// let confina = Capabilities {
+/// let confines = Capabilities {
 ///     flags: CapabilityFlags::CONFINED_WRITES,
 ///     max_path: None,
 /// };
-/// assert!(warning(confina, Lang::En).is_none());
+/// assert!(warning(confines, Lang::En).is_none());
 ///
-/// let no = Capabilities { flags: CapabilityFlags::empty(), max_path: None };
-/// assert!(warning(no, Lang::En).is_some(), "el humano decide, pero enterado");
+/// let cannot = Capabilities { flags: CapabilityFlags::empty(), max_path: None };
+/// assert!(warning(cannot, Lang::En).is_some(), "the human decides, but informed");
 /// ```
 #[must_use]
 pub fn warning(caps: Capabilities, lang: Lang) -> Option<String> {
@@ -73,39 +74,40 @@ mod tests {
         }
     }
 
-    /// Un destino que confina no dice nada.
+    /// A destination that confines says nothing.
     #[test]
-    fn un_destino_que_confina_se_calla() {
+    fn a_confining_destination_stays_quiet() {
         assert_eq!(
             warning(caps(CapabilityFlags::CONFINED_WRITES), Lang::En),
             None
         );
     }
 
-    /// Y uno que no, lo dice — sin bloquear nada.
+    /// And one that cannot, says so — without blocking anything.
     #[test]
-    fn un_destino_que_no_puede_confinar_avisa() {
-        let aviso = warning(caps(CapabilityFlags::empty()), Lang::En)
-            .expect("el humano decide, pero enterado");
-        assert!(!aviso.is_empty(), "la clave existe en el catálogo");
+    fn a_destination_that_cannot_confine_warns() {
+        let warning_text = warning(caps(CapabilityFlags::empty()), Lang::En)
+            .expect("the human decides, but informed");
+        assert!(!warning_text.is_empty(), "the key exists in the catalogue");
     }
 
-    /// El resto de flags no tiene voz en esto: lo que se mira es UNO, y un
-    /// destino cargado de capacidades que no incluyan esta avisa igual.
+    /// The rest of the flags have no say in this: what is checked is ONE, and
+    /// a destination loaded with capabilities that do not include this one
+    /// still warns.
     #[test]
-    fn ningun_otro_flag_lo_silencia() {
-        let ruidoso = CapabilityFlags::all() - CapabilityFlags::CONFINED_WRITES;
-        assert!(warning(caps(ruidoso), Lang::En).is_some());
+    fn no_other_flag_silences_it() {
+        let noisy = CapabilityFlags::all() - CapabilityFlags::CONFINED_WRITES;
+        assert!(warning(caps(noisy), Lang::En).is_some());
     }
 
-    /// Y la línea está en los dos idiomas: una clave ausente saldría como el
-    /// nombre de la clave, que es peor que no avisar.
+    /// And the line exists in both languages: a missing key would come out as
+    /// the key's name, which is worse than not warning at all.
     #[test]
-    fn la_linea_existe_en_los_dos_idiomas() {
+    fn the_line_exists_in_both_languages() {
         let en = warning(caps(CapabilityFlags::empty()), Lang::En).expect("en");
         let es = warning(caps(CapabilityFlags::empty()), Lang::Es).expect("es");
-        assert_ne!(en, "confine-warning", "clave sin traducir en inglés");
-        assert_ne!(es, "confine-warning", "clave sin traducir en español");
-        assert_ne!(en, es, "y no son la misma frase");
+        assert_ne!(en, "confine-warning", "untranslated key in English");
+        assert_ne!(es, "confine-warning", "untranslated key in Spanish");
+        assert_ne!(en, es, "and they are not the same sentence");
     }
 }

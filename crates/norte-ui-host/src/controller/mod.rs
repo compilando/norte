@@ -1,15 +1,14 @@
-//! El único escritor del estado.
+//! The state's only writer.
 //!
-//! Todo lo que puede cambiar la pantalla —una acción del renderer, una
-//! respuesta del daemon, un temporizador— entra por UN buzón acotado y lo
-//! aplica UNA task. No hay locks que cruzar, y por tanto no hay lock que se
-//! quede tomado durante una llamada al backend: lo que hay es una cola.
+//! Everything that can change the screen — a renderer action, a daemon
+//! answer, a timer — comes in through ONE bounded mailbox and ONE task
+//! applies it. There are no locks to cross, and therefore no lock left held
+//! during a backend call: what there is, is a queue.
 //!
-//! De ahí salen las dos garantías que el bridge promete y el renderer
-//! necesita: las acciones se aplican EN ORDEN, y la secuencia de
-//! actualizaciones no salta. Cuando un suscriptor no drena y se queda atrás,
-//! no se le acumulan parches: se le manda un snapshot y vuelve a estar al
-//! día (ADR 0066).
+//! From that come the two guarantees the bridge promises and the renderer
+//! needs: actions are applied IN ORDER, and the update sequence never skips.
+//! When a subscriber does not drain and falls behind, patches do not pile up
+//! for it: it is sent a snapshot and is caught up again (ADR 0066).
 
 use std::sync::Arc;
 
@@ -34,10 +33,10 @@ use crate::dto::{
     TaskStateView, TaskView, UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
 };
 
-// Los `impl Estado` repartidos por tema (ADR 0086). El actor, el buzón,
-// el `Estado` y el reparto de acciones se quedan aquí; cada módulo hijo
-// ve lo privado de este porque es su descendiente, así que el movimiento
-// no ha necesitado abrir la visibilidad de nada.
+// The `impl Estado` blocks split by topic (ADR 0086). The actor, the
+// mailbox, `Estado` and action dispatch stay here; every child module sees
+// this one's private items because it is a descendant, so the move has
+// needed no visibility opened up.
 mod agents;
 mod ai;
 mod approvals;
@@ -80,34 +79,34 @@ mod viewer;
 mod views;
 mod wizard;
 
-/// Capacidad del buzón del actor. Acotado a propósito: si el renderer manda
-/// más rápido de lo que el host aplica, se le hace esperar — jamás se crece
-/// sin límite.
+/// The actor's mailbox capacity. Bounded on purpose: if the renderer sends
+/// faster than the host applies, it is made to wait — it is never grown
+/// without limit.
 const INBOX: usize = 256;
 
-/// Entradas de la PRIMERA página: lo que se pinta antes de seguir drenando.
+/// FIRST page entries: what is painted before continuing to drain.
 ///
-/// El mismo número que usa el TUI (`navigate::FIRST_PAGE`) y por el mismo
-/// motivo: el primer frame no espera al listado entero, y un directorio de
-/// medio millón de entradas se ve igual de rápido que uno de diez.
+/// The same number the TUI uses (`navigate::FIRST_PAGE`) and for the same
+/// reason: the first frame does not wait for the whole listing, and a
+/// directory of half a million entries looks just as fast as one of ten.
 const FIRST_PAGE: usize = 100;
 
-/// Entradas por lote mientras se drena el resto. Ni una a una —un mensaje
-/// por entrada ahoga el buzón del actor— ni todas de golpe.
+/// Entries per batch while the rest drains. Neither one at a time — one
+/// message per entry chokes the actor's mailbox — nor all at once.
 const FILL_BATCH: usize = 500;
 
-/// Lo que se espera a la lectura del visor.
+/// How long the viewer's read is awaited.
 const PLAZO_VISOR: std::time::Duration = std::time::Duration::from_secs(20);
 
-/// Los contextos de ayuda que ESTA ventana puede estar viviendo.
+/// The help contexts THIS window can be living in.
 ///
-/// Escrita a mano y cerrada, como la del TUI (`norte_tui::help_context`), y
-/// por el mismo motivo: derivada del corpus coincidiría consigo misma por
-/// construcción y no cazaría nada. Un test la contrasta contra las páginas
-/// del corpus EN LOS DOS SENTIDOS — un contexto que ninguna página reclama es
-/// un hallazgo, y una página que reclama un contexto que no está aquí también
-/// —, que es lo que impide que renombrar una portada deje a `F1` abriendo el
-/// índice en silencio.
+/// Written by hand and closed, like the TUI's (`norte_tui::help_context`),
+/// and for the same reason: one derived from the corpus would match itself
+/// by construction and catch nothing. A test checks it against the corpus's
+/// pages in BOTH DIRECTIONS — a context no page claims is a finding, and a
+/// page claiming a context that is not here is one too — which is what
+/// keeps renaming a front page from leaving `F1` silently opening the
+/// index.
 pub const CONTEXTOS: &[&str] = &[
     "browse",
     "viewer",
@@ -117,8 +116,8 @@ pub const CONTEXTOS: &[&str] = &[
     "dialog.ai-rename",
 ];
 
-/// Cómo se llaman las extensiones y sus comandos, ya enmascarados:
-/// `id → (nombre, comando → título)`.
+/// What extensions and their commands are called, already masked:
+/// `id → (name, command → title)`.
 type Rotulos = std::collections::HashMap<
     String,
     (
@@ -127,70 +126,74 @@ type Rotulos = std::collections::HashMap<
     ),
 >;
 
-/// Lo que hace falta para pintar la salida de un comando: quién, qué, y qué
-/// contestó.
+/// What it takes to paint a command's output: who, what, and what it
+/// answered.
 struct SalidaPedida {
-    /// El id de la extensión, reverse-DNS validado.
+    /// The extension's id, reverse-DNS validated.
     id: String,
-    /// Su nombre, ya enmascarado, con su bandera.
+    /// Its name, already masked, with its flag.
     plugin: crate::extensions::Texto,
-    /// El título del comando, ya enmascarado, con su bandera.
+    /// The command's title, already masked, with its flag.
     comando: crate::extensions::Texto,
-    /// Lo que imprimió, o por qué no.
+    /// What it printed, or why not.
     res: Result<String, Error>,
 }
 
-/// Lo que esta ventana tiene del ESCRITORIO.
+/// What this window has from the DESKTOP.
 ///
-/// Juntos porque son la misma cosa vista dos veces: por dónde se le pide algo
-/// al proceso que hospeda, y lo que ese proceso contestó y sigue en pantalla.
+/// Together because they are the same thing seen twice: where something is
+/// asked of the hosting process, and what that process answered and is
+/// still on screen.
 #[derive(Debug, Default)]
 struct Escritorio {
-    /// Por dónde salen los efectos NATIVOS, cuando hay alguien escuchando.
+    /// Where NATIVE effects go out through, when someone is listening.
     ///
-    /// `Option` porque el estado se construye antes que el canal —la primera
-    /// foto sale de él— y porque un host sin nadie suscrito tiene que poder
-    /// seguir: un efecto que nadie recoge es un gesto que no pasa nada, no un
-    /// error.
+    /// `Option` because the state is built before the channel — the first
+    /// snapshot comes from it — and because a host with nobody subscribed
+    /// has to be able to keep going: an effect nobody picks up is a gesture
+    /// that does nothing, not an error.
     nativos: Option<broadcast::Sender<crate::dto::NativeEffect>>,
-    /// La salida del último comando de extensión, si sigue en pantalla.
+    /// The last extension command's output, if it is still on screen.
     ///
-    /// Aquí y no en el gestor de extensiones: un comando se lanza desde la
-    /// PALETA, que no necesita tener el gestor abierto —ni lo abre—, y una
-    /// salida guardada dentro de una pantalla cerrada no la ve nadie.
+    /// Here and not in the extensions manager: a command is launched from
+    /// the PALETTE, which does not need the manager open — and does not
+    /// open it — and an output stored inside a closed screen is seen by
+    /// nobody.
     salida: Option<crate::dto::ExtensionOutputView>,
-    /// La salida del último PROGRAMA que se corrió esperándolo (#312), si
-    /// sigue en pantalla.
+    /// The last waited-for PROGRAM's output (#312), if it is still on
+    /// screen.
     programa: Option<crate::dto::ProgramOutputView>,
 }
 
-/// Lo que esta ventana sabe de las sesiones de AGENTE.
+/// What this window knows about AGENT sessions.
 ///
-/// Juntas y no sueltas en el estado: las tres describen lo mismo —quién ha
-/// pedido permiso, si se está mirando, y qué se está deshaciendo— y separarlas
-/// era tener que acordarse de las tres cada vez que una cambia.
+/// Together and not loose in the state: all three describe the same thing —
+/// who has asked for permission, whether it is being looked at, and what is
+/// being undone — and splitting them apart meant having to remember all
+/// three every time one changes.
 #[derive(Debug, Default)]
 struct Agencia {
-    /// Lo visto. SIEMPRE presente: una petición llega cuando llega, y el
-    /// panel solo decide si se pinta.
+    /// What has been seen. ALWAYS present: a request arrives when it
+    /// arrives, and the panel only decides whether to paint it.
     sesiones: crate::agents::Agentes,
-    /// El panel está abierto.
+    /// The panel is open.
     panel: bool,
-    /// Qué sesión deshace cada task de undo en marcha, por id de task.
+    /// Which session each in-progress undo task undoes, by task id.
     ///
-    /// El desenlace llega por el progreso, que solo trae el id: sin este mapa
-    /// no hay forma de saber a qué sesión soltarle el «deshaciendo».
+    /// The outcome arrives through progress, which only carries the id:
+    /// without this map there is no way to know which session to release
+    /// "undoing" for.
     undos: std::collections::HashMap<u64, String>,
 }
 
-/// Qué se cambia de una extensión.
+/// What is changed about an extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Cambio {
-    /// Conceder o retirar sus capabilities.
+    /// Grant or revoke its capabilities.
     Aprobacion,
-    /// Encenderla o apagarla.
+    /// Turn it on or off.
     Encendido,
-    /// Desinstalarla (ADR 0104).
+    /// Uninstall it (ADR 0104).
     Desinstalacion,
 }
 
@@ -205,267 +208,276 @@ impl From<crate::action::ExtensionChange> for Cambio {
     }
 }
 
-/// El cambio ya resuelto a un valor concreto.
+/// The change already resolved to a concrete value.
 ///
-/// Aparte de [`Cambio`] a propósito: `a` sobre una fila significa cosas
-/// distintas según cómo esté, y la que viaja al daemon es la resuelta.
+/// Separate from [`Cambio`] on purpose: `a` over a row means different
+/// things depending on its state, and what travels to the daemon is the
+/// resolved one.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Gobierno {
-    /// `plugin.set_approval`, con el ancla que se ENSEÑÓ (#282). `None` al
-    /// revocar: quitar un permiso no concede nada, y rehusarlo por un digest
-    /// rancio dejaría vivo justo lo que alguien intenta quitar.
+    /// `plugin.set_approval`, with the anchor that was SHOWN (#282). `None`
+    /// when revoking: taking away a permission grants nothing, and refusing
+    /// it over a stale digest would keep alive exactly what someone is
+    /// trying to remove.
     Aprobar(bool, Option<String>),
     /// `plugin.set_enabled`.
     Encender(bool),
-    /// `plugin.uninstall` (ADR 0104). Ya confirmado por un humano.
+    /// `plugin.uninstall` (ADR 0104). Already confirmed by a human.
     Desinstalar,
 }
 
-/// Tope de capabilities que una pregunta de concesión puede enseñar.
+/// Cap on capabilities a grant question can show.
 ///
-/// No es un recorte: por encima de esto NO se pregunta. Un manifiesto que
-/// declara más capabilities de las que caben en una pantalla no produce una
-/// decisión informada, y conceder lo que no se leyó es lo que esta pregunta
-/// existe para evitar.
+/// Not a trim: above this, it does NOT ask. A manifest declaring more
+/// capabilities than fit on one screen does not produce an informed
+/// decision, and granting what was not read is what this question exists to
+/// prevent.
 const MAX_CAPABILIDADES: usize = 32;
 
-/// Tope de caracteres de la salida de un comando de extensión.
+/// Cap on characters of an extension command's output.
 ///
-/// Lo que imprime un plugin no tiene tope por su lado: un comando puede
-/// devolver un megabyte y dejarlo cruzar es regalarle la ventana. Se aplica
-/// ANTES de enmascarar: si no, una salida de 100 MB se enmascara entera —y se
-/// materializa entera en la task del escritor— para que sobrevivan cuatro mil
-/// caracteres.
+/// What a plugin prints has no cap on its own side: a command can return a
+/// megabyte and letting it through hands it the window. It is applied
+/// BEFORE masking: otherwise, a 100 MB output gets masked whole — and
+/// materializes whole in the writer's task — just so four thousand
+/// characters survive.
 const MAX_SALIDA: usize = 4_000;
 
-/// Tope de LÍNEAS de esa salida.
+/// Cap on LINES of that output.
 ///
-/// Las líneas cruzan sueltas para que un salto de línea no marque como
-/// hostil una salida honesta, y una lista también necesita su tope.
+/// Lines cross loose so that a line break does not mark an honest output as
+/// hostile, and a list also needs its own cap.
 const MAX_SALIDA_LINEAS: usize = 200;
 
-/// Plazo de EJECUTAR un comando de extensión.
+/// Deadline for RUNNING an extension command.
 ///
-/// Aparte del de leer el catálogo, y mucho más largo: al otro lado corre
-/// código de tercero que puede estar indexando o hablando por red, y cortarlo
-/// a los cinco segundos no lo para —sigue corriendo en el daemon, con sus
-/// efectos— sino que solo deja a esta ventana sin saber cómo acabó.
+/// Separate from the one for reading the catalog, and much longer: on the
+/// other side runs third-party code that can be indexing or talking over
+/// the network, and cutting it off at five seconds does not stop it — it
+/// keeps running on the daemon, with its effects — it only leaves this
+/// window not knowing how it ended.
 const PLAZO_COMANDO: std::time::Duration = std::time::Duration::from_mins(1);
 
-/// Plazo de una llamada de extensiones (catálogo o página).
+/// Deadline for an extensions call (catalog or page).
 ///
-/// La ayuda se pinta sin esperarla, así que este plazo no gobierna una
-/// pantalla: gobierna una tarea que si no volviera jamás dejaría un `id`
-/// reclamado y una página en blanco para siempre.
+/// Help is painted without waiting for it, so this deadline does not govern
+/// a screen: it governs a task that, if it never came back, would leave an
+/// `id` claimed and a page blank forever.
 const PLAZO_PLUGINS: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Cuánto sigue en el tablero una task ya TERMINADA.
+/// How long an already-FINISHED task stays on the board.
 ///
-/// Sin esto una terminal se quedaba hasta que otra la empujaba fuera por el
-/// tope de filas, así que lo que el panel enseñaba de un vistazo era el
-/// historial de la sesión y no lo que está pasando. Diez segundos bastan para
-/// leer el `✓` o el error, y por debajo el tablero vuelve a hablar del
-/// presente. El mismo número que el TUI, a propósito: dos frontends que
-/// caducan distinto son dos respuestas a «¿sigue esto en marcha?».
+/// Without this a terminal one stayed until another pushed it out by the row
+/// cap, so what the panel showed at a glance was the session's history and
+/// not what is happening. Ten seconds are enough to read the "✓" or the
+/// error, and below that the board goes back to talking about the present.
+/// The same number as the TUI, on purpose: two frontends that expire
+/// differently are two answers to "is this still running?".
 const TTL_TASK_TERMINAL: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Cada cuánto se mira si la sesión cambió y, si cambió, se escribe.
+/// How often it is checked whether the session changed and, if it did,
+/// written.
 ///
-/// El mismo segundo que el terminal (`session_tick` en su bucle), a
-/// propósito: dos frontends que guardan a ritmos distintos son dos respuestas
-/// a «¿dónde me quedé?» tras un cierre que no llegó a tiempo. Y un segundo es
-/// barato: comparar el cuerpo con lo último mandado es lo único que hace un
-/// tic sin cambios.
+/// The same second as the terminal (`session_tick` in its loop), on purpose:
+/// two frontends saving at different rates are two answers to "where was I"
+/// after a close that did not make it in time. And a second is cheap:
+/// comparing the body against the last one sent is all a tick with no
+/// changes does.
 const SESION_TIC: std::time::Duration = std::time::Duration::from_secs(1);
 
-/// Cada cuánto se vuelca lo que el shell del panel de terminal haya escrito.
+/// How often what the terminal pane's shell has written is flushed.
 ///
-/// Treinta veces por segundo: es lo que hace que teclear ahí dentro se sienta
-/// como teclear en un terminal y no como mandar un telegrama. Un tic que no
-/// encuentra bytes no produce parche ni despierta al renderer, así que un
-/// shell quieto no cuesta más que comprobar un buzón vacío.
+/// Thirty times a second: that is what makes typing in there feel like
+/// typing in a terminal and not like sending a telegram. A tick that finds
+/// no bytes produces no patch and wakes no renderer, so an idle shell costs
+/// no more than checking an empty mailbox.
 ///
-/// Y la bomba solo corre mientras el panel existe: ver `Mensaje::TerminalTic`.
+/// And the pump only runs while the panel exists: see `Mensaje::TerminalTic`.
 const TERMINAL_TIC: std::time::Duration = std::time::Duration::from_millis(33);
 
-/// Plazo de una petición de plan a un modelo.
+/// Deadline for a plan request to a model.
 ///
-/// Generoso: pensar es lo que hace. Es el tope de ARRIBA, para que una
-/// llamada que no vuelva jamás no deje la petición en vuelo para siempre —
-/// con `Escape` como única salida y sin nada en pantalla que diga que sigue
-/// viva.
+/// Generous: thinking is what it does. It is the UPPER cap, so a call that
+/// never comes back does not leave the request in flight forever — with
+/// `Escape` as the only exit and nothing on screen saying it is still alive.
 const PLAZO_IA: std::time::Duration = std::time::Duration::from_mins(2);
 
-/// Tope de un nombre tecleado, en bytes. Ni `NAME_MAX` (que es del sistema
-/// de ficheros y no lo sabemos aquí) ni el de pantalla: un tope generoso que
-/// impide que un renderer mande un megabyte, y que RECHAZA en vez de
-/// recortar — recortar un nombre es inventarse otro.
+/// Cap on a typed name, in bytes. Neither `NAME_MAX` (which belongs to the
+/// filesystem and is not known here) nor the screen's: a generous cap that
+/// keeps a renderer from sending a megabyte, and that REJECTS instead of
+/// trimming — trimming a name is inventing another one.
 const MAX_NOMBRE: usize = 4096;
 
-/// Lo que el visor lee de un fichero: una cabecera de 256 KiB. El resto NO
-/// se lee — el mismo presupuesto que el TUI, y por el mismo motivo (ADR
-/// 0005): un visor no es una excusa para traerse un fichero de un giga.
+/// What the viewer reads from a file: a 256 KiB header. The rest is NOT
+/// read — the same budget as the TUI, and for the same reason (ADR 0005): a
+/// viewer is not an excuse to pull in a gigabyte file.
 const VISOR_CAP: u64 = 256 * 1024;
 
-/// Lo más que se lee de una IMAGEN para previsualizarla: 8 MiB.
+/// The most read from an IMAGE to preview it: 8 MiB.
 ///
-/// Aparte del tope del visor de texto, que es una CABECERA a propósito —una
-/// imagen no se puede enseñar a medias—. Una foto de móvil cabe de sobra;
-/// un TIFF de escáner no, y entonces no se pinta y se dice (ADR 0069).
+/// Separate from the text viewer's cap, which is a HEADER on purpose — an
+/// image cannot be shown halfway. A phone photo fits with room to spare; a
+/// scanner TIFF does not, and then it is not painted, and it is reported
+/// (ADR 0069).
 const IMAGEN_CAP: u64 = 8 * 1024 * 1024;
 
-/// Sondas simultáneas contra el daemon. El mismo número que el TUI, y por el
-/// mismo motivo: una sesión remota no puede pagar N viajes en serie.
+/// Simultaneous probes against the daemon. The same number as the TUI, and
+/// for the same reason: a remote session cannot afford N trips in series.
 const SONDEOS_A_LA_VEZ: usize = 8;
 
-/// Lo que se espera a UNA sonda. Un provider colgado no puede llevarse por
-/// delante el resto de la tanda.
+/// How long ONE probe is awaited. A hung provider cannot take the rest of
+/// the batch down with it.
 const PLAZO_SONDEO: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// Cuántas entradas se sondean de una tanda. Es una PANTALLA con holgura:
-/// más no se ve, y cada sondeo es un viaje al daemon.
+/// How many entries are probed per batch. It is a SCREEN with slack: more
+/// is not seen, and every probe is a trip to the daemon.
 const MAX_SONDEOS: usize = 200;
 
-/// Actualizaciones retenidas para un suscriptor lento. Al pasarse, el
-/// suscriptor se entera de que se quedó atrás y pide un snapshot: es la
-/// recuperación barata, y la que no gasta memoria del host.
+/// Updates retained for a slow subscriber. Once past that, the subscriber
+/// finds out it fell behind and requests a snapshot: it is the cheap
+/// recovery, the one that spends no host memory.
 const UPDATE_BUFFER: usize = 64;
 
-/// Cuántas filas mueve una página en la ayuda.
+/// How many rows a page moves in help.
 ///
-/// El renderer es dueño del scroll del cuerpo —una página del corpus cruza
-/// entera—, así que este número solo gobierna los CURSORES, que son los que
-/// el host lleva.
+/// The renderer owns the body's scroll — a corpus page crosses whole — so
+/// this number only governs the CURSORS, the ones the host carries.
 const PAGINA_DE_AYUDA: usize = 10;
 
-/// Cómo arrancar el host.
+/// How to start the host.
 pub struct UiHostOptions {
-    /// Con quién habla.
+    /// Who it talks to.
     pub backend: Arc<dyn HostBackend>,
-    /// Dónde empieza el listado.
+    /// Where the listing starts.
     pub initial_dir: VPath,
-    /// [`Self::initial_dir`] lo ESCRIBIÓ un humano en la línea de órdenes.
+    /// [`Self::initial_dir`] was TYPED by a human on the command line.
     ///
-    /// Con `false` es el directorio actual del proceso, o sea un valor por
-    /// defecto que la sesión tiene todo el derecho a pisar. Con `true` es una
-    /// intención, y gana: `norte-gui /usr/bin` con una sesión guardada abría
-    /// donde estuvieras ayer y se comía el argumento sin decir nada.
+    /// With `false` it is the process's current directory, i.e. a default
+    /// the session has every right to overwrite. With `true` it is an
+    /// intent, and it wins: `norte-gui /usr/bin` with a saved session used
+    /// to open where you were yesterday and silently swallow the argument.
     ///
-    /// Solo el panel ACTIVO. El otro se queda donde la sesión lo dejó: media
-    /// pantalla de memoria que nadie pidió tirar. Es la misma regla que
-    /// `App::pin_start_dir` en el terminal.
+    /// Only the ACTIVE pane. The other one stays where the session left it:
+    /// half a screen of memory nobody asked to be dropped. It is the same
+    /// rule as `App::pin_start_dir` in the terminal.
     pub initial_dir_pedido: bool,
-    /// Esta ventana es el otro extremo de un RELEVO (`--attach`, fase 9), así
-    /// que además de la pantalla reclama lo MARCADO que el otro frontend dejó.
+    /// This window is the other end of a HANDOFF (`--attach`, phase 9), so
+    /// besides the screen it claims the MARKS the other frontend left.
     ///
-    /// La misma naturaleza que [`Self::initial_dir_pedido`] —cómo se lanzó el
-    /// proceso—, y por eso vive a su lado. Sin él, un arranque es un arranque:
-    /// unas marcas de un relevo que se quedó a medias no resucitan al día
-    /// siguiente.
+    /// The same nature as [`Self::initial_dir_pedido`] — how the process was
+    /// launched — and that is why it lives next to it. Without it, a
+    /// startup is a startup: marks from a handoff left halfway do not come
+    /// back to life the next day.
     pub attach: bool,
-    /// Idioma ya negociado, para que el renderer pida su catálogo.
+    /// Language already negotiated, so the renderer can request its
+    /// catalog.
     pub locale: String,
-    /// El keymap EFECTIVO de la pantalla de listado, ya fusionado
-    /// (preset + capas del usuario). Lo construye quien arranca el host —
-    /// leer configuración no es asunto suyo—; [`crate::keys::keymap_de_preset`]
-    /// hace lo mínimo para un test o un arranque sin configuración.
+    /// The listing screen's EFFECTIVE keymap, already merged
+    /// (preset + user layers). Built by whoever starts the host — reading
+    /// configuration is not its business; [`crate::keys::keymap_de_preset`]
+    /// does the minimum for a test or a startup with no configuration.
     pub keymap: Effective,
-    /// El keymap efectivo de la pantalla del VISOR, con las mismas capas.
-    /// Va aparte porque es otra pantalla: con el visor abierto las teclas son
-    /// suyas, igual que en el TUI, y mezclarlas sería inventarse un tercer
-    /// contexto de entrada que no existe en ningún preset.
+    /// The VIEWER screen's effective keymap, with the same layers. It goes
+    /// apart because it is a different screen: with the viewer open the
+    /// keys are its own, same as in the TUI, and mixing them would be
+    /// inventing a third input context that exists in no preset.
     pub keymap_viewer: Effective,
-    /// El keymap efectivo de un DIÁLOGO, con las mismas capas.
+    /// A DIALOG's effective keymap, with the same layers.
     ///
-    /// Tercera pantalla, por el mismo motivo que la del visor: con una
-    /// pregunta delante las teclas son suyas. Sin esto, esta ventana atendía
-    /// sus diálogos con teclas fijas y un preset que reataba
-    /// `dialog.confirm` cambiaba el TUI y no la ventana (#287).
+    /// Third screen, for the same reason as the viewer's: with a question in
+    /// front, the keys are its own. Without this, this window handled its
+    /// dialogs with fixed keys and a preset rebinding `dialog.confirm`
+    /// changed the TUI and not the window (#287).
     pub keymap_dialog: Effective,
-    /// La disposición: el árbol de huecos. De un preset de fábrica
-    /// (`norte_frontend::layout::presets::tree`) o de la configuración del
-    /// usuario; el host no lee ficheros.
+    /// The layout: the slot tree. From a factory preset
+    /// (`norte_frontend::layout::presets::tree`) or from the user's
+    /// configuration; the host reads no files.
     pub layout: Node,
-    /// El tamaño INICIAL de la ventana, en celdas de layout. El renderer lo
-    /// corrige en cuanto sepa el suyo ([`UiAction::SetViewport`]).
+    /// The window's INITIAL size, in layout cells. The renderer corrects it
+    /// as soon as it knows its own ([`UiAction::SetViewport`]).
     pub viewport: (u16, u16),
-    /// Hasta dónde llega este frontend: solo mirar, o también escribir.
+    /// How far this frontend goes: only looking, or also writing.
     ///
-    /// No es una amputación del host —sabe mutar y sus tests lo prueban—
-    /// sino una decisión de quien lo monta. La ventana gráfica arrancó en
-    /// [`crate::commands::Efectos::SoloLectura`] hasta que la revisión de
-    /// seguridad de la tarea 5.4 levantó su interruptor; hoy los tres
-    /// montajes (ventana, TUI y tests) usan
-    /// [`crate::commands::Efectos::Completo`], y `SoloLectura` sigue siendo
-    /// la posición que puede elegir un montaje que no quiera autoridad
-    /// destructiva ni de policy.
+    /// Not an amputation of the host — it knows how to mutate and its tests
+    /// prove it — but a decision made by whoever assembles it. The graphical
+    /// window started at
+    /// [`crate::commands::Efectos::SoloLectura`] until task 5.4's security
+    /// review lifted its toggle; today all three setups (window, TUI and
+    /// tests) use [`crate::commands::Efectos::Completo`], and `SoloLectura`
+    /// remains the position a setup that wants neither destructive nor
+    /// policy authority can choose.
     pub effects: crate::commands::Efectos,
-    /// La configuración YA cargada, para los ajustes en solo lectura.
+    /// The ALREADY loaded configuration, for read-only settings.
     ///
-    /// La lee quien arranca el host, UNA vez, como todo lo demás: un
-    /// frontend que la relee por su cuenta acaba enseñando unos ajustes que
-    /// no son los que está usando.
+    /// Read by whoever starts the host, ONCE, like everything else: a
+    /// frontend that re-reads it on its own ends up showing settings that
+    /// are not the ones it is using.
     pub settings: norte_frontend::config::FrontendConfig,
-    /// Dónde vive cada cosa, ya resuelto. Ver [`crate::settings::HostPaths`].
+    /// Where each thing lives, already resolved. See
+    /// [`crate::settings::HostPaths`].
     pub paths: crate::settings::HostPaths,
-    /// El tema activo, ya resuelto a pares rol → color por quien arranca.
+    /// The active theme, already resolved to role → color pairs by whoever
+    /// starts it.
     pub theme: crate::pickers::HostTheme,
-    /// Las disposiciones que el usuario tiene en `layouts/*.toml`, YA leídas.
+    /// The layouts the user has in `layouts/*.toml`, ALREADY read.
     ///
-    /// Leídas y no por nombre: el selector PINTA la forma de cada una, y
-    /// leerlas al mover el cursor sería I/O en el bucle de eventos. Quien
-    /// tiene el disco delante es quien arranca la ventana, no el host.
+    /// Read, and not by name: the selector PAINTS each one's shape, and
+    /// reading them on cursor move would be I/O in the event loop. Whoever
+    /// has the disk in front of them is whoever starts the window, not the
+    /// host.
     pub user_layouts: Vec<norte_frontend::layout_picker::UserLayout>,
-    /// La configuración de columnas ENTERA, no una lista ya resuelta.
+    /// The WHOLE column configuration, not an already-resolved list.
     ///
-    /// Las columnas se configuran POR ESQUEMA (`[ui.columns.schemes.sftp]`),
-    /// y resolverlas una vez al arrancar dejaba muerta esa mitad de la
-    /// configuración: una columna `attr:` que solo existe en `sftp` no se
-    /// pedía nunca y no se pintaba nunca, porque los atributos que viajan en
-    /// cada listado se habían congelado con los del esquema de arranque.
+    /// Columns are configured PER SCHEME (`[ui.columns.schemes.sftp]`), and
+    /// resolving them once at startup left that half of the configuration
+    /// dead: an `attr:` column that only exists in `sftp` was never
+    /// requested and never painted, because the attributes travelling in
+    /// every listing had been frozen with the startup scheme's.
     pub columns: norte_frontend::columns::ColumnsSettings,
-    /// El perfil con el que se ARRANCÓ, si lo hubo (`--profile`, #307).
+    /// The profile it STARTED with, if any (`--profile`, #307).
     ///
-    /// Ya aplicado: sus capas entraron en la configuración que llega en
-    /// [`Self::settings`], porque un perfil nombrado en la línea de órdenes se
-    /// conoce antes de conectar con nada y así alcanza hasta `[ui] lang`. Lo
-    /// que el host necesita es SABERLO, para marcarlo activo en el selector y
-    /// para que la sesión lo recuerde; sin esto, arrancar con `--profile` daba
-    /// una ventana correcta cuyo selector decía que no había ninguno puesto.
+    /// Already applied: its layers entered the configuration arriving in
+    /// [`Self::settings`], because a profile named on the command line is
+    /// known before connecting to anything, and so reaches all the way to
+    /// `[ui] lang`. What the host needs is to KNOW it, to mark it active in
+    /// the selector and so the session remembers it; without this, starting
+    /// with `--profile` gave a correct window whose selector said none was
+    /// set.
     ///
-    /// `OsString` porque es un nombre de directorio (#245).
+    /// `OsString` because it is a directory name (#245).
     pub profile: Option<std::ffi::OsString>,
-    /// El anillo de registro del que lee el panel `log` (#326).
+    /// The log ring the `log` panel reads from (#326).
     ///
-    /// Lo monta el PROCESO al arrancar —el subscriber de `tracing` se instala
-    /// una vez— y llega aquí porque el host no monta subscribers: los lee.
-    /// `None` = este binario no lo montó, y entonces el panel lo dice en vez
-    /// de enseñarse vacío, que sería indistinguible de «no ha pasado nada».
+    /// Mounted by the PROCESS at startup — the `tracing` subscriber is
+    /// installed once — and it arrives here because the host mounts no
+    /// subscribers: it reads them. `None` = this binary did not mount it,
+    /// and then the panel says so instead of showing itself empty, which
+    /// would be indistinguishable from "nothing has happened".
     ///
-    /// Va por opción y no por un `set_*` posterior porque el panel puede
-    /// existir en la disposición de arranque: montarlo después dejaría la
-    /// primera foto con un registro que no es el que hay.
+    /// It comes as an option and not through a later `set_*` because the
+    /// panel can exist in the startup layout: mounting it afterward would
+    /// leave the first snapshot with a log that is not the real one.
     pub log_ring: Option<norte_config::logring::LogRing>,
 }
 
-/// Lo que un suscriptor recibe.
+/// What a subscriber receives.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Update {
-    /// Una actualización en su sobre.
+    /// An update in its envelope.
     Message(Box<BridgeEnvelope<UiUpdate>>),
-    /// Este suscriptor se quedó atrás y se perdió actualizaciones. Lo que
-    /// tiene que hacer es pedir un snapshot ([`UiAction::Resync`]), no
-    /// intentar deducir lo que faltó.
+    /// This subscriber fell behind and missed updates. What it has to do is
+    /// request a snapshot ([`UiAction::Resync`]), not try to guess what was
+    /// missing.
     Lagged,
 }
 
-/// Suscripción a las actualizaciones del host.
+/// Subscription to the host's updates.
 pub struct UiSubscription {
     rx: broadcast::Receiver<BridgeEnvelope<UiUpdate>>,
 }
 
 impl UiSubscription {
-    /// La siguiente actualización, o `None` si el host se apagó.
+    /// The next update, or `None` if the host shut down.
     pub async fn recv(&mut self) -> Option<Update> {
         match self.rx.recv().await {
             Ok(m) => Some(Update::Message(Box::new(m))),
@@ -475,26 +487,27 @@ impl UiSubscription {
     }
 }
 
-/// Lo que quedó sin terminar al apagar.
+/// What was left unfinished on shutdown.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShutdownReport {
-    /// Quedó algo sin terminar: una task en cola o corriendo, o la sesión sin
-    /// escribir. Se DICE: apagar en silencio con una copia a medias es como
-    /// se pierde una operación sin que nadie lo sepa.
+    /// Something was left unfinished: a queued or running task, or the
+    /// session unwritten. It IS SAID: shutting down silently with a copy
+    /// halfway is how an operation gets lost without anyone knowing.
     pub incomplete: bool,
 }
 
-/// El tic de la sesión, cada segundo, como el del terminal: la pantalla se
-/// guarda mientras se usa, no solo al cerrar. Un cierre que no llega —el
-/// proceso muerto, el socket atascado más allá del plazo— perdía hasta aquí
-/// todo lo andado desde el arranque. Los cambios del ÁRBOL además se escriben
-/// al momento, sin esperar al tic (`aplicar_disposicion_con`,
-/// `aplicar_arbol`). Muere con el buzón, como las demás bombas.
+/// The session's tick, every second, like the terminal's: the screen is
+/// saved while it is being used, not only on close. A close that does not
+/// arrive — the process dead, the socket stuck past the deadline — used to
+/// lose everything walked since startup. Changes to the TREE are also
+/// written immediately, without waiting for the tick
+/// (`aplicar_disposicion_con`, `aplicar_arbol`). Dies with the mailbox, like
+/// the other pumps.
 fn bombear_tic_de_sesion(buzon: mpsc::Sender<Mensaje>) {
     tokio::spawn(async move {
         let mut tic = tokio::time::interval(SESION_TIC);
-        // El primero de `interval` es inmediato, y no hay nada que escribir
-        // un instante después de arrancar.
+        // `interval`'s first tick is immediate, and there is nothing to
+        // write an instant after starting.
         tic.tick().await;
         loop {
             tic.tick().await;
@@ -505,10 +518,10 @@ fn bombear_tic_de_sesion(buzon: mpsc::Sender<Mensaje>) {
     });
 }
 
-/// Reenvía los `plugin.notice` del backend al buzón del host (ADR 0100). Una
-/// función aparte de `start` porque la lista de bombas ya llenaba el límite
-/// de líneas, y la forma es la de las demás: una task que muere con el canal
-/// que la alimenta.
+/// Forwards the backend's `plugin.notice`s to the host's mailbox (ADR 0100).
+/// A function separate from `start` because the pump list was already
+/// filling the line limit, and its shape is the same as the others': a task
+/// that dies with the channel that feeds it.
 fn bombear_avisos_de_plugin(backend: &dyn HostBackend, buzon: mpsc::Sender<Mensaje>) {
     let Some(mut avisos) = backend.take_plugin_notices() else {
         return;
@@ -522,21 +535,22 @@ fn bombear_avisos_de_plugin(backend: &dyn HostBackend, buzon: mpsc::Sender<Mensa
     });
 }
 
-/// Reenvía al buzón del host TODO lo que el backend empuja por su cuenta:
-/// conexión, sesión en claro, fallos de entrada, avisos de plugin,
-/// aprobaciones y tareas ajenas.
+/// Forwards to the host's mailbox EVERYTHING the backend pushes on its own:
+/// connection, plaintext session, entry failures, plugin notices, approvals
+/// and unrelated tasks.
 ///
-/// Juntas porque son la misma decisión seis veces —una task que muere con el
-/// canal que la alimenta— y porque entran por el MISMO buzón: un aviso de
-/// conexión perdida tiene que ordenarse con lo que estaba pasando cuando se
-/// perdió. Fuera de `start` por el límite de líneas.
+/// Together because they are the same decision six times over — a task that
+/// dies with the channel feeding it — and because they come in through the
+/// SAME mailbox: a lost-connection notice has to be ordered with whatever was
+/// happening when it was lost. Kept out of `start` because of the line
+/// limit.
 fn bombear_canales_del_backend(
     backend: &dyn HostBackend,
     buzon: &mpsc::Sender<Mensaje>,
     efectos: crate::commands::Efectos,
 ) {
-    // Los dos canales de la conexión son del PRIMER dueño, así que se toman
-    // una vez, aquí.
+    // The connection's two channels belong to the FIRST owner, so they are
+    // taken once, here.
     if let Some(mut eventos) = backend.take_conn_events() {
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -547,9 +561,9 @@ fn bombear_canales_del_backend(
             }
         });
     }
-    // Los avisos de sesión en claro (#44) se toman SIEMPRE: no dependen de si
-    // esta ventana puede escribir. Que un listado que se está LEYENDO viaje
-    // sin cifrar es un hecho para quien lo mira, no un permiso.
+    // Plaintext-session notices (#44) are ALWAYS taken: they do not depend
+    // on whether this window can write. That a listing being READ travels
+    // unencrypted is a fact for whoever is looking at it, not a permission.
     if let Some(mut degradadas) = backend.take_degraded() {
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -560,9 +574,9 @@ fn bombear_canales_del_backend(
             }
         });
     }
-    // Y los fallos (#322), con el mismo criterio: por qué NO se pudo entrar en
-    // una máquina se le dice a quien lo intentó, pueda esta ventana escribir o
-    // no.
+    // And failures (#322), with the same criterion: why a machine could NOT
+    // be entered is told to whoever tried, whether this window can write or
+    // not.
     if let Some(mut fallidas) = backend.take_failed() {
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -573,14 +587,14 @@ fn bombear_canales_del_backend(
             }
         });
     }
-    // Los avisos de los hooks (ADR 0100) hablan de ficheros que ya cambiaron,
-    // así que se leen pueda escribir o no.
+    // Hook notices (ADR 0100) talk about files that have already changed, so
+    // they are read whether it can write or not.
     bombear_avisos_de_plugin(backend, buzon.clone());
-    // Las aprobaciones de policy son una MUTACIÓN por delegación: decir que sí
-    // a la operación de un agente. Un frontend que todavía no puede escribir
-    // tampoco puede autorizar que escriba otro, así que en solo lectura el
-    // canal ni se toma (y el diálogo no existe, que es más honesto que uno que
-    // no responde).
+    // Policy approvals are a MUTATION by delegation: saying yes to an
+    // agent's operation. A frontend that cannot write yet cannot authorize
+    // another one to write either, so in read-only the channel is not even
+    // taken (and the dialog does not exist, which is more honest than one
+    // that does not respond).
     if efectos == crate::commands::Efectos::Completo
         && let Some(mut aprobaciones) = backend.take_approvals()
     {
@@ -613,7 +627,7 @@ fn bombear_canales_del_backend(
     }
 }
 
-/// El host: un asa barata de clonar sobre el único escritor.
+/// The host: a cheap-to-clone handle over the single writer.
 #[derive(Clone)]
 pub struct UiHost {
     inbox: mpsc::Sender<Mensaje>,
@@ -622,10 +636,10 @@ pub struct UiHost {
     instance: InstanceId,
 }
 
-/// Lo que vuelve de un listado: el testigo que lo pidió, el hueco al que va,
-/// el directorio y el resultado.
-/// Lo que el visor pidió: testigo, ruta, la cabecera leída y la preview de
-/// plugin si alguna aplicó.
+/// What comes back from a listing: the token that requested it, the slot it
+/// goes to, the directory and the result.
+/// What the viewer requested: token, path, the header read and the plugin
+/// preview if one applied.
 type Contenido = (
     RequestToken,
     VPath,
@@ -633,13 +647,13 @@ type Contenido = (
     Option<norte_proto::methods::PluginPreviewStyled>,
 );
 
-/// Lo mismo, para el visor ACOPLADO (#291): el hueco que lo pidió va
-/// delante, y no se resuelve al llegar — el hueco puede haberse cerrado, y
-/// entonces la respuesta se tira.
+/// The same, for the DOCKED viewer (#291): the slot that requested it goes
+/// in front, and it is not resolved on arrival — the slot may have closed,
+/// and then the answer is dropped.
 type PreviewContenido = (u32, Contenido);
 
-/// Lo que vuelve de un listado: su testigo, el hueco, el directorio, y las
-/// entradas de la primera página con CUÁNTAS se saltó el provider.
+/// What comes back from a listing: its token, the slot, the directory, and
+/// the first page's entries with HOW MANY the provider skipped.
 type RespuestaListado = (
     RequestToken,
     u32,
@@ -647,16 +661,17 @@ type RespuestaListado = (
     Result<(Vec<Entry>, Option<u64>), Error>,
 );
 
-/// Lo que vuelve de una tanda de sondeo: el directorio que se sondeaba, el
-/// hueco, y las parejas `(lo que se pidió, lo que contestó el provider)`.
+/// What comes back from a probe batch: the directory being probed, the slot,
+/// and the pairs `(what was requested, what the provider answered)`.
 type Sondas = (VPath, u32, Vec<(VPath, Entry)>);
 
-/// Lo que vuelve de medir un mapa de disco (fase 4).
+/// What comes back from measuring a disk map (phase 4).
 ///
-/// El hueco que lo pidió, el TESTIGO de esa petición —uno que no sea el vivo es
-/// de un directorio que ya se dejó atrás— y el resultado, con el ESTADO de la
-/// Task pegado al informe: uno de una Task cancelada está a medias, y pintarlo
-/// como completo convierte un directorio enorme en uno pequeño.
+/// The slot that requested it, the TOKEN for that request — one that is not
+/// the live one belongs to a directory already left behind — and the result,
+/// with the Task's STATE attached to the report: one from a cancelled Task
+/// is partial, and painting it as complete turns a huge directory into a
+/// small one.
 type MedidaDeMapa = (
     u32,
     RequestToken,
@@ -671,124 +686,130 @@ type MedidaDeMapa = (
 
 enum Mensaje {
     Accion(Box<UiAction>, oneshot::Sender<ActionAck>),
-    /// Los BYTES de la imagen que el visor tiene abierta, si los hay.
+    /// The BYTES of the image the viewer has open, if any.
     ///
-    /// Una consulta y no una acción: no cambia nada y no produce parche. Va
-    /// por el buzón igual porque el estado es del actor, y contestarla desde
-    /// fuera sería leer lo que otro está escribiendo.
+    /// A query and not an action: it changes nothing and produces no patch.
+    /// It still goes through the mailbox because the state belongs to the
+    /// actor, and answering it from outside would be reading what someone
+    /// else is writing.
     BytesDeImagen(oneshot::Sender<Option<std::sync::Arc<Vec<u8>>>>),
-    /// La respuesta de un listado que se pidió antes. Vuelve al actor como
-    /// un mensaje más: así el estado lo sigue tocando un solo escritor.
+    /// The answer to a listing requested earlier. Comes back to the actor as
+    /// just another message: that way the state keeps being touched by a
+    /// single writer.
     ///
-    /// Lleva el HUECO que lo pidió y no se resuelve al llegar: si mientras
-    /// volaba el foco se movió al panel de al lado, aterrizar «en el activo»
-    /// sería meter un directorio en la pantalla equivocada.
+    /// Carries the SLOT that requested it and is not resolved on arrival: if
+    /// focus moved to the neighboring pane while it was in flight, landing
+    /// "on the active one" would put a directory on the wrong screen.
     Listado(Box<RespuestaListado>),
-    /// El catálogo de atributos de un esquema, ya resuelto.
+    /// A scheme's attribute catalog, already resolved.
     Catalogo(Box<(String, norte_proto::AttrCatalog)>),
-    /// Una op de agente espera decisión humana.
+    /// An agent op awaits a human decision.
     Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
-    /// A esta aprobación se le acabó el TTL: el daemon ya no la acepta.
+    /// This approval's TTL ran out: the daemon no longer accepts it.
     AprobacionCaducada(u64),
-    /// El tema elegido ya está (o no) en el `norte.toml`. `Some(clave)` es el
-    /// motivo por el que no se pudo guardar; `None` es que se guardó.
+    /// The chosen theme is (or is not) in `norte.toml` now. `Some(key)` is
+    /// the reason it could not be saved; `None` means it was saved.
     ///
-    /// Solo el fallo se DICE. Un «guardado» por cada tema elegido sería un
-    /// mensaje por cada Enter en una pantalla cuyo resultado ya se ve: los
-    /// colores cambiaron.
+    /// Only the failure IS SAID. A "saved" for every chosen theme would be a
+    /// message per Enter on a screen whose result is already visible: the
+    /// colors changed.
     TemaPersistido(Option<&'static str>),
-    /// El ancho de una columna ya está (o no) en el `norte.toml` (puente
-    /// 64). Mismo trato que el tema: solo el fallo se dice.
+    /// A column's width is (or is not) in `norte.toml` now (bridge 64). Same
+    /// treatment as the theme: only the failure is reported.
     AnchoPersistido(Option<&'static str>),
-    /// Un `[ui] theme` que era una RUTA, ya leído fuera del actor.
+    /// A `[ui] theme` that was a PATH, already read outside the actor.
     ///
-    /// Lleva el spec para poder nombrarlo en el efecto nativo —quien hospeda
-    /// vuelve a resolverlo por su cuenta, porque los colores cruzan a la
-    /// webview convertidos en variables CSS y esa conversión no es del host—
-    /// y, en caja, porque un `Theme` es grande al lado del resto del enum.
+    /// Carries the spec so it can be named in the native effect — whoever
+    /// hosts it resolves it again on their own, because the colors cross to
+    /// the webview converted into CSS variables and that conversion is not
+    /// the host's — and, boxed, because a `Theme` is large next to the rest
+    /// of the enum.
     ///
-    /// El error es una CLAVE, no el error: el suyo lleva la ruta dentro (#73).
+    /// The error is a KEY, not the error: its own carries the path inside
+    /// (#73).
     TemaResuelto(Box<(String, Result<norte_theme::Theme, &'static str>)>),
-    /// El tic de la sesión: cada segundo, como el terminal. Si la pantalla
-    /// cambió desde lo último escrito, se escribe; si no, nada.
+    /// The session's tick: every second, like the terminal. If the screen
+    /// changed since the last write, it is written; if not, nothing.
     SesionTic,
-    /// El tic del panel de TERMINAL (#362): vuelca lo que el shell haya
-    /// escrito y, si cambió algo, republica su hueco.
+    /// The TERMINAL panel's tick (#362): flushes what the shell has written
+    /// and, if something changed, republishes its slot.
     ///
-    /// Tic propio y mucho más rápido que el de la sesión porque un shell se
-    /// mira mientras responde: a un segundo, teclear ahí dentro se siente
-    /// roto.
+    /// Its own tick, much faster than the session's, because a shell is
+    /// watched while it responds: at one second, typing in there feels
+    /// broken.
     ///
-    /// **No es una bomba perpetua**: lleva su ÉPOCA y se rearma en el
-    /// manejador, solo si el panel sigue en pantalla — el mismo mecanismo que
-    /// el sondeo del registro, y por el mismo motivo. Un temporizador de 30 Hz
-    /// que sobreviviera al panel estaría despertando al actor para no pintar
-    /// nada, que es el «gira en reposo» que la terminal ya pagó una vez.
+    /// **Not a perpetual pump**: it carries its EPOCH and rearms in the
+    /// handler, only if the panel is still on screen — the same mechanism as
+    /// the log's polling, and for the same reason. A 30 Hz timer that
+    /// outlived the panel would be waking up the actor to paint nothing,
+    /// which is the "spins at rest" the terminal already paid for once.
     TerminalTic(u64),
-    /// Un `session.put` contestó: qué dijo el daemon y el cuerpo que se
-    /// mandó, para darlo por escrito solo si de verdad entró.
+    /// A `session.put` answered: what the daemon said and the body that was
+    /// sent, to record it as written only if it really went in.
     SesionPuesta(
         Box<(
             Result<u64, Error>,
             std::sync::Arc<norte_frontend::session::SessionBody>,
         )>,
     ),
-    /// La sesión releída tras un conflicto: otra ventana escribió en medio y
-    /// la revisión sobre la que se escribe ya no vale.
+    /// The session re-read after a conflict: another window wrote in
+    /// between and the revision being written over is no longer valid.
     SesionReleida(Result<(norte_proto::methods::Session, bool), Error>),
-    /// El RELEVO a la terminal terminó (fase 9): la pantalla está escrita y
-    /// la sesión, soltada — o no se pudo, y entonces no pasa nada y se dice.
+    /// The HANDOFF to the terminal finished (phase 9): the screen is
+    /// written and the session, released — or it could not be, and then
+    /// nothing happens and it is reported.
     Relevado {
-        /// Esta ventana era la dueña y ha dejado de serlo.
+        /// This window was the owner and has stopped being one.
         soltada: bool,
     },
-    /// A esta task TERMINADA se le acabó su rato en el tablero
-    /// ([`TTL_TASK_TERMINAL`]). Lleva la ÉPOCA de conexión en la que se
-    /// registró: tras un relevo del daemon los ids vuelven a empezar en 1, y
-    /// caducar por número desalojaría a una task viva que solo comparte el
-    /// número con la que se fue.
+    /// This FINISHED task's time on the board ran out
+    /// ([`TTL_TASK_TERMINAL`]). Carries the connection EPOCH it was
+    /// registered in: after a daemon handoff the ids start over at 1, and
+    /// expiring by number would evict a live task that only shares its
+    /// number with the one that left.
     TaskCaducada(u64, u64),
-    /// Algo que se pidió fuera del actor terminó y hay que DECIRLO: la clave
-    /// del mensaje (hoy, una pausa que el daemon no sabe hacer).
+    /// Something requested outside the actor finished and has to be SAID:
+    /// the message's key (today, a pause the daemon does not know how to
+    /// do).
     Decir(&'static str),
-    /// La barra de progreso ligera cambia sin que llegue progreso: pasó su
-    /// umbral, el del panel, o se acabó el rato del «✓» (ADR 0146).
+    /// The light progress bar changes with no progress arriving: it passed
+    /// its threshold, the panel's, or the "✓"'s time ran out (ADR 0146).
     Tira,
-    /// El `policy.decide` que APROBABA no llegó al daemon.
-    /// Un `policy.decide` que no salió bien: qué aprobación y con qué clave
-    /// se cuenta (#279).
+    /// The `policy.decide` that WAS APPROVING did not reach the daemon.
+    /// A `policy.decide` that did not go well: which approval and under
+    /// which key it is counted (#279).
     AprobacionNoEntregada(u64, &'static str),
-    /// Más entradas del listado que se está drenando por detrás.
+    /// More entries from the listing draining in the background.
     ///
-    /// El `bool` dice si es el ÚLTIMO lote. Sin él, `drenando` se levantaba
-    /// al pedir el listado y no lo bajaba nadie nunca —ni siquiera cuando el
-    /// stream se agotaba dentro de la primera página—, así que el campo no
-    /// significaba «sigue llegando» sino «alguna vez se pidió esto», y
-    /// cualquiera que lo consultara para decidir se equivocaba.
+    /// The `bool` says whether it is the LAST batch. Without it, `drenando`
+    /// was raised on requesting the listing and nobody ever lowered it —
+    /// not even when the stream ran out within the first page — so the
+    /// field did not mean "still arriving" but "this was requested at some
+    /// point", and anyone consulting it to decide got it wrong.
     MasEntradas(Box<(RequestToken, u32, Vec<Entry>, bool)>),
-    /// Lo que contestó una petición que se lanzó para un OVERLAY.
+    /// What a request launched for an OVERLAY answered.
     ///
-    /// Las cinco viajan juntas porque son la misma historia: una superficie
-    /// se abrió SIN esperar —la documentación y la tabla de montaje son
-    /// cosméticas, y una ventana en blanco hasta que el daemon conteste es
-    /// peor que una lista que gana filas medio segundo después—, y esto es
-    /// la respuesta llegando tarde. Cada una comprueba que su superficie
-    /// siga abierta antes de tocar nada.
+    /// The five travel together because they are the same story: a surface
+    /// opened WITHOUT waiting — the documentation and the mount table are
+    /// cosmetic, and a blank window until the daemon answers is worse than a
+    /// list gaining rows half a second later — and this is the answer
+    /// arriving late. Each one checks its surface is still open before
+    /// touching anything.
     Fondo(Box<Fondo>),
-    /// El contenido que el visor pidió.
-    /// Lo que el visor pidió: la cabecera del fichero y, si algún plugin
-    /// `previewer` aplicó, su preview con estilo.
+    /// The content the viewer requested.
+    /// What the viewer requested: the file's header and, if some
+    /// `previewer` plugin applied, its styled preview.
     ///
-    /// Las dos en el MISMO mensaje porque son una sola respuesta a una sola
-    /// tecla: mandarlas por separado abriría el visor crudo y lo cambiaría
-    /// por la preview un instante después, que es un parpadeo que nadie pidió.
+    /// Both in the SAME message because they are a single answer to a single
+    /// key: sending them separately would open the raw viewer and swap it
+    /// for the preview an instant later, a flicker nobody asked for.
     Contenido(Box<Contenido>),
-    /// Lo que un hueco de preview pidió (#291): igual que [`Self::Contenido`]
-    /// pero para el visor acoplado, y con el hueco delante.
+    /// What a preview slot requested (#291): same as [`Self::Contenido`] but
+    /// for the docked viewer, and with the slot in front.
     PreviewContenido(Box<PreviewContenido>),
-    /// El marco que pintó un panel de plugin (fase 3), con el testigo de la
-    /// petición que lo pidió: uno que no sea el vivo es de un cursor que ya se
-    /// movió.
+    /// The frame a plugin pane painted (phase 3), with the token for the
+    /// request that asked for it: one that is not the live one belongs to a
+    /// cursor that has already moved.
     PanelContenido(
         Box<(
             u32,
@@ -796,113 +817,120 @@ enum Mensaje {
             Result<Option<norte_proto::methods::PanelFrame>, Error>,
         )>,
     ),
-    /// Lo que midió un mapa de disco (fase 4), con el testigo de la petición
-    /// que lo pidió: uno que no sea el vivo es de un directorio que ya se dejó
-    /// atrás. El ESTADO viaja con el informe porque uno de una Task cancelada
-    /// está a medias, y pintarlo como completo convierte un directorio enorme
-    /// en uno pequeño.
+    /// What measuring a disk map found (phase 4), with the token for the
+    /// request that asked for it: one that is not the live one belongs to a
+    /// directory already left behind. The STATE travels with the report
+    /// because one from a cancelled Task is partial, and painting it as
+    /// complete turns a huge directory into a small one.
     MapaContenido(Box<MedidaDeMapa>),
-    /// Lo que un sondeo averiguó de unas cuantas entradas (tamaño y fecha de
-    /// un listado perezoso).
+    /// What a probe found out about a few entries (a lazy listing's size and
+    /// date).
     ///
-    /// Lleva el DIRECTORIO que se estaba sondeando, y no un testigo ni una
-    /// época. El testigo vale `None` en cuanto la primera página aterriza —o
-    /// sea que el guard que lo miraba no guardaba nada—, y la época sube con
-    /// cada lote de relleno, que no invalida un sondeo: lo que invalida un
-    /// tamaño es que el listado sea de OTRO sitio. Como la hidratación casa
-    /// por ruta, un índice desplazado da igual.
+    /// Carries the DIRECTORY being probed, not a token or an epoch. The
+    /// token reads `None` as soon as the first page lands — i.e. the guard
+    /// watching it was not storing anything — and the epoch goes up with
+    /// every fill batch, which does not invalidate a probe: what invalidates
+    /// a size is the listing belonging to a DIFFERENT place. Since hydration
+    /// matches by path, a shifted index does not matter.
     ///
-    /// Y lleva PAREJAS `(pedido, respuesta)`, porque un provider puede
-    /// contestar con otra ortografía del mismo nombre y la entrada que hay
-    /// que hidratar es la que se pidió.
+    /// And it carries PAIRS `(requested, answered)`, because a provider can
+    /// answer with a different spelling of the same name, and the entry that
+    /// needs hydrating is the one that was requested.
     Hidratado(Box<Sondas>),
-    /// Una Task recién encolada, con su progreso, su cancelación y los
-    /// directorios que dejará distintos.
+    /// A freshly enqueued Task, with its progress, its cancellation and the
+    /// directories it will leave out of date.
     TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>, Option<Reintento>)>),
-    /// Qué acepta la ubicación de un hueco: cómo pliega nombres (#268) y si
-    /// rehúsa escribir.
+    /// What a slot's location accepts: how it folds names (#268) and
+    /// whether it refuses writes.
     Capacidades(u32, VPath, norte_proto::Capabilities),
-    /// Encolarla falló. El usuario tiene que enterarse: pidió un borrado.
+    /// Enqueuing it failed. The user has to find out: they requested a
+    /// delete.
     TaskFallida(Box<Error>),
-    /// Un rechazo al encolar UNA entrada de un lote (#271). Separado de
-    /// [`Self::TaskFallida`] a propósito: aquél lo manda todo el que encola
-    /// algo —una búsqueda, un plan, un undo— y su sitio es la barra; éste solo
-    /// lo manda el bucle de un lote, y su sitio es la CUENTA del lote.
+    /// A rejection on enqueuing ONE batch entry (#271). Separate from
+    /// [`Self::TaskFallida`] on purpose: that one is sent by anyone enqueuing
+    /// anything — a search, a plan, an undo — and its place is the status
+    /// bar; this one is only sent by a batch's loop, and its place is the
+    /// batch's COUNT.
     TaskDeLoteRechazada(Box<Error>),
-    /// La conexión con el daemon cambió de estado.
+    /// The connection to the daemon changed state.
     Conexion(norte_client::ConnEvent),
-    /// Una sesión de un provider viaja SIN cifrar (#44).
+    /// A provider session travels UNENCRYPTED (#44).
     Degradada(Box<norte_proto::methods::ConnectionDegraded>),
-    /// Una conexión NO se pudo abrir, y por qué (#322).
+    /// A connection could NOT be opened, and why (#322).
     Fallida(Box<norte_proto::methods::ConnectionFailed>),
-    /// Un plugin `hook` dijo algo sobre una mutación ya registrada, o el
-    /// daemon apagó sus hooks (0.69.0, ADR 0100).
+    /// A `hook` plugin said something about an already-registered mutation,
+    /// or the daemon turned off its hooks (0.69.0, ADR 0100).
     AvisoPlugin(Box<norte_proto::methods::PluginNotice>),
-    /// El secreto se entregó (o no), y con ello qué hacer con la navegación
-    /// que `SecretNeeded` había suspendido (#327).
+    /// The secret was delivered (or not), and with it what to do with the
+    /// navigation `SecretNeeded` had suspended (#327).
     SecretoEntregado(Box<(u32, VPath, Result<(), Error>)>),
-    /// Toca mirar si el registro tiene algo nuevo (#326). Lleva la ÉPOCA de la
-    /// apertura que lo programó: uno de una apertura anterior se deja morir en
-    /// vez de rearmarse para siempre.
+    /// Time to check whether the log has anything new (#326). Carries the
+    /// EPOCH of the opening that scheduled it: one from a previous opening
+    /// is left to die instead of rearming forever.
     RegistroTic(u64),
-    /// Lo que el daemon contestó a `log.tail` (#328), con la ÉPOCA de la
-    /// apertura que lo pidió.
+    /// What the daemon answered to `log.tail` (#328), with the EPOCH of the
+    /// opening that requested it.
     ///
-    /// La época no es adorno: entre pedir y contestar caben un cierre y una
-    /// apertura, y unas líneas de la sesión anterior aterrizando en el panel
-    /// nuevo serían historia que nadie pidió por delante de la que sí.
+    /// The epoch is not decoration: a close and an open fit between asking
+    /// and answering, and lines from the previous session landing on the
+    /// new panel would be history nobody asked for, ahead of the real one.
     RegistroRemoto(u64, Box<Result<norte_proto::methods::LogTailResult, Error>>),
-    /// Lo que el daemon contestó a `log.level` (#328): el nivel que de verdad
-    /// quedó puesto, que puede no ser el que se pidió.
+    /// What the daemon answered to `log.level` (#328): the level really left
+    /// set, which may not be the one requested.
     RegistroNivel(u64, Box<Result<String, Error>>),
-    /// Un snapshot de progreso. Por la MISMA cola que todo lo demás, que es
-    /// lo que garantiza que un estado terminal no se adelante ni se pierda.
+    /// A progress snapshot. Through the SAME queue as everything else,
+    /// which is what guarantees a terminal state neither jumps ahead nor
+    /// gets lost.
     Progreso(Box<norte_proto::TaskProgress>),
-    /// El informe de una Task que ya terminó y que TIENE informe.
+    /// The report of a Task that has already finished and DOES have a
+    /// report.
     ///
-    /// Lleva el `Result` entero y no un `Option`: «fue bien» y «el daemon no
-    /// sabe informar» son dos cosas distintas, y colapsarlas es justo lo que
-    /// estos informes existen para no hacer.
+    /// Carries the whole `Result` and not an `Option`: "went fine" and "the
+    /// daemon does not know how to report" are two different things, and
+    /// collapsing them is exactly what these reports exist not to do.
     Informe(Box<(u64, u64, tasks::Informe)>),
-    /// El `fs.stat` que se hace entre crear un fichero y abrirlo (#303): la
-    /// ruta que se creó, y si lo que hay ahí sigue siendo un fichero regular.
+    /// The `fs.stat` done between creating a file and opening it (#303): the
+    /// path that was created, and whether what is there is still a regular
+    /// file.
     ///
-    /// Sin época: lo que se decide con esto es abrir una ruta ABSOLUTA en el
-    /// escritorio de esta máquina, que no significa una cosa distinta según
-    /// qué daemon conteste — al revés que los informes, cuyos ids de task
-    /// vuelven a empezar en 1 tras un relevo.
+    /// With no epoch: what is decided with this is opening an ABSOLUTE path
+    /// on this machine's desktop, which does not mean something different
+    /// depending on which daemon answers — unlike reports, whose task ids
+    /// start over at 1 after a handoff.
     CreadoComprobado(Box<(norte_proto::VPath, Veredicto)>),
-    /// Un favorito se guardó (#309): su nombre, a dónde apunta y, si falló, la
-    /// clave del motivo. La copia en memoria no se toca hasta que el disco
-    /// contesta.
+    /// A favorite was saved (#309): its name, where it points to and, if it
+    /// failed, the reason's key. The in-memory copy is not touched until the
+    /// disk answers.
     ///
-    /// El destino viaja en el mensaje y no se relee al llegar: entre pedir el
-    /// nombre y guardar, el panel puede haber navegado, y reflejar «donde
-    /// estoy ahora» pondría en la lista un favorito distinto del que se acaba
-    /// de escribir en el fichero.
+    /// The destination travels in the message and is not re-read on
+    /// arrival: between requesting the name and saving, the pane may have
+    /// navigated, and reflecting "where I am now" would put a different
+    /// favorite in the list than the one just written to the file.
     FavoritoPersistido(Box<(String, norte_proto::VPath, Option<&'static str>)>),
-    /// El perfil se escribió (o no): nombre y la clave del fallo (#318).
+    /// The profile was written (or not): name and the failure's key (#318).
     PerfilGuardado(Box<(String, Option<&'static str>)>),
-    /// Un favorito se quitó, con la misma forma.
+    /// A favorite was removed, in the same shape.
     FavoritoQuitado(Box<(String, Option<&'static str>)>),
     Apagar(oneshot::Sender<ShutdownReport>),
 }
 
-/// Qué contestó el `fs.stat` que se hace entre crear un fichero y abrirlo
+/// What the `fs.stat` done between creating a file and opening it answered
 /// (#303).
 ///
-/// Tres valores y no un `bool` porque «no es el fichero» y «no se pudo
-/// preguntar» son cosas distintas y se dicen distinto: llamar manipulación a un
-/// daemon relevado es una acusación falsa, y enseñar al lector a ignorar ese
-/// mensaje es lo que lo inutiliza el día que sea verdad.
+/// Three values and not a `bool` because "it is not the file" and "could not
+/// be checked" are different things and are said differently: calling a
+/// handed-off daemon tampering is a false accusation, and teaching the
+/// reader to ignore that message is what makes it useless the day it is
+/// true.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Veredicto {
-    /// Sigue siendo un fichero regular: adelante.
+    /// Still a regular file: go ahead.
     EsElFichero,
-    /// Un enlace, una carpeta o nada. Las tres se dicen igual: nombrar cuál
-    /// sería confirmarle el enlace a quien lo puso.
+    /// A link, a folder or nothing. All three are said the same way: naming
+    /// which one would confirm the link to whoever planted it.
     YaNoEsElFichero,
-    /// El `stat` falló. No se abre nada, y se dice que no se pudo comprobar.
+    /// The `stat` failed. Nothing opens, and it is reported that the check
+    /// could not be made.
     NoSeSabe,
 }
 
@@ -916,335 +944,349 @@ impl From<bool> for Veredicto {
     }
 }
 
-/// La respuesta de una petición de fondo, por superficie.
+/// A background request's answer, by surface.
 ///
-/// Un enum aparte y no cinco variantes de [`Mensaje`]: el actor es un
-/// reparto, y cinco brazos que hacen lo mismo —comprobar que su superficie
-/// siga abierta y devolver parches— son un brazo con cinco casos.
-/// La respuesta de una tanda de decoración: de qué GENERACIÓN de adornos
-/// (una tanda pedida antes de que el gestor apagara un plugin no describe
-/// lo que hay), qué hueco, qué directorio, las insignias por ruta y las
-/// celdas de cada columna `plugin:`.
+/// A separate enum and not five [`Mensaje`] variants: the actor is a
+/// dispatcher, and five arms that do the same thing — checking their
+/// surface is still open and returning patches — are one arm with five
+/// cases.
+/// A decoration batch's answer: which decoration GENERATION (a batch
+/// requested before the manager turned off a plugin does not describe what
+/// there is), which slot, which directory, the badges by path and the cells
+/// for each `plugin:` column.
 type Adornos = (
     u64,
     u32,
     VPath,
     std::collections::HashMap<VPath, norte_frontend::Decoration>,
     std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
-    // El rótulo que el manifiesto le puso a cada columna de plugin, ya
-    // saneado: la cabecera lo prefiere a su id.
+    // The label the manifest gave each plugin column, already sanitized:
+    // the header prefers it over its id.
     std::collections::BTreeMap<String, String>,
 );
 
 enum Fondo {
-    /// El catálogo de plugins que pidió la AYUDA, para su lateral.
+    /// The plugin catalog HELP requested, for its side panel.
     PluginsDeAyuda(Result<norte_proto::methods::PluginListResult, Error>),
-    /// El catálogo pedido al ARRANCAR, para declarar qué PANELES aportan los
-    /// plugins (fase 3).
+    /// The catalog requested on STARTUP, to declare which PANES the plugins
+    /// contribute (phase 3).
     ///
-    /// Aparte del de la ayuda y del gestor, y no por gusto: esos dos salen
-    /// pronto si su superficie está cerrada, y un panel de plugin tiene que
-    /// poder pintarse sin que nadie haya abierto ni la ayuda ni el gestor.
-    /// Lo que trae es la DECLARACIÓN de qué huecos existen, no el contenido
-    /// de ninguno.
+    /// Separate from help's and the manager's, and not by whim: those two
+    /// exit early if their surface is closed, and a plugin pane has to be
+    /// able to paint without anyone having opened help or the manager. What
+    /// it brings is the DECLARATION of which slots exist, not any of their
+    /// content.
     PanelesDePlugin(Result<norte_proto::methods::PluginListResult, Error>),
-    /// La página de un plugin, pedida al abrirla en la ayuda.
+    /// A plugin's page, requested on opening it in help.
     PaginaDePlugin(
         String,
         Result<norte_proto::methods::PluginHelpResult, Error>,
     ),
-    /// El catálogo que pidió el GESTOR de extensiones, con la APERTURA que
-    /// lo pidió.
+    /// The catalog the extensions MANAGER requested, with the OPENING that
+    /// requested it.
     ///
-    /// Aparte del de la ayuda: son dos superficies con dos vidas, y
-    /// compartir la respuesta obligaría a cada una a comprobar si la otra
-    /// sigue abierta.
+    /// Separate from help's: they are two surfaces with two lifetimes, and
+    /// sharing the answer would force each to check whether the other is
+    /// still open.
     ///
-    /// La apertura hace falta porque «sigue abierta» no es «es la misma».
-    /// Abrir (petición A, lenta), `esc`, reabrir: A vencía por plazo y su
-    /// `unwrap_or(vacío)` apagaba el «cargando» de B y decía «ninguna
-    /// instalada» hasta que llegara B.
+    /// The opening is needed because "still open" is not "is the same one".
+    /// Open (request A, slow), `esc`, reopen: A used to time out and its
+    /// `unwrap_or(empty)` turned off B's "loading" and said "none
+    /// installed" until B arrived.
     Catalogo(
         u64,
         u64,
         Result<norte_proto::methods::PluginListResult, Error>,
     ),
-    /// Lo que hay que saber del DESTINO de una transferencia antes de que el
-    /// humano diga que sí: si cabe (#149) y si sabe sujetar sus escrituras
-    /// (#164). Lleva el modal al que pertenece, porque llega tarde.
+    /// What needs to be known about a transfer's DESTINATION before the
+    /// human says yes: whether it fits (#149) and whether it knows to
+    /// secure its writes (#164). Carries the modal it belongs to, because it
+    /// arrives late.
     ///
-    /// Las dos van juntas porque son la misma pregunta hecha al mismo sitio
-    /// en el mismo momento, y separarlas costaría dos rondas de I/O por
-    /// diálogo para pintar dos líneas contiguas — el mismo reparto que hace
-    /// el terminal en `DestCheck`.
+    /// Both go together because they are the same question asked to the
+    /// same place at the same moment, and splitting them would cost two I/O
+    /// round trips per dialog to paint two adjoining lines — the same split
+    /// the terminal makes in `DestCheck`.
     AvisosDeDestino(ModalId, Vec<String>),
-    /// La task de un `policy.undo_session` ya tiene id: se ata a su sesión.
+    /// A `policy.undo_session`'s task already has an id: it is tied to its
+    /// session.
     UndoDeSesion(u64, String),
-    /// Los perfiles que hay en `profiles/`, ya leídos, y qué se hace con
-    /// ellos: `None` = abrir el selector, `Some(hacia_delante)` = saltar al
-    /// vecino sin abrir nada.
+    /// The profiles in `profiles/`, already read, and what to do with them:
+    /// `None` = open the selector, `Some(forward)` = jump to the neighbor
+    /// without opening anything.
     ///
-    /// Leerlos es disco —un directorio y un `norte.toml` por perfil— así que
-    /// va por aquí como todo lo que no puede correr en el actor.
+    /// Reading them is disk I/O — a directory and a `norte.toml` per
+    /// profile — so it comes through here like everything that cannot run
+    /// in the actor.
     Perfiles(
         Vec<norte_frontend::profile_picker::UserProfile>,
         Option<bool>,
     ),
-    /// La configuración de un perfil, ya cargada, con su nombre.
+    /// A profile's configuration, already loaded, with its name.
     ///
-    /// `Err` es la clave del motivo: un perfil que no carga NO cambia nada —
-    /// se sigue en el que estabas, que es lo que la ADR 0079 D7 pide para un
-    /// cambio.
+    /// `Err` is the reason's key: a profile that fails to load changes
+    /// NOTHING — it stays on the one you were on, which is what ADR 0079 D7
+    /// asks for a switch.
     PerfilCargado(
         std::ffi::OsString,
         Box<Result<norte_frontend::config::FrontendConfig, &'static str>>,
     ),
-    /// Un ajuste de F11 ya está (o no) en el `norte.toml`, y la configuración
-    /// releída con él. En caja porque una `FrontendConfig` es grande al lado
-    /// del resto del enum.
+    /// An F11 setting is (or is not) in `norte.toml` now, and the
+    /// configuration re-read with it. Boxed because a `FrontendConfig` is
+    /// large next to the rest of the enum.
     AjusteEscrito(Box<settings::AjusteEscrito>),
-    /// Una clave de F11 ya no está en el `norte.toml` — restablecida.
+    /// An F11 key is no longer in `norte.toml` — reset.
     AjusteRestablecido(Box<settings::AjusteRestablecido>),
-    /// El catálogo que pidió la PALETA, para sus filas de plugin.
+    /// The catalog the PALETTE requested, for its plugin rows.
     PluginsDePaleta(u64, Result<norte_proto::methods::PluginListResult, Error>),
-    /// Un cambio de gobierno (aprobar/revocar, encender/apagar) contestó.
+    /// A governance change (approve/revoke, turn on/off) answered.
     ///
-    /// Lleva la APERTURA por lo mismo que el catálogo: la respuesta puede
-    /// llegar sobre un gestor que ya se cerró y se volvió a abrir.
+    /// Carries the OPENING for the same reason as the catalog: the answer
+    /// can arrive over a manager that has already closed and reopened.
     Gobernada(u64, Result<(), Error>),
-    /// Una escritura de `[config.<key>]` contestó: la apertura del gestor
-    /// que la pidió, a qué extensión, y qué dijo el daemon.
+    /// A `[config.<key>]` write answered: the opening of the manager that
+    /// requested it, which extension, and what the daemon said.
     ///
-    /// La apertura hace falta por lo mismo que en el catálogo: cerrar el
-    /// gestor y reabrirlo mientras una escritura vuela dejaba que el fallo de
-    /// la primera cerrara la ficha de la segunda.
+    /// The opening is needed for the same reason as in the catalog: closing
+    /// the manager and reopening it while a write is in flight let the
+    /// first one's failure close the second one's card.
     ConfigEscrita(u64, String, Result<(), Error>),
-    /// La salida de un comando de extensión: la apertura que lo pidió, el id
-    /// de la extensión, sus dos rótulos CON su bandera, y lo que contestó.
+    /// An extension command's output: the opening that requested it, the
+    /// extension's id, its two labels WITH their flag, and what it
+    /// answered.
     ///
-    /// Los rótulos viajan con su bandera y no solo enmascarados porque de una
-    /// máscara no se vuelve: una bandera calculada después, sobre el texto ya
-    /// enmascarado, sale siempre `false` y el panel afirma ser fiel.
+    /// The labels travel with their flag and not just masked because there
+    /// is no coming back from a mask: a flag computed afterward, over
+    /// already-masked text, always comes out `false` and the panel claims
+    /// to be faithful.
     SalidaDeComando(u64, Box<SalidaPedida>),
-    /// El esquema `[config]` de una extensión, pedido al abrir su ficha.
+    /// An extension's `[config]` schema, requested on opening its card.
     FichaDePlugin(
         String,
         Result<norte_proto::methods::PluginGetConfigResult, Error>,
     ),
-    /// Los volúmenes del host, con la APERTURA del selector que los pidió.
-    /// Ver [`Fondo::Catalogo`].
+    /// The host's volumes, with the OPENING of the selector that requested
+    /// them. See [`Fondo::Catalogo`].
     Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
-    /// Una página de la línea de tiempo (#359): el hueco, el testigo de la
-    /// petición y desde dónde se pidió (`None` = la primera).
+    /// A timeline page (#359): the slot, the request's token and where it
+    /// was requested from (`None` = the first one).
     PaginaDeLinea(
         u32,
         RequestToken,
         Option<i64>,
         Result<norte_proto::methods::JournalListResult, Error>,
     ),
-    /// Las conexiones para «ir a» (#357), con la APERTURA que las pidió: una
-    /// respuesta de una apertura anterior no rellena la de ahora.
+    /// The connections for "go to" (#357), with the OPENING that requested
+    /// them: an answer from a previous opening does not fill in the current
+    /// one.
     ConexionesDeIrA(
         u64,
         Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
     ),
-    /// Lo que contestó el índice a una consulta de «ir a» (#357): la apertura
-    /// y la consulta que se preguntaron, para tirar la respuesta si ya no es
-    /// lo que hay escrito.
+    /// What the index answered to a "go to" query (#357): the opening and
+    /// the query that were asked about, to drop the answer if it is no
+    /// longer what is written.
     IndiceDeIrA(
         u64,
         String,
         Result<Vec<norte_proto::methods::SemanticHit>, Error>,
     ),
-    /// Las conexiones configuradas, con la APERTURA que las pidió (#264).
+    /// The configured connections, with the OPENING that requested them
+    /// (#264).
     ///
-    /// El resultado entero: desde #365 trae también las que el daemon no supo
-    /// leer, y el selector las enseña sin destino.
+    /// The whole result: since #365 it also brings the ones the daemon
+    /// could not read, and the selector shows them with no destination.
     Conexiones(
         u64,
         Result<norte_proto::methods::ConnectionListResult, Error>,
     ),
-    /// Un lote de resultados, con la época de la búsqueda que lo pidió.
+    /// A batch of results, with the search epoch that requested it.
     Resultados(u64, Box<norte_proto::methods::SearchHits>),
-    /// La respuesta de una consulta SEMÁNTICA: entera, de una vez.
+    /// A SEMANTIC query's answer: whole, all at once.
     Semanticos(u64, Result<Vec<norte_proto::methods::SemanticHit>, Error>),
-    /// La comparación tiene Task: se bautiza para poder cancelarla.
+    /// The comparison has a Task: it is christened so it can be cancelled.
     ComparacionViva(u64, norte_proto::TaskId),
-    /// El plan de sincronización tiene Task.
+    /// The synchronization plan has a Task.
     PlanDeSyncVivo(u64, norte_proto::TaskId),
-    /// El `sync.apply` fue aceptado y esta es su Task.
+    /// The `sync.apply` was accepted and this is its Task.
     SyncAplicando(u64, norte_proto::TaskId),
-    /// El `sync.apply` falló. El `bool` dice si se SABE que no escribió nada:
-    /// un rechazo (política, conflicto, ruta inválida) lo sabe, porque el
-    /// daemon contestó; un transporte caído NO, porque la petición pudo
-    /// llegar y estar corriendo ahora mismo. Soltar el pestillo en el segundo
-    /// caso invita a aplicar el mismo plan dos veces sobre el mismo destino.
+    /// The `sync.apply` failed. The `bool` says whether it is KNOWN that it
+    /// wrote nothing: a rejection (policy, conflict, invalid path) knows,
+    /// because the daemon answered; a dropped transport does NOT, because
+    /// the request may have arrived and be running right now. Releasing the
+    /// latch in the second case invites applying the same plan twice over
+    /// the same destination.
     SyncNoAplicado(u64, bool),
-    /// El informe de una sincronización terminada.
+    /// A finished synchronization's report.
     InformeDeSync(
         u64,
         norte_proto::TaskState,
         Box<Result<norte_proto::methods::SyncReportResult, Error>>,
     ),
-    /// El daemon rechazó el plan: no habrá Task ni panel.
+    /// The daemon rejected the plan: there will be no Task and no panel.
     PlanDeSyncFallido(u64),
-    /// Los bytes del fichero de sumas que se va a comprobar (#311).
+    /// The bytes of the checksums file about to be checked (#311).
     FicheroDeSumas(Box<VPath>, Box<Result<Vec<u8>, Error>>),
-    /// Los digests que calculó esa Task, con el ESTADO con el que terminó
-    /// (#311): un informe de una Task cancelada está a medias, y compararlo
-    /// acusaría a ficheros que nadie llegó a leer.
+    /// The digests that Task computed, with the STATE it finished with
+    /// (#311): a cancelled Task's report is partial, and comparing it would
+    /// accuse files nobody got around to reading.
     InformeDeSumas(
         norte_proto::TaskId,
         norte_proto::TaskState,
         Box<Result<norte_proto::methods::FsChecksumReportResult, Error>>,
     ),
-    /// Un evento del plan: un lote de pasos, o su cierre.
+    /// A plan event: a batch of steps, or its closing.
     EventoDeSync(u64, Box<norte_client::SyncPlanEvent>),
-    /// Un lote de filas comparadas.
+    /// A batch of compared rows.
     FilasComparadas(u64, Box<norte_proto::methods::CompareRowsBatch>),
-    /// Lo que el modelo propuso, con la época de la petición que lo pidió.
+    /// What the model proposed, with the epoch of the request that asked
+    /// for it.
     PlanIa(
         u64,
         Box<Result<norte_proto::methods::AiRenamePlanResult, Error>>,
     ),
-    /// El plan de ORGANIZAR que propuso un productor (fase 8), con la época
-    /// de la petición que lo pidió. Uno solo para el modelo y para un plugin:
-    /// los dos producen el mismo plan y la misma revisión.
+    /// The ORGANIZE plan a producer proposed (phase 8), with the epoch of
+    /// the request that asked for it. One single one for the model and for
+    /// a plugin: both produce the same plan and the same review.
     PlanOrganizar(
         u64,
         Box<Result<norte_proto::methods::AiOrganizePlanResult, Error>>,
     ),
-    /// El veredicto del core sobre ese plan, con la MISMA época: entre pedir
-    /// el uno y el otro el lector puede haber descartado la revisión, y un
-    /// veredicto sobre un plan que ya no está en pantalla no se aplica.
+    /// The core's verdict on that plan, with the SAME epoch: between
+    /// requesting one and the other the reader may have discarded the
+    /// review, and a verdict on a plan no longer on screen does not apply.
     PlanDeLote(
         u64,
         Box<Result<norte_proto::methods::FsRenameBatchPlanResult, Error>>,
     ),
-    /// Lo que los plugins dijeron de la ventana visible de un hueco.
+    /// What the plugins said about a slot's visible window.
     ///
-    /// Insignias y valores de columna juntos: son la misma pregunta sobre las
-    /// mismas rutas y viajan en la misma respuesta.
+    /// Badges and column values together: they are the same question about
+    /// the same paths and travel in the same answer.
     Adornos(Box<Adornos>),
-    /// Los bytes enteros de una imagen que el visor aceptó.
+    /// An image's whole bytes, accepted by the viewer.
     Imagen(RequestToken, Result<Vec<u8>, Error>),
-    /// La vista CON ESTILO que un previewer dio del fichero del visor (ADR
-    /// 0141), o `None` si ninguno casó. Llega DESPUÉS de abrir: el visor se
-    /// abre con la vista cruda en cuanto se lee y esto la sustituye.
+    /// The STYLED view a previewer gave of the viewer's file (ADR 0141), or
+    /// `None` if none matched. Arrives AFTER opening: the viewer opens with
+    /// the raw view as soon as it is read and this replaces it.
     Estilo(
         RequestToken,
         Option<norte_proto::methods::PluginPreviewStyled>,
     ),
-    /// La MINIATURA que un plugin dio del fichero del visor (ADR 0107), o
-    /// `None` si ninguno casó o el que casó no supo.
+    /// The THUMBNAIL a plugin gave of the viewer's file (ADR 0107), or
+    /// `None` if none matched or the one that matched did not know how.
     Miniatura(RequestToken, Option<norte_proto::methods::PluginThumbnail>),
-    /// La búsqueda de esta época ya tiene Task: este es su id.
+    /// This epoch's search already has a Task: this is its id.
     ///
-    /// Llega por su cuenta y no dentro del primer lote porque puede no haber
-    /// primer lote: el core no manda lotes vacíos.
+    /// Arrives on its own and not inside the first batch because there may
+    /// be no first batch: the core sends no empty batches.
     BusquedaViva(u64, norte_proto::TaskId),
-    /// La búsqueda de esta época NO llegó a encolarse, y con qué error.
+    /// This epoch's search never made it to being enqueued, and with which
+    /// error.
     ///
-    /// Ahí no hay Task, así que el desenlace no puede llegar por el progreso:
-    /// sin esto la vista se quedaba diciendo «buscando…» para siempre sobre
-    /// una búsqueda que no existe, mientras el error pasaba por la barra y se
-    /// lo llevaba la siguiente tecla.
+    /// There is no Task there, so the outcome cannot arrive through
+    /// progress: without this the view kept saying "searching…" forever
+    /// about a search that does not exist, while the error passed through
+    /// the status bar and the next key swept it away.
     BusquedaRota(u64, Box<Error>),
-    /// Los volúmenes, pedidos por la BARRA LATERAL.
+    /// The volumes, requested by the SIDE PANEL.
     ///
-    /// Aparte de los del selector por el mismo motivo que los dos catálogos
-    /// de plugins: son dos superficies con dos vidas.
+    /// Separate from the selector's for the same reason as the two plugin
+    /// catalogs: they are two surfaces with two lifetimes.
     SitiosVolumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
-    /// Los volúmenes para el PIE de los listados (spec 2026-09-10). Aparte
-    /// de los de sitios y del selector por lo mismo: otra vida, y llega sin
-    /// que nadie haya abierto nada.
+    /// The volumes for the listings' FOOTER (spec 2026-09-10). Separate
+    /// from places' and the selector's for the same reason: a different
+    /// lifetime, and it arrives with nobody having opened anything.
     VolumenesDePie(Result<Vec<norte_proto::methods::Volume>, Error>),
-    /// Los subdirectorios de una rama del ÁRBOL, ya filtrados y ordenados.
+    /// A TREE branch's subdirectories, already filtered and sorted.
     ///
-    /// `None` = la rama no se dejó leer; lo decide
-    /// `Tree::branch_unreadable` (vacía, o re-anclar si era la raíz).
+    /// `None` = the branch would not let itself be read; decided by
+    /// `Tree::branch_unreadable` (empty, or re-anchor if it was the root).
     RamasDeArbol(VPath, Option<Vec<VPath>>),
-    /// La sesión de un panel se cerró (#140): el hueco, cómo fue, y a dónde va
-    /// ese panel ahora.
+    /// A pane's session closed (#140): the slot, how it went, and where
+    /// that pane goes now.
     ///
-    /// El destino viaja DENTRO del mensaje porque se decidió antes de soltar
-    /// la sesión: después, la ruta del panel ya no sirve para elegirlo.
+    /// The destination travels INSIDE the message because it was decided
+    /// before releasing the session: afterward, the pane's path no longer
+    /// works to choose it.
     Desconectada(u32, Result<bool, Error>, VPath),
 }
 
 impl UiHost {
-    /// Arranca el host y devuelve su PRIMER snapshot.
+    /// Starts the host and returns its FIRST snapshot.
     ///
-    /// El snapshot inicial es la secuencia 0 y hay exactamente uno: un
-    /// renderer que arranca no tiene que preguntar por el estado, ya lo
-    /// tiene.
+    /// The initial snapshot is sequence 0 and there is exactly one: a
+    /// renderer starting up does not have to ask for the state, it already
+    /// has it.
     ///
     /// # Errors
-    /// [`UiError::NoBrowserSlot`] si la disposición no declara ningún
-    /// `browser`: sin listado no hay pantalla que pintar.
+    /// [`UiError::NoBrowserSlot`] if the layout declares no `browser`: with
+    /// no listing there is no screen to paint.
     pub async fn start(options: UiHostOptions) -> Result<(Self, ViewSnapshot), UiError> {
         let instance = InstanceId::new(nueva_instancia());
         let (updates, _) = broadcast::channel(UPDATE_BUFFER);
-        // Los efectos NATIVOS van por su propio canal: llevan rutas y van al
-        // proceso que hospeda, no a la webview. Un buffer pequeño porque son
-        // gestos de una persona —copiar una ruta, abrir un fichero— y no un
-        // flujo: si alguna vez se llenara, lo que se pierde es un gesto que
-        // se puede repetir, y no un trozo de la pantalla.
+        // NATIVE effects go through their own channel: they carry paths and
+        // go to the hosting process, not to the webview. A small buffer
+        // because they are one person's gestures — copying a path, opening
+        // a file — and not a stream: if it ever filled up, what is lost is
+        // a gesture that can be repeated, not a piece of the screen.
         let (nativos, _) = broadcast::channel(16);
         let (tx, rx) = mpsc::channel(INBOX);
-        // El actor conserva un remite a SU propio buzón: por ahí vuelven las
-        // respuestas de lo que tarda.
+        // The actor keeps a return address to ITS OWN mailbox: that is
+        // where slow answers come back through.
         let tx2 = tx.clone();
 
         let (mut estado, backend) = Estado::nuevo(instance.clone(), options);
         if estado.huecos.is_empty() {
             return Err(UiError::NoBrowserSlot);
         }
-        // La sesión primero: dice DÓNDE estaba cada hueco, y listar antes
-        // sería traer un directorio para tirarlo.
+        // The session first: it says WHERE each slot was, and listing
+        // before that would be bringing in a directory only to drop it.
         estado.leer_sesion(backend.as_ref()).await;
-        // Lo que la sesión dijo de esta ventana —dueña o suelta— va a la
-        // barra desde el primer frame: el cambio se descarta porque la foto
-        // del arranque lleva la barra entera.
+        // What the session said about this window — owner or loose — goes
+        // to the status bar from the first frame: the change is discarded
+        // because the startup snapshot carries the whole status bar.
         let _ = estado.cambio_de_banners();
-        // Y después `[profile.start]`, FUERA de `leer_sesion` a propósito: esa
-        // vuelve pronto por cuatro caminos —sin sesión, de una versión futura,
-        // revisión 0, cuerpo ilegible— y tres de ellos son justo el caso para
-        // el que la clave existe: una instalación nueva, o un perfil copiado de
-        // otra máquina (ADR 0098). Dentro no se sembraba nunca.
+        // And afterward `[profile.start]`, OUTSIDE `leer_sesion` on purpose:
+        // that one returns early through four paths — no session, from a
+        // future version, revision 0, unreadable body — and three of those
+        // are exactly the case the key exists for: a fresh install, or a
+        // profile copied from another machine (ADR 0098). Inside, it never
+        // seeded anything.
         //
-        // El orden ES la precedencia: la sesión, después lo que el perfil dice
-        // de los huecos que ella no conoce, y encima el directorio que un
-        // humano acaba de teclear.
+        // The order IS the precedence: the session, then what the profile
+        // says about slots it does not know, and on top of that the
+        // directory a human just typed.
         for (id, destino) in estado.siembra_de_perfil() {
             if let Some(hueco) = estado.huecos.get_mut(&id) {
                 hueco.pane.begin_loading(destino);
             }
         }
         estado.fijar_dir_pedido();
-        // El primer listado se pide ANTES de publicar nada: el snapshot 0
-        // describe una pantalla que ya existe, no una promesa.
+        // The first listing is requested BEFORE publishing anything:
+        // snapshot 0 describes a screen that already exists, not a promise.
         estado.listar_inicial(&backend, &tx2).await;
-        // La barra lateral, si la disposición coloca una: los favoritos salen
-        // de la configuración que ya está cargada, y los volúmenes se PIDEN y
-        // llegan después — preguntarlos monta y consulta espacio en cada
-        // filesystem, y la ventana no espera a eso para pintar.
+        // The side panel, if the layout places one: favorites come from the
+        // already-loaded configuration, and volumes are REQUESTED and
+        // arrive later — asking about them mounts and queries space on every
+        // filesystem, and the window does not wait for that to paint.
         if estado.hueco_de_sitios().is_some() {
             estado.sembrar_sitios();
             estado.pedir_sitios(&backend, &tx2);
         }
-        // Y qué PANELES aportan los plugins (fase 3). Sin preguntar si hay
-        // hueco para uno: la disposición guardada puede traerlo y ese hueco no
-        // se coloca hasta que su kind está declarado. La única puerta la pone
-        // `pedir_paneles`, y es la de los efectos.
+        // And which PANES the plugins contribute (phase 3). Without asking
+        // whether there is a slot for one: the saved layout can bring one
+        // and that slot does not get placed until its kind is declared. The
+        // only gate is the effects one, put there by `pedir_paneles`.
         //
-        // Llega después de la primera foto, como los volúmenes: declarar un
-        // kind repinta, y esperar a una RPC para enseñar la pantalla sería
-        // pagar por lo que casi nunca hay.
+        // Arrives after the first snapshot, like the volumes: declaring a
+        // kind repaints, and waiting for an RPC to show the screen would be
+        // paying for something that is almost never there.
         Estado::pedir_paneles(&backend, &tx2);
-        // Y se sondea lo que ya se ve: el listado local no trae tamaño ni
-        // fecha (#52), así que sin esto la primera pantalla nace con dos
-        // columnas en blanco y no se llenan hasta que algo la mueva.
+        // And what is already visible is probed: the local listing carries
+        // no size or date (#52), so without this the first screen is born
+        // with two blank columns that do not fill in until something moves
+        // it.
         let visibles: Vec<u32> = estado.huecos.keys().copied().collect();
         for slot in visibles {
             estado.sondear(slot, &backend, &tx2);
@@ -1265,17 +1307,17 @@ impl UiHost {
         Ok((host, primero))
     }
 
-    /// La identidad de esta instancia. Toda acción que no la lleve es de otra
-    /// vida del host.
+    /// This instance's identity. Any action not carrying it belongs to
+    /// another life of the host.
     #[must_use]
     pub fn instance(&self) -> &InstanceId {
         &self.instance
     }
 
-    /// Manda una acción y espera su acuse.
+    /// Sends an action and waits for its acknowledgment.
     ///
     /// # Errors
-    /// [`UiError::Down`] si el host ya no está.
+    /// [`UiError::Down`] if the host is no longer there.
     pub async fn dispatch(&self, action: UiAction) -> Result<ActionAck, UiError> {
         let (tx, rx) = oneshot::channel();
         self.inbox
@@ -1285,18 +1327,20 @@ impl UiHost {
         rx.await.map_err(|_| UiError::Down)
     }
 
-    /// Los bytes de la imagen que el visor tiene abierta, si ya llegaron.
+    /// The bytes of the image the viewer has open, if they have arrived
+    /// yet.
     ///
-    /// Aparte de la foto A PROPÓSITO: ocho megas en el flujo de parches es un
-    /// mensaje que se reenvía entero en cada `Resync`. El renderer los pide
-    /// por aquí, hace un `blob:` y lo revoca al cerrar (ADR 0069).
+    /// Separate from the snapshot ON PURPOSE: eight megs in the patch flow
+    /// is a message resent whole on every `Resync`. The renderer requests
+    /// them through here, makes a `blob:` and revokes it on close
+    /// (ADR 0069).
     ///
-    /// No lleva RUTA. El renderer no nombra ficheros —ni aquí ni en ningún
-    /// otro sitio— así que lo que se sirve es la imagen que el host mismo
-    /// decidió abrir, y no la que alguien pida.
+    /// Carries no PATH. The renderer names no files — not here, not
+    /// anywhere else — so what is served is the image the host itself
+    /// decided to open, not whichever one someone asks for.
     ///
     /// # Errors
-    /// [`UiError::Down`] si el actor ya no está.
+    /// [`UiError::Down`] if the actor is no longer there.
     pub async fn image_bytes(&self) -> Result<Option<std::sync::Arc<Vec<u8>>>, UiError> {
         let (tx, rx) = oneshot::channel();
         self.inbox
@@ -1306,8 +1350,8 @@ impl UiHost {
         rx.await.map_err(|_| UiError::Down)
     }
 
-    /// Se engancha a las actualizaciones. Varios suscriptores son legales; el
-    /// escritor sigue siendo uno.
+    /// Hooks into the updates. Several subscribers are legal; the writer is
+    /// still one.
     #[must_use]
     pub fn subscribe(&self) -> UiSubscription {
         UiSubscription {
@@ -1315,23 +1359,23 @@ impl UiHost {
         }
     }
 
-    /// Los efectos NATIVOS que el host pide: portapapeles, abrir con el
-    /// escritorio, terminal.
+    /// The NATIVE effects the host requests: clipboard, opening with the
+    /// desktop, terminal.
     ///
-    /// Canal aparte del de la vista a propósito: esto lleva rutas y va al
-    /// PROCESO que hospeda, no a la webview, que no tiene permiso para
-    /// ejecutar nada (ADR 0066 D11). Un frontend que no se suscriba
-    /// sencillamente no hace ninguna, que es lo que se quiere de un frontend
-    /// que no sepa hacerlas.
+    /// A channel separate from the view's on purpose: this carries paths
+    /// and goes to the hosting PROCESS, not to the webview, which has no
+    /// permission to run anything (ADR 0066 D11). A frontend that does not
+    /// subscribe simply performs none, which is what is wanted from a
+    /// frontend that does not know how to perform them.
     #[must_use]
     pub fn native_effects(&self) -> broadcast::Receiver<crate::dto::NativeEffect> {
         self.nativos.subscribe()
     }
 
-    /// Apaga el host y cuenta qué quedó sin terminar.
+    /// Shuts down the host and reports what was left unfinished.
     ///
     /// # Errors
-    /// [`UiError::Down`] si ya estaba apagado.
+    /// [`UiError::Down`] if it was already shut down.
     pub async fn shutdown(&self) -> Result<ShutdownReport, UiError> {
         let (tx, rx) = oneshot::channel();
         self.inbox
@@ -1342,30 +1386,30 @@ impl UiHost {
     }
 }
 
-/// Lo que puede fallar al hablar con el host.
+/// What can fail when talking to the host.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum UiError {
-    /// El host se apagó (o se cayó): su estado ya no existe.
-    #[error("el host no está")]
+    /// The host shut down (or crashed): its state no longer exists.
+    #[error("the host is not there")]
     Down,
-    /// La disposición no tiene ningún listado.
+    /// The layout has no listing at all.
     ///
-    /// Una pantalla sin listado no es una pantalla: es un cuelgue con
-    /// bordes. Se rechaza AQUÍ y no en la primera tecla, donde el pánico
-    /// caería dentro de la task del actor —sin log y sin caída visible— y
-    /// dejaría la ventana muerta contestando `Down` para siempre (es la
-    /// forma de #242 en esta superficie).
-    #[error("la disposición no tiene ningún listado")]
+    /// A screen with no listing is not a screen: it is a hang with borders.
+    /// It is rejected HERE and not on the first key, where the panic would
+    /// fall inside the actor's task — with no log and no visible crash —
+    /// and would leave the window dead, answering `Down` forever (it is
+    /// #242's shape on this surface).
+    #[error("the layout has no listing")]
     NoBrowserSlot,
 }
 
-/// El bucle del ÚNICO escritor.
-// El REPARTO de mensajes del actor: un brazo por variante, y cada brazo
-// delega. Largo por número de variantes, no por lógica — partirlo en dos
-// mitades arbitrarias solo escondería dónde se atiende cada mensaje.
+/// The SOLE writer's loop.
+// The actor's message DISPATCH: one arm per variant, and each arm
+// delegates. Long by variant count, not by logic — splitting it into two
+// arbitrary halves would only hide where each message is handled.
 #[expect(
     clippy::too_many_lines,
-    reason = "reparto de mensajes del actor: largo por variantes, no por lógica"
+    reason = "actor message dispatch: long by variant count, not by logic"
 )]
 async fn actor(
     mut rx: mpsc::Receiver<Mensaje>,
@@ -1379,8 +1423,9 @@ async fn actor(
             Mensaje::Accion(accion, responde) => {
                 let (ack, salidas) = estado.aplicar(&accion, &backend, &buzon);
                 for u in salidas {
-                    // Sin suscriptores no es un error: el host sigue vivo
-                    // aunque el renderer se haya ido a hacer otra cosa.
+                    // With no subscribers it is not an error: the host is
+                    // still alive even if the renderer has gone off to do
+                    // something else.
                     let _ = updates.send(u);
                 }
                 let _ = responde.send(ack);
@@ -1393,11 +1438,11 @@ async fn actor(
                 let _ = updates.send(estado.aplicar_catalogo(scheme, catalogo));
             }
             Mensaje::Aprobacion(req) => {
-                // Y por el ESCRITORIO si la ventana no está delante (#285).
-                // Es el aviso que justifica el mecanismo: una aprobación
-                // caduca sola si nadie contesta, así que no enterarse cambia
-                // el desenlace — al revés que una copia, que sigue terminada
-                // cuando vuelves.
+                // And through the DESKTOP if the window is not up front
+                // (#285). It is the notice that justifies the mechanism: an
+                // approval expires on its own if nobody answers, so not
+                // finding out changes the outcome — unlike a copy, which
+                // stays finished when you come back.
                 estado.avisar_de_aprobacion(&req);
                 for u in estado.abrir_aprobacion(&req, &buzon) {
                     let _ = updates.send(u);
@@ -1409,9 +1454,9 @@ async fn actor(
                 }
             }
             Mensaje::AprobacionNoEntregada(approval_id, clave) => {
-                // NOMBRA la aprobación (#279): con dos apiladas, «la
-                // aprobación no llegó» no dice cuál de las dos, y son
-                // decisiones de seguridad sobre operandos distintos.
+                // NAMES the approval (#279): with two stacked, "the approval
+                // did not arrive" does not say which of the two, and they
+                // are security decisions over different operands.
                 for u in estado.decir_con(clave, &[("id", &approval_id.to_string())]) {
                     let _ = updates.send(u);
                 }
@@ -1554,7 +1599,8 @@ async fn actor(
             }
             Mensaje::SesionTic => {
                 estado.empujar_sesion(&backend, &buzon);
-                // Y un segundo más para el aviso de la barra (spec 2026-09-10).
+                // And one more second for the status bar's notice (spec
+                // 2026-09-10).
                 if let Some(u) = estado.caducar_aviso() {
                     let _ = updates.send(u);
                 }
@@ -1580,14 +1626,16 @@ async fn actor(
                 match resultado {
                     Ok(tema) => {
                         estado.tema_puesto(&spec, &tema);
-                        // Foto y no parche: cambiar de tema mueve los colores
-                        // de TODA la pantalla, y el renderer los reenchufa
-                        // desde el catálogo, no desde un campo de la vista.
+                        // Snapshot and not a patch: changing theme moves the
+                        // colors of the WHOLE screen, and the renderer plugs
+                        // them back in from the catalog, not from a view
+                        // field.
                         let snap = estado.snapshot();
                         let _ = updates.send(estado.sobre(UiUpdate::Snapshot(Box::new(snap))));
                     }
-                    // Un tema que no se puede leer NO deja la ventana sin
-                    // colores: se queda el que había y se dice por qué.
+                    // A theme that cannot be read does NOT leave the window
+                    // with no colors: it stays on the one there was and
+                    // reports why.
                     Err(clave) => {
                         for u in estado.decir(clave) {
                             let _ = updates.send(u);
@@ -1634,67 +1682,67 @@ async fn actor(
                 return;
             }
         }
-        // El visor acoplado sigue al cursor (#291), y el cursor lo mueve
-        // cualquier mensaje: una tecla, un listado que aterriza, un panel
-        // que se abre. Se pregunta DESPUÉS de cada uno, como la TUI lo
-        // pregunta en cada frame: qué debería estar enseñando cada hueco de
-        // preview colocado, y si no es lo que enseña, se pide.
+        // The docked viewer follows the cursor (#291), and the cursor is
+        // moved by any message: a key, a listing landing, a panel opening.
+        // It is asked AFTER each one, the way the TUI asks it every frame:
+        // what each placed preview slot should be showing, and if it is not
+        // what it shows, it is requested.
         for u in estado.sondear_previews(&backend, &buzon) {
             let _ = updates.send(u);
         }
-        // Y el panel de un plugin (fase 3), por lo mismo y en el mismo sitio:
-        // su guest recibe el directorio y la fila bajo el cursor, así que
-        // cualquier mensaje puede cambiar lo que debería estar enseñando.
+        // And a plugin's pane (phase 3), for the same reason and in the same
+        // place: its guest receives the directory and the row under the
+        // cursor, so any message can change what it should be showing.
         for u in estado.sondear_paneles(&backend, &buzon) {
             let _ = updates.send(u);
         }
-        // Y el mapa de disco (fase 4), en el mismo sitio y por lo mismo: sigue
-        // al DIRECTORIO del listado al que está atado, así que un `cd` —venga
-        // de donde venga— cambia lo que debería estar enseñando. No sigue al
-        // cursor: mover una fila no cambia de qué está hecho el directorio, y
-        // sondear por cursor sería medir un `$HOME` en cada flecha.
+        // And the disk map (phase 4), in the same place and for the same
+        // reason: it follows the DIRECTORY of the listing it is tied to, so
+        // a `cd` — wherever it comes from — changes what it should be
+        // showing. It does not follow the cursor: moving a row does not
+        // change what the directory is made of, and probing per cursor
+        // would mean measuring a `$HOME` on every arrow.
         for u in estado.sondear_mapas(&backend, &buzon) {
             let _ = updates.send(u);
         }
-        // Y la línea de tiempo (#359): la primera página cuando aparece su
-        // hueco, y la siguiente cuando el cursor llega abajo.
+        // And the timeline (#359): the first page when its slot appears,
+        // and the next one when the cursor reaches the bottom.
         estado.sondear_lineas(&backend, &buzon);
-        // Y la hoja de atributos, por lo MISMO y en el mismo sitio: también
-        // sigue al cursor y tampoco tiene otro camino hasta el renderer. Va
-        // después del visor para que, cuando los dos cambian a la vez, la
-        // foto que se manda ya lleve los dos al día.
+        // And the attribute sheet, for the SAME reason and in the same
+        // place: it also follows the cursor and also has no other path to
+        // the renderer. It goes after the viewer so that, when both change
+        // at once, the snapshot sent already carries both up to date.
         for u in estado.sondear_hojas() {
             let _ = updates.send(u);
         }
     }
 }
 
-/// El área que el renderer dice tener, en celdas de layout.
+/// The area the renderer says it has, in layout cells.
 ///
-/// El árbol se reparte en una rejilla y no en píxeles a propósito: los
-/// mínimos de cada kind están declarados así y los comparte con el TUI, que
-/// es lo que hace que «este panel no cabe» signifique lo mismo en las dos
-/// superficies.
-/// El id de una columna: una IDENTIDAD, entera o vacía.
+/// The tree is laid out on a grid and not in pixels on purpose: each kind's
+/// minimums are declared that way and shared with the TUI, which is what
+/// makes "this pane does not fit" mean the same thing on both surfaces.
+/// A column's id: an IDENTITY, whole or empty.
 ///
-/// NO se enmascara y NO se recorta, al contrario que todo lo demás. Es lo que
-/// vuelve para ordenar y lo que nombra la columna de cada celda, así que las
-/// dos transformaciones lo rompen, y de formas distintas:
+/// NOT masked and NOT trimmed, unlike everything else. It is what comes back
+/// to sort by and what names each cell's column, so both transformations
+/// break it, and in different ways:
 ///
-/// - Enmascarar no es inyectivo. Un `norte.toml` con dos columnas `attr:`
-///   que solo se diferencien en un carácter invisible daba DOS cabeceras con
-///   el MISMO id enmascarado, y la resolución hace `find`: pulsar la segunda
-///   ordenaba por la primera. Es la regla del ADR 0061 —«recortar no es
-///   inyectivo, y esto es una clave»— aplicada al enmascarado, en una
-///   superficie que el ADR no cubría.
-/// - Recortar era además ASIMÉTRICO: el id salía con `clamp_display` y se
-///   comparaba sin él, así que uno largo no casaba nunca con su propia
-///   columna y caía a un `parse` sobre una cadena acabada en `…`.
+/// - Masking is not injective. A `norte.toml` with two `attr:` columns
+///   differing only by an invisible character gave TWO headers with the
+///   SAME masked id, and resolution does a `find`: pressing the second one
+///   sorted by the first. It is ADR 0061's rule — "trimming is not
+///   injective, and this is a key" — applied to masking, on a surface the
+///   ADR did not cover.
+/// - Trimming was also ASYMMETRIC: the id came out with `clamp_display` and
+///   was compared without it, so a long one never matched its own column and
+///   fell back to a `parse` over a string ending in `…`.
 ///
-/// Un id que no cabe en el tope del bridge se manda VACÍO: una clave que no
-/// casa con nada es un fallo visible; una que casa con la equivocada, no. Lo
-/// que se PINTA es `label`, que sí va enmascarado, y el renderer solo usa el
-/// id en un `data-` y para mandarlo de vuelta.
+/// An id that does not fit the bridge's cap is sent EMPTY: a key that
+/// matches nothing is a visible failure; one that matches the wrong one is
+/// not. What gets PAINTED is `label`, which is masked, and the renderer only
+/// uses the id in a `data-` and to send it back.
 fn identidad_de_columna(id: &norte_frontend::columns::ColumnId) -> String {
     let s = id.to_string();
     if s.len() > crate::bridge::MAX_STRING_BYTES {
@@ -1712,12 +1760,12 @@ fn rect((width, height): (u16, u16)) -> Rect {
     }
 }
 
-/// ¿Este hueco del árbol es un listado?
+/// Is this tree slot a listing?
 fn es_listado(arbol: &Node, slot: SlotId, kinds: &KindRegistry) -> bool {
     kind_de(arbol, slot).is_some_and(|k| k.as_str() == "browser" && kinds.get(&k).is_some())
 }
 
-/// El kind declarado de un hueco del árbol.
+/// A tree slot's declared kind.
 fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId> {
     fn buscar(n: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId> {
         match n {
@@ -1731,17 +1779,17 @@ fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId>
     buscar(arbol, slot)
 }
 
-/// El ahora, en milisegundos. Lo inyecta el proyector para que el formato de
-/// una fecha relativa («hace 3 días») no dependa de cuándo se serializó.
-/// La política que corresponde a cada salida del diálogo de colisión (#274).
+/// Now, in milliseconds. Injected by the projector so a relative date's
+/// format ("3 days ago") does not depend on when it was serialized.
+/// The policy matching each collision-dialog output (#274).
 ///
-/// `None` para `cancel` y para cualquier otra cosa: no elegir es una respuesta
-/// válida —la task fallida se queda como está— y una opción que el diálogo no
-/// ofreció no se interpreta.
+/// `None` for `cancel` and for anything else: not choosing is a valid answer
+/// — the failed task stays as it is — and an option the dialog did not offer
+/// is not interpreted.
 ///
-/// Los ids son los del catálogo compartido de `dialog.*`, los mismos que ata
-/// el TUI: dos vocabularios para la misma pregunta serían dos sitios donde una
-/// tecla acaba haciendo otra cosa.
+/// The ids are the shared `dialog.*` catalog's, the same ones the TUI binds:
+/// two vocabularies for the same question would be two places where a key
+/// ends up doing something else.
 fn politica_de_colision(choice: &str) -> Option<norte_proto::CollisionPolicy> {
     use norte_proto::CollisionPolicy as P;
     match choice {
@@ -1753,11 +1801,12 @@ fn politica_de_colision(choice: &str) -> Option<norte_proto::CollisionPolicy> {
     }
 }
 
-/// Manda el «sí» al daemon, y si no sale bien lo CUENTA con la frase que toca.
+/// Sends the "yes" to the daemon, and if it does not go well, COUNTS it with
+/// the right phrase.
 ///
-/// Aparte porque el desenlace tiene tres formas distintas de salir mal y
-/// ninguna de ellas es asunto de la función que decide qué hacer con un
-/// diálogo (#279).
+/// Separate because the outcome has three different ways to go wrong and
+/// none of them is the business of the function that decides what to do
+/// with a dialog (#279).
 fn lanzar_aprobacion(
     approval_id: u64,
     backend: &Arc<dyn HostBackend>,
@@ -1777,16 +1826,17 @@ fn lanzar_aprobacion(
     });
 }
 
-/// Qué frase toca cuando un `policy.decide` no sale bien (#279).
+/// Which phrase applies when a `policy.decide` does not go well (#279).
 ///
-/// Las tres formas de «esa aprobación ya no está» piden consejos distintos, y
-/// antes las tres se pintaban como la primera: «tu clic no llegó» sobre una
-/// aprobación que sí llegó y venció es una frase que manda al lector a
-/// reintentar algo que ya se decidió sin él.
+/// The three shapes of "that approval is no longer there" call for
+/// different advice, and they used to all be painted as the first one:
+/// "your click did not arrive" about an approval that did arrive and
+/// expired is a phrase that sends the reader to retry something already
+/// decided without them.
 ///
-/// Un `reason` que este binario no conozca cae en «desconocida» y nunca en una
-/// de las otras: el vocabulario del wire puede crecer, y adivinar en una
-/// superficie de seguridad es peor que decir que no se sabe.
+/// A `reason` this binary does not know falls into "unknown" and never into
+/// one of the others: the wire's vocabulary can grow, and guessing on a
+/// security surface is worse than saying it is not known.
 fn clave_de_aprobacion_perdida(e: &norte_proto::Error) -> &'static str {
     match e {
         norte_proto::Error::ApprovalGone { reason } => match reason.as_str() {
@@ -1794,23 +1844,24 @@ fn clave_de_aprobacion_perdida(e: &norte_proto::Error) -> &'static str {
             "already-decided" => "msg-approval-already-decided",
             _ => "msg-approval-unknown",
         },
-        // Cualquier otro error es que la petición NO llegó (el daemon se cayó
-        // entre la pregunta y la respuesta), que es el caso original.
+        // Any other error means the request did NOT arrive (the daemon went
+        // down between the question and the answer), which is the original
+        // case.
         _ => "msg-approval-not-delivered",
     }
 }
 
-/// La CLASE de una task, en el vocabulario del bridge.
+/// A task's CLASS, in the bridge's vocabulary.
 ///
-/// Un `match` y no `format!("{:?}").to_lowercase()`. El `Debug` daba
-/// `renamebatch` y `dirsize` para variantes cuya clave en el catálogo es
-/// `rename-batch` y `dir-size`, así que esas dos se pintaban como su propio
-/// identificador.
+/// A `match` and not `format!("{:?}").to_lowercase()`. `Debug` gave
+/// `renamebatch` and `dirsize` for variants whose catalog key is
+/// `rename-batch` and `dir-size`, so those two painted as their own
+/// identifier.
 ///
-/// `TaskKind` es `#[non_exhaustive]`, así que el comodín es obligatorio y
-/// esto NO deja de compilar al aparecer una variante: lo que hace es que caiga
-/// en `unknown`, que es una clave que EXISTE en el catálogo. Una task de un
-/// daemon más nuevo se lee «tarea» en vez de leerse `gui-task-kind-frobnicate`.
+/// `TaskKind` is `#[non_exhaustive]`, so the wildcard is mandatory and this
+/// does NOT stop compiling when a variant appears: what happens is it falls
+/// into `unknown`, a key that DOES EXIST in the catalog. A task from a newer
+/// daemon reads "task" instead of reading `gui-task-kind-frobnicate`.
 fn clase_de_task(kind: norte_proto::TaskKind) -> &'static str {
     use norte_proto::TaskKind as K;
     match kind {
@@ -1832,27 +1883,28 @@ fn clase_de_task(kind: norte_proto::TaskKind) -> &'static str {
         K::Combine => "combine",
         K::SyncPlan => "sync-plan",
         K::Sync => "sync",
-        // #311 y #314: caían en `unknown`, o sea que una comprobación de sumas
-        // y un cambio de permisos se leían «tarea» en la franja.
+        // #311 and #314: fell into `unknown`, meaning a checksum check and a
+        // permission change read "task" in the strip.
         K::Checksum => "checksum",
         K::SetMode => "set-mode",
-        // `Unknown` y lo que traiga un daemon más nuevo, juntos: ver el doc
-        // de arriba. `unknown` es una clave de verdad, no un identificador
-        // pintado crudo.
+        // `Unknown` and whatever a newer daemon brings, together: see the
+        // doc above. `unknown` is a real key, not a raw identifier painted
+        // as is.
         K::Unknown | _ => "unknown",
     }
 }
 
-/// Los valores de las columnas `plugin:` CONFIGURADAS del esquema.
+/// The scheme's CONFIGURED `plugin:` columns' values.
 ///
-/// La validación de pertenencia y el dedupe de colisiones viven en el modelo
-/// COMPARTIDO (`validated_plugin_requests`): una sola definición para los dos
-/// frontends, y una colisión de id bare se queda en blanco antes que atribuir
-/// una columna al plugin equivocado.
+/// Membership validation and collision dedup live in the SHARED model
+/// (`validated_plugin_requests`): one single definition for both frontends,
+/// and a bare-id collision is left blank rather than attributing a column to
+/// the wrong plugin.
 ///
-/// Fail-soft POR COLUMNA: una que falla deja celdas vacías, jamás convierte
-/// el listado en un error. Y `superado` corta entre RPCs, porque una tanda a
-/// la que el listado ya relevó no tiene por qué gastar las que le quedan.
+/// Fail-soft PER COLUMN: one that fails leaves empty cells, it never turns
+/// the listing into an error. And `superado` cuts off between RPCs, because
+/// a batch the listing has already superseded has no reason to spend the
+/// ones it has left.
 async fn celdas_de_plugin(
     backend: &Arc<dyn HostBackend>,
     pedidas: &[(String, String)],
@@ -1873,10 +1925,10 @@ async fn celdas_de_plugin(
     for (plugin, columna) in
         norte_frontend::columns::validated_plugin_requests(pedidas, &lista.plugins)
     {
-        // El RÓTULO que el manifiesto le puso, para que la cabecera no diga
-        // el id (`acme.git/status`). Texto de un plugin: se enmascara y se
-        // acota como cualquier cabecera. Un manifiesto que lo deja vacío se
-        // queda sin rótulo y la cabecera cae al id, como antes.
+        // The LABEL the manifest gave it, so the header does not say the id
+        // (`acme.git/status`). A plugin's text: it is masked and clamped
+        // like any header. A manifest leaving it empty stays with no label
+        // and the header falls back to the id, as before.
         if let Some(h) = lista
             .plugins
             .iter()
@@ -1910,12 +1962,14 @@ async fn celdas_de_plugin(
     (out, rotulos)
 }
 
-/// Cómo se llama una columna en el selector, y si eso difiere de lo real.
+/// What a column is called in the selector, and whether that differs from
+/// reality.
 ///
-/// Por `header_label`, que es la MISMA función que pinta la cabecera del
-/// listado: cómo se llama una columna no puede depender de dónde se lea. Un
-/// id que no parsea se enseña tal cual —es intención de configuración del
-/// usuario y el selector jamás la limpia— y por eso también se enmascara.
+/// Through `header_label`, the SAME function that paints the listing's
+/// header: what a column is called cannot depend on where it is read from.
+/// An id that does not parse is shown as is — it is the user's configuration
+/// intent and the selector never cleans it up — and that is why it is masked
+/// too.
 fn etiqueta_de_columna(
     r: &norte_frontend::columns_picker::PickerRow,
     esquema: &str,
@@ -1924,18 +1978,18 @@ fn etiqueta_de_columna(
 ) -> (String, bool) {
     use norte_frontend::columns::{ColumnId, header_label_in};
     let Ok(cid) = r.id.parse::<ColumnId>() else {
-        // No parsea: el id crudo es lo único que se le puede enseñar, y es
-        // texto de un fichero de configuración.
+        // Does not parse: the raw id is all that can be shown, and it is
+        // text from a configuration file.
         return norte_frontend::display_name(r.id.as_bytes());
     };
     let estilo = columnas.style_for_id(esquema, &cid, None);
     norte_frontend::display_name(header_label_in(&cid, &estilo, None, lang).as_bytes())
 }
 
-/// Una IDENTIDAD de texto que cruza el bridge: entera, o vacía.
+/// A text IDENTITY that crosses the bridge: whole, or empty.
 ///
-/// Misma regla que [`identidad_de_columna`] y por el mismo motivo (ADR 0061):
-/// recortar no es inyectivo, y una clave recortada casa con la equivocada.
+/// Same rule as [`identidad_de_columna`] and for the same reason (ADR 0061):
+/// trimming is not injective, and a trimmed key matches the wrong one.
 fn identidad_de_texto(id: &str) -> String {
     if id.len() > crate::bridge::MAX_STRING_BYTES {
         return String::new();
@@ -1949,9 +2003,9 @@ fn ahora_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-/// Identidad única de una instancia: pid más el instante de arranque. No
-/// necesita ser impredecible —no autoriza nada—, solo distinta de la de la
-/// vida anterior del proceso.
+/// An instance's unique identity: pid plus the startup instant. It does not
+/// need to be unpredictable — it authorizes nothing — only different from
+/// the process's previous life.
 fn nueva_instancia() -> String {
     let ahora = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1959,119 +2013,119 @@ fn nueva_instancia() -> String {
     format!("host-{}-{ahora}", std::process::id())
 }
 
-/// Un listado abierto en un hueco.
+/// A listing open in a slot.
 ///
-/// El estado del listado NO es de este crate: es
-/// [`norte_frontend::pane::PaneState`], el mismo que usa el TUI. Cursor,
-/// marcas, ocultos, memoria de cursor por directorio y la ÉPOCA del listado
-/// salen de ahí, así que las dos superficies no pueden divergir en lo que
-/// significa «bajar el cursor» (ADR 0066, D14).
+/// The listing's state does NOT belong to this crate: it is
+/// [`norte_frontend::pane::PaneState`], the same one the TUI uses. Cursor,
+/// marks, hidden ones, per-directory cursor memory and the listing's EPOCH
+/// come from there, so the two surfaces cannot diverge on what "move the
+/// cursor down" means (ADR 0066, D14).
 struct Hueco {
     pane: PaneState,
-    /// Cómo PLIEGA nombres el directorio en el que este hueco está (#268).
+    /// How the directory this slot is in FOLDS names (#268).
     ///
-    /// Por UBICACIÓN y no por esquema (#215): un pincho FAT montado bajo el
-    /// mismo `file://` que un `/home` sensible a la caja da otra respuesta, y
-    /// contestar por el provider sería contestar por el sitio equivocado.
+    /// By LOCATION and not by scheme (#215): a FAT thumb drive mounted under
+    /// the same `file://` as a case-sensitive `/home` gives a different
+    /// answer, and answering by the provider would be answering for the
+    /// wrong place.
     ///
-    /// Se pide al ATERRIZAR y no delante de cada diálogo: preguntarlo en el
-    /// momento de copiar metería un viaje al daemon en el camino de F5, que es
-    /// la tecla que más se pulsa. `None` = todavía no ha llegado, y entonces no
-    /// se pliega nada — la comprobación es una cortesía y el core es la
-    /// autoridad.
+    /// Requested on LANDING and not in front of every dialog: asking at copy
+    /// time would put a daemon round trip on F5's path, the most-pressed
+    /// key. `None` = it has not arrived yet, and then nothing folds — the
+    /// check is a courtesy and the core is the authority.
     ///
-    /// Se guardan ENTERAS y no ya destiladas a un `FoldMode`. La respuesta
-    /// costó una ronda al daemon y trae más de una cosa que este frontend
-    /// necesita: el plegado del destino y, desde la nivelación de la ayuda,
-    /// el `READ_ONLY` con el que se atenúa lo que esta ubicación no va a
-    /// aceptar. Quedarse solo con lo primero es lo que dejó la ayuda de la
-    /// ventana declarando que se puede escribir en cualquier sitio.
+    /// Stored WHOLE and not already distilled into a `FoldMode`. The answer
+    /// cost a round trip to the daemon and carries more than one thing this
+    /// frontend needs: the destination's folding and, since help's leveling,
+    /// the `READ_ONLY` used to dim what this location is not going to
+    /// accept. Keeping only the first is what left the window's help
+    /// declaring you can write anywhere.
     ///
-    /// Y van ATADAS a la ruta de la que se preguntaron, en vez de borrarse
-    /// cada vez que se piden otras. Lo que las invalida es cambiar de
-    /// DIRECTORIO, no volver a listar el mismo: borrarlas al pedir dejaba una
-    /// ventana determinista —el aterrizaje re-congela los hechos de la ayuda
-    /// tres líneas después de pedirlas— en la que el hueco decía «no consta»
-    /// de un sitio que ya había contestado. Casar por ruta también hace
-    /// inofensiva una respuesta que llega tarde: si es de otro directorio, no
-    /// se lee.
+    /// And they are TIED to the path they were asked about, instead of being
+    /// cleared every time others are requested. What invalidates them is
+    /// changing DIRECTORY, not re-listing the same one: clearing them on
+    /// request left a deterministic window — landing re-freezes help's facts
+    /// three lines after requesting them — where the slot said "unknown"
+    /// about a place that had already answered. Matching by path also
+    /// renders a late answer harmless: if it is from a different directory,
+    /// it is not read.
     ///
-    /// `None`, o una ruta que no casa, significa «todavía no consta», y
-    /// entonces el plegado no se aplica y el solo-lectura lo contesta el
-    /// esquema (`norte_frontend::availability::read_only`).
+    /// `None`, or a path that does not match, means "still unknown", and
+    /// then folding does not apply and read-only is answered by the scheme
+    /// (`norte_frontend::availability::read_only`).
     caps: Option<(VPath, norte_proto::Capabilities)>,
-    /// El esquema cuyo orden lleva puesto `pane` ahora mismo (#108).
+    /// The scheme whose order `pane` currently has set (#108).
     ///
-    /// `[ui.columns] sort` puede dar un orden POR ESQUEMA, y se reaplica
-    /// cuando el hueco aterriza en un esquema distinto — no en cada `cd`,
-    /// que es lo que hace el TUI: aquí la sesión RESTAURA el orden, y
-    /// reaplicarlo en el primer aterrizaje lo borraría antes de que se vea.
+    /// `[ui.columns] sort` can give an order PER SCHEME, and it is
+    /// reapplied when the slot lands on a different scheme — not on every
+    /// `cd`, which is what the TUI does: here the session RESTORES the
+    /// order, and reapplying it on the first landing would erase it before
+    /// it is seen.
     esquema_del_orden: String,
-    /// De dónde vengo y a dónde vuelvo. También compartido.
+    /// Where I come from and where I go back to. Also shared.
     historial: History,
     primera_visible: u64,
     visibles: u32,
-    /// La petición de listado EN VUELO, si la hay. Una respuesta con otro
-    /// testigo llegó tarde: se descarta aquí, en Rust, no se esconde en el
+    /// The listing request IN FLIGHT, if any. An answer with a different
+    /// token arrived late: it is discarded here, in Rust, not hidden in the
     /// renderer.
     en_vuelo: Option<RequestToken>,
-    /// A DÓNDE va la petición en vuelo, si la hay.
+    /// WHERE the in-flight request is going, if any.
     ///
-    /// No es lo mismo que `pane.dir()`, y confundirlos era un bug: `dir()`
-    /// solo cambia cuando el listado ATERRIZA, así que durante una
-    /// navegación el hueco «está» todavía en el directorio que abandona. Un
-    /// refresco que se guiara por `dir()` relistaría el viejo y pisaría el
-    /// testigo de la navegación, que se descartaría en silencio; y un hueco
-    /// que va ENTRANDO en el directorio que una mutación acaba de cambiar no
-    /// se reconocería como afectado, y aterrizaría sobre un listado anterior
-    /// a la mutación sin que nada lo corrigiera.
+    /// Not the same as `pane.dir()`, and confusing them was a bug: `dir()`
+    /// only changes when the listing LANDS, so during a navigation the slot
+    /// "is" still in the directory it is leaving. A refresh going by `dir()`
+    /// would re-list the old one and overwrite the navigation's token, which
+    /// would be silently discarded; and a slot ENTERING the directory a
+    /// mutation just changed would not be recognized as affected, and would
+    /// land on a listing from before the mutation with nothing to correct
+    /// it.
     dir_pedido: Option<VPath>,
-    /// Las marcas que hay que volver a poner cuando aterrice un REFRESCO.
+    /// The marks that need to be set again when a REFRESH lands.
     ///
-    /// Vacío siempre que lo que vuela es una navegación: ahí las filas son de
-    /// otro directorio y una marca no significa nada. Se consume al aterrizar.
+    /// Empty whenever what is in flight is a navigation: there the rows
+    /// belong to another directory and a mark means nothing. Consumed on
+    /// landing.
     marcas_a_restaurar: Vec<VPath>,
-    /// La fila que la SESIÓN dejó bajo el cursor, hasta que llegue su listado.
+    /// The row the SESSION left under the cursor, until its listing arrives.
     ///
-    /// Espera por lo mismo que las marcas: sobre un pane vacío, poner el
-    /// cursor en la fila 12 es ponerlo en la 0. Se consume en el primer
-    /// aterrizaje —bueno o malo—, así que nunca cae sobre un listado posterior
-    /// de otro sitio. Es un ÍNDICE, el mismo que guarda y restaura la
-    /// terminal: un relevo tiene que caer en la misma fila en los dos
-    /// sentidos.
+    /// Waits for the same reason as the marks: over an empty pane, putting
+    /// the cursor on row 12 is putting it on row 0. Consumed on the first
+    /// landing — good or bad — so it never falls on a later listing from
+    /// somewhere else. It is an INDEX, the same one the terminal saves and
+    /// restores: a handoff has to land on the same row in both directions.
     cursor_a_restaurar: Option<usize>,
-    /// Hay filas mezcladas que no se han publicado todavía.
+    /// There are merged rows not yet published.
     ///
-    /// El relleno se calla cuando el lote que mezcla no cambia la ventana
-    /// visible (#252), pero cada mezcla sube la ÉPOCA del listado y el
-    /// renderer nombra las filas por época: si se callan TODOS los parches,
-    /// se queda con una época vieja y sus clics se rechazan por rancios. Esta
-    /// bandera es la deuda, y el último lote la salda.
+    /// Filling stays quiet when the merging batch does not change the
+    /// visible window (#252), but every merge bumps the listing's EPOCH and
+    /// the renderer names rows by epoch: if ALL patches stay quiet, it is
+    /// left on a stale epoch and its clicks are rejected as outdated. This
+    /// flag is the debt, and the last batch settles it.
     filas_por_publicar: bool,
-    /// El drenaje que sigue trayendo lotes por detrás, si lo hay.
+    /// The drain still bringing batches in from behind, if any.
     ///
-    /// SEPARADO de `en_vuelo` porque son dos vidas distintas: la primera
-    /// página aterriza y limpia `en_vuelo`, pero el resto del stream sigue
-    /// llegando. Compartir un testigo hacía que `aplicar_lote` rechazara
-    /// TODOS los lotes de una navegación —un directorio de cinco mil
-    /// entradas se quedaba en cien— y que el arranque tuviera que
-    /// restituirlo a mano para funcionar.
+    /// SEPARATE from `en_vuelo` because they are two different lifetimes:
+    /// the first page lands and clears `en_vuelo`, but the rest of the
+    /// stream keeps arriving. Sharing a token made `aplicar_lote` reject ALL
+    /// of a navigation's batches — a five-thousand-entry directory got
+    /// stuck at a hundred — and startup had to restore it by hand to work.
     drenando: Option<RequestToken>,
     estado: SlotState,
-    /// Hay una tanda de sondeo en vuelo para este hueco.
+    /// There is a probe batch in flight for this slot.
     sondeando: bool,
-    /// Se levanta cuando el listado cambia: lo que vuelva de la tanda en
-    /// vuelo ya no describe esta pantalla.
+    /// Raised when the listing changes: whatever comes back from the batch
+    /// in flight no longer describes this screen.
     cancelar_sondeo: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Los paths que ya se sondearon (hayan contestado o no). Sin esta
-    /// memoria, un `stat` que falla vuelve a pedirse en cada repintado y el
-    /// sondeo se convierte en un bucle contra el daemon.
+    /// The paths already probed (whether they answered or not). Without
+    /// this memory, a failing `stat` gets requested again on every repaint
+    /// and probing turns into a loop against the daemon.
     sondeados: std::collections::HashSet<VPath>,
-    /// La decoración que los plugins pusieron sobre cada ruta.
+    /// The decoration plugins put on each path.
     ///
-    /// Por RUTA y no por índice: las decoraciones llegan asíncronas y el
-    /// listado se reordena por debajo, así que un índice nombraría otra fila
-    /// para cuando aterrizan.
+    /// By PATH and not by index: decorations arrive asynchronously and the
+    /// listing reorders underneath, so an index would name a different row
+    /// by the time they land.
     adornos: std::collections::HashMap<VPath, norte_frontend::Decoration>,
     /// Los valores de cada columna `plugin:`, por id de columna y ruta.
     celdas_plugin: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,

@@ -1,69 +1,74 @@
-//! `Capabilities`: lo que un provider sabe hacer (spec §5). El core elige
-//! estrategia consultándolas (nunca sondeando en caliente) y los frontends
-//! adaptan la UI.
+//! `Capabilities`: what a provider knows how to do (spec §5). The core picks
+//! its strategy by consulting them (never by probing live) and the frontends
+//! adapt the UI.
 
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 bitflags::bitflags! {
-    /// Flags de capacidad de un provider (M0; el resto llega con sus hitos).
+    /// Capability flags of a provider (M0; the rest arrives with their
+    /// milestones).
     ///
-    /// Wire: string con nombres separados por ` | ` (formato de `bitflags`),
-    /// también en encodings binarios (legibilidad > 4 bytes). Política de
-    /// deserialización (ADR 0004):
-    /// - Nombre desconocido con forma válida (`[A-Z0-9_]+`): se IGNORA. Una
-    ///   capability es un anuncio; un cliente N-1 que no la conoce simplemente
-    ///   no la explota — jamás revienta por un flag N+1.
-    /// - Hex (`0x…`) o token malformado: ERROR. Bits sin nombre no viajan.
+    /// Wire: a string with names separated by ` | ` (`bitflags`'s format),
+    /// also in binary encodings (readability > 4 bytes). Deserialisation
+    /// policy (ADR 0004):
+    /// - An unknown name with a valid shape (`[A-Z0-9_]+`): IGNORED. A
+    ///   capability is an announcement; an N-1 client that does not know it
+    ///   simply does not exploit it — it never breaks on an N+1 flag.
+    /// - Hex (`0x…`) or a malformed token: ERROR. Bits with no name do not
+    ///   travel.
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
     pub struct CapabilityFlags: u32 {
-        /// `rename()` atómico dentro del provider.
+        /// Atomic `rename()` within the provider.
         const RENAME_ATOMIC = 1 << 0;
-        /// Copia server-side (S3 CopyObject, SFTP ext, reflink/clonefile).
+        /// Server-side copy (S3 CopyObject, SFTP ext, reflink/clonefile).
         const SERVER_COPY = 1 << 1;
-        /// Soporta symlinks (crearlos puede requerir privilegio en Windows).
+        /// Supports symlinks (creating them may need a privilege on Windows).
         const SYMLINKS = 1 << 2;
-        /// El FS distingue mayúsculas (ext4 sí; NTFS/APFS por defecto no).
+        /// The FS is case sensitive (ext4 is; NTFS/APFS by default are not).
         const CASE_SENSITIVE = 1 << 3;
-        /// El FS preserva la caja aunque no la distinga (NTFS/APFS).
+        /// The FS preserves case even though it does not distinguish it
+        /// (NTFS/APFS).
         const CASE_PRESERVING = 1 << 4;
-        /// Se puede añadir al final de un archivo existente (resume M2).
+        /// Can append to the end of an existing file (resume, M2).
         const APPEND = 1 << 5;
-        /// Se puede escribir en un offset arbitrario (verificación/parcheo).
+        /// Can write at an arbitrary offset (verification/patching).
         const RANDOM_WRITE = 1 << 6;
-        /// Hay papelera: `trash()` mueve a un lugar recuperable (ADR 0009).
+        /// There is a trash: `trash()` moves to a recoverable place (ADR 0009).
         const TRASH = 1 << 7;
-        /// El provider es solo-lectura (0.9.0, ADR 0018: archivos como
-        /// directorios): TODA mutación responde `Unsupported`. La UI veta
-        /// upfront y el copy engine rechaza destinos aquí sin round-trip.
+        /// The provider is read-only (0.9.0, ADR 0018: archives as
+        /// directories): EVERY mutation answers `Unsupported`. The UI vetoes
+        /// upfront and the copy engine rejects destinations here without a
+        /// round trip.
         const READ_ONLY = 1 << 8;
-        /// El plegado de caja de esta UBICACIÓN **expande** (0.45.0, #145,
-        /// ADR 0054): ext4/f2fs con el directorio en `+F`, cuya tabla del
-        /// kernel se construye de `CaseFolding.txt` con estado `C + F`, así
-        /// que `straße.txt` y `strasse.txt` son UN archivo ahí.
+        /// Case folding at this LOCATION **expands** (0.45.0, #145,
+        /// ADR 0054): ext4/f2fs with the directory in `+F`, whose kernel
+        /// table is built from `CaseFolding.txt` with `C + F` state, so
+        /// `straße.txt` and `strasse.txt` are ONE file there.
         ///
-        /// Solo tiene sentido SIN [`Self::CASE_SENSITIVE`] —un directorio que
-        /// distingue caja no pliega nada— y solo lo responde
-        /// `Provider::capabilities_at`: es del directorio, no del backend.
+        /// Only makes sense WITHOUT [`Self::CASE_SENSITIVE`] — a directory
+        /// that is case sensitive folds nothing — and only
+        /// `Provider::capabilities_at` answers it: it belongs to the
+        /// directory, not the backend.
         const FULL_FOLD = 1 << 9;
-        /// Una escritura bajo esta ubicación puede confinarse bajo la raíz que
-        /// nombre el caller, con garantía del kernel (0.45.0, #164, ADR 0054):
-        /// `Provider::open_root` devuelve un handle en vez de `Unsupported`.
+        /// A write under this location can be confined under the root the
+        /// caller names, with a kernel guarantee (0.45.0, #164, ADR 0054):
+        /// `Provider::open_root` returns a handle instead of `Unsupported`.
         ///
-        /// Lo responde `Provider::capabilities_at` y JAMÁS `capabilities()`:
-        /// depende del mount, de la plataforma y del kernel en marcha. Su
-        /// ausencia no impide nada —el core degrada al paseo con `lstat` y lo
-        /// dice— pero significa que un symlink en un componente INTERMEDIO
-        /// puede redirigir la escritura fuera de su raíz.
+        /// Answered by `Provider::capabilities_at` and NEVER `capabilities()`:
+        /// it depends on the mount, the platform and the running kernel. Its
+        /// absence does not prevent anything — the core degrades to walking
+        /// with `lstat` and says so — but it means a symlink in an
+        /// INTERMEDIATE component can redirect the write outside its root.
         const CONFINED_WRITES = 1 << 10;
-        /// Los nodos de esta ubicación tienen permisos POSIX y se pueden
-        /// CAMBIAR (0.60.0, #314): `fs.set_mode` funciona aquí.
+        /// Nodes at this location have POSIX permissions that CAN BE CHANGED
+        /// (0.60.0, #314): `fs.set_mode` works here.
         ///
-        /// Lo declara quien puede hacer las dos cosas, leerlos y escribirlos.
-        /// Un `.zip` no tiene nada que cambiar y un bucket de objetos no tiene
-        /// modo; sin este flag, el frontend apaga el gesto con su motivo en
-        /// vez de ofrecerlo para que falle con `Unsupported`.
+        /// Declared by whoever can do both things, read them and write them.
+        /// A `.zip` has nothing to change and an object bucket has no mode;
+        /// without this flag, the frontend turns the gesture off with its
+        /// reason instead of offering it only to fail with `Unsupported`.
         const POSIX_MODE = 1 << 11;
     }
 }
@@ -114,10 +119,10 @@ impl schemars::JsonSchema for CapabilityFlags {
     }
 }
 
-/// Parser del wire de flags con la política del ADR 0004: nombres conocidos
-/// se acumulan, nombres desconocidos bien formados se ignoran (forward-compat),
-/// hex y tokens malformados son error (`bitflags::parser::from_str` retendría
-/// bits desconocidos en silencio — inaceptable en el wire).
+/// Parser for the wire form of flags, under ADR 0004's policy: known names
+/// accumulate, well-formed unknown names are ignored (forward-compat), and
+/// hex or malformed tokens are an error (`bitflags::parser::from_str` would
+/// silently keep unknown bits — unacceptable on the wire).
 fn parse_flags(s: &str) -> Result<CapabilityFlags, &'static str> {
     let mut flags = CapabilityFlags::empty();
     if s.trim().is_empty() {
@@ -140,13 +145,13 @@ fn parse_flags(s: &str) -> Result<CapabilityFlags, &'static str> {
         if let Some(known) = CapabilityFlags::from_name(token) {
             flags |= known;
         }
-        // Nombre bien formado pero desconocido: capability de un protocolo
-        // más nuevo — se ignora, no se explota.
+        // A well-formed but unknown name: a capability of a newer protocol —
+        // ignored, not exploited.
     }
     Ok(flags)
 }
 
-/// Capacidades declaradas por un provider.
+/// Capabilities a provider declares.
 ///
 /// ```
 /// use norte_proto::{Capabilities, CapabilityFlags};
@@ -159,9 +164,9 @@ fn parse_flags(s: &str) -> Result<CapabilityFlags, &'static str> {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Capabilities {
-    /// Flags de capacidad.
+    /// Capability flags.
     pub flags: CapabilityFlags,
-    /// Longitud máxima de path nativo en bytes; `None` = sin límite conocido.
+    /// Maximum native path length in bytes; `None` = no known limit.
     #[serde(default)]
     pub max_path: Option<u32>,
 }

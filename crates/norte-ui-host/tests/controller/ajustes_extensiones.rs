@@ -1,20 +1,20 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Los ajustes: lo que enseñan (tarea 4.5). Escribirlos es
+// Settings: what they show (task 4.5). Writing them is
 // `ajustes_escritura.rs`.
 // ---------------------------------------------------------------------------
 
-/// Espera la siguiente actualización que traiga los ajustes.
+/// Waits for the next update that carries settings.
 pub(super) async fn siguiente_ajustes(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::SettingsView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -24,10 +24,10 @@ pub(super) async fn siguiente_ajustes(
             }
         }
     }
-    panic!("no llegó ninguna actualización con ajustes");
+    panic!("no update with settings ever arrived");
 }
 
-/// Un host con unas rutas dichas, para la sección de diagnóstico.
+/// A host with some given paths, for the diagnostics section.
 pub(super) async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) -> UiHost {
     UiHost::start(UiHostOptions {
         backend: arbol(),
@@ -50,21 +50,21 @@ pub(super) async fn host_con_rutas(paths: norte_ui_host::settings::HostPaths) ->
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
     .0
 }
 
-/// `F11` abre los ajustes con el registro COMPARTIDO y su valor efectivo, y
-/// cada fila dice si cambiarla hace efecto ya o al reiniciar.
+/// `F11` opens settings with the SHARED registry and its effective value, and
+/// each row says whether changing it takes effect now or on restart.
 #[tokio::test]
-async fn los_ajustes_ensenan_el_registro_compartido_con_su_valor() {
+async fn settings_show_the_shared_registry_with_its_value() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("opens");
 
-    // Todas las secciones de ajustes juntas: desde que hay siete, ninguna
-    // sola lleva el catálogo entero.
+    // All settings sections together: since there are seven, none alone
+    // carries the whole catalogue.
     let general: Vec<_> = a
         .sections
         .iter()
@@ -77,38 +77,38 @@ async fn los_ajustes_ensenan_el_registro_compartido_con_su_valor() {
     assert_eq!(
         general.len(),
         norte_frontend::settings::catalog().len(),
-        "ni una entrada del catálogo compartido se queda fuera"
+        "not a single entry of the shared catalogue is left out"
     );
     for r in &general {
-        assert!(!r.id.is_empty(), "cada fila lleva su id estable");
-        assert!(!r.name.is_empty(), "y su nombre traducido: {r:?}");
+        assert!(!r.id.is_empty(), "each row carries its stable id");
+        assert!(!r.name.is_empty(), "and its translated name: {r:?}");
         assert!(
             !r.name.starts_with("setting-"),
-            "ninguna pinta una clave Fluent: {r:?}"
+            "none paints a Fluent key: {r:?}"
         );
     }
-    // Lo que se aplica en caliente lo dice el catálogo compartido, que es lo
-    // que el terminal enseña; y lo que la ventana no puede aplicar —idioma,
-    // fuentes, movimiento— lo dice `fuera_de_alcance_en_caliente` al escribir.
-    let vivo = general
+    // What applies live is said by the shared catalogue, which is what the
+    // terminal shows; and what the window cannot apply — language, fonts,
+    // motion — is said by `fuera_de_alcance_en_caliente` when writing.
+    let live = general
         .iter()
         .find(|r| r.id == "ui.theme")
-        .expect("el tema está");
+        .expect("the theme is there");
     assert!(
-        !vivo.restart_required,
-        "el tema se aplica en caliente al escribirlo, y la fila no dice lo contrario"
+        !live.restart_required,
+        "the theme applies live when written, and the row does not say otherwise"
     );
-    let frio = general
+    let cold = general
         .iter()
         .find(|r| r.id == "ui.lang")
-        .expect("el idioma está");
+        .expect("the language is there");
     assert!(
-        frio.restart_required,
-        "el idioma pide reiniciar la ventana, y la fila lo dice"
+        cold.restart_required,
+        "the language asks to restart the window, and the row says so"
     );
 }
 
-/// Una ubicación con su existencia resuelta, como la resuelve el arranque.
+/// A location with its existence resolved, the way startup resolves it.
 pub(super) fn sitio(p: std::path::PathBuf) -> norte_ui_host::settings::HostPath {
     norte_ui_host::settings::HostPath {
         missing: !p.exists(),
@@ -116,25 +116,26 @@ pub(super) fn sitio(p: std::path::PathBuf) -> norte_ui_host::settings::HostPath 
     }
 }
 
-/// La sección de ubicaciones dice dónde vive cada cosa, marca lo que falta y
-/// no enseña ni un valor.
+/// The paths section says where each thing lives, marks what is missing, and
+/// shows not a single value.
 #[tokio::test]
-async fn las_ubicaciones_se_dicen_y_lo_que_falta_se_marca() {
+async fn paths_are_said_and_whats_missing_is_marked() {
     let tmp = tempfile::tempdir().expect("tmp");
-    let existe = tmp.path().join("config");
-    std::fs::create_dir(&existe).expect("mkdir");
-    let no_existe = tmp.path().join("no-esta");
+    let exists = tmp.path().join("config");
+    std::fs::create_dir(&exists).expect("mkdir");
+    let missing = tmp.path().join("no-esta");
     let h = host_con_rutas(norte_ui_host::settings::HostPaths {
-        // El `missing` lo trae YA resuelto quien arranca: el host no hace
-        // I/O al proyectar, y el test lo dice porque es el contrato.
+        // `missing` is brought ALREADY resolved by whoever starts it: the
+        // host does no I/O while projecting, and the test says so because it
+        // is the contract.
         config_layers: vec![
             (
                 norte_ui_host::settings::ConfigLayer::User,
-                sitio(existe.clone()),
+                sitio(exists.clone()),
             ),
             (
                 norte_ui_host::settings::ConfigLayer::Project,
-                sitio(no_existe),
+                sitio(missing),
             ),
         ],
         state_dir: None,
@@ -143,80 +144,84 @@ async fn las_ubicaciones_se_dicen_y_lo_que_falta_se_marca() {
     })
     .await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("opens");
 
-    let rutas = a
+    let paths = a
         .sections
         .iter()
         .find_map(|s| match s {
             norte_ui_host::dto::SettingsSectionView::Paths { rows, .. } => Some(rows),
             norte_ui_host::dto::SettingsSectionView::Settings { .. } => None,
         })
-        .expect("hay sección de rutas");
-    assert_eq!(rutas.len(), 3, "dos capas y el socket");
-    assert!(!rutas[0].missing, "la capa que existe no se marca");
+        .expect("there is a paths section");
+    assert_eq!(paths.len(), 3, "two layers and the socket");
+    assert!(!paths[0].missing, "the layer that exists is not marked");
     assert!(
-        rutas[1].missing,
-        "la que no existe SÍ: no se pinta como si estuviera"
+        paths[1].missing,
+        "the one that does not exist IS: it is not painted as if it were there"
     );
-    for r in rutas {
-        assert!(!r.label.is_empty(), "cada una dice QUÉ es: {r:?}");
-        assert!(!r.display.is_empty(), "y dónde: {r:?}");
+    for r in paths {
+        assert!(!r.label.is_empty(), "each one says WHAT it is: {r:?}");
+        assert!(!r.display.is_empty(), "and where: {r:?}");
     }
 }
 
-/// Un directorio de configuración con bytes hostiles llega ENMASCARADO y
-/// marcado, por el mismo camino que un nombre del listado.
+/// A configuration directory with hostile bytes arrives MASKED and marked,
+/// through the same path as a listing name.
 #[tokio::test]
-async fn una_ruta_hostil_llega_enmascarada_y_marcada() {
+async fn a_hostile_path_arrives_masked_and_marked() {
     let tmp = tempfile::tempdir().expect("tmp");
-    // Un nombre con un override bidi: legal como fichero, y una mentira en
-    // pantalla si se pinta crudo.
-    let hostil = tmp.path().join("conf\u{202e}gif");
-    std::fs::create_dir(&hostil).expect("mkdir");
+    // A name with a bidi override: legal as a file, and a lie on screen if
+    // painted raw.
+    let hostile = tmp.path().join("conf\u{202e}gif");
+    std::fs::create_dir(&hostile).expect("mkdir");
     let h = host_con_rutas(norte_ui_host::settings::HostPaths {
-        config_layers: vec![(norte_ui_host::settings::ConfigLayer::User, sitio(hostil))],
+        config_layers: vec![(norte_ui_host::settings::ConfigLayer::User, sitio(hostile))],
         state_dir: None,
         logs_dir: None,
         socket: None,
     })
     .await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("abren");
-    let rutas = a
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("opens");
+    let paths = a
         .sections
         .iter()
         .find_map(|s| match s {
             norte_ui_host::dto::SettingsSectionView::Paths { rows, .. } => Some(rows),
             norte_ui_host::dto::SettingsSectionView::Settings { .. } => None,
         })
-        .expect("hay sección de rutas");
+        .expect("there is a paths section");
     assert!(
-        !rutas[0].display.contains('\u{202e}'),
-        "un override bidi cruzó crudo: {:?}",
-        rutas[0].display
+        !paths[0].display.contains('\u{202e}'),
+        "a bidi override crossed over raw: {:?}",
+        paths[0].display
     );
-    assert!(rutas[0].hostile, "y se MARCA que difiere del nombre real");
+    assert!(
+        paths[0].hostile,
+        "and it is MARKED as differing from the real name"
+    );
 }
 
-/// El cursor se mueve y no se sale, y `enter` sin dónde escribir lo dice.
+/// The cursor moves and does not run off the edges, and `enter` with nowhere
+/// to write says so.
 #[tokio::test]
-async fn el_cursor_no_se_sale_y_enter_lo_dice() {
+async fn the_cursor_stays_in_bounds_and_enter_says_so() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("opens");
     assert_eq!(a.cursor, 0);
 
-    h.dispatch(tecla("ArrowUp")).await.expect("host vivo");
-    let arriba = siguiente_ajustes(&mut sub).await.expect("sigue abierto");
-    assert_eq!(arriba.cursor, 0, "arriba del todo no se sale por arriba");
+    h.dispatch(tecla("ArrowUp")).await.expect("host alive");
+    let up = siguiente_ajustes(&mut sub).await.expect("still open");
+    assert_eq!(up.cursor, 0, "at the very top it does not run off the top");
 
-    h.dispatch(tecla("End")).await.expect("host vivo");
-    let final_ = siguiente_ajustes(&mut sub).await.expect("sigue abierto");
-    let total: usize = final_
+    h.dispatch(tecla("End")).await.expect("host alive");
+    let end = siguiente_ajustes(&mut sub).await.expect("still open");
+    let total: usize = end
         .sections
         .iter()
         .map(|s| match s {
@@ -225,60 +230,60 @@ async fn el_cursor_no_se_sale_y_enter_lo_dice() {
         })
         .sum();
     assert_eq!(
-        usize::try_from(final_.cursor).expect("cabe"),
+        usize::try_from(end.cursor).expect("fits"),
         total - 1,
-        "y por abajo tampoco"
+        "nor at the bottom"
     );
 
-    // La última fila de un host sin rutas es `keymap.preset`, que gira; y
-    // este host no tiene capa de usuario, así que no hay dónde escribirlo.
-    // Se dice, en vez de no hacer nada.
-    let ack = h.dispatch(tecla("Enter")).await.expect("host vivo");
+    // The last row of a host with no paths is `keymap.preset`, which cycles;
+    // and this host has no user layer, so there is nowhere to write it. It
+    // is said, instead of doing nothing.
+    let ack = h.dispatch(tecla("Enter")).await.expect("host alive");
     assert_eq!(
         ack,
         norte_ui_host::ActionAck::Unavailable {
             reason_key: "host-no-config-dir".to_owned()
         },
-        "enter sin dónde escribir lo dice: {ack:?}"
+        "enter with nowhere to write says so: {ack:?}"
     );
 
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
-    foto_hasta(&h, &mut sub, "esc los cierra", |s| {
+    h.dispatch(tecla("Escape")).await.expect("host alive");
+    foto_hasta(&h, &mut sub, "esc closes them", |s| {
         s.settings.is_none().then_some(())
     })
     .await;
 }
 
-/// Con los ajustes abiertos, una tecla del listado no se cuela.
+/// With settings open, a listing key does not slip through.
 #[tokio::test]
-async fn con_los_ajustes_abiertos_el_listado_no_se_mueve() {
+async fn with_settings_open_the_listing_does_not_move() {
     let (h, snap) = host_arbol(arbol()).await;
-    let antes = listado(&snap).cursor;
+    let before = listado(&snap).cursor;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    let _ = siguiente_ajustes(&mut sub).await.expect("abren");
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    let _ = siguiente_ajustes(&mut sub).await.expect("opens");
 
-    h.dispatch(tecla("j")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(listado(&foto).cursor, antes, "el listado no se movió");
-    assert!(foto.settings.is_some(), "y los ajustes siguen abiertos");
+    h.dispatch(tecla("j")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&snap).cursor, before, "the listing did not move");
+    assert!(snap.settings.is_some(), "and settings are still open");
 }
 
 // ---------------------------------------------------------------------------
-// El gestor de extensiones (tarea 4.5).
+// The extensions manager (task 4.5).
 // ---------------------------------------------------------------------------
 
-/// Espera la siguiente actualización que traiga el gestor.
+/// Waits for the next update that carries the manager.
 pub(super) async fn siguiente_extensiones(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::ExtensionsView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -288,10 +293,10 @@ pub(super) async fn siguiente_extensiones(
             }
         }
     }
-    panic!("no llegó ninguna actualización con extensiones");
+    panic!("no update with extensions ever arrived");
 }
 
-/// Espera a que el catálogo haya llegado (deje de estar cargando).
+/// Waits until the catalogue has arrived (stops loading).
 pub(super) async fn extensiones_cargadas(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::dto::ExtensionsView {
@@ -303,13 +308,13 @@ pub(super) async fn extensiones_cargadas(
             return v;
         }
     }
-    panic!("el catálogo nunca llegó");
+    panic!("the catalogue never arrived");
 }
 
-/// `F12` abre el gestor: primero diciendo que carga, luego con el catálogo
-/// saneado y su estado de aprobación.
+/// `F12` opens the manager: first saying it is loading, then with the
+/// sanitized catalogue and its approval status.
 #[tokio::test]
-async fn el_gestor_ensena_lo_instalado_y_su_estado() {
+async fn the_manager_shows_whats_installed_and_its_status() {
     let mut backend = arbol_con_plugins(
         vec![extension("acme.ftp", "FTP de ACME", true), {
             let mut p = extension("org.norte.demo", "Demo", false);
@@ -320,10 +325,10 @@ async fn el_gestor_ensena_lo_instalado_y_su_estado() {
         }],
         &[],
     );
-    // Un directorio que no cargó: se enseña, porque una extensión que
-    // desaparece en silencio es una que el usuario cree tener.
+    // A directory that did not load: it is shown, because an extension that
+    // disappears silently is one the user believes they have.
     std::sync::Arc::get_mut(&mut backend)
-        .expect("única referencia")
+        .expect("single reference")
         .errores_de_carga = vec![(
         "/plugins/roto".to_owned(),
         "el manifiesto no parsea".to_owned(),
@@ -331,34 +336,34 @@ async fn el_gestor_ensena_lo_instalado_y_su_estado() {
     let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F12")).await.expect("host vivo");
-    let primera = siguiente_extensiones(&mut sub).await.expect("abre");
+    h.dispatch(tecla("F12")).await.expect("host alive");
+    let first = siguiente_extensiones(&mut sub).await.expect("opens");
     assert!(
-        primera.loading,
-        "se abre DICIENDO que carga: una lista vacía sin ese aviso se lee \
-         como «no tienes ninguna»"
+        first.loading,
+        "it opens SAYING it is loading: an empty list with no such notice \
+         reads as \"you have none\""
     );
 
     let v = extensiones_cargadas(&mut sub).await;
     assert_eq!(v.rows.len(), 2);
     assert_eq!(v.rows[0].id, "acme.ftp");
     assert!(v.rows[0].approved && v.rows[0].enabled);
-    assert!(!v.rows[1].approved, "y la que no está aprobada se ve");
+    assert!(!v.rows[1].approved, "and the unapproved one shows too");
     assert_eq!(
         v.rows[1].capabilities,
         vec!["fs-read".to_owned()],
-        "las capabilities van en la FILA: son la decisión que se aprueba"
+        "capabilities go in the ROW: they are the decision being approved"
     );
-    assert_eq!(v.errors.len(), 1, "y lo que no cargó se dice");
+    assert_eq!(v.errors.len(), 1, "and what did not load is said");
 }
 
-/// `enter` sobre una extensión pide su esquema `[config]` y lo enseña con el
-/// valor efectivo.
+/// `enter` on an extension requests its `[config]` schema and shows it with
+/// its effective value.
 #[tokio::test]
-async fn la_ficha_ensena_el_esquema_con_su_valor_efectivo() {
+async fn the_card_shows_the_schema_with_its_effective_value() {
     let mut backend = arbol_con_plugins(vec![extension("acme.ftp", "FTP de ACME", false)], &[]);
     std::sync::Arc::get_mut(&mut backend)
-        .expect("única referencia")
+        .expect("single reference")
         .esquemas
         .insert(
             "acme.ftp".to_owned(),
@@ -375,37 +380,37 @@ async fn la_ficha_ensena_el_esquema_con_su_valor_efectivo() {
         );
     let (h, _snap) = host_arbol(std::sync::Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
 
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
-    let mut ficha = None;
+    h.dispatch(tecla("Enter")).await.expect("host alive");
+    let mut card = None;
     for _ in 0..20 {
         let Some(v) = siguiente_extensiones(&mut sub).await else {
             continue;
         };
         if v.detail.is_some() {
-            ficha = v.detail;
+            card = v.detail;
             break;
         }
     }
-    let d = ficha.expect("la ficha llega");
+    let d = card.expect("the card arrives");
     assert_eq!(d.id, "acme.ftp");
     assert_eq!(d.config.len(), 1);
     let k = &d.config[0];
     assert_eq!(k.key, "timeout");
-    assert_eq!(k.value, "30", "el valor EFECTIVO, no el del esquema");
-    assert_eq!(k.default, "10", "y el del esquema, para ver qué se cambió");
-    assert!(!k.domain.is_empty(), "y qué lo acota: {k:?}");
+    assert_eq!(k.value, "30", "the EFFECTIVE value, not the schema's");
+    assert_eq!(k.default, "10", "and the schema's, to see what changed");
+    assert!(!k.domain.is_empty(), "and what bounds it: {k:?}");
     assert!(
         !k.domain.contains("ext-config-"),
-        "sin pintar una clave Fluent: {k:?}"
+        "with no Fluent key painted: {k:?}"
     );
 }
 
-/// Moverse tira la ficha: describe otra extensión.
+/// Moving drops the card: it describes another extension.
 #[tokio::test]
-async fn moverse_tira_la_ficha() {
+async fn moving_drops_the_card() {
     let backend = arbol_con_plugins(
         vec![
             extension("acme.ftp", "FTP de ACME", false),
@@ -415,9 +420,9 @@ async fn moverse_tira_la_ficha() {
     );
     let (h, _snap) = host_arbol(backend).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     for _ in 0..20 {
         let Some(v) = siguiente_extensiones(&mut sub).await else {
             continue;
@@ -426,30 +431,28 @@ async fn moverse_tira_la_ficha() {
             break;
         }
     }
-    // Con la ficha abierta, las flechas son SUYAS: recorren sus claves. Este
-    // catálogo no declara ninguna, y entonces no se las queda —una ficha sin
-    // nada que andar dejaría al lector sin poder moverse sin cerrarla—, así
-    // que esta baja el catálogo y tira la ficha.
-    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-    let v = siguiente_extensiones(&mut sub)
-        .await
-        .expect("sigue abierto");
+    // With the card open, the arrows are ITS OWN: they walk its keys. This
+    // catalogue declares none, and then it does not keep them — a card with
+    // nothing to walk would leave the reader unable to move without closing
+    // it — so this one drops the catalogue's cursor and the card.
+    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+    let v = siguiente_extensiones(&mut sub).await.expect("still open");
     assert_eq!(v.cursor, 1);
     assert!(
         v.detail.is_none(),
-        "la ficha de la anterior no puede quedarse describiendo a otra"
+        "the previous one's card cannot stay describing another"
     );
 }
 
-/// El primer `esc` cierra la FICHA; el segundo, el gestor.
+/// The first `esc` closes the CARD; the second, the manager.
 #[tokio::test]
-async fn el_primer_esc_cierra_la_ficha_y_el_segundo_el_gestor() {
+async fn the_first_esc_closes_the_card_and_the_second_the_manager() {
     let backend = arbol_con_plugins(vec![extension("acme.ftp", "FTP de ACME", false)], &[]);
     let (h, _snap) = host_arbol(backend).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     for _ in 0..20 {
         let Some(v) = siguiente_extensiones(&mut sub).await else {
             continue;
@@ -459,20 +462,18 @@ async fn el_primer_esc_cierra_la_ficha_y_el_segundo_el_gestor() {
         }
     }
 
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
-    let sin_ficha = siguiente_extensiones(&mut sub)
-        .await
-        .expect("sigue abierto");
-    assert!(sin_ficha.detail.is_none(), "el primer esc cierra la ficha");
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(tecla("Escape")).await.expect("host alive");
+    let no_card = siguiente_extensiones(&mut sub).await.expect("still open");
+    assert!(no_card.detail.is_none(), "the first esc closes the card");
+    h.dispatch(tecla("Escape")).await.expect("host alive");
     assert!(
         siguiente_extensiones(&mut sub).await.is_none(),
-        "el segundo cierra el gestor"
+        "the second closes the manager"
     );
 }
 
-/// Dos extensiones para los botones (puente 61): una aprobada y encendida,
-/// y una sin aprobar.
+/// Two extensions for the buttons (bridge 61): one approved and enabled, and
+/// one unapproved.
 fn dos_para_gobernar() -> Arc<Falso> {
     arbol_con_plugins(
         vec![extension("acme.ftp", "FTP de ACME", true), {
@@ -486,15 +487,15 @@ fn dos_para_gobernar() -> Arc<Falso> {
     )
 }
 
-/// El botón de aprobar abre la MISMA pregunta que la tecla, con las
-/// capabilities dentro, y señala la fila: un botón no es un atajo para
-/// saltarse el consentimiento.
+/// The approve button opens the SAME question as the key, with the
+/// capabilities inside, and points at the row: a button is not a shortcut
+/// around consent.
 #[tokio::test]
-async fn el_boton_de_aprobar_abre_la_misma_pregunta_que_la_tecla() {
+async fn the_approve_button_opens_the_same_question_as_the_key() {
     let backend = dos_para_gobernar();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
 
     h.dispatch(UiAction::ExtensionGovern {
@@ -503,14 +504,14 @@ async fn el_boton_de_aprobar_abre_la_misma_pregunta_que_la_tecla() {
         change: norte_ui_host::action::ExtensionChange::Approval,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let d = siguientes_dialogos(&mut sub).await;
-    let pregunta = d.last().expect("pregunta");
-    assert_eq!(pregunta.title_key, "modal-extension-approve-title");
-    // Con la pregunta delante, ningún botón del gestor hace nada: es modal
-    // para el ratón como para el teclado. Un clic detrás revocaría sin
-    // preguntar, o cerraría el gestor bajo la pregunta.
-    for accion in [
+    let question = d.last().expect("question");
+    assert_eq!(question.title_key, "modal-extension-approve-title");
+    // With the question in front, no manager button does anything: it is
+    // modal to the mouse just like to the keyboard. A click behind would
+    // revoke without asking, or close the manager under the question.
+    for action in [
         UiAction::ExtensionGovern {
             row: 0,
             id: "acme.ftp".to_owned(),
@@ -521,32 +522,30 @@ async fn el_boton_de_aprobar_abre_la_misma_pregunta_que_la_tecla() {
             id: "acme.ftp".to_owned(),
         },
     ] {
-        let ack = h.dispatch(accion).await.expect("host vivo");
+        let ack = h.dispatch(action).await.expect("host alive");
         assert!(matches!(ack, ActionAck::Stale { .. }), "{ack:?}");
     }
     assert!(backend.gobierno.lock().expect("gobierno").is_empty());
     assert!(
-        pregunta.body.iter().any(|l| l.text == "fs-read"),
-        "las capabilities van dentro: {:?}",
-        pregunta.body
+        question.body.iter().any(|l| l.text == "fs-read"),
+        "the capabilities go inside: {:?}",
+        question.body
     );
     assert!(
         backend.gobierno.lock().expect("gobierno").is_empty(),
-        "nada viaja antes del sí"
+        "nothing travels before the yes"
     );
-    // Y la fila señalada es la del botón, no la que tenía el cursor.
-    let v = siguiente_extensiones(&mut sub)
-        .await
-        .expect("sigue abierto");
+    // And the pointed-at row is the button's, not the one the cursor had.
+    let v = siguiente_extensiones(&mut sub).await.expect("still open");
     assert_eq!(v.cursor, 1);
 
     h.dispatch(UiAction::Dialog {
-        id: pregunta.id,
+        id: question.id,
         choice: "approve".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
     assert_eq!(
         backend.gobierno.lock().expect("gobierno").as_slice(),
@@ -554,74 +553,78 @@ async fn el_boton_de_aprobar_abre_la_misma_pregunta_que_la_tecla() {
     );
 }
 
-/// Desinstalar PREGUNTA —por el botón y por la tecla igual— y solo el sí
-/// borra; después el catálogo se repide y la fila ya no está.
+/// Uninstalling ASKS — through the button and the key alike — and only yes
+/// deletes; afterward the catalogue is re-requested and the row is gone.
 #[tokio::test]
-async fn desinstalar_pregunta_y_solo_el_si_borra() {
+async fn uninstalling_asks_and_only_yes_deletes() {
     let backend = dos_para_gobernar();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
 
-    // La tecla (`d` es `dialog.remove` en orthodox): pregunta.
-    h.dispatch(tecla("d")).await.expect("host vivo");
+    // The key (`d` is `dialog.remove` in orthodox): asks.
+    h.dispatch(tecla("d")).await.expect("host alive");
     let d = siguientes_dialogos(&mut sub).await;
-    let pregunta = d.last().expect("pregunta");
-    assert_eq!(pregunta.title_key, "modal-extension-uninstall-title");
+    let question = d.last().expect("question");
+    assert_eq!(question.title_key, "modal-extension-uninstall-title");
     assert_eq!(
-        pregunta.subject.as_ref().map(|s| s.text.as_str()),
+        question.subject.as_ref().map(|s| s.text.as_str()),
         Some("acme.ftp")
     );
-    let si = pregunta
+    let yes = question
         .choices
         .iter()
         .find(|c| c.id == "confirm")
-        .expect("la respuesta que borra");
-    assert!(si.destructive, "y viene marcada como lo que es");
-    assert_eq!(si.label_key, "dialog-uninstall", "y dice QUÉ confirma");
-    // Cancelar no borra nada.
+        .expect("the answer that deletes");
+    assert!(yes.destructive, "and it comes marked as what it is");
+    assert_eq!(
+        yes.label_key, "dialog-uninstall",
+        "and says WHAT it confirms"
+    );
+    // Cancelling deletes nothing.
     h.dispatch(UiAction::Dialog {
-        id: pregunta.id,
+        id: question.id,
         choice: "cancel".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguientes_dialogos(&mut sub).await;
     assert!(backend.gobierno.lock().expect("gobierno").is_empty());
 
-    // El botón: la misma pregunta, y el sí borra.
+    // The button: the same question, and yes deletes.
     h.dispatch(UiAction::ExtensionGovern {
         row: 0,
         id: "acme.ftp".to_owned(),
         change: norte_ui_host::action::ExtensionChange::Uninstall,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let d = siguientes_dialogos(&mut sub).await;
-    let pregunta = d.last().expect("pregunta");
-    assert_eq!(pregunta.title_key, "modal-extension-uninstall-title");
+    let question = d.last().expect("question");
+    assert_eq!(question.title_key, "modal-extension-uninstall-title");
     h.dispatch(UiAction::Dialog {
-        id: pregunta.id,
+        id: question.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    // El catálogo se REPIDE tras el sí y llega detrás del parche del cursor:
-    // se espera al que ya no trae la borrada, no al primero que pase.
-    let mut sin_ella = None;
+    .expect("host alive");
+    // The catalogue gets RE-REQUESTED after the yes and arrives behind the
+    // cursor's patch: it waits for the one that no longer carries the
+    // deleted one, not the first one that comes by.
+    let mut without_it = None;
     for _ in 0..20 {
         let Some(v) = siguiente_extensiones(&mut sub).await else {
             continue;
         };
         if !v.loading && v.rows.iter().all(|r| r.id != "acme.ftp") {
-            sin_ella = Some(v);
+            without_it = Some(v);
             break;
         }
     }
-    let v = sin_ella.expect("la desinstalada deja de listarse");
+    let v = without_it.expect("the uninstalled one stops being listed");
     assert_eq!(
         backend.gobierno.lock().expect("gobierno").as_slice(),
         ["uninstall:acme.ftp"]
@@ -632,14 +635,14 @@ async fn desinstalar_pregunta_y_solo_el_si_borra() {
     );
 }
 
-/// Una extensión que NO CARGÓ es una fila más: se señala, y su único verbo es
-/// desinstalar —por la tecla y por el botón, con la misma pregunta—. ADR 0104
-/// lo dejó escrito como hueco: el handler la borraba, pero no había forma de
-/// pedírselo desde la ventana.
+/// An extension that did NOT LOAD is one more row: it is pointed at, and its
+/// only verb is uninstalling — through the key and the button, with the same
+/// question. ADR 0104 left it written as a gap: the handler deleted it, but
+/// there was no way to ask for it from the window.
 #[tokio::test]
-async fn una_extension_rota_se_senala_y_solo_se_desinstala() {
+async fn a_broken_extension_is_shown_and_only_uninstalls() {
     let Ok(mut f) = Arc::try_unwrap(dos_para_gobernar()) else {
-        panic!("el doble recién hecho no está compartido");
+        panic!("the freshly made double is not shared");
     };
     f.errores_de_carga = vec![
         ("acme.roto".to_owned(), "el manifiesto no parsea".to_owned()),
@@ -648,25 +651,26 @@ async fn una_extension_rota_se_senala_y_solo_se_desinstala() {
     let backend = Arc::new(f);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let v = extensiones_cargadas(&mut sub).await;
-    // El id solo cuando el nombre lo es: es lo que el renderer necesita para
-    // ofrecer el botón, y lo que el host mira antes de preguntar.
+    // The id only when the name is one: it is what the renderer needs to
+    // offer the button, and what the host looks at before asking.
     assert_eq!(
         v.errors.iter().map(|e| e.id.as_deref()).collect::<Vec<_>>(),
         [Some("acme.roto"), None]
     );
 
-    // Las rotas van DETRÁS de las dos cargadas: la fila 2 es la primera.
+    // Broken ones go AFTER the two loaded ones: row 2 is the first one.
     h.dispatch(UiAction::ExtensionSelectRow { row: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     let v = siguiente_extensiones(&mut sub)
         .await
-        .expect("el cursor se pinta");
-    assert_eq!(v.cursor, 2, "una rota se señala como cualquier fila");
+        .expect("the cursor gets painted");
+    assert_eq!(v.cursor, 2, "a broken one is pointed at like any row");
 
-    // Aprobarla no tiene sentido —no hay capabilities que leer— y se DICE.
+    // Approving it makes no sense — there are no capabilities to read — and
+    // it is SAID.
     let ack = h
         .dispatch(UiAction::ExtensionGovern {
             row: 2,
@@ -674,53 +678,54 @@ async fn una_extension_rota_se_senala_y_solo_se_desinstala() {
             change: norte_ui_host::action::ExtensionChange::Approval,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "ext-broken-only-uninstall"),
         "{ack:?}"
     );
 
-    // La tecla sobre la señalada: la pregunta de siempre, con su id.
-    h.dispatch(tecla("d")).await.expect("host vivo");
+    // The key on the pointed-at one: the usual question, with its id.
+    h.dispatch(tecla("d")).await.expect("host alive");
     let d = siguientes_dialogos(&mut sub).await;
-    let pregunta = d.last().expect("pregunta");
-    assert_eq!(pregunta.title_key, "modal-extension-uninstall-title");
+    let question = d.last().expect("question");
+    assert_eq!(question.title_key, "modal-extension-uninstall-title");
     assert_eq!(
-        pregunta.subject.as_ref().map(|s| s.text.as_str()),
+        question.subject.as_ref().map(|s| s.text.as_str()),
         Some("acme.roto")
     );
     h.dispatch(UiAction::Dialog {
-        id: pregunta.id,
+        id: question.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguientes_dialogos(&mut sub).await;
     assert_eq!(
         backend.gobierno.lock().expect("gobierno").as_slice(),
         ["uninstall:acme.roto"]
     );
 
-    // Y una rota cuyo directorio no se llama como un id no pregunta: no hay
-    // id que mandar, y se dice por qué.
+    // And a broken one whose directory is not named after an id does not
+    // ask: there is no id to send, and it says why.
     h.dispatch(UiAction::ExtensionSelectRow { row: 3 })
         .await
-        .expect("host vivo");
-    let ack = h.dispatch(tecla("d")).await.expect("host vivo");
+        .expect("host alive");
+    let ack = h.dispatch(tecla("d")).await.expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "ext-broken-not-id"),
         "{ack:?}"
     );
 }
 
-/// Encender una sin aprobar por botón se rehúsa y se dice, como con la tecla.
+/// Enabling an unapproved one through the button is refused and says so,
+/// like with the key.
 #[tokio::test]
-async fn encender_una_sin_aprobar_por_boton_se_rehusa() {
+async fn enabling_an_unapproved_one_via_button_is_refused() {
     let backend = dos_para_gobernar();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
     let ack = h
         .dispatch(UiAction::ExtensionGovern {
@@ -729,16 +734,16 @@ async fn encender_una_sin_aprobar_por_boton_se_rehusa() {
             change: norte_ui_host::action::ExtensionChange::Enabled,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-extension-not-approved"),
         "{ack:?}"
     );
     assert!(backend.gobierno.lock().expect("gobierno").is_empty());
-    // Una fila que ya no existe, o que ya no es la que el renderer vio —el
-    // catálogo se repide de fondo y una borrada por encima corre las de
-    // debajo—, no gobierna nada: apagar «la fila 0» habría apagado a la
-    // vecina.
+    // A row that no longer exists, or is no longer the one the renderer
+    // saw — the catalogue is re-requested in the background and a deletion
+    // above shifts the ones below — governs nothing: disabling "row 0" would
+    // have disabled its neighbor.
     for (row, id) in [(9, "acme.ftp"), (0, "org.norte.demo")] {
         let ack = h
             .dispatch(UiAction::ExtensionGovern {
@@ -747,7 +752,7 @@ async fn encender_una_sin_aprobar_por_boton_se_rehusa() {
                 change: norte_ui_host::action::ExtensionChange::Enabled,
             })
             .await
-            .expect("host vivo");
+            .expect("host alive");
         assert!(
             matches!(ack, ActionAck::Stale { .. }),
             "{row} {id}: {ack:?}"
@@ -756,24 +761,24 @@ async fn encender_una_sin_aprobar_por_boton_se_rehusa() {
     assert!(backend.gobierno.lock().expect("gobierno").is_empty());
 }
 
-/// El botón de ayuda cierra el gestor y abre la ayuda en la página de ESA
-/// extensión, como `F1` sobre la fila en el terminal.
+/// The help button closes the manager and opens help on THAT extension's
+/// page, like `F1` on the row in the terminal.
 #[tokio::test]
-async fn el_boton_de_ayuda_abre_la_pagina_de_esa_extension() {
+async fn the_help_button_opens_that_extensions_page() {
     let backend = dos_para_gobernar();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
 
-    // Sin página no se abre nada, y se dice.
+    // With no page, nothing opens, and it is said.
     let ack = h
         .dispatch(UiAction::ExtensionHelp {
             row: 1,
             id: "org.norte.demo".to_owned(),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
 
     h.dispatch(UiAction::ExtensionHelp {
@@ -781,68 +786,71 @@ async fn el_boton_de_ayuda_abre_la_pagina_de_esa_extension() {
         id: "acme.ftp".to_owned(),
     })
     .await
-    .expect("host vivo");
-    // El gestor se cierra primero: la ayuda lo sustituye, como en el
-    // terminal.
+    .expect("host alive");
+    // The manager closes first: help replaces it, like in the terminal.
     assert!(
         siguiente_extensiones(&mut sub).await.is_none(),
-        "el gestor se cierra"
+        "the manager closes"
     );
-    let mut pagina = None;
+    let mut page = None;
     for _ in 0..20 {
         let Some(v) = siguiente_ayuda(&mut sub).await else {
             continue;
         };
         if v.topic_id == "acme.ftp" && !v.blocks.is_empty() {
-            pagina = Some(v);
+            page = Some(v);
             break;
         }
     }
-    let pagina = pagina.expect("la página del plugin se abre y se instala");
-    assert!(format!("{:?}", pagina.blocks).contains("Conecta con un servidor FTP"));
+    let page = page.expect("the plugin's page opens and installs");
+    assert!(format!("{:?}", page.blocks).contains("Conecta con un servidor FTP"));
 }
 
-/// Un nombre, un publicador y una descripción hostiles llegan enmascarados;
-/// un id inválido no llega en absoluto.
+/// A hostile name, publisher and description arrive masked; an invalid id
+/// does not arrive at all.
 #[tokio::test]
-async fn el_texto_de_una_extension_llega_enmascarado() {
-    let mut malo = extension("acme.\u{202e}ftp", "Invisible", false);
-    malo.description = Some("desc".to_owned());
-    let mut hostil = extension("acme.ftp", "FTP\u{202e}de ACME", false);
-    hostil.publisher = "ACME\u{7}".to_owned();
-    hostil.description = Some("Sirve\u{202e}ficheros".to_owned());
-    hostil.version = "1.0\u{7}".to_owned();
-    let backend = arbol_con_plugins(vec![hostil, malo], &[]);
+async fn an_extensions_text_arrives_masked() {
+    let mut bad = extension("acme.\u{202e}ftp", "Invisible", false);
+    bad.description = Some("desc".to_owned());
+    let mut hostile = extension("acme.ftp", "FTP\u{202e}de ACME", false);
+    hostile.publisher = "ACME\u{7}".to_owned();
+    hostile.description = Some("Sirve\u{202e}ficheros".to_owned());
+    hostile.version = "1.0\u{7}".to_owned();
+    let backend = arbol_con_plugins(vec![hostile, bad], &[]);
     let (h, _snap) = host_arbol(backend).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let v = extensiones_cargadas(&mut sub).await;
 
-    assert_eq!(v.rows.len(), 1, "el id inválido se DESCARTA en la entrada");
-    let texto = format!("{:?}", v.rows[0]);
+    assert_eq!(
+        v.rows.len(),
+        1,
+        "the invalid id gets DISCARDED at the entry"
+    );
+    let text = format!("{:?}", v.rows[0]);
     assert!(
-        !texto.contains('\u{202e}') && !texto.contains('\u{7}'),
-        "texto de tercero sin enmascarar: {texto}"
+        !text.contains('\u{202e}') && !text.contains('\u{7}'),
+        "third-party text unmasked: {text}"
     );
     assert!(
-        !texto.contains("\\u{202e}") && !texto.contains("\\u{7}"),
-        "texto de tercero sin enmascarar: {texto}"
+        !text.contains("\\u{202e}") && !text.contains("\\u{7}"),
+        "third-party text unmasked: {text}"
     );
 }
 
-/// El VALOR de una clave de configuración, su defecto y los valores de un
-/// `enum` los escribe el PLUGIN, y llegan enmascarados y marcados.
+/// The VALUE of a configuration key, its default and an `enum`'s values are
+/// written by the PLUGIN, and arrive masked and marked.
 ///
-/// El manifiesto solo les acota la LONGITUD —`CONFIG_STRING_MAX_CHARS`,
-/// `CONFIG_ENUM_MAX_VALUES`— y no comprueba charset ninguno, así que un
-/// `plugin.toml` podía meter un override bidi en un valor de `enum` y verlo
-/// llegar crudo a un nodo de texto del DOM. Tres rustdocs decían que esos
-/// campos eran «vocabulario de norte, nunca texto libre del plugin».
+/// The manifest only bounds their LENGTH — `CONFIG_STRING_MAX_CHARS`,
+/// `CONFIG_ENUM_MAX_VALUES` — and checks no charset at all, so a
+/// `plugin.toml` could put a bidi override in an `enum` value and see it
+/// arrive raw at a DOM text node. Three rustdocs said those fields were
+/// "norte's own vocabulary, never the plugin's free text".
 ///
-/// Y el `·` que une el dominio se compone AQUÍ: si el valor no se enmascarara,
-/// un plugin podría fabricar uno y fingir un dominio que no tiene.
+/// And the `·` that joins the domain is composed HERE: if the value were not
+/// masked, a plugin could forge one and fake a domain it does not have.
 #[tokio::test]
-async fn el_valor_de_una_clave_de_plugin_llega_enmascarado_y_marcado() {
+async fn a_plugin_keys_value_arrives_masked_and_marked() {
     let ext = extension("acme.ftp", "FTP", true);
     let mut f = Falso {
         plugins: vec![ext].into(),
@@ -864,69 +872,69 @@ async fn el_valor_de_una_clave_de_plugin_llega_enmascarado_y_marcado() {
     );
     let (h, _snap) = host_arbol(Arc::new(f)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let _ = extensiones_cargadas(&mut sub).await;
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
 
-    let mut ficha = None;
+    let mut card = None;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         if let Some(d) = siguiente_foto(&mut sub)
             .await
             .extensions
             .and_then(|e| e.detail)
         {
-            ficha = Some(d);
+            card = Some(d);
             break;
         }
     }
-    let ficha = ficha.expect("la ficha llega");
-    let fila = ficha.config.first().expect("la clave está");
-    let texto = format!("{fila:?}");
+    let card = card.expect("the card arrives");
+    let row = card.config.first().expect("the key is there");
+    let text = format!("{row:?}");
     assert!(
-        !texto.contains('\u{202e}') && !texto.contains('\u{7}'),
-        "texto del plugin sin enmascarar: {texto}"
+        !text.contains('\u{202e}') && !text.contains('\u{7}'),
+        "the plugin's text unmasked: {text}"
     );
     assert!(
-        !texto.contains("\\u{202e}") && !texto.contains("\\u{7}"),
-        "texto del plugin sin enmascarar: {texto}"
+        !text.contains("\\u{202e}") && !text.contains("\\u{7}"),
+        "the plugin's text unmasked: {text}"
     );
     assert!(
-        fila.hostile,
-        "y se DICE que lo pintado difiere de lo que es: {fila:?}"
+        row.hostile,
+        "and it SAYS what is painted differs from what it is: {row:?}"
     );
 }
 
-/// Con el gestor abierto, el listado no se mueve.
+/// With the manager open, the listing does not move.
 #[tokio::test]
-async fn con_el_gestor_abierto_el_listado_no_se_mueve() {
+async fn with_the_manager_open_the_listing_does_not_move() {
     let (h, snap) = host_arbol(arbol()).await;
-    let antes = listado(&snap).cursor;
+    let before = listado(&snap).cursor;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host vivo");
-    let _ = siguiente_extensiones(&mut sub).await.expect("abre");
+    h.dispatch(tecla("F12")).await.expect("host alive");
+    let _ = siguiente_extensiones(&mut sub).await.expect("opens");
 
-    h.dispatch(tecla("j")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(listado(&foto).cursor, antes);
-    assert!(foto.extensions.is_some(), "y el gestor sigue abierto");
+    h.dispatch(tecla("j")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&snap).cursor, before);
+    assert!(snap.extensions.is_some(), "and the manager is still open");
 }
 
 // ---------------------------------------------------------------------------
-// El tema y el selector de volúmenes (tarea 4.5).
+// The theme and the volumes picker (task 4.5).
 // ---------------------------------------------------------------------------
 
-/// Espera la siguiente actualización con el tema.
+/// Waits for the next update with the theme.
 pub(super) async fn siguiente_tema(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::ThemeView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -936,19 +944,19 @@ pub(super) async fn siguiente_tema(
             }
         }
     }
-    panic!("no llegó ninguna actualización con tema");
+    panic!("no update with a theme ever arrived");
 }
 
-/// Espera la siguiente actualización con el selector.
+/// Waits for the next update with the picker.
 pub(super) async fn siguiente_selector(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::PickerView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -958,10 +966,10 @@ pub(super) async fn siguiente_selector(
             }
         }
     }
-    panic!("no llegó ninguna actualización con selector");
+    panic!("no update with a picker ever arrived");
 }
 
-/// Un host con un tema dicho.
+/// A host with a given theme.
 pub(super) async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> UiHost {
     UiHost::start(UiHostOptions {
         backend: arbol(),
@@ -984,14 +992,14 @@ pub(super) async fn host_con_tema(theme: norte_ui_host::pickers::HostTheme) -> U
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
     .0
 }
 
-/// `F9` enseña el tema rol a rol, y NOMBRA los efectos que esta ventana no
-/// sabe pintar: un tema retro que se ve idéntico se lee como roto.
+/// `F9` shows the theme role by role, and NAMES the effects this window
+/// cannot paint: a retro theme that looks identical reads as broken.
 #[tokio::test]
-async fn el_tema_se_ve_por_dentro_y_dice_lo_que_no_pinta() {
+async fn the_theme_shows_from_inside_and_says_what_it_does_not_paint() {
     let h = host_con_tema(norte_ui_host::pickers::HostTheme {
         name: "retro".to_owned(),
         roles: vec![
@@ -1005,29 +1013,29 @@ async fn el_tema_se_ve_por_dentro_y_dice_lo_que_no_pinta() {
     })
     .await;
     let mut sub = h.subscribe();
-    // `alt+9` desde la spec 2026-09-10: F9 es el menú, como en toda la familia.
-    h.dispatch(tecla_alt("9")).await.expect("host vivo");
-    let t = siguiente_tema(&mut sub).await.expect("abre");
+    // `alt+9` since spec 2026-09-10: F9 is the menu, as in the whole family.
+    h.dispatch(tecla_alt("9")).await.expect("host alive");
+    let t = siguiente_tema(&mut sub).await.expect("opens");
 
     assert_eq!(t.name, "retro");
     assert_eq!(t.roles.len(), 2);
-    assert_eq!(t.roles[0].color, "#2d4f8a", "el color va como muestra");
+    assert_eq!(t.roles[0].color, "#2d4f8a", "the color travels as a swatch");
     assert_eq!(
         t.unsupported_effects
             .iter()
             .map(|e| e.key.clone())
             .collect::<Vec<_>>(),
         vec!["crt".to_owned(), "scanlines".to_owned()],
-        "los efectos se NOMBRAN, no se ignoran"
+        "the effects are NAMED, not ignored"
     );
 
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
-    assert!(siguiente_tema(&mut sub).await.is_none(), "esc lo cierra");
+    h.dispatch(tecla("Escape")).await.expect("host alive");
+    assert!(siguiente_tema(&mut sub).await.is_none(), "esc closes it");
 }
 
-/// Un tema sin efectos no inventa ninguno.
+/// A theme with no effects invents none.
 #[tokio::test]
-async fn un_tema_sin_efectos_no_dice_nada_de_ellos() {
+async fn a_theme_with_no_effects_says_nothing_about_them() {
     let h = host_con_tema(norte_ui_host::pickers::HostTheme {
         name: "default".to_owned(),
         roles: vec![("fg".to_owned(), "#d4d8de".to_owned())],
@@ -1038,13 +1046,13 @@ async fn un_tema_sin_efectos_no_dice_nada_de_ellos() {
     })
     .await;
     let mut sub = h.subscribe();
-    // `alt+9` desde la spec 2026-09-10: F9 es el menú, como en toda la familia.
-    h.dispatch(tecla_alt("9")).await.expect("host vivo");
-    let t = siguiente_tema(&mut sub).await.expect("abre");
+    // `alt+9` since spec 2026-09-10: F9 is the menu, as in the whole family.
+    h.dispatch(tecla_alt("9")).await.expect("host alive");
+    let t = siguiente_tema(&mut sub).await.expect("opens");
     assert!(t.unsupported_effects.is_empty());
 }
 
-/// Un volumen del host con lo que la vista mira.
+/// A host volume with what the view looks at.
 pub(super) fn volumen(mount: &str, fs: &str, ro: bool) -> norte_proto::methods::Volume {
     norte_proto::methods::Volume {
         mount: norte_proto::VPath::parse(mount).expect("vpath"),
@@ -1057,10 +1065,10 @@ pub(super) fn volumen(mount: &str, fs: &str, ro: bool) -> norte_proto::methods::
     }
 }
 
-/// El selector de volúmenes se abre PREGUNTANDO, y elegir uno navega el
-/// panel a su punto de montaje — que es lectura, y por eso sí se hace.
+/// The volumes picker opens ASKING, and choosing one navigates the panel to
+/// its mount point — which is a read, and that is why it is done.
 #[tokio::test]
-async fn elegir_un_volumen_navega_el_panel() {
+async fn choosing_a_volume_navigates_the_panel() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
     f.pon("mem:///otro", vec![(b"raiz.txt".to_vec(), false)]);
@@ -1068,8 +1076,8 @@ async fn elegir_un_volumen_navega_el_panel() {
     let (h, _snap) = host_arbol(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    // `pane.select-drive` no lo ata el preset orthodox: se corre por la
-    // paleta, que es otra puerta al MISMO catálogo.
+    // `pane.select-drive` is not bound by the orthodox preset: it is run
+    // through the palette, which is another door to the SAME catalogue.
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "p".to_owned(),
         ctrl: true,
@@ -1078,53 +1086,53 @@ async fn elegir_un_volumen_navega_el_panel() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
-    let _ = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    .expect("host alive");
+    let _ = siguiente_paleta(&mut sub).await.expect("the palette opens");
     for c in "select-drive".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
 
-    let primero = siguiente_selector(&mut sub).await.expect("abre");
+    let first = siguiente_selector(&mut sub).await.expect("opens");
     assert!(
-        !primero.empty.is_empty() || !primero.rows.is_empty(),
-        "o pregunta o trae filas, pero nunca se queda mudo"
+        !first.empty.is_empty() || !first.rows.is_empty(),
+        "it either asks or brings rows, but is never silent"
     );
 
-    let mut con_filas = None;
+    let mut with_rows = None;
     for _ in 0..20 {
         let Some(v) = siguiente_selector(&mut sub).await else {
             continue;
         };
         if !v.rows.is_empty() {
-            con_filas = Some(v);
+            with_rows = Some(v);
             break;
         }
     }
-    let v = con_filas.expect("la tabla de montaje llega");
+    let v = with_rows.expect("the mount table arrives");
     assert_eq!(v.rows.len(), 1);
     assert!(v.rows[0].detail.contains("ext4"), "{:?}", v.rows[0]);
     assert!(
         v.rows[0].detail.contains("12"),
-        "y cuánto queda: {:?}",
+        "and how much is left: {:?}",
         v.rows[0]
     );
 
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.picker.is_none(), "el selector se cierra");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.picker.is_none(), "the picker closes");
     assert!(
-        listado(&foto).path_display.contains("otro"),
-        "y el panel navegó al volumen: {}",
-        listado(&foto).path_display
+        listado(&snap).path_display.contains("otro"),
+        "and the panel navigated to the volume: {}",
+        listado(&snap).path_display
     );
 }
 
-/// Un espacio que el sistema no contestó se DICE; jamás se pinta un `0`, que
-/// se lee como «lleno» — lo contrario de «no lo sé».
+/// A space the system did not answer is SAID; a `0` is never painted, which
+/// reads as "full" — the opposite of "I don't know".
 #[tokio::test]
-async fn un_volumen_sin_tamano_lo_dice() {
+async fn a_volume_with_no_size_says_so() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
     let mut v = volumen("mem:///otro", "nfs4", true);
@@ -1141,73 +1149,73 @@ async fn un_volumen_sin_tamano_lo_dice() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
-    let _ = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    .expect("host alive");
+    let _ = siguiente_paleta(&mut sub).await.expect("the palette opens");
     for c in "select-drive".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
 
     for _ in 0..20 {
         let Some(view) = siguiente_selector(&mut sub).await else {
             continue;
         };
-        if let Some(fila) = view.rows.first() {
-            assert!(!fila.detail.contains(" 0 "), "un cero se lee como lleno");
+        if let Some(row) = view.rows.first() {
+            assert!(!row.detail.contains(" 0 "), "a zero reads as full");
             assert!(
-                fila.detail.contains("nfs4"),
-                "y sigue diciendo lo que sí sabe: {fila:?}"
+                row.detail.contains("nfs4"),
+                "and it still says what it does know: {row:?}"
             );
             return;
         }
     }
-    panic!("la tabla de montaje nunca llegó");
+    panic!("the mount table never arrived");
 }
 
-/// ADR 0100: la frase de un plugin `hook` llega a la barra de la ventana
-/// atribuida al plugin, y como aviso efímero — no como banner: habla de una
-/// mutación que ya pasó. El id va DELANTE, puesto por norte.
+/// ADR 0100: a `hook` plugin's phrase reaches the window's bar attributed to
+/// the plugin, and as an ephemeral notice — not a banner: it talks about a
+/// mutation that already happened. The id goes IN FRONT, put there by norte.
 #[tokio::test]
-async fn el_aviso_de_un_hook_llega_a_la_barra_atribuido() {
-    let falso = arbol_como_falso();
+async fn a_hooks_notice_reaches_the_bar_attributed() {
+    let fake = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.avisos_plugin.lock().expect("avisos_plugin") = Some(rx);
-    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    *fake.avisos_plugin.lock().expect("avisos_plugin") = Some(rx);
+    let (h, _snap) = host_arbol(Arc::new(fake)).await;
     let mut sub = h.subscribe();
     tx.send(norte_proto::methods::PluginNotice {
         plugin_id: "org.norte.rename-log".to_owned(),
         kind: "notify".to_owned(),
         text: Some("renamed 3 files".to_owned()),
     })
-    .expect("el host escucha");
-    let linea = foto_hasta(&h, &mut sub, "el aviso en la barra", |f| {
+    .expect("the host is listening");
+    let line = foto_hasta(&h, &mut sub, "the notice in the bar", |f| {
         f.status
             .message
             .clone()
             .filter(|m| m.contains("renamed 3 files"))
     })
     .await;
-    assert!(linea.starts_with("⚑ org.norte.rename-log"), "{linea}");
+    assert!(line.starts_with("⚑ org.norte.rename-log"), "{line}");
     assert!(
         f_banners_vacios(&h, &mut sub).await,
-        "un aviso de hook no enciende ningún banner persistente"
+        "a hook notice lights up no persistent banner"
     );
 
-    // Y el aviso viaja también, con la misma línea.
+    // And the notice also travels, with the same line.
     let mut sub2 = h.subscribe();
     tx.send(norte_proto::methods::PluginNotice {
         plugin_id: "org.norte.rename-log".to_owned(),
         kind: "hooks-disabled".to_owned(),
         text: None,
     })
-    .expect("el host escucha");
-    let aviso = super::registro::foto_hasta_notice(&mut sub2, "msg-plugin-hooks-disabled").await;
-    assert!(aviso.contains("org.norte.rename-log"), "{aviso}");
+    .expect("the host is listening");
+    let notice = super::registro::foto_hasta_notice(&mut sub2, "msg-plugin-hooks-disabled").await;
+    assert!(notice.contains("org.norte.rename-log"), "{notice}");
 }
 
 async fn f_banners_vacios(
     h: &norte_ui_host::UiHost,
     sub: &mut norte_ui_host::UiSubscription,
 ) -> bool {
-    foto_hasta(h, sub, "los banners", |f| Some(f.status.banners.is_empty())).await
+    foto_hasta(h, sub, "the banners", |f| Some(f.status.banners.is_empty())).await
 }

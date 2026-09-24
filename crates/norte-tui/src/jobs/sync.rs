@@ -1,8 +1,8 @@
-//! Planificar una sincronización y aplicarla.
+//! Plan a sync and apply it.
 //!
-//! Dos Tasks y no una: primero el PLAN, que se lee, y después la APLICACIÓN,
-//! que escribe. Entre las dos hay una aprobación explícita —`a` y luego `y`—
-//! porque sincronizar borra y sobrescribe.
+//! Two Tasks and not one: first the PLAN, which reads, and then the
+//! APPLICATION, which writes. Between the two there is an explicit approval
+//! — `a` and then `y` — because syncing deletes and overwrites.
 
 use crossterm::event::KeyCode;
 use norte_core::backend::{Backend, TaskRef};
@@ -11,51 +11,52 @@ use norte_i18n::{t, ta};
 use super::compare::COMPARE_PAGE_STEP;
 use crate::app::{App, detail_for_bar, error_category};
 
-/// Qué acaba de pasarle a la Task viva de un [`SyncRun`].
+/// What just happened to a [`SyncRun`]'s live Task.
 ///
-/// Un solo brazo del `select!` cubre las dos fases del diálogo, así que hace
-/// falta un tipo que diga cuál de ellas habló.
+/// A single `select!` arm covers both phases of the dialog, so a type is
+/// needed to say which of them spoke.
 pub enum SyncTick {
-    /// Un evento del plan, o `None` = fin del flujo.
+    /// A plan event, or `None` = end of stream.
     Plan(Option<norte_core::sync::SyncPlanEvent>),
-    /// La Task de la aplicación cambió de estado.
+    /// The application Task changed state.
     Applied {
-        /// Alguien sigue publicando su progreso.
+        /// Someone is still publishing its progress.
         ///
-        /// `false` = se cayeron TODOS los emisores. Es un final, no un tick:
-        /// tratarlo como un tick con un último estado no terminal rearma el
-        /// brazo sobre un future ya listo y gira. Se decide igual que
-        /// `TaskRef::join`, que ante lo mismo sintetiza un fallo en vez de
-        /// heredar la invariante de otro crate.
+        /// `false` = ALL senders dropped. It's an end, not a tick: treating
+        /// it as a tick with a last non-terminal state re-arms the arm on a
+        /// future that's already ready and spins. Decided the same way as
+        /// `TaskRef::join`, which synthesizes a failure for the same case
+        /// instead of inheriting another crate's invariant.
         alive: bool,
     },
 }
 
-/// Una sincronización EN CURSO (`Ctrl+Y`, 2026-08-11-directory-sync.md).
+/// A sync IN PROGRESS (`Ctrl+Y`, 2026-08-11-directory-sync.md).
 ///
-/// Cubre las DOS Tasks del flujo, una detrás de otra, porque son un solo
-/// diálogo para el lector: `sync.plan` (con su canal de eventos) y, si aprueba,
-/// `sync.apply` (sin canal — lo que hizo se pide con `sync.report`).
+/// Covers the flow's TWO Tasks, one after the other, because they're a
+/// single dialog for the reader: `sync.plan` (with its event channel) and,
+/// if approved, `sync.apply` (no channel — what it did is requested with
+/// `sync.report`).
 pub struct SyncRun {
-    /// La Task viva, cancelable (regla 3).
+    /// The live Task, cancelable (rule 3).
     pub task: TaskRef,
-    /// Canal de eventos del plan. `None` mientras corre la APLICACIÓN, que no
-    /// tiene stream.
+    /// Plan event channel. `None` while the APPLICATION runs, which has no
+    /// stream.
     pub rx: Option<tokio::sync::mpsc::Receiver<norte_core::sync::SyncPlanEvent>>,
-    /// Progreso de la Task, para saber cuándo la aplicación acabó y pedir su
-    /// informe. Se mira también al cerrarse el canal del plan, igual que en la
-    /// comparación.
+    /// Task progress, to know when the application ended and request its
+    /// report. Also checked when the plan's channel closes, same as in the
+    /// comparison.
     pub progress: tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
-    /// La aplicación ya está corriendo (`sync.apply`), no el plan.
+    /// The application is already running (`sync.apply`), not the plan.
     pub applying: bool,
 }
 
-/// Lanza `sync.plan` y abre el panel de sincronización.
+/// Launches `sync.plan` and opens the sync panel.
 ///
-/// Los params ya vienen resueltos y validados por
-/// [`App::request_sync`](crate::app::App::request_sync). Un panel anterior
-/// se reemplaza y su Task se cancela (regla 3): dos planes a la vez serían dos
-/// flujos alimentando un diálogo cuyo `plan_hash` es lo que se aprueba.
+/// The params already arrive resolved and validated by
+/// [`App::request_sync`](crate::app::App::request_sync). A previous panel
+/// gets replaced and its Task cancelled (rule 3): two plans at once would be
+/// two streams feeding a dialog whose `plan_hash` is what gets approved.
 pub async fn launch_sync_plan(
     app: &mut App,
     backend: &Backend,
@@ -85,10 +86,11 @@ pub async fn launch_sync_plan(
                 old.task.cancel();
             }
         }
-        // El panel NO se abre, por lo mismo que el de diferencias: un panel
-        // vacío que dice «fallo» es peor que la frase en la barra. La
-        // categoría va saneada — y `OverlappingRoots` llega aquí con su
-        // relación, que es justo el error que este camino produce de verdad.
+        // The panel does NOT open, for the same reason as the diff one: an
+        // empty panel that says "failed" is worse than the status-bar
+        // phrase. The category goes sanitized — and `OverlappingRoots`
+        // arrives here with its relation, which is exactly the error this
+        // path really produces.
         Err(e) => {
             app.message = Some(ta(
                 "sync-status-failed",
@@ -98,11 +100,12 @@ pub async fn launch_sync_plan(
     }
 }
 
-/// Lanza `sync.apply` sobre el plan APROBADO.
+/// Launches `sync.apply` over the APPROVED plan.
 ///
-/// El hash es lo único que viaja: no hay forma de pedir que se ejecute algo
-/// distinto de lo que el panel enseñó (ADR 0049). La Task del plan ya terminó,
-/// así que este `SyncRun` la SUSTITUYE sin cancelar nada.
+/// The hash is the only thing that travels: there's no way to request
+/// running something different from what the panel showed (ADR 0049). The
+/// plan's Task already finished, so this `SyncRun` REPLACES it without
+/// cancelling anything.
 pub async fn launch_sync_apply(
     app: &mut App,
     backend: &Backend,
@@ -112,13 +115,14 @@ pub async fn launch_sync_apply(
     match backend.sync_apply(plan_hash).await {
         Ok(task) => {
             let progress = task.progress();
-            // Y puede NEGARSE: `on_apply_started` refuse una Task que llega
-            // después de que ya se pidiera cancelar. La TUI no puede leer una
-            // tecla entre el `sync_apply` y esta línea —lo espera en línea—,
-            // así que hoy no se alcanza; el guard vive en `norte-frontend`
-            // porque estaba en el envoltorio de la GUI y esta rama lo dejaba
-            // dependiendo del flujo de control (revisión de rama, rust
-            // MAJOR-2). Quien la niega la cancela: nadie más la conoce.
+            // And it CAN be refused: `on_apply_started` refuses a Task that
+            // arrives after cancellation was already requested. The TUI
+            // can't read a key between `sync_apply` and this line — it waits
+            // for it inline — so it's unreachable today; the guard lives in
+            // `norte-frontend` because it was in the GUI's wrapper and this
+            // branch left it depending on control flow (branch review, rust
+            // MAJOR-2). Whoever refuses it cancels it: nobody else knows
+            // about it.
             let adopted = app
                 .sync
                 .as_mut()
@@ -127,26 +131,27 @@ pub async fn launch_sync_apply(
                 task.cancel();
                 return;
             }
-            // Y AL TABLERO (#173): el panel conserva la task —`Esc` sigue
-            // siendo desde donde se para un plan aprobado— y el tablero se
-            // queda un `TaskObserver`, que pinta y cancela sin poseer. Antes
-            // no estaba porque el tablero se quedaba el `TaskRef` entero, así
-            // que la operación más destructiva del programa era la única
-            // invisible: cerrado el panel, un `Mirror` seguía reescribiendo un
-            // subárbol sin fila, sin progreso y sin forma de pararlo.
+            // And ONTO THE BOARD (#173): the panel keeps the task — `Esc` is
+            // still where an approved plan gets stopped from — and the board
+            // keeps a `TaskObserver`, which paints and cancels without
+            // owning. It wasn't there before because the board kept the
+            // whole `TaskRef`, so the program's most destructive operation
+            // was the only invisible one: with the panel closed, a `Mirror`
+            // kept rewriting a subtree with no row, no progress and no way
+            // to stop it.
             app.board.push_observed(task.observer(), None);
-            // La del plan se cancela SIEMPRE al sustituirla: `Ready` se alcanza
-            // al RECIBIR el `sync.plan_done`, y su flujo puede no haberse
-            // cerrado todavía. `TaskRef` no tiene `Drop`, así que soltarla sin
-            // más deja al daemon recorriendo dos árboles para un plan ya
-            // aprobado. Cancelar una Task terminada no hace nada.
-            if let Some(anterior) = sync_run.replace(SyncRun {
+            // The plan's Task is ALWAYS cancelled when replaced: `Ready` is
+            // reached on RECEIVING `sync.plan_done`, and its stream may not
+            // have closed yet. `TaskRef` has no `Drop`, so dropping it
+            // outright leaves the daemon walking two trees for a plan
+            // already approved. Cancelling a finished Task does nothing.
+            if let Some(previous) = sync_run.replace(SyncRun {
                 task,
                 rx: None,
                 progress,
                 applying: true,
             }) {
-                anterior.task.cancel();
+                previous.task.cancel();
             }
         }
         Err(e) => {
@@ -162,13 +167,13 @@ pub async fn launch_sync_apply(
     }
 }
 
-/// Aplica un evento del plan (o el cierre del canal) al panel.
+/// Applies a plan event (or the channel closing) to the panel.
 ///
-/// `None` = fin del flujo. A diferencia de la comparación, aquí NO hay que
-/// cuadrar un conteo contra `entries_done`: el `sync.plan_done` es la señal, y
-/// su ausencia es la protección — sin él no hay `plan_hash` y no hay nada que
-/// aprobar. Lo que sí se hace es leer el estado terminal, para distinguir un
-/// plan cancelado de uno que falló.
+/// `None` = end of stream. Unlike the comparison, there's NO count to square
+/// against `entries_done` here: `sync.plan_done` is the signal, and its
+/// absence is the protection — without it there's no `plan_hash` and nothing
+/// to approve. What does happen is reading the terminal state, to tell a
+/// cancelled plan from a failed one.
 pub fn drain_sync_plan(
     app: &mut App,
     sync_run: &mut Option<SyncRun>,
@@ -178,9 +183,9 @@ pub fn drain_sync_plan(
         return;
     };
     let Some(view) = app.sync.as_mut() else {
-        // El panel se cerró bajo el flujo: cancelar en vez de seguir
-        // recibiendo pasos que nadie va a mirar (mismo motivo que en la
-        // comparación — en remoto el daemon seguiría recorriendo los árboles).
+        // The panel closed under the stream: cancel instead of continuing to
+        // receive steps nobody is going to look at (same reason as in the
+        // comparison — remotely, the daemon would keep walking the trees).
         run.task.cancel();
         *sync_run = None;
         return;
@@ -188,43 +193,43 @@ pub fn drain_sync_plan(
     match event {
         Some(norte_core::sync::SyncPlanEvent::Steps(batch)) => {
             if !view.state.on_steps(batch) {
-                // Un lote de otro plan, o uno que llega DESPUÉS del cierre —
-                // que es una violación del protocolo. El modelo lo tira; que
-                // quede dicho en el log es lo que impide que se esconda.
-                tracing::warn!("lote de sync.steps descartado: no es de este plan");
+                // A batch from another plan, or one that arrives AFTER the
+                // close — which is a protocol violation. The model drops it;
+                // having it logged is what keeps it from hiding.
+                tracing::warn!("sync.steps batch discarded: not from this plan");
             }
         }
         Some(norte_core::sync::SyncPlanEvent::Done(done)) => {
             if !view.state.on_plan_done(done) {
-                tracing::warn!("sync.plan_done descartado: no es de este plan");
+                tracing::warn!("sync.plan_done discarded: not from this plan");
             }
         }
         None => {
             let snapshot = run.progress.borrow_and_update().clone();
-            // El mapeo `TaskState` → `SyncRunState` es de
-            // `crate::app::SyncRunState::from_task_state` (#161): la
-            // localización del error que sigue es la única mitad que de
-            // verdad difiere entre frontends, y por eso se queda aquí.
+            // The `TaskState` → `SyncRunState` mapping belongs to
+            // `crate::app::SyncRunState::from_task_state` (#161): localizing
+            // the error that follows is the only half that truly differs
+            // between frontends, and that's why it stays here.
             view.run = crate::app::SyncRunState::from_task_state(&snapshot.state);
             if let norte_proto::TaskState::Failed { error } = snapshot.state {
                 let category = detail_for_bar(&error_category(&error));
                 view.error = Some(category.clone());
                 app.message = Some(ta("sync-status-failed", &[("error", &category)]));
             }
-            // El canal se acabó: el `SyncRun` ya no tiene nada que drenar,
-            // pero se conserva para que `Esc` siga pudiendo cancelar si la
-            // Task no era terminal todavía.
+            // The channel ended: the `SyncRun` has nothing left to drain,
+            // but it's kept so `Esc` can still cancel if the Task wasn't
+            // terminal yet.
             run.rx = None;
         }
     }
 }
 
-/// Cosecha la Task de `sync.apply` cuando llega a un estado terminal y pide su
-/// informe.
+/// Harvests the `sync.apply` Task once it reaches a terminal state and
+/// requests its report.
 ///
-/// El informe se pide SIEMPRE que la Task acaba, incluida la cancelación: lo
-/// aplicado hasta el corte se queda, journalizado, y media sincronización es un
-/// estado real que el lector tiene que poder ver.
+/// The report is ALWAYS requested once the Task ends, cancellation included:
+/// what was applied up to the cut stays, journalled, and half a sync is a
+/// real state the reader has to be able to see.
 pub async fn harvest_sync_apply(
     app: &mut App,
     backend: &Backend,
@@ -235,9 +240,10 @@ pub async fn harvest_sync_apply(
         return;
     };
     let snapshot = run.progress.borrow_and_update().clone();
-    // Sin emisores no va a llegar nada más, así que un estado no terminal aquí
-    // es todo lo que se va a saber: se cosecha igual. Volver sin cosechar
-    // rearmaría el brazo sobre un `changed()` que devuelve `Err` al instante.
+    // With no senders left, nothing more is going to arrive, so a
+    // non-terminal state here is all that's ever going to be known: it's
+    // harvested anyway. Returning without harvesting would re-arm the arm on
+    // a `changed()` that returns `Err` instantly.
     if alive && !snapshot.state.is_terminal() {
         return;
     }
@@ -247,15 +253,16 @@ pub async fn harvest_sync_apply(
     let Some(view) = app.sync.as_mut() else {
         return;
     };
-    // Las TRES reglas de este instante —el error de la Task manda sobre el del
-    // informe, un informe que no llega es un fallo, y un estado no terminal
-    // también— son de `norte_frontend::sync::SyncView::on_apply_ended`, la
-    // COMPARTIDA con la GUI (#161). Estaban aquí, escritas a mano, y con la
-    // segunda SIN aplicar: un `sync.report` que fallaba dejaba el modelo en
-    // `Applying` y el pie diciendo «aplicando…» para siempre, con la única
-    // explicación en una barra transitoria. Lo que se queda de este lado es la
-    // única mitad que de verdad difiere entre frontends: cómo se sanea la
-    // categoría y dónde se pinta.
+    // The THREE rules for this instant — the Task's error wins over the
+    // report's, a report that doesn't arrive is a failure, and so is a
+    // non-terminal state — belong to
+    // `norte_frontend::sync::SyncView::on_apply_ended`, SHARED with the GUI
+    // (#161). They used to be here, written by hand, with the second one
+    // NOT applied: a `sync.report` that failed left the model in `Applying`
+    // and the footer saying "applying..." forever, with the only
+    // explanation in a transient status-bar message. What stays on this
+    // side is the only half that truly differs between frontends: how the
+    // category gets sanitized and where it gets painted.
     let category = view
         .on_apply_ended(&snapshot.state, report, norte_i18n::active())
         .map(|c| detail_for_bar(&c));
@@ -265,47 +272,48 @@ pub async fn harvest_sync_apply(
     }
 }
 
-/// Lo que una tecla SIGNIFICA en el panel de sincronización.
+/// What a key MEANS in the sync panel.
 ///
-/// Separado del despacho por lo mismo que [`super::CompareKey`]: lo que se puede
-/// equivocar aquí es la DECISIÓN, y una de ellas —aprobar— escribe en el disco
-/// de alguien.
+/// Separated from dispatch for the same reason as [`super::CompareKey`]:
+/// what can get it wrong here is the DECISION, and one of them — approving —
+/// writes to someone's disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncKey {
-    /// Nada que hacer con esta tecla.
+    /// Nothing to do with this key.
     Ignore,
-    /// Salir de norte (`Ctrl+C`, como en todos los demás overlays).
+    /// Quit norte (`Ctrl+C`, as in all the other overlays).
     Quit,
-    /// Pedir la cancelación de la Task y quedarse.
+    /// Request the Task's cancellation and stay.
     CancelTask,
-    /// Cerrar el panel, cancelando la Task si sigue viva.
+    /// Close the panel, cancelling the Task if it's still alive.
     Close,
-    /// Mover el cursor por los pasos.
+    /// Move the cursor over the steps.
     Move(isize),
-    /// Aprobar: la PRIMERA respuesta. Puede abrir la segunda pregunta.
+    /// Approve: the FIRST answer. May open the second question.
     Approve,
-    /// Contestar `sí` a la segunda pregunta.
+    /// Answer "yes" to the second question.
     ConfirmYes,
-    /// Cualquier otra tecla con la segunda pregunta en pantalla: cancela.
+    /// Any other key with the second question on screen: cancels it.
     ///
-    /// Existe como variante propia y no como `Ignore` porque una pregunta a
-    /// medio contestar tiene que resolverse: dejarla puesta mientras el cursor
-    /// se mueve por debajo es cómo un `y` posterior aprueba otra cosa.
+    /// It exists as its own variant and not as `Ignore` because a
+    /// half-answered question has to be resolved: leaving it up while the
+    /// cursor moves underneath is how a later `y` approves something else.
     ConfirmNo,
 }
 
-/// Traduce una tecla del panel de sincronización.
+/// Translates a sync-panel key.
 ///
-/// * `Ctrl+C` sale de norte, como en los otros diez overlays.
-/// * El primer `Esc` sobre una Task viva la cancela; cualquier `Esc` posterior
-///   cierra, sin mirar el estado de la Task — la misma salida de emergencia
-///   que el panel de diferencias, por la misma razón.
-/// * Con la segunda pregunta en pantalla el teclado se reduce a `y` y «no»:
-///   `Ctrl+C` y `Esc` siguen valiendo (salir y cerrar no son respuestas a la
-///   pregunta), y TODO lo demás la cancela en vez de ignorarse.
-/// * `Enter` NO aprueba. Sincronizar borra y sobrescribe, así que se pide una
-///   tecla que nadie pulsa por inercia — el mismo criterio que los diálogos
-///   TOFU y la aprobación de una op de agente.
+/// * `Ctrl+C` quits norte, like the other ten overlays.
+/// * The first `Esc` over a live Task cancels it; any later `Esc` closes,
+///   without looking at the Task's state — the same emergency exit as the
+///   diff panel, for the same reason.
+/// * With the second question on screen the keyboard shrinks to `y` and
+///   "no": `Ctrl+C` and `Esc` still count (quitting and closing aren't
+///   answers to the question), and EVERYTHING else cancels it instead of
+///   being ignored.
+/// * `Enter` does NOT approve. Syncing deletes and overwrites, so a key
+///   nobody presses out of habit is required — the same criterion as the
+///   TOFU dialogs and approving an agent op.
 #[must_use]
 pub fn sync_key(
     mods: crossterm::event::KeyModifiers,
@@ -315,8 +323,9 @@ pub fn sync_key(
     confirming: bool,
 ) -> SyncKey {
     use crossterm::event::KeyModifiers as M;
-    // Las DOS excepciones, y solo ellas: salir de norte y cerrar el panel no
-    // son respuestas a la pregunta, así que valen con la pregunta puesta.
+    // The TWO exceptions, and only them: quitting norte and closing the
+    // panel aren't answers to the question, so they count with the question
+    // up.
     if mods.contains(M::CONTROL) && code == KeyCode::Char('c') {
         return SyncKey::Quit;
     }
@@ -327,10 +336,10 @@ pub fn sync_key(
             SyncKey::Close
         };
     }
-    // Y la pregunta se resuelve ANTES que los filtros de modificador. Con
-    // ellos delante, un `Ctrl+r` o un `Alt+e` de costumbre caían en `Ignore` y
-    // dejaban «se van a borrar 2 árboles… ¿Seguir?» armada en pantalla,
-    // esperando un `y` que ya no sabría a qué contesta.
+    // And the question is resolved BEFORE the modifier filters. With them in
+    // front, a habitual `Ctrl+r` or `Alt+e` used to fall into `Ignore` and
+    // left "2 trees are about to be deleted... Continue?" armed on screen,
+    // waiting for a `y` that no longer knew what it was answering.
     if confirming {
         return if mods.is_empty() && code == KeyCode::Char('y') {
             SyncKey::ConfirmYes
@@ -351,9 +360,9 @@ pub fn sync_key(
     }
 }
 
-/// Despacha una tecla del panel de sincronización. Fijas, como las del panel
-/// de diferencias y por lo mismo: no hay vocabulario `dialog.*` para «aprueba
-/// este plan» y no es una pantalla del keymap propia.
+/// Dispatches a sync-panel key. Fixed, like the diff panel's and for the
+/// same reason: there's no `dialog.*` vocabulary for "approve this plan" and
+/// it isn't a keymap screen of its own.
 pub fn on_sync_key(
     app: &mut App,
     sync_run: &mut Option<SyncRun>,
@@ -385,15 +394,15 @@ pub fn on_sync_key(
             }
             if let Some(view) = app.sync.as_mut() {
                 view.cancel_requested = true;
-                // La pregunta se cae con la Task que la motivó: dejarla puesta
-                // es cómo un `y` posterior aprueba otra cosa.
+                // The question falls with the Task that motivated it:
+                // leaving it up is how a later `y` approves something else.
                 view.confirming = None;
             }
         }
         SyncKey::Close => {
-            // Se cancela SIEMPRE al salir, igual que en el panel de
-            // diferencias: en remoto el daemon seguiría planificando —o
-            // APLICANDO— para un panel que ya no existe.
+            // ALWAYS cancelled on exit, same as the diff panel: remotely,
+            // the daemon would keep planning — or APPLYING — for a panel
+            // that no longer exists.
             if let Some(s) = sync_run.take() {
                 s.task.cancel();
             }
@@ -419,26 +428,27 @@ pub fn on_sync_key(
     }
 }
 
-/// `a` sobre un plan cerrado: o abre la segunda pregunta, o lo manda ya.
+/// `a` over a closed plan: either opens the second question, or sends it
+/// right away.
 ///
-/// La segunda pregunta la decide el MODELO
-/// ([`norte_frontend::sync::SyncPlan::confirmation`]), que la devuelve solo
-/// cuando el plan borra árboles o cuando el undo no lo cubre entero. Preguntar
-/// dos veces por un `Update` que se deshace del todo enseña a saltarse las dos.
+/// The second question is decided by the MODEL
+/// ([`norte_frontend::sync::SyncPlan::confirmation`]), which returns it only
+/// when the plan deletes trees or when undo doesn't cover it whole. Asking
+/// twice for an `Update` that undoes entirely teaches skipping both.
 pub fn approve_sync(app: &mut App) {
     let lang = norte_i18n::active();
     let Some(view) = app.sync.as_mut() else {
         return;
     };
-    // `SyncView::can_approve` — que envuelve `SyncState::can_approve` y NUNCA
-    // `SyncPlan::can_approve` — porque el segundo sigue contestando que sí
-    // sobre un plan que ya se aprobó: `SyncState::plan()` devuelve el mismo
-    // plan en `Applying` y en `Applied`, y ninguno de sus tres factores
-    // cambia al gastarse. Con el del plan a secas, un `a` de más durante una
-    // aplicación larga lanzaba un segundo `sync.apply` que el spool contesta
-    // `PlanStale`, y el brazo de error pintaba «el plan falló» encima de una
-    // sincronización que seguía ESCRIBIENDO; el `Esc` siguiente la cancelaba
-    // a medias creyendo cerrar un fallo.
+    // `SyncView::can_approve` — which wraps `SyncState::can_approve` and
+    // NEVER `SyncPlan::can_approve` — because the latter keeps answering yes
+    // about a plan that's already been approved: `SyncState::plan()` returns
+    // the same plan in `Applying` and in `Applied`, and none of its three
+    // factors change when it's spent. With just the plan's check, an extra
+    // `a` during a long application launched a second `sync.apply` that the
+    // spool answers `PlanStale`, and the error arm painted "the plan failed"
+    // over a sync that was still WRITING; the next `Esc` half-cancelled it
+    // thinking it was closing a failure.
     if !view.can_approve() {
         app.message = Some(t("msg-sync-cannot-approve"));
         return;
@@ -452,16 +462,16 @@ pub fn approve_sync(app: &mut App) {
     }
 }
 
-/// Deja el `plan_hash` aprobado listo para que el run loop lo aplique.
+/// Leaves the approved `plan_hash` ready for the run loop to apply.
 ///
-/// Vuelve a preguntar por `can_approve`: entre la primera respuesta y la
-/// segunda no ha llegado nada que pueda cambiarla —el modelo no retrocede—,
-/// pero el hash sale de aquí hacia una escritura y no hay una segunda puerta
-/// después de ésta.
+/// Asks `can_approve` again: between the first answer and the second nothing
+/// has arrived that could change it — the model doesn't go backward — but
+/// the hash leaves here headed for a write, and there's no second gate after
+/// this one.
 pub fn submit_sync(app: &mut App) {
-    // Por `SyncView::submit`, la ÚNICA puerta: mira `can_approve` y echa el
-    // pestillo del apply en vuelo en el mismo gesto. Separarlos es lo que
-    // dejaba la ventana que la GUI sí alcanzaba (revisión de rama de C2).
+    // Through `SyncView::submit`, the ONE gate: it checks `can_approve` and
+    // throws the in-flight apply's bolt in the same gesture. Splitting them
+    // is what left the window the GUI DID reach (C2 branch review).
     let Some(view) = app.sync.as_mut() else {
         return;
     };
@@ -472,11 +482,11 @@ pub fn submit_sync(app: &mut App) {
     app.pending_sync_apply = Some(Box::new(hash));
 }
 
-/// Las teclas y los params de la SINCRONIZACIÓN (2026-08-11-directory-sync.md).
+/// The SYNC keys and params (2026-08-11-directory-sync.md).
 ///
-/// Sin backend y sin terminal: lo que se puede equivocar aquí es la DECISIÓN
-/// —qué se sincroniza, en qué sentido, y cuántas veces se pregunta antes de
-/// escribir—, y todo eso se afirma sobre un `App` y una función pura.
+/// No backend and no terminal: what can get it wrong here is the DECISION —
+/// what gets synced, in which direction, and how many times it asks before
+/// writing — and all of that is asserted over an `App` and a pure function.
 #[cfg(test)]
 mod sync_tests {
     use super::{
@@ -493,7 +503,7 @@ mod sync_tests {
     };
 
     fn vp(wire: &str) -> VPath {
-        VPath::parse(wire).expect("wire de test")
+        VPath::parse(wire).expect("test wire")
     }
 
     fn entry(wire: &str) -> norte_proto::Entry {
@@ -506,12 +516,12 @@ mod sync_tests {
         }
     }
 
-    /// Una fila emparejada, con entrada en los dos lados.
-    fn par(id: u64, nombre: &str) -> CompareRow {
+    /// A paired row, with an entry on both sides.
+    fn paired(id: u64, name: &str) -> CompareRow {
         CompareRow {
             id,
-            left: Some(entry(&format!("file:///casa/{nombre}"))),
-            right: Some(entry(&format!("file:///otro/{nombre}"))),
+            left: Some(entry(&format!("file:///home/{name}"))),
+            right: Some(entry(&format!("file:///other/{name}"))),
             verdict: CompareVerdict::Different,
             criterion: CompareCriterion::Size,
             confidence: CompareConfidence::Certain,
@@ -522,34 +532,34 @@ mod sync_tests {
         }
     }
 
-    /// Un `App` con daemon (si no, todo se niega antes de mirar nada) y un
-    /// panel de diferencias con `n` filas emparejadas.
-    fn app_con_filas(n: u64) -> App {
+    /// An `App` with a daemon (otherwise everything gets refused before
+    /// looking at anything) and a diff panel with `n` paired rows.
+    fn app_with_rows(n: u64) -> App {
         let mut app = App::new(
-            Pane::new(vp("file:///casa"), Vec::new()),
-            Pane::new(vp("file:///otro"), Vec::new()),
+            Pane::new(vp("file:///home"), Vec::new()),
+            Pane::new(vp("file:///other"), Vec::new()),
         );
         app.backend_journalled = true;
         let mut view =
-            crate::app::CompareView::new(vp("file:///casa"), vp("file:///otro"), 0, None, None);
+            crate::app::CompareView::new(vp("file:///home"), vp("file:///other"), 0, None, None);
         view.pane
-            .extend((1..=n).map(|i| par(i, &format!("f{i}.txt"))));
+            .extend((1..=n).map(|i| paired(i, &format!("f{i}.txt"))));
         app.compare = Some(view);
         app
     }
 
-    fn marcar(app: &mut App, id: u64) {
+    fn mark(app: &mut App, id: u64) {
         app.compare.as_mut().expect("panel").pane.toggle_mark(id);
     }
 
-    /// Lo marcado en el panel de diferencias es lo que se sincroniza, y viaja
-    /// como `include` — rutas RELATIVAS a la raíz, que es lo que el filtro del
-    /// core compara.
+    /// What's marked in the diff panel is what gets synced, and it travels
+    /// as `include` — paths RELATIVE to the root, which is what the core's
+    /// filter compares.
     #[test]
     fn el_panel_siembra_include_con_lo_marcado() {
-        let mut app = app_con_filas(3);
-        marcar(&mut app, 1);
-        marcar(&mut app, 2);
+        let mut app = app_with_rows(3);
+        mark(&mut app, 1);
+        mark(&mut app, 2);
         let params = app.request_sync(SyncMode::Update).expect("params");
         let include = params.include.as_ref().expect("include");
         assert_eq!(include.len(), 2);
@@ -560,21 +570,21 @@ mod sync_tests {
         assert_eq!(wire, vec!["f1.txt".to_owned(), "f2.txt".to_owned()]);
     }
 
-    /// Sin marcas el plan cubre el árbol ENTERO, y eso es la AUSENCIA del
-    /// campo: una lista vacía significaría un plan de cero pasos.
+    /// With no marks the plan covers the WHOLE tree, and that's the ABSENCE
+    /// of the field: an empty list would mean a zero-step plan.
     #[test]
     fn sin_marcas_el_plan_cubre_el_arbol_entero() {
-        let mut app = app_con_filas(3);
+        let mut app = app_with_rows(3);
         let params = app.request_sync(SyncMode::Update).expect("params");
         assert!(params.include.is_none());
     }
 
-    /// El sentido lo decide el LADO ACTIVO, y no se infiere de nada: `Tab` lo
-    /// cambia y las dos raíces se intercambian enteras. Es la mitad de lo que
-    /// el lector aprueba.
+    /// The direction is decided by the ACTIVE SIDE, and isn't inferred from
+    /// anything: `Tab` changes it and both roots swap entirely. It's half of
+    /// what the reader approves.
     #[test]
     fn el_lado_activo_decide_el_sentido_y_nada_se_infiere() {
-        let mut app = app_con_filas(1);
+        let mut app = app_with_rows(1);
         let a = app.request_sync(SyncMode::Update).expect("params").clone();
         app.compare.as_mut().expect("panel").pane.swap_active_side();
         let b = app.request_sync(SyncMode::Update).expect("params").clone();
@@ -586,47 +596,47 @@ mod sync_tests {
         );
     }
 
-    /// El modo viaja tal cual: `m` planifica un espejo, que además BORRA.
+    /// The mode travels as is: `m` plans a mirror, which also DELETES.
     #[test]
     fn el_modo_viaja_tal_cual() {
-        let mut app = app_con_filas(1);
+        let mut app = app_with_rows(1);
         assert_eq!(
             app.request_sync(SyncMode::Mirror).expect("params").mode,
             SyncMode::Mirror
         );
     }
 
-    /// La TUI embebida no sincroniza, y lo DICE: `sync.apply` exige journal y
-    /// se niega en cerrado (regla dura 4), así que planificar contra ella sería
-    /// enseñar un plan que nadie puede aprobar. La frase es accionable —dice
-    /// que hay que arrancar con `--daemon`—, no un «no soportado».
+    /// The embedded TUI doesn't sync, and it SAYS so: `sync.apply` requires a
+    /// journal and refuses without one (hard rule 4), so planning against it
+    /// would show a plan nobody can approve. The phrase is actionable — it
+    /// says to start with `--daemon` — not an "unsupported".
     #[test]
     fn sin_journal_no_se_planifica_y_se_dice_como_arreglarlo() {
-        let mut app = app_con_filas(1);
+        let mut app = app_with_rows(1);
         app.backend_journalled = false;
         assert!(app.request_sync(SyncMode::Update).is_none());
-        assert!(app.pending_sync.is_none(), "no se lanza nada");
-        let msg = app.message.clone().expect("una frase");
+        assert!(app.pending_sync.is_none(), "nothing gets launched");
+        let msg = app.message.clone().expect("a message");
         assert_eq!(msg, norte_i18n::t("msg-sync-needs-daemon"));
         assert_ne!(msg, norte_i18n::t("err-unsupported"));
     }
 
-    /// Las dos raíces en el mismo sitio se niegan aquí, sin ir y volver al
-    /// daemon — igual que al comparar.
+    /// Both roots in the same place get refused here, without a round trip
+    /// to the daemon — same as when comparing.
     #[test]
     fn las_dos_raices_en_el_mismo_sitio_se_niegan_aqui() {
         let mut app = App::new(
-            Pane::new(vp("file:///casa"), Vec::new()),
-            Pane::new(vp("file:///casa"), Vec::new()),
+            Pane::new(vp("file:///home"), Vec::new()),
+            Pane::new(vp("file:///home"), Vec::new()),
         );
         app.backend_journalled = true;
         assert!(app.request_sync(SyncMode::Update).is_none());
         assert!(app.message.is_some());
     }
 
-    /// `Enter` NO aprueba. Sincronizar borra y sobrescribe, así que se pide una
-    /// tecla que nadie pulsa por inercia — el mismo criterio que los diálogos
-    /// TOFU y la aprobación de una op de agente.
+    /// `Enter` does NOT approve. Syncing deletes and overwrites, so a key
+    /// nobody presses out of habit is required — the same criterion as the
+    /// TOFU dialogs and approving an agent op.
     #[test]
     fn enter_no_aprueba_una_sincronizacion() {
         assert_eq!(
@@ -639,32 +649,32 @@ mod sync_tests {
         );
     }
 
-    /// La tecla por defecto NO es una de función con modificador (#159: bajo
-    /// tmux ninguna llega). Dentro del panel de diferencias son letras peladas.
+    /// The default key is NOT a function key with a modifier (#159: under
+    /// tmux none arrives). Inside the diff panel they're bare letters.
     #[test]
     fn las_teclas_del_panel_no_son_de_funcion_con_modificador() {
         use crate::jobs::{CompareKey, compare_key};
-        for (code, modo) in [
+        for (code, mode) in [
             (KeyCode::Char('s'), SyncMode::Update),
             (KeyCode::Char('m'), SyncMode::Mirror),
         ] {
             assert_eq!(
                 compare_key(M::NONE, code, false, false),
-                CompareKey::Sync(modo)
+                CompareKey::Sync(mode)
             );
         }
-        // Y con modificador NO son nada: `Alt+s` no puede sincronizar por
-        // accidente desde un panel cuyo teclado es entero suyo.
+        // And with a modifier they're NOTHING: `Alt+s` can't sync by
+        // accident from a panel whose keyboard is entirely its own.
         assert_eq!(
             compare_key(M::ALT, KeyCode::Char('s'), false, false),
             CompareKey::Ignore
         );
     }
 
-    /// Con la segunda pregunta en pantalla el teclado se reduce: `y` contesta
-    /// que sí, `Esc` y `Ctrl+C` siguen valiendo porque no son respuestas a la
-    /// pregunta, y TODO lo demás la cancela. Dejarla puesta mientras el cursor
-    /// se mueve por debajo es cómo un `y` posterior aprueba otra cosa.
+    /// With the second question on screen the keyboard shrinks: `y` answers
+    /// yes, `Esc` and `Ctrl+C` still count because they aren't answers to
+    /// the question, and EVERYTHING else cancels it. Leaving it up while the
+    /// cursor moves underneath is how a later `y` approves something else.
     #[test]
     fn la_segunda_pregunta_reduce_el_teclado() {
         assert_eq!(
@@ -675,7 +685,7 @@ mod sync_tests {
             assert_eq!(
                 sync_key(M::NONE, code, false, false, true),
                 SyncKey::ConfirmNo,
-                "{code:?} dejó la pregunta a medias"
+                "{code:?} left the question half-answered"
             );
         }
         assert_eq!(
@@ -688,10 +698,10 @@ mod sync_tests {
         );
     }
 
-    /// La salida de emergencia del panel de diferencias, aquí también: el
-    /// primer `Esc` sobre una Task viva la cancela y CUALQUIER `Esc` posterior
-    /// cierra, sin mirar el estado de la Task. Sin esto, un daemon caído deja
-    /// al lector encerrado en la pantalla desde la que se aprueban escrituras.
+    /// The diff panel's emergency exit, here too: the first `Esc` over a
+    /// live Task cancels it and ANY later `Esc` closes, without looking at
+    /// the Task's state. Without this, a downed daemon leaves the reader
+    /// locked in the screen from which writes get approved.
     #[test]
     fn el_segundo_esc_cierra_pase_lo_que_pase() {
         assert_eq!(
@@ -704,12 +714,12 @@ mod sync_tests {
         );
     }
 
-    /// Todas las claves Fluent que este panel pinta existen en los DOS
-    /// locales. Una que falte llega a la pantalla como su propio id, y este
-    /// panel es donde se lee lo que se va a borrar.
+    /// Every Fluent key this panel paints exists in BOTH locales. A missing
+    /// one reaches the screen as its own id, and this panel is where what's
+    /// about to be deleted gets read.
     #[test]
     fn cada_cadena_del_panel_existe_en_ambos_locales() {
-        for clave in [
+        for key in [
             "sync-title",
             "sync-mode-update",
             "sync-mode-mirror",
@@ -722,12 +732,12 @@ mod sync_tests {
             "sync-status-applying",
             "sync-status-applied-undoable",
             "sync-status-applied-not-undoable",
-            // Las cinco que este panel pinta DESDE que `sync_status_line`
-            // delega en el `status_line` compartido y `mode_label` en el
-            // compartido: la lista dejó de cubrir lo que la pantalla dice
-            // (revisión de rama de C2, rust MINOR-5). Las cuatro de «cortada»
-            // son justo las que esta rama añadió para que un run cortado no
-            // se leyera como uno limpio.
+            // The five this panel paints SINCE `sync_status_line` delegates
+            // to the shared `status_line` and `mode_label` to the shared
+            // one: the list stopped covering what the screen says (C2
+            // branch review, rust MINOR-5). The four "cut" ones are exactly
+            // the ones this branch added so a cut run doesn't read as a
+            // clean one.
             "sync-status-applied-cut-undoable",
             "sync-status-applied-cut-not-undoable",
             "sync-status-applied-failed-undoable",
@@ -746,17 +756,17 @@ mod sync_tests {
         ] {
             for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
                 assert_ne!(
-                    norte_i18n::t_in(lang, clave),
-                    clave,
-                    "falta {clave} en {lang:?}"
+                    norte_i18n::t_in(lang, key),
+                    key,
+                    "missing {key} in {lang:?}"
                 );
             }
         }
     }
 
-    /// Un `SyncRun` sintético: la Task la respalda un `watch` del propio test,
-    /// así que se puede afirmar la lógica del run loop sin engine ni daemon
-    /// (mismo molde que `compare_tests::run_con`).
+    /// A synthetic `SyncRun`: the Task is backed by the test's own `watch`,
+    /// so the run loop's logic can be asserted without an engine or a daemon
+    /// (same mold as `compare_tests::run_with`).
     fn run_sync(
         state: norte_proto::TaskState,
         applying: bool,
@@ -767,7 +777,7 @@ mod sync_tests {
     ) {
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         let id = norte_proto::TaskId::new(1);
-        let (progreso, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
+        let (progress_tx, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
             task_id: id,
             kind: norte_proto::TaskKind::Sync,
             state,
@@ -787,23 +797,23 @@ mod sync_tests {
                 applying,
             },
             tx,
-            progreso,
+            progress_tx,
         )
     }
 
-    fn vista(app: &mut App, mode: SyncMode) {
+    fn view_at(app: &mut App, mode: SyncMode) {
         app.sync = Some(crate::app::SyncView::new(
             norte_proto::TaskId::new(1),
             mode,
-            vp("file:///casa"),
-            vp("file:///otro"),
+            vp("file:///home"),
+            vp("file:///other"),
             None,
             None,
         ));
     }
 
-    /// Un cierre de plan de un paso, aprobable.
-    fn cierre() -> SyncPlanDone {
+    /// A one-step, approvable plan close.
+    fn plan_done() -> SyncPlanDone {
         SyncPlanDone {
             task_id: norte_proto::TaskId::new(1),
             plan_hash: PlanHash::from_digest(&[3u8; 32]),
@@ -819,7 +829,7 @@ mod sync_tests {
         }
     }
 
-    fn paso() -> norte_proto::methods::SyncStep {
+    fn step() -> norte_proto::methods::SyncStep {
         norte_proto::methods::SyncStep {
             id: 1,
             kind: norte_proto::methods::SyncStepKind::Copy,
@@ -833,33 +843,36 @@ mod sync_tests {
         }
     }
 
-    /// Un plan LISTO en el panel.
-    fn app_con_plan_listo() -> App {
-        let mut app = app_con_filas(1);
-        vista(&mut app, SyncMode::Update);
+    /// A plan READY in the panel.
+    fn app_with_ready_plan() -> App {
+        let mut app = app_with_rows(1);
+        view_at(&mut app, SyncMode::Update);
         let view = app.sync.as_mut().expect("panel");
-        view.state = norte_frontend::sync::SyncState::ready(vec![paso()], cierre());
+        view.state = norte_frontend::sync::SyncState::ready(vec![step()], plan_done());
         view.run = crate::app::SyncRunState::Done;
         app
     }
 
-    /// **La regresión del BLOCKER.** Un `a` de más sobre un plan que ya se
-    /// aprobó no puede volver a mandarlo.
+    /// **The BLOCKER regression.** An extra `a` over a plan already approved
+    /// can't send it again.
     ///
-    /// `SyncPlan::can_approve` sigue contestando que sí para siempre —sus tres
-    /// factores no cambian al gastarse el plan— y `SyncState::plan()` devuelve
-    /// el mismo plan en `Applying` y en `Applied`. Con esa comprobación a
-    /// secas, un `a` durante una aplicación larga lanzaba un segundo
-    /// `sync.apply` que el spool contesta `PlanStale`, el brazo de error
-    /// pintaba «el plan falló» encima de una sincronización que seguía
-    /// ESCRIBIENDO, y como eso deja `run != Running` el `Esc` siguiente la
-    /// cancelaba a medias creyendo cerrar un fallo.
+    /// `SyncPlan::can_approve` keeps answering yes forever — its three
+    /// factors don't change when the plan is spent — and `SyncState::plan()`
+    /// returns the same plan in `Applying` and in `Applied`. With just that
+    /// check, an `a` during a long application launched a second
+    /// `sync.apply` that the spool answers `PlanStale`, the error arm
+    /// painted "the plan failed" over a sync that was still WRITING, and
+    /// since that leaves `run != Running` the next `Esc` half-cancelled it
+    /// thinking it was closing a failure.
     #[test]
     fn aprobar_dos_veces_no_manda_el_plan_dos_veces() {
-        let mut app = app_con_plan_listo();
+        let mut app = app_with_ready_plan();
         approve_sync(&mut app);
-        assert!(app.pending_sync_apply.is_some(), "la primera sí manda");
-        // El run loop se lo lleva y la Task arranca.
+        assert!(
+            app.pending_sync_apply.is_some(),
+            "the first one does send it"
+        );
+        // The run loop takes it and the Task starts.
         app.pending_sync_apply = None;
         app.sync
             .as_mut()
@@ -870,17 +883,17 @@ mod sync_tests {
         approve_sync(&mut app);
         assert!(
             app.pending_sync_apply.is_none(),
-            "un segundo `a` mandó el mismo hash otra vez"
+            "a second `a` sent the same hash again"
         );
         assert_eq!(app.message, Some(norte_i18n::t("msg-sync-cannot-approve")));
     }
 
-    /// Y tampoco después, con el informe ya en pantalla: pisar la línea que
-    /// dice qué se puede deshacer con un «el plan falló» destruye lo único que
-    /// queda escrito sobre el asunto.
+    /// And not afterward either, with the report already on screen:
+    /// overwriting the line that says what can be undone with "the plan
+    /// failed" destroys the only thing left written about it.
     #[test]
     fn aprobar_un_plan_ya_aplicado_no_hace_nada() {
-        let mut app = app_con_plan_listo();
+        let mut app = app_with_ready_plan();
         {
             let view = app.sync.as_mut().expect("panel");
             view.state.on_apply_started(norte_proto::TaskId::new(9));
@@ -899,12 +912,13 @@ mod sync_tests {
         assert!(app.pending_sync_apply.is_none());
     }
 
-    /// La pregunta a medio contestar se resuelve con CUALQUIER tecla, también
-    /// con las que llevan modificador.
+    /// The half-answered question is resolved by ANY key, including ones
+    /// with a modifier.
     ///
-    /// Con el filtro de modificadores delante, un `Ctrl+r` o un `Alt+e` de
-    /// costumbre caían en `Ignore` y dejaban «se van a borrar 2 árboles…»
-    /// armada en pantalla, esperando un `y` que ya no sabría a qué contesta.
+    /// With the modifier filter in front, a habitual `Ctrl+r` or `Alt+e`
+    /// used to fall into `Ignore` and left "2 trees are about to be
+    /// deleted..." armed on screen, waiting for a `y` that no longer knew
+    /// what it was answering.
     #[test]
     fn un_modificador_tambien_cancela_la_segunda_pregunta() {
         for (mods, code) in [
@@ -915,89 +929,92 @@ mod sync_tests {
             assert_eq!(
                 sync_key(mods, code, false, false, true),
                 SyncKey::ConfirmNo,
-                "{mods:?}+{code:?} dejó la pregunta armada"
+                "{mods:?}+{code:?} left the question armed"
             );
         }
-        // Y `y` con modificador NO es un sí: el sí es la tecla pelada.
+        // And `y` with a modifier is NOT a yes: the yes is the bare key.
         assert_eq!(
             sync_key(M::CONTROL, KeyCode::Char('y'), false, false, true),
             SyncKey::ConfirmNo
         );
     }
 
-    /// Cancelar la Task suelta también la pregunta: dejarla puesta mientras la
-    /// sincronización que la motivó se para es cómo un `y` posterior aprueba
-    /// otra cosa.
+    /// Cancelling the Task also drops the question: leaving it up while the
+    /// sync that motivated it stops is how a later `y` approves something
+    /// else.
     #[test]
     fn cancelar_suelta_la_segunda_pregunta() {
-        let mut app = app_con_plan_listo();
+        let mut app = app_with_ready_plan();
         {
             let view = app.sync.as_mut().expect("panel");
             view.run = crate::app::SyncRunState::Running;
             view.confirming = Some(norte_frontend::sync::Confirmation {
                 id: "sync-confirm-delete",
-                text: "¿?".to_owned(),
+                text: "??".to_owned(),
             });
         }
         let (run, _tx, _prog) = run_sync(norte_proto::TaskState::Running, true);
         let mut sync_run = Some(run);
         on_sync_key(&mut app, &mut sync_run, M::NONE, KeyCode::Esc);
-        let view = app.sync.as_ref().expect("el panel sigue abierto");
+        let view = app.sync.as_ref().expect("the panel is still open");
         assert!(view.cancel_requested);
-        assert!(view.confirming.is_none(), "la pregunta sobrevivió al Esc");
+        assert!(view.confirming.is_none(), "the question survived the Esc");
     }
 
-    /// El segundo `Esc` cierra y CANCELA: en remoto el daemon seguiría
-    /// aplicando para un panel que ya no existe.
+    /// The second `Esc` closes and CANCELS: remotely, the daemon would keep
+    /// applying for a panel that no longer exists.
     #[test]
     fn el_segundo_esc_cierra_y_cancela_la_task() {
-        let mut app = app_con_plan_listo();
+        let mut app = app_with_ready_plan();
         app.sync.as_mut().expect("panel").cancel_requested = true;
         let (run, _tx, _prog) = run_sync(norte_proto::TaskState::Running, true);
         let canceller = run.task.canceller();
         let mut sync_run = Some(run);
         on_sync_key(&mut app, &mut sync_run, M::NONE, KeyCode::Esc);
-        assert!(app.sync.is_none(), "el panel se cierra");
-        assert!(sync_run.is_none(), "y el run se suelta");
+        assert!(app.sync.is_none(), "the panel closes");
+        assert!(sync_run.is_none(), "and the run gets dropped");
         drop(canceller);
     }
 
-    /// Un lote con el panel ya cerrado cancela la Task en vez de seguir
-    /// recibiendo pasos que nadie va a mirar.
+    /// A batch with the panel already closed cancels the Task instead of
+    /// continuing to receive steps nobody is going to look at.
     #[test]
     fn un_lote_con_el_panel_cerrado_cosecha_el_run() {
-        let mut app = app_con_filas(1);
+        let mut app = app_with_rows(1);
         app.sync = None;
         let (run, _tx, _prog) = run_sync(norte_proto::TaskState::Running, false);
         let mut sync_run = Some(run);
         drain_sync_plan(&mut app, &mut sync_run, None);
-        assert!(sync_run.is_none(), "el run se suelta con el panel cerrado");
+        assert!(
+            sync_run.is_none(),
+            "the run gets dropped with the panel closed"
+        );
     }
 
-    /// Cerrarse el flujo del plan deja `rx` a `None`: un canal cerrado
-    /// devolvería `None` en bucle y el brazo del `select!` giraría.
+    /// The plan's stream ending leaves `rx` at `None`: a closed channel
+    /// would return `None` in a loop and the `select!` arm would spin.
     #[test]
     fn el_fin_del_flujo_desarma_el_brazo_del_plan() {
-        let mut app = app_con_filas(1);
-        vista(&mut app, SyncMode::Update);
+        let mut app = app_with_rows(1);
+        view_at(&mut app, SyncMode::Update);
         let (run, _tx, prog) = run_sync(norte_proto::TaskState::Running, false);
         let mut sync_run = Some(run);
         prog.send_modify(|p| p.state = norte_proto::TaskState::Completed);
         drain_sync_plan(&mut app, &mut sync_run, None);
-        let run = sync_run.as_ref().expect("el run se conserva para el Esc");
-        assert!(run.rx.is_none(), "el brazo se desarma al cerrarse el canal");
+        let run = sync_run.as_ref().expect("the run is kept for the Esc");
+        assert!(run.rx.is_none(), "the arm disarms once the channel closes");
         assert_eq!(
             app.sync.as_ref().expect("panel").run,
             crate::app::SyncRunState::Done
         );
     }
 
-    /// Un plan CANCELADO se dice cancelado, y no «hecho»: sin
-    /// `sync.plan_done` no hay `plan_hash`, así que no hay nada que aprobar.
+    /// A CANCELLED plan says cancelled, not "done": without `sync.plan_done`
+    /// there's no `plan_hash`, so there's nothing to approve.
     #[test]
     fn un_plan_cancelado_se_dice_cancelado() {
-        let mut app = app_con_filas(1);
-        vista(&mut app, SyncMode::Update);
+        let mut app = app_with_rows(1);
+        view_at(&mut app, SyncMode::Update);
         let (run, _tx, prog) = run_sync(norte_proto::TaskState::Running, false);
         let mut sync_run = Some(run);
         prog.send_modify(|p| p.state = norte_proto::TaskState::Cancelled);
@@ -1009,15 +1026,15 @@ mod sync_tests {
         assert!(!app.sync.as_ref().expect("panel").state.can_approve());
     }
 
-    /// Con los emisores del progreso caídos y un estado NO terminal, la
-    /// aplicación se cosecha igual y se cuenta como fallo.
+    /// With the progress senders dropped and a NON-terminal state, the
+    /// application is harvested anyway and counted as a failure.
     ///
-    /// Volver sin cosechar rearmaría el brazo sobre un `changed()` que
-    /// devuelve `Err` al instante — un giro—, y llamarlo «hecho» sería decir
-    /// que una sincronización a medias terminó bien.
+    /// Returning without harvesting would re-arm the arm on a `changed()`
+    /// that returns `Err` instantly — a spin — and calling it "done" would
+    /// be saying a half-finished sync ended well.
     #[tokio::test]
     async fn un_emisor_caido_cosecha_la_aplicacion_como_fallo() {
-        let mut app = app_con_plan_listo();
+        let mut app = app_with_ready_plan();
         app.sync
             .as_mut()
             .expect("panel")
@@ -1029,19 +1046,20 @@ mod sync_tests {
         let mut sync_run = Some(run);
         drop(prog);
         harvest_sync_apply(&mut app, &backend, &mut sync_run, false).await;
-        assert!(sync_run.is_none(), "el run se suelta");
+        assert!(sync_run.is_none(), "the run gets dropped");
         assert_eq!(
             app.sync.as_ref().expect("panel").run,
             crate::app::SyncRunState::Failed
         );
     }
 
-    /// Y una Task que TERMINÓ pide su informe pase lo que pase, cancelada
-    /// incluida: lo aplicado hasta el corte se queda, journalizado, y media
-    /// sincronización es un estado real que el lector tiene que poder ver.
+    /// And a Task that FINISHED requests its report no matter what,
+    /// cancellation included: what was applied up to the cut stays,
+    /// journalled, and half a sync is a real state the reader has to be
+    /// able to see.
     #[tokio::test]
     async fn una_aplicacion_cancelada_pide_su_informe() {
-        let mut app = app_con_plan_listo();
+        let mut app = app_with_ready_plan();
         app.sync
             .as_mut()
             .expect("panel")
@@ -1053,8 +1071,9 @@ mod sync_tests {
         let mut sync_run = Some(run);
         harvest_sync_apply(&mut app, &backend, &mut sync_run, true).await;
         assert!(sync_run.is_none());
-        // El engine embebido no tiene ese informe, así que la barra lo dice —
-        // lo que se afirma es que se PIDIÓ y que el estado terminal se pintó.
+        // The embedded engine doesn't have that report, so the status bar
+        // says so — what's asserted is that it WAS requested and that the
+        // terminal state got painted.
         assert_eq!(
             app.sync.as_ref().expect("panel").run,
             crate::app::SyncRunState::Cancelled
@@ -1062,33 +1081,34 @@ mod sync_tests {
         assert!(app.message.is_some());
     }
 
-    /// El `SyncTick` existe porque `select!` no deja tomar prestado `sync_run`
-    /// dos veces; que sus dos variantes sean fases SUCESIVAS —nunca hay plan y
-    /// aplicación a la vez— es lo que hace correcto el brazo único.
+    /// `SyncTick` exists because `select!` won't let `sync_run` be borrowed
+    /// twice; its two variants being SUCCESSIVE phases — plan and
+    /// application are never both at once — is what makes the single arm
+    /// correct.
     #[test]
     fn el_tick_distingue_las_dos_fases() {
         let (plan, _tx, _prog) = run_sync(norte_proto::TaskState::Running, false);
         assert!(plan.rx.is_some() && !plan.applying);
-        let (aplicando, _tx2, _prog2) = run_sync(norte_proto::TaskState::Running, true);
-        assert!(aplicando.rx.is_none() && aplicando.applying);
+        let (applying, _tx2, _prog2) = run_sync(norte_proto::TaskState::Running, true);
+        assert!(applying.rx.is_none() && applying.applying);
         assert_ne!(
             std::mem::discriminant(&SyncTick::Plan(None)),
             std::mem::discriminant(&SyncTick::Applied { alive: true })
         );
     }
 
-    /// Una marca que es una de las dos RAÍCES se niega en vez de mandarse: la
-    /// raíz en un `include` significa «todo», así que una sola convertiría una
-    /// selección estrecha en un plan del árbol entero — bajo `Mirror`, en
-    /// «borra del destino todo lo que el origen no tenga».
+    /// A mark that is one of the two ROOTS gets refused instead of sent: a
+    /// root in an `include` means "everything", so a single one would turn
+    /// a narrow selection into a whole-tree plan — under `Mirror`, into
+    /// "delete from the destination everything the source doesn't have".
     #[test]
     fn una_marca_que_es_la_raiz_se_niega() {
-        let mut app = app_con_filas(1);
+        let mut app = app_with_rows(1);
         {
             let view = app.compare.as_mut().expect("panel");
             view.pane.extend(vec![CompareRow {
                 id: 99,
-                left: Some(entry("file:///casa")),
+                left: Some(entry("file:///home")),
                 right: None,
                 verdict: CompareVerdict::OnlyLeft,
                 criterion: CompareCriterion::Presence,
@@ -1107,18 +1127,18 @@ mod sync_tests {
         );
     }
 
-    /// Y una que no cuelga de ninguna de las dos se niega también, en vez de
-    /// caerse: `include` con la lista encogida a cero es un plan de cero pasos,
-    /// que el panel pinta como «los dos árboles ya coinciden» — una mentira en
-    /// la pantalla que autoriza escrituras.
+    /// And one that hangs off neither of the two roots also gets refused,
+    /// instead of crashing: an `include` shrunk to an empty list is a
+    /// zero-step plan, which the panel paints as "both trees already
+    /// match" — a lie on a screen that authorizes writes.
     #[test]
     fn una_marca_fuera_de_las_dos_raices_se_niega() {
-        let mut app = app_con_filas(1);
+        let mut app = app_with_rows(1);
         {
             let view = app.compare.as_mut().expect("panel");
             view.pane.extend(vec![CompareRow {
                 id: 98,
-                left: Some(entry("file:///otra-parte/x.txt")),
+                left: Some(entry("file:///elsewhere/x.txt")),
                 right: None,
                 verdict: CompareVerdict::OnlyLeft,
                 criterion: CompareCriterion::Presence,

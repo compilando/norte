@@ -1,8 +1,8 @@
-//! El controlador: un solo escritor, y lo que eso garantiza.
+//! The controller: a single writer, and what that guarantees.
 //!
-//! Estos tests no necesitan daemon. El backend es una tabla determinista, que
-//! es exactamente lo que el plan pedía: el host tiene que ser útil a un test
-//! headless antes de que exista renderer alguno.
+//! These tests need no daemon. The backend is a deterministic table, which is
+//! exactly what the plan asked for: the host has to be useful to a headless
+//! test before any renderer exists.
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -14,12 +14,11 @@ use norte_ui_host::controller::{UiHost, UiHostOptions, Update};
 use norte_ui_host::dto::{SlotView, UiNotice, UiUpdate};
 
 #[path = "../backend_falso/mod.rs"]
-// Un solo binario de test, muchos ficheros (ola W10): cada `mod` es una
-// sección del antiguo `controller.rs` de 22.000 líneas, y los `use x::*` de
-// abajo comparten entre secciones los helpers `pub(super)` que ya se usaban
-// a través del fichero. Un fichero de integración por sección sería un
-// binario por sección — un enlace completo del crate cada uno (presupuesto de
-// disco de CLAUDE.md).
+// One test binary, many files (wave W10): each `mod` is a section of the old
+// 22,000-line `controller.rs`, and the `use x::*` below share between
+// sections the `pub(super)` helpers that were already used throughout the
+// file. One integration file per section would be one binary per section —
+// a full crate link each (CLAUDE.md's disk budget).
 mod backend_falso;
 use backend_falso::Falso;
 
@@ -66,17 +65,17 @@ use sync::*;
 use teclas_paleta::*;
 use transferencias::*;
 
-/// Cuánto se espera UNA actualización antes de dar el test por colgado.
+/// How long ONE update is waited for before the test is given up as hung.
 ///
-/// Es un tope de socorro, no una medida: convierte un cuelgue en un fallo
-/// con mensaje. Fue 500 ms, y bajo la carga del gate entero (6.000 tests en
-/// paralelo más los e2e con red) `siguiente_revision` lo perdía de vez en
-/// cuando en el pre-push — la misma familia que `foto_hasta`, que ya
-/// esperaba quince segundos por lo mismo. Ningún test lo usa como señal de
-/// «no llega nada».
+/// It is a relief ceiling, not a measurement: it turns a hang into a failure
+/// with a message. It used to be 500 ms, and under the whole gate's load
+/// (6,000 tests in parallel plus the networked e2e ones) `siguiente_revision`
+/// lost it now and then in pre-push — the same family as `foto_hasta`, which
+/// already waited fifteen seconds for the same reason. No test uses it as a
+/// signal for "nothing is arriving".
 const ESPERA_MAX: std::time::Duration = std::time::Duration::from_secs(15);
 
-/// Unos ajustes de columnas con estos ids, para todos los esquemas.
+/// Column settings with these ids, for every scheme.
 fn columnas_de(ids: &[&str]) -> norte_frontend::columns::ColumnsSettings {
     let cfg = norte_config::ColumnsConfig {
         default_columns: Some(ids.iter().map(|s| (*s).to_owned()).collect()),
@@ -86,16 +85,16 @@ fn columnas_de(ids: &[&str]) -> norte_frontend::columns::ColumnsSettings {
 }
 
 fn dir() -> VPath {
-    VPath::parse("mem:///casa").expect("vpath de test")
+    VPath::parse("mem:///casa").expect("test vpath")
 }
 
-/// La configuración de un host de prueba: la de fábrica, con la fila `..`
-/// APAGADA.
+/// A test host's configuration: the factory one, with the `..` row TURNED
+/// OFF.
 ///
-/// Apagada a propósito y no por descuido. Estos tests razonan sobre índices
-/// de listado —la fila 0 es la primera entrada— y una fila más al principio
-/// los desplazaría todos sin decir nada de lo que cada uno prueba. La fila
-/// tiene sus propios tests, y son los que la encienden.
+/// Off on purpose and not by oversight. These tests reason about listing
+/// indices — row 0 is the first entry — and one more row at the start would
+/// shift them all without saying anything about what each one tests. The row
+/// has its own tests, and they are the ones that turn it on.
 fn ajustes_de_prueba() -> norte_frontend::config::FrontendConfig {
     let mut cfg = norte_ui_host::ajustes_por_defecto();
     cfg.common.ui_parent_entry = Some(false);
@@ -124,27 +123,27 @@ async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapsho
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// Arrancar produce EXACTAMENTE una foto, y describe una pantalla que ya
-/// existe: el listado se pidió antes de publicarla.
+/// Starting produces EXACTLY one snapshot, and it describes a screen that
+/// already exists: the listing was requested before publishing it.
 #[tokio::test]
-async fn arrancar_da_un_snapshot_con_el_listado_dentro() {
+async fn starting_gives_a_snapshot_with_the_listing_inside() {
     let (_h, snap) = host(vec!["b.txt", "a.txt"]).await;
     let SlotView::Browser(b) = &snap.slots[0] else {
-        panic!("el primer hueco es un listado");
+        panic!("the first slot is a listing");
     };
     assert_eq!(b.rows.len(), 2);
-    // Ordenado con el comparador COMPARTIDO, no con el del host.
+    // Sorted with the SHARED comparator, not the host's own.
     assert_eq!(b.rows[0].display_name, "a.txt");
     assert_eq!(b.cursor, Some(RowKey(0)));
 }
 
-/// Dos asas del host siguen siendo UN escritor: las acciones se aplican en
-/// orden y la secuencia no salta.
+/// Two handles to the host are still ONE writer: actions apply in order and
+/// the sequence does not skip.
 #[tokio::test]
-async fn dos_asas_un_escritor_y_las_secuencias_no_saltan() {
+async fn two_handles_one_writer_and_sequences_do_not_skip() {
     let (h, _snap) = host(vec!["a", "b", "c", "d"]).await;
     let h2 = h.clone();
     let mut sub = h.subscribe();
@@ -156,27 +155,23 @@ async fn dos_asas_un_escritor_y_las_secuencias_no_saltan() {
                 delta: 1,
             })
             .await
-            .expect("host vivo");
+            .expect("host alive");
         assert!(matches!(ack, ActionAck::Applied { .. }));
     }
 
-    let mut vistas = Vec::new();
+    let mut seen = Vec::new();
     for _ in 0..3 {
-        match sub.recv().await.expect("hay actualización") {
-            Update::Message(m) => vistas.push(m.sequence),
-            Update::Lagged => panic!("no debería haber retraso con tres mensajes"),
+        match sub.recv().await.expect("there is an update") {
+            Update::Message(m) => seen.push(m.sequence),
+            Update::Lagged => panic!("there should be no lag with three messages"),
         }
     }
-    assert_eq!(
-        vistas,
-        vec![1, 2, 3],
-        "una secuencia por acción, sin saltos"
-    );
+    assert_eq!(seen, vec![1, 2, 3], "one sequence per action, with no gaps");
 }
 
-/// Un click sobre una fila que ya no existe no muta nada, y lo dice.
+/// A click on a row that no longer exists mutates nothing, and says so.
 #[tokio::test]
-async fn una_fila_que_no_existe_es_una_carrera_no_un_error() {
+async fn a_row_that_no_longer_exists_is_a_race_not_an_error() {
     let (h, snap) = host(vec!["a"]).await;
     let ack = h
         .dispatch(UiAction::SelectRow {
@@ -185,7 +180,7 @@ async fn una_fila_que_no_existe_es_una_carrera_no_un_error() {
             key: RowKey(99),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
@@ -194,13 +189,13 @@ async fn una_fila_que_no_existe_es_una_carrera_no_un_error() {
     );
 }
 
-/// Un suscriptor lento NO hace crecer la memoria del host: se entera de que
-/// se quedó atrás y pide una foto.
+/// A slow subscriber does NOT grow the host's memory: it finds out it fell
+/// behind and requests a snapshot.
 #[tokio::test]
-async fn un_suscriptor_lento_se_entera_y_pide_foto() {
+async fn a_slow_subscriber_finds_out_and_requests_a_snapshot() {
     let (h, _snap) = host(vec!["a", "b", "c"]).await;
     let mut sub = h.subscribe();
-    // Muchas más actualizaciones que huecos tiene el buffer.
+    // Many more updates than the buffer has slots.
     for _ in 0..200 {
         let _ = h
             .dispatch(UiAction::MoveCursor {
@@ -209,18 +204,18 @@ async fn un_suscriptor_lento_se_entera_y_pide_foto() {
             })
             .await;
     }
-    match sub.recv().await.expect("algo llega") {
+    match sub.recv().await.expect("something arrives") {
         Update::Lagged => {}
-        Update::Message(m) => panic!("debería avisar del retraso, no dar {:?}", m.sequence),
+        Update::Message(m) => panic!("should warn about the lag, not give {:?}", m.sequence),
     }
-    // Y la recuperación es una foto completa.
-    let ack = h.dispatch(UiAction::Resync).await.expect("host vivo");
+    // And the recovery is a full snapshot.
+    let ack = h.dispatch(UiAction::Resync).await.expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }));
 }
 
-/// Que un suscriptor se vaya no para el host.
+/// A subscriber leaving does not stop the host.
 #[tokio::test]
-async fn si_el_suscriptor_se_va_el_host_sigue() {
+async fn if_the_subscriber_leaves_the_host_keeps_going() {
     let (h, _snap) = host(vec!["a"]).await;
     drop(h.subscribe());
     let ack = h
@@ -229,37 +224,38 @@ async fn si_el_suscriptor_se_va_el_host_sigue() {
             delta: 1,
         })
         .await
-        .expect("el host sigue vivo sin nadie escuchando");
+        .expect("the host stays alive with nobody listening");
     assert!(matches!(ack, ActionAck::Applied { .. }));
 }
 
-/// Apagar dice si quedó algo a medias, y después el host ya no acepta nada.
+/// Shutting down reports whether something was left unfinished, and
+/// afterward the host no longer accepts anything.
 #[tokio::test]
-async fn apagar_informa_y_cierra() {
+async fn shutting_down_reports_and_closes() {
     let (h, _snap) = host(vec!["a"]).await;
     let mut sub = h.subscribe();
-    let informe = h.shutdown().await.expect("apaga");
-    assert!(!informe.incomplete);
-    let ultimo = sub.recv().await.expect("el último mensaje llega");
-    match ultimo {
+    let report = h.shutdown().await.expect("shuts down");
+    assert!(!report.incomplete);
+    let last = sub.recv().await.expect("the last message arrives");
+    match last {
         Update::Message(m) => assert!(matches!(
             m.payload,
             UiUpdate::Notice(UiNotice::Shutdown { .. })
         )),
-        Update::Lagged => panic!("sin retraso aquí"),
+        Update::Lagged => panic!("no lag here"),
     }
     assert!(
         h.dispatch(UiAction::Resync).await.is_err(),
-        "un host apagado no acepta más acciones"
+        "a shut-down host accepts no more actions"
     );
 }
 
-/// La ventana visible acota lo que viaja: pedir cuarenta filas de un listado
-/// grande manda cuarenta, no el listado.
+/// The visible window bounds what travels: requesting forty rows of a large
+/// listing sends forty, not the listing.
 #[tokio::test]
-async fn solo_viaja_la_ventana_visible() {
-    let nombres: Vec<&'static str> = vec!["f"; 500];
-    let (h, _snap) = host(nombres).await;
+async fn only_the_visible_window_travels() {
+    let names: Vec<&'static str> = vec!["f"; 500];
+    let (h, _snap) = host(names).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
@@ -267,12 +263,12 @@ async fn solo_viaja_la_ventana_visible() {
         count: 40,
     })
     .await
-    .expect("host vivo");
-    let Update::Message(m) = sub.recv().await.expect("llega") else {
-        panic!("sin retraso");
+    .expect("host alive");
+    let Update::Message(m) = sub.recv().await.expect("arrives") else {
+        panic!("no lag");
     };
     let UiUpdate::Patch(p) = &m.payload else {
-        panic!("un parche");
+        panic!("a patch");
     };
     match &p.changes[0] {
         norte_ui_host::dto::ViewChange::Rows {
@@ -280,15 +276,15 @@ async fn solo_viaja_la_ventana_visible() {
             first_visible,
             ..
         } => {
-            assert_eq!(rows.len(), 40, "solo la ventana");
+            assert_eq!(rows.len(), 40, "only the window");
             assert_eq!(*first_visible, 10);
         }
-        otro => panic!("se esperaban filas: {otro:?}"),
+        other => panic!("expected rows: {other:?}"),
     }
 }
 
-/// El mismo árbol, sin envolver: para los tests que necesitan tocar sus
-/// canales antes de arrancar el host.
+/// The same tree, unwrapped: for tests that need to touch its channels
+/// before starting the host.
 fn arbol_como_falso() -> Falso {
     let mut f = Falso::default();
     f.pon(
@@ -306,7 +302,7 @@ fn arbol_como_falso() -> Falso {
     f
 }
 
-/// Un árbol de dos niveles para navegar de verdad.
+/// A two-level tree for really navigating.
 fn arbol() -> Arc<Falso> {
     let mut f = Falso::default();
     f.pon(
@@ -314,8 +310,8 @@ fn arbol() -> Arc<Falso> {
         vec![
             (b"docs".to_vec(), true),
             (b"notas.txt".to_vec(), false),
-            // Un nombre que NO es UTF-8: tiene que sobrevivir como bytes y
-            // llegar al renderer marcado, jamás rechazado ni silenciado.
+            // A name that is NOT UTF-8: it has to survive as bytes and reach
+            // the renderer marked, never rejected nor silenced.
             (vec![0x63, 0x61, 0x66, 0xC3, 0x28], false),
         ],
     );
@@ -348,27 +344,27 @@ async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
 fn listado(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
     let SlotView::Browser(b) = &snap.slots[0] else {
-        panic!("el primer hueco es un listado");
+        panic!("the first slot is a listing");
     };
     b
 }
 
-/// Espera la siguiente foto (una navegación manda una).
+/// Waits for the next snapshot (a navigation sends one).
 async fn siguiente_foto(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_host::ViewSnapshot {
     loop {
-        match sub.recv().await.expect("el host sigue vivo") {
+        match sub.recv().await.expect("the host is still alive") {
             Update::Message(m) => {
                 if let UiUpdate::Snapshot(s) = m.payload {
                     return *s;
                 }
             }
-            // Quedarse atrás no rompe la espera: significa «pide una foto»,
-            // y una foto es justo lo que se está esperando.
+            // Falling behind does not break the wait: it means "request a
+            // snapshot", and a snapshot is exactly what is being waited for.
             Update::Lagged => {}
         }
     }

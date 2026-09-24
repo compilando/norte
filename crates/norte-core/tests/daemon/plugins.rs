@@ -2,7 +2,7 @@ use super::*;
 
 // ---------- plugin.* (M4-P3) ----------
 
-/// Manifiesto válido mínimo (mismo del test de `norte_core::plugins`).
+/// Minimal valid manifest (the same one from `norte_core::plugins`'s test).
 pub(super) const DEMO_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.demo"
@@ -14,13 +14,14 @@ category = "command"
 fs-read = "scoped"
 "#;
 
-/// Daemon con `plugins_dir` apuntando a un tempdir SEMBRADO con un plugin
-/// descubrible (`plugins/org.norte.demo/plugin.toml`). JAMÁS toca el
-/// `~/.config` real: el `plugins_dir` explícito aísla el estado del test.
+/// A daemon with `plugins_dir` pointing at a tempdir SEEDED with a
+/// discoverable plugin (`plugins/org.norte.demo/plugin.toml`). NEVER touches
+/// the real `~/.config`: the explicit `plugins_dir` isolates the test's
+/// state.
 pub(super) async fn spawn_daemon_plugins() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
-    // Raíz de plugins DENTRO del mismo tempdir (se limpia con `_dir`).
+    // Plugin root INSIDE the same tempdir (cleaned up with `_dir`).
     let plugins_root = dir.path().join("cfg");
     let plugin_dir = plugins_root.join("plugins").join("org.norte.demo");
     std::fs::create_dir_all(&plugin_dir).expect("mkdir plugin");
@@ -50,27 +51,27 @@ pub(super) async fn spawn_daemon_plugins() -> TestDaemon {
     }
 }
 
-/// `plugin.list` por el socket ve el plugin sembrado, nace sin aprobar/activar.
+/// `plugin.list` over the socket sees the seeded plugin, born unapproved/disabled.
 #[tokio::test]
-async fn plugin_list_ve_el_catalogo_sembrado() {
+async fn plugin_list_sees_the_seeded_catalogue() {
     let d = spawn_daemon_plugins().await;
     let c = connected_client(&d).await;
     let list: methods::PluginListResult = c
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
-    assert_eq!(list.plugins.len(), 1, "el plugin sembrado se descubre");
+    assert_eq!(list.plugins.len(), 1, "the seeded plugin is discovered");
     let p = &list.plugins[0];
     assert_eq!(p.id, "org.norte.demo");
-    assert!(!p.approved, "nace sin aprobar");
-    assert!(!p.enabled, "nace sin activar");
+    assert!(!p.approved, "born unapproved");
+    assert!(!p.enabled, "born disabled");
     assert!(list.errors.is_empty());
 }
 
-/// Un HUMANO aprueba por el socket; `plugin.list` lo refleja (y persistió, así
-/// que una NUEVA conexión también lo ve aprobado).
+/// A HUMAN approves over the socket; `plugin.list` reflects it (and it
+/// persisted, so a NEW connection also sees it approved).
 #[tokio::test]
-async fn plugin_set_approval_humano_se_refleja_y_persiste() {
+async fn plugin_set_approval_by_a_human_is_reflected_and_persists() {
     let d = spawn_daemon_plugins().await;
     let human = connected_client(&d).await;
     let _: methods::PluginSetApprovalResult = human
@@ -83,37 +84,37 @@ async fn plugin_set_approval_humano_se_refleja_y_persiste() {
             },
         )
         .await
-        .expect("aprobación aceptada");
+        .expect("approval accepted");
 
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
-        .expect("plugin.list tras aprobar");
-    assert!(list.plugins[0].approved, "la aprobación se refleja");
+        .expect("plugin.list after approving");
+    assert!(list.plugins[0].approved, "the approval is reflected");
 
-    // Una conexión NUEVA lee el estado persistido (mismo daemon, mismo dir).
-    let otra = connected_client(&d).await;
-    let list2: methods::PluginListResult = otra
+    // A NEW connection reads the persisted state (same daemon, same dir).
+    let other = connected_client(&d).await;
+    let list2: methods::PluginListResult = other
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
-        .expect("plugin.list en otra conexión");
-    assert!(list2.plugins[0].approved, "la aprobación persistió");
+        .expect("plugin.list on another connection");
+    assert!(list2.plugins[0].approved, "the approval persisted");
 }
 
-/// Y con el ancla BUENA —la que el propio `plugin.list` acaba de dar— sí
-/// concede: el campo cierra una ventana, no la puerta.
+/// And with the GOOD anchor — the one `plugin.list` itself just gave — it
+/// does grant: the field closes a window, not the door.
 #[tokio::test]
-async fn plugin_set_approval_con_el_ancla_que_se_leyo_concede() {
+async fn plugin_set_approval_with_the_just_read_anchor_grants() {
     let d = spawn_daemon_plugins().await;
     let human = connected_client(&d).await;
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
-    let ancla = list.plugins[0]
+    let anchor = list.plugins[0]
         .manifest_digest
         .clone()
-        .expect("el catálogo trae el ancla que un humano lee");
+        .expect("the catalogue carries the anchor a human reads");
 
     let _: methods::PluginSetApprovalResult = human
         .call(
@@ -121,25 +122,25 @@ async fn plugin_set_approval_con_el_ancla_que_se_leyo_concede() {
             &methods::PluginSetApprovalParams {
                 id: "org.norte.demo".into(),
                 approved: true,
-                expected_digest: Some(ancla),
+                expected_digest: Some(anchor),
             },
         )
         .await
-        .expect("el ancla que se leyó concede");
+        .expect("the anchor that was read grants");
 
-    let despues: methods::PluginListResult = human
+    let after: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
-        .expect("plugin.list tras aprobar");
-    assert!(despues.plugins[0].approved);
+        .expect("plugin.list after approving");
+    assert!(after.plugins[0].approved);
 }
 
-/// `plugin.run_command` de un plugin SIN aprobar es `INVALID_REQUEST` y NO lo
-/// ejecuta (fail-closed): el humano no ha consentido, así que el runtime no
-/// arranca. El demo sembrado nace sin aprobar/activar (M4-P4). El caso de éxito
-/// con un `.wasm` real es E2E de la task siguiente.
+/// `plugin.run_command` of an UNAPPROVED plugin is `INVALID_REQUEST` and does
+/// NOT run it (fail-closed): the human has not consented, so the runtime
+/// does not start. The seeded demo is born unapproved/disabled (M4-P4). The
+/// success case with a real `.wasm` is the next task's E2E.
 #[tokio::test]
-async fn plugin_run_command_sin_aprobar_es_invalid_request() {
+async fn plugin_run_command_when_unapproved_is_invalid_request() {
     let d = spawn_daemon_plugins().await;
     let c = connected_client(&d).await;
     let err = c
@@ -152,17 +153,17 @@ async fn plugin_run_command_sin_aprobar_es_invalid_request() {
             },
         )
         .await
-        .expect_err("un plugin sin aprobar jamás se ejecuta");
+        .expect_err("an unapproved plugin never runs");
     assert!(
         matches!(err, ClientError::Rpc(ref rpc) if rpc.code == codes::INVALID_REQUEST),
-        "sin aprobar = INVALID_REQUEST, no se ejecuta: {err:?}"
+        "unapproved = INVALID_REQUEST, does not run: {err:?}"
     );
 }
 
-/// `plugin.run_command` de un id DESCONOCIDO es `INVALID_PARAMS` (el cliente
-/// pidió un plugin que no existe): no se ejecuta ni se filtra nada.
+/// `plugin.run_command` of an UNKNOWN id is `INVALID_PARAMS` (the client
+/// asked for a plugin that does not exist): nothing runs and nothing leaks.
 #[tokio::test]
-async fn plugin_run_command_id_desconocido_es_invalid_params() {
+async fn plugin_run_command_unknown_id_is_invalid_params() {
     let d = spawn_daemon_plugins().await;
     let c = connected_client(&d).await;
     let err = c
@@ -175,16 +176,16 @@ async fn plugin_run_command_id_desconocido_es_invalid_params() {
             },
         )
         .await
-        .expect_err("id desconocido");
+        .expect_err("unknown id");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
 // ---------- plugin.help (H3e) ----------
 
-/// Daemon sembrado con el plugin demo, dando al test la oportunidad de escribir
-/// su propio `help.md` (H3e). `seed` recibe `(raiz_del_tempdir, dir_del_plugin)`
-/// — la raíz para poder dejar ficheros FUERA del directorio del plugin, que es
-/// justo lo que el caso del enlace escapado necesita.
+/// A daemon seeded with the demo plugin, giving the test a chance to write
+/// its own `help.md` (H3e). `seed` receives `(tempdir_root, plugin_dir)` —
+/// the root so it can leave files OUTSIDE the plugin's directory, which is
+/// exactly what the escaped-symlink case needs.
 pub(super) async fn spawn_daemon_help_plugin(
     seed: impl FnOnce(&std::path::Path, &std::path::Path),
 ) -> TestDaemon {
@@ -220,14 +221,14 @@ pub(super) async fn spawn_daemon_help_plugin(
     }
 }
 
-/// `plugin.help` por el socket devuelve el `help.md` del plugin, ya acotado por
-/// el host: cuerpo íntegro, sin recorte ni pérdida.
+/// `plugin.help` over the socket returns the plugin's `help.md`, already
+/// capped by the host: the whole body, no trimming and no loss.
 #[tokio::test]
-async fn plugin_help_devuelve_la_pagina_acotada_del_plugin() {
+async fn plugin_help_returns_the_plugins_capped_page() {
     let d = spawn_daemon_help_plugin(|_root, plugin_dir| {
         std::fs::write(
             plugin_dir.join("help.md"),
-            "# Demo\n\nLa página del plugin demo.\n",
+            "# Demo\n\nThe demo plugin's page.\n",
         )
         .expect("write help.md");
     })
@@ -241,26 +242,23 @@ async fn plugin_help_devuelve_la_pagina_acotada_del_plugin() {
             },
         )
         .await
-        .expect("plugin.help responde");
-    assert!(help.markdown.contains("demo"), "llega el cuerpo: {help:?}");
-    assert!(
-        !help.truncated && !help.lossy,
-        "nada que recortar: {help:?}"
-    );
+        .expect("plugin.help answers");
+    assert!(help.markdown.contains("demo"), "the body arrives: {help:?}");
+    assert!(!help.truncated && !help.lossy, "nothing to trim: {help:?}");
 
-    // Y `plugin.list` lo anuncia, para que el frontend no pida en vano.
+    // And `plugin.list` advertises it, so the frontend does not ask in vain.
     let list: methods::PluginListResult = c
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
-    assert!(list.plugins[0].has_help, "has_help lo anuncia");
+    assert!(list.plugins[0].has_help, "has_help advertises it");
 }
 
-/// Un id que NO está en el catálogo es `INVALID_PARAMS` — mismo trato que
-/// `plugin.set_approval` da a un plugin fantasma. El id nunca se compone en una
-/// ruta, así que un `../` solo falla el lookup.
+/// An id that is NOT in the catalogue is `INVALID_PARAMS` — same treatment
+/// `plugin.set_approval` gives a phantom plugin. The id is never composed
+/// into a path, so a `../` only fails the lookup.
 #[tokio::test]
-async fn plugin_help_de_un_id_desconocido_es_invalid_params() {
+async fn plugin_help_of_an_unknown_id_is_invalid_params() {
     let d = spawn_daemon_help_plugin(|_root, plugin_dir| {
         std::fs::write(plugin_dir.join("help.md"), "# Demo\n").expect("write help.md");
     })
@@ -274,7 +272,7 @@ async fn plugin_help_de_un_id_desconocido_es_invalid_params() {
             },
         )
         .await
-        .expect_err("un plugin fantasma no tiene página");
+        .expect_err("a phantom plugin has no page");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 
     let err2 = c
@@ -285,22 +283,21 @@ async fn plugin_help_de_un_id_desconocido_es_invalid_params() {
             },
         )
         .await
-        .expect_err("un id con travesía es solo un id desconocido");
+        .expect_err("an id with traversal is just an unknown id");
     assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
-/// El agujero que cierra la guarda del host, comprobado en el punto donde un
-/// AGENTE llega: `plugin.help` no puede convertirse en una lectura de fichero
-/// arbitrario que rodee el motor de policy. Un `help.md` que es un enlace a algo
-/// de FUERA del directorio del plugin se sirve como página en blanco.
+/// The hole the host's guard closes, checked at the point where an AGENT
+/// arrives: `plugin.help` cannot turn into an arbitrary file read that goes
+/// around the policy engine. A `help.md` that is a symlink to something
+/// OUTSIDE the plugin's directory is served as a blank page.
 #[cfg(unix)]
 #[tokio::test]
-async fn plugin_help_no_sirve_un_help_md_que_escapa_del_directorio() {
+async fn plugin_help_does_not_serve_a_help_md_that_escapes_the_directory() {
     let d = spawn_daemon_help_plugin(|root, plugin_dir| {
-        let secreto = root.join("secreto.md");
-        std::fs::write(&secreto, "CLAVE-PRIVADA-QUE-NO-DEBE-CRUZAR-EL-WIRE")
-            .expect("write secreto");
-        std::os::unix::fs::symlink(&secreto, plugin_dir.join("help.md")).expect("symlink");
+        let secret = root.join("secreto.md");
+        std::fs::write(&secret, "PRIVATE-KEY-THAT-MUST-NOT-CROSS-THE-WIRE").expect("write secret");
+        std::os::unix::fs::symlink(&secret, plugin_dir.join("help.md")).expect("symlink");
     })
     .await;
     let agent = connected_agent(&d, "claude-01").await;
@@ -312,16 +309,16 @@ async fn plugin_help_no_sirve_un_help_md_que_escapa_del_directorio() {
             },
         )
         .await
-        .expect("un plugin conocido siempre responde");
+        .expect("a known plugin always answers");
     assert_eq!(
         help.markdown, "",
-        "un enlace que sale del directorio no se sirve"
+        "a symlink leaving the directory is not served"
     );
 }
 
-/// Manifiesto con `[config]` (G3c): tres claves de tipos distintos, para
-/// ejercitar `plugin.get_config`/`plugin.set_config` de punta a punta por
-/// el socket.
+/// A manifest with `[config]` (G3c): three keys of different types, to
+/// exercise `plugin.get_config`/`plugin.set_config` end to end over the
+/// socket.
 pub(super) const CONFIG_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.cfg"
@@ -346,8 +343,8 @@ default = "fast"
 values = ["fast", "thorough"]
 "#;
 
-/// Daemon sembrado con [`CONFIG_MANIFEST`] (G3c) — espejo de
-/// `spawn_daemon_plugins`, distinto manifiesto.
+/// A daemon seeded with [`CONFIG_MANIFEST`] (G3c) — mirror of
+/// `spawn_daemon_plugins`, a different manifest.
 pub(super) async fn spawn_daemon_config_plugin() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -380,11 +377,11 @@ pub(super) async fn spawn_daemon_config_plugin() -> TestDaemon {
     }
 }
 
-/// `plugin.get_config` por el socket: esquema + valor efectivo de las TRES
-/// claves, ABIERTO a cualquier conexión (leer no consiente nada) — incluso
-/// SIN aprobar/activar el plugin (mismo criterio que `plugin.list`).
+/// `plugin.get_config` over the socket: schema + effective value of the
+/// THREE keys, OPEN to any connection (reading consents to nothing) — even
+/// with the plugin unapproved/disabled (same criterion as `plugin.list`).
 #[tokio::test]
-async fn plugin_get_config_ve_el_esquema_y_los_defaults() {
+async fn plugin_get_config_sees_the_schema_and_the_defaults() {
     let d = spawn_daemon_config_plugin().await;
     let c = connected_client(&d).await;
     let res: methods::PluginGetConfigResult = c
@@ -412,11 +409,10 @@ async fn plugin_get_config_ve_el_esquema_y_los_defaults() {
     );
 }
 
-/// `plugin.get_config` de un id DESCONOCIDO responde `keys: []` — nunca un
-/// error (mismo criterio indulgente que `plugin.list` con un catálogo
-/// vacío).
+/// `plugin.get_config` of an UNKNOWN id answers `keys: []` — never an error
+/// (same lenient criterion as `plugin.list` with an empty catalogue).
 #[tokio::test]
-async fn plugin_get_config_id_desconocido_es_keys_vacio() {
+async fn plugin_get_config_unknown_id_is_empty_keys() {
     let d = spawn_daemon_config_plugin().await;
     let c = connected_client(&d).await;
     let res: methods::PluginGetConfigResult = c
@@ -427,14 +423,14 @@ async fn plugin_get_config_id_desconocido_es_keys_vacio() {
             },
         )
         .await
-        .expect("plugin.get_config no es error con id desconocido");
+        .expect("plugin.get_config is not an error with an unknown id");
     assert!(res.keys.is_empty());
 }
 
-/// Un HUMANO fija un valor válido; `plugin.get_config` lo refleja Y
-/// persistió (una NUEVA conexión también lo ve).
+/// A HUMAN sets a valid value; `plugin.get_config` reflects it AND it
+/// persisted (a NEW connection also sees it).
 #[tokio::test]
-async fn plugin_set_config_humano_se_refleja_y_persiste() {
+async fn plugin_set_config_by_a_human_is_reflected_and_persists() {
     let d = spawn_daemon_config_plugin().await;
     let human = connected_client(&d).await;
     let _: methods::PluginSetConfigResult = human
@@ -447,7 +443,7 @@ async fn plugin_set_config_humano_se_refleja_y_persiste() {
             },
         )
         .await
-        .expect("set_config con un valor válido");
+        .expect("set_config with a valid value");
 
     let res: methods::PluginGetConfigResult = human
         .call(
@@ -457,14 +453,14 @@ async fn plugin_set_config_humano_se_refleja_y_persiste() {
             },
         )
         .await
-        .expect("get_config tras set_config");
+        .expect("get_config after set_config");
     assert_eq!(
         res.keys.iter().find(|k| k.key == "greeting").unwrap().value,
         "hola mundo"
     );
 
-    let otra = connected_client(&d).await;
-    let res2: methods::PluginGetConfigResult = otra
+    let other = connected_client(&d).await;
+    let res2: methods::PluginGetConfigResult = other
         .call(
             methods::PLUGIN_GET_CONFIG,
             &methods::PluginGetConfigParams {
@@ -472,7 +468,7 @@ async fn plugin_set_config_humano_se_refleja_y_persiste() {
             },
         )
         .await
-        .expect("get_config en otra conexión");
+        .expect("get_config on another connection");
     assert_eq!(
         res2.keys
             .iter()
@@ -480,14 +476,14 @@ async fn plugin_set_config_humano_se_refleja_y_persiste() {
             .unwrap()
             .value,
         "hola mundo",
-        "el valor persistió"
+        "the value persisted"
     );
 }
 
-/// Un valor INVÁLIDO (fuera de `[min,max]`) es `INVALID_PARAMS` y NO se
-/// persiste — `plugin.get_config` sigue viendo el default.
+/// An INVALID value (outside `[min,max]`) is `INVALID_PARAMS` and does NOT
+/// persist — `plugin.get_config` still sees the default.
 #[tokio::test]
-async fn plugin_set_config_valor_invalido_no_persiste() {
+async fn plugin_set_config_invalid_value_does_not_persist() {
     let d = spawn_daemon_config_plugin().await;
     let human = connected_client(&d).await;
     let err = human
@@ -500,7 +496,7 @@ async fn plugin_set_config_valor_invalido_no_persiste() {
             },
         )
         .await
-        .expect_err("999 fuera de [0,10]");
+        .expect_err("999 is outside [0,10]");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 
     let res: methods::PluginGetConfigResult = human
@@ -511,18 +507,18 @@ async fn plugin_set_config_valor_invalido_no_persiste() {
             },
         )
         .await
-        .expect("get_config tras el rechazo");
+        .expect("get_config after the rejection");
     assert_eq!(
         res.keys.iter().find(|k| k.key == "retries").unwrap().value,
         "3",
-        "el rechazo no debe haber tocado el default"
+        "the rejection must not have touched the default"
     );
 }
 
-/// Una clave DESCONOCIDA es `INVALID_PARAMS` (no se ensucia `config.toml`
-/// con claves que el esquema no declara).
+/// An UNKNOWN key is `INVALID_PARAMS` (`config.toml` is not dirtied with keys
+/// the schema does not declare).
 #[tokio::test]
-async fn plugin_set_config_clave_desconocida_es_invalid_params() {
+async fn plugin_set_config_unknown_key_is_invalid_params() {
     let d = spawn_daemon_config_plugin().await;
     let human = connected_client(&d).await;
     let err = human
@@ -535,18 +531,18 @@ async fn plugin_set_config_clave_desconocida_es_invalid_params() {
             },
         )
         .await
-        .expect_err("clave desconocida");
+        .expect_err("unknown key");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
-/// `plugin.preview` de un archivo cuando NO hay ningún previewer instalado
-/// (registro vacío, `plugins_dir: None`) devuelve `preview: None` — NO un
-/// error: ningún previewer consentido casa el mimetype, así que el frontend cae
-/// a la vista cruda. Ni siquiera se leen los bytes del archivo (la resolución
-/// falla antes). El caso con un previewer `.wasm` real es E2E de la task
-/// siguiente.
+/// `plugin.preview` of a file when there is NO previewer installed at all
+/// (empty registry, `plugins_dir: None`) returns `preview: None` — NOT an
+/// error: no consented previewer matches the mimetype, so the frontend falls
+/// back to the raw view. The file's bytes are not even read (resolution
+/// fails before that). The case with a real `.wasm` previewer is the next
+/// task's E2E.
 #[tokio::test]
-async fn plugin_preview_sin_previewer_es_none() {
+async fn plugin_preview_with_no_previewer_is_none() {
     let d = spawn_daemon(None).await;
     write_file(&d.mem, "mem:///nota.txt", b"hola mundo").await;
     let c = connected_client(&d).await;
@@ -558,20 +554,20 @@ async fn plugin_preview_sin_previewer_es_none() {
             },
         )
         .await
-        .expect("plugin.preview no es error cuando no hay previewer");
+        .expect("plugin.preview is not an error when there is no previewer");
     assert!(
         res.preview.is_none(),
-        "sin previewer instalado la preview es None (vista cruda), no un error: {res:?}"
+        "with no previewer installed the preview is None (raw view), not an error: {res:?}"
     );
 }
 
-/// G3a (ADR 0037): `plugin.preview_styled` sin ningún previewer instalado
-/// devuelve `preview: None` — MISMO criterio que su gemelo plano, no un
-/// error. El client `Backend::plugin_preview_styled` embebido tiene su
-/// propio test para el caso `Ok(None)`; este cubre el handler DAEMON contra
-/// un socket real.
+/// G3a (ADR 0037): `plugin.preview_styled` with no previewer installed
+/// returns `preview: None` — SAME criterion as its plain twin, not an error.
+/// The embedded `Backend::plugin_preview_styled` client has its own test for
+/// the `Ok(None)` case; this covers the DAEMON handler against a real
+/// socket.
 #[tokio::test]
-async fn plugin_preview_styled_sin_previewer_es_none() {
+async fn plugin_preview_styled_with_no_previewer_is_none() {
     let d = spawn_daemon(None).await;
     write_file(&d.mem, "mem:///nota.txt", b"hola mundo").await;
     let c = connected_client(&d).await;
@@ -584,9 +580,9 @@ async fn plugin_preview_styled_sin_previewer_es_none() {
             },
         )
         .await
-        .expect("plugin.preview_styled no es error cuando no hay previewer");
+        .expect("plugin.preview_styled is not an error when there is no previewer");
     assert!(
         res.preview.is_none(),
-        "sin previewer instalado la preview con estilo es None: {res:?}"
+        "with no previewer installed the styled preview is None: {res:?}"
     );
 }

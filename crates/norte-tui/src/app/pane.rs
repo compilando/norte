@@ -1,89 +1,93 @@
-//! Un pane: sus entradas, su cursor, sus marcas y el diálogo de búsqueda que
-//! vive dentro de él.
+//! A pane: its entries, its cursor, its marks and the search dialog that
+//! lives inside it.
 
 use norte_proto::{Entry, VPath};
 
-/// Un panel: directorio actual y sus entradas YA ordenadas.
+/// A panel: current directory and its ALREADY sorted entries.
 ///
-/// La mecánica PURA de un pane —directorio, entradas, cursor, `loading` y
-/// quick search— vive UNA sola vez en [`norte_frontend::PaneState`],
-/// compartida con la GUI (#82): el `Pane` de la TUI la EMBEBE en su campo
-/// `state` (privado) y delega en ella
-/// (`dir`/`entries`/`cursor`/`selected`/`move_*`/`quick_*`…). Lo propio de la
-/// TUI —la búsqueda viva (`virtual_search`, `search_state`, `search_error`) y
-/// el fill paginado (ADR 0017, [`Pane::extend_listing`] y compañía)— se queda
-/// aquí, encima de ese estado.
+/// A pane's PURE mechanics — directory, entries, cursor, `loading` and quick
+/// search — live ONCE in [`norte_frontend::PaneState`], shared with the GUI
+/// (#82): the TUI's `Pane` EMBEDS it in its (private) `state` field and
+/// delegates to it (`dir`/`entries`/`cursor`/`selected`/`move_*`/`quick_*`…).
+/// What's specific to the TUI — the live search (`virtual_search`,
+/// `search_state`, `search_error`) and the paginated fill (ADR 0017,
+/// [`Pane::extend_listing`] and friends) — stays here, on top of that state.
 #[derive(Debug)]
 pub struct Pane {
-    /// Estado no-render compartido (cursor + quick + listado). Privado: se
-    /// accede por los delegados ([`Pane::dir`], [`Pane::entries`], …) para que
-    /// el invariante del cursor lo custodie `PaneState`.
+    /// Shared non-render state (cursor + quick + listing). Private: accessed
+    /// through the delegates ([`Pane::dir`], [`Pane::entries`], …) so
+    /// `PaneState` guards the cursor's invariant.
     state: norte_frontend::PaneState,
-    /// El pane muestra los HITS de una búsqueda viva (`Alt+F7`, liveSearch),
-    /// no un listado de directorio real: `dir` es la RAÍZ del walk y las
-    /// `entries` son los resultados que van llegando por streaming
-    /// ([`Pane::extend_listing`], reusando el molde de paginación). Con él la
-    /// barra de estado pinta `search-status-*` en vez del `pos/total` normal;
-    /// cualquier `cd`/refresh normal lo apaga (los listados reales lo ponen a
-    /// `false`). `F5`/`F8`/`F3` operan sobre el hit bajo el cursor SOLOS
-    /// ([`Pane::selected`] da la `Entry` con su `VPath` completo).
+    /// The pane shows the HITS of a live search (`Alt+F7`, liveSearch), not
+    /// a real directory listing: `dir` is the walk's ROOT and `entries` are
+    /// the results arriving by streaming ([`Pane::extend_listing`], reusing
+    /// the pagination mold). With this on, the status bar paints
+    /// `search-status-*` instead of the normal `pos/total`; any normal
+    /// `cd`/refresh turns it off (real listings set it to `false`).
+    /// `F5`/`F8`/`F3` operate ONLY on the hit under the cursor
+    /// ([`Pane::selected`] gives the `Entry` with its full `VPath`).
     pub virtual_search: bool,
-    /// Estado de presentación de la búsqueda viva (solo significativo con
-    /// [`Pane::virtual_search`]): decide qué variante `search-status-*` pinta
-    /// la barra. El run loop lo actualiza al llegar el estado terminal.
+    /// A live search's presentation state (only meaningful with
+    /// [`Pane::virtual_search`]): decides which `search-status-*` variant
+    /// the status bar paints. The run loop updates it on the terminal state
+    /// arriving.
     pub search_state: SearchState,
-    /// Categoría del error de una búsqueda que FALLÓ (`SearchState::Failed`),
-    /// ya localizada y saneada: la barra la pinta de forma PERSISTENTE
-    /// (`search-status-failed`) tras limpiarse [`crate::app::App::message`] — un fallo no
-    /// puede degradar a «done» en la siguiente tecla (review MINOR-2).
+    /// Category of a search that FAILED (`SearchState::Failed`), already
+    /// localized and sanitized: the status bar paints it PERSISTENTLY
+    /// (`search-status-failed`) after [`crate::app::App::message`] clears —
+    /// a failure can't degrade into "done" on the next key (review
+    /// MINOR-2).
     pub search_error: Option<String>,
-    /// Contexto del match de contenido por hit de la búsqueda viva (#81):
-    /// `path → (línea, preview YA saneado en origen)`. Solo significativo con
-    /// [`Pane::virtual_search`]; la barra lo pinta para el hit bajo el
-    /// cursor. Se limpia al salir del modo virtual (cd/listado real).
+    /// Content match context per live-search hit (#81):
+    /// `path → (line, preview ALREADY sanitized at the source)`. Only
+    /// meaningful with [`Pane::virtual_search`]; the status bar paints it
+    /// for the hit under the cursor. Cleared on leaving virtual mode
+    /// (cd/real listing).
     pub search_matches: std::collections::HashMap<VPath, norte_proto::methods::MatchInfo>,
-    /// El listado de este pane NO se pudo hacer al restaurar la sesión, y lo
-    /// que se ve no es «este directorio está vacío» (#235).
+    /// This pane's listing could NOT be done on restoring the session, and
+    /// what's shown isn't "this directory is empty" (#235).
     ///
-    /// Se marca en el TÍTULO del pane, igual que la paginación en curso, y no
-    /// en un `message`: es un estado que dura hasta que alguien liste de
-    /// verdad, y un mensaje lo borra la tecla siguiente — que es justo el bug
-    /// que #232 arregla dos hunks más arriba. Cualquier listado real
-    /// ([`Pane::set_listing`], [`Pane::begin_listing`]) lo apaga.
+    /// Marked in the pane's TITLE, same as pagination in progress, and not
+    /// in a `message`: it's a state that lasts until someone actually
+    /// lists, and a message gets erased by the next key — which is exactly
+    /// the bug #232 fixes two hunks up. Any real listing
+    /// ([`Pane::set_listing`], [`Pane::begin_listing`]) turns it off.
     pub unlisted: bool,
-    /// Preferencia de ocultos del USUARIO (#107): el pane virtual de
-    /// búsqueda SUSPENDE el filtro (un hit es una petición EXPLÍCITA — un
-    /// `.env` buscado que desapareciera en silencio bajo `[ui] show_hidden
-    /// = false` es el MAJOR-1 del review), y al volver a un listado real se
-    /// restaura esto. Un Ctrl+H DENTRO del pane virtual actúa sobre los
-    /// resultados pero no toca la preferencia.
+    /// The USER's hidden-files preference (#107): the virtual search pane
+    /// SUSPENDS the filter (a hit is an EXPLICIT request — a searched-for
+    /// `.env` silently disappearing under `[ui] show_hidden = false` was the
+    /// review's MAJOR-1), and this gets restored on returning to a real
+    /// listing. A Ctrl+H INSIDE the virtual pane acts on the results but
+    /// doesn't touch the preference.
     show_hidden_pref: bool,
 }
 
-/// Estado de presentación de una búsqueda viva (`Alt+F7`, liveSearch T6): el
-/// run loop lo refleja en [`Pane::search_state`] para que la barra elija la
-/// variante `search-status-*`. `Failed` no se pinta en la barra del pane (el
-/// error concreto viaja por [`crate::app::App::message`] vía `error_message`); se
-/// conserva la variante por completitud del estado del run.
+/// A live search's presentation state (`Alt+F7`, liveSearch T6): the run
+/// loop reflects it in [`Pane::search_state`] so the status bar picks the
+/// `search-status-*` variant. `Failed` isn't painted on the pane's status
+/// bar (the concrete error travels via [`crate::app::App::message`] through
+/// `error_message`); the variant is kept for completeness of the run's
+/// state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SearchState {
-    /// El walker sigue emitiendo hits.
+    /// The walker keeps emitting hits.
     #[default]
     Running,
-    /// Terminó y no se alcanzó el tope de hits.
+    /// Finished and the hit cap wasn't reached.
     Done,
-    /// Terminó por alcanzar `max_hits` (resultados posiblemente incompletos).
+    /// Finished by reaching `max_hits` (results possibly incomplete).
     Truncated,
-    /// El usuario canceló (los hits ya llegados se conservan).
+    /// The user cancelled (hits already received are kept).
     Cancelled,
-    /// La Task de búsqueda falló (el error va por la barra de mensajes).
+    /// The search Task failed (the error travels via the message bar).
     Failed,
 }
 
 impl Pane {
-    /// Pane sobre `dir` con `entries`: #54, ya no hace falta ordenarlas antes
-    /// — [`norte_frontend::PaneState::new`] normaliza internamente (dirs
-    /// primero, NFC, empate por bytes, ver [`crate::app::sort_entries`]).
+    /// Pane over `dir` with `entries`: #54, no longer needs sorting them
+    /// beforehand — [`norte_frontend::PaneState::new`] normalizes
+    /// internally (dirs first, NFC, ties by bytes, see
+    /// [`crate::app::sort_entries`]).
     #[must_use]
     pub fn new(dir: VPath, entries: Vec<Entry>) -> Self {
         Self {
@@ -97,287 +101,290 @@ impl Pane {
         }
     }
 
-    /// Cicla la reinterpretación de nombres (#57): delegado puro — la
-    /// mecánica (sugerencia, vuelta completa del ciclo, re-pliegue del quick
-    /// vivo) vive en [`norte_frontend::PaneState::cycle_name_encoding`]
-    /// (#98/m2: la GUI la reusa tal cual).
+    /// Cycles the name reinterpretation (#57): pure delegate — the
+    /// mechanics (suggestion, full cycle wrap, re-folding a live quick
+    /// search) live in
+    /// [`norte_frontend::PaneState::cycle_name_encoding`] (#98/m2: the GUI
+    /// reuses it as is).
     pub fn cycle_name_encoding(&mut self) -> Option<&'static str> {
         self.state.cycle_name_encoding()
     }
 
-    /// Reinterpretación de nombres activa (#57), para render.
+    /// Active name reinterpretation (#57), for rendering.
     #[must_use]
     pub fn name_encoding(&self) -> Option<norte_encoding::NameEncoding> {
         self.state.name_encoding()
     }
 
-    /// El estado compartido, para lo que se decide en `norte-frontend` sobre
-    /// él entero (la barra de estado, ADR 0132) en vez de campo a campo.
+    /// The shared state, for what `norte-frontend` decides over it WHOLE
+    /// (the status bar, ADR 0132) instead of field by field.
     #[must_use]
     pub(crate) fn state(&self) -> &norte_frontend::PaneState {
         &self.state
     }
 
-    // --- Delegados de solo-lectura sobre el estado compartido (#82) ---
+    // --- Read-only delegates over the shared state (#82) ---
 
-    /// Directorio listado.
+    /// Listed directory.
     #[must_use]
     pub fn dir(&self) -> &VPath {
         self.state.dir()
     }
 
-    /// Entradas ordenadas ([`crate::app::sort_entries`]), la fila `..`
-    /// incluida: es la lista que se PINTA.
+    /// Sorted entries ([`crate::app::sort_entries`]), the `..` row included:
+    /// it's the list that gets PAINTED.
     #[must_use]
     pub fn entries(&self) -> &[Entry] {
         self.state.entries()
     }
 
-    /// Las entradas de VERDAD, sin la fila `..`: lo que se copia cuando un
-    /// pane nace del listado de otro ([`crate::app::App::fork_pane`]).
+    /// The REAL entries, without the `..` row: what gets copied when a pane
+    /// is born from another one's listing
+    /// ([`crate::app::App::fork_pane`]).
     #[must_use]
     pub fn real_entries(&self) -> &[Entry] {
         self.state.real_entries()
     }
 
-    /// Los ficheros que un plan de ORGANIZAR puede mover (fase 8), en texto
+    /// The files an ORGANIZE plan can move (phase 8), as text
     /// ([`norte_frontend::PaneState::organizable_names`]).
     #[must_use]
     pub fn organizable_names(&self) -> Vec<String> {
         self.state.organizable_names()
     }
 
-    /// Los nombres que ya ocupan este directorio, para distinguir una carpeta
-    /// nueva de una que estaba
+    /// The names already occupying this directory, to tell a new folder
+    /// from one that already existed
     /// ([`norte_frontend::PaneState::existing_names`]).
     #[must_use]
     pub fn existing_names(&self) -> Vec<String> {
         self.state.existing_names()
     }
 
-    /// A dónde apunta el cursor para un gesto de panel: la carpeta bajo él si
-    /// lo es, y si no este directorio
+    /// What the cursor points at for a panel gesture: the folder under it if
+    /// it is one, and if not this directory
     /// ([`norte_frontend::PaneState::target_dir`]).
     #[must_use]
     pub fn target_dir(&self) -> &VPath {
         self.state.target_dir()
     }
 
-    /// Índice bajo el cursor real (0 incluso con lista vacía).
+    /// Index under the real cursor (0 even with an empty list).
     #[must_use]
     pub fn cursor(&self) -> usize {
         self.state.cursor()
     }
 
-    /// El listado se está RELLENANDO en background (paginación, ADR 0017): la
-    /// primera página ya se pintó y llegan más entradas. La UI lo marca — un
-    /// listado incompleto JAMÁS es silencioso.
+    /// The listing is FILLING IN in the background (pagination, ADR 0017):
+    /// the first page already painted and more entries are arriving. The UI
+    /// marks it — an incomplete listing is NEVER silent.
     #[must_use]
     pub fn loading(&self) -> bool {
         self.state.loading()
     }
 
-    /// Quick search vivo (`/`, spec 2026-07-18) para el render; `None` =
-    /// navegación normal.
+    /// Live quick search (`/`, spec 2026-07-18) for rendering; `None` =
+    /// normal navigation.
     #[must_use]
     pub fn quick(&self) -> Option<&crate::nav::QuickSearch> {
         self.state.quick()
     }
 
-    /// La entrada seleccionada: con quick search en modo Filter, la
-    /// selección DENTRO del filtro (así F5/F8/F3… operan sobre lo filtrado
-    /// sin que cada comando sepa del quick search — feed-to-listbox); si el
-    /// filtro no tiene matches, `None` (las ops no-opean, jamás actúan
-    /// sobre una entrada que el usuario no ve). Sin filtro (o en Jump, que
-    /// mueve el cursor real), la entrada bajo el cursor.
+    /// The selected entry: with quick search in Filter mode, the selection
+    /// WITHIN the filter (so F5/F8/F3… operate on what's filtered without
+    /// each command knowing about quick search — feed-to-listbox); if the
+    /// filter has no matches, `None` (ops no-op, never acting on an entry
+    /// the user doesn't see). With no filter (or in Jump, which moves the
+    /// real cursor), the entry under the cursor.
     #[must_use]
     pub fn selected(&self) -> Option<&Entry> {
         self.state.selected()
     }
 
-    /// La entrada bajo el cursor PARA DESCRIBIRLA, fila `..` incluida.
+    /// The entry under the cursor TO DESCRIBE IT, `..` row included.
     ///
-    /// La otra pregunta, la de los paneles que siguen al cursor: ver
-    /// [`norte_frontend::PaneState::cursor_entry`]. **No es un operando.**
+    /// The other question, the one panels that follow the cursor ask: see
+    /// [`norte_frontend::PaneState::cursor_entry`]. **It isn't an operand.**
     #[must_use]
     pub fn cursor_entry(&self) -> Option<&Entry> {
         self.state.cursor_entry()
     }
 
-    /// ¿Lo señalado AHORA es la fila `..`? Ver
-    /// [`norte_frontend::PaneState::cursor_is_parent_row`] — sale del mismo
-    /// índice que [`Self::cursor_entry`], y por eso no es
+    /// Is what's pointed at RIGHT NOW the `..` row? See
+    /// [`norte_frontend::PaneState::cursor_is_parent_row`] — it comes from
+    /// the same index as [`Self::cursor_entry`], which is why it isn't
     /// `is_parent_row(cursor())`.
     #[must_use]
     pub fn cursor_is_parent_row(&self) -> bool {
         self.state.cursor_is_parent_row()
     }
 
-    /// Índices REALES visibles bajo el filtro; `None` = sin filtro (quick
-    /// inactivo, o modo Jump: el listado se pinta entero).
+    /// REAL indices visible under the filter; `None` = no filter (quick
+    /// inactive, or Jump mode: the whole listing gets painted).
     #[must_use]
     pub fn quick_visible(&self) -> Option<&[usize]> {
         self.state.quick_visible()
     }
 
-    /// SEÑALA la entrada `i`: el cursor, o la selección del filtro cuando hay
-    /// un quick search vivo. Ver [`norte_frontend::PaneState::senalar`] — con
-    /// filtro, `set_cursor` mueve algo que nadie está mirando.
+    /// POINTS AT entry `i`: the cursor, or the filter's selection when a
+    /// live quick search is on. See [`norte_frontend::PaneState::senalar`]
+    /// — with a filter, `set_cursor` moves something nobody is looking at.
     pub fn senalar(&mut self, i: usize) {
         self.state.senalar(i);
     }
 
-    // --- Delegados de mutación de cursor + quick (#82) ---
+    // --- Cursor + quick mutation delegates (#82) ---
 
-    /// Arranca el quick search (`/`) en `mode` sobre las entries actuales.
+    /// Starts quick search (`/`) in `mode` over the current entries.
     pub fn quick_start(&mut self, mode: crate::nav::Mode) {
         self.state.quick_start(mode);
     }
 
-    /// Un carácter tecleado con el quick search activo.
+    /// A character typed with quick search active.
     pub fn quick_char(&mut self, c: char) {
         self.state.quick_char(c);
     }
 
-    /// Backspace con el quick search activo.
+    /// Backspace with quick search active.
     pub fn quick_backspace(&mut self) {
         self.state.quick_backspace();
     }
 
-    /// Selección del quick search una posición abajo.
+    /// Quick search selection one position down.
     pub fn quick_down(&mut self) {
         self.state.quick_down();
     }
 
-    /// Selección del quick search una posición arriba.
+    /// Quick search selection one position up.
     pub fn quick_up(&mut self) {
         self.state.quick_up();
     }
 
-    /// Siguiente match con wrap (Tab en modo Jump).
+    /// Next match with wrap (Tab in Jump mode).
     pub fn quick_next(&mut self) {
         self.state.quick_next();
     }
 
-    /// Cierra el quick search SIN tocar el cursor real: en Filter el listado
-    /// completo vuelve con el cursor donde estaba (el filtro nunca lo movió
-    /// — test del plan); en Jump el cursor se queda donde saltó.
+    /// Closes quick search WITHOUT touching the real cursor: in Filter the
+    /// full listing comes back with the cursor where it was (the filter
+    /// never moved it — a test from the plan); in Jump the cursor stays
+    /// where it jumped to.
     pub fn quick_cancel(&mut self) {
         self.state.quick_cancel();
     }
 
-    /// Cierra el quick search fijando el cursor REAL a la selección (Enter:
-    /// la op siguiente parte de ahí). Devuelve `true` si el cursor apunta a
-    /// una entrada que el usuario VEÍA: en Filter sin matches devuelve
-    /// `false` (la lista pintada estaba vacía — jamás despachar sobre una
-    /// entrada invisible); en Jump sin matches devuelve `true` si hay
-    /// entradas (el listado se pinta ENTERO: el cursor real es visible por
-    /// definición — edge de T4, observación del reviewer).
+    /// Closes quick search, setting the REAL cursor to the selection
+    /// (Enter: the next op starts from there). Returns `true` if the cursor
+    /// points at an entry the user COULD SEE: in Filter with no matches it
+    /// returns `false` (the painted list was empty — never dispatch over an
+    /// invisible entry); in Jump with no matches it returns `true` if there
+    /// are entries (the listing is painted WHOLE: the real cursor is
+    /// visible by definition — a T4 edge case, reviewer's observation).
     pub fn quick_confirm(&mut self) -> bool {
         self.state.quick_confirm()
     }
 
-    /// Sube el cursor `n` posiciones (con tope en 0).
+    /// Moves the cursor up `n` positions (clamped at 0).
     pub fn move_up(&mut self, n: usize) {
         self.state.page_up(n);
     }
 
-    /// Baja el cursor `n` posiciones (con tope en la última entrada).
+    /// Moves the cursor down `n` positions (clamped at the last entry).
     pub fn move_down(&mut self, n: usize) {
         self.state.page_down(n);
     }
 
-    /// Filas de listado pintadas en el último frame (#124) — delegado puro a
+    /// Listing rows painted in the last frame (#124) — pure delegate to
     /// [`norte_frontend::PaneState::set_viewport_rows`].
     pub fn set_viewport_rows(&mut self, rows: usize) {
         self.state.set_viewport_rows(rows);
     }
 
-    /// Deja la ventana lista para pintar `rows` filas — delegado puro a
-    /// [`norte_frontend::PaneState::reconcile_viewport`]. El run loop lo llama
-    /// ANTES de cada draw.
+    /// Leaves the window ready to paint `rows` rows — pure delegate to
+    /// [`norte_frontend::PaneState::reconcile_viewport`]. The run loop calls
+    /// it BEFORE every draw.
     pub fn reconcile_viewport(&mut self, rows: usize) {
         self.state.reconcile_viewport(rows);
     }
 
-    /// La primera fila visible del listado — delegado puro a
-    /// [`norte_frontend::PaneState::viewport_offset`]. Lo leen el pintado y el
-    /// hit test del ratón, que tienen que ver la MISMA ventana.
+    /// The listing's first visible row — pure delegate to
+    /// [`norte_frontend::PaneState::viewport_offset`]. Read by both the
+    /// painter and the mouse's hit test, which have to see the SAME window.
     #[must_use]
     pub fn viewport_offset(&self) -> usize {
         self.state.viewport_offset()
     }
 
-    /// Cuántas filas mueve una página en este pane (#124) — delegado puro a
+    /// How many rows a page moves in this pane (#124) — pure delegate to
     /// [`norte_frontend::PaneState::page_step`].
     #[must_use]
     pub fn page_step(&self) -> usize {
         self.state.page_step()
     }
 
-    /// Cursor a la primera entrada.
+    /// Cursor to the first entry.
     pub fn move_to_start(&mut self) {
         self.state.home();
     }
 
-    /// Cursor a la última entrada.
+    /// Cursor to the last entry.
     pub fn move_to_end(&mut self) {
         self.state.end();
     }
 
-    /// Fija el cursor REAL a `i` (con tope en la última entrada): re-anclar
-    /// tras localizar un índice concreto, p. ej. un hit de búsqueda.
+    /// Sets the REAL cursor to `i` (clamped at the last entry): re-anchoring
+    /// after locating a concrete index, e.g. a search hit.
     pub fn set_cursor(&mut self, i: usize) {
         self.state.set_cursor(i);
     }
 
-    /// Foco pendiente (spec 2026-07-24 §S1, `nav.parent`): el próximo
-    /// [`Pane::begin_listing`] selecciona `child` si aparece en el listado
-    /// nuevo, por delante de la memoria de cursor. Ver
+    /// Pending focus (spec 2026-07-24 §S1, `nav.parent`): the next
+    /// [`Pane::begin_listing`] selects `child` if it shows up in the new
+    /// listing, ahead of the cursor memory. See
     /// [`norte_frontend::PaneState::set_pending_focus`].
     pub fn set_pending_focus(&mut self, child: VPath) {
         self.state.set_pending_focus(child);
     }
 
-    /// Descarta un foco pendiente sin consumirlo (revisión S, M2). Ver
+    /// Discards a pending focus without consuming it (S review, M2). See
     /// [`norte_frontend::PaneState::clear_pending_focus`].
     pub fn clear_pending_focus(&mut self) {
         self.state.clear_pending_focus();
     }
 
-    // --- Listado + búsqueda viva (propio de la TUI, encima del estado) ---
+    // --- Listing + live search (specific to the TUI, on top of the state) ---
 
-    /// Marca (o desmarca) el flag de carga de un fill paginado (ADR 0017).
+    /// Sets (or clears) a paginated fill's loading flag (ADR 0017).
     pub fn set_loading(&mut self, loading: bool) {
         self.state.set_loading(loading);
     }
 
-    /// Arranca el pane virtual de una búsqueda viva (`Alt+F7`, liveSearch T6):
-    /// `root` es la raíz del walk, las entries empiezan vacías y los hits
-    /// entran por [`Pane::extend_listing`] como un listado paginado. Marca el
-    /// pane como virtual (la barra pinta `search-status-running`) y mata
-    /// cualquier quick search vivo (filtraba OTRA cosa).
+    /// Starts a live search's virtual pane (`Alt+F7`, liveSearch T6): `root`
+    /// is the walk's root, entries start empty and hits come in through
+    /// [`Pane::extend_listing`] like a paginated listing. Marks the pane as
+    /// virtual (the status bar paints `search-status-running`) and kills any
+    /// live quick search (it was filtering something ELSE).
     pub fn begin_search(&mut self, root: VPath) {
-        // #107: los hits son EXPLÍCITOS — el filtro de ocultos se suspende
-        // en el pane virtual (la preferencia queda en `show_hidden_pref`).
+        // #107: hits are EXPLICIT — the hidden-files filter is suspended in
+        // the virtual pane (the preference stays in `show_hidden_pref`).
         self.state.set_show_hidden(true);
         self.state.set_listing(root, Vec::new());
         self.virtual_search = true;
         self.search_state = SearchState::Running;
         self.search_error = None;
-        // #81 (MAJOR-4 del review): re-lanzar Alt+F7 sin cd de por medio no
-        // debe arrastrar previews de la búsqueda ANTERIOR (un hit de la
-        // query B solo-nombre pintaría el :línea de la query A) ni crecer
-        // el mapa sin límite entre búsquedas.
+        // #81 (review MAJOR-4): relaunching Alt+F7 with no cd in between
+        // must not drag along the PREVIOUS search's previews (a hit from
+        // name-only query B would paint query A's :line) nor grow the map
+        // without bound between searches.
         self.search_matches.clear();
     }
 
-    /// Reemplaza el contenido tras un cd/refresh, reseteando el cursor.
-    /// Un quick search vivo muere: filtraba OTRO listado.
+    /// Replaces the content after a cd/refresh, resetting the cursor. A
+    /// live quick search dies: it was filtering a DIFFERENT listing.
     pub fn set_listing(&mut self, dir: VPath, entries: Vec<Entry>) {
-        // #107: al volver a un listado real, la preferencia de ocultos del
-        // usuario vuelve a mandar ANTES de ingerir (el filtro se aplica al
-        // entrar el listado).
+        // #107: on returning to a real listing, the user's hidden-files
+        // preference takes over again BEFORE ingesting (the filter applies
+        // as the listing comes in).
         self.state.set_show_hidden(self.show_hidden_pref);
         self.state.set_listing(dir, entries);
         self.virtual_search = false;
@@ -386,18 +393,19 @@ impl Pane {
         self.unlisted = false;
     }
 
-    /// Primera página de un listado paginado: reemplaza el contenido y MARCA
-    /// que faltan entradas por llegar (ADR 0017). El drenador irá llamando a
-    /// [`Pane::extend_listing`] y, al terminar, [`Pane::finish_listing`].
-    /// `skipped` = omitidas del contenedor (#93), del open del listado.
+    /// A paginated listing's first page: replaces the content and MARKS
+    /// that entries are still to arrive (ADR 0017). The drainer will keep
+    /// calling [`Pane::extend_listing`] and, on finishing,
+    /// [`Pane::finish_listing`]. `skipped` = the ones the container omitted
+    /// (#93), from the listing's open.
     ///
-    /// Punto de captura de la memoria de cursor (spec §S1) para la TUI: a
-    /// diferencia de la GUI (que tiene una fase `begin_loading` optimista
-    /// ANTES del fetch async), la TUI espera el listado ENTERO antes de
-    /// tocar el pane (`cd` en `main.rs` no llama a
-    /// [`norte_frontend::PaneState::begin_loading`] — este método es el
-    /// único punto donde `self.state` todavía refleja el dir VIEJO). Grabar
-    /// aquí, antes de `set_listing`, es el equivalente exacto.
+    /// The cursor memory's capture point (spec §S1) for the TUI: unlike the
+    /// GUI (which has an optimistic `begin_loading` phase BEFORE the async
+    /// fetch), the TUI waits for the WHOLE listing before touching the pane
+    /// (`cd` in `main.rs` doesn't call
+    /// [`norte_frontend::PaneState::begin_loading`] — this method is the
+    /// only point where `self.state` still reflects the OLD dir). Recording
+    /// here, before `set_listing`, is the exact equivalent.
     pub fn begin_listing(
         &mut self,
         dir: VPath,
@@ -406,8 +414,8 @@ impl Pane {
         skipped: Option<u64>,
     ) {
         self.state.remember_cursor();
-        // #107: mismo restablecimiento que `set_listing` — este es el cd
-        // real paginado de la TUI.
+        // #107: the same reset as `set_listing` — this is the TUI's real
+        // paginated cd.
         self.state.set_show_hidden(self.show_hidden_pref);
         self.state.set_listing(dir, first_page);
         self.state.set_loading(more);
@@ -417,42 +425,46 @@ impl Pane {
         self.unlisted = false;
     }
 
-    /// Añade un lote del drenador: re-ordena TODO y re-ancla el cursor al path
-    /// que estaba seleccionado (si desapareció del re-orden, clamp por índice)
-    /// para que rellenar no mueva la selección del usuario bajo sus pies. Un
-    /// quick search vivo se RE-APLICA sobre el listado nuevo (spec: el filtro
-    /// no se congela mientras el fill sigue), conservando su selección por
-    /// path. La mecánica pura vive en [`norte_frontend::PaneState::extend`].
+    /// Adds a batch from the drainer: re-sorts the WHOLE listing and
+    /// re-anchors the cursor to the path that was selected (if it dropped
+    /// out of the re-sort, clamp by index) so that filling doesn't move the
+    /// user's selection under their feet. A live quick search gets
+    /// RE-APPLIED over the new listing (spec: the filter doesn't freeze
+    /// while the fill continues), keeping its selection by path. The pure
+    /// mechanics live in [`norte_frontend::PaneState::extend`].
     pub fn extend_listing(&mut self, batch: Vec<Entry>) {
         self.state.extend(batch);
     }
 
-    /// Hidrata size/mtime de la entrada `path` con el resultado de una sonda
-    /// de stat on-focus (#52, listado lazy). No reordena; no-op si la entrada
-    /// ya no está. Delegado puro a [`norte_frontend::PaneState::hydrate`].
+    /// Hydrates size/mtime of entry `path` with a stat-on-focus probe's
+    /// result (#52, lazy listing). Doesn't re-sort; no-op if the entry is no
+    /// longer there. Pure delegate to
+    /// [`norte_frontend::PaneState::hydrate`].
     pub fn hydrate(&mut self, path: &VPath, size: Option<u64>, mtime_ms: Option<i64>) {
         self.state.hydrate(path, size, mtime_ms);
     }
 
-    /// Paths VISIBLES sin `size` a `radius` filas del cursor (#52) —
-    /// delegado puro a [`norte_frontend::PaneState::needs_stat_window`].
+    /// VISIBLE paths with no `size` within `radius` rows of the cursor
+    /// (#52) — pure delegate to
+    /// [`norte_frontend::PaneState::needs_stat_window`].
     #[must_use]
     pub fn needs_stat_window(&self, radius: usize) -> Vec<VPath> {
         self.state.needs_stat_window(radius)
     }
 
-    /// El drenador terminó: el listado ya está completo. El quick search se
-    /// re-aplica por contrato (hoy no muta entries: refresh barato; si algún
-    /// día el cierre re-sortea, el filtro no se queda con índices muertos).
+    /// The drainer finished: the listing is now complete. Quick search gets
+    /// re-applied by contract (today it doesn't mutate entries: a cheap
+    /// refresh; if closing ever re-sorts, the filter won't be left holding
+    /// dead indices).
     pub fn finish_listing(&mut self) {
         self.state.set_loading(false);
         self.state.refresh_quick();
     }
 
-    /// Listado COMPLETO nuevo del MISMO dir (refresh tras una mutación):
-    /// cursor conservado por ÍNDICE con clamp (tras un delete queda en la
-    /// siguiente entrada — semántica ortodoxa) y quick search re-aplicado
-    /// por path (los índices del listado viejo no identifican nada).
+    /// A brand-new COMPLETE listing of the SAME dir (refresh after a
+    /// mutation): cursor kept by INDEX with a clamp (after a delete it lands
+    /// on the next entry — orthodox semantics) and quick search re-applied
+    /// by path (the old listing's indices don't identify anything).
     pub fn refresh_listing(&mut self, entries: Vec<Entry>) {
         self.state.refill(entries);
         self.state.set_loading(false);
@@ -460,58 +472,59 @@ impl Pane {
         self.search_matches.clear();
     }
 
-    /// Omitidas del contenedor del listado actual (#93/#96): delegado puro a
-    /// [`norte_frontend::PaneState::skipped`]. La barra pinta `Some(n)`, n>0.
+    /// Omitted by the current listing's container (#93/#96) — pure delegate
+    /// to [`norte_frontend::PaneState::skipped`]. The status bar paints
+    /// `Some(n)`, n>0.
     #[must_use]
     pub fn skipped(&self) -> Option<u64> {
         self.state.skipped()
     }
 
-    /// Fija las omitidas frescas (#96) — ver `PaneState::set_skipped`.
+    /// Sets the fresh omitted count (#96) — see `PaneState::set_skipped`.
     pub fn set_skipped(&mut self, skipped: Option<u64>) {
         self.state.set_skipped(skipped);
     }
 
-    /// Decoración de plugin de `path` (G3b, ADR 0037) — delegado puro a
-    /// [`norte_frontend::PaneState::decoration_for`]. El render la pinta
-    /// como badge tras el hueco del badge hostil.
+    /// `path`'s plugin decoration (G3b, ADR 0037) — pure delegate to
+    /// [`norte_frontend::PaneState::decoration_for`]. Rendering paints it as
+    /// a badge after the hostile badge's slot.
     #[must_use]
     pub fn decoration_for(&self, path: &VPath) -> Option<&norte_frontend::Decoration> {
         self.state.decoration_for(path)
     }
 
-    /// Si alguna entrada tiene icono (ADR 0105): entonces el render abre la
-    /// columna de iconos en todas las filas. Delegado puro a
+    /// Whether any entry has an icon (ADR 0105): if so, rendering opens the
+    /// icon column on every row. Pure delegate to
     /// [`norte_frontend::PaneState::any_icon`].
     #[must_use]
     pub fn any_icon(&self) -> bool {
         self.state.any_icon()
     }
 
-    /// Celdas que cubren al 80% de los nombres del listado — delegado puro a
+    /// Cells covering 80% of the listing's names — pure delegate to
     /// [`norte_frontend::PaneState::name_width_p80`].
     #[must_use]
     pub fn name_width_p80(&self) -> u16 {
         self.state.name_width_p80()
     }
 
-    /// ¿Está marcada esta entrada? (#103) — delegado puro a
-    /// [`norte_frontend::PaneState::is_marked`]. El render pinta un canalón
-    /// textual (`*`) al inicio de la fila.
+    /// Is this entry marked? (#103) — pure delegate to
+    /// [`norte_frontend::PaneState::is_marked`]. Rendering paints a textual
+    /// gutter (`*`) at the start of the row.
     #[must_use]
     pub fn is_marked(&self, entry: &Entry) -> bool {
         self.state.is_marked(entry)
     }
 
-    /// Celda de una columna `plugin:` (#117-follow-up) — delegado puro a
+    /// A `plugin:` column's cell (#117-follow-up) — pure delegate to
     /// [`norte_frontend::PaneState::plugin_cell`].
     #[must_use]
     pub fn plugin_cell(&self, display_id: &str, path: &VPath) -> Option<String> {
         self.state.plugin_cell(display_id, path)
     }
 
-    /// Instala el lote de valores de columnas `plugin:` (#117-follow-up) —
-    /// delegado puro a [`norte_frontend::PaneState::set_plugin_columns`].
+    /// Installs the batch of `plugin:` column values (#117-follow-up) —
+    /// pure delegate to [`norte_frontend::PaneState::set_plugin_columns`].
     pub fn set_plugin_columns(
         &mut self,
         columns: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
@@ -519,128 +532,128 @@ impl Pane {
         self.state.set_plugin_columns(columns);
     }
 
-    /// Togglea la marca de la entrada seleccionada. Delegado puro (#103).
+    /// Toggles the selected entry's mark. Pure delegate (#103).
     pub fn toggle_mark(&mut self) {
         self.state.toggle_mark();
     }
 
-    /// mc/Total Commander: togglea la marca de la selección VISIBLE y avanza
-    /// (dentro del filtro si hay uno activo, si no el cursor real; sin
-    /// envolver en la última fila). Delegado puro a
+    /// mc/Total Commander: toggles the VISIBLE selection's mark and advances
+    /// (within the filter if one is active, otherwise the real cursor; no
+    /// wrapping on the last row). Pure delegate to
     /// [`norte_frontend::PaneState::toggle_mark_and_advance`] (#103, review:
-    /// la mecánica de "sobre qué avanza" no puede reimplementarse aquí ni en
-    /// el dispatch — vive una sola vez en el modelo compartido).
+    /// the "what it advances over" mechanics can't be reimplemented here
+    /// nor in dispatch — it lives once in the shared model).
     pub fn toggle_mark_and_advance(&mut self) {
         self.state.toggle_mark_and_advance();
     }
 
-    /// El espejo del de arriba, hacia ARRIBA (`shift+↑`). Delegado puro.
+    /// The mirror of the one above, UPWARD (`shift+↑`). Pure delegate.
     pub fn toggle_mark_and_retreat(&mut self) {
         self.state.toggle_mark_and_retreat();
     }
 
-    /// Marca (o desmarca) el tramo de `n` filas desde el cursor y se mueve
-    /// allí (`shift+PgDn`/`shift+PgUp`). Delegado puro.
-    pub fn toggle_mark_page(&mut self, n: usize, hacia_abajo: bool) {
-        self.state.toggle_mark_page(n, hacia_abajo);
+    /// Marks (or unmarks) the `n`-row stretch from the cursor and moves
+    /// there (`shift+PgDn`/`shift+PgUp`). Pure delegate.
+    pub fn toggle_mark_page(&mut self, n: usize, downward: bool) {
+        self.state.toggle_mark_page(n, downward);
     }
 
-    /// Krusader `Shift+Home`: marca del cursor hacia arriba y desmarca el
-    /// resto. Delegado puro.
+    /// Krusader `Shift+Home`: marks from the cursor upward and unmarks the
+    /// rest. Pure delegate.
     pub fn mark_to_top(&mut self) {
         self.state.mark_to_top();
     }
 
-    /// Krusader `Shift+End`: marca del cursor hacia abajo y desmarca el
-    /// resto. Delegado puro.
+    /// Krusader `Shift+End`: marks from the cursor downward and unmarks the
+    /// rest. Pure delegate.
     pub fn mark_to_bottom(&mut self) {
         self.state.mark_to_bottom();
     }
 
-    /// Marca todas las entradas visibles. Delegado puro (#103).
+    /// Marks every visible entry. Pure delegate (#103).
     pub fn mark_all(&mut self) {
         self.state.mark_all();
     }
 
-    /// Marca (o desmarca) las que comparten extensión con la del cursor.
-    /// Delegado puro (#313).
+    /// Marks (or unmarks) the ones sharing the cursor's extension. Pure
+    /// delegate (#313).
     pub fn mark_same_extension(&mut self, mark: bool) -> usize {
         self.state.mark_same_extension(mark)
     }
 
-    /// Marca las visibles que son directorios (`dirs`) o las que no lo son.
-    /// Delegado puro (#313).
+    /// Marks the visible ones that are directories (`dirs`) or the ones
+    /// that aren't. Pure delegate (#313).
     pub fn mark_kind(&mut self, dirs: bool) -> usize {
         self.state.mark_kind(dirs)
     }
 
-    /// Devuelve la selección anterior al último gesto en bloque. Delegado
-    /// puro (#313).
+    /// Returns the selection from before the last bulk gesture. Pure
+    /// delegate (#313).
     pub fn restore_previous_marks(&mut self) -> Option<usize> {
         self.state.restore_previous_marks()
     }
 
-    /// Cuántas veces ha MOVIDO índices el listado de este pane — delegado
-    /// puro a [`norte_frontend::PaneState::listing_epoch`]. Lo lee el ratón
-    /// para soltar un gesto cuyos índices ya no nombran lo que se pintó.
+    /// How many times this pane's listing has MOVED indices — pure delegate
+    /// to [`norte_frontend::PaneState::listing_epoch`]. Read by the mouse to
+    /// drop a gesture whose indices no longer name what got painted.
     #[must_use]
     pub fn listing_epoch(&self) -> u64 {
         self.state.listing_epoch()
     }
 
-    /// Marca (o desmarca) UNA entrada por su índice. Delegado puro al
-    /// primitivo que necesita el ctrl+click
+    /// Marks (or unmarks) ONE entry by its index. Pure delegate to the
+    /// primitive ctrl+click needs
     /// ([`norte_frontend::PaneState::set_mark`]).
     pub fn set_mark(&mut self, index: usize, marked: bool) {
         self.state.set_mark(index, marked);
     }
 
-    /// Marca el rango entre dos índices, inclusive y en cualquier orden;
-    /// devuelve cuántas marcas cambió. ADITIVO. Delegado puro a
+    /// Marks the range between two indices, inclusive and in either order;
+    /// returns how many marks it changed. ADDITIVE. Pure delegate to
     /// [`norte_frontend::PaneState::mark_range`].
     pub fn mark_range(&mut self, from: usize, to: usize) -> usize {
         self.state.mark_range(from, to)
     }
 
-    /// Arma un barrido de puntero. Delegado puro a
+    /// Arms a pointer sweep. Pure delegate to
     /// [`norte_frontend::PaneState::begin_sweep`].
     pub fn begin_sweep(&mut self) {
         self.state.begin_sweep();
     }
 
-    /// Fija la extensión ACTUAL de un barrido (rubber-band: devuelve lo que
-    /// deja de cubrir). Delegado puro a
+    /// Sets a sweep's CURRENT extent (rubber-band: returns what it stops
+    /// covering). Pure delegate to
     /// [`norte_frontend::PaneState::apply_sweep`].
     pub fn apply_sweep(&mut self, from: usize, to: usize) -> usize {
         self.state.apply_sweep(from, to)
     }
 
-    /// Devuelve lo que marcó el barrido en curso, dejándolo armado.
-    /// Delegado puro a [`norte_frontend::PaneState::revert_sweep`].
+    /// Returns what the current sweep marked, leaving it armed. Pure
+    /// delegate to [`norte_frontend::PaneState::revert_sweep`].
     pub fn revert_sweep(&mut self) {
         self.state.revert_sweep();
     }
 
-    /// Cierra un barrido, soltando su baseline. Delegado puro a
+    /// Closes a sweep, dropping its baseline. Pure delegate to
     /// [`norte_frontend::PaneState::end_sweep`].
     pub fn end_sweep(&mut self) {
         self.state.end_sweep();
     }
 
-    /// Invierte las marcas de las entradas visibles. Delegado puro (#103).
+    /// Inverts the visible entries' marks. Pure delegate (#103).
     pub fn invert_marks(&mut self) {
         self.state.invert_marks();
     }
 
-    /// Quita todas las marcas. Delegado puro (#103).
+    /// Removes every mark. Pure delegate (#103).
     pub fn clear_marks(&mut self) {
         self.state.clear_marks();
     }
 
-    /// Marca/desmarca por glob; devuelve cuántas marcas cambió (#103).
+    /// Marks/unmarks by glob; returns how many marks it changed (#103).
     ///
     /// # Errors
-    /// Si el patrón no compila.
+    /// If the pattern doesn't compile.
     pub fn mark_glob(
         &mut self,
         pattern: &str,
@@ -649,54 +662,56 @@ impl Pane {
         self.state.mark_glob(pattern, mark)
     }
 
-    /// Cuántas entradas marcadas. Delegado puro (#103).
+    /// How many marked entries. Pure delegate (#103).
     #[must_use]
     pub fn marks_len(&self) -> usize {
         self.state.marks_len()
     }
 
-    /// Tamaño total de los FICHEROS marcados. Delegado puro (#103).
+    /// Total size of the marked FILES. Pure delegate (#103).
     #[must_use]
     pub fn marked_bytes(&self) -> u64 {
         self.state.marked_bytes()
     }
 
-    /// Cuántas entradas marcadas son directorios. Delegado puro (#103) —
-    /// ver [`norte_frontend::PaneState::marked_dirs`].
+    /// How many marked entries are directories. Pure delegate (#103) — see
+    /// [`norte_frontend::PaneState::marked_dirs`].
     #[must_use]
     pub fn marked_dirs(&self) -> usize {
         self.state.marked_dirs()
     }
 
-    /// Marcas que el último refresh en el mismo directorio descartó porque su
-    /// entrada desapareció. Delegado puro (#103) — ver
+    /// Marks the last refresh in the same directory dropped because their
+    /// entry disappeared. Pure delegate (#103) — see
     /// [`norte_frontend::PaneState::pruned_marks`].
     #[must_use]
     pub fn pruned_marks(&self) -> usize {
         self.state.pruned_marks()
     }
 
-    /// Sobre qué opera la acción: marcas, o cursor si no hay. Delegado puro (#103).
+    /// What the action operates on: marks, or the cursor if there are none.
+    /// Pure delegate (#103).
     #[must_use]
     pub fn marked_paths(&self) -> Vec<VPath> {
         self.state.marked_paths()
     }
 
-    /// Siembra las marcas que traía un relevo (fase 9,
+    /// Seeds the marks a handoff carried (phase 9,
     /// [`norte_frontend::PaneState::seed_marks`]).
     pub fn seed_marks(&mut self, paths: impl IntoIterator<Item = VPath>) {
         self.state.seed_marks(paths);
     }
 
-    /// Las entradas MARCADAS, sin caer al cursor. Delegado puro (#312).
+    /// The MARKED entries, without falling back to the cursor. Pure delegate
+    /// (#312).
     #[must_use]
     pub fn marked_entries(&self) -> Vec<&Entry> {
         self.state.marked_entries()
     }
 
-    /// Toggle de ocultos (#107); devuelve el estado nuevo. En el pane
-    /// virtual actúa sobre los RESULTADOS sin tocar la preferencia — al
-    /// volver a un listado real manda `show_hidden_pref`.
+    /// Hidden-files toggle (#107); returns the new state. In the virtual
+    /// pane it acts on the RESULTS without touching the preference — on
+    /// returning to a real listing, `show_hidden_pref` takes over again.
     pub fn toggle_hidden(&mut self) -> bool {
         let now = self.state.toggle_hidden();
         if !self.virtual_search {
@@ -705,55 +720,55 @@ impl Pane {
         now
     }
 
-    /// Siembra la visibilidad de ocultos desde `[ui] show_hidden` (#107):
-    /// fija la preferencia Y el estado actual.
+    /// Seeds hidden-files visibility from `[ui] show_hidden` (#107): sets
+    /// both the preference AND the current state.
     pub fn set_show_hidden(&mut self, show: bool) {
         self.show_hidden_pref = show;
         self.state.set_show_hidden(show);
     }
 
-    /// ¿Se ven los ocultos? Delegado puro.
+    /// Are hidden files shown? Pure delegate.
     #[must_use]
     pub fn show_hidden(&self) -> bool {
         self.state.show_hidden()
     }
 
-    /// Entradas apartadas por la ocultación (#107). Delegado puro.
+    /// Entries set aside by hiding (#107). Pure delegate.
     #[must_use]
     pub fn hidden_count(&self) -> usize {
         self.state.hidden_count()
     }
 
-    /// El orden activo del listado (#108). Delegado puro.
+    /// The listing's active sort (#108). Pure delegate.
     #[must_use]
     pub fn sort(&self) -> norte_frontend::SortSpec {
         self.state.sort()
     }
 
-    /// Cambia el orden del listado (#108). Delegado puro.
+    /// Changes the listing's sort (#108). Pure delegate.
     pub fn set_sort(&mut self, spec: norte_frontend::SortSpec) {
         self.state.set_sort(spec);
     }
 
-    /// Enciende o apaga la fila `..` (`[ui] parent_entry`). Delegado puro.
+    /// Turns the `..` row on or off (`[ui] parent_entry`). Pure delegate.
     pub fn set_parent_row(&mut self, on: bool) {
         self.state.set_parent_row(on);
     }
 
-    /// ¿La fila `i` es la de subir? Delegado puro: lo pregunta el pintado
-    /// —para escribir `..` en vez del nombre del padre— y la navegación.
+    /// Is row `i` the parent one? Pure delegate: asked by rendering — to
+    /// write `..` instead of the parent's name — and by navigation.
     #[must_use]
     pub fn is_parent_row(&self, i: usize) -> bool {
         self.state.is_parent_row(i)
     }
 
-    /// A dónde lleva la fila de subir, si la hay. Delegado puro.
+    /// Where the parent row leads, if there is one. Pure delegate.
     #[must_use]
     pub fn parent_target(&self) -> Option<&VPath> {
         self.state.parent_target()
     }
 
-    /// Instala el lote de decoraciones resuelto (G3b) — ver
+    /// Installs the resolved batch of decorations (G3b) — see
     /// `PaneState::set_decorations`.
     pub fn set_decorations(
         &mut self,
@@ -763,14 +778,14 @@ impl Pane {
     }
 }
 
-/// El formulario de búsqueda y sus piezas viven en el crate COMPARTIDO
-/// ([`norte_frontend::search`]): los dos frontends preguntan la MISMA
-/// búsqueda, y el día que cada uno construya sus propios parámetros divergen
-/// en silencio. Ya pasó con el desenlace de una búsqueda, y por eso existe
-/// `search_status` (ADR 0077).
+/// The search form and its pieces live in the SHARED crate
+/// ([`norte_frontend::search`]): both frontends ask the SAME search, and the
+/// day each builds its own params they drift apart silently. It already
+/// happened with a search's outcome, and that's why `search_status` exists
+/// (ADR 0077).
 ///
-/// Se re-exportan con los nombres de aquí para que el resto del terminal no
-/// note el traslado: `SearchDialog` es como se llama esta pantalla.
+/// Re-exported under the names used here so the rest of the terminal doesn't
+/// notice the move: `SearchDialog` is what this screen is called.
 pub use norte_frontend::search::{
     SearchField, SearchForm as SearchDialog, SearchKinds, parse_days,
 };
@@ -782,7 +797,7 @@ mod tests {
     use crate::app::testutil::*;
     use norte_proto::{EntryKind, VPath};
 
-    /// `extend_listing` re-ordena TODO el listado (primera página + lote).
+    /// `extend_listing` re-sorts the WHOLE listing (first page + batch).
     #[test]
     fn extend_reordena_todo() {
         let mut first = vec![file("b.txt"), file("d.txt")];
@@ -793,15 +808,15 @@ mod tests {
         assert_eq!(names(&p), vec!["a.txt", "b.txt", "c.txt", "d.txt"]);
     }
 
-    /// El cursor se re-ancla al PATH seleccionado, no al índice: rellenar no
-    /// mueve la selección del usuario bajo sus pies.
+    /// The cursor re-anchors to the selected PATH, not the index: filling
+    /// doesn't move the user's selection under their feet.
     #[test]
     fn extend_reancla_el_cursor_por_path() {
         let mut first = vec![file("m.txt"), file("z.txt")];
         sort_entries(&mut first);
         let mut p = Pane::new(root(), first);
         p.set_cursor(1); // "z.txt"
-        // Llega un lote de nombres que ordenan ANTES: z.txt se desplaza.
+        // A batch of names arrives that sort BEFORE: z.txt shifts.
         p.extend_listing(vec![file("a.txt"), file("b.txt")]);
         assert_eq!(names(&p), vec!["a.txt", "b.txt", "m.txt", "z.txt"]);
         assert_eq!(
@@ -810,7 +825,7 @@ mod tests {
         );
     }
 
-    /// Un lote vacío no altera nada (fin del drenado sin cola).
+    /// An empty batch changes nothing (end of drain with no queue).
     #[test]
     fn extend_vacio_es_noop() {
         let mut p = Pane::new(root(), vec![file("a.txt")]);
@@ -820,7 +835,7 @@ mod tests {
         assert_eq!(p.cursor(), 0);
     }
 
-    /// `finish_listing` limpia el flag de carga.
+    /// `finish_listing` clears the loading flag.
     #[test]
     fn finish_limpia_loading() {
         let mut p = Pane::new(root(), vec![]);
@@ -829,9 +844,9 @@ mod tests {
         assert!(!p.loading());
     }
 
-    /// Filtro activo: `selected()` (la base de F5/F8/F3…) apunta a la
-    /// selección DENTRO del filtro; cancelar restaura el listado completo
-    /// con el cursor real donde estaba (el filtro jamás lo movió).
+    /// Active filter: `selected()` (F5/F8/F3…'s basis) points at the
+    /// selection WITHIN the filter; cancelling restores the full listing
+    /// with the real cursor where it was (the filter never moved it).
     #[test]
     fn quick_filter_redirige_seleccion_y_ops() {
         let mut p = pane_con(&["a1", "b", "a2"]);
@@ -840,7 +855,7 @@ mod tests {
         assert_eq!(
             p.selected().unwrap().path,
             vp("mem:///a1"),
-            "selected respeta el filtro"
+            "selected respects the filter"
         );
         p.quick_down();
         assert_eq!(p.selected().unwrap().path, vp("mem:///a2"));
@@ -848,12 +863,12 @@ mod tests {
         assert_eq!(
             p.selected().unwrap().path,
             vp("mem:///a1"),
-            "restaurado: cursor al último real"
+            "restored: cursor to the last real one"
         );
     }
 
-    /// Confirmar fija el cursor REAL a lo seleccionado en el filtro y cierra
-    /// (Enter: la op siguiente —cd, view— parte de ese cursor).
+    /// Confirming sets the REAL cursor to what's selected in the filter and
+    /// closes it (Enter: the next op — cd, view — starts from that cursor).
     #[test]
     fn quick_confirm_fija_el_cursor_real() {
         let mut p = pane_con(&["a1", "b", "a2"]);
@@ -861,111 +876,116 @@ mod tests {
         p.quick_char('a');
         p.quick_down();
         p.quick_confirm();
-        assert!(p.quick().is_none(), "confirmar cierra el quick search");
-        // #54: normalizado, el orden real es [a1, a2, b] — a2 al índice 1.
-        assert_eq!(p.cursor(), 1, "cursor real = índice real de a2");
+        assert!(p.quick().is_none(), "confirming closes quick search");
+        // #54: normalized, the real order is [a1, a2, b] — a2 at index 1.
+        assert_eq!(p.cursor(), 1, "real cursor = a2's real index");
         assert_eq!(p.selected().unwrap().path, vp("mem:///a2"));
     }
 
-    /// Un lote nuevo del fill re-aplica el filtro (spec: al llegar lotes
-    /// nuevos el filtro se re-aplica, no se congela).
+    /// A new batch from the fill re-applies the filter (spec: on new
+    /// batches arriving the filter gets re-applied, not frozen).
     #[test]
     fn extend_listing_reaplica_el_filtro() {
         let mut p = pane_con(&["a1"]);
         p.quick_start(crate::nav::Mode::Filter);
         p.quick_char('a');
         p.extend_listing(vec![file("a2"), file("zz")]);
-        assert_eq!(p.quick_visible().unwrap().len(), 2, "a2 entra, zz no");
+        assert_eq!(
+            p.quick_visible().unwrap().len(),
+            2,
+            "a2 gets in, zz doesn't"
+        );
     }
 
-    /// review MAJOR T4: con el filtro SIN matches la pantalla lista vacío —
-    /// Enter jamás debe actuar sobre la entrada del cursor real (invisible
-    /// para el usuario). `quick_confirm` devuelve false y no toca el cursor.
+    /// review MAJOR T4: with the filter having NO matches the list paints
+    /// empty — Enter must never act on the real cursor's entry (invisible
+    /// to the user). `quick_confirm` returns false and doesn't touch the
+    /// cursor.
     #[test]
     fn enter_sin_matches_no_actua_sobre_entrada_invisible() {
         let mut p = pane_con(&["a1", "b", "a2"]);
         p.set_cursor(1);
         p.quick_start(crate::nav::Mode::Filter);
-        p.quick_char('x'); // cero matches
-        assert!(p.selected().is_none(), "sin matches no hay selección");
+        p.quick_char('x'); // zero matches
+        assert!(p.selected().is_none(), "no matches means no selection");
         assert!(
             !p.quick_confirm(),
-            "confirmar sin matches NO fija selección"
+            "confirming with no matches does NOT set a selection"
         );
-        assert!(p.quick().is_none(), "el quick search sí se cierra");
-        assert_eq!(p.cursor(), 1, "el cursor real queda intacto");
+        assert!(p.quick().is_none(), "quick search does close");
+        assert_eq!(p.cursor(), 1, "the real cursor stays untouched");
     }
 
-    /// Modo salto: el listado NO cambia; teclear mueve el cursor REAL al
-    /// primer match y Tab (`quick_next`) al siguiente con wrap.
+    /// Jump mode: the listing does NOT change; typing moves the REAL cursor
+    /// to the first match and Tab (`quick_next`) to the next one with wrap.
     #[test]
     fn quick_jump_mueve_el_cursor_real() {
-        // #54: normalizado, el orden real es [ab, ac, zz] — ab y ac casan.
+        // #54: normalized, the real order is [ab, ac, zz] — ab and ac match.
         let mut p = pane_con(&["ab", "zz", "ac"]);
         p.quick_start(crate::nav::Mode::Jump);
         p.quick_char('a');
-        assert_eq!(p.cursor(), 0, "salta al primer match");
+        assert_eq!(p.cursor(), 0, "jumps to the first match");
         assert!(
             p.quick_visible().is_none(),
-            "en salto el listado queda intacto"
+            "in jump the listing stays untouched"
         );
         p.quick_next();
-        assert_eq!(p.cursor(), 1, "Tab: siguiente match");
+        assert_eq!(p.cursor(), 1, "Tab: next match");
         p.quick_next();
         assert_eq!(p.cursor(), 0, "wrap");
         assert_eq!(p.selected().unwrap().path, vp("mem:///ab"));
     }
 
-    /// El contrato de `QuickSearch::refresh` (T1) de punta a punta:
-    /// `extend_listing` RE-SORTEA el listado entero, así que la selección
-    /// del filtro se conserva por PATH, jamás por índice.
+    /// `QuickSearch::refresh`'s contract (T1) end to end: `extend_listing`
+    /// RE-SORTS the whole listing, so the filter's selection is kept by
+    /// PATH, never by index.
     #[test]
     fn extend_con_resort_conserva_seleccion_por_path() {
         let mut p = pane_con(&["a1", "a2"]);
         p.quick_start(crate::nav::Mode::Filter);
         p.quick_char('a');
-        p.quick_down(); // selecciona a2 (índice real 1)
+        p.quick_down(); // selects a2 (real index 1)
         assert_eq!(p.selected().unwrap().path, vp("mem:///a2"));
-        // "a0" ordena ANTES: a2 pasa del índice real 1 al 2 tras el sort.
+        // "a0" sorts BEFORE: a2 moves from real index 1 to 2 after sorting.
         p.extend_listing(vec![file("a0")]);
         assert_eq!(
             p.selected().unwrap().path,
             vp("mem:///a2"),
-            "la selección sigue en el MISMO path tras el resort"
+            "the selection stays on the SAME path after re-sorting"
         );
     }
 
-    /// Edge de T4 (review): en Jump con query SIN matches el listado se
-    /// pinta ENTERO — el cursor real es visible por definición, así que
-    /// Enter SÍ puede operar sobre él (en Filter sigue siendo `false`).
+    /// T4's edge case (review): in Jump with a query with NO matches the
+    /// listing paints WHOLE — the real cursor is visible by definition, so
+    /// Enter CAN operate on it (in Filter it's still `false`).
     #[test]
     fn enter_en_jump_sin_matches_opera_sobre_el_cursor_visible() {
         let mut p = pane_con(&["a1", "b"]);
         p.set_cursor(1);
         p.quick_start(crate::nav::Mode::Jump);
-        p.quick_char('x'); // cero matches; el listado no cambió
+        p.quick_char('x'); // zero matches; the listing didn't change
         assert!(
             p.quick_confirm(),
-            "en Jump el cursor real ES visible: Enter opera"
+            "in Jump the real cursor IS visible: Enter operates"
         );
-        assert!(p.quick().is_none(), "el quick search se cierra");
-        assert_eq!(p.cursor(), 1, "el cursor real queda donde estaba");
+        assert!(p.quick().is_none(), "quick search closes");
+        assert_eq!(p.cursor(), 1, "the real cursor stays where it was");
 
-        // Con el pane VACÍO ni Jump confirma (no hay nada visible).
+        // With an EMPTY pane, not even Jump confirms (nothing visible).
         let mut empty = pane_con(&[]);
         empty.quick_start(crate::nav::Mode::Jump);
         assert!(
             !empty.quick_confirm(),
-            "sin entradas no hay nada que operar"
+            "with no entries there's nothing to operate on"
         );
     }
 
-    /// #103 review MAJOR-4: `Pane` delega la API de marcas en `PaneState`
-    /// sin reimplementar nada — pero el set de partida debe ser ASIMÉTRICO
-    /// en cada paso, o `mark_all`/`invert_marks`/`clear_marks` quedan
-    /// indistinguibles entre sí (p. ej. sobre un set vacío, `mark_all` e
-    /// `invert_marks` dan el mismo resultado). Cada aserción de abajo
-    /// falsaría si esa llamada se sustituyera por CUALQUIER otra delegada.
+    /// #103 review MAJOR-4: `Pane` delegates the mark API to `PaneState`
+    /// without reimplementing anything — but the starting set has to be
+    /// ASYMMETRIC at each step, or `mark_all`/`invert_marks`/`clear_marks`
+    /// become indistinguishable from each other (e.g. over an empty set,
+    /// `mark_all` and `invert_marks` give the same result). Each assertion
+    /// below would fail if that call were swapped for ANY other delegate.
     #[test]
     fn pane_delegates_the_mark_api() {
         let mut p = Pane::new(
@@ -980,43 +1000,44 @@ mod tests {
         let b = p.entries()[1].clone();
         let c = p.entries()[2].clone();
 
-        // toggle_mark: marca SOLO la entrada bajo el cursor ("a").
+        // toggle_mark: marks ONLY the entry under the cursor ("a").
         p.toggle_mark();
         assert_eq!(p.marks_len(), 1);
         assert!(p.is_marked(&a) && !p.is_marked(&b) && !p.is_marked(&c));
 
-        // mark_all desde {a}: las TRES, incluida "a" — si esto llamara a
-        // invert_marks en su lugar, "a" se desmarcaría y el total sería 2.
+        // mark_all from {a}: all THREE, "a" included — if this called
+        // invert_marks instead, "a" would get unmarked and the total would
+        // be 2.
         p.mark_all();
         assert_eq!(p.marks_len(), 3);
         assert!(p.is_marked(&a) && p.is_marked(&b) && p.is_marked(&c));
 
-        // Reset a un set asimétrico de nuevo para poder distinguir invert.
+        // Reset to an asymmetric set again to be able to tell invert apart.
         p.clear_marks();
         p.toggle_mark(); // {a}
 
-        // invert_marks desde {a}: exactamente LAS OTRAS DOS — ni el set
-        // vacío que daría clear_marks, ni las tres que daría mark_all.
+        // invert_marks from {a}: exactly THE OTHER TWO — neither the empty
+        // set clear_marks would give, nor the three mark_all would give.
         p.invert_marks();
         assert_eq!(p.marks_len(), 2);
         assert!(!p.is_marked(&a) && p.is_marked(&b) && p.is_marked(&c));
 
-        // clear_marks desde {b, c}: vacío — invert_marks aquí daría {a}
-        // (marks_len 1), mark_all daría 3.
+        // clear_marks from {b, c}: empty — invert_marks here would give {a}
+        // (marks_len 1), mark_all would give 3.
         p.clear_marks();
         assert_eq!(p.marks_len(), 0);
     }
 
-    /// El dispatch real de `mark.toggle` (main.rs) es una ÚNICA llamada a
-    /// `toggle_mark_and_advance` (#103 review MAJOR-2: la composición
-    /// "marca + avanza" ya no se parte en dos llamadas del dispatch —
-    /// vive entera en el modelo compartido, que decide avanzar dentro del
-    /// filtro o el cursor real; ver
+    /// `mark.toggle`'s real dispatch (main.rs) is a SINGLE call to
+    /// `toggle_mark_and_advance` (#103 review MAJOR-2: the "mark + advance"
+    /// composition is no longer split into two dispatch calls — it lives
+    /// whole in the shared model, which decides whether to advance inside
+    /// the filter or over the real cursor; see
     /// `norte_frontend::pane::tests::toggle_mark_and_advance_stays_inside_an_active_filter`
-    /// para el caso con filtro). `dispatch` en sí no es testeable aquí sin
-    /// un daemon real (pide `&Backend`/`&mut EventStream`), así que este
-    /// test pinea la misma llamada al nivel de `Pane`: marca Y avanza, y en
-    /// la última fila no envuelve.
+    /// for the filtered case). `dispatch` itself isn't testable here without
+    /// a real daemon (it needs `&Backend`/`&mut EventStream`), so this test
+    /// pins the same call at `Pane`'s level: marks AND advances, and on the
+    /// last row it doesn't wrap.
     #[test]
     fn mark_toggle_advances_without_wrapping_at_the_end() {
         let mut p = Pane::new(
@@ -1032,21 +1053,21 @@ mod tests {
 
         p.toggle_mark_and_advance();
         assert_eq!(p.marks_len(), 1);
-        assert!(p.is_marked(&a), "la fila 0 quedó marcada");
-        assert_eq!(p.cursor(), 1, "el cursor avanzó tras marcar");
+        assert!(p.is_marked(&a), "row 0 got marked");
+        assert_eq!(p.cursor(), 1, "the cursor advanced after marking");
 
-        // Última fila: togglear + avanzar NO debe envolver a 0.
+        // Last row: toggling + advancing must NOT wrap to 0.
         p.toggle_mark_and_advance();
         assert_eq!(p.marks_len(), 2);
-        assert!(p.is_marked(&b), "la fila 1 (última) también quedó marcada");
-        assert_eq!(p.cursor(), 1, "clampado en la última fila, no envuelve");
+        assert!(p.is_marked(&b), "row 1 (last) also got marked");
+        assert_eq!(p.cursor(), 1, "clamped on the last row, doesn't wrap");
     }
 
-    /// #107 review MAJOR-1: los hits de una búsqueda son EXPLÍCITOS — el
-    /// pane virtual suspende el filtro de ocultos. Con `[ui] show_hidden =
-    /// false`, buscar "env" DEBE enseñar `.env`: tragárselo en silencio
-    /// (mientras el contador de hits decía 1 sobre un pane vacío) era el
-    /// bug. Al volver a un listado real, la preferencia vuelve a mandar.
+    /// #107 review MAJOR-1: a search's hits are EXPLICIT — the virtual pane
+    /// suspends the hidden-files filter. With `[ui] show_hidden = false`,
+    /// searching "env" MUST show `.env`: swallowing it silently (while the
+    /// hit counter said 1 over an empty-looking pane) was the bug. On
+    /// returning to a real listing, the preference takes over again.
     #[test]
     fn el_pane_virtual_de_busqueda_ensena_hits_ocultos() {
         let mut p = Pane::new(
@@ -1056,23 +1077,23 @@ mod tests {
                 e("mem:///a", EntryKind::File),
             ],
         );
-        p.set_show_hidden(false); // seed de config: ocultar
-        assert_eq!(p.entries().len(), 1, "el listado real filtra");
+        p.set_show_hidden(false); // config seed: hide
+        assert_eq!(p.entries().len(), 1, "the real listing filters");
 
         p.begin_search(VPath::parse("mem:///").unwrap());
         p.extend_listing(vec![e("mem:///sub/.env", EntryKind::File)]);
         assert_eq!(
             p.entries().len(),
             1,
-            "el hit oculto ES visible en el pane virtual"
+            "the hidden hit IS visible in the virtual pane"
         );
 
-        // Ctrl+H dentro del pane virtual filtra los RESULTADOS…
+        // Ctrl+H inside the virtual pane filters the RESULTS…
         p.toggle_hidden();
         assert_eq!(p.entries().len(), 0);
 
-        // …pero NO toca la preferencia: el listado real vuelve filtrando
-        // (y un toggle en el real sí la cambia).
+        // …but does NOT touch the preference: the real listing comes back
+        // filtering (and a toggle on the real one does change it).
         p.set_listing(
             VPath::parse("mem:///").unwrap(),
             vec![
@@ -1080,9 +1101,9 @@ mod tests {
                 e("mem:///a", EntryKind::File),
             ],
         );
-        assert_eq!(p.entries().len(), 1, "la preferencia (ocultar) manda");
+        assert_eq!(p.entries().len(), 1, "the preference (hide) takes over");
         p.toggle_hidden();
-        assert_eq!(p.entries().len(), 2, "toggle real: mostrar");
+        assert_eq!(p.entries().len(), 2, "real toggle: show");
         p.begin_listing(
             VPath::parse("mem:///sub").unwrap(),
             vec![
@@ -1095,29 +1116,29 @@ mod tests {
         assert_eq!(
             p.entries().len(),
             2,
-            "begin_listing respeta la preferencia nueva (mostrar)"
+            "begin_listing respects the new preference (show)"
         );
     }
 
-    /// Tab recorre los siete campos y vuelve al primero.
+    /// Tab walks all seven fields and wraps back to the first.
     #[test]
     fn tab_da_la_vuelta_entera() {
         let mut d = SearchDialog::new();
-        let primero = d.field;
+        let first = d.field;
         for _ in 0..SearchField::ORDEN.len() {
             d.toggle_field();
         }
-        assert_eq!(d.field, primero, "una vuelta completa");
-        // Y cada parada escribe en SU campo, que es lo que el pintado
-        // presupone al marcar el cursor.
+        assert_eq!(d.field, first, "a full loop");
+        // And each stop writes into ITS field, which is what rendering
+        // assumes when marking the cursor.
         for f in SearchField::ORDEN {
             d.field = f;
             d.push_char('x');
-            assert!(d.texto(f).ends_with('x'), "{f:?} no recibió la tecla");
+            assert!(d.texto(f).ends_with('x'), "{f:?} didn't receive the key");
         }
     }
 
-    /// Los nombres a excluir se parten por comas y se limpian.
+    /// Names to exclude are split by commas and trimmed.
     #[test]
     fn los_nombres_a_excluir_se_parten_por_comas() {
         let mut d = SearchDialog::new();

@@ -1,22 +1,22 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// La disposición proyectada, y un snapshot que de verdad reemplaza (fase 3).
+// The projected layout, and a snapshot that really replaces (phase 3).
 // ---------------------------------------------------------------------------
 
-/// Espera la siguiente actualización que traiga el VISOR.
+/// Waits for the next update that carries the VIEWER.
 ///
-/// Viaja como parche desde la versión 6: una foto entera por cada línea de
-/// scroll mandaba las filas de todos los listados de debajo.
+/// It travels as a patch since version 6: a whole snapshot per scroll line
+/// used to send every listing's rows underneath.
 pub(super) async fn siguiente_visor(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::ViewerView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización con visor, no un cuelgue")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente {
+            .expect("an update with a viewer, not a hang")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next {
             match &m.payload {
                 UiUpdate::Patch(p) => {
                     for c in &p.changes {
@@ -30,19 +30,19 @@ pub(super) async fn siguiente_visor(
             }
         }
     }
-    panic!("no llegó ninguna actualización con visor");
+    panic!("no update with a viewer ever arrived");
 }
 
-/// Espera la siguiente actualización que traiga disposición.
+/// Waits for the next update that carries a layout.
 pub(super) async fn siguiente_disposicion(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::dto::LayoutView {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización con disposición, no un cuelgue")
-            .expect("el host sigue vivo");
-        match siguiente {
+            .expect("an update with a layout, not a hang")
+            .expect("the host is still alive");
+        match next {
             Update::Message(m) => {
                 if let UiUpdate::Patch(p) = &m.payload {
                     for c in &p.changes {
@@ -55,83 +55,80 @@ pub(super) async fn siguiente_disposicion(
                     return s.layout.clone();
                 }
             }
-            Update::Lagged => panic!("sin retraso en este test"),
+            Update::Lagged => panic!("no lag in this test"),
         }
     }
-    panic!("no llegó ninguna actualización con disposición");
+    panic!("no update with a layout ever arrived");
 }
 
-/// El renderer no reparte la pantalla: la recibe repartida.
+/// The renderer does not split the screen: it receives it already split.
 ///
-/// Sin esto, colocar dos paneles sería una regla de presentación escrita en
-/// TypeScript — exactamente lo que la decisión D14 prohíbe—, y encima una
-/// distinta de la del TUI.
+/// Without this, placing two panels would be a presentation rule written in
+/// TypeScript — exactly what decision D14 forbids — and on top of that a
+/// different one from the TUI's.
 #[tokio::test]
-async fn el_snapshot_reparte_la_pantalla_por_el_renderer() {
+async fn the_snapshot_splits_the_screen_through_the_renderer() {
     let (_h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
     let l = &snap.layout;
-    assert_eq!(l.cells, (120, 40), "el reparto es del tamaño que se le dio");
-    let listados: Vec<&norte_ui_host::dto::SlotPlacement> = l
+    assert_eq!(l.cells, (120, 40), "the split is the size it was given");
+    let listings: Vec<&norte_ui_host::dto::SlotPlacement> = l
         .placements
         .iter()
         .filter(|p| [1, 2].contains(&p.slot_id))
         .collect();
-    assert_eq!(
-        listados.len(),
-        2,
-        "la disposición de siempre son dos listados"
-    );
-    let izq = listados[0];
-    let der = listados[1];
+    assert_eq!(listings.len(), 2, "the usual layout is two listings");
+    let left = listings[0];
+    let right = listings[1];
     assert!(
-        izq.width > 0 && izq.height > 0,
-        "un hueco pintable tiene área"
+        left.width > 0 && left.height > 0,
+        "a paintable slot has area"
     );
     assert!(
-        izq.x + izq.width <= der.x,
-        "y los dos listados no se solapan: {izq:?} vs {der:?}"
+        left.x + left.width <= right.x,
+        "and the two listings do not overlap: {left:?} vs {right:?}"
     );
 }
 
-/// Activo y destino los resuelve el host, con la MISMA regla que el TUI: el
-/// destino es el otro listado visible. El renderer solo los pinta.
+/// Active and target are resolved by the host, with the SAME rule as the
+/// TUI: the target is the other visible listing. The renderer only paints
+/// them.
 #[tokio::test]
-async fn los_roles_los_resuelve_el_host_no_el_renderer() {
+async fn roles_are_resolved_by_the_host_not_the_renderer() {
     use norte_ui_host::dto::SlotRole;
     let (h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
-    let rol = |l: &norte_ui_host::dto::LayoutView, id: u32| {
+    let role = |l: &norte_ui_host::dto::LayoutView, id: u32| {
         l.placements
             .iter()
             .find(|p| p.slot_id == id)
             .and_then(|p| p.role)
     };
-    assert_eq!(rol(&snap.layout, 1), Some(SlotRole::Active));
-    assert_eq!(rol(&snap.layout, 2), Some(SlotRole::Target));
+    assert_eq!(role(&snap.layout, 1), Some(SlotRole::Active));
+    assert_eq!(role(&snap.layout, 2), Some(SlotRole::Target));
 
     let mut sub = h.subscribe();
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
-    let despues = siguiente_disposicion(&mut sub).await;
-    assert_eq!(rol(&despues, 2), Some(SlotRole::Active), "el foco cambió");
+        .expect("host alive");
+    let after = siguiente_disposicion(&mut sub).await;
+    assert_eq!(role(&after, 2), Some(SlotRole::Active), "focus changed");
     assert_eq!(
-        rol(&despues, 1),
+        role(&after, 1),
         Some(SlotRole::Target),
-        "y el destino también"
+        "and so did the target"
     );
 }
 
-/// Cambiar el tamaño de la ventana reparte otra vez, y el renderer se entera
-/// por el mismo canal ordenado que todo lo demás.
+/// Resizing the window splits again, and the renderer finds out through the
+/// same ordered channel as everything else.
 #[tokio::test]
-async fn un_resize_reparte_otra_vez_y_lo_dice() {
+async fn a_resize_splits_again_and_says_so() {
     let (h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
-    let ancho_antes = snap
+    let width_before = snap
         .layout
         .placements
         .iter()
         .find(|p| p.slot_id == 1)
-        .expect("el listado izquierdo se pinta")
+        .expect("the left listing is painted")
         .width;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SetViewport {
@@ -139,139 +136,140 @@ async fn un_resize_reparte_otra_vez_y_lo_dice() {
         height: 60,
     })
     .await
-    .expect("host vivo");
-    let despues = siguiente_disposicion(&mut sub).await;
-    assert_eq!(despues.cells, (200, 60));
-    let ancho_despues = despues
+    .expect("host alive");
+    let after = siguiente_disposicion(&mut sub).await;
+    assert_eq!(after.cells, (200, 60));
+    let width_after = after
         .placements
         .iter()
         .find(|p| p.slot_id == 1)
-        .expect("sigue pintándose")
+        .expect("still painted")
         .width;
     assert!(
-        ancho_despues > ancho_antes,
-        "una ventana más ancha da listados más anchos: {ancho_antes} -> {ancho_despues}"
+        width_after > width_before,
+        "a wider window gives wider listings: {width_before} -> {width_after}"
     );
 }
 
-/// Un snapshot REEMPLAZA el estado del renderer, así que tiene que llevarlo
-/// entero. Si un resync se comiera el diálogo abierto, el renderer se quedaría
-/// pintando una pantalla sin la pregunta que está esperando respuesta — y la
-/// operación destructiva seguiría ahí, viva y sin confirmar.
+/// A snapshot REPLACES the renderer's state, so it has to carry it whole. If
+/// a resync swallowed the open dialog, the renderer would end up painting a
+/// screen with no question that is waiting for an answer — and the
+/// destructive operation would still be there, alive and unconfirmed.
 #[tokio::test]
-async fn un_resync_no_se_come_el_dialogo_abierto() {
+async fn a_resync_does_not_swallow_the_open_dialog() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
-    let abierto = siguientes_dialogos(&mut sub).await;
-    assert_eq!(abierto.len(), 1);
+    h.dispatch(tecla("F8")).await.expect("host alive");
+    let open = siguientes_dialogos(&mut sub).await;
+    assert_eq!(open.len(), 1);
 
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
     assert_eq!(
-        foto.dialogs, abierto,
-        "el snapshot lleva el diálogo que hay abierto"
+        snap.dialogs, open,
+        "the snapshot carries the dialog that is open"
     );
 }
 
-/// Lo mismo para el tablero: una copia en marcha no puede desaparecer porque
-/// el renderer haya pedido una foto nueva.
+/// Same for the board: a copy in progress cannot disappear because the
+/// renderer requested a new snapshot.
 #[tokio::test]
-async fn un_resync_no_se_come_las_tasks_vivas() {
+async fn a_resync_does_not_swallow_live_tasks() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F7")).await.expect("host vivo");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let id = dialogos[0].id;
+    h.dispatch(tecla("F7")).await.expect("host alive");
+    let dialogs = siguientes_dialogos(&mut sub).await;
+    let id = dialogs[0].id;
     h.dispatch(UiAction::DialogInput {
         id,
         text: "nueva".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let vivas = siguientes_tasks(&mut sub).await;
-    assert!(!vivas.is_empty(), "hay una task en el tablero");
+    .expect("host alive");
+    let alive = siguientes_tasks(&mut sub).await;
+    assert!(!alive.is_empty(), "there is a task on the board");
 
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(foto.tasks, vivas, "el snapshot lleva el tablero entero");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert_eq!(snap.tasks, alive, "the snapshot carries the whole board");
 }
 
-/// Espera a que el falso reciba un lote de `dir_size` (el brazo lo lanza en
-/// una tarea aparte, así que no está listo al volver del dispatch).
-pub(super) async fn siguiente_recuento(falso: &Falso) -> Vec<VPath> {
+/// Waits for the fake to receive a `dir_size` batch (the arm launches it in a
+/// separate task, so it is not ready right when dispatch returns).
+pub(super) async fn siguiente_recuento(fake: &Falso) -> Vec<VPath> {
     for _ in 0..200 {
-        if let Some(lote) = falso.recuentos.lock().expect("recuentos").first() {
-            return lote.clone();
+        if let Some(batch) = fake.recuentos.lock().expect("recuentos").first() {
+            return batch.clone();
         }
         tokio::task::yield_now().await;
     }
-    panic!("nadie pidió contar");
+    panic!("nobody requested a count");
 }
 
-/// El mensaje de la barra tras un desenlace, reintentando: el progreso viaja
-/// por su propio canal y el parche puede tardar un tick en salir.
+/// The bar's message after an outcome, retrying: progress travels on its own
+/// channel and the patch can take a tick to come out.
 pub(super) async fn siguiente_mensaje_de_estado(
     h: &UiHost,
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) -> String {
-    // Cada vuelta es un viaje de ida y vuelta al actor: el bucle avanza al
-    // ritmo del host, no al del reloj.
+    // Each round is a round trip to the actor: the loop advances at the
+    // host's pace, not the clock's.
     for _ in 0..2_000 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(sub).await;
-        if let Some(m) = foto.status.message.clone() {
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(sub).await;
+        if let Some(m) = snap.status.message.clone() {
             return m;
         }
     }
-    panic!("la barra no dijo nada");
+    panic!("the bar said nothing");
 }
 
-/// `pane.dir-size` cuenta lo MARCADO, y en UNA sola Task (#139, #290).
+/// `pane.dir-size` counts what is MARKED, and in ONE single Task (#139,
+/// #290).
 ///
-/// Una Task por marca obligaría a quien pregunta a sumar los bytes y los
-/// ilegibles por su cuenta, y esos dos no se suman igual.
+/// A Task per mark would force whoever is asking to add up the bytes and the
+/// unreadable ones themselves, and the two do not add up the same way.
 #[tokio::test]
-async fn contar_el_tamano_manda_las_marcas_en_un_solo_lote() {
+async fn counting_size_sends_the_marks_in_a_single_batch() {
     let backend = Arc::new(arbol_como_falso());
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
-    let epoca = listado(&snap).generation;
+    let generation = listado(&snap).generation;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::MarkRange {
         slot_id: 1,
         from: RowKey(1),
         to: RowKey(2),
-        generation: epoca,
+        generation,
     })
     .await
-    .expect("host vivo");
-    let _ = sub.recv().await.expect("host vivo");
+    .expect("host alive");
+    let _ = sub.recv().await.expect("host alive");
 
     ejecutar_por_paleta(&h, &mut sub, "pane.dir-size").await;
 
-    let lote = siguiente_recuento(&backend).await;
-    assert_eq!(lote.len(), 2, "las dos marcas, en un solo lote: {lote:?}");
+    let batch = siguiente_recuento(&backend).await;
+    assert_eq!(batch.len(), 2, "both marks, in a single batch: {batch:?}");
     assert_eq!(
         backend.recuentos.lock().expect("recuentos").len(),
         1,
-        "y una sola Task"
+        "and a single Task"
     );
 }
 
-/// **El total de un recuento se DICE.** `fs.dir_size` no publica nada: su
-/// resultado es su progreso terminal, así que sin esto la ventana lanzaría la
-/// cuenta, la vería terminar y no diría jamás cuánto ocupaba.
+/// **A count's total is SAID.** `fs.dir_size` publishes nothing: its result
+/// is its terminal progress, so without this the window would launch the
+/// count, watch it finish, and never say how much it took up.
 #[tokio::test]
-async fn el_total_de_un_recuento_llega_a_la_barra() {
+async fn a_counts_total_reaches_the_bar() {
     let backend = Arc::new(arbol_como_falso());
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -283,25 +281,25 @@ async fn el_total_de_un_recuento_llega_a_la_barra() {
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| {
         p.state = norte_proto::TaskState::Completed;
         p.bytes_done = 2048;
         p.entries_done = 3;
     });
 
-    let mensaje = siguiente_mensaje_de_estado(&h, &mut sub).await;
+    let message = siguiente_mensaje_de_estado(&h, &mut sub).await;
     assert!(
-        mensaje.contains('3'),
-        "el total dice cuántas entradas: {mensaje}"
+        message.contains('3'),
+        "the total says how many entries: {message}"
     );
 }
 
-/// Y lo que NO se pudo leer cambia la frase: un recuento sirve para decidir si
-/// algo CABE, así que un total redondo sin haber podido contarlo entero es una
-/// respuesta equivocada, no una incompleta.
+/// And what could NOT be read changes the sentence: a count exists to decide
+/// whether something FITS, so a round total that could not count everything
+/// is a wrong answer, not an incomplete one.
 #[tokio::test]
-async fn un_recuento_con_ilegibles_no_da_el_total_a_secas() {
+async fn a_count_with_unreadable_entries_does_not_give_a_plain_total() {
     let backend = Arc::new(arbol_como_falso());
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -313,7 +311,7 @@ async fn un_recuento_con_ilegibles_no_da_el_total_a_secas() {
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| {
         p.state = norte_proto::TaskState::Completed;
         p.bytes_done = 2048;
@@ -321,80 +319,81 @@ async fn un_recuento_con_ilegibles_no_da_el_total_a_secas() {
         p.unreadable = Some(2);
     });
 
-    let mensaje = siguiente_mensaje_de_estado(&h, &mut sub).await;
+    let message = siguiente_mensaje_de_estado(&h, &mut sub).await;
     assert!(
-        mensaje.contains('2'),
-        "tiene que decir cuántas no pudo leer: {mensaje}"
+        message.contains('2'),
+        "it has to say how many it could not read: {message}"
     );
     assert_ne!(
-        mensaje,
+        message,
         norte_i18n::ta_in(
             norte_i18n::Lang::Es,
             "msg-dir-size",
             &[("size", "2,0 KB"), ("count", "3")]
         ),
-        "y no puede ser la frase del total redondo"
+        "and it cannot be the plain round-total sentence"
     );
 }
 
-/// Sin marcas se cuenta lo que hay bajo el CURSOR: es la misma fuente de
-/// «sobre qué opera esto» que usa una transferencia, y no un segundo respaldo
-/// que se pueda separar del primero.
+/// With no marks, what is under the CURSOR is counted: it is the same
+/// source of "what does this operate on" a transfer uses, and not a second
+/// fallback that can drift apart from the first.
 #[tokio::test]
-async fn contar_el_tamano_sin_marcas_usa_el_cursor() {
+async fn counting_size_with_no_marks_uses_the_cursor() {
     let backend = Arc::new(arbol_como_falso());
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.dir-size").await;
 
-    let lote = siguiente_recuento(&backend).await;
-    assert_eq!(lote.len(), 1, "solo el del cursor: {lote:?}");
+    let batch = siguiente_recuento(&backend).await;
+    assert_eq!(batch.len(), 1, "just the cursor's: {batch:?}");
 }
 
-/// Un barrido con el ratón marca el rango entero de UNA vez, con la regla
-/// compartida: qué entra en el rango no lo decide quien pinta.
+/// A mouse sweep marks the whole range at ONCE, with the shared rule: what
+/// falls in the range is not decided by whoever paints.
 #[tokio::test]
-async fn un_rango_se_marca_de_una_vez() {
+async fn a_range_gets_marked_all_at_once() {
     let (h, snap) = host(vec!["a", "b", "c", "d", "e"]).await;
     assert_eq!(listado(&snap).marks, 0);
-    let epoca = listado(&snap).generation;
+    let generation = listado(&snap).generation;
     let mut sub = h.subscribe();
     let ack = h
         .dispatch(UiAction::MarkRange {
             slot_id: 1,
             from: RowKey(3),
             to: RowKey(1),
-            generation: epoca,
+            generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }));
-    let _ = sub.recv().await.expect("el host sigue vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
+    let _ = sub.recv().await.expect("the host is still alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
     assert_eq!(
-        listado(&foto).marks,
+        listado(&snap).marks,
         3,
-        "los extremos entran, y el orden en que se dan da igual"
+        "the ends are included, and the order they are given in does not matter"
     );
 }
 
-/// Un extremo de una generación anterior no marca A MEDIAS: marcar hasta un
-/// sitio que ya no es el que el usuario señaló es peor que no marcar nada.
+/// An end from a previous generation does not mark HALFWAY: marking up to a
+/// place that is no longer the one the user pointed at is worse than
+/// marking nothing.
 #[tokio::test]
-async fn un_rango_con_un_extremo_viejo_no_marca_nada() {
+async fn a_range_with_a_stale_end_marks_nothing() {
     let (h, snap) = host(vec!["a", "b"]).await;
-    let epoca = listado(&snap).generation;
+    let generation = listado(&snap).generation;
     let ack = h
         .dispatch(UiAction::MarkRange {
             slot_id: 1,
             from: RowKey(0),
             to: RowKey(99),
-            generation: epoca,
+            generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
@@ -403,14 +402,14 @@ async fn un_rango_con_un_extremo_viejo_no_marca_nada() {
     );
 }
 
-/// Un listado PEREZOSO —el del provider local (#52): sin tamaño ni fecha—
-/// no deja las columnas en blanco: el host sonda lo que se ve.
+/// A LAZY listing — the local provider's (#52): no size, no date — does not
+/// leave columns blank: the host probes what is visible.
 ///
-/// El backend de tabla daba tamaño en el propio listado, así que esta
-/// diferencia solo se vio cuando el spike de Tauri pintó un directorio real
-/// y enseñó dos columnas vacías.
+/// The table backend gave a size right in the listing, so this difference
+/// only showed when the Tauri spike painted a real directory and revealed
+/// two empty columns.
 #[tokio::test]
-async fn un_listado_perezoso_se_sondea_y_las_celdas_se_llenan() {
+async fn a_lazy_listing_gets_probed_and_cells_fill_up() {
     let mut f = Falso {
         lazy: true,
         ..Falso::default()
@@ -426,36 +425,37 @@ async fn un_listado_perezoso_se_sondea_y_las_celdas_se_llenan() {
             .cells
             .iter()
             .all(|c| c.text.is_none()),
-        "el listado llega sin tamaño, como el de verdad: {:?}",
+        "the listing arrives with no size, like the real one: {:?}",
         listado(&snap).rows[0].cells
     );
 
     let mut sub = h.subscribe();
-    // El sondeo sale solo, en cuanto el listado aterriza. Se pide foto tras
-    // foto: lo que importa es que la pantalla acabe con las celdas llenas, no
-    // por qué mensaje llegó. Cada vuelta es un viaje al actor, no una espera.
+    // The probe goes out on its own, as soon as the listing lands. Snapshots
+    // are requested one after another: what matters is that the screen ends
+    // up with the cells full, not which message it arrived in. Each round is
+    // a trip to the actor, not a wait.
     for _ in 0..2_000 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let lleno = listado(&foto)
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let filled = listado(&snap)
             .rows
             .iter()
             .any(|r| r.cells.iter().any(|c| c.text.is_some()));
-        if lleno {
+        if filled {
             assert!(
                 !backend.sondeos.lock().expect("sondeos").is_empty(),
-                "y se llenaron sondeando, no inventando"
+                "and they filled by probing, not by inventing"
             );
             return;
         }
     }
-    panic!("las celdas siguen en blanco: el sondeo no llegó");
+    panic!("the cells are still blank: the probe never arrived");
 }
 
-/// Lo ya sondeado no se vuelve a sondear: un `stat` por repintado sería un
-/// bucle contra el daemon, y uno que falla lo sería para siempre.
+/// Whatever was already probed is not probed again: a `stat` per repaint
+/// would be a loop against the daemon, and a failing one would be forever.
 #[tokio::test]
-async fn lo_sondeado_no_se_vuelve_a_pedir() {
+async fn what_was_probed_is_not_requested_again() {
     let mut f = Falso {
         lazy: true,
         ..Falso::default()
@@ -470,35 +470,35 @@ async fn lo_sondeado_no_se_vuelve_a_pedir() {
             count: 40,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
-    // Se espera al PRIMER sondeo y se deja correr lo demás: si los cinco
-    // repintados sondearan, los otros cuatro ya estarían encolados.
-    hasta(&backend, "el primer sondeo", |f| {
+    // It waits for the FIRST probe and lets the rest run: if all five
+    // repaints probed, the other four would already be queued.
+    hasta(&backend, "the first probe", |f| {
         (!f.sondeos.lock().expect("sondeos").is_empty()).then_some(())
     })
     .await;
     asentar().await;
-    let sondeos = backend.sondeos.lock().expect("sondeos").clone();
+    let probes = backend.sondeos.lock().expect("sondeos").clone();
     assert_eq!(
-        sondeos.len(),
+        probes.len(),
         1,
-        "una entrada se sondea UNA vez, no una por repintado: {sondeos:?}"
+        "an entry is probed ONCE, not once per repaint: {probes:?}"
     );
 }
 
 // ---------------------------------------------------------------------------
-// Dos paneles son DOS paneles (fase 4, tarea 4.1).
+// Two panels are TWO panels (phase 4, task 4.1).
 // ---------------------------------------------------------------------------
 
-/// La rueda sobre el panel que NO tiene el foco mueve ESE panel, y no le
-/// roba el foco al otro.
+/// The wheel over the panel that does NOT have focus moves THAT panel, and
+/// does not steal focus from the other one.
 ///
-/// Declarar qué filas se ven no es actuar sobre el listado: es decir dónde
-/// está mirando el usuario. Tratarlo como una acción del panel activo dejaba
-/// el segundo panel de una disposición de dos sin poder desplazarse.
+/// Declaring which rows are visible is not acting on the listing: it is
+/// saying where the user is looking. Treating it as an action of the active
+/// panel left the second panel of a two-panel layout unable to scroll.
 #[tokio::test]
-async fn el_panel_inactivo_se_desplaza_sin_robar_el_foco() {
+async fn the_inactive_panel_scrolls_without_stealing_focus() {
     let (h, snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
     assert_eq!(snap.focus, Some(1));
     let mut sub = h.subscribe();
@@ -509,19 +509,19 @@ async fn el_panel_inactivo_se_desplaza_sin_robar_el_foco() {
             count: 10,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
-        "el panel de al lado también se desplaza: {ack:?}"
+        "the panel next to it also scrolls: {ack:?}"
     );
 
-    let mut visto = None;
+    let mut seen = None;
     for _ in 0..10 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -531,38 +531,38 @@ async fn el_panel_inactivo_se_desplaza_sin_robar_el_foco() {
                     ..
                 } = c
                 {
-                    visto = Some((*slot_id, *first_visible));
+                    seen = Some((*slot_id, *first_visible));
                 }
             }
         }
-        if visto.is_some() {
+        if seen.is_some() {
             break;
         }
     }
     assert_eq!(
-        visto,
+        seen,
         Some((2, 1)),
-        "las filas que viajan son las del hueco que se desplazó"
+        "the rows that travel are the slot's that scrolled"
     );
 
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(foto.focus, Some(1), "y el foco no se movió");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert_eq!(snap.focus, Some(1), "and focus did not move");
 }
 
-/// El relleno de un listado pinta en SU panel.
+/// A listing's fill paints in ITS OWN panel.
 ///
-/// Los lotes que drenan por detrás se anunciaban siempre como filas del panel
-/// activo, así que en una disposición de dos el segundo se quedaba con lo que
-/// cupo en la primera página hasta que algo lo tocara.
+/// Batches draining behind the scenes used to always be announced as the
+/// active panel's rows, so in a two-panel layout the second one kept
+/// whatever fit on the first page until something touched it.
 #[tokio::test]
-async fn el_relleno_de_un_panel_no_se_anuncia_en_el_otro() {
+async fn a_panels_fill_does_not_announce_in_the_other() {
     let mut f = Falso::default();
-    // Más entradas que la primera página (100), para que haya relleno.
-    let muchas: Vec<(Vec<u8>, bool)> = (0..300)
+    // More entries than the first page (100), so there is a fill.
+    let many: Vec<(Vec<u8>, bool)> = (0..300)
         .map(|i| (format!("f{i:04}.txt").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa", muchas);
+    f.pon("mem:///casa", many);
     let (h, _snap) = host_con_layout(Arc::new(f), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SetVisibleRange {
@@ -571,16 +571,16 @@ async fn el_relleno_de_un_panel_no_se_anuncia_en_el_otro() {
         count: 20,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     let mut slots = std::collections::BTreeSet::new();
     for _ in 0..40 {
-        let Ok(Some(siguiente)) =
+        let Ok(Some(next)) =
             tokio::time::timeout(std::time::Duration::from_millis(300), sub.recv()).await
         else {
             break;
         };
-        if let Update::Message(m) = siguiente
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -592,89 +592,92 @@ async fn el_relleno_de_un_panel_no_se_anuncia_en_el_otro() {
     }
     assert!(
         slots.contains(&2),
-        "el segundo panel también recibe sus filas: {slots:?}"
+        "the second panel also receives its rows: {slots:?}"
     );
 }
 
-/// El tabulador cambia de panel, con el MISMO recorrido que el TUI: solo lo
-/// que se ve y solo lo que se puede enfocar.
+/// Tab switches panels, with the SAME traversal as the TUI: only what is
+/// visible and only what can be focused.
 ///
-/// Sin esto, en una ventana de dos paneles el teclado no podía cambiar de
-/// panel: había que usar el ratón, que es exactamente la clase de diferencia
-/// entre frontends que la capa compartida existe para no tener.
+/// Without this, in a two-panel window the keyboard could not switch panels:
+/// the mouse had to be used, which is exactly the kind of difference between
+/// frontends the shared layer exists to not have.
 #[tokio::test]
-async fn el_tabulador_cambia_de_panel() {
+async fn tab_switches_panels() {
     use norte_ui_host::dto::SlotRole;
     let (h, snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
     assert_eq!(snap.focus, Some(1));
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("Tab")).await.expect("host vivo");
+    h.dispatch(tecla("Tab")).await.expect("host alive");
     let l = siguiente_disposicion(&mut sub).await;
-    let rol = |l: &norte_ui_host::dto::LayoutView, id: u32| {
+    let role = |l: &norte_ui_host::dto::LayoutView, id: u32| {
         l.placements
             .iter()
             .find(|p| p.slot_id == id)
             .and_then(|p| p.role)
     };
-    assert_eq!(rol(&l, 2), Some(SlotRole::Active), "el foco pasó al otro");
+    assert_eq!(
+        role(&l, 2),
+        Some(SlotRole::Active),
+        "focus moved to the other one"
+    );
 
-    // Y vuelve: el recorrido CICLA, no se queda en el último.
-    h.dispatch(tecla("Tab")).await.expect("host vivo");
-    let vuelta = siguiente_disposicion(&mut sub).await;
-    assert_eq!(rol(&vuelta, 1), Some(SlotRole::Active));
+    // And back: the traversal CYCLES, it does not stay on the last one.
+    h.dispatch(tecla("Tab")).await.expect("host alive");
+    let back = siguiente_disposicion(&mut sub).await;
+    assert_eq!(role(&back, 1), Some(SlotRole::Active));
 }
 
-/// El foco jamás aterriza en un hueco que no se enfoca (la barra de estado,
-/// la franja de tareas): el recorrido es el de la capa compartida.
+/// Focus never lands on a slot that is not focusable (the status bar, the
+/// task strip): the traversal is the shared layer's.
 #[tokio::test]
-async fn el_tabulador_no_enfoca_la_barra_de_estado() {
+async fn tab_does_not_focus_the_status_bar() {
     let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
     for _ in 0..6 {
-        h.dispatch(tecla("Tab")).await.expect("host vivo");
+        h.dispatch(tecla("Tab")).await.expect("host alive");
         let l = siguiente_disposicion(&mut sub).await;
-        let activo = l
+        let active = l
             .placements
             .iter()
             .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
             .map(|p| p.slot_id);
         assert!(
-            matches!(activo, Some(1 | 2)),
-            "el foco solo pasa por los listados, no por {activo:?}"
+            matches!(active, Some(1 | 2)),
+            "focus only passes through the listings, not {active:?}"
         );
     }
 }
 
-/// Designar destino nunca se señala a uno mismo: un destino igual al panel
-/// con el foco sería pedirle a una copia que se copie encima.
+/// Designating a target never points at yourself: a target equal to the
+/// focused panel would be asking a copy to copy onto itself.
 ///
-/// De paso, esto prueba el camino de una CAPA de usuario: el binding no está
-/// en ningún preset (#228), así que la tecla la ata el keymap efectivo que
-/// recibe el host — el mismo que construye un arranque de verdad.
+/// Along the way, this tests a USER LAYER's path: the binding is not in any
+/// preset (#228), so the key is bound by the effective keymap the host
+/// receives — the same one a real startup builds.
 #[tokio::test]
-async fn el_destino_nunca_es_el_panel_enfocado() {
+async fn the_target_is_never_the_focused_panel() {
     use norte_frontend::keymap::{Effective, Screen, parse_keymap, parse_keymap_layer};
     use norte_ui_host::dto::SlotRole;
 
-    let preset = parse_keymap(
-        norte_frontend::keymap::presets::source("orthodox").expect("preset de fábrica"),
-    )
-    .expect("preset parsea");
-    let capa = parse_keymap_layer(
+    let preset =
+        parse_keymap(norte_frontend::keymap::presets::source("orthodox").expect("factory preset"))
+            .expect("preset parses");
+    let layer = parse_keymap_layer(
         r#"
 [pane]
 prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
 "#,
     )
-    .expect("capa parsea");
+    .expect("layer parses");
     let keymap = Effective::build_for(
         &preset,
-        &[capa],
+        &[layer],
         norte_ui_host::commands::IMPLEMENTADOS,
         Screen::Browse,
     )
-    .expect("efectivo");
+    .expect("effective");
 
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
@@ -697,7 +700,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
 
     let mut sub = h.subscribe();
     let ack = h
@@ -709,38 +712,38 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
             meta: false,
         }))
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
-        "la capa del usuario ata la tecla: {ack:?}"
+        "the user's layer binds the key: {ack:?}"
     );
     let l = siguiente_disposicion(&mut sub).await;
-    let rol_de = |r: SlotRole| {
+    let role_of = |r: SlotRole| {
         l.placements
             .iter()
             .find(|p| p.role == Some(r))
             .map(|p| p.slot_id)
     };
-    assert_eq!(rol_de(SlotRole::Active), Some(1));
+    assert_eq!(role_of(SlotRole::Active), Some(1));
     assert_eq!(
-        rol_de(SlotRole::Target),
+        role_of(SlotRole::Target),
         Some(2),
-        "el destino es SIEMPRE otro hueco"
+        "the target is ALWAYS another slot"
     );
 }
 
 // ---------------------------------------------------------------------------
-// El mapa de disco (fase 4): medir, aterrizar, y no repedir.
+// The disk map (phase 4): measuring, landing, and not re-requesting.
 // ---------------------------------------------------------------------------
 
-/// El hueco del mapa, en un árbol con el listado al lado.
+/// The map's slot, in a tree with the listing next to it.
 const SLOT_MAPA: u32 = 7;
 
-/// Un host con un listado y, al lado, el hueco del mapa de disco.
+/// A host with a listing and, next to it, the disk map's slot.
 async fn host_con_mapa(backend: Arc<Falso>) -> UiHost {
     use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-    let arbol = Node::Split {
+    let tree = Node::Split {
         dir: Dir::Horizontal,
         sizes: vec![Size::Weight(1), Size::Fixed(40)],
         children: vec![
@@ -748,7 +751,7 @@ async fn host_con_mapa(backend: Arc<Falso>) -> UiHost {
             Node::slot(SlotId(SLOT_MAPA), KindId::new("disk-map")),
         ],
     };
-    norte_frontend::layout::validate(&arbol).expect("el árbol es válido");
+    norte_frontend::layout::validate(&tree).expect("the tree is valid");
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
@@ -758,7 +761,7 @@ async fn host_con_mapa(backend: Arc<Falso>) -> UiHost {
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
-        layout: arbol,
+        layout: tree,
         viewport: (120, 40),
         settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
@@ -770,11 +773,11 @@ async fn host_con_mapa(backend: Arc<Falso>) -> UiHost {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     h
 }
 
-/// El mapa del hueco, si la foto lo trae.
+/// The slot's map, if the snapshot brings it.
 fn mapa_de(snap: &norte_ui_host::ViewSnapshot) -> Option<&norte_ui_host::dto::DiskMapSlotView> {
     snap.slots.iter().find_map(|s| match s {
         SlotView::DiskMap(m) if m.slot_id == SLOT_MAPA => Some(&**m),
@@ -782,87 +785,96 @@ fn mapa_de(snap: &norte_ui_host::ViewSnapshot) -> Option<&norte_ui_host::dto::Di
     })
 }
 
-/// La medida se pide sobre el directorio del LISTADO, y su informe aterriza.
+/// The measurement is requested for the LISTING's directory, and its report
+/// lands.
 ///
-/// Es lo que separa un panel declarado de uno que funciona: hasta T5 el hueco
-/// se pintaba —con su borde y su título— y no medía nada, así que `measuring`
-/// se quedaba en falso sobre un mapa vacío para siempre y nadie lo notaba.
+/// It is what tells apart a declared panel from a working one: until T5 the
+/// slot got painted — with its border and title — and measured nothing, so
+/// `measuring` stayed false over an empty map forever and nobody noticed.
 #[tokio::test]
-async fn el_mapa_mide_el_directorio_del_listado_y_el_informe_aterriza() {
+async fn the_map_measures_the_listings_directory_and_the_report_lands() {
     let backend = arbol();
     let h = host_con_mapa(Arc::clone(&backend)).await;
     asentar().await;
 
-    let pedido = backend
-        .hasta("una medida del mapa", |f| {
+    let requested = backend
+        .hasta("a map measurement", |f| {
             f.mapas_pedidos.lock().expect("mapas").first().cloned()
         })
         .await;
-    assert_eq!(pedido, dir(), "se mide lo que el listado está enseñando");
+    assert_eq!(
+        requested,
+        dir(),
+        "what is measured is what the listing shows"
+    );
 
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let vista = siguiente_foto(&mut sub).await;
-    let mapa = mapa_de(&vista).expect("el hueco sigue siendo un mapa");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let view = siguiente_foto(&mut sub).await;
+    let map = mapa_de(&view).expect("the slot is still a map");
     assert!(
-        !mapa.measuring,
-        "el informe aterrizó: un mapa que sigue diciendo «midiendo» con la \
-         medida terminada es el panel congelado que esto existe para impedir"
+        !map.measuring,
+        "the report landed: a map still saying \"measuring\" with the \
+         measurement finished is the frozen panel this exists to prevent"
     );
-    // El doble contesta un informe LISTADO y vacío, que es lo que produce un
-    // directorio sin hijos. `squarify` sin hijos devuelve un marco vacío, así
-    // que se afirma ESO y no «todas las celdas en blanco»: con `lines` vacío un
-    // `all` sobre sus líneas se cumple sin mirar nada — un verde hueco.
+    // The double answers a LISTED, empty report, which is what a directory
+    // with no children produces. `squarify` with no children returns an
+    // empty frame, so THAT is what is asserted, not "all cells blank": with
+    // `lines` empty, an `all` over its lines holds without looking at
+    // anything — a hollow green.
     assert!(
-        mapa.lines.is_empty(),
-        "sin hijos no hay reparto: {} líneas",
-        mapa.lines.len()
+        map.lines.is_empty(),
+        "with no children there is no split: {} lines",
+        map.lines.len()
     );
-    assert!(mapa.hits.is_empty(), "sin hijos no hay nada que pulsar");
+    assert!(
+        map.hits.is_empty(),
+        "with no children there is nothing to click"
+    );
 }
 
-/// Se mide UNA vez por directorio: no una por mensaje del actor.
+/// It measures ONCE per directory: not once per actor message.
 ///
-/// La sonda corre tras cada mensaje, así que la mitad de su valor está aquí.
-/// Es el mismo fallo que el panel de plugin tuvo que evitar —una RPC por
-/// tecla—, y aquí sería peor: cada petición recorre un árbol entero.
+/// The probe runs after every message, so half its value is right here. It
+/// is the same failure the plugin panel had to avoid — one RPC per
+/// keystroke — and here it would be worse: every request walks a whole
+/// tree.
 #[tokio::test]
-async fn el_mapa_no_se_mide_dos_veces_por_el_mismo_directorio() {
+async fn the_map_does_not_measure_the_same_directory_twice() {
     let backend = arbol();
     let h = host_con_mapa(Arc::clone(&backend)).await;
     asentar().await;
     let _ = backend
-        .hasta("la primera medida", |f| {
+        .hasta("the first measurement", |f| {
             f.mapas_pedidos.lock().expect("mapas").first().cloned()
         })
         .await;
 
     for _ in 0..5 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         asentar().await;
     }
-    let pedidos = backend.mapas_pedidos.lock().expect("mapas").len();
-    assert_eq!(pedidos, 1, "cinco mensajes, una medida: {pedidos}");
+    let requested = backend.mapas_pedidos.lock().expect("mapas").len();
+    assert_eq!(requested, 1, "five messages, one measurement: {requested}");
 }
 
 // ---------------------------------------------------------------------------
-// El panel de TERMINAL (#362). Los dos tests que faltaban, y ninguno necesita
-// un pty: el barrido de sondas no puede abrirlo —sus paneles son `mem:///` y
-// un shell se niega a sentarse ahí— así que estas dos cosas se comprobaban
-// solas, que es como llegaron a `main` seis fallos con el gate en verde.
+// The TERMINAL panel (#362). The two tests that were missing, and neither
+// needs a pty: the probe sweep cannot open it — its panels are `mem:///` and
+// a shell refuses to sit there — so these two things went unchecked on their
+// own, which is how six bugs reached `main` with the gate green.
 // ---------------------------------------------------------------------------
 
-/// **Una ventana de solo lectura no abre un shell, ni por el botón.**
+/// **A read-only window opens no shell, not even through the button.**
 ///
-/// El filtro del keymap no basta y ése era el fallo: gobierna la resolución
-/// de TECLAS, y el botón de la barra de paneles, la entrada del menú y los
-/// botones de la barra de estado llaman al despacho sin pasar por él. Un
-/// clic bastaba.
+/// The keymap's filter is not enough and that was the bug: it governs KEY
+/// resolution, and the panel bar's button, the menu entry and the status
+/// bar's buttons call dispatch without going through it. A click was enough.
 ///
-/// Es la puerta de atrás más ancha que puede tener una ventana que promete no
-/// escribir: dentro de un shell se teclea cualquier cosa.
+/// It is the widest back door a window that promises not to write can have:
+/// inside a shell, anything can be typed.
 #[tokio::test]
-async fn en_solo_lectura_el_boton_del_terminal_no_abre_nada() {
+async fn in_read_only_the_terminal_button_opens_nothing() {
     let backend = Arc::new(arbol_como_falso());
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
@@ -889,38 +901,37 @@ async fn en_solo_lectura_el_boton_del_terminal_no_abre_nada() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
 
-    // El botón SÍ está en la barra —viene del registro compartido— y eso es
-    // parte del caso: lo que no puede es funcionar.
-    let boton = snap
+    // The button DOES exist in the bar — it comes from the shared registry —
+    // and that is part of the case: what it must not do is work.
+    let button = snap
         .panel_bar
         .buttons
         .iter()
         .position(|b| b.kind == "terminal")
-        .expect("el terminal tiene botón en la barra");
+        .expect("the terminal has a button in the bar");
 
     let ack = h
         .dispatch(UiAction::PanelBarActivate {
-            button: u32::try_from(boton).expect("cabe"),
+            button: u32::try_from(button).expect("fits"),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         !matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
-        "una ventana de solo lectura no puede abrir un shell: {ack:?}"
+        "a read-only window cannot open a shell: {ack:?}"
     );
 }
 
-/// **Se entra y se SALE con la misma tecla.**
+/// **It is entered and EXITED with the same key.**
 ///
-/// Las dos mitades del mismo defecto, y hacen falta las dos: abrir por la
-/// tecla dejaba el foco en el listado —así que al panel solo se llegaba con
-/// el ratón— y estando dentro la tecla de salida no hacía nada. Como ahí
-/// dentro TODAS las teclas son del shell, incluida la del anillo de paneles,
-/// eso era una ratonera.
+/// The two halves of the same bug, and both are needed: opening by key left
+/// focus on the listing — so the panel could only be reached with the mouse
+/// — and once inside, the exit key did nothing. Since inside there ALL keys
+/// belong to the shell, including the panel ring's, that was a mousetrap.
 #[tokio::test]
-async fn el_panel_de_terminal_se_abre_y_se_sale_con_la_misma_tecla() {
+async fn the_terminal_panel_opens_and_exits_with_the_same_key() {
     let backend = Arc::new(arbol_como_falso());
     let (h, _snap) = host_con_arbol(
         Arc::clone(&backend),
@@ -930,16 +941,16 @@ async fn el_panel_de_terminal_se_abre_y_se_sale_con_la_misma_tecla() {
     .await;
     let mut sub = h.subscribe();
 
-    // El backend falso sirve `mem:///`, donde un shell se niega a sentarse. Se
-    // comprueba porque es la misma puerta que `app.terminal` y con la misma
-    // frase, y porque es lo que impide que el barrido de sondas pueda abrir
-    // este panel.
+    // The fake backend serves `mem:///`, where a shell refuses to sit. It is
+    // checked because it is the same door as `app.terminal` and with the
+    // same phrase, and because it is what keeps the probe sweep from being
+    // able to open this panel.
     let ack = ejecutar_por_paleta_ack(&h, &mut sub, "layout.terminal").await;
     assert!(
         matches!(
             ack,
             ActionAck::Unavailable { ref reason_key } if reason_key == "host-not-local"
         ),
-        "sobre un panel que no es local se niega y lo dice: {ack:?}"
+        "over a panel that is not local it refuses and says so: {ack:?}"
     );
 }

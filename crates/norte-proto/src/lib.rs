@@ -1,8 +1,9 @@
-//! Tipos del protocolo `norte`: el wire format JSON-RPC, sin lógica de negocio.
+//! Types of the `norte` protocol: the JSON-RPC wire format, with no business
+//! logic.
 //!
-//! Cualquier cambio en este crate es un cambio de wire format: exige golden
-//! test actualizado, bump de versión de protocolo y revisión doble
-//! (regla dura de `CLAUDE.md`; procedimiento en la spec §11).
+//! Any change in this crate is a wire format change: it requires an updated
+//! golden test, a protocol version bump and a double review
+//! (hard rule of `CLAUDE.md`; procedure in spec §11).
 #![forbid(unsafe_code)]
 
 pub mod hashing;

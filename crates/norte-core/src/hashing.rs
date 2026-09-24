@@ -1,45 +1,46 @@
-//! Cómo el core mete campos en un digest, en UN sitio.
+//! How the core feeds fields into a digest, in ONE place.
 //!
-//! El framing con longitud lo usan la cadena de hashes del journal (ADR 0023)
-//! y el `plan_hash` del batch de renames, y por el mismo motivo: dos campos
-//! adyacentes JAMÁS se pueden leer como uno solo. El hex minúscula lo usan esos
-//! dos más la exportación de auditoría (ADR 0025). Tenerlo dos veces es tenerlo
-//! dos veces mal en cuanto uno de los dos cambie: el framing de un hash tiene
-//! que ser idéntico para todos los que lo usan o deja de significar lo mismo.
+//! The length-prefixed framing is used by the journal's hash chain (ADR 0023)
+//! and the batch rename's `plan_hash`, and for the same reason: two adjacent
+//! fields must NEVER be readable as one. The lowercase hex is used by those
+//! two plus the audit export (ADR 0025). Having it twice is having it twice
+//! wrong as soon as one of the two changes: a hash's framing has to be
+//! identical for everyone who uses it, or it stops meaning the same thing.
 //!
-//! **`feed`/`feed_opt` son el framing de una cadena tamper-evident sobre una
-//! base de datos que ya existe en disco.** Cambiar un byte aquí invalida
-//! `verify_chain` en todos los journals ya escritos. Salieron de `journal.rs`
-//! sin tocar una línea y así tienen que seguir.
+//! **`feed`/`feed_opt` are the framing of a tamper-evident chain over a
+//! database that already exists on disk.** Changing a byte here invalidates
+//! `verify_chain` on every journal already written. They came out of
+//! `journal.rs` without touching a line, and they have to stay that way.
 //!
-//! # #174: esta copia se queda, y ya no puede derivar en silencio
-//! El framing vive también en [`norte_proto::hashing`], que es donde ADR 0051
-//! decidió ponerlo: `norte-sync` lo usa desde allí y ya no tiene copia
-//! propia. **Ésta no se mueve.** Es la cadena tamper-evident del journal
-//! (ADR 0023) y el ancla de la exportación de auditoría (ADR 0025), así que su
-//! framing no puede cambiar ni un byte sin invalidar todo `journal.db` ya
-//! escrito — eso es una migración, no un refactor. Y relicenciarla tampoco es
-//! gratis: este crate es AGPL-3.0-only y `norte-proto` es MIT OR Apache-2.0.
+//! # #174: this copy stays, and can no longer drift silently
+//! The framing also lives in [`norte_proto::hashing`], which is where ADR
+//! 0051 decided to put it: `norte-sync` uses it from there and no longer has
+//! its own copy. **This one does not move.** It is the journal's
+//! tamper-evident chain (ADR 0023) and the audit export's anchor (ADR 0025),
+//! so its framing cannot change by even one byte without invalidating every
+//! `journal.db` already written — that is a migration, not a refactor. And
+//! relicensing it is not free either: this crate is AGPL-3.0-only and
+//! `norte-proto` is MIT OR Apache-2.0.
 //!
-//! Lo que la duplicación tenía de peligroso —que las dos derivaran sin que
-//! nadie lo notara, que es exactamente lo que le pasó a la clave de plegado de
-//! #151— lo cierra `tests::el_framing_de_proto_es_byte_a_byte_este`: alimenta
-//! las dos implementaciones con las mismas entradas, incluido el corpus
-//! hostil, y compara los digests. Dos copias que no pueden discrepar en
-//! silencio son un coste de mantenimiento; dos que sí pueden son un bug
-//! esperando.
+//! What was dangerous about the duplication —that the two could drift
+//! without anyone noticing, which is exactly what happened to #151's folding
+//! key— is closed by `tests::the_proto_framing_is_byte_for_byte_this_one`:
+//! it feeds both implementations the same inputs, including the hostile
+//! corpus, and compares the digests. Two copies that cannot silently
+//! disagree are a maintenance cost; two that can are a bug waiting to
+//! happen.
 
 use sha2::{Digest, Sha256};
 
-/// Alimenta un campo con su LONGITUD delante, así `"ab"+"c"` y `"a"+"bc"` no
-/// producen el mismo digest.
+/// Feeds a field with its LENGTH in front, so `"ab"+"c"` and `"a"+"bc"` do
+/// not produce the same digest.
 pub(crate) fn feed(h: &mut Sha256, bytes: &[u8]) {
     h.update((bytes.len() as u64).to_le_bytes());
     h.update(bytes);
 }
 
-/// Campo opcional con BYTE DE PRESENCIA (0/1) → `None` y `Some(vacío)` NUNCA
-/// colisionan (sin él, ambos serían `len=0` — hallazgo security B1).
+/// Optional field with a PRESENCE BYTE (0/1) → `None` and `Some(empty)` NEVER
+/// collide (without it, both would be `len=0` — security finding B1).
 pub(crate) fn feed_opt(h: &mut Sha256, o: Option<&[u8]>) {
     match o {
         None => h.update([0u8]),
@@ -50,8 +51,8 @@ pub(crate) fn feed_opt(h: &mut Sha256, o: Option<&[u8]>) {
     }
 }
 
-/// Hex MINÚSCULA, la forma en la que un digest sale del core (el `plan_hash`
-/// del wire, el head del journal, el ancla de auditoría).
+/// LOWERCASE hex, the form a digest takes coming out of the core (the wire's
+/// `plan_hash`, the journal head, the audit anchor).
 pub(crate) fn hex_lower(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(bytes.len() * 2);
@@ -72,15 +73,15 @@ mod tests {
         h.finalize().into()
     }
 
-    /// #174 / ADR 0051: las dos implementaciones del framing producen los
-    /// MISMOS bytes. Es lo que sustituye a «extraer y borrar la copia», que
-    /// aquí no se puede hacer sin tocar el formato del journal.
+    /// #174 / ADR 0051: the two framing implementations produce the SAME
+    /// bytes. This is what stands in for "extract and delete the copy",
+    /// which cannot be done here without touching the journal format.
     ///
-    /// El corpus hostil entra a propósito: si alguna de las dos tratara los
-    /// bytes como texto —lossy, normalización, lo que sea— sería justo ahí
-    /// donde se vería, y no con `b"ab"`.
+    /// The hostile corpus is included on purpose: if either implementation
+    /// treated the bytes as text —lossy, normalization, whatever— this is
+    /// exactly where it would show, and not with `b"ab"`.
     #[test]
-    fn el_framing_de_proto_es_byte_a_byte_este() {
+    fn the_proto_framing_is_byte_for_byte_this_one() {
         fn proto(f: impl FnOnce(&mut Sha256)) -> [u8; 32] {
             let mut h = Sha256::new();
             f(&mut h);
@@ -109,19 +110,19 @@ mod tests {
                     norte_proto::hashing::feed(h, &name.bytes);
                     norte_proto::hashing::feed_opt(h, Some(&name.bytes));
                 }),
-                "el framing difiere sobre {}: {}",
+                "framing differs on {}: {}",
                 name.id,
                 name.why
             );
         }
-        // Y el hex, que es la otra mitad que no puede tener dos formas.
+        // And the hex, the other half that cannot have two forms.
         assert_eq!(
             hex_lower(&[0xab, 0x0f]),
             norte_proto::hashing::hex_lower(&[0xab, 0x0f])
         );
     }
 
-    /// El prefijo de longitud es lo único que separa dos campos pegados.
+    /// The length prefix is the only thing separating two adjacent fields.
     #[test]
     fn length_prefix_prevents_concatenation_collision() {
         let ab_c = digest(|h| {
@@ -135,8 +136,8 @@ mod tests {
         assert_ne!(ab_c, a_bc);
     }
 
-    /// Sin byte de presencia, «no hay campo» y «campo vacío» serían el mismo
-    /// digest, y un `Option` dejaría de ser tamper-evident.
+    /// Without a presence byte, "no field" and "empty field" would be the
+    /// same digest, and an `Option` would stop being tamper-evident.
     #[test]
     fn absent_and_empty_are_different_digests() {
         assert_ne!(
@@ -145,15 +146,16 @@ mod tests {
         );
     }
 
-    /// VECTOR CONGELADO del framing. Los otros dos tests son RELATIVOS
-    /// (`assert_ne!` entre dos digests), así que pasarían igual si el prefijo
-    /// de longitud cambiase de `u64` a `u32`, de little-endian a big-endian, o
-    /// si el byte de presencia intercambiase 0 y 1 — y cualquiera de esas tres
-    /// invalida `verify_chain` en TODOS los journals que ya están en disco.
+    /// FROZEN VECTOR for the framing. The other two tests are RELATIVE
+    /// (`assert_ne!` between two digests), so they would still pass if the
+    /// length prefix changed from `u64` to `u32`, from little-endian to
+    /// big-endian, or if the presence byte swapped 0 and 1 — and any of
+    /// those three invalidates `verify_chain` on EVERY journal already on
+    /// disk.
     ///
-    /// Si este test se pone rojo, has roto la cadena de todos ellos. No
-    /// actualices la constante: revierte el cambio, o versiona el formato y
-    /// migra.
+    /// If this test goes red, you have broken the chain for all of them. Do
+    /// not update the constant: revert the change, or version the format
+    /// and migrate.
     #[test]
     fn the_framing_is_frozen() {
         let d = digest(|h| {

@@ -1,7 +1,7 @@
-//! Matriz test-first de la fase 1 de M2 — deuda dura del engine:
-//! #16 identidad real de nodo en los guards, #17 retry de mutaciones con
-//! desambiguación post-efecto, #18 kind real al preservar symlinks,
-//! #19 Follow sobre dir-symlinks con visited set.
+//! Test-first matrix for M2's phase 1 — the engine's hard debt:
+//! #16 real node identity in the guards, #17 mutation retry with
+//! post-effect disambiguation, #18 real kind when preserving symlinks,
+//! #19 Follow over dir-symlinks with a visited set.
 
 use std::sync::{Arc, Mutex};
 
@@ -17,15 +17,15 @@ use norte_testkit::MemProvider;
 use norte_vfs::{ByteSink, ByteStream, EntryStream, FollowLinks, NodeId, Provider, SymlinkKind};
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
 async fn read_all(p: &dyn Provider, wire: &str) -> Result<Vec<u8>, Error> {
@@ -58,8 +58,8 @@ fn follow() -> TransferOptions {
     }
 }
 
-/// Observador que registra cada mutación (como hará el journal en M3):
-/// verifica que el retry con desambiguación emite EXACTAMENTE una vez.
+/// An observer that records every mutation (as the journal will in M3): it
+/// checks that the retry with disambiguation emits EXACTLY once.
 #[derive(Default)]
 struct RecordingObserver {
     events: Mutex<Vec<String>>,
@@ -67,7 +67,7 @@ struct RecordingObserver {
 
 impl RecordingObserver {
     fn events(&self) -> Vec<String> {
-        self.events.lock().expect("events lock sano").clone()
+        self.events.lock().expect("events lock sane").clone()
     }
 }
 
@@ -85,18 +85,19 @@ impl MutationObserver for RecordingObserver {
             Mutation::Renamed { from, to, .. } => {
                 format!("renamed:{}>{}", from.display_lossy(), to.display_lossy())
             }
-            // #314: con el modo ANTERIOR dentro, que es lo que la reversa
-            // necesita y lo único que un observador no puede reconstruir.
-            // El lote (#315) NO entra en la representación: lo que estos
-            // tests miran es qué mutación se emitió, y meter el id haría que
-            // cada expectativa dependiera de cuántos lotes hubo antes.
+            // #314: with the PREVIOUS mode inside, which is what the reversal
+            // needs and the one thing an observer cannot reconstruct. The
+            // batch (#315) does NOT enter the representation: what these
+            // tests look at is which mutation was emitted, and including the
+            // id would make every expectation depend on how many batches came
+            // before.
             Mutation::ModeChanged { path, from, to, .. } => format!(
                 "mode:{}:{}>{to:o}",
                 path.display_lossy(),
                 from.map_or_else(|| "?".to_owned(), |m| format!("{m:o}")),
             ),
         };
-        self.events.lock().expect("events lock sano").push(repr);
+        self.events.lock().expect("events lock sane").push(repr);
         Ok(())
     }
 }
@@ -108,11 +109,11 @@ fn engine_recording(mem: &Arc<MemProvider>) -> (Engine, Arc<RecordingObserver>) 
     (engine, observer)
 }
 
-/// Provider que DELEGA todo en un Mem pero con scheme y capabilities
-/// propios. Dos usos: (a) anunciar caja insensible sobre un Mem sensible —
-/// el caso WSL/NTFS donde la heurística de caja MIENTE y solo la identidad
-/// real (#16) responde bien; (b) scheme distinto para forzar el camino
-/// cross-provider (como el `Alias` de engine.rs).
+/// A provider that DELEGATES everything to a Mem but with its own scheme and
+/// capabilities. Two uses: (a) announce a case-insensitive box over a
+/// case-sensitive Mem — the WSL/NTFS case where the case heuristic LIES and
+/// only real identity (#16) answers correctly; (b) a different scheme to
+/// force the cross-provider path (like `engine.rs`'s `Alias`).
 struct CapsMask {
     inner: Arc<MemProvider>,
     scheme: &'static str,
@@ -162,101 +163,100 @@ impl Provider for CapsMask {
     }
 }
 
-// ---------- #16: identidad real en el guard anti-autodestrucción ----------
+// ---------- #16: real identity in the anti-self-destruction guard ----------
 
-/// El FS anuncia caja insensible pero DISTINGUE estos dos nombres (WSL
-/// sobre NTFS case-sensitive, folds exóticos): la identidad real dice que
-/// son nodos DISTINTOS y la copia con Overwrite debe PROCEDER — la
-/// heurística de `to_lowercase` los bloqueaba como falso positivo.
+/// The FS announces case-insensitive but DISTINGUISHES these two names (WSL
+/// over case-sensitive NTFS, exotic folds): real identity says they are
+/// DIFFERENT nodes and the Overwrite copy must PROCEED — the `to_lowercase`
+/// heuristic blocked them as a false positive.
 #[tokio::test]
-async fn overwrite_entre_variantes_de_caja_que_el_fs_distingue_procede() {
+async fn overwrite_between_case_variants_the_fs_distinguishes_proceeds() {
     let engine = Engine::new();
-    let inner = Arc::new(MemProvider::new()); // case-SENSITIVE de verdad
-    write_file(&inner, "mem:///CASA", b"mayus").await;
-    write_file(&inner, "mem:///casa", b"minus").await;
+    let inner = Arc::new(MemProvider::new()); // really case-SENSITIVE
+    write_file(&inner, "mem:///HOUSE", b"upper").await;
+    write_file(&inner, "mem:///house", b"lower").await;
     let masked = Arc::new(CapsMask {
         inner: Arc::clone(&inner),
         scheme: "mem",
-        // Anuncia insensible (sin CASE_SENSITIVE): la heurística sospecharía.
+        // Announces insensitive (without CASE_SENSITIVE): the heuristic would suspect.
         flags: CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING,
     });
     engine.register_provider(masked as Arc<dyn Provider>);
 
     let handle = engine
         .copy_with(
-            &vp("mem:///CASA"),
-            &vp("mem:///casa"),
+            &vp("mem:///HOUSE"),
+            &vp("mem:///house"),
             on_collision(CollisionPolicy::Overwrite),
         )
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(read_all(&*inner, "mem:///casa").await.unwrap(), b"mayus");
-    assert_eq!(read_all(&*inner, "mem:///CASA").await.unwrap(), b"mayus");
+    assert_eq!(read_all(&*inner, "mem:///house").await.unwrap(), b"upper");
+    assert_eq!(read_all(&*inner, "mem:///HOUSE").await.unwrap(), b"upper");
 }
 
-/// Sin identidad (provider `without_node_ids`), la heurística conservadora
-/// de M1 sigue vigente: la variante de caja sobre sí mismo se rechaza.
+/// Without identity (the `without_node_ids` provider), M1's conservative
+/// heuristic is still in force: the case variant onto itself is rejected.
 #[tokio::test]
-async fn sin_identidad_la_heuristica_conservadora_sigue_bloqueando() {
+async fn without_identity_the_conservative_heuristic_still_blocks() {
     let engine = Engine::new();
     let mem = Arc::new(
         MemProvider::with_flags(CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING)
             .without_node_ids(),
     );
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    write_file(&mem, "mem:///unico", b"precioso").await;
+    write_file(&mem, "mem:///unique", b"precious").await;
 
     let handle = engine
         .copy_with(
-            &vp("mem:///UNICO"),
-            &vp("mem:///unico"),
+            &vp("mem:///UNIQUE"),
+            &vp("mem:///unique"),
             on_collision(CollisionPolicy::Overwrite),
         )
         .await
         .unwrap();
     assert!(matches!(handle.join().await, TaskState::Failed { .. }));
-    assert_eq!(read_all(&*mem, "mem:///unico").await.unwrap(), b"precioso");
+    assert_eq!(read_all(&*mem, "mem:///unique").await.unwrap(), b"precious");
 }
 
-// ---------- #17: retry de mutaciones con desambiguación ----------
+// ---------- #17: mutation retry with disambiguation ----------
 
-/// El fallo transitorio PRE-efecto en una mutación ahora se reintenta (M1
-/// solo reintentaba lecturas): un delete con el provider parpadeando
-/// termina bien.
+/// The PRE-effect transient failure in a mutation is now retried (M1 only
+/// retried reads): a delete with the provider flickering ends up fine.
 #[tokio::test]
-async fn mutacion_con_fallo_transitorio_pre_efecto_se_reintenta() {
+async fn a_mutation_with_a_pre_effect_transient_failure_is_retried() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///victima", b"x").await;
+    write_file(&mem, "mem:///victim", b"x").await;
     mem.faults().unavailable_for_next(1);
 
     let handle = engine
-        .delete_with(&vp("mem:///victima"), DeleteMode::Permanent)
+        .delete_with(&vp("mem:///victim"), DeleteMode::Permanent)
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
-        mem.stat(&vp("mem:///victima")).await.unwrap_err(),
+        mem.stat(&vp("mem:///victim")).await.unwrap_err(),
         Error::NotFound
     );
 }
 
-/// Timeout POST-efecto en remove: el reintento ve `NotFound` y lo lee como
-/// "el efecto se aplicó" — éxito, y el journal recibe UN solo Removed.
+/// POST-effect timeout in remove: the retry sees `NotFound` and reads it as
+/// "the effect applied" — success, and the journal gets a SINGLE Removed.
 #[tokio::test]
-async fn remove_ambiguo_se_desambigua_como_exito() {
+async fn an_ambiguous_remove_is_disambiguated_as_success() {
     let mem = Arc::new(MemProvider::new());
-    write_file(&mem, "mem:///victima", b"x").await;
+    write_file(&mem, "mem:///victim", b"x").await;
     let (engine, observer) = engine_recording(&mem);
     mem.faults().ambiguous_mutations(1);
 
     let handle = engine
-        .delete_with(&vp("mem:///victima"), DeleteMode::Permanent)
+        .delete_with(&vp("mem:///victim"), DeleteMode::Permanent)
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
-        mem.stat(&vp("mem:///victima")).await.unwrap_err(),
+        mem.stat(&vp("mem:///victim")).await.unwrap_err(),
         Error::NotFound
     );
     let removed: Vec<_> = observer
@@ -264,14 +264,14 @@ async fn remove_ambiguo_se_desambigua_como_exito() {
         .into_iter()
         .filter(|e| e.starts_with("removed:"))
         .collect();
-    assert_eq!(removed.len(), 1, "UN Removed, jamás cero ni dos");
+    assert_eq!(removed.len(), 1, "ONE Removed, never zero or two");
 }
 
-/// Timeout POST-efecto en el mkdir del árbol destino, con política que
-/// permite merge: el Conflict del reintento se absorbe como merge y la
-/// copia termina.
+/// POST-effect timeout in the destination tree's mkdir, with a policy that
+/// allows merge: the retry's Conflict is absorbed as a merge and the copy
+/// finishes.
 #[tokio::test]
-async fn mkdir_ambiguo_bajo_merge_completa_la_copia() {
+async fn an_ambiguous_mkdir_under_merge_completes_the_copy() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     write_file(&mem, "mem:///src/f", b"data").await;
@@ -289,12 +289,12 @@ async fn mkdir_ambiguo_bajo_merge_completa_la_copia() {
     assert_eq!(read_all(&*mem, "mem:///dst/f").await.unwrap(), b"data");
 }
 
-/// Mismo timeout post-efecto bajo `Fail`: con el pre-stat de #32.2 el
-/// engine YA no adivina — SABE que el destino no preexistía, así que el
-/// Conflict del retry es nuestra primera aplicación: la copia COMPLETA
-/// (antes: Conflict fail-safe con el dir bien creado y la task fallida).
+/// The same post-effect timeout under `Fail`: with #32.2's pre-stat the
+/// engine no longer guesses — it KNOWS the destination did not preexist, so
+/// the retry's Conflict is our first application: the copy COMPLETES (before:
+/// a fail-safe Conflict with the dir correctly created and the task failed).
 #[tokio::test]
-async fn mkdir_ambiguo_bajo_fail_completa() {
+async fn an_ambiguous_mkdir_under_fail_completes() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     write_file(&mem, "mem:///src/f", b"data").await;
@@ -308,11 +308,11 @@ async fn mkdir_ambiguo_bajo_fail_completa() {
     assert_eq!(read_all(&*mem, "mem:///dst/f").await.unwrap(), b"data");
 }
 
-/// Timeout POST-efecto al preservar un symlink: el reintento ve `Conflict`,
-/// verifica por `read_link` que el link es EL NUESTRO (mismo target) y lo da
-/// por creado. UN Created para el journal.
+/// POST-effect timeout while preserving a symlink: the retry sees `Conflict`,
+/// verifies through `read_link` that the link is OURS (same target) and calls
+/// it created. ONE Created for the journal.
 #[tokio::test]
-async fn symlink_ambiguo_preserve_se_desambigua() {
+async fn an_ambiguous_symlink_preserve_is_disambiguated() {
     let mem = Arc::new(MemProvider::new());
     write_file(&mem, "mem:///target", b"x").await;
     mem.symlink(&vp("mem:///ln"), b"target", SymlinkKind::File)
@@ -332,30 +332,27 @@ async fn symlink_ambiguo_preserve_se_desambigua() {
         .into_iter()
         .filter(|e| e.starts_with("created:"))
         .collect();
-    assert_eq!(created.len(), 1, "UN Created para el journal");
+    assert_eq!(created.len(), 1, "ONE Created for the journal");
 }
 
-/// Timeout POST-efecto en rename (move same-provider): el reintento ve
-/// `NotFound` en el origen, verifica por `node_id` que el destino ES el nodo
-/// original y lo da por renombrado. UN Renamed para el journal.
+/// POST-effect timeout in rename (same-provider move): the retry sees
+/// `NotFound` at the source, verifies through `node_id` that the destination
+/// IS the original node and calls it renamed. ONE Renamed for the journal.
 #[tokio::test]
-async fn rename_ambiguo_se_desambigua_como_exito() {
+async fn an_ambiguous_rename_is_disambiguated_as_success() {
     let mem = Arc::new(MemProvider::new());
-    write_file(&mem, "mem:///antes", b"contenido").await;
+    write_file(&mem, "mem:///before", b"content").await;
     let (engine, observer) = engine_recording(&mem);
     mem.faults().ambiguous_mutations(1);
 
     let handle = engine
-        .move_(&vp("mem:///antes"), &vp("mem:///despues"))
+        .move_(&vp("mem:///before"), &vp("mem:///after"))
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
+    assert_eq!(read_all(&*mem, "mem:///after").await.unwrap(), b"content");
     assert_eq!(
-        read_all(&*mem, "mem:///despues").await.unwrap(),
-        b"contenido"
-    );
-    assert_eq!(
-        mem.stat(&vp("mem:///antes")).await.unwrap_err(),
+        mem.stat(&vp("mem:///before")).await.unwrap_err(),
         Error::NotFound
     );
     let renamed: Vec<_> = observer
@@ -363,45 +360,42 @@ async fn rename_ambiguo_se_desambigua_como_exito() {
         .into_iter()
         .filter(|e| e.starts_with("renamed:"))
         .collect();
-    assert_eq!(renamed.len(), 1, "UN Renamed para el journal");
+    assert_eq!(renamed.len(), 1, "ONE Renamed for the journal");
 }
 
-/// Sin identidad de nodo NO se puede verificar un rename ambiguo: el
-/// engine no adivina — surge el error transitorio original (fail-safe;
-/// el efecto pudo aplicarse y el usuario reintenta contra el estado real).
+/// Without node identity an ambiguous rename CANNOT be verified: the engine
+/// does not guess — the original transient error surfaces (fail-safe; the
+/// effect may have applied and the user retries against the real state).
 #[tokio::test]
-async fn rename_ambiguo_sin_identidad_no_adivina() {
+async fn an_ambiguous_rename_without_identity_does_not_guess() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new().without_node_ids());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    write_file(&mem, "mem:///antes", b"contenido").await;
+    write_file(&mem, "mem:///before", b"content").await;
     mem.faults().ambiguous_mutations(1);
 
     let handle = engine
-        .move_(&vp("mem:///antes"), &vp("mem:///despues"))
+        .move_(&vp("mem:///before"), &vp("mem:///after"))
         .await
         .unwrap();
     match handle.join().await {
         TaskState::Failed {
             error: Error::ProviderUnavailable { .. },
         } => {}
-        other => panic!("esperaba el transitorio original, fue {other:?}"),
+        other => panic!("expected the original transient error, was {other:?}"),
     }
-    // Sin pérdida: el contenido está EN ALGÚN LADO (aquí: ya renombrado).
-    assert_eq!(
-        read_all(&*mem, "mem:///despues").await.unwrap(),
-        b"contenido"
-    );
+    // No loss: the content is SOMEWHERE (here: already renamed).
+    assert_eq!(read_all(&*mem, "mem:///after").await.unwrap(), b"content");
 }
 
-// ---------- #18: kind real al preservar symlinks ----------
+// ---------- #18: real kind when preserving symlinks ----------
 
-/// Preserve de un dir-symlink: el kind que llega al provider destino ya no
-/// es `File` hardcodeado — el destino lo resuelve (Unknown) y el link
-/// queda como DIR-symlink. El target ("asub") se copia ANTES que el link
-/// ("zln") por orden de walk: la resolución lo encuentra.
+/// Preserve of a dir-symlink: the kind that reaches the destination provider
+/// is no longer hardcoded `File` — the destination resolves it (Unknown) and
+/// the link ends up as a DIR-symlink. The target ("asub") is copied BEFORE
+/// the link ("zln") by walk order: the resolution finds it.
 #[tokio::test]
-async fn preserve_resuelve_el_kind_del_dir_symlink() {
+async fn preserve_resolves_the_dir_symlinks_kind() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/asub")).await.unwrap();
@@ -417,16 +411,16 @@ async fn preserve_resuelve_el_kind_del_dir_symlink() {
     assert_eq!(
         mem.symlink_kind_of(&vp("mem:///dst/zln")),
         Some(SymlinkKind::Dir),
-        "el kind se resolvió contra el target real, no File a ciegas"
+        "the kind was resolved against the real target, not a blind File"
     );
 }
 
-// ---------- #19: Follow sobre dir-symlinks ----------
+// ---------- #19: Follow over dir-symlinks ----------
 
-/// Follow expande un dir-symlink como directorio REAL en el destino, con
-/// su contenido copiado (semántica `cp -RL`). En M1 esto era Unsupported.
+/// Follow expands a dir-symlink as a REAL directory at the destination, with
+/// its content copied (`cp -RL` semantics). In M1 this was Unsupported.
 #[tokio::test]
-async fn follow_expande_dir_symlink_como_directorio() {
+async fn follow_expands_a_dir_symlink_as_a_directory() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/at")).await.unwrap();
@@ -446,14 +440,14 @@ async fn follow_expande_dir_symlink_como_directorio() {
     assert_eq!(
         e.kind,
         norte_proto::EntryKind::Dir,
-        "el link expandido es un dir REAL"
+        "the expanded link is a REAL dir"
     );
 }
 
-/// Copiar el dir-symlink RAÍZ con Follow: el destino es el árbol del
-/// target, como dir real.
+/// Copying the ROOT dir-symlink with Follow: the destination is the target's
+/// tree, as a real dir.
 #[tokio::test]
-async fn follow_de_un_dir_symlink_raiz_copia_el_arbol() {
+async fn follow_of_a_root_dir_symlink_copies_the_tree() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///at")).await.unwrap();
     write_file(&mem, "mem:///at/f", b"data").await;
@@ -469,14 +463,14 @@ async fn follow_de_un_dir_symlink_raiz_copia_el_arbol() {
     assert_eq!(read_all(&*mem, "mem:///dst/f").await.unwrap(), b"data");
 }
 
-/// Un ciclo de symlinks bajo Follow falla LIMPIO (visited set por `node_id`,
-/// spec §17.9): jamás recursión infinita ni cuelgue.
+/// A symlink cycle under Follow fails CLEANLY (a visited set by `node_id`,
+/// spec §17.9): never infinite recursion nor a hang.
 #[tokio::test]
-async fn follow_ciclo_de_symlinks_falla_limpio() {
+async fn follow_a_symlink_cycle_fails_cleanly() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/d")).await.unwrap();
-    // Target vacío: resuelve al PADRE del link (src/d) — ciclo d → d.
+    // Empty target: resolves to the link's PARENT (src/d) — cycle d → d.
     mem.symlink(&vp("mem:///src/d/loop"), b"", SymlinkKind::Dir)
         .await
         .unwrap();
@@ -488,14 +482,14 @@ async fn follow_ciclo_de_symlinks_falla_limpio() {
     assert_eq!(
         handle.join().await,
         TaskState::Failed { error: Error::Loop },
-        "ciclo detectado y rechazado con su categoría propia (#31)"
+        "cycle detected and rejected with its own category (#31)"
     );
 }
 
-/// Un DAG (dos caminos al mismo dir SIN ciclo) NO es un ciclo: se copia
-/// dos veces, como `cp -RL`.
+/// A DAG (two paths to the same dir WITHOUT a cycle) is NOT a cycle: it is
+/// copied twice, like `cp -RL`.
 #[tokio::test]
-async fn follow_dag_sin_ciclo_copia_dos_veces() {
+async fn follow_a_dag_without_a_cycle_copies_twice() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/at")).await.unwrap();
@@ -516,11 +510,11 @@ async fn follow_dag_sin_ciclo_copia_dos_veces() {
     assert_eq!(read_all(&*mem, "mem:///dst/y2/f").await.unwrap(), b"data");
 }
 
-/// Follow sobre dir-symlink en un provider SIN identidad de nodo: sin
-/// visited set posible → Unsupported (el comportamiento M1 se preserva
-/// exactamente donde no hay red de seguridad).
+/// Follow over a dir-symlink on a provider WITHOUT node identity: no visited
+/// set possible → Unsupported (M1's behavior is preserved exactly where
+/// there is no safety net).
 #[tokio::test]
-async fn follow_sin_identidad_es_unsupported() {
+async fn follow_without_identity_is_unsupported() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new().without_node_ids());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
@@ -541,11 +535,11 @@ async fn follow_sin_identidad_es_unsupported() {
     );
 }
 
-/// Move con Follow: el delete de la fase 2 borra el LINK, jamás el
-/// contenido del target A TRAVÉS del link (sería pérdida fuera del árbol
-/// movido). El origen queda completamente vacío; el destino, expandido.
+/// Move with Follow: phase 2's delete removes the LINK, never the target's
+/// content THROUGH the link (that would be a loss outside the tree being
+/// moved). The source ends up completely empty; the destination, expanded.
 #[tokio::test]
-async fn move_follow_no_borra_a_traves_del_link() {
+async fn move_follow_does_not_delete_through_the_link() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/at")).await.unwrap();
@@ -558,19 +552,20 @@ async fn move_follow_no_borra_a_traves_del_link() {
         .move_with(&vp("mem:///src"), &vp("mem:///dst2"), follow())
         .await
         .unwrap();
-    // Mismo provider: el rename gana y no hay expansión — forzar el camino
-    // copy+delete con un destino CROSS-provider sería el caso puro; aquí
-    // basta verificar que el move terminó sin tocar nada de más.
+    // Same provider: the rename wins and there is no expansion — forcing the
+    // copy+delete path with a CROSS-provider destination would be the pure
+    // case; here it is enough to check the move finished without touching
+    // anything extra.
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert!(mem.stat(&vp("mem:///src")).await.is_err(), "origen movido");
+    assert!(mem.stat(&vp("mem:///src")).await.is_err(), "source moved");
 }
 
-/// El caso PURO de move+Follow (copy+delete cross-provider): el link se
-/// expande en el destino; en el ORIGEN el link se borra COMO LINK — su
-/// contenido jamás se recorre para borrar (sería pérdida a través del
-/// link) ni queda nada atrás.
+/// The PURE case of move+Follow (cross-provider copy+delete): the link
+/// expands at the destination; at the SOURCE the link is deleted AS A LINK —
+/// its content is never walked to delete it (that would be a loss through the
+/// link) nor is anything left behind.
 #[tokio::test]
-async fn move_follow_cross_provider_expande_y_borra_solo_el_link() {
+async fn move_follow_cross_provider_expands_and_deletes_only_the_link() {
     let engine = Engine::new();
     let src_tree = Arc::new(MemProvider::new());
     let dst_tree = Arc::new(MemProvider::new());
@@ -594,7 +589,7 @@ async fn move_follow_cross_provider_expande_y_borra_solo_el_link() {
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    // Destino: expandido de verdad (at real + zln expandido como dir real).
+    // Destination: really expanded (at real + zln expanded as a real dir).
     assert_eq!(
         read_all(&*dst_tree, "mem:///dst/at/f").await.unwrap(),
         b"data"
@@ -603,19 +598,19 @@ async fn move_follow_cross_provider_expande_y_borra_solo_el_link() {
         read_all(&*dst_tree, "mem:///dst/zln/f").await.unwrap(),
         b"data"
     );
-    // Origen: TODO fuera (at, su contenido y el link — borrado como link).
+    // Source: EVERYTHING gone (at, its content and the link — deleted as a link).
     assert_eq!(
         src_tree.stat(&vp("src:///m")).await.unwrap_err(),
         Error::NotFound
     );
 }
 
-/// Cancelación durante una copia con Follow: limpia, sin cuelgue (regla 3
-/// aplica también al walk con expansión).
-// Reloj pausado: la latencia por op del MemProvider corre en el reloj de
-// tokio, así que «dormir y cancelar» deja de ser una carrera con la máquina.
+/// Cancellation during a Follow copy: clean, no hang (rule 3 also applies to
+/// the walk with expansion).
+// Paused clock: `MemProvider`'s per-op latency runs on tokio's clock, so
+// "sleep and cancel" stops being a race with the machine.
 #[tokio::test(start_paused = true)]
-async fn follow_cancelacion_durante_walk_es_limpia() {
+async fn follow_cancellation_during_the_walk_is_clean() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/at")).await.unwrap();
@@ -637,13 +632,14 @@ async fn follow_cancelacion_durante_walk_es_limpia() {
     assert_eq!(handle.join().await, TaskState::Cancelled);
 }
 
-/// Hallazgo ALTA del encoding-auditor: copiar un symlink SOBRE su propio
-/// target con Follow+Overwrite destruiría el target (remove antes de leer
-/// a través del link). El guard compara la identidad RESUELTA del origen.
+/// A HIGH finding from the encoding-auditor: copying a symlink OVER its own
+/// target with Follow+Overwrite would destroy the target (remove before
+/// reading through the link). The guard compares the source's RESOLVED
+/// identity.
 #[tokio::test]
-async fn follow_overwrite_de_link_sobre_su_target_no_destruye() {
+async fn follow_overwrite_of_a_link_over_its_target_does_not_destroy() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///f", b"precioso").await;
+    write_file(&mem, "mem:///f", b"precious").await;
     mem.symlink(&vp("mem:///ln"), b"f", SymlinkKind::File)
         .await
         .unwrap();
@@ -666,16 +662,16 @@ async fn follow_overwrite_de_link_sobre_su_target_no_destruye() {
             error: Error::InvalidPath
         }
     );
-    assert_eq!(read_all(&*mem, "mem:///f").await.unwrap(), b"precioso");
+    assert_eq!(read_all(&*mem, "mem:///f").await.unwrap(), b"precious");
 }
 
-/// Variante dir del mismo hallazgo: expandir un dir-symlink sobre su
-/// propio target dir.
+/// The dir variant of the same finding: expanding a dir-symlink over its own
+/// target dir.
 #[tokio::test]
-async fn follow_overwrite_de_dir_link_sobre_su_target_no_destruye() {
+async fn follow_overwrite_of_a_dir_link_over_its_target_does_not_destroy() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///d")).await.unwrap();
-    write_file(&mem, "mem:///d/hijo", b"precioso").await;
+    write_file(&mem, "mem:///d/child", b"precious").await;
     mem.symlink(&vp("mem:///ln"), b"d", SymlinkKind::Dir)
         .await
         .unwrap();
@@ -698,28 +694,31 @@ async fn follow_overwrite_de_dir_link_sobre_su_target_no_destruye() {
             error: Error::InvalidPath
         }
     );
-    assert_eq!(read_all(&*mem, "mem:///d/hijo").await.unwrap(), b"precioso");
+    assert_eq!(
+        read_all(&*mem, "mem:///d/child").await.unwrap(),
+        b"precious"
+    );
 }
 
-/// La expansión Follow no pierde BYTES: nombre de link no-UTF8 y
-/// contenido con nombres hostiles (NFD, control) llegan byte-exactos al
-/// destino bajo el path del link expandido.
+/// Follow's expansion loses no BYTES: a non-UTF-8 link name and content with
+/// hostile names (NFD, control) arrive byte-exact at the destination under
+/// the expanded link's path.
 #[tokio::test]
-async fn follow_expande_con_nombres_hostiles_byte_exactos() {
+async fn follow_expands_with_hostile_names_byte_exact() {
     let (engine, mem) = engine_with_mem();
-    let seg = |b: &[u8]| norte_proto::Segment::new(b.to_vec()).expect("segmento hostil válido");
+    let seg = |b: &[u8]| norte_proto::Segment::new(b.to_vec()).expect("valid hostile segment");
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/at")).await.unwrap();
-    // Hijos hostiles: NFD (e + combinante) y salto de línea.
+    // Hostile children: NFD (e + combining) and a line break.
     let nfd: &[u8] = b"e\xCC\x81.txt";
     let ctrl: &[u8] = b"a\nb";
     for name in [nfd, ctrl] {
         let p = vp("mem:///src/at").join(seg(name));
-        let mut sink = mem.write(&p).await.expect("write hostil");
+        let mut sink = mem.write(&p).await.expect("hostile write");
         sink.write(Bytes::from_static(b"data")).await.unwrap();
         sink.commit().await.unwrap();
     }
-    // Link con nombre no-UTF8 (latin1 é crudo).
+    // A link with a non-UTF-8 name (raw latin1 é).
     let link_name: &[u8] = b"z\xE9ln";
     let link = vp("mem:///src").join(seg(link_name));
     mem.symlink(&link, b"at", SymlinkKind::Dir).await.unwrap();
@@ -732,37 +731,37 @@ async fn follow_expande_con_nombres_hostiles_byte_exactos() {
     for name in [nfd, ctrl] {
         let expanded = vp("mem:///dst").join(seg(link_name)).join(seg(name));
         let e = mem.stat(&expanded).await.unwrap_or_else(|err| {
-            panic!("falta {name:?} bajo el link expandido: {err:?}");
+            panic!("missing {name:?} under the expanded link: {err:?}");
         });
         assert_eq!(
             e.path.file_name().unwrap().as_bytes(),
             name,
-            "bytes intactos bajo la expansión"
+            "bytes intact under the expansion"
         );
     }
 }
 
-/// Cancelar DURANTE el backoff de un retry de mutación responde rápido
-/// (regla 3): jamás espera a agotar los reintentos.
-// Reloj pausado: la latencia por op del MemProvider corre en el reloj de
-// tokio, así que «dormir y cancelar» deja de ser una carrera con la máquina.
+/// Cancelling DURING a mutation retry's backoff answers fast (rule 3): it
+/// never waits out the retries.
+// Paused clock: `MemProvider`'s per-op latency runs on tokio's clock, so
+// "sleep and cancel" stops being a race with the machine.
 #[tokio::test(start_paused = true)]
-async fn cancelacion_durante_backoff_de_mutacion_es_rapida() {
+async fn cancellation_during_a_mutations_backoff_is_fast() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///victima", b"x").await;
-    // Transitorios de sobra: sin cancelación tardaría 100+200+400 ms.
+    write_file(&mem, "mem:///victim", b"x").await;
+    // Plenty of transients: without cancellation it would take 100+200+400 ms.
     mem.faults().unavailable_for_next(10);
 
-    let inicio = std::time::Instant::now();
+    let start = std::time::Instant::now();
     let handle = engine
-        .delete_with(&vp("mem:///victima"), DeleteMode::Permanent)
+        .delete_with(&vp("mem:///victim"), DeleteMode::Permanent)
         .await
         .unwrap();
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     handle.cancel();
     assert_eq!(handle.join().await, TaskState::Cancelled);
     assert!(
-        inicio.elapsed() < std::time::Duration::from_millis(500),
-        "la cancelación no espera al backoff"
+        start.elapsed() < std::time::Duration::from_millis(500),
+        "the cancellation does not wait out the backoff"
     );
 }

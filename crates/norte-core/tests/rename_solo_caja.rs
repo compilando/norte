@@ -1,13 +1,13 @@
-//! Renombrar cambiando SOLO la caja, sobre un destino que pliega (#274).
+//! Renaming by changing ONLY the case, over a destination that folds (#274).
 //!
-//! `Foo.txt → foo.txt` en APFS, HFS+, NTFS, exFAT o un SMB que pliegue es
-//! trabajo de verdad: el filesystem guarda el nombre nuevo aunque los dos
-//! nombres se refieran al mismo inodo. Lo mismo NFD → NFC.
+//! `Foo.txt → foo.txt` on APFS, HFS+, NTFS, exFAT or an SMB share that folds
+//! is real work: the filesystem keeps the new name even though both names
+//! refer to the same inode. The same goes for NFD → NFC.
 //!
-//! El planificador de lotes ya lo sabe —`rename/plan.rs` tiene
-//! `a_case_only_rename_is_real_work_on_a_case_insensitive_directory` y emite
-//! un paso de verdad—, así que una ventana con dos renombrados no puede dar
-//! respuestas opuestas ante la misma entrada.
+//! The batch planner already knows this — `rename/plan.rs` has
+//! `a_case_only_rename_is_real_work_on_a_case_insensitive_directory` and
+//! emits a real step — so a window with two renames cannot give opposite
+//! answers to the same input.
 
 use std::sync::Arc;
 
@@ -17,12 +17,12 @@ use norte_testkit::{MemProvider, Normalization};
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-/// Un provider que PLIEGA, como APFS: sin `CASE_SENSITIVE` y con la
-/// normalización insensible, o sea que `A.txt` y `a.txt` son el mismo nodo.
-fn engine_que_pliega() -> (Engine, Arc<MemProvider>) {
+/// A provider that FOLDS, like APFS: without `CASE_SENSITIVE` and with
+/// insensitive normalization, meaning `A.txt` and `a.txt` are the same node.
+fn folding_engine() -> (Engine, Arc<MemProvider>) {
     let caps = MemProvider::new().capabilities().flags & !CapabilityFlags::CASE_SENSITIVE;
     let mem =
         Arc::new(MemProvider::with_flags(caps).with_normalization(Normalization::Insensitive));
@@ -31,15 +31,15 @@ fn engine_que_pliega() -> (Engine, Arc<MemProvider>) {
     (engine, mem)
 }
 
-async fn escribe(mem: &MemProvider, wire: &str, bytes: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+async fn write(mem: &MemProvider, wire: &str, bytes: &[u8]) {
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(bytes::Bytes::copy_from_slice(bytes))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
 }
 
-async fn mueve(engine: &Engine, from: &str, to: &str) -> TaskState {
+async fn move_(engine: &Engine, from: &str, to: &str) -> TaskState {
     let handle = engine
         .move_with_as(
             &vp(from),
@@ -51,58 +51,58 @@ async fn mueve(engine: &Engine, from: &str, to: &str) -> TaskState {
             Actor::User,
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
     handle.join().await
 }
 
-/// **El caso del issue.** Cambiar solo la caja NO es mover algo sobre sí
-/// mismo: es el rename que hace `F2` en cualquier gestor de archivos.
+/// **The case from the issue.** Changing only the case is NOT moving something
+/// onto itself: it is the rename `F2` does in any file manager.
 #[tokio::test]
-async fn un_rename_que_solo_cambia_la_caja_se_hace() {
-    let (engine, mem) = engine_que_pliega();
-    escribe(&mem, "mem:///Foo.txt", b"contenido").await;
+async fn a_rename_that_only_changes_the_case_happens() {
+    let (engine, mem) = folding_engine();
+    write(&mem, "mem:///Foo.txt", b"content").await;
 
     assert_eq!(
-        mueve(&engine, "mem:///Foo.txt", "mem:///foo.txt").await,
+        move_(&engine, "mem:///Foo.txt", "mem:///foo.txt").await,
         TaskState::Completed,
-        "el mismo nodo con otro nombre es trabajo real, no autodestrucción"
+        "the same node under another name is real work, not self-destruction"
     );
 }
 
-/// **La misma ruta byte a byte NO se rechaza: el rename es un no-op que sale
-/// bien**, igual que `rename(2)` con `old` y `new` apuntando al mismo fichero,
-/// que POSIX define como éxito sin hacer nada.
+/// **The exact same path byte for byte is NOT rejected: the rename is a no-op
+/// that succeeds**, just like `rename(2)` with `old` and `new` pointing at the
+/// same file, which POSIX defines as success doing nothing.
 ///
-/// Es una asimetría con `fs.copy`, que ante `from == to` devuelve
-/// `InvalidPath` — y ahí sí hace falta, porque copiar SOBRE sí mismo con
-/// `Overwrite` borra el destino antes de leer el origen. Un rename no lee
-/// nada, así que no hay nada que destruir. El test la fija para que nadie
-/// «arregle» una de las dos hacia la otra sin querer.
+/// It is an asymmetry with `fs.copy`, which returns `InvalidPath` for
+/// `from == to` — and there it IS needed, because copying ONTO itself with
+/// `Overwrite` deletes the destination before reading the source. A rename
+/// reads nothing, so there is nothing to destroy. The test pins this down so
+/// nobody "fixes" one of the two into the other by accident.
 #[tokio::test]
-async fn moverse_sobre_si_mismo_es_un_no_op_que_sale_bien() {
-    let (engine, mem) = engine_que_pliega();
-    escribe(&mem, "mem:///Foo.txt", b"contenido").await;
+async fn moving_onto_itself_is_a_no_op_that_succeeds() {
+    let (engine, mem) = folding_engine();
+    write(&mem, "mem:///Foo.txt", b"content").await;
 
     assert_eq!(
-        mueve(&engine, "mem:///Foo.txt", "mem:///Foo.txt").await,
+        move_(&engine, "mem:///Foo.txt", "mem:///Foo.txt").await,
         TaskState::Completed
     );
-    let e = mem.stat(&vp("mem:///Foo.txt")).await.expect("sigue ahí");
-    assert_eq!(e.size, Some(9), "y no se ha perdido nada por el camino");
+    let e = mem.stat(&vp("mem:///Foo.txt")).await.expect("still there");
+    assert_eq!(e.size, Some(7), "and nothing was lost along the way");
 }
 
-/// Y el fichero sigue estando, con su contenido: un rename de solo-caja que
-/// se resolviera como «lo mismo, no hago nada» y uno que borrara el origen se
-/// leen igual desde fuera si nadie mira el contenido.
+/// And the file is still there, with its content: a case-only rename resolved
+/// as "same thing, doing nothing" and one that deleted the source read the
+/// same from outside if nobody looks at the content.
 #[tokio::test]
-async fn el_contenido_sobrevive_al_rename_de_solo_caja() {
-    let (engine, mem) = engine_que_pliega();
-    escribe(&mem, "mem:///Foo.txt", b"contenido").await;
+async fn the_content_survives_a_case_only_rename() {
+    let (engine, mem) = folding_engine();
+    write(&mem, "mem:///Foo.txt", b"content").await;
 
     assert_eq!(
-        mueve(&engine, "mem:///Foo.txt", "mem:///foo.txt").await,
+        move_(&engine, "mem:///Foo.txt", "mem:///foo.txt").await,
         TaskState::Completed
     );
-    let e = mem.stat(&vp("mem:///foo.txt")).await.expect("sigue ahí");
-    assert_eq!(e.size, Some(9));
+    let e = mem.stat(&vp("mem:///foo.txt")).await.expect("still there");
+    assert_eq!(e.size, Some(7));
 }

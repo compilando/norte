@@ -1,23 +1,24 @@
-//! El área de sesión de UI de [`Backend`](super::Backend) (L2): leer,
-//! reemplazar y soltar la sesión guardada.
+//! [`Backend`](super::Backend)'s UI session area (L2): reading, replacing
+//! and releasing the stored session.
 
 use norte_proto::Error;
 
 use super::Backend;
 
 impl Backend {
-    /// La sesión de UI guardada y si ESTA superficie puede escribirla (L2).
+    /// The stored UI session and whether THIS surface can write it (L2).
     ///
-    /// Contra el daemon es `session.get`. En EMBEBIDO no hay socket, así que
-    /// el proceso es su propio almacén: el fichero de `<state_dir>` y el mismo
-    /// lock que usa el daemon, tomado una vez por proceso. Sin `state_dir` —un
-    /// entorno sin `HOME`— se sirve una sesión vacía que nadie escribe, que es
-    /// exactamente lo que hoy hace un arranque sin sesión guardada.
+    /// Against the daemon this is `session.get`. EMBEDDED has no socket, so
+    /// the process is its own store: the file under `<state_dir>` and the
+    /// same lock the daemon uses, taken once per process. With no
+    /// `state_dir` —an environment with no `HOME`— an empty session that
+    /// nobody writes is served, which is exactly what a startup with no
+    /// stored session does today.
     ///
     /// # Errors
     ///
-    /// Lo que devuelva el transporte. Un fallo NO es motivo para no arrancar:
-    /// el llamante sigue con la pantalla de la configuración.
+    /// Whatever the transport returns. A failure is NOT a reason not to
+    /// start: the caller continues to the settings screen.
     pub async fn session_get(&self) -> Result<(norte_proto::methods::Session, bool), Error> {
         match self {
             Self::Embedded(_) => Ok(crate::embedded::session_get().await),
@@ -26,13 +27,13 @@ impl Backend {
         }
     }
 
-    /// Reemplaza la sesión de UI y devuelve la revisión NUEVA (L2).
+    /// Replaces the UI session and returns the NEW revision (L2).
     ///
     /// # Errors
     ///
-    /// [`Error::Conflict`] si la revisión venía rancia (re-lee y reintenta),
-    /// [`Error::LimitExceeded`] si el cuerpo pasa del tope, y lo que dé el
-    /// transporte en lo demás.
+    /// [`Error::Conflict`] if the revision came in stale (re-read and
+    /// retry), [`Error::LimitExceeded`] if the body exceeds the cap, and
+    /// whatever the transport gives otherwise.
     pub async fn session_put(
         &self,
         version: u32,
@@ -46,16 +47,17 @@ impl Backend {
         }
     }
 
-    /// Suelta la propiedad de la sesión de UI (0.78.0, fase 9). Devuelve si
-    /// esta conexión ERA la dueña.
+    /// Releases ownership of the UI session (0.78.0, phase 9). Returns
+    /// whether this connection WAS the owner.
     ///
-    /// **En EMBEBIDO no hay a quién soltársela**: el proceso es el único que
-    /// toca esa sesión, así que contesta `false` sin tocar nada. No es una
-    /// degradación silenciosa — es la razón por la que `app.handoff` se
-    /// declara no disponible fuera del modo daemon, con su motivo.
+    /// **In EMBEDDED there's nobody to release it to**: the process is the
+    /// only one touching that session, so it answers `false` without
+    /// touching anything. This isn't a silent degradation — it's the reason
+    /// `app.handoff` is declared unavailable outside daemon mode, with its
+    /// reason.
     ///
     /// # Errors
-    /// Lo que dé el transporte. Un daemon 0.77 contesta `Unsupported`.
+    /// Whatever the transport gives. A 0.77 daemon answers `Unsupported`.
     pub async fn session_release(&self) -> Result<bool, Error> {
         match self {
             Self::Embedded(_) => Ok(false),

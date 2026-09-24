@@ -1,8 +1,8 @@
-//! Integración `Engine::checksum_as` (#311): el digest del contenido de un
-//! lote de ficheros, como Task cancelable, con los digests en un INFORME —
-//! porque N sumas no caben en el desenlace de una Task ni en su progreso.
+//! `Engine::checksum_as` integration (#311): the content digest of a batch of
+//! files, as a cancelable Task, with the digests in a REPORT — because N sums
+//! do not fit in a Task's outcome nor in its progress.
 //!
-//! `MemProvider` in-memory → determinista, sin tocar disco.
+//! In-memory `MemProvider` → deterministic, without touching disk.
 
 use std::sync::Arc;
 
@@ -14,12 +14,12 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-async fn write_file(mem: &MemProvider, wire: &str, contenido: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
-    sink.write(Bytes::copy_from_slice(contenido))
+async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
+    sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
@@ -39,41 +39,41 @@ fn params(paths: &[&str]) -> FsChecksumParams {
     }
 }
 
-/// El digest de un fichero vacío y el de uno con contenido, contra los valores
-/// que publica cualquier `sha256sum`: si esto se desviara, comprobar contra una
-/// suma de fuera dejaría de servir para nada — que es justo para lo que existe.
+/// The digest of an empty file and of one with content, against the values any
+/// `sha256sum` publishes: if this drifted, checking against an outside sum
+/// would stop being useful for anything — which is exactly what it exists for.
 #[tokio::test]
-async fn los_digests_son_los_de_sha256sum() {
+async fn the_digests_are_sha256sums() {
     let (engine, mem) = setup();
-    write_file(&mem, "mem:///vacio", b"").await;
+    write_file(&mem, "mem:///empty", b"").await;
     write_file(&mem, "mem:///abc", b"abc").await;
 
     let handle = engine
-        .checksum_as(params(&["mem:///vacio", "mem:///abc"]), Actor::User)
+        .checksum_as(params(&["mem:///empty", "mem:///abc"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(handle.join().await, TaskState::Completed);
 
-    let (_actor, informe) = engine.checksum_report(id).expect("hay informe");
-    assert_eq!(informe.pending, 0, "terminada: no queda nada por resolver");
-    assert_eq!(informe.entries.len(), 2);
+    let (_actor, report) = engine.checksum_report(id).expect("there is a report");
+    assert_eq!(report.pending, 0, "finished: nothing left to resolve");
+    assert_eq!(report.entries.len(), 2);
     assert_eq!(
-        informe.entries[0].digest.as_deref(),
+        report.entries[0].digest.as_deref(),
         Some("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
-        "el sha256 del fichero vacío"
+        "the sha256 of the empty file"
     );
     assert_eq!(
-        informe.entries[1].digest.as_deref(),
+        report.entries[1].digest.as_deref(),
         Some("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
-        "el sha256 de `abc`"
+        "the sha256 of `abc`"
     );
 }
 
-/// El orden del informe es el de la PETICIÓN. Un informe que se reordenara solo
-/// no se podría comparar con la lista que uno mandó.
+/// The report's order is the REQUEST's. A report that reordered itself could
+/// not be compared against the list one sent.
 #[tokio::test]
-async fn el_informe_conserva_el_orden_pedido() {
+async fn the_report_keeps_the_requested_order() {
     let (engine, mem) = setup();
     write_file(&mem, "mem:///a", b"a").await;
     write_file(&mem, "mem:///b", b"b").await;
@@ -82,151 +82,152 @@ async fn el_informe_conserva_el_orden_pedido() {
     let handle = engine
         .checksum_as(params(&["mem:///c", "mem:///a", "mem:///b"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(handle.join().await, TaskState::Completed);
-    let (_actor, informe) = engine.checksum_report(id).expect("informe");
-    let rutas: Vec<String> = informe.entries.iter().map(|e| e.path.to_wire()).collect();
-    assert_eq!(rutas, vec!["mem:///c", "mem:///a", "mem:///b"]);
+    let (_actor, report) = engine.checksum_report(id).expect("report");
+    let paths: Vec<String> = report.entries.iter().map(|e| e.path.to_wire()).collect();
+    assert_eq!(paths, vec!["mem:///c", "mem:///a", "mem:///b"]);
 }
 
-/// Lo que no se pudo leer y lo que no era un fichero salen con su MOTIVO, y no
-/// tumban el lote: comprobar cien ficheros no puede morirse en el que alguien
-/// acaba de mover.
+/// What could not be read and what was not a file come out with their REASON,
+/// and do not bring down the batch: checking a hundred files cannot die on the
+/// one someone just moved.
 #[tokio::test]
-async fn lo_ilegible_y_lo_que_no_es_fichero_salen_con_su_motivo() {
+async fn the_unreadable_and_non_file_entries_come_out_with_their_reason() {
     let (engine, mem) = setup();
-    write_file(&mem, "mem:///bueno", b"hola").await;
-    mem.mkdir(&vp("mem:///carpeta")).await.expect("mkdir");
+    write_file(&mem, "mem:///good", b"hello").await;
+    mem.mkdir(&vp("mem:///folder")).await.expect("mkdir");
 
     let handle = engine
         .checksum_as(
-            params(&["mem:///bueno", "mem:///carpeta", "mem:///no-existe"]),
+            params(&["mem:///good", "mem:///folder", "mem:///does-not-exist"]),
             Actor::User,
         )
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(
         handle.join().await,
         TaskState::Completed,
-        "un ilegible NO hace fallar la Task"
+        "an unreadable entry does NOT fail the Task"
     );
 
-    let (_actor, informe) = engine.checksum_report(id).expect("informe");
-    assert_eq!(informe.entries.len(), 3, "las tres rutas salen");
+    let (_actor, report) = engine.checksum_report(id).expect("report");
+    assert_eq!(report.entries.len(), 3, "all three paths come out");
     assert!(
-        informe.entries[0].digest.is_some(),
-        "el bueno sí tiene suma"
+        report.entries[0].digest.is_some(),
+        "the good one does have a sum"
     );
-    assert_eq!(informe.entries[1].miss, Some(ChecksumMiss::NotAFile));
-    assert_eq!(informe.entries[2].miss, Some(ChecksumMiss::Unreadable));
+    assert_eq!(report.entries[1].miss, Some(ChecksumMiss::NotAFile));
+    assert_eq!(report.entries[2].miss, Some(ChecksumMiss::Unreadable));
     assert!(
-        informe.entries[1].digest.is_none() && informe.entries[2].digest.is_none(),
-        "sin suma cuando hay motivo: los dos campos son excluyentes"
+        report.entries[1].digest.is_none() && report.entries[2].digest.is_none(),
+        "no sum when there is a reason: the two fields are mutually exclusive"
     );
 }
 
-/// La lista vacía se rechaza ANTES de crear Task alguna: resumir la nada no es
-/// una petición, y un rechazo del REQUEST no es el fallo de una Task lanzada.
+/// The empty list is rejected BEFORE any Task is created: summing nothing is
+/// not a request, and a REQUEST rejection is not a launched Task's failure.
 #[tokio::test]
-async fn sin_rutas_no_hay_task() {
+async fn no_paths_means_no_task() {
     let (engine, _mem) = setup();
     let Err(err) = engine.checksum_as(params(&[]), Actor::User).await else {
-        panic!("una lista vacía tiene que rechazarse");
+        panic!("an empty list has to be rejected");
     };
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
 }
 
-/// Por encima del tope se RECHAZA, no se recorta: un informe recortado en
-/// silencio se lee como «todo comprobado» sobre ficheros que nadie miró.
+/// Above the cap it is REJECTED, not trimmed: a silently trimmed report reads
+/// as "everything checked" for files nobody looked at.
 #[tokio::test]
-async fn por_encima_del_tope_se_rechaza() {
+async fn above_the_cap_it_is_rejected() {
     let (engine, _mem) = setup();
-    let muchas: Vec<VPath> = (0..=norte_proto::methods::FS_CHECKSUM_MAX_PATHS)
+    let many: Vec<VPath> = (0..=norte_proto::methods::FS_CHECKSUM_MAX_PATHS)
         .map(|i| vp(&format!("mem:///f{i}")))
         .collect();
     let Err(err) = engine
         .checksum_as(
             FsChecksumParams {
-                paths: muchas,
+                paths: many,
                 algo: ChecksumAlgo::Sha256,
             },
             Actor::User,
         )
         .await
     else {
-        panic!("por encima del tope tiene que rechazarse");
+        panic!("above the cap has to be rejected");
     };
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
 }
 
-/// Regla 3: el lote se cancela limpiamente, el estado lo dice, y el informe
-/// **se queda a medias diciéndolo**.
+/// Hard rule 3: the batch cancels cleanly, the state says so, and the report
+/// **is left half done saying so too**.
 ///
-/// `pending > 0` con la Task ya terminal es la señal de que lo que hay no es
-/// todo. Sin ella, un frontend que compare contra un fichero de sumas acusaría
-/// —«no cuadra o falta»— a ficheros que nadie llegó a leer, que es el peor
-/// error posible en la única herramienta cuyo trabajo es comprobar.
+/// `pending > 0` with the Task already terminal is the signal that what is
+/// there is not everything. Without it, a frontend comparing against a sums
+/// file would accuse — "does not match or is missing" — files nobody ever got
+/// to read, which is the worst possible error in the one tool whose job is to
+/// verify.
 #[tokio::test]
-async fn cancelar_deja_el_informe_marcado_como_incompleto() {
+async fn cancelling_leaves_the_report_marked_incomplete() {
     let (engine, mem) = setup();
-    let mut rutas = Vec::new();
+    let mut paths = Vec::new();
     for i in 0..400 {
         let wire = format!("mem:///f{i}");
-        write_file(&mem, &wire, b"contenido").await;
-        rutas.push(vp(&wire));
+        write_file(&mem, &wire, b"content").await;
+        paths.push(vp(&wire));
     }
     let handle = engine
         .checksum_as(
             FsChecksumParams {
-                paths: rutas,
+                paths,
                 algo: ChecksumAlgo::Sha256,
             },
             Actor::User,
         )
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     handle.cancel();
     assert_eq!(handle.join().await, TaskState::Cancelled);
 
-    let (_actor, informe) = engine.checksum_report(id).expect("hay informe");
+    let (_actor, report) = engine.checksum_report(id).expect("there is a report");
     assert!(
-        informe.pending > 0,
-        "cancelado a mitad: lo que falta tiene que seguir contándose, \
-         no ponerse a cero como si el lote hubiera acabado"
+        report.pending > 0,
+        "cancelled halfway: what is missing has to keep counting, \
+         not drop to zero as if the batch had finished"
     );
     assert!(
-        informe.entries.len() < 400,
-        "si estuvieran las 400 no se canceló nada y el test no prueba nada"
+        report.entries.len() < 400,
+        "if all 400 were there, nothing was cancelled and the test proves nothing"
     );
 }
 
-/// El informe dice CON QUÉ se calculó. Se puede pedir sin haber mandado la
-/// petición —`task.list` enseña las tasks de otros—, así que asumir sha256 por
-/// omisión sería pintar digests de otra cosa el día que haya un segundo
-/// algoritmo.
+/// The report says WHAT it was computed with. It can be requested without
+/// having sent the request — `task.list` shows other actors' tasks — so
+/// defaulting to sha256 would paint digests of something else the day there is
+/// a second algorithm.
 #[tokio::test]
-async fn el_informe_nombra_su_algoritmo() {
+async fn the_report_names_its_algorithm() {
     let (engine, mem) = setup();
     write_file(&mem, "mem:///x", b"abc").await;
     let handle = engine
         .checksum_as(params(&["mem:///x"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let id = handle.id();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
-        engine.checksum_report(id).expect("informe").1.algo,
+        engine.checksum_report(id).expect("report").1.algo,
         ChecksumAlgo::Sha256
     );
 }
 
-/// Un id que nunca fue un lote de sumas no tiene informe — y eso es lo que el
-/// daemon convierte en `NotFound` para quien pregunta por el de otro.
+/// An id that was never a checksum batch has no report — and that is what the
+/// daemon turns into `NotFound` for whoever asks about someone else's.
 #[tokio::test]
-async fn un_id_ajeno_no_tiene_informe() {
+async fn a_foreign_id_has_no_report() {
     let (engine, _mem) = setup();
     assert!(
         engine

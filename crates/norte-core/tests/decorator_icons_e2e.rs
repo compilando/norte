@@ -16,7 +16,7 @@ fn plugin_dir() -> PathBuf {
 
 fn build_plugin() -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let target_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("wasm-guests");
@@ -121,8 +121,8 @@ fn folders_and_links_get_their_icon_from_the_kind() {
             (b"bcds", EntryKind::Dir),
             (b"main.rs", EntryKind::Dir),
             (b".git", EntryKind::Dir),
-            (b"enlace", EntryKind::Symlink),
-            (b"cuentas.xlsx", EntryKind::File),
+            (b"link", EntryKind::Symlink),
+            (b"accounts.xlsx", EntryKind::File),
             (b"x", EntryKind::Other),
         ],
     );

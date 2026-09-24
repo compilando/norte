@@ -1,35 +1,39 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Esperar sin reloj.
+// Waiting without a clock.
 //
-// Estos tests hablan con un actor que encola cada mutación con `tokio::spawn`
-// y contesta el ack ANTES de que la task corra. Así que el test que quiere ver
-// lo encolado tiene que esperar a algo, y durante mucho tiempo ese algo fue un
-// `sleep(30)`: una apuesta de reloj de pared que, con 423 tests en paralelo,
-// pierde en cuanto la máquina va cargada. Un test intermitente es un bug.
+// These tests talk to an actor that queues every mutation with
+// `tokio::spawn` and answers the ack BEFORE the task runs. So a test that
+// wants to see what got queued has to wait for something, and for a long
+// time that something was a `sleep(30)`: a wall-clock bet that, with 423
+// tests in parallel, loses as soon as the machine is loaded. An intermittent
+// test is a bug.
 //
-// Hay tres preguntas y cada una tiene su herramienta:
+// There are three questions and each has its own tool:
 //
-// - «¿ya pasó X?» → [`hasta`], que espera el AVISO del doble. Cuesta cero en
-//   el camino verde y nombra lo que esperaba cuando falla. Su forma corta,
-//   para el caso más común, es [`anotados`].
-// - «¿seguro que NO pasó nada?» → [`asentar`], que espera a que al ejecutor no
-//   le quede trabajo listo. Con el reloj parado eso es el CONTRATO de tokio,
-//   no una apuesta sobre el planificador.
-// - «¿y cuando el doble no lo ve?» → [`foto_hasta`], que pide fotos hasta que
-//   la pantalla lo diga. Es lo que queda para una escritura que vuelve por
-//   `spawn_blocking` o un panel que se resiembra.
+// - "did X already happen?" → [`hasta`], which waits for the double's
+//   NOTIFICATION. It costs zero on the green path and names what it was
+//   waiting for when it fails. Its short form, for the most common case, is
+//   [`anotados`].
+// - "is it certain that NOTHING happened?" → [`asentar`], which waits for the
+//   executor to have no work left ready. With the clock stopped that is
+//   tokio's CONTRACT, not a bet on the scheduler.
+// - "and when the double does not see it?" → [`foto_hasta`], which requests
+//   snapshots until the screen says so. It is what is left for a write that
+//   comes back through `spawn_blocking` or a panel that reseeds itself.
 //
-// Para un plazo de VERDAD (el TTL del tablero, un timeout de extensión) no
-// vale ninguna de las dos: eso es `#[tokio::test(start_paused = true)]` y
-// `tokio::time::advance`, que salta el plazo en vez de esperarlo.
+// For a REAL deadline (the board's TTL, an extension timeout) neither works:
+// that is `#[tokio::test(start_paused = true)]` and `tokio::time::advance`,
+// which skips the deadline instead of waiting for it.
 // ---------------------------------------------------------------------------
 
-/// Espera a que el doble ANOTE lo que el test busca. Sin reloj.
+/// Waits for the double to RECORD what the test is looking for. Without a
+/// clock.
 ///
-/// `que_esperaba` es lo que se imprime si no llega: un test que se cuelga
-/// tiene que decir qué esperaba, no reventar en la aserción de después.
+/// `que_esperaba` is what gets printed if it never arrives: a test that hangs
+/// has to say what it was waiting for, not blow up in the assertion
+/// afterward.
 pub(super) async fn hasta<T>(
     f: &Falso,
     que_esperaba: &str,
@@ -38,12 +42,12 @@ pub(super) async fn hasta<T>(
     f.hasta(que_esperaba, que).await
 }
 
-/// Espera a que el doble tenga al menos `n` anotaciones en la lista que se le
-/// señala, y devuelve una copia.
+/// Waits for the double to have at least `n` records in the list it is
+/// pointed at, and returns a copy.
 ///
-/// Es la forma corta de [`hasta`] para el caso de lejos más común: «ya se
-/// encoló lo que tenía que encolarse». Devuelve el `Vec` clonado y no el
-/// `MutexGuard` a propósito: un guard no cruza un `await`.
+/// It is the short form of [`hasta`] for by far the most common case: "what
+/// had to be queued is already queued". Returns the cloned `Vec` and not the
+/// `MutexGuard` on purpose: a guard cannot cross an `await`.
 pub(super) async fn anotados<T: Clone>(
     f: &Falso,
     que_esperaba: &str,
@@ -57,15 +61,16 @@ pub(super) async fn anotados<T: Clone>(
     .await
 }
 
-/// Repite `Resync` hasta que la foto cumpla lo que se le pide.
+/// Repeats `Resync` until the snapshot satisfies what is asked of it.
 ///
-/// Cada vuelta es un viaje de ida y vuelta al actor, así que el bucle avanza
-/// al ritmo del host y no al del reloj. Es lo que hace falta cuando lo que se
-/// espera NO lo anota el doble —una escritura en disco que vuelve por
-/// `spawn_blocking`, un panel que se resiembra— y por eso [`hasta`] no sirve.
+/// Each round is a round trip to the actor, so the loop advances at the
+/// host's pace and not the clock's. It is what is needed when what is being
+/// waited for is NOT recorded by the double — a disk write that comes back
+/// through `spawn_blocking`, a panel that reseeds itself — and that is why
+/// [`hasta`] does not work.
 ///
-/// El plazo es el presupuesto de FALLO, igual que en [`hasta`]: en el camino
-/// verde la primera o la segunda foto ya trae lo que se busca.
+/// The deadline is the FAILURE budget, same as in [`hasta`]: on the green
+/// path the first or second snapshot already brings what is sought.
 pub(super) async fn foto_hasta<T>(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
@@ -73,101 +78,101 @@ pub(super) async fn foto_hasta<T>(
     que: impl Fn(&norte_ui_host::ViewSnapshot) -> Option<T>,
 ) -> T {
     const SOCORRO: std::time::Duration = std::time::Duration::from_secs(15);
-    let espera = async {
+    let wait = async {
         loop {
-            h.dispatch(UiAction::Resync).await.expect("host vivo");
+            h.dispatch(UiAction::Resync).await.expect("host alive");
             if let Some(v) = que(&siguiente_foto(sub).await) {
                 return v;
             }
         }
     };
-    let Ok(v) = tokio::time::timeout(SOCORRO, espera).await else {
-        panic!("la pantalla nunca llegó a: {que_esperaba}")
+    let Ok(v) = tokio::time::timeout(SOCORRO, wait).await else {
+        panic!("the screen never reached: {que_esperaba}")
     };
     v
 }
 
-/// Espera a que al ejecutor NO le quede trabajo listo.
+/// Waits for the executor to have NO work left ready.
 ///
-/// Es la respuesta a «no se encoló nada»: ahí no hay evento que esperar, así
-/// que lo que hay que garantizar es que las tasks que el actor pudiera haber
-/// lanzado antes de contestar el ack ya han corrido. El hueco es estrecho y
-/// concreto: el actor valida, hace `tokio::spawn` y CONTESTA el ack; el doble
-/// anota al entrar en el método, pero ese método solo se llama cuando la task
-/// lanzada recibe su primer poll.
+/// It is the answer to "nothing got queued": there is no event to wait for
+/// there, so what has to be guaranteed is that whatever tasks the actor might
+/// have launched before answering the ack have already run. The window is
+/// narrow and specific: the actor validates, does `tokio::spawn` and ANSWERS
+/// the ack; the double records on entering the method, but that method is
+/// only called when the launched task gets its first poll.
 ///
-/// **Con el reloj PARADO, tokio solo adelanta el tiempo cuando no le queda
-/// nada que correr.** O sea que dormir un instante virtual es exactamente
-/// «espera a que el ejecutor se quede sin trabajo»: cuando esto vuelve, toda
-/// task lanzada antes ha sido sondeada al menos una vez y está terminada o
-/// esperando algo. No cuesta tiempo real y no adivina nada.
+/// **With the clock STOPPED, tokio only advances time when it has nothing
+/// left to run.** So sleeping a virtual instant is exactly "wait for the
+/// executor to run out of work": when this returns, every task launched
+/// before has been polled at least once and is either finished or waiting on
+/// something. It costs no real time and guesses nothing.
 ///
-/// Antes eran 32 `yield_now()`, y eso era una apuesta con otro nombre: la
-/// documentación de tokio dice que `yield_now` puede volver a sondear la misma
-/// task inmediatamente, así que «32 cesiones» no garantizaba que las demás
-/// hubieran avanzado. Treinta y tres de estas comprobaciones negativas
-/// dependían solo de eso.
+/// It used to be 32 `yield_now()` calls, and that was a bet with another
+/// name: tokio's documentation says `yield_now` can poll the same task again
+/// immediately, so "32 yields" did not guarantee the others had advanced.
+/// Thirty-three of these negative checks depended on just that.
 ///
-/// El plazo es de socorro, no de espera: si el ejecutor nunca se queda quieto
-/// —una task que gira— esto lo dice en vez de colgarse para siempre.
+/// The deadline is for relief, not for waiting: if the executor never goes
+/// still — a spinning task — this says so instead of hanging forever.
 pub(super) async fn asentar() {
     const SOCORRO: std::time::Duration = std::time::Duration::from_secs(15);
-    let quieto = async {
+    let still = async {
         tokio::time::pause();
-        // Un instante VIRTUAL: el auto-avance del reloj parado no ocurre
-        // hasta que el ejecutor está ocioso, que es justo lo que se espera.
+        // A VIRTUAL instant: the stopped clock's auto-advance does not
+        // happen until the executor is idle, which is exactly what is being
+        // waited for.
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         tokio::time::resume();
     };
     assert!(
-        tokio::time::timeout(SOCORRO, quieto).await.is_ok(),
-        "el ejecutor nunca se quedó sin trabajo: hay una task que gira"
+        tokio::time::timeout(SOCORRO, still).await.is_ok(),
+        "the executor never ran out of work: there is a spinning task"
     );
 }
 
-/// Un nombre que no es UTF-8 cruza el bridge MARCADO y con el reemplazo
-/// canónico: ni se rechaza la entrada ni se pierde el aviso.
+/// A name that is not UTF-8 crosses the bridge MARKED and with the canonical
+/// replacement: the entry is neither rejected nor is the notice lost.
 #[tokio::test]
-async fn un_nombre_no_utf8_llega_marcado() {
+async fn a_non_utf8_name_arrives_marked() {
     let (_h, snap) = host_arbol(arbol()).await;
-    let hostil = listado(&snap)
+    let hostile = listado(&snap)
         .rows
         .iter()
         .find(|r| r.hostile)
-        .expect("la fila hostil llega");
+        .expect("the hostile row arrives");
     assert!(
-        hostil.display_name.contains('\u{FFFD}'),
-        "el nombre pintado lleva el reemplazo canónico: {:?}",
-        hostil.display_name
+        hostile.display_name.contains('\u{FFFD}'),
+        "the painted name carries the canonical replacement: {:?}",
+        hostile.display_name
     );
 }
 
-/// El orden es el COMPARTIDO: el mismo que produce `PaneState` para las
-/// mismas entradas, no uno del host.
+/// The sort order is the SHARED one: the same one `PaneState` produces for
+/// the same entries, not the host's own.
 #[tokio::test]
-async fn el_orden_es_el_de_la_capa_compartida() {
+async fn the_sort_order_is_the_shared_layers() {
     let (_h, snap) = host_arbol(arbol()).await;
-    let nombres: Vec<&str> = listado(&snap)
+    let names: Vec<&str> = listado(&snap)
         .rows
         .iter()
         .map(|r| r.display_name.as_str())
         .collect();
-    // Directorios primero, y dentro de cada grupo por nombre: es la regla de
-    // `norte_frontend::sort`, y aquí solo se comprueba que el host no la
-    // reimplementa.
-    assert_eq!(nombres[0], "docs");
-    assert!(nombres.contains(&"notas.txt"));
+    // Directories first, and within each group by name: it is
+    // `norte_frontend::sort`'s rule, and here it is only checked that the
+    // host does not reimplement it.
+    assert_eq!(names[0], "docs");
+    assert!(names.contains(&"notas.txt"));
 }
 
-/// Entrar en un directorio navega y trae su listado.
+/// Entering a directory navigates and brings its listing.
 #[tokio::test]
-async fn activar_un_directorio_navega() {
+async fn activating_a_directory_navigates() {
     let (h, snap) = host_arbol(arbol()).await;
     let docs = listado(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Activate {
         slot_id: 1,
@@ -175,29 +180,29 @@ async fn activar_un_directorio_navega() {
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let despues = siguiente_foto(&mut sub).await;
-    let b = listado(&despues);
+    let after = siguiente_foto(&mut sub).await;
+    let b = listado(&after);
     assert!(b.path_display.ends_with("/casa/docs"), "{}", b.path_display);
     assert_eq!(b.rows.len(), 2);
     assert_ne!(
         b.generation,
         listado(&snap).generation,
-        "otro listado, otra generación: las claves viejas caducan"
+        "another listing, another generation: old keys expire"
     );
 }
 
-/// Subir deja el cursor en el directorio del que se sale, que es lo que hace
-/// reversible bajar y subir.
+/// Going up leaves the cursor on the directory being left, which is what
+/// makes going down and up reversible.
 #[tokio::test]
-async fn subir_devuelve_el_cursor_al_directorio_de_origen() {
+async fn going_up_returns_the_cursor_to_the_origin_directory() {
     let (h, snap) = host_arbol(arbol()).await;
     let docs = listado(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Activate {
         slot_id: 1,
@@ -205,35 +210,35 @@ async fn subir_devuelve_el_cursor_al_directorio_de_origen() {
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguiente_foto(&mut sub).await;
 
     h.dispatch(UiAction::Parent { slot_id: 1 })
         .await
-        .expect("host vivo");
-    let arriba = siguiente_foto(&mut sub).await;
-    let b = listado(&arriba);
-    let bajo_cursor = b
+        .expect("host alive");
+    let up = siguiente_foto(&mut sub).await;
+    let b = listado(&up);
+    let under_cursor = b
         .rows
         .iter()
         .find(|r| Some(r.key) == b.cursor)
-        .expect("hay cursor");
+        .expect("there is a cursor");
     assert_eq!(
-        bajo_cursor.display_name, "docs",
-        "el cursor vuelve al directorio del que se salió"
+        under_cursor.display_name, "docs",
+        "the cursor goes back to the directory it left"
     );
 }
 
-/// Atrás y adelante recorren el rastro, y el rastro agotado lo DICE: una
-/// tecla muda no se distingue de una rota.
+/// Back and forward walk the trail, and an exhausted trail SAYS so: a dead
+/// key is indistinguishable from a broken one.
 #[tokio::test]
-async fn el_rastro_va_y_vuelve_y_cuando_se_acaba_lo_dice() {
+async fn the_trail_goes_and_comes_back_and_says_when_it_ends() {
     let (h, snap) = host_arbol(arbol()).await;
     let docs = listado(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
+        .expect("the directory is there");
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Activate {
         slot_id: 1,
@@ -241,7 +246,7 @@ async fn el_rastro_va_y_vuelve_y_cuando_se_acaba_lo_dice() {
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguiente_foto(&mut sub).await;
 
     h.dispatch(UiAction::History {
@@ -249,18 +254,18 @@ async fn el_rastro_va_y_vuelve_y_cuando_se_acaba_lo_dice() {
         back: true,
     })
     .await
-    .expect("host vivo");
-    let atras = siguiente_foto(&mut sub).await;
-    assert!(listado(&atras).path_display.ends_with("/casa"));
+    .expect("host alive");
+    let back = siguiente_foto(&mut sub).await;
+    assert!(listado(&back).path_display.ends_with("/casa"));
 
     h.dispatch(UiAction::History {
         slot_id: 1,
         back: false,
     })
     .await
-    .expect("host vivo");
-    let adelante = siguiente_foto(&mut sub).await;
-    assert!(listado(&adelante).path_display.ends_with("/casa/docs"));
+    .expect("host alive");
+    let forward = siguiente_foto(&mut sub).await;
+    assert!(listado(&forward).path_display.ends_with("/casa/docs"));
 
     let ack = h
         .dispatch(UiAction::History {
@@ -268,20 +273,20 @@ async fn el_rastro_va_y_vuelve_y_cuando_se_acaba_lo_dice() {
             back: false,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     match ack {
         ActionAck::Unavailable { reason_key } => {
             assert_eq!(reason_key, "msg-nav-no-forward");
         }
-        otro => panic!("el rastro agotado se dice: {otro:?}"),
+        other => panic!("an exhausted trail says so: {other:?}"),
     }
 }
 
-/// Una respuesta que llega TARDE, cuando otra navegación ya la relevó, se
-/// descarta en Rust. Sin esto, el listado del directorio abandonado
-/// aparecería encima del actual.
+/// A response that arrives LATE, once another navigation has already
+/// replaced it, is discarded in Rust. Without this, the abandoned
+/// directory's listing would show up over the current one.
 #[tokio::test]
-async fn una_respuesta_tardia_no_pisa_la_navegacion_nueva() {
+async fn a_late_response_does_not_overwrite_the_new_navigation() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"docs".to_vec(), true)]);
     f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
@@ -291,44 +296,48 @@ async fn una_respuesta_tardia_no_pisa_la_navegacion_nueva() {
     let docs = listado(&snap).rows[0].key;
     let mut sub = h.subscribe();
 
-    // Entrar en `docs` y, sin esperar, volver a casa: la primera respuesta
-    // llegará cuando el hueco ya esté en otra navegación.
+    // Enter `docs` and, without waiting, go back home: the first response
+    // will arrive once the slot is already in another navigation.
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::History {
         slot_id: 1,
         back: true,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let foto = siguiente_foto(&mut sub).await;
+    let snap = siguiente_foto(&mut sub).await;
     assert!(
-        listado(&foto).path_display.ends_with("/casa"),
-        "la última navegación es la que manda: {}",
-        listado(&foto).path_display
+        listado(&snap).path_display.ends_with("/casa"),
+        "the last navigation is the one that rules: {}",
+        listado(&snap).path_display
     );
-    // Y la tardía no produce una segunda foto con el directorio abandonado.
-    // Se espera a que las TRES respuestas hayan vuelto —la relevada incluida,
-    // que es la que podría pisar— y solo entonces se mira el canal.
-    hasta(&backend, "que no vuele ningún listado", |f| {
+    // And the late one produces no second snapshot with the abandoned
+    // directory. It waits for the THREE responses to have come back — the
+    // replaced one included, which is the one that could overwrite — and
+    // only then does it look at the channel.
+    hasta(&backend, "no listing in flight", |f| {
         (f.listados() == 3 && f.en_calma()).then_some(())
     })
     .await;
     asentar().await;
-    let mas = tokio::time::timeout(std::time::Duration::ZERO, sub.recv()).await;
-    assert!(mas.is_err(), "la respuesta relevada no llega a la pantalla");
-    assert_eq!(backend.listados(), 3, "inicial + docs + vuelta");
+    let more = tokio::time::timeout(std::time::Duration::ZERO, sub.recv()).await;
+    assert!(
+        more.is_err(),
+        "the replaced response does not reach the screen"
+    );
+    assert_eq!(backend.listados(), 3, "initial + docs + back");
 }
 
-/// Mover el cursor manda el cursor, no el listado entero.
+/// Moving the cursor sends the cursor, not the whole listing.
 #[tokio::test]
-async fn mover_el_cursor_no_reenvia_las_filas() {
+async fn moving_the_cursor_does_not_resend_the_rows() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::MoveCursor {
@@ -336,131 +345,133 @@ async fn mover_el_cursor_no_reenvia_las_filas() {
         delta: 1,
     })
     .await
-    .expect("host vivo");
-    let Update::Message(m) = sub.recv().await.expect("llega") else {
-        panic!("sin retraso");
+    .expect("host alive");
+    let Update::Message(m) = sub.recv().await.expect("arrives") else {
+        panic!("no lag");
     };
     let UiUpdate::Patch(p) = &m.payload else {
-        panic!("un parche");
+        panic!("a patch");
     };
     assert!(
         matches!(p.changes[0], norte_ui_host::dto::ViewChange::Cursor { .. }),
-        "solo el cursor viaja: {:?}",
+        "only the cursor travels: {:?}",
         p.changes[0]
     );
 }
 
-/// El TOTAL llega sin pedir una foto: es la altura del scroll del renderer.
+/// The TOTAL arrives without requesting a snapshot: it is the renderer's
+/// scroll height.
 ///
-/// `total_rows` solo viajaba en la foto entera, y el drenaje paginado contesta
-/// con parches de filas —también el ÚLTIMO lote—. Así que el renderer se
-/// quedaba con el total de la PRIMERA PÁGINA (100) para siempre: pinta el
-/// canvas de scroll a `total * alto_de_celda` y publica `aria-rowcount`, o sea
-/// que un directorio de cinco mil ficheros quedaba topado en la fila 100 para
-/// la rueda, y no había forma de pedir el resto porque el rango visible se
-/// calcula del scroll.
+/// `total_rows` only travelled in the whole snapshot, and the paginated
+/// drain answers with row patches — the LAST batch too. So the renderer
+/// stayed stuck on the FIRST PAGE's total (100) forever: it paints the
+/// scroll canvas at `total * cell_height` and publishes `aria-rowcount`, so a
+/// directory of five thousand files stayed capped at row 100 for the wheel,
+/// and there was no way to request the rest because the visible range is
+/// computed from the scroll.
 ///
-/// El test de al lado no lo veía porque pide `Resync` en cada vuelta, que es
-/// justo lo que el renderer de verdad NO hace: solo resincroniza tras un hueco
-/// de secuencia o un `Lagged`.
+/// The test next to this one did not catch it because it requests `Resync`
+/// on every round, which is exactly what a real renderer does NOT do: it
+/// only resyncs after a sequence gap or a `Lagged`.
 #[tokio::test]
-async fn el_total_de_un_listado_grande_llega_sin_pedir_foto() {
-    let mut falso = Falso::default();
-    let muchas: Vec<(Vec<u8>, bool)> = (0..5_000u32)
+async fn a_large_listings_total_arrives_with_no_snapshot_requested() {
+    let mut fake = Falso::default();
+    let many: Vec<(Vec<u8>, bool)> = (0..5_000u32)
         .map(|i| (format!("f{i:05}").into_bytes(), false))
         .collect();
-    falso.pon("mem:///casa", muchas);
-    let (host, snap) = host_arbol(Arc::new(falso)).await;
+    fake.pon("mem:///casa", many);
+    let (host, snap) = host_arbol(Arc::new(fake)).await;
     let mut sub = host.subscribe();
     assert!(
-        listado(&snap).total_rows.expect("hay total") <= 100,
-        "de partida, solo la primera página"
+        listado(&snap).total_rows.expect("there is a total") <= 100,
+        "to start with, only the first page"
     );
 
-    // SIN `Resync`: solo lo que el host manda por su cuenta mientras drena.
-    let mut ultimo_total = None;
-    let espera = async {
+    // With NO `Resync`: only what the host sends on its own while draining.
+    let mut last_total = None;
+    let wait = async {
         loop {
-            match sub.recv().await.expect("host vivo") {
+            match sub.recv().await.expect("host alive") {
                 Update::Message(m) => match m.payload {
                     UiUpdate::Patch(p) => {
                         for c in &p.changes {
                             if let norte_ui_host::dto::ViewChange::Rows { total_rows, .. } = c {
-                                ultimo_total = *total_rows;
+                                last_total = *total_rows;
                             }
                         }
                     }
                     UiUpdate::Snapshot(s) => {
-                        ultimo_total = listado(&s).total_rows;
+                        last_total = listado(&s).total_rows;
                     }
                     UiUpdate::Notice(_) => {}
                 },
-                // Quedarse atrás es «pide una foto», y el renderer la pide.
-                // No cuenta como que el total llegara solo.
+                // Falling behind is "request a snapshot", and the renderer
+                // requests it. It does not count as the total arriving on
+                // its own.
                 Update::Lagged => {}
             }
-            if ultimo_total == Some(5_000) {
+            if last_total == Some(5_000) {
                 return;
             }
         }
     };
     assert!(
-        tokio::time::timeout(std::time::Duration::from_secs(20), espera)
+        tokio::time::timeout(std::time::Duration::from_secs(20), wait)
             .await
             .is_ok(),
-        "el renderer nunca se entera de que hay 5.000 filas: se queda topado \
-         en {ultimo_total:?} y no puede desplazarse más abajo"
+        "the renderer never finds out there are 5,000 rows: it stays capped \
+         at {last_total:?} and cannot scroll further down"
     );
 }
 
-/// Un listado grande: la primera página se pinta enseguida, el resto llega
-/// por detrás, y del total solo cruzan las filas visibles.
+/// A large listing: the first page paints right away, the rest arrives
+/// behind it, and of the total only the visible rows cross over.
 #[tokio::test]
-async fn un_listado_grande_ni_espera_ni_cruza_entero() {
-    let mut falso = Falso::default();
-    let muchas: Vec<(Vec<u8>, bool)> = (0..5_000u32)
+async fn a_large_listing_neither_waits_nor_crosses_whole() {
+    let mut fake = Falso::default();
+    let many: Vec<(Vec<u8>, bool)> = (0..5_000u32)
         .map(|i| (format!("f{i:05}").into_bytes(), false))
         .collect();
-    falso.pon("mem:///casa", muchas);
-    let (host, snap) = host_arbol(Arc::new(falso)).await;
+    fake.pon("mem:///casa", many);
+    let (host, snap) = host_arbol(Arc::new(fake)).await;
 
-    // La primera foto NO espera al listado entero.
-    let primeras = listado(&snap).total_rows.expect("hay total");
+    // The first snapshot does NOT wait for the whole listing.
+    let first = listado(&snap).total_rows.expect("there is a total");
     assert!(
-        primeras <= 100,
-        "la primera página se pinta sin esperar al resto: {primeras}"
+        first <= 100,
+        "the first page paints without waiting for the rest: {first}"
     );
 
-    // El resto llega por detrás. Se sondea, en vez de contar mensajes: los
-    // lotes son asíncronos y el número exacto no es el contrato. Lo que NO
-    // hace falta es un reloj: cada vuelta es un viaje de ida y vuelta al
-    // actor, así que el bucle avanza al ritmo del drenaje, no al del reloj.
+    // The rest arrives behind it. It is polled, instead of counting
+    // messages: batches are asynchronous and the exact number is not the
+    // contract. What is NOT needed is a clock: each round is a round trip to
+    // the actor, so the loop advances at the drain's pace, not the clock's.
     let mut sub = host.subscribe();
-    let mut total = primeras;
+    let mut total = first;
     for _ in 0..2_000 {
         if total >= 5_000 {
             break;
         }
-        host.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        total = listado(&foto).total_rows.expect("hay total");
+        host.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        total = listado(&snap).total_rows.expect("there is a total");
     }
-    assert_eq!(total, 5_000, "acaba entero");
+    assert_eq!(total, 5_000, "it ends up whole");
 
-    // Y de las cinco mil, cruzan cuarenta.
+    // And of the five thousand, forty cross over.
     host.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
         first: 2_000,
         count: 40,
     })
     .await
-    .expect("host vivo");
-    host.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(listado(&foto).rows.len(), 40);
+    .expect("host alive");
+    host.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&snap).rows.len(), 40);
 }
 
-/// Una tecla CON modificadores.
+/// A key WITH modifiers.
 pub(super) fn tecla_mod(k: &str, ctrl: bool, shift: bool) -> UiAction {
     UiAction::Key(norte_ui_host::keys::KeyInput {
         key: k.to_owned(),
@@ -481,10 +492,10 @@ pub(super) fn tecla(k: &str) -> UiAction {
     })
 }
 
-/// `alt+<algo>`: el modificador va en su campo, jamás en el nombre de la
-/// tecla — `"Alt+o"` no es un nombre de tecla, `to_chord` lo rechaza y el host
-/// contesta `Unavailable` sin mandar nada. Un test escrito así se cumplía o no
-/// según qué sobre quedara en la cola.
+/// `alt+<something>`: the modifier goes in its own field, never in the key's
+/// name — `"Alt+o"` is not a key name, `to_chord` rejects it and the host
+/// answers `Unavailable` without sending anything. A test written that way
+/// passed or not depending on what envelope was left in the queue.
 pub(super) fn tecla_alt(k: &str) -> UiAction {
     UiAction::Key(norte_ui_host::keys::KeyInput {
         key: k.to_owned(),
@@ -495,45 +506,46 @@ pub(super) fn tecla_alt(k: &str) -> UiAction {
     })
 }
 
-/// Una tecla del preset resuelve al comando del CATÁLOGO compartido y el
-/// host solo la ejecuta: no hay un segundo keymap.
+/// A preset key resolves to the shared CATALOGUE's command and the host
+/// only runs it: there is no second keymap.
 #[tokio::test]
-async fn una_tecla_del_preset_mueve_el_cursor() {
+async fn a_preset_key_moves_the_cursor() {
     let (h, snap) = host_arbol(arbol()).await;
-    let antes = listado(&snap).cursor;
+    let before = listado(&snap).cursor;
     let mut sub = h.subscribe();
-    let ack = h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("ArrowDown")).await.expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }));
-    let Update::Message(m) = sub.recv().await.expect("llega") else {
-        panic!("sin retraso");
+    let Update::Message(m) = sub.recv().await.expect("arrives") else {
+        panic!("no lag");
     };
     let UiUpdate::Patch(p) = &m.payload else {
-        panic!("un parche");
+        panic!("a patch");
     };
     match &p.changes[0] {
         norte_ui_host::dto::ViewChange::Cursor { cursor, .. } => {
-            assert_ne!(*cursor, antes, "el cursor se movió");
+            assert_ne!(*cursor, before, "the cursor moved");
         }
-        otro => panic!("se esperaba el cursor: {otro:?}"),
+        other => panic!("expected the cursor: {other:?}"),
     }
 }
 
-/// El contador lo resuelve Rust, no el renderer: `3` y luego `j` baja tres.
+/// The counter is resolved by Rust, not the renderer: `3` and then `j` goes
+/// down three.
 #[tokio::test]
-async fn el_contador_lo_resuelve_el_host() {
-    let mut falso = Falso::default();
-    let nombres: Vec<(Vec<u8>, bool)> = (0..10u32)
+async fn the_counter_is_resolved_by_the_host() {
+    let mut fake = Falso::default();
+    let names: Vec<(Vec<u8>, bool)> = (0..10u32)
         .map(|n| (format!("f{n}").into_bytes(), false))
         .collect();
-    falso.pon("mem:///casa", nombres);
-    let backend = Arc::new(falso);
+    fake.pon("mem:///casa", names);
+    let backend = Arc::new(fake);
     let (host, _snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
         initial_dir_pedido: false,
         attach: false,
         locale: "es".to_owned(),
-        // `vim` es el preset que habilita contadores.
+        // `vim` is the preset that enables counters.
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("vim").expect("preset"),
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
@@ -549,47 +561,47 @@ async fn el_contador_lo_resuelve_el_host() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
 
-    // Tecleando el contador, el host lo PINTA: lo que no se ve no se puede
-    // cancelar.
+    // Typing the counter, the host PAINTS it: what is not visible cannot be
+    // cancelled.
     let mut sub = host.subscribe();
-    host.dispatch(tecla("3")).await.expect("host vivo");
-    let Update::Message(m) = sub.recv().await.expect("llega") else {
-        panic!("sin retraso");
+    host.dispatch(tecla("3")).await.expect("host alive");
+    let Update::Message(m) = sub.recv().await.expect("arrives") else {
+        panic!("no lag");
     };
     let UiUpdate::Patch(p) = &m.payload else {
-        panic!("un parche");
+        panic!("a patch");
     };
     match &p.changes[0] {
         norte_ui_host::dto::ViewChange::Status(s) => {
             assert_eq!(s.pending.as_ref().and_then(|p| p.count), Some(3));
         }
-        otro => panic!("se esperaba el estado: {otro:?}"),
+        other => panic!("expected the status: {other:?}"),
     }
 
-    host.dispatch(tecla("j")).await.expect("host vivo");
-    host.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
+    host.dispatch(tecla("j")).await.expect("host alive");
+    host.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
     assert_eq!(
-        listado(&foto).cursor,
+        listado(&snap).cursor,
         Some(norte_ui_host::RowKey(3)),
-        "tres filas, no una"
+        "three rows, not one"
     );
 }
 
-/// Una tecla ligada a un comando que este host no implementa NO ejecuta
-/// nada, y lo dice con la misma frase que el TUI.
+/// A key bound to a command this host does not implement runs NOTHING, and
+/// says so with the same phrase as the TUI.
 #[tokio::test]
-async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
-    // El ejemplo fue rotando según la ventana se acercaba a la paridad —`F5`
-    // hasta copiar, `F4` hasta editar (#290), `alt+t` hasta el árbol, `alt+q`
-    // hasta el visor acoplado (#291), `alt+r` hasta el lote (#310), `alt+C`
-    // hasta comparar (#312)— y se acabaron: la ventana hace todo lo que el
-    // catálogo tiene vivo. Lo que queda es lo que NO APLICA a una ventana
-    // (`tests/paridad.rs`), y `ctrl+o` en el preset `norton` está ligado a
-    // uno de esos, `app.toggle-panels`: esconder los paneles para ver el
-    // terminal de detrás no significa nada en una ventana.
+async fn a_command_the_host_does_not_do_triggers_nothing() {
+    // The example kept rotating as the window got closer to parity — `F5`
+    // until copy, `F4` until edit (#290), `alt+t` until the tree, `alt+q`
+    // until the docked viewer (#291), `alt+r` until the batch (#310), `alt+C`
+    // until compare (#312) — and they ran out: the window does everything
+    // the catalogue has live. What is left is what does NOT APPLY to a
+    // window (`tests/paridad.rs`), and `ctrl+o` in the `norton` preset is
+    // bound to one of those, `app.toggle-panels`: hiding the panels to see
+    // the terminal behind them means nothing in a window.
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
@@ -611,8 +623,8 @@ async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
-    let antes = listado(&snap).clone();
+    .expect("starts");
+    let before = listado(&snap).clone();
     let ack = h
         .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
             key: "o".to_owned(),
@@ -622,48 +634,48 @@ async fn un_comando_que_el_host_no_hace_no_dispara_nada() {
             meta: false,
         }))
         .await
-        .expect("host vivo");
+        .expect("host alive");
     match ack {
         ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "cmd-not-here"),
-        otro => panic!("se esperaba no disponible: {otro:?}"),
+        other => panic!("expected unavailable: {other:?}"),
     }
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let ahora = listado(&foto);
-    assert_eq!(ahora.generation, antes.generation, "nada cambió");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let now = listado(&snap);
+    assert_eq!(now.generation, before.generation, "nothing changed");
     assert!(
-        foto.status.message.is_some(),
-        "y la barra lo dice en vez de callarse"
+        snap.status.message.is_some(),
+        "and the bar says so instead of staying silent"
     );
 }
 
-/// Una tecla sin binding se descarta dejando el estado limpio: ni ejecuta
-/// nada ni deja un prefijo colgando.
+/// A key with no binding is discarded leaving the state clean: it neither
+/// runs anything nor leaves a dangling prefix.
 #[tokio::test]
-async fn una_tecla_sin_binding_se_descarta() {
+async fn an_unbound_key_is_discarded() {
     let (h, _snap) = host_arbol(arbol()).await;
-    // `Insert` no está ligada en el preset ortodoxo.
-    let ack = h.dispatch(tecla("Insert")).await.expect("host vivo");
+    // `Insert` is not bound in the orthodox preset.
+    let ack = h.dispatch(tecla("Insert")).await.expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
-        "una tecla suelta no es un error: {ack:?}"
+        "a loose key is not an error: {ack:?}"
     );
 }
 
-/// Y una tecla que el adaptador no entiende tampoco se adivina.
+/// And a key the adapter does not understand is not guessed either.
 #[tokio::test]
-async fn una_tecla_que_no_se_entiende_no_se_inventa() {
+async fn a_key_that_is_not_understood_is_not_invented() {
     let (h, _snap) = host_arbol(arbol()).await;
-    let ack = h.dispatch(tecla("Compose")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("Compose")).await.expect("host alive");
     match ack {
         ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "host-key-unmapped"),
-        otro => panic!("se esperaba no disponible: {otro:?}"),
+        other => panic!("expected unavailable: {other:?}"),
     }
 }
 
-/// Arranca con una disposición concreta y un tamaño concreto.
+/// Starts with a specific layout and a specific size.
 pub(super) async fn host_con_layout(
     backend: Arc<Falso>,
     layout: &str,
@@ -693,8 +705,8 @@ pub(super) async fn host_con_layout(
     .expect("arranca")
 }
 
-/// Arranca con un ÁRBOL dado: el de una sesión real, para reproducir lo que
-/// alguien vio.
+/// Starts with a given TREE: a real session's, to reproduce what someone
+/// saw.
 pub(super) async fn host_con_arbol(
     backend: Arc<Falso>,
     layout: norte_frontend::layout::Node,
@@ -724,38 +736,37 @@ pub(super) async fn host_con_arbol(
     .expect("arranca")
 }
 
-/// Las cinco disposiciones de fábrica resuelven a tamaños razonables, y
-/// ninguna deja una pantalla sin listado.
+/// The five factory layouts resolve to reasonable sizes, and none leaves a
+/// screen with no listing.
 #[tokio::test]
-async fn los_cinco_presets_de_disposicion_resuelven() {
-    for nombre in norte_frontend::layout::presets::NAMES {
+async fn the_five_factory_layout_presets_resolve() {
+    for name in norte_frontend::layout::presets::NAMES {
         for viewport in [(80u16, 24u16), (120, 40), (200, 60)] {
-            let (_h, snap) = host_con_layout(arbol(), nombre, viewport).await;
-            let listados = snap
+            let (_h, snap) = host_con_layout(arbol(), name, viewport).await;
+            let listings = snap
                 .slots
                 .iter()
                 .filter(|s| matches!(s, SlotView::Browser(_)))
                 .count();
             assert!(
-                listados >= 1,
-                "{nombre} a {viewport:?} se quedó sin listado usable"
+                listings >= 1,
+                "{name} at {viewport:?} ended up with no usable listing"
             );
         }
     }
 }
 
-/// Redimensionar reparte otra vez y NO reescribe la disposición: un layout
-/// guardado es la intención del usuario, no una función del tamaño de su
-/// ventana.
+/// Resizing splits again and does NOT rewrite the layout: a saved layout is
+/// the user's intent, not a function of their window's size.
 #[tokio::test]
-async fn redimensionar_no_reescribe_la_disposicion() {
-    let (h, grande) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
-    let listados_antes = grande
+async fn resizing_does_not_rewrite_the_layout() {
+    let (h, big) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
+    let listings_before = big
         .slots
         .iter()
         .filter(|s| matches!(s, SlotView::Browser(_)))
         .count();
-    assert_eq!(listados_antes, 2, "ortodoxo tiene dos listados");
+    assert_eq!(listings_before, 2, "orthodox has two listings");
 
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SetViewport {
@@ -763,39 +774,40 @@ async fn redimensionar_no_reescribe_la_disposicion() {
         height: 10,
     })
     .await
-    .expect("host vivo");
-    let apretado = siguiente_foto(&mut sub).await;
+    .expect("host alive");
+    let tight = siguiente_foto(&mut sub).await;
     assert!(
-        apretado
+        tight
             .slots
             .iter()
             .any(|s| matches!(s, SlotView::Browser(_))),
-        "aunque no quepan los dos, queda un listado"
+        "even if both do not fit, one listing is left"
     );
 
-    // Y al volver al tamaño de antes, vuelven los dos: el árbol no se tocó.
+    // And going back to the previous size, both come back: the tree was
+    // never touched.
     h.dispatch(UiAction::SetViewport {
         width: 200,
         height: 60,
     })
     .await
-    .expect("host vivo");
-    let otra_vez = siguiente_foto(&mut sub).await;
-    let listados = otra_vez
+    .expect("host alive");
+    let again = siguiente_foto(&mut sub).await;
+    let listings = again
         .slots
         .iter()
         .filter(|s| matches!(s, SlotView::Browser(_)))
         .count();
-    assert_eq!(listados, 2, "la disposición sobrevivió al apretón");
+    assert_eq!(listings, 2, "the layout survived the squeeze");
 }
 
-/// Un hueco de un kind que este host aún no proyecta viaja en gris y con su
-/// nombre: preservar lo que no se entiende es la regla, y desaparecer sería
-/// peor que estar apagado.
+/// A slot of a kind this host does not yet project travels grayed out and
+/// with its name: preserving what is not understood is the rule, and
+/// disappearing would be worse than being disabled.
 #[tokio::test]
-async fn un_kind_desconocido_viaja_apagado_y_con_nombre() {
+async fn an_unknown_kind_travels_disabled_and_named() {
     let (_h, snap) = host_con_layout(arbol(), "simple", (120, 40)).await;
-    let nombres: Vec<&str> = snap
+    let names: Vec<&str> = snap
         .slots
         .iter()
         .filter_map(|s| match s {
@@ -804,44 +816,44 @@ async fn un_kind_desconocido_viaja_apagado_y_con_nombre() {
         })
         .collect();
     assert!(
-        nombres.contains(&"tasks") && nombres.contains(&"status"),
-        "los kinds que el host no proyecta siguen ahí: {nombres:?}"
+        names.contains(&"tasks") && names.contains(&"status"),
+        "the kinds the host does not project are still there: {names:?}"
     );
 }
 
-/// El foco cambia de hueco, y con él el destino: el destino es SIEMPRE otro
-/// listado visible, jamás el mismo que tiene el foco.
+/// Focus changes slot, and the target follows it: the target is ALWAYS
+/// another visible listing, never the same one that has focus.
 #[tokio::test]
-async fn el_foco_cambia_y_el_destino_lo_sigue() {
+async fn focus_changes_and_the_target_follows_it() {
     let (h, snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
     assert_eq!(snap.focus, Some(1));
     let mut sub = h.subscribe();
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
-    // Cambiar de foco NO reenvía la pantalla: viaja el reparto con los
-    // papeles nuevos, que es lo único que cambió.
-    let despues = siguiente_disposicion(&mut sub).await;
-    let rol = |id: u32| {
-        despues
+        .expect("host alive");
+    // Changing focus does NOT resend the screen: the split travels with the
+    // new roles, which is the only thing that changed.
+    let after = siguiente_disposicion(&mut sub).await;
+    let role = |id: u32| {
+        after
             .placements
             .iter()
             .find(|p| p.slot_id == id)
             .and_then(|p| p.role)
     };
-    assert_eq!(rol(2), Some(norte_ui_host::dto::SlotRole::Active));
-    assert_eq!(rol(1), Some(norte_ui_host::dto::SlotRole::Target));
+    assert_eq!(role(2), Some(norte_ui_host::dto::SlotRole::Active));
+    assert_eq!(role(1), Some(norte_ui_host::dto::SlotRole::Target));
 }
 
-/// Enfocar un hueco que no se ve es una carrera con un reparto anterior, no
-/// una orden.
+/// Focusing a slot that is not visible is a race with a previous split, not
+/// an order.
 #[tokio::test]
-async fn no_se_puede_enfocar_lo_que_no_se_ve() {
+async fn what_is_not_visible_cannot_be_focused() {
     let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
     let ack = h
         .dispatch(UiAction::FocusSlot { slot_id: 99 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
@@ -850,21 +862,21 @@ async fn no_se_puede_enfocar_lo_que_no_se_ve() {
     );
 }
 
-/// Lo que no se ve no se trae: un reparto que oculta un listado no le pide
-/// su directorio al daemon.
+/// What is not visible is not fetched: a split that hides a listing does not
+/// ask the daemon for its directory.
 #[tokio::test]
-async fn un_hueco_oculto_no_pide_listado() {
+async fn a_hidden_slot_does_not_request_a_listing() {
     let backend = arbol();
-    // A lo ancho caben los dos listados de `orthodox`; a 30 columnas, no.
+    // Widthwise, both `orthodox` listings fit; at 30 columns, they do not.
     let (_h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (30, 10)).await;
     assert_eq!(
         backend.listados(),
         1,
-        "solo el listado que se ve pide su directorio"
+        "only the visible listing requests its directory"
     );
 }
 
-/// Construye una sesión guardada con un hueco en `dir`.
+/// Builds a saved session with a slot on `dir`.
 pub(super) fn sesion_guardada(
     version: u32,
     revision: u64,
@@ -894,32 +906,32 @@ pub(super) fn sesion_guardada(
     }
 }
 
-/// La sesión dice dónde estaba cada hueco, y el host arranca ahí.
+/// The session says where each slot was, and the host starts there.
 #[tokio::test]
-async fn la_sesion_coloca_los_huecos() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
-    let (_h, snap) = host_arbol(Arc::new(falso)).await;
+async fn the_session_places_the_slots() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = host_arbol(Arc::new(fake)).await;
     assert!(
         listado(&snap).path_display.ends_with("/casa/docs"),
-        "arrancó donde lo dejó la sesión: {}",
+        "it started where the session left it: {}",
         listado(&snap).path_display
     );
 }
 
-/// La ventana devuelve el CURSOR que guardó la sesión, como la terminal.
+/// The window returns the CURSOR the session saved, like the terminal.
 ///
-/// Se vio en el primer relevo con una persona delante: la terminal tenía el
-/// cursor en `c.txt` y la ventana abrió en `/..`. Guardaba el cursor y nunca lo
-/// leía —sitio, orden, ocultos e historia sí—, así que «sigue donde estabas»
-/// se cumplía a medias. Mismo índice que usa la terminal (`restore_cursor`),
-/// para que un relevo caiga en la misma fila en los dos sentidos.
+/// It was seen at the first handoff with a person in front: the terminal had
+/// the cursor on `c.txt` and the window opened on `/..`. It saved the cursor
+/// and never read it back — place, order, hidden state and history it did —
+/// so "stay where you were" held only halfway. Same index the terminal uses
+/// (`restore_cursor`), so a handoff lands on the same row in both directions.
 #[tokio::test]
-async fn la_sesion_devuelve_el_cursor() {
-    let mut falso = Falso::default();
-    falso.pon(
+async fn the_session_returns_the_cursor() {
+    let mut fake = Falso::default();
+    fake.pon(
         "mem:///casa",
         vec![
             (b"a.txt".to_vec(), false),
@@ -927,45 +939,45 @@ async fn la_sesion_devuelve_el_cursor() {
             (b"c.txt".to_vec(), false),
         ],
     );
-    let mut sesion = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut session = sesion_guardada(1, 7, 1, "mem:///casa");
     let mut body: norte_frontend::session::SessionBody =
-        serde_json::from_value(sesion.body.clone()).expect("cuerpo");
-    body.slots.get_mut(&1).expect("hueco").cursor = 2;
-    sesion.body = serde_json::to_value(&body).expect("json");
-    *falso.sesion.lock().expect("sesión") = (sesion, true);
-    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+        serde_json::from_value(session.body.clone()).expect("body");
+    body.slots.get_mut(&1).expect("slot").cursor = 2;
+    session.body = serde_json::to_value(&body).expect("json");
+    *fake.sesion.lock().expect("sesión") = (session, true);
+    let (h, _snap) = host_arbol(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let (tercera, bajo_el_cursor) = foto_hasta(&h, &mut sub, "el listado con sus filas", |s| {
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let (third, under_cursor) = foto_hasta(&h, &mut sub, "the listing with its rows", |s| {
         let b = listado(s);
-        let tercera = b.rows.get(2)?.display_name.clone();
+        let third = b.rows.get(2)?.display_name.clone();
         let cursor = b.cursor?;
-        let bajo = b
+        let under = b
             .rows
             .iter()
             .find(|r| r.key == cursor)?
             .display_name
             .clone();
-        Some((tercera, bajo))
+        Some((third, under))
     })
     .await;
     assert_eq!(
-        bajo_el_cursor, tercera,
-        "el cursor vuelve a la fila que guardó"
+        under_cursor, third,
+        "the cursor returns to the row it saved"
     );
 }
 
-/// Un directorio tecleado gana a la sesión, y entonces el cursor guardado NO
-/// vale: era una fila de OTRO directorio. La misma regla que `pin_start_dir`
-/// en la terminal.
+/// A typed directory beats the session, and then the saved cursor does NOT
+/// apply: it was a row from ANOTHER directory. The same rule as
+/// `pin_start_dir` in the terminal.
 #[tokio::test]
-async fn con_dir_tecleado_el_cursor_guardado_no_vale() {
-    let mut falso = Falso::default();
-    falso.pon(
+async fn with_a_typed_dir_the_saved_cursor_does_not_apply() {
+    let mut fake = Falso::default();
+    fake.pon(
         "mem:///casa",
         vec![(b"a".to_vec(), false), (b"b".to_vec(), false)],
     );
-    falso.pon(
+    fake.pon(
         "mem:///casa/docs",
         vec![
             (b"x.md".to_vec(), false),
@@ -973,14 +985,14 @@ async fn con_dir_tecleado_el_cursor_guardado_no_vale() {
             (b"z.md".to_vec(), false),
         ],
     );
-    let mut sesion = sesion_guardada(1, 7, 1, "mem:///casa/docs");
+    let mut session = sesion_guardada(1, 7, 1, "mem:///casa/docs");
     let mut body: norte_frontend::session::SessionBody =
-        serde_json::from_value(sesion.body.clone()).expect("cuerpo");
-    body.slots.get_mut(&1).expect("hueco").cursor = 2;
-    sesion.body = serde_json::to_value(&body).expect("json");
-    *falso.sesion.lock().expect("sesión") = (sesion, true);
+        serde_json::from_value(session.body.clone()).expect("body");
+    body.slots.get_mut(&1).expect("slot").cursor = 2;
+    session.body = serde_json::to_value(&body).expect("json");
+    *fake.sesion.lock().expect("sesión") = (session, true);
     let (h, _snap) = Box::pin(UiHost::start(UiHostOptions {
-        backend: Arc::new(falso),
+        backend: Arc::new(fake),
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
         initial_dir_pedido: true,
         attach: false,
@@ -1000,32 +1012,32 @@ async fn con_dir_tecleado_el_cursor_guardado_no_vale() {
         log_ring: None,
     }))
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let (primera, bajo_el_cursor) = foto_hasta(&h, &mut sub, "el listado tecleado", |s| {
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let (first, under_cursor) = foto_hasta(&h, &mut sub, "the typed listing", |s| {
         let b = listado(s);
         if !b.path_display.ends_with("/casa") {
             return None;
         }
-        let primera = b.rows.first()?.display_name.clone();
+        let first = b.rows.first()?.display_name.clone();
         let cursor = b.cursor?;
-        let bajo = b
+        let under = b
             .rows
             .iter()
             .find(|r| r.key == cursor)?
             .display_name
             .clone();
-        Some((primera, bajo))
+        Some((first, under))
     })
     .await;
     assert_eq!(
-        bajo_el_cursor, primera,
-        "el cursor de `docs` no se aplica sobre `casa`"
+        under_cursor, first,
+        "`docs`'s cursor does not apply over `casa`"
     );
 }
 
-/// Arranca como [`host_arbol`], con `[profile.start]` puesto.
+/// Starts like [`host_arbol`], with `[profile.start]` set.
 pub(super) async fn host_con_start(
     backend: Arc<Falso>,
     start: &[(u32, &str)],
@@ -1059,19 +1071,19 @@ pub(super) async fn host_con_start(
     .expect("arranca")
 }
 
-/// `[profile.start]` abre el hueco del que la sesión no sabe nada.
+/// `[profile.start]` opens the slot the session knows nothing about.
 ///
-/// Es lo que hace útil un perfil recién creado, o uno que llega de otra
-/// máquina: la clave la escribían los dos frontends y no la leía NINGUNO, así
-/// que entrar en un perfil dejaba los paneles donde estaban y el perfil solo
-/// cambiaba los colores. Dos ficheros prometían que sí.
+/// It is what makes a freshly created profile useful, or one arriving from
+/// another machine: the key used to be written by both frontends and read by
+/// NEITHER, so entering a profile left the panels where they were and the
+/// profile only changed the colors. Two files promised otherwise.
 #[tokio::test]
-async fn profile_start_siembra_un_hueco_sin_sesion() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    falso.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
-    // Sesión legible y VACÍA: nadie ha guardado el hueco 1 todavía.
-    *falso.sesion.lock().expect("sesión") = (
+async fn profile_start_seeds_a_slot_with_no_session() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    fake.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
+    // A readable and EMPTY session: nobody has saved slot 1 yet.
+    *fake.sesion.lock().expect("sesión") = (
         norte_proto::methods::Session {
             version: 1,
             revision: 7,
@@ -1080,54 +1092,55 @@ async fn profile_start_siembra_un_hueco_sin_sesion() {
         },
         true,
     );
-    let (_h, snap) = host_con_start(Arc::new(falso), &[(1, "mem:///casa/fotos")]).await;
+    let (_h, snap) = host_con_start(Arc::new(fake), &[(1, "mem:///casa/fotos")]).await;
     assert!(
         listado(&snap).path_display.ends_with("/casa/fotos"),
-        "abrió donde dice el perfil: {}",
+        "it opened where the profile says: {}",
         listado(&snap).path_display
     );
 }
 
-/// Y la SESIÓN gana: `[profile.start]` dice dónde abre un hueco la primera
-/// vez, no cada vez.
+/// And the SESSION wins: `[profile.start]` says where a slot opens the first
+/// time, not every time.
 ///
-/// Un perfil es un espacio de trabajo, no un marcador que te devuelve al
-/// principio: si cada entrada al perfil te sacara de donde estabas, el perfil
-/// sería inservible justo para quien lo usa a diario.
+/// A profile is a workspace, not a bookmark that sends you back to the
+/// start: if every entry into the profile pulled you out of where you were,
+/// the profile would be useless for exactly whoever uses it daily.
 #[tokio::test]
-async fn la_sesion_gana_a_profile_start() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    falso.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
-    let (_h, snap) = host_con_start(Arc::new(falso), &[(1, "mem:///casa/fotos")]).await;
+async fn the_session_beats_profile_start() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    fake.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = host_con_start(Arc::new(fake), &[(1, "mem:///casa/fotos")]).await;
     assert!(
         listado(&snap).path_display.ends_with("/casa/docs"),
-        "manda dónde lo dejaste, no dónde nace el perfil: {}",
+        "it rules where you left it, not where the profile is born: {}",
         listado(&snap).path_display
     );
 }
 
-/// Un directorio ESCRITO en la línea de órdenes gana a la sesión.
+/// A directory TYPED on the command line beats the session.
 ///
-/// `norte-gui /usr/bin` con una sesión guardada abría donde estuvieras ayer y
-/// se comía el argumento sin decir nada: `aplicar_sesion` escribe el dir de
-/// TODOS los huecos, y no había nada que dijera «éste lo acaba de teclear un
-/// humano». El terminal cerró lo mismo en `eb237c61` con `pin_start_dir`, y a
-/// la ventana no llegó.
+/// `norte-gui /usr/bin` with a saved session used to open wherever you were
+/// yesterday and swallow the argument without a word: `aplicar_sesion` writes
+/// ALL slots' dir, and nothing said "a human just typed this one". The
+/// terminal closed the same gap in `eb237c61` with `pin_start_dir`, and it
+/// never reached the window.
 ///
-/// Gana en el panel ACTIVO y solo ahí: el otro sigue donde la sesión lo dejó,
-/// que es media pantalla de memoria que nadie pidió tirar.
+/// It wins on the ACTIVE panel and only there: the other one stays where the
+/// session left it, which is half a screen of memory nobody asked to throw
+/// away.
 #[tokio::test]
-async fn el_dir_de_la_linea_de_ordenes_gana_a_la_sesion() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+async fn the_command_lines_dir_beats_the_session() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
     let (_h, snap) = UiHost::start(UiHostOptions {
-        backend: Arc::new(falso),
-        // Lo que el humano tecleó, que NO es donde lo dejó la sesión.
+        backend: Arc::new(fake),
+        // What the human typed, which is NOT where the session left it.
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
         initial_dir_pedido: true,
         attach: false,
@@ -1147,37 +1160,37 @@ async fn el_dir_de_la_linea_de_ordenes_gana_a_la_sesion() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     assert!(
         listado(&snap).path_display.ends_with("/casa"),
-        "manda lo que se tecleó, no lo que guardó la sesión: {}",
+        "it rules what was typed, not what the session saved: {}",
         listado(&snap).path_display
     );
 }
 
-/// Y sin argumento, la sesión sigue mandando: es lo de siempre.
+/// And with no argument, the session still rules: it is the usual behavior.
 #[tokio::test]
-async fn sin_argumento_la_sesion_sigue_mandando() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
-    let (_h, snap) = host_arbol(Arc::new(falso)).await;
+async fn with_no_argument_the_session_still_rules() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa/docs"), true);
+    let (_h, snap) = host_arbol(Arc::new(fake)).await;
     assert!(
         listado(&snap).path_display.ends_with("/casa/docs"),
-        "sin nada tecleado, donde lo dejaste: {}",
+        "with nothing typed, where you left it: {}",
         listado(&snap).path_display
     );
 }
 
-/// Una sesión de un esquema MÁS NUEVO no se aplica y —sobre todo— no se
-/// sobrescribe: arrancar sin sesión es recuperable, machacar la de una
-/// versión futura no.
+/// A session with a NEWER schema is neither applied nor — above all —
+/// overwritten: starting with no session is recoverable, clobbering a future
+/// version's is not.
 #[tokio::test]
-async fn una_sesion_del_futuro_ni_se_aplica_ni_se_pisa() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (
+async fn a_session_from_the_future_is_neither_applied_nor_overwritten() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (
         sesion_guardada(
             norte_frontend::session::SCHEMA_VERSION + 1,
             7,
@@ -1186,86 +1199,89 @@ async fn una_sesion_del_futuro_ni_se_aplica_ni_se_pisa() {
         ),
         true,
     );
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     assert!(
         listado(&snap).path_display.ends_with("/casa"),
-        "se arranca de la configuración, no de lo que no se entiende"
+        "it starts from the configuration, not from what it does not understand"
     );
-    h.shutdown().await.expect("apaga");
+    h.shutdown().await.expect("shuts down");
     assert!(
         backend.escrito.lock().expect("escrito").is_none(),
-        "y no se escribe encima"
+        "and it does not write over it"
     );
 }
 
-/// Una ventana SUELTA no escribe: la sesión es un documento con un solo
-/// escritor.
+/// A DETACHED window does not write: the session is a document with a
+/// single writer.
 #[tokio::test]
-async fn una_ventana_suelta_no_escribe() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), false);
-    let backend = Arc::new(falso);
+async fn a_detached_window_does_not_write() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), false);
+    let backend = Arc::new(fake);
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
-    // Y lo DICE desde el primer frame, con el mismo indicador que el
-    // terminal: hasta aquí una ventana suelta cerraba y perdía dónde estaba
-    // cada panel sin una palabra.
-    let indicador = norte_i18n::t_in(norte_i18n::Lang::Es, "status-session-detached");
+    // And it SAYS so from the first frame, with the same indicator as the
+    // terminal: until now a detached window closed and lost where every
+    // panel was without a word.
+    let indicator = norte_i18n::t_in(norte_i18n::Lang::Es, "status-session-detached");
     assert!(
-        snap.status.banners.iter().any(|b| b.text == indicador),
-        "la barra lleva el indicador de sesión suelta: {:?}",
+        snap.status.banners.iter().any(|b| b.text == indicator),
+        "the bar carries the detached-session indicator: {:?}",
         snap.status.banners
     );
-    let informe = h.shutdown().await.expect("apaga");
-    assert!(!informe.incomplete, "no escribir no es dejar algo a medias");
+    let report = h.shutdown().await.expect("shuts down");
+    assert!(
+        !report.incomplete,
+        "not writing is not leaving something unfinished"
+    );
     assert!(backend.escrito.lock().expect("escrito").is_none());
 }
 
-/// Y la dueña no lleva el indicador: no es un adorno, es un estado.
+/// And the owner carries no indicator: it is not decoration, it is a state.
 #[tokio::test]
-async fn la_duena_no_lleva_el_indicador_de_sesion() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
-    let (_h, snap) = host_arbol(Arc::new(falso)).await;
-    let indicador = norte_i18n::t_in(norte_i18n::Lang::Es, "status-session-detached");
+async fn the_owner_carries_no_session_indicator() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
+    let (_h, snap) = host_arbol(Arc::new(fake)).await;
+    let indicator = norte_i18n::t_in(norte_i18n::Lang::Es, "status-session-detached");
     assert!(
-        !snap.status.banners.iter().any(|b| b.text == indicador),
-        "la dueña no avisa de nada: {:?}",
+        !snap.status.banners.iter().any(|b| b.text == indicator),
+        "the owner warns about nothing: {:?}",
         snap.status.banners
     );
 }
 
-/// La dueña vuelca al cerrar —cerrar justo después de navegar guarda el
-/// directorio nuevo— y las MARCAS no entran en la sesión.
+/// The owner dumps on close — closing right after navigating saves the new
+/// directory — and MARKS do not enter the session.
 #[tokio::test]
-async fn la_duena_vuelca_al_cerrar_y_sin_marcas() {
-    let mut falso = Falso::default();
-    falso.pon(
+async fn the_owner_dumps_on_close_and_with_no_marks() {
+    let mut fake = Falso::default();
+    fake.pon(
         "mem:///casa",
         vec![(b"docs".to_vec(), true), (b"a".to_vec(), false)],
     );
-    falso.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
-    let backend = Arc::new(falso);
+    fake.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///casa"), true);
+    let backend = Arc::new(fake);
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
 
-    // Marcar algo y navegar.
-    let fila = listado(&snap).rows[0].key;
+    // Mark something and navigate.
+    let row = listado(&snap).rows[0].key;
     h.dispatch(UiAction::ToggleMark {
         slot_id: 1,
-        key: fila,
+        key: row,
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let mut sub = h.subscribe();
     let docs = listado(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está")
+        .expect("the directory is there")
         .key;
     h.dispatch(UiAction::Activate {
         slot_id: 1,
@@ -1273,48 +1289,48 @@ async fn la_duena_vuelca_al_cerrar_y_sin_marcas() {
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguiente_foto(&mut sub).await;
 
-    h.shutdown().await.expect("apaga");
-    let escrito = backend
+    h.shutdown().await.expect("shuts down");
+    let written = backend
         .escrito
         .lock()
         .expect("escrito")
         .clone()
-        .expect("escribió");
-    let texto = escrito.to_string();
+        .expect("wrote");
+    let text = written.to_string();
     assert!(
-        texto.contains("casa/docs"),
-        "guarda dónde acabó, no dónde empezó: {texto}"
+        text.contains("casa/docs"),
+        "it saves where it ended up, not where it started: {text}"
     );
     assert!(
-        !texto.contains("marks") && !texto.contains("marcas"),
-        "las marcas no entran en la sesión: {texto}"
+        !text.contains("marks") && !text.contains("marcas"),
+        "marks do not enter the session: {text}"
     );
 }
 
-/// La ventana gráfica NO le cambia la disposición al TUI, ni le barre sus
-/// huecos.
+/// The graphical window does NOT change the TUI's layout, nor sweep its
+/// slots.
 ///
-/// `capturar_sesion` escribía `self.arbol` en `layouts["default"]`, y hasta
-/// esta fase `self.arbol` era constante —o sea que escribía lo que había
-/// leído—. Cambiarlo con `layout.pick` o con dos `Ctrl+→` lo convirtió en una
-/// escritura de verdad, y `norte-tui` ADOPTA `layouts["default"]` al
-/// arrancar: curiosear un minuto en el selector le cambiaba el arranque al
-/// TUI. El rustdoc del campo lo prohíbe por su nombre (ADR 0058 D5) y
-/// `aplicar_disposicion_elegida` promete «se aplica para ESTA ventana», que
-/// era verdad para la configuración y falso para la sesión.
+/// `capturar_sesion` wrote `self.arbol` into `layouts["default"]`, and until
+/// this phase `self.arbol` was constant — i.e. it wrote back what it had
+/// read. Changing it with `layout.pick` or with two `Ctrl+→` turned it into a
+/// real write, and `norte-tui` ADOPTS `layouts["default"]` on startup:
+/// browsing the picker for a minute changed the TUI's startup. The field's
+/// rustdoc forbids this by its very name (ADR 0058 D5) and
+/// `aplicar_disposicion_elegida` promises "it applies to THIS window", which
+/// was true for the configuration and false for the session.
 ///
-/// Y de paso: se partía de un `SessionBody::default()`, así que los huecos de
-/// cualquier OTRO frontend se tiraban en vez de conservarse.
+/// And along the way: it started from a `SessionBody::default()`, so any
+/// OTHER frontend's slots got thrown away instead of preserved.
 #[tokio::test]
-async fn cerrar_la_ventana_no_le_toca_la_disposicion_ni_los_huecos_al_tui() {
+async fn closing_the_window_does_not_touch_the_tuis_layout_or_slots() {
     use norte_frontend::layout::{KindId, Node, SlotId};
 
-    // Lo que había en la sesión: la disposición del TUI y un hueco suyo que
-    // esta ventana no tiene.
-    let del_tui = Node::Split {
+    // What was in the session: the TUI's layout and one of its own slots
+    // this window does not have.
+    let tui_layout = Node::Split {
         dir: norte_frontend::layout::Dir::Vertical,
         children: vec![
             Node::slot(SlotId(1), KindId::browser()),
@@ -1326,7 +1342,8 @@ async fn cerrar_la_ventana_no_le_toca_la_disposicion_ni_los_huecos_al_tui() {
         ],
     };
     let mut body = norte_frontend::session::SessionBody::default();
-    body.layouts.insert("default".to_owned(), del_tui.clone());
+    body.layouts
+        .insert("default".to_owned(), tui_layout.clone());
     body.slots.insert(
         99,
         norte_frontend::session::SlotState {
@@ -1338,7 +1355,7 @@ async fn cerrar_la_ventana_no_le_toca_la_disposicion_ni_los_huecos_al_tui() {
             sort: norte_frontend::SortSpec::default(),
             columns: Vec::new(),
             show_hidden: false,
-            // Recién tocado por el otro frontend: no es un huérfano.
+            // Just touched by the other frontend: it is not an orphan.
             touched_ms: u64::try_from(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1349,9 +1366,9 @@ async fn cerrar_la_ventana_no_le_toca_la_disposicion_ni_los_huecos_al_tui() {
         },
     );
 
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (
         norte_proto::methods::Session {
             version: norte_frontend::session::SCHEMA_VERSION,
             revision: 7,
@@ -1359,169 +1376,167 @@ async fn cerrar_la_ventana_no_le_toca_la_disposicion_ni_los_huecos_al_tui() {
         },
         true,
     );
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    // La ventana cambia SU disposición: dos veces de ancho.
+    // The window changes ITS OWN layout: widened twice.
     for _ in 0..2 {
-        h.dispatch(tecla("ctrl+Right")).await.expect("host vivo");
+        h.dispatch(tecla("ctrl+Right")).await.expect("host alive");
     }
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     let _ = siguiente_foto(&mut sub).await;
 
-    h.shutdown().await.expect("apaga");
-    let escrito = backend
+    h.shutdown().await.expect("shuts down");
+    let written = backend
         .escrito
         .lock()
         .expect("escrito")
         .clone()
-        .expect("escribió");
-    let guardado: norte_frontend::session::SessionBody =
-        serde_json::from_value(escrito).expect("el cuerpo parsea");
+        .expect("wrote");
+    let saved: norte_frontend::session::SessionBody =
+        serde_json::from_value(written).expect("the body parses");
 
     assert_eq!(
-        guardado.layouts.get("default"),
-        Some(&del_tui),
-        "la disposición del TUI se queda como estaba"
+        saved.layouts.get("default"),
+        Some(&tui_layout),
+        "the TUI's layout stays as it was"
     );
     assert!(
-        guardado.slots.contains_key(&99),
-        "y su hueco también: partir de `default()` lo tiraba — {:?}",
-        guardado.slots.keys().collect::<Vec<_>>()
+        saved.slots.contains_key(&99),
+        "and so does its slot: starting from `default()` threw it away — {:?}",
+        saved.slots.keys().collect::<Vec<_>>()
     );
-    // Y los huecos VIVOS se sellan con un reloj de verdad: un cero los dejaba
-    // con treinta días de edad para el siguiente escritor, que se los llevaba
-    // en su primera barrida.
-    let vivo = guardado.slots.get(&1).expect("el hueco propio está");
+    // And LIVE slots are sealed with a real clock: a zero left them thirty
+    // days old for the next writer, which swept them away on its first pass.
+    let live = saved.slots.get(&1).expect("its own slot is there");
     assert!(
-        vivo.touched_ms > 0,
-        "el hueco vivo se sella con la hora, no con cero: {vivo:?}"
+        live.touched_ms > 0,
+        "the live slot is sealed with the time, not with zero: {live:?}"
     );
 }
 
-/// Un conflicto al escribir NO pisa lo de la otra ventana, y se DICE.
+/// A write conflict does NOT overwrite the other window's, and it is SAID.
 #[tokio::test]
-async fn un_conflicto_no_pisa_a_nadie_y_se_dice() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    *falso.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///otro"), true);
-    falso.conflicto = true;
-    let backend = Arc::new(falso);
+async fn a_conflict_overwrites_nobody_and_says_so() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    *fake.sesion.lock().expect("sesión") = (sesion_guardada(1, 7, 1, "mem:///otro"), true);
+    fake.conflicto = true;
+    let backend = Arc::new(fake);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
-    let informe = h.shutdown().await.expect("apaga");
+    let report = h.shutdown().await.expect("shuts down");
     assert!(
-        informe.incomplete,
-        "lo nuestro no llegó, y apagar en silencio sería mentir"
+        report.incomplete,
+        "our own did not go through, and shutting down silently would lie"
     );
     assert!(backend.escrito.lock().expect("escrito").is_none());
 }
 
-/// **Un cuerpo que se pasa de tamaño se DEGRADA y se reintenta** (#316).
+/// **A body that goes over size gets DEGRADED and retried** (#316).
 ///
-/// El core rehúsa el `put` entero y deja almacenado lo que hubiera, o sea
-/// dónde estaba el lector hace días. La TUI ya tiraba el historial y volvía a
-/// intentarlo; esta ventana trataba cualquier error igual —«no llegó»— y esa
-/// es la divergencia silenciosa del ADR 0077.
+/// The core refuses the whole `put` and leaves stored whatever there was,
+/// i.e. where the reader was days ago. The TUI already dropped history and
+/// tried again; this window treated any error the same — "did not
+/// arrive" — and that is ADR 0077's silent divergence.
 ///
-/// Lo que se comprueba es que el SEGUNDO intento manda algo distinto: sin
-/// degradar, reintentar es pedir el mismo error otra vez.
+/// What is checked is that the SECOND attempt sends something different:
+/// without degrading, retrying is asking for the same error again.
 #[tokio::test]
-async fn un_cuerpo_que_no_cabe_se_degrada_y_se_reintenta() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    // Con historial, que es lo único que la degradación tira.
-    let mut guardada = sesion_guardada(1, 7, 1, "mem:///casa");
-    let mut cuerpo: norte_frontend::session::SessionBody =
-        serde_json::from_value(guardada.body.clone()).expect("cuerpo");
-    for s in cuerpo.slots.values_mut() {
+async fn a_body_that_does_not_fit_gets_degraded_and_retried() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    // With history, which is the only thing degrading throws away.
+    let mut saved = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut body: norte_frontend::session::SessionBody =
+        serde_json::from_value(saved.body.clone()).expect("body");
+    for s in body.slots.values_mut() {
         s.back = vec![VPath::parse("mem:///casa/atras").expect("vpath")];
     }
-    guardada.body = serde_json::to_value(&cuerpo).expect("json");
-    *falso.sesion.lock().expect("sesión") = (guardada, true);
-    // El primero no cabe; el segundo sí.
-    *falso.rechazos_por_tamano.lock().expect("rechazos") = 1;
-    let backend = Arc::new(falso);
+    saved.body = serde_json::to_value(&body).expect("json");
+    *fake.sesion.lock().expect("sesión") = (saved, true);
+    // The first one does not fit; the second does.
+    *fake.rechazos_por_tamano.lock().expect("rechazos") = 1;
+    let backend = Arc::new(fake);
 
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
-    let informe = h.shutdown().await.expect("apaga");
+    let report = h.shutdown().await.expect("shuts down");
 
-    let puestas = backend.puestas.lock().expect("puestas");
-    assert_eq!(puestas.len(), 2, "se reintenta UNA vez: {puestas:?}");
-    let ultimo: norte_frontend::session::SessionBody =
-        serde_json::from_value(puestas[1].clone()).expect("cuerpo");
+    let puts = backend.puestas.lock().expect("puestas");
+    assert_eq!(puts.len(), 2, "it is retried ONCE: {puts:?}");
+    let last: norte_frontend::session::SessionBody =
+        serde_json::from_value(puts[1].clone()).expect("body");
     assert!(
-        ultimo
-            .slots
+        last.slots
             .values()
             .all(|s| s.back.is_empty() && s.forward.is_empty()),
-        "el reintento va sin historial, que es lo que se degrada"
+        "the retry goes with no history, which is what gets degraded"
     );
     assert!(
-        !ultimo.slots.is_empty(),
-        "y CON los huecos: lo que había que salvar es dónde está el lector"
+        !last.slots.is_empty(),
+        "and WITH the slots: what had to be saved is where the reader is"
     );
     assert!(
-        !informe.incomplete,
-        "el segundo `put` entró, así que no queda nada sin escribir"
+        !report.incomplete,
+        "the second `put` went through, so nothing is left unwritten"
     );
 }
 
-/// Y si ni sin historial cabe, se dice: reintentar otra vez sería pedir el
-/// mismo error, y apagar en silencio sería mentir.
+/// And if it does not fit even degraded, it is said: retrying again would be
+/// asking for the same error, and shutting down silently would lie.
 #[tokio::test]
-async fn un_cuerpo_que_no_cabe_ni_degradado_se_dice() {
-    let mut falso = Falso::default();
-    falso.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
-    // CON historial: sin él `degrade_for_size` no tiene nada que tirar,
-    // contesta `false`, y el reintento ni se intenta — el test pasaría sin
-    // ejercitar el camino que dice ejercitar.
-    let mut guardada = sesion_guardada(1, 7, 1, "mem:///casa");
-    let mut cuerpo: norte_frontend::session::SessionBody =
-        serde_json::from_value(guardada.body.clone()).expect("cuerpo");
-    for s in cuerpo.slots.values_mut() {
+async fn a_body_that_does_not_fit_even_degraded_says_so() {
+    let mut fake = Falso::default();
+    fake.pon("mem:///casa", vec![(b"a".to_vec(), false)]);
+    // WITH history: without it `degrade_for_size` has nothing to throw away,
+    // answers `false`, and the retry is not even attempted — the test would
+    // pass without exercising the path it claims to exercise.
+    let mut saved = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut body: norte_frontend::session::SessionBody =
+        serde_json::from_value(saved.body.clone()).expect("body");
+    for s in body.slots.values_mut() {
         s.back = vec![VPath::parse("mem:///casa/atras").expect("vpath")];
     }
-    guardada.body = serde_json::to_value(&cuerpo).expect("json");
-    *falso.sesion.lock().expect("sesión") = (guardada, true);
-    *falso.rechazos_por_tamano.lock().expect("rechazos") = 5;
-    let backend = Arc::new(falso);
+    saved.body = serde_json::to_value(&body).expect("json");
+    *fake.sesion.lock().expect("sesión") = (saved, true);
+    *fake.rechazos_por_tamano.lock().expect("rechazos") = 5;
+    let backend = Arc::new(fake);
 
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
-    let informe = h.shutdown().await.expect("apaga");
+    let report = h.shutdown().await.expect("shuts down");
 
-    assert!(informe.incomplete);
+    assert!(report.incomplete);
     assert_eq!(
         backend.puestas.lock().expect("puestas").len(),
         2,
-        "un reintento, y solo uno: sin nada más que degradar, insistir es pedir el mismo error"
+        "one retry, and only one: with nothing else to degrade, insisting is asking for the same error"
     );
     assert!(backend.escrito.lock().expect("escrito").is_none());
 }
 
-/// Un doble con una sesión guardada de la que esta ventana es dueña.
-fn falso_con_sesion(guardada: norte_proto::methods::Session, duena: bool) -> Falso {
-    let mut falso = Falso::default();
-    falso.pon(
+/// A double with a saved session this window owns.
+fn falso_con_sesion(saved: norte_proto::methods::Session, owner: bool) -> Falso {
+    let mut fake = Falso::default();
+    fake.pon(
         "mem:///casa",
         vec![(b"docs".to_vec(), true), (b"a".to_vec(), false)],
     );
-    *falso.sesion.lock().expect("sesión") = (guardada, duena);
-    falso
+    *fake.sesion.lock().expect("sesión") = (saved, owner);
+    fake
 }
 
-/// El último cuerpo escrito, ya leído.
+/// The last body written, already read.
 fn cuerpo_escrito(f: &Falso) -> Option<norte_frontend::session::SessionBody> {
     let v = f.escrito.lock().ok()?.clone()?;
     serde_json::from_value(v).ok()
 }
 
-/// Alternar un panel lateral escribe la disposición en la sesión AL MOMENTO,
-/// bajo la clave PROPIA de la ventana (ADR 0139, que sustituye aquí a la D8
-/// de la ADR 0058): la terminal y la ventana recuerdan cada una la suya, y
-/// la de la terminal no se toca.
+/// Toggling a side panel writes the layout to the session AT ONCE, under the
+/// window's OWN key (ADR 0139, which replaces D8 of ADR 0058 here): the
+/// terminal and the window each remember their own, and the terminal's is
+/// never touched.
 #[tokio::test]
-async fn alternar_un_panel_escribe_la_disposicion_al_momento() {
+async fn toggling_a_panel_writes_the_layout_immediately() {
     let backend = Arc::new(falso_con_sesion(
         sesion_guardada(1, 7, 1, "mem:///casa"),
         true,
@@ -1530,102 +1545,100 @@ async fn alternar_un_panel_escribe_la_disposicion_al_momento() {
     let mut sub = h.subscribe();
 
     por_la_paleta(&h, &mut sub, "layout.places").await;
-    let cuerpo = hasta(&backend, "la disposición escrita", cuerpo_escrito).await;
-    let arbol = cuerpo
+    let body = hasta(&backend, "the layout written", cuerpo_escrito).await;
+    let tree = body
         .layouts
         .get("default@window")
-        .expect("bajo la clave de la ventana sin perfil");
+        .expect("under the window's key with no profile");
     assert!(
-        !cuerpo.layouts.contains_key("default"),
-        "la de la terminal no se escribe"
+        !body.layouts.contains_key("default"),
+        "the terminal's is not written"
     );
-    let texto = serde_json::to_string(arbol).expect("json");
+    let text = serde_json::to_string(tree).expect("json");
+    assert!(text.contains("places"), "with the side bar inside: {text}");
     assert!(
-        texto.contains("places"),
-        "con la barra lateral dentro: {texto}"
-    );
-    assert!(
-        cuerpo.slots.contains_key(&1),
-        "y los huecos siguen ahí: {:?}",
-        cuerpo.slots.keys().collect::<Vec<_>>()
+        body.slots.contains_key(&1),
+        "and the slots are still there: {:?}",
+        body.slots.keys().collect::<Vec<_>>()
     );
 
-    // Cerrarla escribe OTRA vez, sin ella: cada cambio del árbol se guarda.
-    let antes = backend.puestas.lock().expect("puestas").len();
+    // Closing it writes AGAIN, without it: every tree change gets saved.
+    let before = backend.puestas.lock().expect("puestas").len();
     por_la_paleta(&h, &mut sub, "layout.places").await;
-    let cuerpo = hasta(&backend, "la segunda escritura", |f| {
-        (f.puestas.lock().ok()?.len() > antes)
+    let body = hasta(&backend, "the second write", |f| {
+        (f.puestas.lock().ok()?.len() > before)
             .then(|| cuerpo_escrito(f))
             .flatten()
     })
     .await;
-    let texto =
-        serde_json::to_string(cuerpo.layouts.get("default@window").expect("sigue")).expect("json");
-    assert!(!texto.contains("places"), "ya sin la barra: {texto}");
+    let text = serde_json::to_string(body.layouts.get("default@window").expect("still there"))
+        .expect("json");
+    assert!(!text.contains("places"), "already without the bar: {text}");
 }
 
-/// Y al arrancar se APLICA la que la sesión guardó, por encima de la de la
-/// configuración: cierra la ventana con dos listados, vuelve con dos.
+/// And on startup, what the session saved gets APPLIED, over the
+/// configuration's: close the window with two listings, come back with two.
 #[tokio::test]
-async fn la_disposicion_guardada_se_aplica_al_arrancar() {
-    let mut guardada = sesion_guardada(1, 7, 1, "mem:///casa");
-    let mut cuerpo: norte_frontend::session::SessionBody =
-        serde_json::from_value(guardada.body.clone()).expect("cuerpo");
-    cuerpo.layouts.insert(
+async fn the_saved_layout_applies_on_startup() {
+    let mut saved = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut body: norte_frontend::session::SessionBody =
+        serde_json::from_value(saved.body.clone()).expect("body");
+    body.layouts.insert(
         "default".to_owned(),
         norte_frontend::layout::presets::tree("orthodox").expect("preset"),
     );
-    guardada.body = serde_json::to_value(&cuerpo).expect("json");
-    let backend = Arc::new(falso_con_sesion(guardada, true));
-    // El host arranca con `simple`, un listado; la sesión dice `orthodox`,
-    // dos. Lo que se ve al arrancar es lo que la sesión dice.
+    saved.body = serde_json::to_value(&body).expect("json");
+    let backend = Arc::new(falso_con_sesion(saved, true));
+    // The host starts with `simple`, one listing; the session says
+    // `orthodox`, two. What is seen on startup is what the session says.
     let (_h, snap) = host_arbol(Arc::clone(&backend)).await;
-    let listados = snap
+    let listings = snap
         .slots
         .iter()
         .filter(|s| matches!(s, norte_ui_host::dto::SlotView::Browser(_)))
         .count();
     assert_eq!(
-        listados, 2,
-        "los dos listados de la disposición guardada, no el uno de `simple`"
+        listings, 2,
+        "the saved layout's two listings, not `simple`'s one"
     );
 }
 
-/// ADR 0139: con la suya guardada, la ventana arranca con LA SUYA, aunque la
-/// terminal haya dejado otra después.
+/// ADR 0139: with its own saved, the window starts with ITS OWN, even if the
+/// terminal left another one afterward.
 #[tokio::test]
-async fn la_ventana_arranca_con_su_disposicion_y_no_con_la_de_la_terminal() {
-    let mut guardada = sesion_guardada(1, 7, 1, "mem:///casa");
-    let mut cuerpo: norte_frontend::session::SessionBody =
-        serde_json::from_value(guardada.body.clone()).expect("cuerpo");
-    // La terminal: un listado. La ventana: dos.
-    cuerpo.layouts.insert(
+async fn the_window_starts_with_its_own_layout_and_not_the_terminals() {
+    let mut saved = sesion_guardada(1, 7, 1, "mem:///casa");
+    let mut body: norte_frontend::session::SessionBody =
+        serde_json::from_value(saved.body.clone()).expect("body");
+    // The terminal: one listing. The window: two.
+    body.layouts.insert(
         "default".to_owned(),
         norte_frontend::layout::presets::tree("simple").expect("preset"),
     );
-    cuerpo.layouts.insert(
+    body.layouts.insert(
         "default@window".to_owned(),
         norte_frontend::layout::presets::tree("orthodox").expect("preset"),
     );
-    guardada.body = serde_json::to_value(&cuerpo).expect("json");
-    let backend = Arc::new(falso_con_sesion(guardada, true));
+    saved.body = serde_json::to_value(&body).expect("json");
+    let backend = Arc::new(falso_con_sesion(saved, true));
     let (_h, snap) = host_arbol(Arc::clone(&backend)).await;
-    let listados = snap
+    let listings = snap
         .slots
         .iter()
         .filter(|s| matches!(s, norte_ui_host::dto::SlotView::Browser(_)))
         .count();
-    assert_eq!(listados, 2, "la de la ventana, no la de la terminal");
+    assert_eq!(listings, 2, "the window's, not the terminal's");
 }
 
-/// El tic de la sesión escribe lo que cambió y NO repite lo mismo.
+/// The session's tick writes what changed and does NOT repeat the same
+/// thing.
 ///
-/// Con el reloj parado: un segundo virtual dispara el tic sin esperar un
-/// segundo de verdad. La primera vuelta escribe —la disposición de esta
-/// ventana aún no estaba en la sesión— y la segunda, sin cambios, no manda
-/// nada: comparar con lo último escrito es todo lo que hace un tic quieto.
+/// With the clock stopped: a virtual second triggers the tick without
+/// waiting a real second. The first round writes — this window's layout was
+/// not yet in the session — and the second, with no changes, sends nothing:
+/// comparing against the last thing written is all a quiet tick does.
 #[tokio::test(start_paused = true)]
-async fn el_tic_escribe_lo_que_cambio_y_no_repite_lo_mismo() {
+async fn the_tick_writes_what_changed_and_does_not_repeat_it() {
     let backend = Arc::new(falso_con_sesion(
         sesion_guardada(1, 7, 1, "mem:///casa"),
         true,
@@ -1633,29 +1646,30 @@ async fn el_tic_escribe_lo_que_cambio_y_no_repite_lo_mismo() {
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     assert!(
         backend.puestas.lock().expect("puestas").is_empty(),
-        "arrancar no escribe: el tic aún no ha sonado"
+        "starting does not write: the tick has not fired yet"
     );
     tokio::time::advance(std::time::Duration::from_millis(1100)).await;
-    let n = hasta(&backend, "la primera escritura del tic", |f| {
+    let n = hasta(&backend, "the tick's first write", |f| {
         let n = f.puestas.lock().ok()?.len();
         (n > 0).then_some(n)
     })
     .await;
-    assert_eq!(n, 1, "una escritura, la de la disposición nueva");
+    assert_eq!(n, 1, "one write, the new layout's");
 
     tokio::time::advance(std::time::Duration::from_millis(2100)).await;
-    // Una vuelta al actor: los tics que sonaron ya se han atendido.
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    // One round to the actor: the ticks that fired have already been
+    // handled.
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     assert_eq!(
         backend.puestas.lock().expect("puestas").len(),
         1,
-        "sin cambios, el tic no repite lo mismo"
+        "with no changes, the tick does not repeat the same thing"
     );
 }
 
-/// Una ventana SUELTA no escribe tampoco al alternar un panel.
+/// A DETACHED window does not write when toggling a panel either.
 #[tokio::test]
-async fn una_ventana_suelta_no_escribe_al_alternar_un_panel() {
+async fn a_detached_window_does_not_write_when_toggling_a_panel() {
     let backend = Arc::new(falso_con_sesion(
         sesion_guardada(1, 7, 1, "mem:///casa"),
         false,
@@ -1666,20 +1680,20 @@ async fn una_ventana_suelta_no_escribe_al_alternar_un_panel() {
     asentar().await;
     assert!(
         backend.puestas.lock().expect("puestas").is_empty(),
-        "suelta no escribe: la sesión es un documento con un solo escritor"
+        "detached does not write: the session is a document with a single writer"
     );
 }
 
-/// Espera la siguiente actualización que traiga tasks.
+/// Waits for the next update that carries tasks.
 pub(super) async fn siguientes_tasks(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Vec<norte_ui_host::dto::TaskView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización con tasks, no un cuelgue")
-            .expect("el host sigue vivo");
-        match siguiente {
+            .expect("an update with tasks, not a hang")
+            .expect("the host is still alive");
+        match next {
             Update::Message(m) => {
                 if let UiUpdate::Patch(p) = &m.payload {
                     for c in &p.changes {
@@ -1694,22 +1708,22 @@ pub(super) async fn siguientes_tasks(
                     return s.tasks.clone();
                 }
             }
-            Update::Lagged => panic!("sin retraso en este test"),
+            Update::Lagged => panic!("no lag in this test"),
         }
     }
-    panic!("no llegó ninguna actualización con tasks");
+    panic!("no update with tasks ever arrived");
 }
 
-/// Espera la siguiente actualización que traiga diálogos.
+/// Waits for the next update that carries dialogs.
 pub(super) async fn siguientes_dialogos(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Vec<norte_ui_host::dto::DialogView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización con diálogos, no un cuelgue")
-            .expect("el host sigue vivo");
-        match siguiente {
+            .expect("an update with dialogs, not a hang")
+            .expect("the host is still alive");
+        match next {
             Update::Message(m) => {
                 if let UiUpdate::Patch(p) = &m.payload {
                     for c in &p.changes {
@@ -1719,72 +1733,73 @@ pub(super) async fn siguientes_dialogos(
                     }
                 }
             }
-            Update::Lagged => panic!("sin retraso en este test"),
+            Update::Lagged => panic!("no lag in this test"),
         }
     }
-    panic!("no llegó ninguna actualización con diálogos");
+    panic!("no update with dialogs ever arrived");
 }
 
-/// Borrar NO borra: abre la confirmación, y la respuesta destructiva viene
-/// marcada como tal para que el renderer no tenga que adivinar cuál es.
+/// Deleting does NOT delete: it opens the confirmation, and the destructive
+/// answer comes marked as such so the renderer does not have to guess which
+/// one it is.
 #[tokio::test]
-async fn borrar_pide_confirmacion_antes_de_tocar_nada() {
+async fn deleting_asks_for_confirmation_before_touching_anything() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    assert_eq!(dialogos.len(), 1, "se abre UN diálogo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
+    let dialogs = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogs.len(), 1, "ONE dialog opens");
     assert!(
-        dialogos[0].choices.iter().any(|c| c.destructive),
-        "y dice cuál de las respuestas destruye"
+        dialogs[0].choices.iter().any(|c| c.destructive),
+        "and it says which of the answers destroys"
     );
     assert!(
         backend.borrados.lock().expect("borrados").is_empty(),
-        "abrir el diálogo no borra nada"
+        "opening the dialog deletes nothing"
     );
 }
 
-/// Confirmar dos veces con el MISMO id no borra dos veces: el segundo es una
-/// carrera del renderer, no una segunda orden.
+/// Confirming twice with the SAME id does not delete twice: the second one
+/// is a race in the renderer, not a second order.
 #[tokio::test]
-async fn confirmar_dos_veces_no_borra_dos_veces() {
+async fn confirming_twice_does_not_delete_twice() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let id = dialogos[0].id;
+    h.dispatch(tecla("F8")).await.expect("host alive");
+    let dialogs = siguientes_dialogos(&mut sub).await;
+    let id = dialogs[0].id;
 
-    let primero = h
+    let first = h
         .dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
             secret: None,
         })
         .await
-        .expect("host vivo");
-    assert!(matches!(primero, ActionAck::Applied { .. }));
+        .expect("host alive");
+    assert!(matches!(first, ActionAck::Applied { .. }));
 
-    let segundo = h
+    let second = h
         .dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
-        segundo,
+        second,
         ActionAck::Stale {
             reason: StaleAction::Modal
         },
-        "el segundo confirm es una carrera, no una orden"
+        "the second confirm is a race, not an order"
     );
 
-    // Y solo se pidió UN borrado: se espera al primero, y se deja correr lo
-    // que hubiera detrás antes de contar.
-    hasta(&backend, "el borrado encolado", |f| {
+    // And only ONE delete was requested: it waits for the first, and lets
+    // whatever was behind it run before counting.
+    hasta(&backend, "the queued delete", |f| {
         (!f.borrados.lock().expect("borrados").is_empty()).then_some(())
     })
     .await;
@@ -1792,14 +1807,14 @@ async fn confirmar_dos_veces_no_borra_dos_veces() {
     assert_eq!(backend.borrados.lock().expect("borrados").len(), 1);
 }
 
-/// Una respuesta que el diálogo no ofreció no se interpreta: en una
-/// superficie de decisión no hay respuestas implícitas.
+/// An answer the dialog did not offer is not interpreted: on a decision
+/// surface there are no implicit answers.
 #[tokio::test]
-async fn una_respuesta_que_no_existe_no_se_interpreta() {
+async fn an_answer_that_does_not_exist_is_not_interpreted() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     let ack = h
         .dispatch(UiAction::Dialog {
@@ -1808,7 +1823,7 @@ async fn una_respuesta_que_no_existe_no_se_interpreta() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
@@ -1818,15 +1833,15 @@ async fn una_respuesta_que_no_existe_no_se_interpreta() {
     assert!(backend.borrados.lock().expect("borrados").is_empty());
 }
 
-/// Confirmado el borrado, la task aparece en el tablero y su estado TERMINAL
-/// llega: un desenlace que se pierde deja al usuario mirando un progreso que
-/// no avanza.
+/// With the delete confirmed, the task shows up on the board and its
+/// TERMINAL state arrives: an outcome that gets lost leaves the user staring
+/// at progress that does not advance.
 #[tokio::test]
-async fn la_task_aparece_y_su_desenlace_no_se_pierde() {
+async fn the_task_shows_up_and_its_outcome_is_not_lost() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1834,19 +1849,19 @@ async fn la_task_aparece_y_su_desenlace_no_se_pierde() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     let tasks = siguientes_tasks(&mut sub).await;
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].task_id, 7);
 
-    // El daemon termina la task.
+    // The daemon finishes the task.
     let tx = backend
         .progreso
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| {
         p.state = norte_proto::TaskState::Completed;
         p.bytes_done = 10;
@@ -1855,26 +1870,26 @@ async fn la_task_aparece_y_su_desenlace_no_se_pierde() {
     assert_eq!(
         tasks[0].state,
         norte_ui_host::dto::TaskStateView::Done,
-        "el estado terminal llega al tablero"
+        "the terminal state reaches the board"
     );
     assert_eq!(tasks[0].percent, Some(100));
 }
 
-/// Una task TERMINADA se va sola del tablero a los diez segundos.
+/// A FINISHED task leaves the board on its own after ten seconds.
 ///
-/// Antes se quedaba hasta que otra la empujaba fuera por el tope de filas, así
-/// que el panel enseñaba el historial de la sesión en vez de lo que está
-/// pasando. Es el mismo plazo que el TUI: dos frontends que caducan distinto
-/// son dos respuestas a «¿sigue esto en marcha?».
+/// It used to stay until another one pushed it out via the row cap, so the
+/// panel showed the session's history instead of what is happening now. It
+/// is the same deadline as the TUI: two frontends that expire differently are
+/// two answers to "is this still running?".
 ///
-/// Reloj VIRTUAL (`start_paused`): el test no espera diez segundos, los salta
-/// — cuando nadie tiene trabajo, tokio adelanta al siguiente temporizador.
+/// VIRTUAL clock (`start_paused`): the test does not wait ten seconds, it
+/// skips them — when nobody has work, tokio advances to the next timer.
 #[tokio::test(start_paused = true)]
-async fn una_task_terminada_se_va_del_tablero_sola() {
+async fn a_finished_task_leaves_the_board_on_its_own() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1882,7 +1897,7 @@ async fn una_task_terminada_se_va_del_tablero_sola() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     assert_eq!(siguientes_tasks(&mut sub).await.len(), 1);
 
     let tx = backend
@@ -1890,68 +1905,69 @@ async fn una_task_terminada_se_va_del_tablero_sola() {
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     let tasks = siguientes_tasks(&mut sub).await;
     assert_eq!(
         tasks[0].state,
         norte_ui_host::dto::TaskStateView::Done,
-        "primero se VE terminada: el ✓ no puede pasar de largo"
+        "it is first SEEN finished: the ✓ cannot slip by"
     );
 
-    // Se adelanta el reloj A MANO en vez de dejar que tokio salte solo: los
-    // helpers de este fichero esperan con un plazo de 500 ms, y el salto
-    // automático va al temporizador MÁS CERCANO — o sea a ese plazo, no al
-    // TTL, y el test moriría por «cuelgue» sin que nada estuviera mal.
+    // The clock is advanced BY HAND instead of letting tokio jump on its
+    // own: this file's helpers wait with a 500 ms deadline, and the
+    // automatic jump goes to the CLOSEST timer — i.e. that deadline, not the
+    // TTL, and the test would die of "hang" with nothing actually wrong.
     tokio::time::advance(std::time::Duration::from_secs(11)).await;
-    // El `spawn` del TTL despierta y manda su mensaje; el ceder deja que lo
-    // haga ANTES de que el `Resync` entre en el mismo buzón, que se atiende
-    // en orden.
+    // The TTL's `spawn` wakes up and sends its message; yielding lets it do
+    // so BEFORE the `Resync` enters the same mailbox, which is served in
+    // order.
     for _ in 0..4 {
         tokio::task::yield_now().await;
     }
-    // Hasta que el tablero quede vacío: entre el desenlace y la caducidad hay
-    // otros cambios de tablero (el relistado del directorio que el borrado
-    // dejó viejo publica el suyo), y afirmar sobre «el siguiente» sería
-    // afirmar sobre el que pase primero.
-    let mut vacio = false;
+    // Until the board is empty: between the outcome and the expiry, other
+    // board changes happen (the re-listing of the directory the delete left
+    // stale publishes its own), and asserting on "the next one" would be
+    // asserting on whichever comes first.
+    let mut empty = false;
     for _ in 0..5 {
         if siguientes_tasks(&mut sub).await.is_empty() {
-            vacio = true;
+            empty = true;
             break;
         }
     }
-    assert!(vacio, "la terminada caducó y se fue del tablero");
+    assert!(empty, "the finished one expired and left the board");
 }
 
-/// ¿Hay un panel de procesos colocado en esta foto?
+/// Is there a processes panel placed in this snapshot?
 fn hay_procesos(snap: &norte_ui_host::ViewSnapshot) -> bool {
     snap.slots
         .iter()
         .any(|s| matches!(s, SlotView::Processes { .. }))
 }
 
-/// El panel de procesos se abre solo cuando el trabajo DURA (ADR 0146) y se
-/// va cuando la fila caduca.
+/// The processes panel opens only when work LASTS (ADR 0146) and leaves when
+/// the row expires.
 ///
-/// Las dos mitades del gesto, y la segunda es la que faltaba: el host solo
-/// reevaluaba desde `progreso`, y cuando la última fila caduca ya no llega
-/// ningún progreso más — así que el panel que se abrió solo se quedaba puesto
-/// el resto de la sesión. El terminal no tenía el fallo porque su bucle
-/// reevalúa en cada vuelta; era la clase de divergencia que el ADR 0077
-/// persigue, y ningún test la veía porque todos miraban el PRIMER evento.
+/// The gesture's two halves, and the second is the one that was missing: the
+/// host only re-evaluated from `progreso`, and once the last row expires no
+/// more progress ever arrives — so a panel that opened on its own stayed put
+/// for the rest of the session. The terminal did not have the bug because its
+/// loop re-evaluates on every round; it was the kind of divergence ADR 0077
+/// chases, and no test caught it because all of them looked at the FIRST
+/// event.
 ///
-/// Reloj virtual, como el del TTL de aquí arriba y por lo mismo.
+/// Virtual clock, like the TTL one above and for the same reason.
 #[tokio::test(start_paused = true)]
-async fn el_panel_de_procesos_se_abre_solo_y_se_cierra_al_caducar_la_fila() {
+async fn the_processes_panel_opens_on_its_own_and_closes_when_the_row_expires() {
     let backend = arbol();
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     assert!(
         !hay_procesos(&snap),
-        "sin nada encolado, el panel no ocupa sitio"
+        "with nothing queued, the panel takes no room"
     );
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -1959,7 +1975,7 @@ async fn el_panel_de_procesos_se_abre_solo_y_se_cierra_al_caducar_la_fila() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     assert_eq!(siguientes_tasks(&mut sub).await.len(), 1);
 
     let tx = backend
@@ -1967,87 +1983,92 @@ async fn el_panel_de_procesos_se_abre_solo_y_se_cierra_al_caducar_la_fila() {
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
-    // Un tic de progreso: es donde el host reevalúa el panel. Abrirlo ya en el
-    // REGISTRO se probó y se revirtió —abrir un panel republica la foto
-    // entera, y hacerlo al encolar la mete en medio de cada operación que el
-    // lector acaba de pedir—; está escrito en el ADR 0115.
+        .expect("there is a task");
+    // A progress tick: it is where the host re-evaluates the panel. Opening
+    // it right at the LOG was tried and reverted — opening a panel
+    // republishes the whole snapshot, and doing it on queuing would put it
+    // in the middle of every operation the reader just requested; it is
+    // written down in ADR 0115.
     tx.send_modify(|p| p.bytes_done = 1);
-    // Antes de que la ráfaga DURE, el panel no se abre (ADR 0146): una
-    // copia que acaba en un segundo la cuenta la barra de estado.
+    // Before the burst LASTS, the panel does not open (ADR 0146): a copy
+    // that finishes in a second is counted by the status bar.
     assert!(
         !hay_procesos(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await),
-        "una ráfaga recién empezada no abre el panel"
+        "a burst that just started does not open the panel"
     );
     tokio::time::advance(std::time::Duration::from_millis(
-        u64::try_from(norte_frontend::task_strip::PANEL_MS).expect("positivo") + 100,
+        u64::try_from(norte_frontend::task_strip::PANEL_MS).expect("positive") + 100,
     ))
     .await;
     for _ in 0..4 {
         tokio::task::yield_now().await;
     }
-    // HASTA que aparezca, no en la primera foto: el progreso viaja por el
-    // buzón del actor y el `Resync` entra en ese mismo buzón, así que
-    // afirmar sobre «la siguiente» sería afirmar sobre la que llegue antes.
-    let mut abierto = false;
+    // UNTIL it appears, not on the first snapshot: progress travels through
+    // the actor's mailbox and `Resync` enters that same mailbox, so
+    // asserting on "the next one" would be asserting on whichever arrives
+    // first.
+    let mut open = false;
     for _ in 0..6 {
         if hay_procesos(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await) {
-            abierto = true;
+            open = true;
             break;
         }
     }
-    assert!(abierto, "se abrió solo cuando el trabajo ya duraba");
+    assert!(open, "it opened only once the work had already lasted");
 
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    // Otra vez HASTA, no «la siguiente»: el bucle de arriba dejó un `Resync`
-    // en camino, y su foto llega entre el desenlace y quien lo espera.
-    let mut terminada = false;
+    // UNTIL again, not "the next one": the loop above left a `Resync` in
+    // flight, and its snapshot arrives between the outcome and whoever waits
+    // for it.
+    let mut finished = false;
     for _ in 0..6 {
         if siguientes_tasks(&mut sub)
             .await
             .first()
             .is_some_and(|t| t.state == norte_ui_host::dto::TaskStateView::Done)
         {
-            terminada = true;
+            finished = true;
             break;
         }
     }
     assert!(
-        terminada,
-        "primero se VE terminada, con el panel todavía puesto"
+        finished,
+        "it is first SEEN finished, with the panel still up"
     );
 
-    // El mismo salto a mano que el test del TTL, y por el mismo motivo.
+    // The same manual jump as the TTL test, and for the same reason.
     tokio::time::advance(std::time::Duration::from_secs(11)).await;
     for _ in 0..4 {
         tokio::task::yield_now().await;
     }
-    // Hasta que se vaya: entre el desenlace y la caducidad pasan otras cosas
-    // (el relistado del directorio que el borrado dejó viejo), y afirmar
-    // sobre «la siguiente foto» sería afirmar sobre la que pase primero.
-    let mut cerrado = false;
+    // Until it leaves: between the outcome and the expiry other things
+    // happen (the re-listing of the directory the delete left stale), and
+    // asserting on "the next snapshot" would be asserting on whichever
+    // happens first.
+    let mut closed = false;
     for _ in 0..6 {
         if !hay_procesos(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await) {
-            cerrado = true;
+            closed = true;
             break;
         }
     }
     assert!(
-        cerrado,
-        "y se cerró solo cuando la última fila caducó: un panel que se abre \
-         solo y no se cierra nunca ocupa un tercio de la pantalla para decir \
-         que no pasa nada"
+        closed,
+        "and it closed only once the last row expired: a panel that opens \
+         on its own and never closes takes up a third of the screen to say \
+         nothing is happening"
     );
 }
 
-/// ADR 0146: una copia que acaba antes del umbral no abre el panel NI pinta
-/// la barra, pero deja el «✓» en el item de tareas; y el «✓» se va solo.
+/// ADR 0146: a copy that finishes before the threshold opens no panel NOR
+/// paints the bar, but leaves the "✓" on the tasks item; and the "✓" leaves
+/// on its own.
 #[tokio::test(start_paused = true)]
-async fn una_tarea_rapida_deja_el_hecho_y_no_abre_el_panel() {
+async fn a_quick_task_leaves_the_checkmark_and_opens_no_panel() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -2055,102 +2076,102 @@ async fn una_tarea_rapida_deja_el_hecho_y_no_abre_el_panel() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     assert_eq!(siguientes_tasks(&mut sub).await.len(), 1);
     let tx = backend
         .progreso
         .lock()
         .expect("progreso")
         .clone()
-        .expect("hay task");
+        .expect("there is a task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    let tareas =
+    let tasks_item =
         |s: &norte_ui_host::ViewSnapshot| s.status_items.iter().find(|i| i.id == "tasks").cloned();
-    let mut hecho = None;
+    let mut done = None;
     for _ in 0..6 {
-        let foto = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
-        assert!(!hay_procesos(&foto), "una copia rápida no abre el panel");
-        if let Some(t) = tareas(&foto) {
-            hecho = Some(t);
+        let snap = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
+        assert!(!hay_procesos(&snap), "a quick copy opens no panel");
+        if let Some(t) = tasks_item(&snap) {
+            done = Some(t);
             break;
         }
     }
-    let hecho = hecho.expect("el item de tareas dice que acabó");
-    assert!(hecho.text.starts_with('✓'), "{:?}", hecho.text);
-    assert!(hecho.progress.is_none(), "un ✓ no lleva barra");
+    let done = done.expect("the tasks item says it finished");
+    assert!(done.text.starts_with('✓'), "{:?}", done.text);
+    assert!(done.progress.is_none(), "a ✓ carries no bar");
 
     tokio::time::advance(std::time::Duration::from_millis(
-        u64::try_from(norte_frontend::task_strip::HECHO_MS).expect("positivo") + 100,
+        u64::try_from(norte_frontend::task_strip::HECHO_MS).expect("positive") + 100,
     ))
     .await;
     for _ in 0..4 {
         tokio::task::yield_now().await;
     }
-    let mut ido = false;
+    let mut gone = false;
     for _ in 0..6 {
-        if tareas(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await).is_none() {
-            ido = true;
+        if tasks_item(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await).is_none() {
+            gone = true;
             break;
         }
     }
-    assert!(ido, "y el ✓ se va solo");
+    assert!(gone, "and the ✓ leaves on its own");
 }
 
-/// ADR 0146: tras un relevo del daemon, el trabajo del ANTERIOR no deja la
-/// barra en marcha ni el panel automático abierto para siempre: esas tasks
-/// no van a terminar nunca, porque ya no hay nadie que las termine.
+/// ADR 0146: after a daemon handoff, the PREVIOUS one's work leaves neither
+/// the bar running nor the automatic panel open forever: those tasks are
+/// never going to finish, because there is nobody left to finish them.
 #[tokio::test(start_paused = true)]
-async fn un_relevo_no_deja_la_barra_ni_el_panel_colgados() {
-    let falso = arbol_como_falso();
+async fn a_handoff_does_not_leave_the_bar_or_the_panel_hanging() {
+    let fake = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.ajenas.lock().expect("ajenas") = Some(rx);
     let (evtx, evrx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.eventos.lock().expect("eventos") = Some(evrx);
-    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+    *fake.eventos.lock().expect("eventos") = Some(evrx);
+    let (h, _snap) = host_arbol(Arc::new(fake)).await;
     let mut sub = h.subscribe();
     let _p = inyectar_task_de(&tx, 7, norte_proto::TaskKind::Copy);
     siguientes_tasks(&mut sub).await;
     tokio::time::advance(std::time::Duration::from_millis(
-        u64::try_from(norte_frontend::task_strip::PANEL_MS).expect("positivo") + 100,
+        u64::try_from(norte_frontend::task_strip::PANEL_MS).expect("positive") + 100,
     ))
     .await;
     for _ in 0..4 {
         tokio::task::yield_now().await;
     }
-    let mut abierto = false;
+    let mut open = false;
     for _ in 0..6 {
         if hay_procesos(&crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await) {
-            abierto = true;
+            open = true;
             break;
         }
     }
-    assert!(abierto, "el trabajo que dura abre el panel");
+    assert!(open, "work that lasts opens the panel");
 
     evtx.send(norte_client::ConnEvent::GoingAway { reconnect: true })
-        .expect("el host escucha");
+        .expect("the host is listening");
     evtx.send(norte_client::ConnEvent::Restored)
-        .expect("el host escucha");
-    let mut limpio = false;
+        .expect("the host is listening");
+    let mut clean = false;
     for _ in 0..8 {
-        let foto = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
-        if !hay_procesos(&foto) && foto.status_items.iter().all(|i| i.id != "tasks") {
-            limpio = true;
+        let snap = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
+        if !hay_procesos(&snap) && snap.status_items.iter().all(|i| i.id != "tasks") {
+            clean = true;
             break;
         }
     }
     assert!(
-        limpio,
-        "la task del daemon anterior no mantiene ni el panel ni la barra"
+        clean,
+        "the previous daemon's task keeps neither the panel nor the bar alive"
     );
 }
 
-/// Cancelar es idempotente: pedirlo dos veces no es un error.
+/// Cancelling is idempotent: asking twice is not an error.
 #[tokio::test]
-async fn cancelar_es_idempotente() {
+async fn cancelling_is_idempotent() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
+    h.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
@@ -2158,31 +2179,31 @@ async fn cancelar_es_idempotente() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     siguientes_tasks(&mut sub).await;
 
     for _ in 0..2 {
         let ack = h
             .dispatch(UiAction::CancelTask { task_id: 7 })
             .await
-            .expect("host vivo");
+            .expect("host alive");
         assert!(matches!(ack, ActionAck::Applied { .. }));
     }
     assert_eq!(
         backend.cancelaciones.load(Ordering::SeqCst),
         2,
-        "las dos peticiones llegan; el contrato de idempotencia es del daemon"
+        "both requests arrive; the idempotency contract belongs to the daemon"
     );
 }
 
-/// Cancelar una task que el tablero no conoce es una carrera, no un error.
+/// Cancelling a task the board does not know about is a race, not an error.
 #[tokio::test]
-async fn cancelar_lo_que_no_existe_es_una_carrera() {
+async fn cancelling_what_does_not_exist_is_a_race() {
     let (h, _snap) = host_arbol(arbol()).await;
     let ack = h
         .dispatch(UiAction::CancelTask { task_id: 999 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
@@ -2191,48 +2212,45 @@ async fn cancelar_lo_que_no_existe_es_una_carrera() {
     );
 }
 
-/// El buscador incremental se abre por su comando, se queda las teclas de
-/// TEXTO y filtra el listado. Es el contexto de entrada del listado: dejar
-/// que el resolver se quedara la «d» convertiría teclear en borrar.
+/// The incremental search opens through its command, keeps TEXT keys, and
+/// filters the listing. It is the listing's input context: letting the
+/// resolver keep the "d" would turn typing into deleting.
 #[tokio::test]
-async fn el_buscador_se_queda_el_texto_y_filtra() {
+async fn the_quick_search_keeps_the_text_and_filters() {
     let (host, _snap) = host_arbol(arbol()).await;
     let mut sub = host.subscribe();
 
-    host.dispatch(tecla("/")).await.expect("host vivo");
-    host.dispatch(UiAction::Resync).await.expect("host vivo");
-    let abierto = siguiente_foto(&mut sub).await;
-    assert!(
-        listado(&abierto).quick.is_some(),
-        "el buscador está abierto"
-    );
+    host.dispatch(tecla("/")).await.expect("host alive");
+    host.dispatch(UiAction::Resync).await.expect("host alive");
+    let open = siguiente_foto(&mut sub).await;
+    assert!(listado(&open).quick.is_some(), "the quick search is open");
 
-    // Teclear NO ejecuta comandos: filtra.
+    // Typing does NOT run commands: it filters.
     for c in ["n", "o"] {
-        host.dispatch(tecla(c)).await.expect("host vivo");
+        host.dispatch(tecla(c)).await.expect("host alive");
     }
-    host.dispatch(UiAction::Resync).await.expect("host vivo");
-    let filtrado = siguiente_foto(&mut sub).await;
-    let quick = listado(&filtrado).quick.clone().expect("sigue abierto");
+    host.dispatch(UiAction::Resync).await.expect("host alive");
+    let filtered = siguiente_foto(&mut sub).await;
+    let quick = listado(&filtered).quick.clone().expect("still open");
     assert_eq!(quick.query, "no");
-    assert_eq!(quick.matches, 1, "solo `notas.txt` casa");
+    assert_eq!(quick.matches, 1, "only `notas.txt` matches");
 
-    // Y Esc lo cierra sin tocar el listado.
-    host.dispatch(tecla("Escape")).await.expect("host vivo");
-    host.dispatch(UiAction::Resync).await.expect("host vivo");
-    let cerrado = siguiente_foto(&mut sub).await;
-    assert!(listado(&cerrado).quick.is_none());
-    assert_eq!(listado(&cerrado).rows.len(), 3, "el listado sigue entero");
+    // And Esc closes it without touching the listing.
+    host.dispatch(tecla("Escape")).await.expect("host alive");
+    host.dispatch(UiAction::Resync).await.expect("host alive");
+    let closed = siguiente_foto(&mut sub).await;
+    assert!(listado(&closed).quick.is_none());
+    assert_eq!(listado(&closed).rows.len(), 3, "the listing is still whole");
 }
 
-/// Perder el daemon se pinta Y se dice: notarlo solo en un icono no basta
-/// cuando pasa a mitad de una operación.
+/// Losing the daemon is painted AND said: noticing it only through an icon
+/// is not enough when it happens mid-operation.
 #[tokio::test]
-async fn la_conexion_perdida_se_pinta_y_se_dice() {
-    let falso = arbol_como_falso();
+async fn the_lost_connection_is_painted_and_said() {
+    let fake = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.eventos.lock().expect("eventos") = Some(rx);
-    let (host, snap) = host_arbol(Arc::new(falso)).await;
+    *fake.eventos.lock().expect("eventos") = Some(rx);
+    let (host, snap) = host_arbol(Arc::new(fake)).await;
     assert_eq!(
         snap.connection,
         norte_ui_host::dto::ConnectionView::Connected
@@ -2240,57 +2258,57 @@ async fn la_conexion_perdida_se_pinta_y_se_dice() {
 
     let mut sub = host.subscribe();
     tx.send(norte_client::ConnEvent::Lost)
-        .expect("el host escucha");
+        .expect("the host is listening");
 
-    let mut vista = None;
-    let mut dicho = false;
+    let mut view = None;
+    let mut said = false;
     for _ in 0..10 {
         match tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("llega")
-            .expect("el host sigue vivo")
+            .expect("arrives")
+            .expect("the host is still alive")
         {
             Update::Message(m) => match &m.payload {
                 UiUpdate::Patch(p) => {
                     for c in &p.changes {
                         if let norte_ui_host::dto::ViewChange::Connection(v) = c {
-                            vista = Some(v.clone());
+                            view = Some(v.clone());
                         }
                     }
                 }
                 UiUpdate::Notice(norte_ui_host::dto::UiNotice::Message { key, .. }) => {
                     if key == "msg-daemon-lost" {
-                        dicho = true;
+                        said = true;
                     }
                 }
                 UiUpdate::Snapshot(_) | UiUpdate::Notice(_) => {}
             },
             Update::Lagged => {}
         }
-        if vista.is_some() && dicho {
+        if view.is_some() && said {
             break;
         }
     }
     assert_eq!(
-        vista,
+        view,
         Some(norte_ui_host::dto::ConnectionView::Reconnecting),
-        "se pinta reconectando"
+        "it paints reconnecting"
     );
-    assert!(dicho, "y se dice");
+    assert!(said, "and it is said");
 }
 
-/// Una task que lanzó OTRO cliente de la misma sesión aparece en el tablero,
-/// y el tablero dice que es ajena: una operación que uno no ha pedido y no se
-/// distingue de las suyas es una sorpresa.
+/// A task launched by ANOTHER client of the same session shows up on the
+/// board, and the board says it is foreign: an operation nobody asked for
+/// and that is indistinguishable from one's own is a surprise.
 #[tokio::test]
-async fn una_task_ajena_se_ve_y_se_dice_ajena() {
-    let falso = arbol_como_falso();
+async fn a_foreign_task_is_visible_and_said_to_be_foreign() {
+    let fake = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.ajenas.lock().expect("ajenas") = Some(rx);
-    let (host, _snap) = host_arbol(Arc::new(falso)).await;
+    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    let (host, _snap) = host_arbol(Arc::new(fake)).await;
     let mut sub = host.subscribe();
 
-    let progreso = norte_proto::TaskProgress {
+    let progress = norte_proto::TaskProgress {
         task_id: norte_proto::TaskId::new(11),
         kind: norte_proto::TaskKind::Copy,
         state: norte_proto::TaskState::Running,
@@ -2302,7 +2320,7 @@ async fn una_task_ajena_se_ve_y_se_dice_ajena() {
         unreadable: None,
         unvisited: None,
     };
-    let (_ptx, prx) = tokio::sync::watch::channel(progreso);
+    let (_ptx, prx) = tokio::sync::watch::channel(progress);
     tx.send(norte_ui_host::backend::HostTask {
         id: norte_proto::TaskId::new(11),
         progress: prx,
@@ -2311,70 +2329,69 @@ async fn una_task_ajena_se_ve_y_se_dice_ajena() {
         cola: None,
         foreign: true,
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
     let tasks = siguientes_tasks(&mut sub).await;
     assert_eq!(tasks.len(), 1);
     assert_eq!(tasks[0].task_id, 11);
-    assert!(tasks[0].foreign, "el tablero dice que es ajena");
+    assert!(tasks[0].foreign, "the board says it is foreign");
 }
 
-/// Las columnas configuradas llegan como celdas, con el MISMO formato que
-/// pinta el TUI, y la ausencia viaja como ausencia: un directorio sin tamaño
-/// no lleva un `0` fabricado.
+/// Configured columns arrive as cells, with the SAME format the TUI paints,
+/// and absence travels as absence: a directory with no size carries no
+/// manufactured `0`.
 #[tokio::test]
-async fn las_columnas_configuradas_llegan_como_celdas() {
+async fn configured_columns_arrive_as_cells() {
     let (_h, snap) = host_arbol(arbol()).await;
-    let filas = &listado(&snap).rows;
-    let dir = filas
+    let rows = &listado(&snap).rows;
+    let dir = rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está");
-    let fichero = filas
+        .expect("the directory is there");
+    let file = rows
         .iter()
         .find(|r| r.display_name == "notas.txt")
-        .expect("el fichero está");
+        .expect("the file is there");
 
-    let columnas: Vec<&str> = fichero.cells.iter().map(|c| c.column.as_str()).collect();
-    assert_eq!(
-        columnas,
-        vec!["size", "mtime"],
-        "nombre aparte, el resto aquí"
-    );
+    let columns: Vec<&str> = file.cells.iter().map(|c| c.column.as_str()).collect();
+    assert_eq!(columns, vec!["size", "mtime"], "name aside, the rest here");
 
     let size_dir = dir
         .cells
         .iter()
         .find(|c| c.column == "size")
-        .expect("la celda existe");
-    assert_eq!(size_dir.text, None, "un dir sin tamaño no inventa un cero");
+        .expect("the cell exists");
+    assert_eq!(
+        size_dir.text, None,
+        "a dir with no size does not invent a zero"
+    );
 
-    let size_fichero = fichero
+    let size_file = file
         .cells
         .iter()
         .find(|c| c.column == "size")
-        .expect("la celda existe");
+        .expect("the cell exists");
     assert!(
-        size_fichero.text.is_some(),
-        "y un fichero con tamaño lo trae formateado"
+        size_file.text.is_some(),
+        "and a file with a size brings it formatted"
     );
 }
 
-/// Crear directorio: el diálogo lleva CAMPO DE TEXTO, lo tecleado viaja, y
-/// confirmar encola la task.
+/// Create directory: the dialog carries a TEXT FIELD, what is typed travels,
+/// and confirming queues the task.
 #[tokio::test]
-async fn crear_directorio_teclea_y_encola() {
+async fn creating_a_directory_types_and_queues() {
     let backend = arbol();
     let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = host.subscribe();
 
-    host.dispatch(tecla("F7")).await.expect("host vivo");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let id = dialogos[0].id;
+    host.dispatch(tecla("F7")).await.expect("host alive");
+    let dialogs = siguientes_dialogos(&mut sub).await;
+    let id = dialogs[0].id;
     assert_eq!(
-        dialogos[0].input.as_deref(),
+        dialogs[0].input.as_deref(),
         Some(""),
-        "el diálogo dice que aquí se teclea"
+        "the dialog says this is where you type"
     );
 
     host.dispatch(UiAction::DialogInput {
@@ -2382,9 +2399,9 @@ async fn crear_directorio_teclea_y_encola() {
         text: "carpeta nueva".to_owned(),
     })
     .await
-    .expect("host vivo");
-    let tecleado = siguientes_dialogos(&mut sub).await;
-    assert_eq!(tecleado[0].input.as_deref(), Some("carpeta nueva"));
+    .expect("host alive");
+    let typed = siguientes_dialogos(&mut sub).await;
+    assert_eq!(typed[0].input.as_deref(), Some("carpeta nueva"));
 
     host.dispatch(UiAction::Dialog {
         id,
@@ -2392,27 +2409,27 @@ async fn crear_directorio_teclea_y_encola() {
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let creados = hasta(&backend, "la creación encolada", |f| {
+    .expect("host alive");
+    let created = hasta(&backend, "the queued creation", |f| {
         let c = f.creados.lock().expect("creados").clone();
         (!c.is_empty()).then_some(c)
     })
     .await;
-    assert_eq!(creados.len(), 1, "se encoló una creación");
+    assert_eq!(created.len(), 1, "one creation got queued");
     assert!(
-        creados[0].to_wire().ends_with("carpeta nueva"),
-        "con el nombre tecleado: {}",
-        creados[0].to_wire()
+        created[0].to_wire().ends_with("carpeta nueva"),
+        "with the typed name: {}",
+        created[0].to_wire()
     );
 }
 
-/// Un nombre que no vale no encola nada y se dice.
+/// A name that is not valid queues nothing and says so.
 #[tokio::test]
-async fn un_nombre_invalido_no_crea_nada() {
+async fn an_invalid_name_creates_nothing() {
     let backend = arbol();
     let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = host.subscribe();
-    host.dispatch(tecla("F7")).await.expect("host vivo");
+    host.dispatch(tecla("F7")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
 
     host.dispatch(UiAction::DialogInput {
@@ -2420,27 +2437,27 @@ async fn un_nombre_invalido_no_crea_nada() {
         text: "..".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     host.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     asentar().await;
     assert!(
         backend.creados.lock().expect("creados").is_empty(),
-        "`..` no es un nombre de directorio"
+        "`..` is not a directory name"
     );
 }
 
-/// Escribir en un diálogo de DECISIÓN no se interpreta: no tiene dónde.
+/// Typing into a DECISION dialog is not interpreted: it has nowhere to go.
 #[tokio::test]
-async fn no_se_teclea_en_un_dialogo_de_decision() {
+async fn typing_is_not_interpreted_in_a_decision_dialog() {
     let (host, _snap) = host_arbol(arbol()).await;
     let mut sub = host.subscribe();
-    host.dispatch(tecla("F8")).await.expect("host vivo");
+    host.dispatch(tecla("F8")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     let ack = host
         .dispatch(UiAction::DialogInput {
@@ -2448,7 +2465,7 @@ async fn no_se_teclea_en_un_dialogo_de_decision() {
             text: "lo que sea".to_owned(),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
@@ -2457,16 +2474,15 @@ async fn no_se_teclea_en_un_dialogo_de_decision() {
     );
 }
 
-/// Una aprobación de policy abre su diálogo, con las rutas SANEADAS y
-/// diciendo si la lista viene recortada. Aprobar es una decisión de
-/// seguridad: viene marcada como destructiva y no tiene respuesta por
-/// defecto.
+/// A policy approval opens its dialog, with the paths SANITIZED and saying
+/// whether the list comes trimmed. Approving is a security decision: it
+/// comes marked as destructive and has no default answer.
 #[tokio::test]
-async fn una_aprobacion_abre_su_dialogo() {
-    let falso = arbol_como_falso();
+async fn an_approval_opens_its_dialog() {
+    let fake = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
-    let backend = Arc::new(falso);
+    *fake.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(fake);
     let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = host.subscribe();
 
@@ -2474,45 +2490,46 @@ async fn una_aprobacion_abre_su_dialogo() {
         approval_id: 5,
         session: Some("agente-1".to_owned()),
         op: "delete".to_owned(),
-        // Con un control dentro: el diálogo lo enmascara, jamás lo pinta.
+        // With a control character inside: the dialog masks it, never
+        // paints it.
         paths: vec!["mem:///casa/borra\u{202E}me".to_owned()],
         paths_total: 40,
         ttl_ms: 30_000,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    assert_eq!(dialogos.len(), 1);
-    let d = &dialogos[0];
+    let dialogs = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogs.len(), 1);
+    let d = &dialogs[0];
     assert!(
         d.choices.iter().any(|c| c.id == "approve" && c.destructive),
-        "aprobar una op de agente es destructivo y se dice"
+        "approving an agent's op is destructive and it is said"
     );
     assert!(
         d.body.iter().all(|l| !l.text.contains('\u{202E}')),
-        "las rutas van enmascaradas: {:?}",
+        "paths go masked: {:?}",
         d.body
     );
     assert!(
         d.body.iter().any(|l| l.hostile),
-        "y se DICE cuál se pinta distinta de lo que es: {:?}",
+        "and it SAYS which one paints differently from what it is: {:?}",
         d.body
     );
     assert!(
         !d.overflow_note.is_empty(),
-        "y que la lista viene recortada, en su propio campo: {d:?}"
+        "and that the list comes trimmed, in its own field: {d:?}"
     );
-    // La única ruta que llega SE ENSEÑA, así que el resumen no marca nada: el
-    // badge del recorte habla de lo que NO se puede mirar, y aquí lo recortado
-    // lo recortó el server y no llegó.
+    // The one path that does arrive IS SHOWN, so the summary marks nothing:
+    // the trim's badge speaks of what CANNOT be looked at, and here what got
+    // trimmed was trimmed by the server and never arrived.
     assert!(
         !d.overflow_hostile,
-        "sin rutas ocultas que mirar, el resumen no marca: {d:?}"
+        "with no hidden paths to look at, the summary marks nothing: {d:?}"
     );
-    // Y dice cuánto le queda, en su propio campo: una decisión con fecha de
-    // caducidad que no la enseña se lee como una que espera para siempre, y
-    // entre las rutas la podría suplantar un nombre de fichero.
+    // And it says how much time is left, in its own field: a decision with
+    // an expiry that does not show it reads as one that waits forever, and
+    // among the paths a file name could impersonate it.
     assert_eq!(
         d.deadline.as_deref(),
         Some(
@@ -2521,28 +2538,29 @@ async fn una_aprobacion_abre_su_dialogo() {
     );
 }
 
-/// Y una ruta hostil que se queda FUERA de lo que se enseña se dice.
+/// And a hostile path left OUTSIDE what is shown is said.
 ///
-/// El badge de una ruta visible dice «lo que lees no son los bytes que hay».
-/// Sobre lo recortado no se puede decir eso —no está delante para mirarlo—
-/// pero sí que ahí fuera hay algo así, y eso es lo que decide si merece la
-/// pena ampliar antes de aprobar. El terminal lo decía en su resumen desde
-/// siempre y esta ventana no, sobre las mismas rutas (plan de paridad, 14).
+/// A visible path's badge says "what you read is not the bytes there are".
+/// About the trimmed ones that cannot be said — it is not there to look
+/// at — but it can be said that there is something like that out there, and
+/// that is what decides whether expanding before approving is worth it. The
+/// terminal has always said so in its summary and this window did not, over
+/// the same paths (parity plan, 14).
 #[tokio::test]
-async fn el_resumen_de_una_aprobacion_delata_una_ruta_hostil_escondida() {
-    let falso = arbol_como_falso();
+async fn an_approvals_summary_gives_away_a_hidden_hostile_path() {
+    let fake = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
-    let backend = Arc::new(falso);
+    *fake.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(fake);
     let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = host.subscribe();
 
-    // Más rutas de las que el diálogo enseña, y la hostil en la COLA. El tope
-    // es del host y no se exporta; treinta pasa de largo de cualquier valor
-    // razonable, que es lo que hace falta.
+    // More paths than the dialog shows, with the hostile one at the TAIL.
+    // The ceiling belongs to the host and is not exported; thirty goes well
+    // past any reasonable value, which is what is needed.
     let mut paths: Vec<String> = (0..30).map(|i| format!("mem:///casa/f{i}")).collect();
-    let ultima = paths.len() - 1;
-    paths[ultima] = "mem:///casa/x\u{202E}y".to_owned();
+    let last = paths.len() - 1;
+    paths[last] = "mem:///casa/x\u{202E}y".to_owned();
     let total = paths.len() as u64;
 
     tx.send(norte_proto::methods::PolicyApprovalRequired {
@@ -2554,34 +2572,31 @@ async fn el_resumen_de_una_aprobacion_delata_una_ruta_hostil_escondida() {
         ttl_ms: 30_000,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
 
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = &dialogos[0];
-    assert!(
-        !d.overflow_note.is_empty(),
-        "la lista viene recortada: {d:?}"
-    );
+    let dialogs = siguientes_dialogos(&mut sub).await;
+    let d = &dialogs[0];
+    assert!(!d.overflow_note.is_empty(), "the list comes trimmed: {d:?}");
     assert!(
         d.body.iter().all(|l| !l.hostile),
-        "las que SE ENSEÑAN son todas limpias, así que el badge no viene de ahí: {:?}",
+        "the ones that ARE SHOWN are all clean, so the badge does not come from there: {:?}",
         d.body
     );
     assert!(
         d.overflow_hostile,
-        "y el resumen delata la que no se ve: {d:?}"
+        "and the summary gives away the one that is not visible: {d:?}"
     );
 }
 
-/// Denegar es lo que pasa por defecto: cualquier respuesta que no sea
-/// aprobar deniega, y cerrar el diálogo también. Dejar al agente esperando
-/// sería peor que decirle que no.
+/// Denying is the default: any answer that is not approving denies, and so
+/// does closing the dialog. Leaving the agent waiting would be worse than
+/// telling it no.
 #[tokio::test]
-async fn cualquier_respuesta_que_no_sea_aprobar_deniega() {
-    let falso = arbol_como_falso();
+async fn any_answer_other_than_approve_denies() {
+    let fake = arbol_como_falso();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
-    let backend = Arc::new(falso);
+    *fake.aprobaciones.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(fake);
     let (host, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = host.subscribe();
 
@@ -2594,7 +2609,7 @@ async fn cualquier_respuesta_que_no_sea_aprobar_deniega() {
         ttl_ms: 30_000,
         detail: norte_proto::methods::ApprovalDetail::default(),
     })
-    .expect("el host escucha");
+    .expect("the host is listening");
     let id = siguientes_dialogos(&mut sub).await[0].id;
 
     host.dispatch(UiAction::Dialog {
@@ -2603,31 +2618,31 @@ async fn cualquier_respuesta_que_no_sea_aprobar_deniega() {
         secret: None,
     })
     .await
-    .expect("host vivo");
-    hasta(&backend, "la decisión mandada", |f| {
+    .expect("host alive");
+    hasta(&backend, "the decision sent", |f| {
         (!f.decisiones.lock().expect("decisiones").is_empty()).then_some(())
     })
     .await;
     assert_eq!(
         backend.decisiones.lock().expect("decisiones").clone(),
         vec![(9, false)],
-        "se deniega, y se dice al daemon"
+        "it is denied, and the daemon is told"
     );
 }
 
-/// Con catálogo, un `attr:` numérico se pinta como lo que ES: un modo se lee
-/// `rwx`, no `33188`.
+/// With a catalogue, a numeric `attr:` is painted as what it IS: a mode
+/// reads `rwx`, not `33188`.
 #[tokio::test]
-async fn el_catalogo_da_sentido_a_un_attr() {
-    let falso = arbol_como_falso();
-    *falso.catalogo.lock().expect("catálogo") =
+async fn the_catalogue_gives_meaning_to_an_attr() {
+    let fake = arbol_como_falso();
+    *fake.catalogo.lock().expect("catálogo") =
         norte_proto::AttrCatalog::new(vec![norte_proto::attrs::AttrInfo {
             id: "posix.mode".to_owned(),
             label: "modo".to_owned(),
             ty: norte_proto::attrs::AttrType::Uint,
             hint: norte_proto::attrs::AttrHint::Mode,
         }]);
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (host, _snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
@@ -2649,24 +2664,25 @@ async fn el_catalogo_da_sentido_a_un_attr() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
 
-    // El catálogo llega después del primer listado y trae su propia foto.
+    // The catalogue arrives after the first listing and carries its own
+    // snapshot.
     let mut sub = host.subscribe();
-    let foto = siguiente_foto(&mut sub).await;
-    let fila = listado(&foto)
+    let snap = siguiente_foto(&mut sub).await;
+    let row = listado(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "notas.txt")
-        .expect("el fichero está");
-    let celda = fila
+        .expect("the file is there");
+    let cell = row
         .cells
         .iter()
         .find(|c| c.column == "attr:posix.mode")
-        .expect("la celda existe");
+        .expect("the cell exists");
     assert_eq!(
-        celda.text.as_deref(),
+        cell.text.as_deref(),
         Some("-rw-r--r--"),
-        "el catálogo convierte el número en un modo legible"
+        "the catalogue converts the number into a readable mode"
     );
 }

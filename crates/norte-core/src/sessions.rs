@@ -1,21 +1,21 @@
-//! Ciclo de vida de las sesiones remotas del Engine (#47, evolución de la
-//! fase 6e / ADR 0015): un [`SessionPool`] posee la caché de providers y le
-//! añade single-flight del connect, dial cancelable por drop, backoff de
-//! reconexión y evicción de sesiones muertas (con arrastre de los providers
-//! archive compuestos, #62).
+//! Lifecycle of the Engine's remote sessions (#47, an evolution of phase 6e
+//! / ADR 0015): a [`SessionPool`] owns the provider cache and adds
+//! single-flight connects, drop-cancelable dials, reconnect backoff and
+//! eviction of dead sessions (dragging along composed archive providers,
+//! #62).
 //!
-//! Contrato del ciclo de vida (ADR 0029):
-//! - **Perezoso**: sin health-checks de fondo ni TTL. Una sesión se evicta
-//!   cuando una operación devuelve [`Error::ProviderUnavailable`]; el
-//!   siguiente acceso reconecta.
-//! - **Single-flight**: dos peticiones concurrentes a la misma clave esperan
-//!   el MISMO dial (una sesión por clave, sin handshakes duplicados).
-//! - **Cancelable por drop**: los waiters llevan un guard RAII; cuando el
-//!   último se suelta a mitad del dial, el connect se cancela (compone con
-//!   `rpc.cancel`, #72 — dropear el dispatch suelta el waiter).
-//! - **Backoff**: un fallo `ProviderUnavailable` del dial entra en
-//!   negative-cache (1s, ×2, tope 30s); los errores accionables por el
-//!   usuario (TOFU, auth) JAMÁS se cachean.
+//! Lifecycle contract (ADR 0029):
+//! - **Lazy**: no background health-checks or TTL. A session is evicted
+//!   when an operation returns [`Error::ProviderUnavailable`]; the next
+//!   access reconnects.
+//! - **Single-flight**: two concurrent requests for the same key wait on
+//!   the SAME dial (one session per key, no duplicate handshakes).
+//! - **Drop-cancelable**: waiters carry an RAII guard; when the last one is
+//!   dropped mid-dial, the connect is cancelled (composes with
+//!   `rpc.cancel`, #72 — dropping the dispatch drops the waiter).
+//! - **Backoff**: a dial's `ProviderUnavailable` failure enters a
+//!   negative-cache (1s, ×2, 30s cap); errors actionable BY the user (TOFU,
+//!   auth) are NEVER cached.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -27,32 +27,32 @@ use norte_vfs::Provider;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
-/// Tope para ESTABLECER una conexión remota (dial+TOFU+auth+subsistema).
-/// Generoso a propósito: cubre redes lentas sin colgar indefinidamente.
+/// Cap for ESTABLISHING a remote connection (dial+TOFU+auth+subsystem).
+/// Generous on purpose: covers slow networks without hanging indefinitely.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// La caché de providers del Engine + el ciclo de vida de las sesiones
-/// remotas. Clon barato (Arc interno): los jobs de connect y los wrappers de
-/// evicción referencian el interior vía `Weak`.
+/// The Engine's provider cache + the remote sessions' lifecycle. Cheap to
+/// clone (internal Arc): connect jobs and eviction wrappers reference the
+/// interior via `Weak`.
 #[derive(Clone)]
 pub(crate) struct SessionPool {
     inner: Arc<PoolInner>,
 }
 
 struct PoolInner {
-    /// Clave: el scheme (`"file"`, providers de proceso), `scheme://authority`
-    /// (sesiones remotas; puede haber varias claves-alias para el MISMO Arc,
-    /// dedup canónica) o `fmt+scheme://authority` (archive compuestos).
+    /// Key: the scheme (`"file"`, process providers), `scheme://authority`
+    /// (remote sessions; there can be several alias keys for the SAME Arc,
+    /// canonical dedup) or `fmt+scheme://authority` (composed archives).
     providers: RwLock<HashMap<String, Arc<dyn Provider>>>,
-    /// Dials en vuelo, por clave de caché (single-flight).
+    /// Dials in flight, by cache key (single-flight).
     connecting: Mutex<HashMap<String, ConnectJob>>,
-    /// Negative-cache de fallos de dial (solo `ProviderUnavailable`).
+    /// Negative-cache of dial failures (`ProviderUnavailable` only).
     cooldown: Mutex<HashMap<String, Cooldown>>,
-    /// Ids únicos de job (el job solo limpia SU entrada de `connecting`).
+    /// Unique job ids (a job only cleans up ITS entry in `connecting`).
     next_job: AtomicU64,
 }
 
-/// Resultado compartido de un dial en vuelo.
+/// Shared result of an in-flight dial.
 type DialResult = Option<Result<Arc<dyn Provider>, Error>>;
 
 struct ConnectJob {
@@ -60,9 +60,10 @@ struct ConnectJob {
     rx: watch::Receiver<DialResult>,
     waiters: usize,
     cancel: CancellationToken,
-    /// Claves-alias que registrar junto a la canónica al publicar (la del
-    /// spawner + las de los waiters que se SUMARON al dial en vuelo con otra
-    /// forma de la misma identidad — rust MINOR-1 del review #47).
+    /// Alias keys to register alongside the canonical one when publishing
+    /// (the spawner's plus those of waiters who JOINED the in-flight dial
+    /// with another form of the same identity — rust MINOR-1 from review
+    /// #47).
     aliases: Vec<String>,
 }
 
@@ -70,22 +71,22 @@ struct Cooldown {
     until: tokio::time::Instant,
     next: Duration,
     last_err: Error,
-    /// El PORQUÉ del último fallo (#322), para poder repetirlo.
+    /// The WHY of the last failure (#322), so it can be repeated.
     ///
-    /// Sin esto, la explicación desaparecía justo cuando alguien la busca: el
-    /// humano lee «el agente SSH no pudo autenticar», vuelve a pulsar dentro
-    /// de la ventana de backoff, y el segundo intento se sirve de esta caché
-    /// sin marcar — así que no pasa por el observer y la respuesta vuelve a ser
-    /// la categoría pelada.
+    /// Without this, the explanation disappeared exactly when someone
+    /// looked for it: the human reads "the SSH agent couldn't authenticate",
+    /// presses again inside the backoff window, and the second attempt is
+    /// served from this cache with no flag — so it never goes through the
+    /// observer and the answer is the bare category again.
     last_causa: Option<Box<crate::connect::Causa>>,
 }
 
 const BACKOFF_INITIAL: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(30);
-/// Tope de entradas de la negative-cache (security MAJOR-3 del review #47):
-/// las claves las elige el caller (`scheme://authority` arbitrario) — sin
-/// tope, enumerar authorities infla memoria. Mismo orden que los topes
-/// anti-DoS del daemon (listings 256, scopes 256).
+/// Cap on negative-cache entries (security MAJOR-3 from review #47): the
+/// caller picks the keys (an arbitrary `scheme://authority`) — with no cap,
+/// enumerating authorities inflates memory. Same order as the daemon's
+/// anti-DoS caps (256 listings, 256 scopes).
 const COOLDOWN_MAX: usize = 256;
 
 impl SessionPool {
@@ -100,32 +101,33 @@ impl SessionPool {
         }
     }
 
-    /// Registra un provider de proceso bajo su scheme (pisa el anterior).
+    /// Registers a process provider under its scheme (overwrites the
+    /// previous one).
     pub(crate) fn register_process(&self, provider: Arc<dyn Provider>) {
         let scheme = provider.scheme().to_owned();
         self.inner
             .providers
             .write()
-            .expect("providers lock sano")
+            .expect("providers lock sound")
             .insert(scheme, provider);
     }
 
-    /// Cierra la sesión cacheada bajo `key` y los compuestos que colgaran de
-    /// ella (#140). Devuelve `true` si había algo que cerrar.
+    /// Closes the session cached under `key` and the composites hanging off
+    /// it (#140). Returns `true` if there was something to close.
     ///
-    /// Soltar el `Arc` ES cerrar: el provider remoto cierra su transporte en su
-    /// propio `Drop`, así que quitarlo del mapa basta —siempre que nadie más lo
-    /// tenga cogido, y una operación en vuelo lo tiene: esa termina con la
-    /// conexión que ya tenía, y es lo correcto. Lo que no vuelve a pasar es que
-    /// una petición NUEVA la reutilice.
+    /// Dropping the `Arc` IS closing: the remote provider closes its
+    /// transport in its own `Drop`, so removing it from the map is enough
+    /// —as long as nobody else is holding it, and an in-flight operation
+    /// is: that one finishes with the connection it already had, and
+    /// that's correct. What no longer happens is a NEW request reusing it.
     ///
-    /// Los compuestos de archivo (`fmt+key`) se barren con ella por la misma
-    /// razón que en una evicción: el wrapper de archivo cachea el `Arc` de la
-    /// sesión, y dejarlo vivo sería servir el índice de una conexión muerta
-    /// (#62).
+    /// Archive composites (`fmt+key`) are swept along with it for the same
+    /// reason as in an eviction: the archive wrapper caches the session's
+    /// `Arc`, and leaving it alive would serve the index of a dead
+    /// connection (#62).
     pub(crate) fn close(&self, key: &str) -> bool {
-        let mut providers = self.inner.providers.write().expect("providers lock sano");
-        let compuestos: Vec<String> = providers
+        let mut providers = self.inner.providers.write().expect("providers lock sound");
+        let composites: Vec<String> = providers
             .keys()
             .filter(|ck| {
                 ck.len() > key.len() + 1
@@ -134,29 +136,29 @@ impl SessionPool {
             })
             .cloned()
             .collect();
-        let habia = providers.remove(key).is_some();
-        for ck in compuestos {
+        let had = providers.remove(key).is_some();
+        for ck in composites {
             providers.remove(&ck);
         }
-        habia
+        had
     }
 
-    /// El provider cacheado bajo `key`, si lo hay.
+    /// The provider cached under `key`, if any.
     pub(crate) fn lookup(&self, key: &str) -> Option<Arc<dyn Provider>> {
         self.inner
             .providers
             .read()
-            .expect("providers lock sano")
+            .expect("providers lock sound")
             .get(key)
             .map(Arc::clone)
     }
 
-    /// Inserta un provider compuesto (archive) con double-check: si otra
-    /// petición registró primero, gana la suya (el extra solo es RAM). El
-    /// compuesto entra ENVUELTO en su propio [`SessionProvider`]: si el
-    /// barrido de una evicción se lo salta (carrera compose-vs-evict,
-    /// security MAJOR-2), un compuesto zombi sobre una sesión muerta se
-    /// auto-evicta a la primera operación fallida — jamás inmortal.
+    /// Inserts a composite (archive) provider with a double-check: if
+    /// another request registered first, theirs wins (the extra is only
+    /// RAM). The composite enters WRAPPED in its own [`SessionProvider`]:
+    /// if an eviction's sweep skips it (compose-vs-evict race, security
+    /// MAJOR-2), a zombie composite over a dead session self-evicts on its
+    /// first failed operation — never immortal.
     pub(crate) fn insert_composite(
         &self,
         key: String,
@@ -167,21 +169,21 @@ impl SessionPool {
             key: key.clone(),
             pool: Arc::downgrade(&self.inner),
         });
-        let mut providers = self.inner.providers.write().expect("providers lock sano");
+        let mut providers = self.inner.providers.write().expect("providers lock sound");
         let entry = providers.entry(key).or_insert(wrapped);
         Arc::clone(entry)
     }
 
-    /// Registra `alias_key` → la sesión VIGENTE de `canonical_key` y la
-    /// devuelve; `None` si la canónica ya no está (evictada entre el lookup
-    /// del caller y aquí — security MAJOR-2: jamás re-insertar un Arc muerto
-    /// que el caller retenga de un lookup viejo).
+    /// Registers `alias_key` → `canonical_key`'s CURRENT session and
+    /// returns it; `None` if the canonical one is no longer there (evicted
+    /// between the caller's lookup and here — security MAJOR-2: never
+    /// re-insert a dead Arc the caller is holding from an old lookup).
     pub(crate) fn alias_current(
         &self,
         canonical_key: &str,
         alias_key: String,
     ) -> Option<Arc<dyn Provider>> {
-        let mut providers = self.inner.providers.write().expect("providers lock sano");
+        let mut providers = self.inner.providers.write().expect("providers lock sound");
         let current = Arc::clone(providers.get(canonical_key)?);
         providers
             .entry(alias_key)
@@ -189,20 +191,20 @@ impl SessionPool {
         Some(current)
     }
 
-    /// Establece (o espera) la sesión remota de `cache_key` — el corazón del
-    /// ciclo de vida (#47).
+    /// Establishes (or waits for) `cache_key`'s remote session — the heart
+    /// of the lifecycle (#47).
     ///
-    /// Single-flight: si ya hay un dial en vuelo para la clave, esta llamada
-    /// se SUBSCRIBE y espera su resultado. Si no, spawnea el job de dial
-    /// (timeout [`CONNECT_TIMEOUT`]). Dropear el future de esta función
-    /// suelta el waiter; cuando cae el último, el dial se cancela.
+    /// Single-flight: if a dial is already in flight for the key, this call
+    /// SUBSCRIBES and waits for its result. If not, it spawns the dial job
+    /// (timeout [`CONNECT_TIMEOUT`]). Dropping this function's future drops
+    /// the waiter; when the last one falls, the dial is cancelled.
     ///
-    /// `alias`: clave extra bajo la que registrar la MISMA sesión al
-    /// conectar (dedup canónica: la forma que pidió el caller).
+    /// `alias`: an extra key to register the SAME session under once
+    /// connected (canonical dedup: the form the caller asked for).
     ///
     /// # Errors
-    /// Los del dial; un fallo `ProviderUnavailable` reciente se responde
-    /// desde la negative-cache sin volver a marcar (backoff).
+    /// The dial's; a recent `ProviderUnavailable` failure is answered from
+    /// the negative-cache without flagging again (backoff).
     pub(crate) async fn connect_remote(
         &self,
         cache_key: String,
@@ -212,23 +214,24 @@ impl SessionPool {
         connector: Arc<dyn crate::connect::RemoteConnector>,
         observer: Option<Arc<dyn crate::connect::ConnectionObserver>>,
     ) -> Result<Arc<dyn Provider>, Error> {
-        // Backoff: un fallo transitorio reciente responde cacheado (jamás
-        // los errores accionables — TOFU/auth no entran en cooldown). De
-        // paso PODA las entradas muertas (tope COOLDOWN_MAX, sec MAJOR-3) y
-        // DECAE el backoff de una clave que lleva mucho sin fallar (rust
-        // MINOR-2: dos fallos separados por horas no son consecutivos).
+        // Backoff: a recent transient failure answers from cache (never
+        // actionable errors — TOFU/auth never enter cooldown). Along the
+        // way it PRUNES dead entries (COOLDOWN_MAX cap, sec MAJOR-3) and
+        // DECAYS the backoff of a key that's gone a long time without
+        // failing (rust MINOR-2: two failures hours apart aren't
+        // consecutive).
         {
             let now = tokio::time::Instant::now();
-            let mut cooldown = self.inner.cooldown.lock().expect("cooldown lock sano");
+            let mut cooldown = self.inner.cooldown.lock().expect("cooldown lock sound");
             cooldown.retain(|_, c| now < c.until + BACKOFF_MAX);
             if let Some(c) = cooldown.get_mut(&cache_key) {
                 if now < c.until {
                     let err = c.last_err.clone();
-                    let causa = c.last_causa.clone();
-                    // Fuera del lock: el observer es código ajeno, y esta es la
-                    // misma regla que en el camino normal.
+                    let cause = c.last_causa.clone();
+                    // Outside the lock: the observer is foreign code, and
+                    // this is the same rule as the normal path.
                     drop(cooldown);
-                    contar_el_fallo(observer.as_ref(), scheme, authority, causa);
+                    count_the_failure(observer.as_ref(), scheme, authority, cause);
                     return Err(err);
                 }
                 if now > c.until + c.next {
@@ -237,23 +240,24 @@ impl SessionPool {
             }
         }
         let (mut rx, _guard) = {
-            let mut connecting = self.inner.connecting.lock().expect("connecting lock sano");
-            // Double-check bajo el lock (orden connecting→providers, fijo):
-            // un job pudo publicar entre el fast path del caller y aquí —
-            // sin esto, el segundo caller re-marcaría un handshake de más.
+            let mut connecting = self.inner.connecting.lock().expect("connecting lock sound");
+            // Double-check under the lock (fixed connecting→providers
+            // order): a job may have published between the caller's fast
+            // path and here — without this, the second caller would flag
+            // one extra handshake.
             if let Some(prov) = self
                 .inner
                 .providers
                 .read()
-                .expect("providers lock sano")
+                .expect("providers lock sound")
                 .get(&cache_key)
             {
                 return Ok(Arc::clone(prov));
             }
             if let Some(job) = connecting.get_mut(&cache_key) {
                 job.waiters += 1;
-                // El waiter que se SUMA aporta su forma-alias: se registra
-                // al publicar (rust MINOR-1).
+                // The waiter that JOINS contributes its alias form: it's
+                // registered when published (rust MINOR-1).
                 if let Some(a) = alias
                     && a != cache_key
                     && !job.aliases.contains(&a)
@@ -308,21 +312,23 @@ impl SessionPool {
                 return result;
             }
             if rx.changed().await.is_err() {
-                // El job murió sin publicar. Con el guard por-id (BLOCKER
-                // del review), un job con waiters vivos ya no puede ser
-                // cancelado por un guard rancio: si el tx cayó sin publicar
-                // teniendo nosotros un waiter vivo, el job PANICÓ de verdad.
+                // The job died without publishing. With the per-id guard
+                // (BLOCKER from the review), a job with live waiters can no
+                // longer be cancelled by a stale guard: if the tx dropped
+                // with no publish while we had a live waiter, the job
+                // REALLY panicked.
                 return Err(Error::Internal { panic: true });
             }
         }
     }
 }
 
-/// Waiter RAII de un dial en vuelo: al caer el ÚLTIMO, cancela el job y
-/// limpia la entrada (atómico bajo el lock de `connecting` — un waiter nuevo
-/// jamás ve un job ya cancelado). Lleva el `id` del job al que se suscribió:
-/// un guard rancio (su job ya terminó) JAMÁS descuenta waiters de un job
-/// nuevo bajo la misma clave (BLOCKER del review #47).
+/// RAII waiter for an in-flight dial: when the LAST one falls, it cancels
+/// the job and cleans up the entry (atomic under `connecting`'s lock — a
+/// new waiter never sees an already-cancelled job). Carries the `id` of the
+/// job it subscribed to: a stale guard (its job already finished) NEVER
+/// decrements waiters of a new job under the same key (BLOCKER from review
+/// #47).
 struct WaiterGuard {
     pool: Arc<PoolInner>,
     key: String,
@@ -331,7 +337,7 @@ struct WaiterGuard {
 
 impl Drop for WaiterGuard {
     fn drop(&mut self) {
-        let mut connecting = self.pool.connecting.lock().expect("connecting lock sano");
+        let mut connecting = self.pool.connecting.lock().expect("connecting lock sound");
         if let Some(job) = connecting.get_mut(&self.key)
             && job.id == self.id
         {
@@ -344,7 +350,7 @@ impl Drop for WaiterGuard {
     }
 }
 
-/// Todo lo que necesita el job de dial (spawneado: sobrevive a los waiters).
+/// Everything the dial job needs (spawned: outlives the waiters).
 struct DialJob {
     pool: Weak<PoolInner>,
     id: u64,
@@ -357,15 +363,16 @@ struct DialJob {
     tx: watch::Sender<DialResult>,
 }
 
-/// #322: cuenta POR QUÉ no se pudo conectar, si se puede contar.
+/// #322: counts WHY it couldn't connect, if that can be counted.
 ///
-/// Es el punto donde la causa —que la sabe quien atrapó el `ConnectError`— se
-/// junta con el destino —que lo sabe este job—, y hasta ahora el porqué se
-/// quedaba en el log del daemon: el humano leía «permiso denegado» y nada más.
+/// This is the point where the cause —known by whoever caught the
+/// `ConnectError`— meets the destination —known by this job—, and until now
+/// the why stayed in the daemon's log: the human read "permission denied"
+/// and nothing else.
 ///
-/// Se llama FUERA de los locks del pool, como los avisos de #44: el observer
-/// es código ajeno y no se le sostiene un lock mientras corre.
-fn contar_el_fallo(
+/// Called OUTSIDE the pool's locks, like #44's notices: the observer is
+/// foreign code and no lock is held for it while it runs.
+fn count_the_failure(
     observer: Option<&Arc<dyn crate::connect::ConnectionObserver>>,
     scheme: &str,
     authority: &str,
@@ -377,11 +384,12 @@ fn contar_el_fallo(
     obs.on_connection_failure(&crate::connect::ConnectionFailure {
         conn: causa.conn,
         scheme: scheme.to_owned(),
-        // La authority SIN userinfo (regla 10): lo que va delante del ÚLTIMO
-        // `@` es el usuario, y no sale. Mismo criterio de «el último» que usan
-        // `Authority::new` y `parse_endpoint`, así que `a@b@c` da `c` en los
-        // tres sitios. El puerto SÍ se queda: esto es un diagnóstico, y a qué
-        // puerto no se pudo entrar es parte de la respuesta.
+        // The authority WITHOUT userinfo (rule 10): whatever comes before
+        // the LAST `@` is the user, and it doesn't go out. Same "the last
+        // one" criterion `Authority::new` and `parse_endpoint` use, so
+        // `a@b@c` gives `c` in all three places. The port DOES stay: this
+        // is a diagnostic, and which port couldn't be reached is part of
+        // the answer.
         host: authority.rsplit('@').next().unwrap_or(authority).to_owned(),
         reason: causa.reason,
         detail: causa.detail,
@@ -396,36 +404,37 @@ fn spawn_dial_job(job: DialJob) {
                 CONNECT_TIMEOUT,
                 job.connector.connect(&job.scheme, &job.authority),
             ) => Some(r.unwrap_or_else(|_| {
-                tracing::warn!(scheme = %job.scheme, "timeout estableciendo la conexión remota");
+                tracing::warn!(scheme = %job.scheme, "timeout establishing the remote connection");
                 Err(Error::ProviderUnavailable { retryable: true }.into())
             })),
         };
         let Some(pool) = job.pool.upgrade() else {
-            return; // el Engine murió: nada que registrar
+            return; // the Engine died: nothing to register
         };
         match dialed {
-            // Abandonado: el último WaiterGuard ya canceló Y limpió la
-            // entrada bajo el lock — aquí no queda nada que hacer.
+            // Abandoned: the last WaiterGuard already cancelled AND cleaned
+            // up the entry under the lock — nothing left to do here.
             None => {}
             Some(Ok(connected)) => {
-                // La sesión entra al pool ENVUELTA: se auto-evicta cuando
-                // una operación la encuentre muerta (ProviderUnavailable).
+                // The session enters the pool WRAPPED: it self-evicts when
+                // an operation finds it dead (ProviderUnavailable).
                 let provider: Arc<dyn Provider> = Arc::new(SessionProvider {
                     inner: connected.provider,
                     key: job.cache_key.clone(),
                     pool: job.pool.clone(),
                 });
-                // Publica SOLO si este job sigue vigente (sec MINOR-3: un
-                // job abandonado cuyo select! tomó el brazo del connect no
-                // pisa la sesión de un job de reemplazo). Orden de locks
-                // FIJO del pool: connecting → providers → cooldown.
-                let mut connecting = pool.connecting.lock().expect("connecting lock sano");
+                // Publishes ONLY if this job is still current (sec
+                // MINOR-3: an abandoned job whose select! took the connect
+                // arm doesn't clobber a replacement job's session). The
+                // pool's FIXED lock order: connecting → providers →
+                // cooldown.
+                let mut connecting = pool.connecting.lock().expect("connecting lock sound");
                 let current = connecting
                     .get(&job.cache_key)
                     .is_some_and(|j| j.id == job.id);
                 if !current {
-                    // Reemplazado/abandonado: la sesión recién nacida se
-                    // suelta (Drop cierra) y nadie escucha el tx.
+                    // Replaced/abandoned: the freshly born session is
+                    // dropped (Drop closes it) and nobody listens to tx.
                     return;
                 }
                 let aliases = connecting
@@ -433,7 +442,7 @@ fn spawn_dial_job(job: DialJob) {
                     .map(|j| j.aliases.clone())
                     .unwrap_or_default();
                 {
-                    let mut providers = pool.providers.write().expect("providers lock sano");
+                    let mut providers = pool.providers.write().expect("providers lock sound");
                     providers.insert(job.cache_key.clone(), Arc::clone(&provider));
                     for a in aliases {
                         providers.insert(a, Arc::clone(&provider));
@@ -441,12 +450,12 @@ fn spawn_dial_job(job: DialJob) {
                 }
                 pool.cooldown
                     .lock()
-                    .expect("cooldown lock sano")
+                    .expect("cooldown lock sound")
                     .remove(&job.cache_key);
                 connecting.remove(&job.cache_key);
                 drop(connecting);
-                // #44: avisos UNA vez por establecimiento publicado (fuera
-                // de los locks: el observer es código ajeno).
+                // #44: notices ONCE per published establishment (outside
+                // the locks: the observer is foreign code).
                 if let Some(obs) = &job.observer {
                     for w in &connected.warnings {
                         obs.on_connection_warning(w);
@@ -456,17 +465,18 @@ fn spawn_dial_job(job: DialJob) {
             }
             Some(Err(dial)) => {
                 let crate::connect::DialError { error: e, causa } = dial;
-                let mut connecting = pool.connecting.lock().expect("connecting lock sano");
+                let mut connecting = pool.connecting.lock().expect("connecting lock sound");
                 let current = connecting
                     .get(&job.cache_key)
                     .is_some_and(|j| j.id == job.id);
                 if current {
-                    // El cooldown se fija ANTES de soltar la entrada (bajo
-                    // el mismo lock): un re-dial no puede colarse en la
-                    // ventana sin ver la negative-cache. Solo un job VIGENTE
-                    // escala el backoff (un job abandonado que muere tarde
-                    // no castiga el próximo intento del usuario).
-                    let mut cooldown = pool.cooldown.lock().expect("cooldown lock sano");
+                    // The cooldown is set BEFORE dropping the entry (under
+                    // the same lock): a re-dial cannot sneak into the
+                    // window without seeing the negative-cache. Only a
+                    // CURRENT job escalates the backoff (an abandoned job
+                    // that dies late doesn't punish the user's next
+                    // attempt).
+                    let mut cooldown = pool.cooldown.lock().expect("cooldown lock sound");
                     if matches!(e, Error::ProviderUnavailable { .. }) {
                         let now = tokio::time::Instant::now();
                         if cooldown.len() >= COOLDOWN_MAX
@@ -476,7 +486,7 @@ fn spawn_dial_job(job: DialJob) {
                                 .min_by_key(|(_, c)| c.until)
                                 .map(|(k, _)| k.clone())
                         {
-                            // Tope: cae la entrada más antigua (sec MAJOR-3).
+                            // Cap: the oldest entry falls (sec MAJOR-3).
                             cooldown.remove(&oldest);
                         }
                         let entry = cooldown.entry(job.cache_key.clone()).or_insert(Cooldown {
@@ -488,28 +498,29 @@ fn spawn_dial_job(job: DialJob) {
                         entry.until = now + entry.next;
                         entry.next = (entry.next * 2).min(BACKOFF_MAX);
                         entry.last_err = e.clone();
-                        // #322: y el porqué, para poder repetirlo mientras
-                        // esta entrada sirva el error sin volver a marcar.
+                        // #322: and the why, so it can be repeated while
+                        // this entry serves the error with no new flag.
                         entry.last_causa.clone_from(&causa);
                     } else {
-                        // Error accionable (TOFU, auth, path): sin cooldown —
-                        // el usuario corrige y reintenta al instante.
+                        // Actionable error (TOFU, auth, path): no cooldown
+                        // — the user fixes it and retries instantly.
                         cooldown.remove(&job.cache_key);
                     }
                     drop(cooldown);
                     connecting.remove(&job.cache_key);
                 }
                 drop(connecting);
-                // #322: se CUENTA por qué, y SOLO si este job seguía vigente
-                // — el mismo criterio que los avisos de #44 de arriba. Un job
-                // abandonado (el humano se fue) o reemplazado por otro no
-                // tiene a nadie esperando su respuesta, y su aviso saldría en
-                // la barra de alguien que no había pedido nada.
+                // #322: the why gets COUNTED, and ONLY if this job was
+                // still current — the same criterion as #44's notices
+                // above. An abandoned job (the human left) or one replaced
+                // by another has nobody waiting on its answer, and its
+                // notice would show up in someone's bar who never asked
+                // for anything.
                 //
-                // Fuera de los locks, también como #44: el observer es código
-                // ajeno y no se le sostiene un lock mientras corre.
+                // Outside the locks, also like #44: the observer is
+                // foreign code and no lock is held for it while it runs.
                 if current {
-                    contar_el_fallo(job.observer.as_ref(), &job.scheme, &job.authority, causa);
+                    count_the_failure(job.observer.as_ref(), &job.scheme, &job.authority, causa);
                 }
                 let _ = job.tx.send(Some(Err(e)));
             }
@@ -518,33 +529,34 @@ fn spawn_dial_job(job: DialJob) {
 }
 
 impl PoolInner {
-    /// Evicta TODA entrada cuyo Arc sea exactamente el wrapper que lo pide
-    /// (ptr-driven: una sesión más nueva bajo cualquier clave jamás se pisa,
-    /// y un alias huérfano cuya canónica ya cayó TAMBIÉN se barre — sec
-    /// MAJOR-2: sin esto, un alias re-insertado por una carrera quedaba
-    /// muerto para siempre). Arrastra los providers archive compuestos
-    /// sobre las claves barridas Y sobre `key` (`{fmt}+{clave}`, #62 — el
-    /// wrapper de archivo cachea el Arc de la sesión: dejarlo sería servir
-    /// un índice de una conexión muerta).
+    /// Evicts EVERY entry whose Arc is exactly the wrapper requesting it
+    /// (ptr-driven: a newer session under any key is never clobbered, and
+    /// an orphaned alias whose canonical already fell is ALSO swept — sec
+    /// MAJOR-2: without this, an alias re-inserted by a race stayed dead
+    /// forever). Drags along composed archive providers over the swept
+    /// keys AND over `key` (`{fmt}+{key}`, #62 — the archive wrapper caches
+    /// the session's Arc: leaving it would serve an index from a dead
+    /// connection).
     fn evict_session(&self, key: &str, wrapper_ptr: *const ()) {
-        let mut providers = self.providers.write().expect("providers lock sano");
+        let mut providers = self.providers.write().expect("providers lock sound");
         let mut swept_keys: Vec<String> = providers
             .iter()
             .filter(|(_, v)| Arc::as_ptr(v).cast::<()>() == wrapper_ptr)
             .map(|(k, _)| k.clone())
             .collect();
         if swept_keys.is_empty() {
-            // Evicción rancia (una sesión nueva ya vive bajo estas claves):
-            // sin barrido de sesión, pero los compuestos sobre `key` que
-            // envuelvan ESTE wrapper se limpian vía su propio wrapper
-            // (insert_composite envuelve — se auto-evictan al fallar).
+            // Stale eviction (a new session already lives under these
+            // keys): no session sweep, but composites over `key` wrapping
+            // THIS wrapper get cleaned up via their own wrapper
+            // (insert_composite wraps — they self-evict on failure).
             return;
         }
         for k in &swept_keys {
             providers.remove(k);
         }
-        // Base del barrido de compuestos: las claves barridas + la canónica
-        // del wrapper (cubre el alias barrido cuya canónica ya no estaba).
+        // Base for the composite sweep: the swept keys + the wrapper's
+        // canonical one (covers a swept alias whose canonical was already
+        // gone).
         if !swept_keys.iter().any(|k| k == key) {
             swept_keys.push(key.to_owned());
         }
@@ -553,8 +565,8 @@ impl PoolInner {
             .filter(|ck| {
                 swept_keys.iter().any(|k| {
                     ck.len() > k.len() + 1 && ck.ends_with(k) && {
-                        // sufijo `+{k}` exacto (el scheme compuesto es
-                        // `fmt+scheme`): evita falsos positivos.
+                        // exact `+{k}` suffix (the composite scheme is
+                        // `fmt+scheme`): avoids false positives.
                         ck.as_bytes()[ck.len() - k.len() - 1] == b'+'
                     }
                 })
@@ -565,17 +577,17 @@ impl PoolInner {
             providers.remove(ck);
         }
         tracing::warn!(
-            clave = %redact_key(key),
-            barridas = swept_keys.len(),
-            compuestos = composite_keys.len(),
-            "sesión remota evictada (ProviderUnavailable); el siguiente acceso reconecta"
+            key = %redact_key(key),
+            swept = swept_keys.len(),
+            composites = composite_keys.len(),
+            "remote session evicted (ProviderUnavailable); the next access reconnects"
         );
     }
 }
 
-/// `scheme://user@host` → `scheme://host` para logs (regla 10: el userinfo
-/// jamás entra al log — misma convención que `ConnectionWarning.host`). El
-/// corte usa el ÚLTIMO `@` (regla de #46: lo anterior es userinfo).
+/// `scheme://user@host` → `scheme://host` for logs (rule 10: userinfo never
+/// enters the log — same convention as `ConnectionWarning.host`). The cut
+/// uses the LAST `@` (rule from #46: whatever's before is userinfo).
 fn redact_key(key: &str) -> String {
     match key.split_once("://") {
         Some((scheme, auth)) => match auth.rfind('@') {
@@ -586,16 +598,17 @@ fn redact_key(key: &str) -> String {
     }
 }
 
-/// Envuelve la sesión remota cacheada: si una operación devuelve
-/// [`Error::ProviderUnavailable`], se auto-evicta del pool (la sesión está
-/// muerta; el siguiente acceso reconecta). El error se propaga TAL CUAL.
+/// Wraps the cached remote session: if an operation returns
+/// [`Error::ProviderUnavailable`], it self-evicts from the pool (the
+/// session is dead; the next access reconnects). The error propagates AS
+/// IS.
 ///
-/// v1: solo los `Result` de las LLAMADAS evictan — un error dentro de un
-/// stream (`list`/`read`) o sink ya entregado no llega aquí (la siguiente
-/// llamada directa sobre la sesión muerta sí evicta).
+/// v1: only the `Result`s of CALLS evict — an error inside an already
+/// delivered stream (`list`/`read`) or sink doesn't reach here (the next
+/// direct call on the dead session does evict).
 struct SessionProvider {
     inner: Arc<dyn Provider>,
-    /// La clave CANÓNICA bajo la que vive en el pool.
+    /// The CANONICAL key it lives under in the pool.
     key: String,
     pool: Weak<PoolInner>,
 }
@@ -632,12 +645,13 @@ impl Provider for SessionProvider {
         &self,
         root: &norte_proto::VPath,
     ) -> Result<Box<dyn norte_vfs::ConfinedRoot>, Error> {
-        // `Unsupported` NO evicta: es la respuesta honesta de un backend que no
-        // sabe confinar (sftp, object, archive), no el síntoma de una sesión
-        // muerta. Cualquier otro error sí, como en el resto del wrapper.
+        // `Unsupported` does NOT evict: it's the honest answer of a backend
+        // that doesn't know how to confine (sftp, object, archive), not the
+        // symptom of a dead session. Any other error does, like the rest of
+        // the wrapper.
         match self.inner.open_root(root).await {
             Err(Error::Unsupported) => Err(Error::Unsupported),
-            otro => self.observe(otro),
+            other => self.observe(other),
         }
     }
     async fn stat(&self, p: &norte_proto::VPath) -> Result<norte_proto::Entry, Error> {
@@ -688,7 +702,7 @@ impl Provider for SessionProvider {
         self.observe(self.inner.trash(p, id).await)
     }
     fn trash_restorable(&self) -> bool {
-        // Propiedad del provider envuelto, sin I/O que observar.
+        // Property of the wrapped provider, no I/O to observe.
         self.inner.trash_restorable()
     }
     async fn restore_from(
@@ -766,16 +780,18 @@ mod tests {
         Error::ProviderUnavailable { retryable: true }
     }
 
-    /// Provider cuyo TODO devuelve `ProviderUnavailable` (sesión muerta):
-    /// pinea que el wrapper delega y evicta en CADA método del trait.
+    /// A provider whose EVERYTHING returns `ProviderUnavailable` (dead
+    /// session): pins that the wrapper delegates and evicts on EVERY trait
+    /// method.
     struct AllPu;
 
     #[async_trait::async_trait]
     impl Provider for AllPu {
-        // La firma la fija el trait (&self → &str): el literal es del test.
+        // The signature is fixed by the trait (&self → &str): the literal
+        // is the test's.
         #[expect(
             clippy::unnecessary_literal_bound,
-            reason = "La firma la fija el trait (&self → &str): el literal es del test"
+            reason = "The signature is fixed by the trait (&self → &str): the literal is the test's"
         )]
         fn scheme(&self) -> &str {
             "sftp"
@@ -796,7 +812,7 @@ mod tests {
             Err(pu())
         }
         fn attrs(&self) -> &[norte_proto::AttrInfo] {
-            static UNO: std::sync::LazyLock<Vec<norte_proto::AttrInfo>> =
+            static ONE: std::sync::LazyLock<Vec<norte_proto::AttrInfo>> =
                 std::sync::LazyLock::new(|| {
                     vec![norte_proto::AttrInfo {
                         id: "allpu.x".into(),
@@ -805,10 +821,10 @@ mod tests {
                         hint: norte_proto::AttrHint::Opaque,
                     }]
                 });
-            &UNO
+            &ONE
         }
-        // `true` para que el default del trait (`false`) NO pueda hacer pasar
-        // la aserción de delegación.
+        // `true` so the trait's default (`false`) CANNOT pass the
+        // delegation assertion.
         fn trash_restorable(&self) -> bool {
             true
         }
@@ -911,7 +927,7 @@ mod tests {
         pool.inner
             .providers
             .write()
-            .expect("lock de test")
+            .expect("test lock")
             .insert(key.to_owned(), Arc::clone(w));
     }
 
@@ -919,31 +935,33 @@ mod tests {
         pool.inner
             .providers
             .read()
-            .expect("lock de test")
+            .expect("test lock")
             .contains_key(key)
     }
 
-    /// sec MAJOR-2 (review #47): un alias HUÉRFANO (su canónica ya cayó del
-    /// mapa) también se barre — la evicción es ptr-driven, sin gate por
-    /// clave — y arrastra los compuestos colgados de esa forma (#62).
+    /// sec MAJOR-2 (review #47): an ORPHANED alias (its canonical already
+    /// fell out of the map) also gets swept — the eviction is ptr-driven,
+    /// with no per-key gate — and drags along the composites hanging off
+    /// that form (#62).
     #[tokio::test]
-    async fn alias_huerfano_se_barre_ptr_driven() {
+    async fn an_orphaned_alias_is_swept_ptr_driven() {
         let pool = SessionPool::new();
         let w = wrapper(&pool, "sftp://oscar@h");
-        // Vive SOLO bajo la forma alias; la canónica no está en el mapa.
+        // Lives ONLY under the alias form; the canonical isn't in the map.
         insert(&pool, "sftp://h", &w);
         let comp: Arc<dyn Provider> = Arc::new(AllPu);
         insert(&pool, "zip+sftp://h", &comp);
 
         let _ = w.stat(&VPath::parse("sftp://h/x").expect("wire")).await;
-        assert!(!contains(&pool, "sftp://h"), "alias barrido");
-        assert!(!contains(&pool, "zip+sftp://h"), "compuesto arrastrado");
+        assert!(!contains(&pool, "sftp://h"), "alias swept");
+        assert!(!contains(&pool, "zip+sftp://h"), "composite dragged along");
     }
 
-    /// `alias_current` con la canónica ausente NO re-inserta nada (el Arc
-    /// muerto que el caller retenga de un lookup viejo jamás vuelve al mapa).
+    /// `alias_current` with the canonical missing does NOT re-insert
+    /// anything (a dead Arc the caller is holding from an old lookup never
+    /// comes back to the map).
     #[test]
-    fn alias_current_sin_canonica_es_none() {
+    fn alias_current_with_no_canonical_is_none() {
         let pool = SessionPool::new();
         assert!(
             pool.alias_current("sftp://oscar@h", "sftp://h".to_owned())
@@ -952,66 +970,69 @@ mod tests {
         assert!(!contains(&pool, "sftp://h"));
     }
 
-    /// Una evicción RANCIA (otro Arc ya vive bajo la clave) no toca nada.
+    /// A STALE eviction (another Arc already lives under the key) touches
+    /// nothing.
     #[tokio::test]
-    async fn eviccion_rancia_no_pisa_la_sesion_nueva() {
+    async fn a_stale_eviction_does_not_clobber_the_new_session() {
         let pool = SessionPool::new();
-        let viejo = wrapper(&pool, "sftp://h");
-        let nuevo = wrapper(&pool, "sftp://h");
-        insert(&pool, "sftp://h", &nuevo);
-        // El VIEJO (ya fuera del mapa) falla y pide evicción: no barre.
-        let _ = viejo.stat(&VPath::parse("sftp://h/x").expect("wire")).await;
-        assert!(contains(&pool, "sftp://h"), "la sesión nueva sigue");
+        let old = wrapper(&pool, "sftp://h");
+        let new_session = wrapper(&pool, "sftp://h");
+        insert(&pool, "sftp://h", &new_session);
+        // The OLD one (already out of the map) fails and requests eviction:
+        // it doesn't sweep.
+        let _ = old.stat(&VPath::parse("sftp://h/x").expect("wire")).await;
+        assert!(contains(&pool, "sftp://h"), "the new session survives");
     }
 
-    /// rust MINOR-3 (review #47): TODA la superficie del trait delega en el
-    /// interior y OBSERVA el error — cada método sobre una sesión muerta
-    /// evicta la clave. Si un método nuevo del trait no se delega, este test
-    /// es el recordatorio (junto al comentario en el trait).
+    /// rust MINOR-3 (review #47): the ENTIRE trait surface delegates to the
+    /// interior and OBSERVES the error — every method over a dead session
+    /// evicts the key. If a new trait method isn't delegated, this test is
+    /// the reminder (alongside the comment on the trait).
     #[tokio::test]
-    async fn wrapper_observa_todos_los_metodos() {
+    async fn the_wrapper_observes_every_method() {
         let pool = SessionPool::new();
         let key = "sftp://h";
         let p = VPath::parse("sftp://h/x").expect("wire");
         let w = wrapper(&pool, key);
 
-        macro_rules! evicta {
-            ($llamada:expr) => {{
+        macro_rules! evicts {
+            ($call:expr) => {{
                 insert(&pool, key, &w);
-                let _ = $llamada;
-                assert!(!contains(&pool, key), stringify!($llamada));
+                let _ = $call;
+                assert!(!contains(&pool, key), stringify!($call));
             }};
         }
 
-        evicta!(w.capabilities_at(&p).await);
-        evicta!(w.open_root(&p).await);
-        evicta!(w.stat(&p).await);
-        evicta!(w.stat_with(&p, &norte_vfs::ListOptions::default()).await);
-        evicta!(w.list(&p).await);
-        evicta!(w.list_with(&p, &norte_vfs::ListOptions::default()).await);
-        evicta!(w.list_skipped(&p).await);
-        evicta!(w.read(&p, None).await);
-        evicta!(w.node_id(&p, norte_vfs::FollowLinks::No).await);
-        evicta!(w.read_link(&p).await);
-        evicta!(w.trash(&p, &norte_vfs::trash::TrashId::new(0, 0)).await);
-        evicta!(w.gc_partials(&p, Duration::from_secs(1)).await);
-        evicta!(w.restore_trashed(&p).await);
-        evicta!(w.symlink(&p, b"t", norte_vfs::SymlinkKind::File).await);
-        evicta!(w.write(&p).await);
-        evicta!(w.open_resumable(&p).await);
-        evicta!(w.partial_digest(&p, 0).await);
-        evicta!(w.mkdir(&p).await);
-        evicta!(w.remove(&p).await);
-        evicta!(w.rename(&p, &p).await);
-        evicta!(w.restore_from(&p, &p).await);
-        evicta!(w.copy_native(&p, &p).await);
+        evicts!(w.capabilities_at(&p).await);
+        evicts!(w.open_root(&p).await);
+        evicts!(w.stat(&p).await);
+        evicts!(w.stat_with(&p, &norte_vfs::ListOptions::default()).await);
+        evicts!(w.list(&p).await);
+        evicts!(w.list_with(&p, &norte_vfs::ListOptions::default()).await);
+        evicts!(w.list_skipped(&p).await);
+        evicts!(w.read(&p, None).await);
+        evicts!(w.node_id(&p, norte_vfs::FollowLinks::No).await);
+        evicts!(w.read_link(&p).await);
+        evicts!(w.trash(&p, &norte_vfs::trash::TrashId::new(0, 0)).await);
+        evicts!(w.gc_partials(&p, Duration::from_secs(1)).await);
+        evicts!(w.restore_trashed(&p).await);
+        evicts!(w.symlink(&p, b"t", norte_vfs::SymlinkKind::File).await);
+        evicts!(w.write(&p).await);
+        evicts!(w.open_resumable(&p).await);
+        evicts!(w.partial_digest(&p, 0).await);
+        evicts!(w.mkdir(&p).await);
+        evicts!(w.remove(&p).await);
+        evicts!(w.rename(&p, &p).await);
+        evicts!(w.restore_from(&p, &p).await);
+        evicts!(w.copy_native(&p, &p).await);
 
-        // Métodos sin `Result` (no evictan): pass-through pineado — el hueco
-        // que este test tenía con `capabilities` no se repite con `attrs`.
-        assert_eq!(w.attrs().len(), 1, "attrs() delega en el interior");
+        // Methods with no `Result` (they don't evict): pinned pass-through
+        // — the gap this test used to have with `capabilities` doesn't
+        // repeat with `attrs`.
+        assert_eq!(w.attrs().len(), 1, "attrs() delegates to the interior");
         assert!(
             w.trash_restorable(),
-            "trash_restorable() delega en el interior"
+            "trash_restorable() delegates to the interior"
         );
     }
 }

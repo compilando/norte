@@ -1,25 +1,25 @@
-//! Los plugins vistos desde la UI: cómo se recorta su descripción para la lista
-//! y el gestor de extensiones.
+//! Plugins as seen from the UI: how their description gets trimmed for the
+//! list and the extension manager.
 
-/// El tope y el enmascarado de las etiquetas cortas de un plugin (`name`,
-/// `publisher`, título de comando) viven en `norte-frontend` desde la tarea
-/// 4.4: la ayuda del host gráfico entra por la misma puerta y masquear texto
-/// de tercero no puede tener dos definiciones. Se re-exportan con su nombre
-/// de siempre para que ningún call site de este crate se mueva.
+/// A plugin's short labels' cap and masking (`name`, `publisher`, a
+/// command's title) live in `norte-frontend` since task 4.4: the graphical
+/// host's help goes through the same door, and masking third-party text
+/// can't have two definitions. Re-exported under their usual names so no
+/// call site in this crate has to move.
 pub use norte_frontend::help_badge::{
     PLUGIN_DESCRIPTION_WIRE_CAP, PLUGIN_NAME_WIRE_CAP, plugin_description, plugin_label,
 };
 
-/// Clampa ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) y enmascara ([`norte_frontend::display_name`])
-/// la `description` de CADA plugin de `plugins`, IN PLACE — en el único
-/// punto donde un `PluginListResult` recién llegado del `Backend` entra al
-/// estado del TUI (`main::dispatch`, brazos `app.extensions`/
-/// `app.palette`). El trabajo se hace UNA vez por plugin aquí, no por fila
-/// ni por frame: ambos consumidores ([`ExtensionManager`],
-/// [`crate::palette::plugin_rows`]) comparten el resultado ya seguro para
-/// pintar — `ExtensionManager` la repinta cada frame
-/// (`ui::plugin_description_line`), y antes de este fix recalculaba el
-/// enmascarado del String crudo (sin tope) en CADA uno.
+/// Clamps ([`PLUGIN_DESCRIPTION_WIRE_CAP`]) and masks
+/// ([`norte_frontend::display_name`]) EVERY plugin's `description` in
+/// `plugins`, IN PLACE — at the ONE point where a `PluginListResult` freshly
+/// arrived from the `Backend` enters the TUI's state (`main::dispatch`, the
+/// `app.extensions`/`app.palette` arms). The work is done ONCE per plugin
+/// here, not per row nor per frame: both consumers ([`ExtensionManager`],
+/// [`crate::palette::plugin_rows`]) share the result already safe to paint —
+/// `ExtensionManager` repaints it every frame
+/// (`ui::plugin_description_line`), and before this fix it recomputed the
+/// masking of the raw, uncapped String on EVERY one.
 pub fn clamp_plugin_descriptions(plugins: &mut [norte_proto::methods::PluginInfo]) {
     for p in plugins {
         if let Some(raw) = &p.description {
@@ -28,56 +28,57 @@ pub fn clamp_plugin_descriptions(plugins: &mut [norte_proto::methods::PluginInfo
     }
 }
 
-/// Overlay del catálogo de extensiones (M4-P3): la lista de plugins descubierta
-/// por el core (YA ordenada por categoría e id) más los directorios que
-/// fallaron al cargar, con un cursor de selección. Regla 7: el TUI no decide
-/// nada — aprobar/activar viaja al core por el `Backend`; aquí solo se navega y
-/// se refleja el estado. El `name`/`publisher` de cada plugin son texto LIBRE
-/// de un tercero: se enmascaran con [`norte_frontend::display_name`] al pintar (superficie de
-/// decisión de seguridad).
+/// Extensions catalogue overlay (M4-P3): the list of plugins the core
+/// discovered (ALREADY sorted by category and id) plus the directories that
+/// failed to load, with a selection cursor. Rule 7: the TUI decides
+/// nothing — approving/enabling travels to the core through the `Backend`;
+/// here it only navigates and reflects state. Each plugin's `name`/
+/// `publisher` are a third party's FREE text: masked with
+/// [`norte_frontend::display_name`] when painted (a security decision
+/// surface).
 #[derive(Debug, Clone)]
 pub struct ExtensionManager {
-    /// Plugins descubiertos, en el orden del core (categoría, luego id).
+    /// Discovered plugins, in the core's order (category, then id).
     pub plugins: Vec<norte_proto::methods::PluginInfo>,
-    /// Directorios que no cargaron (diagnóstico), se pintan al final.
+    /// Directories that didn't load (diagnostic), painted at the end.
     pub errors: Vec<norte_proto::methods::PluginLoadError>,
-    /// Índice del plugin resaltado.
+    /// Index of the highlighted plugin.
     pub cursor: usize,
     /// Drill-down editor over the SELECTED plugin's `[config]` (G3c):
     /// `Some` while open — `dialog.confirm` on the plugin list opens it
     /// (fetches `plugin.get_config`), `dialog.cancel` inside it closes
     /// back to the plugin list (never the whole overlay).
     pub config: Option<PluginConfigPanel>,
-    /// Dónde van las teclas dentro del gestor: la lista, o uno de los
-    /// botones de la ficha ([`ExtFoco`]). `dialog.pane` —`tab`— lo mueve.
+    /// Where the keys go inside the manager: the list, or one of the
+    /// card's buttons ([`ExtFoco`]). `dialog.pane` — `tab` — moves it.
     pub foco: ExtFoco,
 }
 
-/// Dónde tiene el foco el gestor de extensiones: la lista de plugins, o el
-/// botón `n` de la ficha, contando desde 0 en el orden en que se pintan.
+/// Where the extension manager's focus is: the plugin list, or button `n`
+/// of the card, counting from 0 in the order they're painted.
 ///
-/// Existe porque el gestor nació con una sola parada de teclado —la lista—
-/// y la ficha, que la nivelación con la ventana (ADR 0104) le puso al lado,
-/// llegó con botones que solo el ratón podía pulsar como tales. Cada botón
-/// tiene su tecla propia y la conserva; esto es el camino de quien recorre
-/// la pantalla con `tab` en vez de recordar cinco letras.
+/// Exists because the manager was born with a single keyboard stop — the
+/// list — and the card, which the parity work with the window (ADR 0104)
+/// put next to it, arrived with buttons only the mouse could press as such.
+/// Each button keeps its own key; this is the path for whoever walks the
+/// screen with `tab` instead of remembering five letters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ExtFoco {
-    /// Las teclas mueven el cursor de la lista (lo de siempre).
+    /// The keys move the list's cursor (the usual thing).
     #[default]
     Lista,
-    /// Las teclas van al botón `n` de la ficha; `dialog.confirm` lo dispara.
+    /// The keys go to button `n` of the card; `dialog.confirm` fires it.
     Boton(usize),
 }
 
-/// La siguiente parada del anillo de `tab`: la lista, luego cada botón, y
-/// otra vez la lista.
+/// `tab`'s ring's next stop: the list, then each button, and back to the
+/// list.
 ///
-/// `botones` es cuántos botones pintó el ÚLTIMO frame, no cuántos tendría
-/// la ficha si cupiese: con la caja estrecha no hay ficha, y entonces el
-/// anillo tiene una sola parada y `tab` no hace nada. Mover un foco a algo
-/// que no está en la pantalla es un teclado moviendo lo que nadie ve, que
-/// es justo el fallo que este anillo viene a arreglar.
+/// `botones` is how many buttons the LAST frame painted, not how many the
+/// card would have if it fit: with a narrow box there's no card, and then
+/// the ring has a single stop and `tab` does nothing. Moving focus to
+/// something not on screen is a keyboard moving what nobody sees, which is
+/// exactly the bug this ring exists to fix.
 #[must_use]
 pub fn siguiente_foco(foco: ExtFoco, botones: usize) -> ExtFoco {
     if botones == 0 {
@@ -90,8 +91,8 @@ pub fn siguiente_foco(foco: ExtFoco, botones: usize) -> ExtFoco {
     }
 }
 
-/// La parada ANTERIOR del mismo anillo (`←`): el inverso exacto de
-/// [`siguiente_foco`], así que desde la lista salta al último botón.
+/// The PREVIOUS stop of the same ring (`←`): the exact inverse of
+/// [`siguiente_foco`], so from the list it jumps to the last button.
 #[must_use]
 pub fn anterior_foco(foco: ExtFoco, botones: usize) -> ExtFoco {
     if botones == 0 {
@@ -120,36 +121,37 @@ pub struct PluginConfigPanel {
 }
 
 impl ExtensionManager {
-    /// Sube el cursor (tope arriba).
+    /// Moves the cursor up (clamped at the top).
     ///
-    /// Y devuelve el foco a la lista: los botones son los del plugin
-    /// ELEGIDO, así que uno enfocado mientras el cursor se va a otro plugin
-    /// sería un botón que ya no es de lo que se está mirando.
+    /// And hands focus back to the list: the buttons belong to the CHOSEN
+    /// plugin, so one focused while the cursor moves to another plugin
+    /// would be a button no longer about what's being looked at.
     pub fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
         self.foco = ExtFoco::Lista;
     }
 
-    /// Baja el cursor (tope a la última fila: las que no cargaron van detrás
-    /// de los plugins). Devuelve el foco a la lista, por lo mismo que
-    /// [`Self::up`].
+    /// Moves the cursor down (clamped at the last row: the ones that didn't
+    /// load come after the plugins). Hands focus back to the list, for the
+    /// same reason as [`Self::up`].
     pub fn down(&mut self) {
         let max = (self.plugins.len() + self.errors.len()).saturating_sub(1);
         self.cursor = (self.cursor + 1).min(max);
         self.foco = ExtFoco::Lista;
     }
 
-    /// El plugin bajo el cursor, si lo hay.
+    /// The plugin under the cursor, if there is one.
     #[must_use]
     pub fn selected(&self) -> Option<&norte_proto::methods::PluginInfo> {
         self.plugins.get(self.cursor)
     }
 
-    /// La extensión que NO cargó bajo el cursor, si el cursor está en una.
+    /// The extension that did NOT load under the cursor, if the cursor is on
+    /// one.
     ///
-    /// Van detrás de los plugins: la fila `plugins.len() + j` es `errors[j]`.
-    /// Un cursor que se paraba en el último plugin dejaba una extensión rota
-    /// sin forma de pedir que se quitara.
+    /// They come after the plugins: row `plugins.len() + j` is `errors[j]`.
+    /// A cursor that stopped at the last plugin left a broken extension with
+    /// no way to ask for it to be removed.
     #[must_use]
     pub fn selected_broken(&self) -> Option<&norte_proto::methods::PluginLoadError> {
         self.cursor
@@ -157,16 +159,17 @@ impl ExtensionManager {
             .and_then(|j| self.errors.get(j))
     }
 
-    /// Togglea el bool LOCAL de aprobación del plugin bajo el cursor, para
-    /// feedback inmediato tras un `plugins_set_approval` OK en el Backend (la
-    /// verdad vive en el core; esto solo evita un relistado para repintar).
+    /// Toggles the LOCAL approval bool of the plugin under the cursor, for
+    /// immediate feedback after a `plugins_set_approval` OK from the Backend
+    /// (the truth lives in the core; this just avoids a re-list to
+    /// repaint).
     pub fn set_local_approved(&mut self, approved: bool) {
         if let Some(p) = self.plugins.get_mut(self.cursor) {
             p.approved = approved;
         }
     }
 
-    /// Análogo a [`Self::set_local_approved`] para el estado de activación.
+    /// Same as [`Self::set_local_approved`] for the enabled state.
     pub fn set_local_enabled(&mut self, enabled: bool) {
         if let Some(p) = self.plugins.get_mut(self.cursor) {
             p.enabled = enabled;
@@ -174,64 +177,65 @@ impl ExtensionManager {
     }
 }
 
-/// Acción del usuario sobre el overlay de extensiones (el frontend traduce las
-/// teclas; el efecto —llamar al `Backend`— vive en `main`).
+/// A user action on the extensions overlay (the frontend translates the
+/// keys; the effect — calling the `Backend` — lives in `main`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExtAction {
-    /// Resalta el anterior.
+    /// Highlights the previous one.
     Up,
-    /// Resalta el siguiente.
+    /// Highlights the next one.
     Down,
-    /// Togglea la aprobación del plugin resaltado.
+    /// Toggles the highlighted plugin's approval.
     ToggleApprove,
-    /// Togglea la activación del plugin resaltado.
+    /// Toggles the highlighted plugin's enabled state.
     ToggleEnable,
-    /// Cierra el overlay.
+    /// Closes the overlay.
     Close,
 }
 
-/// Popup de selección de tema: lista de presets con preview EN VIVO (mover el
-/// cursor aplica el tema al vuelo; Esc revierte al que había, Enter lo fija).
+/// Theme picker popup: a list of presets with a LIVE preview (moving the
+/// cursor applies the theme on the fly; Esc reverts to what was there,
+/// Enter fixes it).
 #[derive(Debug, Clone)]
 pub struct ThemePicker {
-    /// Nombres de preset a elegir.
+    /// Preset names to choose from.
     pub names: Vec<String>,
-    /// Índice resaltado.
+    /// Highlighted index.
     pub cursor: usize,
-    /// Tema que había ANTES de abrir, para revertir al cancelar.
+    /// The theme that was there BEFORE opening, to revert on cancelling.
     pub original: crate::theme::TuiTheme,
 }
 
 impl ThemePicker {
-    /// Sube el cursor (tope arriba).
+    /// Moves the cursor up (clamped at the top).
     pub fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
     }
 
-    /// Baja el cursor (tope al último).
+    /// Moves the cursor down (clamped at the last one).
     pub fn down(&mut self) {
         if self.cursor + 1 < self.names.len() {
             self.cursor += 1;
         }
     }
 
-    /// El nombre resaltado.
+    /// The highlighted name.
     #[must_use]
     pub fn selected(&self) -> Option<&str> {
         self.names.get(self.cursor).map(String::as_str)
     }
 }
 
-/// Acción del usuario sobre el popup de tema (el frontend traduce las teclas).
+/// A user action on the theme popup (the frontend translates the keys).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PickerAction {
-    /// Resalta el anterior (con preview).
+    /// Highlights the previous one (with preview).
     Up,
-    /// Resalta el siguiente (con preview).
+    /// Highlights the next one (with preview).
     Down,
-    /// Fija el tema resaltado y cierra.
+    /// Fixes the highlighted theme and closes.
     Confirm,
-    /// Revierte al tema previo y cierra.
+    /// Reverts to the previous theme and closes.
     Cancel,
 }
 
@@ -259,29 +263,29 @@ mod clamp_plugin_descriptions_tests {
         }
     }
 
-    /// P1 encoding audit F1 (MEDIUM): `PluginInfo.description` no tiene tope
-    /// en el wire (el manifiesto solo lo limita al PARSEAR, en el camino
-    /// honesto) — un daemon hostil/comprometido podría mandar cualquier
-    /// longitud. `clamp_plugin_descriptions` es el único punto donde
-    /// `plugins_list` entra al estado del TUI (`main::dispatch`); debe
-    /// recortarla ahí, de una vez, para ambos consumidores.
-    /// El recorte se MARCA con `…`, así que son el tope MÁS uno.
+    /// P1 encoding audit F1 (MEDIUM): `PluginInfo.description` has no cap on
+    /// the wire (the manifest only bounds it while PARSING, on the honest
+    /// path) — a hostile/compromised daemon could send any length.
+    /// `clamp_plugin_descriptions` is the one point where `plugins_list`
+    /// enters the TUI's state (`main::dispatch`); it has to trim it there,
+    /// once, for both consumers.
+    /// The trim gets MARKED with `…`, so it's the cap PLUS one.
     ///
-    /// Cambió al izar la función a `norte-frontend` (tarea 4.5), y a
-    /// propósito: cortar en seco presenta una descripción truncada como si
-    /// estuviera completa, que es la misma clase de mentira que
-    /// `plugin_label` —su vecina, con el mismo tipo de texto— lleva
-    /// evitando desde H3e. El tope defensivo sigue siendo el mismo número.
+    /// Changed when the function got hoisted to `norte-frontend` (task 4.5),
+    /// and on purpose: cutting it off flat presents a truncated description
+    /// as if it were complete, which is the same kind of lie `plugin_label`
+    /// — its neighbor, with the same kind of text — has been avoiding since
+    /// H3e. The defensive cap is still the same number.
     #[test]
     fn clampa_al_tope_del_wire() {
         let mut plugins = vec![plugin(Some(&"a".repeat(50_000)))];
         clamp_plugin_descriptions(&mut plugins);
-        let recortada = plugins[0].description.as_deref().unwrap();
+        let trimmed = plugins[0].description.as_deref().unwrap();
         assert_eq!(
-            recortada.chars().count(),
+            trimmed.chars().count(),
             crate::app::PLUGIN_DESCRIPTION_WIRE_CAP + 1
         );
-        assert!(recortada.ends_with('…'), "el recorte se ve");
+        assert!(trimmed.ends_with('…'), "the trim is visible");
     }
 
     #[test]
@@ -293,16 +297,16 @@ mod clamp_plugin_descriptions_tests {
 
     #[test]
     fn corta_bajo_el_tope_no_se_toca() {
-        let mut plugins = vec![plugin(Some("una description corta"))];
+        let mut plugins = vec![plugin(Some("a short description"))];
         clamp_plugin_descriptions(&mut plugins);
         assert_eq!(
             plugins[0].description.as_deref(),
-            Some("una description corta")
+            Some("a short description")
         );
     }
 
-    /// El override RTL nunca sobrevive crudo al clamp — se enmascara aquí,
-    /// no en cada frame del gestor de extensiones.
+    /// The RTL override never survives the clamp raw — it gets masked here,
+    /// not on every frame of the extension manager.
     #[test]
     fn enmascara_override_rtl() {
         let mut plugins = vec![plugin(Some("abc\u{202E}gpj.exe"))];
@@ -313,24 +317,24 @@ mod clamp_plugin_descriptions_tests {
     }
 }
 
-/// El anillo de `tab` del gestor: la lista, cada botón, la lista.
+/// The manager's `tab` ring: the list, each button, the list.
 #[cfg(test)]
 mod siguiente_foco_tests {
     use super::{ExtFoco, siguiente_foco};
 
-    /// Con cuatro botones, `tab` los recorre en orden y vuelve a la lista:
-    /// cinco pulsaciones cierran el anillo, ni una parada de más.
+    /// With four buttons, `tab` walks them in order and returns to the
+    /// list: five presses close the ring, not one stop too many.
     #[test]
     fn el_anillo_recorre_los_botones_y_vuelve() {
         let mut f = ExtFoco::Lista;
-        let recorrido: Vec<ExtFoco> = (0..5)
+        let walk: Vec<ExtFoco> = (0..5)
             .map(|_| {
                 f = siguiente_foco(f, 4);
                 f
             })
             .collect();
         assert_eq!(
-            recorrido,
+            walk,
             vec![
                 ExtFoco::Boton(0),
                 ExtFoco::Boton(1),
@@ -341,18 +345,18 @@ mod siguiente_foco_tests {
         );
     }
 
-    /// Sin ficha pintada no hay botones, y entonces `tab` no mueve nada: el
-    /// caso de la caja estrecha, donde enfocar un botón sería enfocar algo
-    /// que no está en la pantalla.
+    /// With no card painted there are no buttons, and then `tab` moves
+    /// nothing: the narrow-box case, where focusing a button would be
+    /// focusing something not on screen.
     #[test]
     fn sin_botones_pintados_el_foco_se_queda_en_la_lista() {
         assert_eq!(siguiente_foco(ExtFoco::Lista, 0), ExtFoco::Lista);
         assert_eq!(siguiente_foco(ExtFoco::Boton(2), 0), ExtFoco::Lista);
     }
 
-    /// Un foco que se quedó apuntando más allá de los botones que ahora se
-    /// pintan —la ficha encogió, o el plugin elegido no tiene ayuda y tiene
-    /// un botón menos— vuelve a la lista en vez de quedarse fuera de rango.
+    /// A focus left pointing past the buttons that are now painted — the
+    /// card shrank, or the chosen plugin has no help and one fewer button —
+    /// goes back to the list instead of staying out of range.
     #[test]
     fn un_foco_rebasado_vuelve_a_la_lista() {
         assert_eq!(siguiente_foco(ExtFoco::Boton(9), 4), ExtFoco::Lista);

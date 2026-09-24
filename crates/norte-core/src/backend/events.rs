@@ -1,6 +1,6 @@
-//! El área de canales de eventos de [`Backend`](super::Backend): tasks
-//! foráneas, eventos de conexión, aprobaciones de policy, degradación/fallo
-//! de conexión, avisos de plugins (`hook`) y avisos del journal perezoso.
+//! [`Backend`](super::Backend)'s event-channel area: foreign tasks,
+//! connection events, policy approvals, connection degradation/failure,
+//! plugin notices (`hook`) and lazy-journal warnings.
 
 use std::sync::Arc;
 
@@ -12,23 +12,24 @@ use super::{
 };
 
 impl Backend {
-    /// Canal de tasks FORÁNEAS (encoladas por otros frontends de la misma
-    /// sesión). `None` en embebido o si ya se tomó. Solo el dueño original de
-    /// la conexión debe llamarlo; un clon (scripting) no.
+    /// Channel for FOREIGN tasks (queued by other frontends of the same
+    /// session). `None` when embedded or if already taken. Only the
+    /// connection's original owner should call it; a clone (scripting)
+    /// should not.
     pub fn take_foreign_tasks(&mut self) -> Option<mpsc::UnboundedReceiver<TaskRef>> {
         match self {
             Self::Embedded(_) => None,
             #[cfg(unix)]
             Self::Remote(r) => {
-                // El SDK entrega tasks REMOTAS; un frontend habla de
-                // `TaskRef` y no quiere saber de dónde vino. El puente es
-                // una task de reenvío porque un canal no se puede mapear en
-                // el sitio: muere cuando muere el canal de origen, así que
-                // no sobrevive a la conexión que lo alimentaba.
-                let mut origen = r.take_foreign_tasks()?;
+                // The SDK delivers REMOTE tasks; a frontend talks in terms
+                // of `TaskRef` and doesn't want to know where it came from.
+                // The bridge is a forwarding task because a channel can't
+                // be mapped in place: it dies when the source channel dies,
+                // so it doesn't outlive the connection that fed it.
+                let mut source = r.take_foreign_tasks()?;
                 let (tx, rx) = mpsc::unbounded_channel();
                 crate::blocking::spawn(async move {
-                    while let Some(t) = origen.recv().await {
+                    while let Some(t) = source.recv().await {
                         if tx.send(TaskRef::from(t)).is_err() {
                             break;
                         }
@@ -39,9 +40,9 @@ impl Backend {
         }
     }
 
-    /// Canal de eventos de conexión (aviso de reconexión). `None` en
-    /// embebido o si ya se tomó. Solo el dueño original de la conexión debe
-    /// llamarlo; un clon (scripting) no.
+    /// Channel for connection events (reconnection notices). `None` when
+    /// embedded or if already taken. Only the connection's original owner
+    /// should call it; a clone (scripting) should not.
     pub fn take_conn_events(&mut self) -> Option<mpsc::UnboundedReceiver<ConnEvent>> {
         match self {
             Self::Embedded(_) => None,
@@ -50,12 +51,12 @@ impl Backend {
         }
     }
 
-    /// Canal de aprobaciones de policy pendientes (M3-3b T5): cada
-    /// `policy.approval_required` del daemon (y el resync por
-    /// `policy.pending` al (re)conectar) llega aquí para que el frontend
-    /// pregunte al humano. `None` en embebido (sin agentes que aprobar por
-    /// esta vía) o si ya se tomó. Solo el dueño original de la conexión debe
-    /// llamarlo; un clon (scripting) no.
+    /// Channel for pending policy approvals (M3-3b T5): every daemon
+    /// `policy.approval_required` (and the `policy.pending` resync on
+    /// (re)connect) arrives here for the frontend to ask the human. `None`
+    /// when embedded (no agents to approve over this path) or if already
+    /// taken. Only the connection's original owner should call it; a clone
+    /// (scripting) should not.
     pub fn take_approvals(
         &mut self,
     ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>> {
@@ -66,21 +67,21 @@ impl Backend {
         }
     }
 
-    /// Receptor de avisos `connection.degraded` (#44). En `Remote` viene del
-    /// pump del daemon; en `Embedded` INSTALA un observer en el engine que
-    /// empuja a un canal — así AMBOS modos surfacean la degradación de forma
-    /// uniforme (rust MAJOR M1 + security m1: antes el embebido era silencioso).
-    /// One-shot por su naturaleza (instala/toma una vez); en `Embedded` el
-    /// aviso es SÍNCRONO (el observer dispara dentro del `provider_for` del
-    /// comando en curso), así que un drenado posterior lo ve sin carrera.
+    /// Receiver for `connection.degraded` notices (#44). On `Remote` it
+    /// comes from the daemon's pump; on `Embedded` it INSTALLS an observer
+    /// on the engine that pushes to a channel — so BOTH modes surface
+    /// degradation uniformly (rust MAJOR M1 + security m1: embedded used to
+    /// be silent). One-shot by nature (installs/takes once); on `Embedded`
+    /// the notice is SYNCHRONOUS (the observer fires inside the current
+    /// command's `provider_for`), so a later drain sees it with no race.
     pub fn take_degraded(
         &mut self,
     ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>> {
         match self {
             Self::Embedded(engine) => {
                 let (tx, rx) = mpsc::unbounded_channel();
-                // Encadenando: la ranura es de UNO y este `take_*` no puede
-                // dejar mudo al del otro hecho (#322).
+                // Chaining: the slot belongs to ONE, and this `take_*` must
+                // not silence whatever else already set one (#322).
                 engine.chain_connection_observer(|previo| {
                     Arc::new(ChannelConnectionObserver { tx, previo })
                 });
@@ -91,28 +92,29 @@ impl Backend {
         }
     }
 
-    /// Receptor de fallos `connection.failed` (#322): POR QUÉ una conexión NO
-    /// se abrió. Gemelo de [`Backend::take_degraded`] y con el mismo trato en
-    /// los dos brazos — en `Remote` viene del pump del daemon, en `Embedded`
-    /// instala un observer.
+    /// Receiver for `connection.failed` failures (#322): WHY a connection
+    /// did NOT open. Twin of [`Backend::take_degraded`] and treated the same
+    /// on both arms — on `Remote` it comes from the daemon's pump, on
+    /// `Embedded` it installs an observer.
     ///
-    /// Existe en `Embedded` y no solo en `Remote` porque el diagnóstico se
-    /// perdía en los DOS: en el daemon se quedaba en su log, y en el embebido
-    /// salía por el stderr del propio proceso — que en la TUI se lo come la
-    /// pantalla alternativa. Un fallo que se diagnostica o no según el
-    /// transporte es la peor forma de que dependa.
+    /// Exists on `Embedded` and not only on `Remote` because the diagnosis
+    /// used to get lost on BOTH: on the daemon it stayed in its log, and on
+    /// embedded it went out through the process's own stderr — which the
+    /// TUI's alternate screen swallows. A failure that gets diagnosed or
+    /// not depending on the transport is the worst way for it to depend on
+    /// anything.
     ///
-    /// One-shot en `Remote`, donde el receptor se lo lleva el primer dueño. En
-    /// `Embedded` NO lo es —igual que [`Backend::take_degraded`]—: cada
-    /// llamada encadena otro observer y devuelve otro receptor, y el que nadie
-    /// drene es un canal sin techo que solo crece. Llámalo UNA vez, en el
-    /// arranque.
+    /// One-shot on `Remote`, where the first owner takes the receiver. On
+    /// `Embedded` it is NOT —same as [`Backend::take_degraded`]—: every call
+    /// chains another observer and returns another receiver, and one nobody
+    /// drains is a channel with no ceiling that only grows. Call it ONCE, at
+    /// startup.
     ///
-    /// Por `&self` y no `&mut self` como [`Backend::take_degraded`]: ninguna
-    /// de las dos ramas lo necesitaba, y `norte connect` —el comando que se
-    /// teclea justo para diagnosticar esto— tiene el backend por referencia
-    /// compartida. Pedir `&mut` habría dejado fuera al único sitio donde el
-    /// humano está preguntando explícitamente «¿por qué no entra?».
+    /// By `&self` and not `&mut self` like [`Backend::take_degraded`]:
+    /// neither branch needed it, and `norte connect` —the command typed
+    /// precisely to diagnose this— holds the backend by shared reference.
+    /// Requiring `&mut` would have shut out the one place where the human
+    /// is explicitly asking "why won't it connect?".
     pub fn take_failed(
         &self,
     ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>> {
@@ -129,22 +131,24 @@ impl Backend {
         }
     }
 
-    /// Receptor de avisos `plugin.notice` (0.69.0, ADR 0100): la frase de un
-    /// plugin `hook` sobre una mutación ya registrada, o que los hooks de un
-    /// plugin se apagaron tras tres fallos. En `Remote` viene del pump del
-    /// daemon; en `Embedded` ARRANCA el despachador de hooks sobre el journal
-    /// de este engine y le da un canal — así ambos modos corren los mismos
-    /// hooks y surfacean lo mismo. One-shot, como [`Backend::take_failed`]:
-    /// el engine tiene UN hueco para el despachador y el segundo que lo pida
-    /// recibe `None`, en vez de arrancar otro que pisara al primero.
+    /// Receiver for `plugin.notice` notices (0.69.0, ADR 0100): a `hook`
+    /// plugin's sentence about a mutation already recorded, or that a
+    /// plugin's hooks turned themselves off after three failures. On
+    /// `Remote` it comes from the daemon's pump; on `Embedded` it STARTS the
+    /// hook dispatcher over this engine's journal and gives it a channel —
+    /// so both modes run the same hooks and surface the same things.
+    /// One-shot, like [`Backend::take_failed`]: the engine has ONE slot for
+    /// the dispatcher and whoever asks for it second gets `None`, instead of
+    /// starting another one that would clobber the first.
     ///
-    /// `None` también en `Embedded` si el engine no lleva journal (sin filas
-    /// no hay hooks) o si el runtime WASM no se pudo crear: sin runtime no
-    /// corre ningún plugin, y tampoco un hook (fail-closed, con traza). El
-    /// despachador muere solo cuando el receptor devuelto se suelta.
+    /// Also `None` on `Embedded` if the engine carries no journal (no rows,
+    /// no hooks) or if the WASM runtime could not be created: with no
+    /// runtime no plugin runs, and neither does a hook (fail-closed, with a
+    /// trace). The dispatcher only dies once the returned receiver is
+    /// dropped.
     ///
     /// # Panics
-    /// Fuera de un runtime de tokio: arranca tasks.
+    /// Outside a tokio runtime: it starts tasks.
     pub fn take_plugin_notices(
         &self,
     ) -> Option<mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>> {
@@ -156,31 +160,31 @@ impl Backend {
                 let runtime = match norte_plugin_host::PluginRuntime::new() {
                     Ok(r) => Arc::new(r),
                     Err(e) => {
-                        tracing::warn!(error = %e, "hooks: sin runtime de plugins, no corren");
+                        tracing::warn!(error = %e, "hooks: no plugin runtime, none will run");
                         return None;
                     }
                 };
                 let (tx, rx) = mpsc::unbounded_channel();
-                // Enchufar el journal es `async` (el perezoso guarda el
-                // extremo bajo su lock) y leer `policy.toml` es I/O (regla 2):
-                // las dos cosas en una task. Una mutación que se adelante
-                // queda sin hook, y es el arranque: no hay ninguna. Sin token
-                // de cancelación propio: la vida del despachador embebido es
-                // la del receptor (`is_closed`), y el proceso que lo hospeda
-                // termina con él.
+                // Plugging in the journal is `async` (the lazy one keeps the
+                // end under its lock) and reading `policy.toml` is I/O
+                // (rule 2): both in one task. A mutation that gets ahead of
+                // this ends up with no hook, and this is the startup: there
+                // isn't one yet. No cancellation token of its own: the
+                // embedded dispatcher's life is the receiver's
+                // (`is_closed`), and the process hosting it ends along with it.
                 let engine = Arc::clone(engine);
                 crate::blocking::spawn(async move {
-                    // Las reglas del humano valen también aquí (ADR 0101): el
-                    // engine embebido no lleva gate, así que el despachador
-                    // las mira para el actor `plugin`. Un fichero ilegible se
-                    // dice y equivale a ninguno.
+                    // The human's rules apply here too (ADR 0101): the
+                    // embedded engine carries no gate, so the dispatcher
+                    // checks them for the `plugin` actor. An unreadable file
+                    // is reported and counts as none.
                     let policy = crate::blocking::spawn_blocking(crate::PolicyConfig::load)
                         .await
                         .ok()
                         .and_then(|r| match r {
                             Ok(p) => Some(Arc::new(p)),
                             Err(e) => {
-                                tracing::warn!(error = %e, "hooks: policy.toml ilegible, sin reglas");
+                                tracing::warn!(error = %e, "hooks: policy.toml unreadable, no rules");
                                 None
                             }
                         });
@@ -204,27 +208,28 @@ impl Backend {
         }
     }
 
-    /// Receptor del aviso «esta sesión NO queda registrada en el journal»
-    /// (#167/#177). Solo `Embedded` puede quedarse sin journal —el daemon se
-    /// niega a arrancar sin él—, así que en `Remote` es `None`.
+    /// Receiver for the "this session is NOT being recorded in the journal"
+    /// notice (#167/#177). Only `Embedded` can end up with no journal —the
+    /// daemon refuses to start without one—, so on `Remote` this is `None`.
     ///
-    /// Como [`Backend::take_degraded`], en `Embedded` INSTALA el sink en el
-    /// engine en vez de tomar un canal ya hecho. Llamarlo en el arranque, antes
-    /// de la primera mutación; y si una mutación se adelanta igual, el aviso no
-    /// se pierde (el `LazyJournal` lo retiene hasta que hay sink).
+    /// Like [`Backend::take_degraded`], on `Embedded` it INSTALLS the sink
+    /// on the engine instead of taking an already-built channel. Call it at
+    /// startup, before the first mutation; and if a mutation gets ahead of
+    /// it anyway, the notice isn't lost (the `LazyJournal` holds onto it
+    /// until there's a sink).
     ///
-    /// Llegan PÉRDIDAS Y RECUPERACIONES (#179): la ventana de propiedad se
-    /// puede reabrir, así que un frontend que solo escuche
-    /// [`JournalStatus::Lost`](crate::embedded::JournalStatus::Lost) acaba
-    /// pintando «esta sesión no se registra» sobre una que sí.
+    /// BOTH LOSSES AND RECOVERIES arrive (#179): the ownership window can
+    /// reopen, so a frontend that only listens for
+    /// [`JournalStatus::Lost`](crate::embedded::JournalStatus::Lost) ends up
+    /// painting "this session isn't recorded" over one that is.
     ///
-    /// `None` también si el engine embebido no lleva journal perezoso —uno
-    /// construido con `Engine::new()`, que no journaliza NADA y nunca va a
-    /// avisar de ello—: devolver un canal ahí sería decirle al frontend que
-    /// está cubierto por un aviso que no puede llegar.
+    /// Also `None` if the embedded engine carries no lazy journal —one built
+    /// with `Engine::new()`, which journals NOTHING and will never warn
+    /// about it—: returning a channel there would be telling the frontend
+    /// it's covered by a notice that can never arrive.
     ///
-    /// UNA sola vez, como sus hermanos: un segundo sink deja mudo al primer
-    /// receptor (ver [`crate::embedded::LazyJournal::set_warning_sink`]).
+    /// ONCE only, like its siblings: a second sink silences the first
+    /// receiver (see [`crate::embedded::LazyJournal::set_warning_sink`]).
     pub fn take_journal_warnings(
         &mut self,
     ) -> Option<mpsc::UnboundedReceiver<crate::embedded::JournalStatus>> {

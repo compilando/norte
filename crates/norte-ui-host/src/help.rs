@@ -1,21 +1,22 @@
-//! La ayuda (F1) vista desde el host: qué página está abierta y cómo se
-//! proyecta para quien la pinta.
+//! Help (F1) as seen from the host: which page is open and how it is
+//! projected for whoever paints it.
 //!
-//! Nada de esto es nuevo. El corpus y su modelo de bloques son de
-//! `norte-help`, el overlay —lateral, historial, filtro, qué es ejecutable—
-//! es `norte_frontend::help::HelpState`, la resolución de las marcas vivas es
-//! `norte_frontend::help_chords::Chords` y la hoja de teclado es
-//! `norte_frontend::keysheet`. Lo que este módulo aporta es la PROYECCIÓN:
-//! convertir todo eso en el vocabulario cerrado que cruza el bridge, para que
-//! el renderer construya nodos del DOM uno a uno y no interprete marcado.
+//! None of this is new. The corpus and its block model belong to
+//! `norte-help`, the overlay —sidebar, history, filter, what is
+//! executable— is `norte_frontend::help::HelpState`, resolving the live
+//! marks is `norte_frontend::help_chords::Chords` and the keyboard sheet is
+//! `norte_frontend::keysheet`. What this module contributes is the
+//! PROJECTION: turning all of that into the closed vocabulary that crosses
+//! the bridge, so the renderer builds DOM nodes one at a time and does not
+//! interpret markup.
 //!
-//! Dos cosas se congelan al ABRIR y no se recalculan al pintar, por el mismo
-//! motivo que el panel de continuaciones se construye en la transición: los
-//! hechos con los que se atenúa una fila (`Facts`) y la hoja de teclado, que
-//! son varias cadenas y un formato Fluent por fila. Congelar los hechos
-//! además evita que una página se contradiga a mitad de lectura —una fila
-//! atenuada arriba y viva abajo porque el cursor se movió por debajo—, que es
-//! la misma decisión que tomó el TUI.
+//! Two things are frozen on OPEN and not recomputed on paint, for the same
+//! reason the continuations panel is built at the transition: the facts a
+//! row is dimmed by (`Facts`) and the keyboard sheet, which are several
+//! strings and a Fluent format per row. Freezing the facts also keeps a
+//! page from contradicting itself mid-read —a row dimmed above and live
+//! below because the cursor moved underneath—, which is the same decision
+//! the TUI made.
 
 use std::collections::{HashMap, HashSet};
 
@@ -33,57 +34,57 @@ use crate::dto::{
     HelpView,
 };
 
-/// La ayuda abierta.
+/// Help, open.
 pub(crate) struct Ayuda {
-    /// El modelo compartido: qué página, qué cursor, qué filtro.
+    /// The shared model: which page, which cursor, which filter.
     pub(crate) estado: HelpState,
-    /// El resolver con el que se pinta ESTA apertura, con sus hechos ya
-    /// congelados.
+    /// The resolver THIS opening is painted with, with its facts already
+    /// frozen.
     chords: Chords,
-    /// Los hechos que `chords` lleva dentro, para saber si re-congelar
-    /// cambia algo. `Chords` no los devuelve, y preguntar «¿ha cambiado?»
-    /// es la diferencia entre un parche cuando el listado se mueve y un
-    /// parche por cada lote de relleno.
-    hechos: norte_frontend::availability::Facts,
-    /// La hoja de teclado, generada una vez con el mapa efectivo del lector.
-    teclas: Vec<HelpBlockView>,
-    /// A quién atribuir la página de cada plugin, ya enmascarado y acotado.
+    /// The facts `chords` carries inside, to know whether re-freezing
+    /// changes anything. `Chords` does not return them, and asking "did it
+    /// change?" is the difference between a patch when the listing moves
+    /// and a patch for every fill batch.
+    facts: norte_frontend::availability::Facts,
+    /// The keyboard sheet, generated once with the reader's effective map.
+    keys: Vec<HelpBlockView>,
+    /// Who to attribute each plugin's page to, already masked and clamped.
     ///
-    /// Sale de la FOTO del catálogo y jamás de la página: un plugin no decide
-    /// quién lo publica. Un publicador en blanco no entra —la insignia
-    /// pintaría «publicado por » sin nada detrás, que se lee como un fallo de
-    /// pintado y no como una ausencia.
-    publicadores: HashMap<String, String>,
-    /// Las páginas de plugin que ya se han PEDIDO en esta apertura.
+    /// Comes from the catalogue's SNAPSHOT and never from the page: a
+    /// plugin does not decide who publishes it. A blank publisher does not
+    /// go in —the badge would paint "published by " with nothing behind
+    /// it, which reads as a painting bug and not as an absence.
+    publishers: HashMap<String, String>,
+    /// The plugin pages already REQUESTED in this opening.
     ///
-    /// «Se pide una vez» es de aquí y no del modelo: `plugin_needs_fetch` es
-    /// una pregunta de SONDEO, y sin esta memoria un daemon muerto se
-    /// re-preguntaría en cada proyección.
-    pedidas: HashSet<String>,
-    /// La última petición de desplazar el cuerpo, con su número (puente 76).
-    /// Ver [`crate::dto::HelpView::scroll`].
-    desplazamiento: Option<crate::dto::HelpScrollView>,
+    /// "Requested once" belongs here and not to the model: `plugin_needs_fetch`
+    /// is a POLLING question, and without this memory a dead daemon would be
+    /// asked again on every projection.
+    requested: HashSet<String>,
+    /// The last request to scroll the body, with its sequence number (bridge
+    /// 76). See [`crate::dto::HelpView::scroll`].
+    scroll: Option<crate::dto::HelpScrollView>,
 }
 
 impl Ayuda {
-    /// Pide al renderer que desplace el cuerpo. Cada petición lleva un número
-    /// mayor que la anterior, para que un repintado no la aplique dos veces.
+    /// Asks the renderer to scroll the body. Each request carries a number
+    /// higher than the last, so a repaint does not apply it twice.
     pub(crate) fn desplazar(&mut self, to: crate::dto::HelpScrollTo) {
-        let seq = self.desplazamiento.map_or(1, |d| d.seq + 1);
-        self.desplazamiento = Some(crate::dto::HelpScrollView { to, seq });
+        let seq = self.scroll.map_or(1, |d| d.seq + 1);
+        self.scroll = Some(crate::dto::HelpScrollView { to, seq });
     }
 
-    /// Abre la ayuda sobre la página del CONTEXTO donde está el lector, o
-    /// sobre el índice si ese contexto no tiene página.
+    /// Opens help on the page for the CONTEXT the reader is in, or on the
+    /// index if that context has no page.
     ///
-    /// El contexto es una palabra del vocabulario cerrado del corpus y
-    /// siempre hay una: quién la reclama lo dice cada página en su portada,
-    /// así que una página nueva para un diálogo nuevo no toca este código.
+    /// The context is a word from the corpus's closed vocabulary and there
+    /// is always one: each page's front matter says who claims it, so a new
+    /// page for a new dialog does not touch this code.
     ///
-    /// La página del contexto se abre como RAÍZ (`open_as_root`): el lector
-    /// no navegó hasta ella, la ayuda lo puso ahí, así que «volver» no puede
-    /// llevarle a un índice donde nunca estuvo — y una sola pulsación de
-    /// `Esc` tiene que dejar una página que nadie pidió.
+    /// The context's page is opened as ROOT (`open_as_root`): the reader
+    /// did not navigate to it, help put them there, so "back" cannot take
+    /// them to an index they were never in — and a single `Esc` press has
+    /// to leave behind a page nobody asked for.
     pub(crate) fn abrir(
         lang: Lang,
         contexto: &str,
@@ -97,48 +98,48 @@ impl Ayuda {
         }
         Self {
             estado,
-            publicadores: HashMap::new(),
-            pedidas: HashSet::new(),
-            desplazamiento: None,
-            // DOS pantallas y no tres: los diálogos de esta ventana los
-            // contesta el renderer con sus propios botones, así que no hay
-            // mapa `dialog` en el que resolver un verbo suyo y ponerle una
-            // tecla sería ponerla en una página que nadie va a pulsar.
+            publishers: HashMap::new(),
+            requested: HashSet::new(),
+            scroll: None,
+            // TWO screens and not three: this window's dialogs are answered
+            // by the renderer with its own buttons, so there is no
+            // `dialog` map to resolve one of its verbs in, and giving it a
+            // key would put it on a page nobody is going to press.
             chords: Chords::over(&[listado, visor], lang).with_facts(facts),
-            hechos: facts,
-            teclas: hoja_de_teclado(listado, visor, lang),
+            facts,
+            keys: keyboard_sheet(listado, visor, lang),
         }
     }
 
-    /// Vuelve a congelar los hechos SIN perder lo demás.
+    /// Re-freezes the facts WITHOUT losing anything else.
     ///
-    /// El congelado es contra que se mueva el LECTOR, no contra que se mueva
-    /// el mundo: dos de los hechos —`enterable` y `viewable`— describen la
-    /// entrada bajo el cursor, y una copia o un borrado que terminan con la
-    /// ayuda delante re-listan el panel por debajo. Sin esto, la frase de
-    /// motivo se queda hablando de una selección que ya no existe (#262). El
-    /// TUI hace lo mismo por su embudo de refresco.
+    /// The freeze guards against the READER moving, not against the world
+    /// moving: two of the facts —`enterable` and `viewable`— describe the
+    /// entry under the cursor, and a copy or a delete that ends with help
+    /// in front re-lists the pane underneath. Without this, the reason
+    /// sentence keeps talking about a selection that no longer exists
+    /// (#262). The TUI does the same through its refresh funnel.
     ///
-    /// Conserva la FOTO de plugins a propósito (`with_facts` la copia): esa
-    /// no la cambia un listado, y volver a pedirla dejaría la lateral sin
-    /// páginas de extensión durante un parpadeo.
-    /// Devuelve si los hechos CAMBIARON. Volver a congelar lo mismo no es un
-    /// cambio de pantalla, y publicarlo como tal sería un parche por cada
-    /// lote de relleno de un directorio que el lector ni está mirando.
+    /// Keeps the plugin SNAPSHOT on purpose (`with_facts` copies it): a
+    /// listing does not change that, and asking for it again would leave
+    /// the sidebar without extension pages for a flicker.
+    /// Returns whether the facts CHANGED. Re-freezing the same thing is not
+    /// a screen change, and publishing it as one would be a patch for every
+    /// fill batch of a directory the reader is not even looking at.
     pub(crate) fn recongelar(&mut self, facts: norte_frontend::availability::Facts) -> bool {
-        if self.hechos == facts {
+        if self.facts == facts {
             return false;
         }
-        self.hechos = facts;
+        self.facts = facts;
         self.chords = self.chords.with_facts(facts);
         true
     }
 
-    /// La proyección entera.
+    /// The whole projection.
     ///
-    /// `efectos` y `visor_abierto` son las dos mitades de la pregunta «¿puede
-    /// ESTA ventana correr esta fila?», que no es la misma que «¿se puede
-    /// ahora?» — ver [`veredicto_del_host`].
+    /// `efectos` and `visor_abierto` are the two halves of the question
+    /// "can THIS window run this row?", which is not the same as "can it
+    /// be run right now?" — see [`motivo_de`].
     pub(crate) fn vista(
         &self,
         lang: Lang,
@@ -147,11 +148,11 @@ impl Ayuda {
     ) -> HelpView {
         let topic = self.estado.current_topic();
         let en_teclas = self.estado.current().as_str() == KEYS_ID;
-        // Una página de extensión que todavía no ha llegado no tiene `Topic`,
-        // y ahí es donde estaba el agujero: sin título y SIN LÍNEA DE
-        // PROCEDENCIA, o sea con la forma exacta de una página del binario.
-        // El nodo de la lateral sí sabe cómo se llama, y que es de un
-        // tercero, así que la página en vuelo se pinta con las dos cosas.
+        // An extension page that has not arrived yet has no `Topic`, and
+        // that is where the hole was: no title and NO PROVENANCE LINE, that
+        // is, with the exact shape of a page from the binary itself. The
+        // sidebar node does know its name, and that it is from a third
+        // party, so the in-flight page is painted with both.
         let en_vuelo = topic
             .is_none()
             .then(|| self.estado.plugin_needs_fetch())
@@ -159,15 +160,15 @@ impl Ayuda {
         let titulo = if en_teclas {
             norte_i18n::t_in(lang, "help-topic-keys")
         } else if let Some(id) = en_vuelo {
-            self.titulo_de_nodo(id)
+            self.title_of_node(id)
         } else {
             topic.map_or_else(String::new, |t| t.title.clone())
         };
         let filas = self.filas(lang, efectos, visor_abierto);
         HelpView {
             title: clamp_display(titulo),
-            // NO pasa por `clamp_display`: es una CLAVE, y recortar no es
-            // inyectivo. Entera o vacía.
+            // Does NOT go through `clamp_display`: it is a KEY, and
+            // clamping is not injective. Whole or empty.
             topic_id: identidad(self.estado.current().as_str()),
             badge: self.insignia(lang, topic, en_vuelo),
             sidebar: self.lateral(lang),
@@ -177,7 +178,7 @@ impl Ayuda {
                 Focus::Body => HelpFocusView::Body,
             },
             blocks: if en_teclas {
-                self.teclas.clone()
+                self.keys.clone()
             } else {
                 topic.map_or_else(Vec::new, |t| {
                     t.blocks
@@ -192,15 +193,16 @@ impl Ayuda {
             filter: clamp_display(self.estado.filter_display()),
             filtering: self.estado.filtering(),
             can_back: self.estado.can_back(),
-            scroll: self.desplazamiento,
+            scroll: self.scroll,
         }
     }
 
-    /// El título con el que la lateral nombra a `id`.
+    /// The title the sidebar names `id` with.
     ///
-    /// Sale del NODO y no de la página, porque la página es justo lo que no
-    /// ha llegado. Ya viene enmascarado y acotado de la entrada.
-    fn titulo_de_nodo(&self, id: &str) -> String {
+    /// Comes from the NODE and not the page, because the page is exactly
+    /// what has not arrived. Already masked and clamped at the point of
+    /// entry.
+    fn title_of_node(&self, id: &str) -> String {
         self.estado
             .rows()
             .iter()
@@ -211,14 +213,15 @@ impl Ayuda {
             .unwrap_or_else(|| id.to_owned())
     }
 
-    /// La línea de procedencia, si la página es de un tercero.
+    /// The provenance line, if the page is from a third party.
     ///
-    /// Una página de extensión SIEMPRE la lleva, también mientras se está
-    /// pidiendo: una línea que aparece a veces enseña lo contrario de la
-    /// verdad cuando falta, y quien la lee está decidiendo si aprueba la
-    /// extensión. Con la página en vuelo no se sabe todavía si se recortó ni
-    /// si hubo bytes que no decodificaron, así que se dicen las dos que sí se
-    /// saben: que es de una extensión y quién la publica.
+    /// An extension page ALWAYS carries it, even while it is still being
+    /// requested: a line that only sometimes appears teaches the opposite
+    /// of the truth when it is missing, and whoever reads it is deciding
+    /// whether to approve the extension. With the page in flight it is not
+    /// yet known whether it was truncated or whether some bytes failed to
+    /// decode, so the two things that ARE known are said: that it is from
+    /// an extension, and who publishes it.
     fn insignia(
         &self,
         lang: Lang,
@@ -227,7 +230,7 @@ impl Ayuda {
     ) -> Option<String> {
         if let Some(id) = en_vuelo {
             return norte_frontend::help_badge::plugin_badge(
-                self.publicadores.get(id).map(String::as_str),
+                self.publishers.get(id).map(String::as_str),
                 false,
                 false,
                 lang,
@@ -251,7 +254,7 @@ impl Ayuda {
         }
     }
 
-    /// La lateral, con las cabeceras de grupo ya traducidas.
+    /// The sidebar, with group headers already translated.
     fn lateral(&self, lang: Lang) -> Vec<HelpSidebarRowView> {
         let actual = self.estado.current();
         self.estado
@@ -259,7 +262,7 @@ impl Ayuda {
             .iter()
             .map(|r| match r {
                 SidebarRow::Group { tag } => HelpSidebarRowView::Group {
-                    label: clamp_display(etiqueta_de_grupo(tag, lang)),
+                    label: clamp_display(group_label(tag, lang)),
                 },
                 SidebarRow::Topic { id, title } => HelpSidebarRowView::Topic {
                     title: clamp_display(title.clone()),
@@ -269,14 +272,14 @@ impl Ayuda {
             .collect()
     }
 
-    /// Las filas ejecutables: la acción del MODELO y su proyección, juntas.
+    /// The executable rows: the MODEL's action and its projection, together.
     ///
-    /// Una sola pasada produce las dos a propósito. `HelpActivate{index}`
-    /// indexa el modelo con un índice que salió de la proyección, así que dos
-    /// recorridos separados eran dos listas que podían dejar de coincidir sin
-    /// que nada lo dijera — y entonces un click en «copiar» corre otra cosa.
-    /// El orden es el de [`HelpState::actions`]: primero los comandos que la
-    /// página documenta, luego sus enlaces de «ver también».
+    /// A single pass produces both on purpose. `HelpActivate{index}` indexes
+    /// the model with an index that came out of the projection, so two
+    /// separate traversals were two lists that could drift apart without
+    /// anything saying so — and then a click on "copy" runs something else.
+    /// The order is [`HelpState::actions`]'s: first the commands the page
+    /// documents, then its "see also" links.
     fn filas(
         &self,
         lang: Lang,
@@ -292,10 +295,10 @@ impl Ayuda {
                 .map(|r| {
                     let motivo = motivo_de(&r.row, efectos, visor_abierto);
                     let vista = HelpActionView {
-                        // El nombre de un comando puede venir de una capa de
-                        // keymap del usuario o del proyecto, que no lleva
-                        // confianza, y `label_or_id` cae al id crudo cuando el
-                        // catálogo no lo nombra.
+                        // A command's name can come from a user keymap layer
+                        // or from the project, which carries no trust, and
+                        // `label_or_id` falls back to the raw id when the
+                        // catalogue does not name it.
                         label: clamp_display(norte_frontend::display_name(r.label.as_bytes()).0),
                         chord: clamp_display(r.chord.unwrap_or_default()),
                         enabled: motivo.is_none(),
@@ -307,14 +310,14 @@ impl Ayuda {
                     (Action::Run(r.row.command), vista, motivo)
                 })
                 .collect();
-        // `links()` y no `see_also`: los enlaces de la prosa también se siguen.
+        // `links()` and not `see_also`: the prose's links are followed too.
         out.extend(topic.links().iter().map(|id| {
             let vista = HelpActionView {
                 label: clamp_display(titulo_de(id, self.estado.lang())),
                 chord: String::new(),
-                // Un enlace siempre se puede seguir: lo único que hace es
-                // cambiar de página, y si el corpus de este idioma no la
-                // tiene, el propio modelo lo ignora sin panicar.
+                // A link can always be followed: all it does is change the
+                // page, and if this language's corpus does not have it, the
+                // model itself ignores it without panicking.
                 enabled: true,
                 reason: String::new(),
                 opens_topic: true,
@@ -324,11 +327,11 @@ impl Ayuda {
         out
     }
 
-    /// Qué hace la acción `i`, si esta ventana puede hacerla.
+    /// What action `i` does, if this window can do it.
     ///
-    /// `Err` es la clave Fluent del motivo. La comprueba el HOST y no el
-    /// renderer: si la comprobación viviera solo en quien pinta, el camino
-    /// del teclado —que no pasa por ahí— correría una fila atenuada.
+    /// `Err` is the Fluent key for the reason. The HOST checks it, not the
+    /// renderer: if the check lived only in whoever paints, the keyboard
+    /// path —which does not go through there— would run a dimmed row.
     pub(crate) fn accion_ejecutable(
         &self,
         i: usize,
@@ -344,34 +347,37 @@ impl Ayuda {
         }
     }
 
-    /// Mete el catálogo de plugins en el modelo (H3e).
+    /// Feeds the plugin catalogue into the model (H3e).
     ///
-    /// El ÚNICO punto de entrada de texto de tercero a la ayuda de esta
-    /// ventana, y hace tres cosas que el modelo no hace:
+    /// The ONLY entry point for third-party text into this window's help,
+    /// and it does three things the model does not:
     ///
-    /// 1. **Descarta** —nunca reescribe— un id que no sea reverse-DNS válido.
-    ///    Un id es una CLAVE: entra en un `TopicId`, sale como argumento de
-    ///    `plugin.help` y es lo que el filtro de la lateral pliega en cada
-    ///    tecla. Enmascararlo no es una medida de seguridad, porque no es
-    ///    inyectivo: mapearía dos plugins distintos a la misma fila.
-    /// 2. **Enmascara y acota** el nombre y el publicador, que son prosa de
-    ///    tercero, en la entrada y no al pintar: `PluginNode` documenta su
-    ///    título como «ya seguro» y el modelo no enmascara nada.
-    /// 3. Cae al **id** cuando el nombre queda en blanco. `name` es
-    ///    obligatorio en el manifiesto pero nadie comprueba que diga algo, y
-    ///    un nombre de rellenos HANGUL pinta una fila vacía bajo la cabecera
-    ///    de extensiones: una página que se puede abrir y leer, sin nombre.
+    /// 1. **Discards** —never rewrites— an id that is not a valid
+    ///    reverse-DNS one. An id is a KEY: it goes into a `TopicId`, comes
+    ///    out as an argument of `plugin.help` and is what the sidebar
+    ///    filter folds on every keystroke. Masking it would not be a
+    ///    security measure, because it is not injective: it would map two
+    ///    different plugins to the same row.
+    /// 2. **Masks and clamps** the name and the publisher, which are
+    ///    third-party prose, at the point of entry and not at paint time:
+    ///    `PluginNode` documents its title as "already safe" and the model
+    ///    masks nothing.
+    /// 3. Falls back to the **id** when the name is left blank. `name` is
+    ///    mandatory in the manifest but nobody checks that it says
+    ///    anything, and a name made of HANGUL filler characters paints an
+    ///    empty row under the extensions header: a page that can be opened
+    ///    and read, with no name.
     ///
-    /// Un nodo está ACTIVO si el plugin está aprobado Y encendido. Eso decide
-    /// si sus filas de comando se pueden correr, jamás si su página se ve: un
-    /// humano lee la documentación de una extensión precisamente para decidir
-    /// si la enciende.
+    /// A node is ACTIVE if the plugin is approved AND enabled. That decides
+    /// whether its command rows can be run, never whether its page can be
+    /// seen: a human reads an extension's documentation precisely to decide
+    /// whether to enable it.
     pub(crate) fn set_plugins(&mut self, plugins: &[norte_proto::methods::PluginInfo]) {
         let validos: Vec<&norte_proto::methods::PluginInfo> = plugins
             .iter()
             .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
             .collect();
-        self.publicadores = validos
+        self.publishers = validos
             .iter()
             .filter_map(|p| {
                 let quien = plugin_label(&p.publisher);
@@ -398,58 +404,61 @@ impl Ayuda {
         );
     }
 
-    /// La página de plugin que hay que pedir, si hay alguna y no se ha pedido
-    /// ya en esta apertura. Reclamarla la marca como pedida.
+    /// The plugin page that must be requested, if there is one and it has
+    /// not been requested yet in this opening. Claiming it marks it as
+    /// requested.
     pub(crate) fn reclamar_pagina(&mut self) -> Option<String> {
         let id = self.estado.plugin_needs_fetch()?.to_owned();
-        self.pedidas.insert(id.clone()).then_some(id)
+        self.requested.insert(id.clone()).then_some(id)
     }
 
-    /// Instala la página de un plugin, parseada como lo que es: texto que no
-    /// se controla.
+    /// Installs a plugin's page, parsed as what it is: text that is not
+    /// controlled.
     ///
-    /// `fold_flags` no es opcional: el texto llega YA acotado y YA decodificado
-    /// por el daemon, así que este parseo sale limpio y la insignia —que es
-    /// toda la mitigación visible de un `help.md` hostil— se apagaría.
+    /// `fold_flags` is not optional: the text arrives ALREADY clamped and
+    /// ALREADY decoded by the daemon, so this parse comes out clean and the
+    /// badge —which is all the visible mitigation against a hostile
+    /// `help.md`— would go dark.
     pub(crate) fn instalar_pagina(
         &mut self,
         id: &str,
         res: &norte_proto::methods::PluginHelpResult,
     ) {
-        // El publicador sale de la FOTO, nunca de la página: un plugin no
-        // dice quién lo publica. `parse_untrusted` lo vuelve a enmascarar,
-        // que es inofensivo.
-        let publicador = self.publicadores.get(id).cloned();
+        // The publisher comes from the SNAPSHOT, never from the page: a
+        // plugin does not say who publishes it. `parse_untrusted` masks it
+        // again anyway, which is harmless.
+        let publicador = self.publishers.get(id).cloned();
         let parsed = norte_help::parse_untrusted(res.markdown.as_bytes(), id, publicador)
             .fold_flags(res.truncated, res.lossy);
         self.estado.install_plugin_topic(parsed.topic);
     }
 
-    /// Mueve el cursor del cuerpo a la fila `i` — lo que significa un click
-    /// sobre ella, la mitad que NO ejecuta.
+    /// Moves the body cursor to row `i` — what a click on it means, the
+    /// half that does NOT execute.
     ///
-    /// Se hace además de ejecutar, y no en vez de: tras seguir un enlace, la
-    /// siguiente flecha tiene que moverse por donde el lector acaba de
-    /// señalar, no por la lateral.
+    /// Done in addition to executing, not instead of: after following a
+    /// link, the next arrow key has to move from where the reader just
+    /// pointed, not from the sidebar.
     pub(crate) fn senalar(&mut self, i: usize) {
         self.estado.click_action(i);
     }
 }
 
-/// Por qué esta ventana NO puede correr una fila, o `None` si sí puede.
+/// Why this window CANNOT run a row, or `None` if it can.
 ///
-/// Son DOS preguntas, y las dos apagan la fila:
+/// There are TWO questions, and either one turns the row off:
 ///
-/// - El **catálogo compartido** contesta «¿se puede AHORA?» con los hechos
-///   congelados al abrir la ayuda (dentro de un zip no se copia hacia aquí).
-/// - La **lista de esta ventana** contesta «¿lo hace esta ventana?», y esa
-///   respuesta depende de la PANTALLA a la que pertenece el comando, no de
-///   una lista plana: un verbo `dialog.*` lo contesta el propio diálogo con
-///   sus botones, y un comando del visor solo significa algo con el visor
-///   abierto. Preguntar contra la lista plana daba las dos respuestas mal a
-///   la vez — una página de diálogo salía entera apagada «porque esta ventana
-///   no lo hace», y las filas del visor salían encendidas con el visor
-///   cerrado para luego negarse al pulsarlas.
+/// - The **shared catalogue** answers "can it be run RIGHT NOW?" with the
+///   facts frozen when help was opened (inside a zip nothing gets copied
+///   here).
+/// - This **window's list** answers "does this window do it?", and that
+///   answer depends on the SCREEN the command belongs to, not on a flat
+///   list: a `dialog.*` verb is answered by the dialog itself with its own
+///   buttons, and a viewer command only means something with the viewer
+///   open. Asking against the flat list got both answers wrong at once — a
+///   dialog page came out entirely dimmed "because this window doesn't do
+///   it", and the viewer's rows came out enabled with the viewer closed,
+///   only to refuse when pressed.
 fn motivo_de(
     row: &norte_help::CommandRow,
     efectos: crate::commands::Efectos,
@@ -472,13 +481,13 @@ fn motivo_de(
         .map(norte_frontend::availability::reason_key)
 }
 
-/// Una IDENTIDAD que cruza el bridge: entera, o vacía.
+/// An IDENTITY that crosses the bridge: whole, or empty.
 ///
-/// Nunca recortada. Recortar no es inyectivo, y esto es una clave: dos ids
-/// que coincidieran en sus primeros miles de bytes llegarían como uno solo,
-/// que es la trampa que ADR 0061 decidió no volver a tender. Una clave que no
-/// cabe se convierte en una que no casa con nada, que es un fallo visible, en
-/// vez de una que casa con la equivocada.
+/// Never clamped. Clamping is not injective, and this is a key: two ids
+/// that matched on their first few thousand bytes would arrive as one and
+/// the same, which is the trap ADR 0061 decided never to set again. A key
+/// that does not fit becomes one that matches nothing, which is a visible
+/// failure, instead of one that matches the wrong thing.
 fn identidad(id: &str) -> String {
     if id.len() > crate::bridge::MAX_STRING_BYTES {
         return String::new();
@@ -486,13 +495,13 @@ fn identidad(id: &str) -> String {
     id.to_owned()
 }
 
-/// La página sintética de teclado: cada tecla ligada de cada pantalla, con su
-/// etiqueta del catálogo, en el orden de precedencia REAL del mapa.
+/// The synthetic keyboard page: every bound key of every screen, with its
+/// catalogue label, in the map's REAL precedence order.
 ///
-/// Generada, jamás una lista mantenida a mano: un rebind la cambia. No es una
-/// tabla del corpus porque sus filas llevan disponibilidad y motivo, que una
-/// celda de tabla no tiene dónde poner.
-fn hoja_de_teclado(listado: &Effective, visor: &Effective, lang: Lang) -> Vec<HelpBlockView> {
+/// Generated, never a hand-maintained list: a rebind changes it. It is not
+/// a corpus table because its rows carry availability and a reason, which a
+/// table cell has nowhere to put.
+fn keyboard_sheet(listado: &Effective, visor: &Effective, lang: Lang) -> Vec<HelpBlockView> {
     let mut out = vec![HelpBlockView::Paragraph {
         spans: vec![HelpSpanView::Text {
             text: clamp_display(norte_i18n::t_in(lang, "keys-page-note")),
@@ -505,8 +514,8 @@ fn hoja_de_teclado(listado: &Effective, visor: &Effective, lang: Lang) -> Vec<He
         let filas: Vec<HelpKeyRowView> = sheet(&[(screen, eff.clone())])
             .into_iter()
             .map(|row| {
-                // La etiqueta puede venir de un `keymap.toml` del usuario:
-                // se enmascara, y se dice que se enmascaró (#266).
+                // The label can come from a user's `keymap.toml`: it is
+                // masked, and it says that it was masked (#266).
                 let etiqueta = norte_frontend::whichkey::command_label(&row.command, lang);
                 let (pintable, hostil) = norte_frontend::display_name(etiqueta.as_bytes());
                 HelpKeyRowView {
@@ -530,23 +539,24 @@ fn hoja_de_teclado(listado: &Effective, visor: &Effective, lang: Lang) -> Vec<He
     out
 }
 
-/// La cabecera de un grupo de la lateral, traducida.
+/// A sidebar group's header, translated.
 ///
-/// `t_in` contesta una clave que no tiene con la clave misma, así que un tag
-/// sin entrada pintaría `help-group-…` al lector: se detecta ese eco —que ES
-/// el fallo— y se cae al tag, que al menos es una palabra.
-fn etiqueta_de_grupo(tag: &str, lang: Lang) -> String {
+/// `t_in` answers a key it does not have with the key itself, so a tag with
+/// no entry would paint `help-group-…` for the reader: that echo is
+/// detected —it IS the failure— and it falls back to the tag, which is at
+/// least a word.
+fn group_label(tag: &str, lang: Lang) -> String {
     let id = format!("help-group-{tag}");
     let texto = norte_i18n::t_in(lang, &id);
     if texto == id { tag.to_owned() } else { texto }
 }
 
-/// El título de una página, o su id si el corpus de este idioma no la tiene.
+/// A page's title, or its id if this language's corpus does not have it.
 fn titulo_de(id: &TopicId, lang: Lang) -> String {
     norte_help::topic(lang, id.as_str()).map_or_else(|| id.as_str().to_owned(), |t| t.title.clone())
 }
 
-/// Un bloque del corpus, proyectado.
+/// A corpus block, projected.
 fn bloque(b: &Block, chords: &Chords, acciones: &[Action]) -> HelpBlockView {
     match b {
         Block::Heading { level, text } => HelpBlockView::Heading {
@@ -595,8 +605,8 @@ fn bloque(b: &Block, chords: &Chords, acciones: &[Action]) -> HelpBlockView {
     }
 }
 
-/// Un fragmento, con las dos marcas VIVAS ya resueltas contra el keymap y el
-/// idioma de este lector.
+/// A fragment, with both LIVE marks already resolved against this reader's
+/// keymap and language.
 fn fragmento(s: &Span, chords: &Chords, acciones: &[Action]) -> HelpSpanView {
     match s {
         Span::Text(t) => HelpSpanView::Text {
@@ -612,14 +622,14 @@ fn fragmento(s: &Span, chords: &Chords, acciones: &[Action]) -> HelpSpanView {
             text: clamp_display(t.clone()),
         },
         Span::CommandRef(c) => {
-            // El último escalón de `render_command` es el ID CRUDO del
-            // comando, y en modo confiable el parser no comprueba su
-            // alfabeto: `{{cmd:\u{202E}fs.copy}}` sobrevive intacto. Lo que
-            // hace seguro no enmascarar aquí es que el corpus EMBEBIDO pasa
-            // por un gate (`check_commands` sobre la lista compartida, que
-            // hoy corre en `norte-tui/tests/help_gate.rs`) y este host pinta
-            // ESE mismo corpus. Una página de plugin no cuenta: viene de
-            // `parse_untrusted`, que rehúsa una clave que no podría pintar.
+            // The last step of `render_command` is the command's RAW ID,
+            // and in trusted mode the parser does not check its alphabet:
+            // `{{cmd:\u{202E}fs.copy}}` survives intact. What makes it safe
+            // not to mask here is that the EMBEDDED corpus goes through a
+            // gate (`check_commands` against the shared list, which today
+            // runs in `norte-tui/tests/help_gate.rs`) and this host paints
+            // that SAME corpus. A plugin page does not count: it comes from
+            // `parse_untrusted`, which refuses a key it could not paint.
             let texto = norte_help::render_command(c, chords);
             HelpSpanView::Command {
                 is_chord: texto.is_chord(),
@@ -628,8 +638,8 @@ fn fragmento(s: &Span, chords: &Chords, acciones: &[Action]) -> HelpSpanView {
         }
         Span::TopicLink(id) => HelpSpanView::Link {
             text: clamp_display(titulo_de(id, chords_lang(chords))),
-            // La fila que lo sigue: `Topic::links()` mete cada enlace de la
-            // prosa en las acciones, así que pulsarlo es activar esa fila.
+            // The row that follows it: `Topic::links()` puts every prose
+            // link into the actions, so pressing it activates that row.
             action: acciones
                 .iter()
                 .position(|a| matches!(a, Action::Open(destino) if destino == id))
@@ -638,11 +648,11 @@ fn fragmento(s: &Span, chords: &Chords, acciones: &[Action]) -> HelpSpanView {
     }
 }
 
-/// El idioma con el que se construyó el resolver.
+/// The language the resolver was built with.
 ///
-/// Se pregunta al resolver y no se pasa como parámetro porque son el mismo
-/// idioma por construcción, y dos fuentes es donde una página acaba con el
-/// título en un idioma y la prosa en otro.
+/// Asked of the resolver and not passed as a parameter because they are the
+/// same language by construction, and two sources is where a page ends up
+/// with the title in one language and the prose in another.
 fn chords_lang(chords: &Chords) -> Lang {
     chords.lang()
 }

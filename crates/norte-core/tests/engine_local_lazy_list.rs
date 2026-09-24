@@ -1,9 +1,9 @@
-//! #52: el listado de `LocalProvider` es lazy (kind por `d_type`,
-//! `size`/`mtime_ms` en `None`). Este test prueba la COORDINACIÓN C1↔C2:
-//! sin `hydrate_plan` (C1, en `ops::copy_tree`), `bytes_total` quedaría en
-//! `Some(0)` porque el plan del walk trae `size: None` para cada hoja
-//! (fuente: `LocalProvider::list`, C2). Con la hidratación, el progreso
-//! refleja el tamaño real ANTES de copiar y el contenido llega byte-exacto.
+//! #52: `LocalProvider`'s listing is lazy (kind by `d_type`,
+//! `size`/`mtime_ms` left `None`). This test checks the C1↔C2 COORDINATION:
+//! without `hydrate_plan` (C1, in `ops::copy_tree`), `bytes_total` would stay
+//! `Some(0)` because the walk's plan carries `size: None` for every leaf
+//! (source: `LocalProvider::list`, C2). With hydration, the progress
+//! reflects the real size BEFORE copying and the content arrives byte-exact.
 
 use std::sync::Arc;
 
@@ -13,11 +13,11 @@ use norte_vfs::Provider;
 use norte_vfs_local::LocalProvider;
 
 fn child(base: &VPath, name: &[u8]) -> VPath {
-    base.join(Segment::new(name.to_vec()).expect("segmento válido"))
+    base.join(Segment::new(name.to_vec()).expect("valid segment"))
 }
 
 #[tokio::test]
-async fn copy_dir_local_bytes_total_hidratado_desde_listado_lazy() {
+async fn copy_dir_local_bytes_total_hydrated_from_lazy_listing() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir(dir.path().join("src")).expect("mkdir src");
     std::fs::write(dir.path().join("src").join("a"), b"abc").expect("3 bytes");
@@ -38,7 +38,7 @@ async fn copy_dir_local_bytes_total_hidratado_desde_listado_lazy() {
     assert_eq!(
         last.bytes_total,
         Some(7),
-        "sin hydrate_plan el listado lazy dejaría bytes_total en Some(0)"
+        "without hydrate_plan the lazy listing would leave bytes_total at Some(0)"
     );
 
     assert_eq!(

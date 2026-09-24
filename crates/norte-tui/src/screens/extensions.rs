@@ -1,14 +1,14 @@
-//! El gestor de extensiones (G3): la lista de plugins, su ayuda de una tecla y
-//! el panel de `[config]` de cada uno.
+//! The extension manager (G3): the plugin list, its one-key help, and each
+//! plugin's `[config]` panel.
 //!
-//! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, así que
-//! ni los tests de integración podían meterle una tecla ni afirmar su ayuda sin
-//! que el bucle de eventos hiciera de intermediario.
+//! It used to live in the `ntc` binary's root — a crate DISTINCT from this
+//! lib — so neither the integration tests could feed it a key nor assert its
+//! help without the event loop acting as go-between.
 //!
-//! Un plugin es código de TERCEROS: todo lo que llega de él —id, nombre,
-//! salida, valores de `[config]`— pasa por `detail_for_bar` antes de tocar la
-//! barra (patrón #73), y la autorización de correr un comando es siempre del
-//! SERVIDOR, no de la foto que este cliente tenga congelada.
+//! A plugin is THIRD-PARTY code: everything that arrives from it — id, name,
+//! output, `[config]` values — goes through `detail_for_bar` before touching
+//! the bar (#73 pattern), and authorization to run a command always belongs
+//! to the SERVER, never to whatever snapshot this client has frozen.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
@@ -57,8 +57,8 @@ pub fn extensions_help(
     let Some(plugins) = app.extensions.take().map(|m| m.plugins) else {
         return;
     };
-    // H3d: el mismo congelado que `open_contextual_help` — la ayuda que se abre
-    // desde el gestor es la misma ayuda.
+    // H3d: the same freeze as `open_contextual_help` — the help opened from
+    // the manager is the same help.
     app.freeze_help_facts();
     app.help = Some(HelpView::new(lang, help_lines.to_vec()));
     app.freeze_help_plugins(&plugins);
@@ -67,20 +67,21 @@ pub fn extensions_help(
     }
 }
 
-/// Teclas del overlay de extensiones (M4-P3), resueltas contra el contexto
-/// `dialog` del keymap (H1 T2, issue #24); `ctrl+c` conserva su salida
-/// global, hardcodeado ANTES de resolver. Regla 7: aprobar/activar viaja al
-/// core por el `Backend`; el bool LOCAL solo se togglea tras un OK (feedback
-/// inmediato sin relistar). El id y el estado se toman ANTES del `.await`
-/// (el borrow del `mgr` se suelta durante la llamada al backend y se
-/// re-obtiene después para reflejar el resultado). Allowlist de este
-/// overlay: `dialog.up/down/cancel/approve/toggle-enabled` — `approve`
-/// togglea la APROBACIÓN del plugin (decisión 3 del plan H1: "aprobar un
-/// plugin" reutiliza semánticamente `dialog.approve`, antes era la tecla
-/// `a` hardcodeada; ahora `a` es `dialog.add`, que este overlay no soporta).
+/// Keys of the extensions overlay (M4-P3), resolved against the keymap's
+/// `dialog` context (H1 T2, issue #24); `ctrl+c` keeps its global quit,
+/// hardcoded BEFORE resolving. Rule 7: approving/enabling travels to the
+/// core through the `Backend`; the LOCAL bool only toggles after an OK
+/// (immediate feedback with no re-listing). The id and state are taken
+/// BEFORE the `.await` (the `mgr` borrow is released during the backend
+/// call and reacquired afterward to reflect the result). This overlay's
+/// allowlist: `dialog.up/down/cancel/approve/toggle-enabled` — `approve`
+/// toggles the plugin's APPROVAL (decision 3 of the H1 plan: "approving a
+/// plugin" semantically reuses `dialog.approve`; it used to be the
+/// hardcoded `a` key, now `a` is `dialog.add`, which this overlay does not
+/// support).
 ///
-/// Fuera del allowlist, una sola tecla más: `app.help` (H3e) abre la página del
-/// plugin resaltado — ver [`extensions_help`].
+/// Outside the allowlist, one more key: `app.help` (H3e) opens the
+/// highlighted plugin's page — see [`extensions_help`].
 pub async fn on_extensions_key(
     app: &mut App,
     backend: &Backend,
@@ -110,17 +111,17 @@ pub async fn on_extensions_key(
         on_plugin_config_edit_key(app, backend, mods, code).await;
         return;
     }
-    if flecha_de_botones(app, mods, code) {
+    if button_arrow(app, mods, code) {
         resolver.reset();
         return;
     }
     let Some(chord) = chord_from_crossterm(mods, code) else {
-        return; // tecla no modelada por el keymap: ignorar
+        return; // key not modeled by the keymap: ignore
     };
     let cmd = match resolver.push(chord) {
         Resolution::Run { command: cmd, .. } => cmd,
-        // Secuencia en curso, o tecla ligada a algo que esta build no corre
-        // (K1 T4): ignorar y reiniciar el estado de resolución.
+        // Sequence in progress, or a key bound to something this build does
+        // not run (K1 T4): ignore and reset the resolution state.
         Resolution::Pending(_) | Resolution::Counting(_) | Resolution::Unavailable { .. } => {
             resolver.reset();
             return;
@@ -128,38 +129,38 @@ pub async fn on_extensions_key(
         Resolution::Reset => return,
     };
     let panel_open = app.extensions.as_ref().is_some_and(|m| m.config.is_some());
-    // Con el foco en un botón de la ficha (`tab`), Enter dispara ESE botón.
-    // Se hace SUSTITUYENDO el comando aquí, antes del allowlist, y no
-    // llamando al despacho por segunda vez: uno de los botones es
-    // `dialog.confirm` —el de los ajustes—, así que reentrar sería un
-    // bucle. Sustituido una vez, `dialog.confirm` vuelve a significar lo
-    // que significa en la lista, que es exactamente lo que ese botón hace.
-    let cmd = boton_enfocado(app)
+    // With focus on a button of the card (`tab`), Enter fires THAT button.
+    // Done by SUBSTITUTING the command here, before the allowlist, and not
+    // by calling dispatch a second time: one of the buttons is
+    // `dialog.confirm` — the settings one — so re-entering would be a loop.
+    // Substituted once, `dialog.confirm` goes back to meaning what it means
+    // in the list, which is exactly what that button does.
+    let cmd = focused_button(app)
         .filter(|_| !panel_open && cmd == "dialog.confirm")
         .unwrap_or(cmd);
-    // H3e: `app.help` es un comando de `[global]`, no un verbo `dialog.*`, así
-    // que no está en ningún allowlist de este overlay y sin esta rama F1 sería
-    // inerte aquí. Se resuelve por el keymap como todo lo demás (un rebind de
-    // `app.help` mueve también este puente); lo cableado es el significado, no
-    // la tecla. Mismo criterio que la rama `app.help` de `on_help_key` y que F9
-    // en `on_theme_picker_key`. NO cuando el panel de `[config]` está abierto:
-    // ahí el lector está editando valores, y perder el panel para leer prosa no
-    // es lo que pidió.
+    // H3e: `app.help` is a `[global]` command, not a `dialog.*` verb, so it
+    // is not in any allowlist of this overlay and without this branch F1
+    // would be inert here. It resolves through the keymap like everything
+    // else (a rebind of `app.help` also moves this bridge); what is wired
+    // is the meaning, not the key. Same criterion as `on_help_key`'s
+    // `app.help` branch and F9 in `on_theme_picker_key`. NOT when the
+    // `[config]` panel is open: there the reader is editing values, and
+    // losing the panel to read prose is not what they asked for.
     if cmd == "app.help" && !panel_open {
         extensions_help(app, lang, help_lines);
         return;
     }
-    // H1 T3: el MISMO allowlist que consume el hint generado
-    // (`hints::DialogHints::build`) — una sola fuente para dispatch y footer.
-    // G3c: qué allowlist aplica depende de si el panel de `[config]` está
-    // abierto.
+    // H1 T3: the SAME allowlist the generated hint consumes
+    // (`hints::DialogHints::build`) — a single source for dispatch and
+    // footer. G3c: which allowlist applies depends on whether the
+    // `[config]` panel is open.
     let allow: &[&str] = if panel_open {
         ALLOW_PLUGIN_CONFIG
     } else {
         ALLOW_EXTENSIONS
     };
     if !allow.contains(&cmd.as_str()) {
-        return; // fuera del allowlist de este contexto: inerte
+        return; // outside this context's allowlist: inert
     }
     if panel_open {
         on_plugin_config_panel_cmd(app, backend, &cmd).await;
@@ -168,15 +169,15 @@ pub async fn on_extensions_key(
     }
 }
 
-/// `←`/`→` sin modificadores recorren el anillo de botones de la ficha, como
-/// `tab` hacia delante y hacia atrás. Devuelve si consumió la tecla.
+/// `←`/`→` with no modifiers cycle the card's button ring, like `tab`
+/// forward and backward. Returns whether it consumed the key.
 ///
-/// Cableado a la tecla, no al keymap, a propósito: ningún preset ata
-/// `left`/`right` en `[dialog]`, y una fila de botones que no se recorre con
-/// las flechas es lo raro, no lo configurable. Con el panel de ajustes
-/// abierto, `←` es «atrás»: lo cierra y deja el foco en el botón por el que
-/// se entró; `→` no hace nada ahí.
-fn flecha_de_botones(app: &mut App, mods: KeyModifiers, code: KeyCode) -> bool {
+/// Wired to the key, not the keymap, on purpose: no preset binds
+/// `left`/`right` in `[dialog]`, and a button row that does not cycle with
+/// the arrows is what is strange, not the configurable part. With the
+/// settings panel open, `←` is "back": it closes it and leaves focus on the
+/// button it was entered through; `→` does nothing there.
+fn button_arrow(app: &mut App, mods: KeyModifiers, code: KeyCode) -> bool {
     if !mods.is_empty() || !matches!(code, KeyCode::Left | KeyCode::Right) {
         return false;
     }
@@ -189,25 +190,25 @@ fn flecha_de_botones(app: &mut App, mods: KeyModifiers, code: KeyCode) -> bool {
         }
         return true;
     }
-    let botones = crate::mouse::painted_extension_buttons(app).len();
+    let buttons = crate::mouse::painted_extension_buttons(app).len();
     if let Some(mgr) = &mut app.extensions {
         mgr.foco = if code == KeyCode::Right {
-            crate::app::siguiente_foco(mgr.foco, botones)
+            crate::app::siguiente_foco(mgr.foco, buttons)
         } else {
-            crate::app::anterior_foco(mgr.foco, botones)
+            crate::app::anterior_foco(mgr.foco, buttons)
         };
     }
     true
 }
 
-/// El comando del botón que el foco señala, si el foco está en uno y ese
-/// botón lo pintó el último frame.
+/// The command of the button focus points at, if focus is on one and that
+/// button was painted the last frame.
 ///
-/// `None` cuando el foco está en la lista —lo de siempre— y también cuando
-/// apunta más allá de los botones pintados: la ficha pudo encoger entre el
-/// frame y la tecla, y disparar «el cuarto botón» de una ficha que ahora
-/// tiene tres sería disparar otro verbo del que se leyó.
-fn boton_enfocado(app: &App) -> Option<String> {
+/// `None` when focus is on the list — the usual case — and also when it
+/// points past the painted buttons: the card could have shrunk between the
+/// frame and the key, and firing "the fourth button" of a card that now has
+/// three would fire a different verb from the one that was read.
+fn focused_button(app: &App) -> Option<String> {
     let crate::app::ExtFoco::Boton(i) = app.extensions.as_ref()?.foco else {
         return None;
     };
@@ -216,15 +217,15 @@ fn boton_enfocado(app: &App) -> Option<String> {
         .map(|c| (*c).to_owned())
 }
 
-/// Un clic en el gestor: un botón de la ficha, o la fila ya elegida.
+/// A click in the manager: a card button, or the row already chosen.
 ///
-/// El MISMO despacho que la tecla (`on_extensions_list_cmd`, y para
-/// `app.help` el mismo puente que `F1`): un botón que encendiera una
-/// extensión por un camino y la tecla por otro sería dos gestores que
-/// divergen en cuanto uno crece un detalle (ADR 0077, dentro de un solo
-/// frontend). Lo que el botón NO hace es pasar por el allowlist del panel
-/// de ajustes: el clic es explícito, y apagar una extensión con sus
-/// ajustes a la vista es exactamente lo que el lector pidió.
+/// The SAME dispatch as the key (`on_extensions_list_cmd`, and for
+/// `app.help` the same bridge as `F1`): a button that turned on an
+/// extension one way and the key another would be two managers drifting
+/// apart as soon as one grows a detail (ADR 0077, within a single
+/// frontend). What the button does NOT do is go through the settings
+/// panel's allowlist: the click is explicit, and turning off an extension
+/// with its settings on screen is exactly what the reader asked for.
 pub async fn on_extensions_click(
     app: &mut App,
     backend: &Backend,
@@ -245,8 +246,8 @@ pub async fn on_extensions_click(
     on_extensions_list_cmd(app, backend, cmd).await;
 }
 
-/// G3c: teclas RAW mientras un `string`/`int` de `[config]` se edita
-/// (`on_extensions_key`'s guard `editing`) — mismo idioma que
+/// G3c: RAW keys while a `[config]` `string`/`int` is being edited
+/// (`on_extensions_key`'s `editing` guard) — same idiom as
 /// `on_nav_popup_key`'s `name_input`.
 async fn on_plugin_config_edit_key(
     app: &mut App,
@@ -289,9 +290,9 @@ async fn on_plugin_config_edit_key(
     }
 }
 
-/// G3c: comandos resueltos (`up`/`down`/`confirm`/`cancel`) mientras el
-/// panel de `[config]` está abierto y NADA se edita (`on_extensions_key`,
-/// `panel_open` branch — `allow == ALLOW_PLUGIN_CONFIG`).
+/// G3c: resolved commands (`up`/`down`/`confirm`/`cancel`) while the
+/// `[config]` panel is open and NOTHING is being edited
+/// (`on_extensions_key`'s `panel_open` branch — `allow == ALLOW_PLUGIN_CONFIG`).
 async fn on_plugin_config_panel_cmd(app: &mut App, backend: &Backend, cmd: &str) {
     let Some(panel) = app.extensions.as_mut().and_then(|m| m.config.as_mut()) else {
         return;
@@ -299,9 +300,9 @@ async fn on_plugin_config_panel_cmd(app: &mut App, backend: &Backend, cmd: &str)
     match cmd {
         "dialog.up" => panel.state.up(),
         "dialog.down" => panel.state.down(),
-        // `tab` sale igual que `Esc`: se entra al panel desde el anillo de
-        // botones con `tab`, y sin esto era la única tecla del recorrido
-        // que dejaba al lector encerrado dentro.
+        // `tab` exits just like `Esc`: the panel is entered from the button
+        // ring with `tab`, and without this it was the only key on the
+        // circuit that left the reader locked inside.
         "dialog.cancel" | "dialog.pane" => {
             if let Some(mgr) = &mut app.extensions {
                 mgr.config = None;
@@ -317,20 +318,20 @@ async fn on_plugin_config_panel_cmd(app: &mut App, backend: &Backend, cmd: &str)
     }
 }
 
-/// El resto de `on_extensions_key`: comandos sobre la LISTA de plugins
-/// (`panel_open == false`, `allow == ALLOW_EXTENSIONS`) — navegar,
-/// aprobar/activar, y `dialog.confirm` (G3c) abre el panel de `[config]`
-/// del plugin resaltado SI declara alguna clave. Enter NUNCA aprueba (pin
-/// P1): solo entra en un submenú.
+/// The rest of `on_extensions_key`: commands over the plugin LIST
+/// (`panel_open == false`, `allow == ALLOW_EXTENSIONS`) — navigating,
+/// approving/enabling, and `dialog.confirm` (G3c) opens the highlighted
+/// plugin's `[config]` panel IF it declares any key. Enter NEVER approves
+/// (pin P1): it only enters a submenu.
 async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
-    // `tab`: la lista, cada botón de la ficha, la lista. Las paradas son
-    // las que el último frame PINTÓ (`painted_extension_buttons`), así que
-    // con la caja estrecha —sin ficha— el anillo tiene una sola y la tecla
-    // no hace nada, en vez de mover un foco invisible.
+    // `tab`: the list, each card button, the list. The stops are whatever
+    // the last frame PAINTED (`painted_extension_buttons`), so with a
+    // narrow box — no card — the ring has only one and the key does
+    // nothing, instead of moving an invisible focus.
     if cmd == "dialog.pane" {
-        let botones = crate::mouse::painted_extension_buttons(app).len();
+        let buttons = crate::mouse::painted_extension_buttons(app).len();
         if let Some(mgr) = &mut app.extensions {
-            mgr.foco = crate::app::siguiente_foco(mgr.foco, botones);
+            mgr.foco = crate::app::siguiente_foco(mgr.foco, buttons);
         }
         return;
     }
@@ -341,11 +342,11 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
         "dialog.up" => mgr.up(),
         "dialog.down" => mgr.down(),
         "dialog.cancel" => app.extensions = None,
-        // CONCEDER pregunta; REVOCAR no (#280). La asimetría es la de todo
-        // este árbol: lo que va en la dirección segura no necesita permiso, y
-        // conceder capabilities es LA decisión de seguridad del sistema de
-        // extensiones — la ventana gráfica ya preguntaba y aquí se aprobaba
-        // con una tecla, enumerando nada.
+        // GRANTING asks; REVOKING does not (#280). The asymmetry is that of
+        // this whole tree: what goes in the safe direction needs no
+        // permission, and granting capabilities is THE security decision of
+        // the extension system — the graphical window already asked, and
+        // here it was approved with a key, enumerating nothing.
         "dialog.approve" => {
             let Some(sel) = mgr.selected() else {
                 if mgr.selected_broken().is_some() {
@@ -355,30 +356,30 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
             };
             if sel.approved {
                 let id = sel.id.clone();
-                revocar_o_decir(app, backend, &id).await;
+                revoke_or_say(app, backend, &id).await;
                 return;
             }
             let (id, name) = (sel.id.clone(), sel.name.clone());
             let digest = sel.manifest_digest.clone();
-            // Las capabilities, cada una enmascarada POR SU CUENTA y con su
-            // bandera: son texto de un tercero, y pegarlas en una frase deja
-            // que una finja ser otra.
+            // The capabilities, each one masked ON ITS OWN and with its
+            // flag: they are third-party text, and pasting them into one
+            // sentence lets one impersonate another.
             let caps: Vec<(String, bool)> = sel
                 .capabilities
                 .iter()
                 .map(|c| norte_frontend::help_badge::plugin_label_flagged(c))
                 .collect();
-            let (nombre, nombre_hostil) = crate::app::display_name(name.as_bytes());
+            let (name, hostile) = crate::app::display_name(name.as_bytes());
             app.modal = Some(crate::app::Modal::ConfirmPluginApproval {
                 id,
-                name: nombre,
-                name_hostile: nombre_hostil,
+                name,
+                name_hostile: hostile,
                 caps,
                 digest,
             });
         }
         "dialog.toggle-enabled" => {
-            let Some((id, cur, aprobado)) = mgr
+            let Some((id, cur, approved)) = mgr
                 .selected()
                 .map(|p| (p.id.clone(), p.enabled, p.approved))
             else {
@@ -387,32 +388,32 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
                 }
                 return;
             };
-            // Encender lo que no está aprobado, no. Apagar lo que sí lo está
-            // —aunque le hayan revocado la aprobación—, sí: apagar siempre va
-            // en la dirección segura.
-            if !cur && !aprobado {
+            // Turning on what is not approved, no. Turning off what is —
+            // even if its approval was revoked —, yes: turning off always
+            // goes in the safe direction.
+            if !cur && !approved {
                 app.message = Some(t("msg-plugin-not-approved"));
                 return;
             }
             match backend.plugins_set_enabled(&id, !cur).await {
-                Ok(()) => relistar_extensiones(app, backend).await,
+                Ok(()) => relist_extensions(app, backend).await,
                 Err(e) => app.message = Some(error_message(&e)),
             }
         }
-        // Desinstalar (ADR 0104) SIEMPRE pregunta: borra ficheros y retira
-        // el consentimiento, y no tiene vuelta. Mismo molde que conceder —el
-        // nombre saneado y con su bandera, el id aparte— y misma puerta de
-        // confirmación que borrar ficheros.
+        // Uninstalling (ADR 0104) ALWAYS asks: it deletes files and
+        // withdraws consent, with no going back. Same mold as granting —
+        // the sanitized name with its flag, the id apart — and same
+        // confirmation gate as deleting files.
         "dialog.remove" => {
             let Some((id, name)) = mgr.selected().map(|p| (p.id.clone(), p.name.clone())) else {
-                preguntar_desinstalar_rota(app);
+                ask_uninstall_broken(app);
                 return;
             };
-            let (nombre, nombre_hostil) = crate::app::display_name(name.as_bytes());
+            let (name, hostile) = crate::app::display_name(name.as_bytes());
             app.modal = Some(crate::app::Modal::ConfirmPluginUninstall {
                 id,
-                name: nombre,
-                name_hostile: nombre_hostil,
+                name,
+                name_hostile: hostile,
             });
         }
         "dialog.confirm" => {
@@ -438,15 +439,15 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
                 Err(e) => app.message = Some(error_message(&e)),
             }
         }
-        _ => {} // fuera del allowlist de este overlay: inerte
+        _ => {} // outside this overlay's allowlist: inert
     }
 }
 
-/// Persiste UN [`norte_frontend::plugin_config::PendingConfigWrite`] vía
-/// `Backend::plugin_set_config` y anuncia el resultado (G3c) — factorizado
-/// fuera de [`on_extensions_key`] porque el mismo commit ocurre desde DOS
-/// sitios (edición inline confirmada con Enter, y un `bool`/`enum` que
-/// cicla de inmediato en `dialog.confirm`).
+/// Persists ONE [`norte_frontend::plugin_config::PendingConfigWrite`] via
+/// `Backend::plugin_set_config` and announces the result (G3c) — factored
+/// out of [`on_extensions_key`] because the same commit happens from TWO
+/// places (inline editing confirmed with Enter, and a `bool`/`enum` that
+/// cycles immediately on `dialog.confirm`).
 async fn commit_plugin_config_write(
     app: &mut App,
     backend: &Backend,
@@ -462,8 +463,8 @@ async fn commit_plugin_config_write(
                 "msg-plugin-config-saved",
                 &[("key", &write.key), ("value", &write.display)],
             ));
-            // Un ajuste puede cambiar lo que un decorador pinta —el estilo
-            // de los iconos—: los listados se vuelven a pedir.
+            // A setting can change what a decorator paints — icon style —:
+            // listings are requested again.
             app.redecorate = true;
         }
         Err(e) => app.message = Some(error_message(&e)),
@@ -476,8 +477,8 @@ mod extensions_help_tests {
     use crate::app::Pane;
     use norte_vfs::VPath;
 
-    fn app_con(plugins: Vec<norte_proto::methods::PluginInfo>) -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
+    fn app_with(plugins: Vec<norte_proto::methods::PluginInfo>) -> App {
+        let d = VPath::parse("file:///x").expect("test wire");
         let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
         app.extensions = Some(ExtensionManager {
             plugins,
@@ -508,33 +509,35 @@ mod extensions_help_tests {
         }
     }
 
-    /// H3e: `F1` sobre la fila de un plugin con `help.md` abre la ayuda EN SU
-    /// página, con el catálogo que el gestor ya tenía — sin pasar por la
-    /// lateral y sin una segunda ida al daemon.
+    /// H3e: `F1` on a plugin row that has `help.md` opens help ON ITS PAGE,
+    /// with the catalogue the manager already had — with no detour through
+    /// the sidebar and no second round trip to the daemon.
     #[test]
-    fn f1_sobre_un_plugin_con_ayuda_abre_su_pagina() {
-        let mut app = app_con(vec![plugin("acme.ftp", true)]);
+    fn f1_on_a_plugin_with_help_opens_its_page() {
+        let mut app = app_with(vec![plugin("acme.ftp", true)]);
         extensions_help(&mut app, norte_help::Lang::En, &[]);
-        let help = app.help.as_ref().expect("la ayuda se abrió");
+        let help = app.help.as_ref().expect("help opened");
         assert_eq!(help.state.current().as_str(), "acme.ftp");
         assert!(
             app.extensions.is_none(),
-            "el gestor se cierra: su rama va ANTES en la cadena de teclas y se \
-             comería las teclas de la página"
+            "the manager closes: its branch goes BEFORE in the key chain and \
+             would eat the page's keys"
         );
-        // La página llega como RAÍZ del rastro: al lector lo PUSIERON ahí, así
-        // que un `Esc` tiene que salir, no volver a un índice que no visitó.
-        assert!(!app.help.as_mut().expect("abierta").state.back());
+        // The page arrives as the trail's ROOT: the reader was PUT there,
+        // so an `Esc` has to exit, not go back to an index they never
+        // visited.
+        assert!(!app.help.as_mut().expect("open").state.back());
     }
 
-    /// Y sobre una fila sin `help.md` se DICE. La fila es idéntica a una que sí
-    /// la tiene, y una tecla que calla no se distingue de una rota.
+    /// And over a row with no `help.md` it IS SAID. The row is identical to
+    /// one that has it, and a key that stays silent is indistinguishable
+    /// from a broken one.
     #[test]
-    fn f1_sobre_un_plugin_sin_ayuda_lo_dice_y_no_cierra_el_gestor() {
-        let mut app = app_con(vec![plugin("acme.ftp", false)]);
+    fn f1_on_a_plugin_with_no_help_says_so_and_does_not_close_the_manager() {
+        let mut app = app_with(vec![plugin("acme.ftp", false)]);
         extensions_help(&mut app, norte_help::Lang::En, &[]);
-        assert!(app.help.is_none(), "no hay página que abrir");
-        assert!(app.extensions.is_some(), "el gestor se queda donde estaba");
+        assert!(app.help.is_none(), "there is no page to open");
+        assert!(app.extensions.is_some(), "the manager stays where it was");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("msg-extensions-no-help").as_str())
@@ -542,32 +545,33 @@ mod extensions_help_tests {
     }
 }
 
-/// Revoca la aprobación de un plugin y RELISTA.
+/// Revokes a plugin's approval and RE-LISTS.
 ///
-/// Revocar va en la dirección segura, así que no pregunta.
-async fn revocar_o_decir(app: &mut App, backend: &Backend, id: &str) {
-    // Sin ancla a propósito (#282): revocar no concede nada, y rehusarlo por
-    // un digest rancio dejaría vivo justo el permiso que se quiere quitar.
+/// Revoking goes in the safe direction, so it does not ask.
+async fn revoke_or_say(app: &mut App, backend: &Backend, id: &str) {
+    // No anchor on purpose (#282): revoking grants nothing, and refusing it
+    // over a stale digest would leave alive exactly the permission being
+    // withdrawn.
     match backend.plugins_set_approval(id, false, None).await {
-        Ok(()) => relistar_extensiones(app, backend).await,
+        Ok(()) => relist_extensions(app, backend).await,
         Err(e) => app.message = Some(error_message(&e)),
     }
 }
 
-/// Desinstala —ya confirmado por un humano que leyó qué se pierde (ADR
-/// 0104)— y RELISTA. Un fallo se dice y se relista igual, por la misma
-/// razón que al conceder: la pantalla enseña lo que el core cree.
+/// Uninstalls — already confirmed by a human who read what is lost (ADR
+/// 0104) — and RE-LISTS. A failure is reported and re-listed anyway, for
+/// the same reason as granting: the screen shows what the core believes.
 pub(crate) async fn desinstalar_confirmada(app: &mut App, backend: &Backend, id: &str) {
     match backend.plugins_uninstall(id).await {
-        Ok(_) => relistar_extensiones(app, backend).await,
+        Ok(_) => relist_extensions(app, backend).await,
         Err(e) => {
             app.message = Some(error_message(&e));
-            relistar_extensiones(app, backend).await;
+            relist_extensions(app, backend).await;
         }
     }
 }
 
-/// Concede la aprobación —ya confirmada por un humano— y RELISTA.
+/// Grants approval — already confirmed by a human — and RE-LISTS.
 pub(crate) async fn conceder_aprobacion(
     app: &mut App,
     backend: &Backend,
@@ -575,103 +579,105 @@ pub(crate) async fn conceder_aprobacion(
     digest: Option<&str>,
 ) {
     match backend.plugins_set_approval(id, true, digest).await {
-        Ok(()) => relistar_extensiones(app, backend).await,
+        Ok(()) => relist_extensions(app, backend).await,
         Err(e) => {
-            // Un fallo se DICE **y** se relista: un plazo vencido, o un
-            // daemon que rehúsa, no es «no pasó nada» — y la pantalla tiene
-            // que enseñar lo que el core cree, no lo que este proceso
-            // esperaba.
+            // A failure is REPORTED **and** re-listed: an expired deadline,
+            // or a daemon that refuses, is not "nothing happened" — and the
+            // screen has to show what the core believes, not what this
+            // process expected.
             app.message = Some(error_message(&e));
-            relistar_extensiones(app, backend).await;
+            relist_extensions(app, backend).await;
         }
     }
 }
 
-/// `dialog.remove` sobre una extensión que NO cargó: se desinstala por su
-/// directorio si se llama como un id —es lo que `plugin.uninstall` borra—, y
-/// si no, se dice por qué no. La pregunta es la misma que para una cargada.
-fn preguntar_desinstalar_rota(app: &mut App) {
+/// `dialog.remove` on an extension that did NOT load: it is uninstalled by
+/// its directory if it is named like an id — that is what `plugin.uninstall`
+/// deletes —, and if not, it says why not. The question is the same as for
+/// a loaded one.
+fn ask_uninstall_broken(app: &mut App) {
     let Some(mgr) = app.extensions.as_ref() else {
         return;
     };
-    let Some(rota) = mgr.selected_broken() else {
+    let Some(broken) = mgr.selected_broken() else {
         return;
     };
-    let Some(id) = norte_frontend::broken_plugin::uninstallable_id(rota, &mgr.plugins) else {
+    let Some(id) = norte_frontend::broken_plugin::uninstallable_id(broken, &mgr.plugins) else {
         app.message = Some(t("ext-broken-not-id"));
         return;
     };
-    let (nombre, nombre_hostil) =
-        crate::app::display_name(rota.dir_bytes.as_deref().unwrap_or(rota.dir.as_bytes()));
+    let (name, hostile) =
+        crate::app::display_name(broken.dir_bytes.as_deref().unwrap_or(broken.dir.as_bytes()));
     app.modal = Some(crate::app::Modal::ConfirmPluginUninstall {
         id,
-        name: nombre,
-        name_hostile: nombre_hostil,
+        name,
+        name_hostile: hostile,
     });
 }
 
-/// Con qué se reconoce una fila que no cargó entre dos listados: los BYTES
-/// del directorio si el peer los manda (#265), y su cadena si no. No el id
-/// —una rota puede no tenerlo— ni la posición.
-fn clave_de_rota(e: &norte_proto::methods::PluginLoadError) -> Vec<u8> {
+/// What a row that did not load is recognized by between two listings: the
+/// directory's BYTES if the peer sends them (#265), and its string if not.
+/// Not the id — a broken one may not have one — nor the position.
+fn broken_key(e: &norte_proto::methods::PluginLoadError) -> Vec<u8> {
     e.dir_bytes
         .clone()
         .unwrap_or_else(|| e.dir.as_bytes().to_vec())
 }
 
-/// Qué fila señala el cursor en el catálogo NUEVO.
+/// Which row the cursor points at in the NEW catalogue.
 ///
-/// La identidad primero —el id de la cargada, los bytes del directorio de la
-/// rota—, y la posición acotada solo si lo elegido ya no está. El catálogo
-/// se reordena (el core lo ordena por categoría e id) y desinstalar quita una
-/// fila, así que un cursor por posición deja al lector señalando otra, y la
-/// siguiente `e` encendería una extensión que nadie eligió. Es lo que ya hace
-/// el host en `Extensiones::set_catalogo`.
-fn cursor_tras_relistar(
-    id_elegido: Option<&str>,
-    rota_elegida: Option<&[u8]>,
+/// Identity first — the loaded one's id, the broken one's directory bytes —
+/// and the bounded position only if what was chosen is no longer there. The
+/// catalogue gets reordered (the core sorts it by category and id) and
+/// uninstalling removes a row, so a cursor by position leaves the reader
+/// pointing at another, and the next `e` would enable an extension nobody
+/// chose. It is what the host already does in `Extensiones::set_catalogo`.
+fn cursor_after_relist(
+    chosen_id: Option<&str>,
+    chosen_broken: Option<&[u8]>,
     plugins: &[norte_proto::methods::PluginInfo],
-    errores: &[norte_proto::methods::PluginLoadError],
-    previo: usize,
+    errors: &[norte_proto::methods::PluginLoadError],
+    previous: usize,
 ) -> usize {
-    id_elegido
+    chosen_id
         .and_then(|id| plugins.iter().position(|p| p.id == id))
         .or_else(|| {
-            rota_elegida.and_then(|clave| {
-                errores
+            chosen_broken.and_then(|key| {
+                errors
                     .iter()
-                    .position(|e| clave_de_rota(e) == clave)
+                    .position(|e| broken_key(e) == key)
                     .map(|j| plugins.len() + j)
             })
         })
-        .unwrap_or_else(|| previo.min((plugins.len() + errores.len()).saturating_sub(1)))
+        .unwrap_or_else(|| previous.min((plugins.len() + errors.len()).saturating_sub(1)))
 }
 
-/// Vuelve a pedirle el catálogo al core y repinta la pantalla con ÉL.
+/// Asks the core for the catalogue again and repaints the screen with IT.
 ///
-/// El camino anterior era `set_local_approved`: un `bool` de este proceso que
-/// el daemon no había confirmado. La razón por la que no vale está escrita en
-/// la ventana gráfica, que ya lo hacía así — «un optimismo local que el
-/// daemon no confirmó es una pantalla que miente sobre quién puede leer tus
-/// ficheros» (#280).
-async fn relistar_extensiones(app: &mut App, backend: &Backend) {
-    // Lo que los plugins dijeron de cada listado lo dijeron con el catálogo
-    // de antes: el bucle lo olvida y lo vuelve a pedir.
+/// The earlier path was `set_local_approved`: a `bool` of this process the
+/// daemon had not confirmed. Why that is not good enough is written in the
+/// graphical window, which already did it this way — "a local optimism the
+/// daemon did not confirm is a screen lying about who can read your files"
+/// (#280).
+async fn relist_extensions(app: &mut App, backend: &Backend) {
+    // What the plugins said about each listing, they said with the earlier
+    // catalogue: the loop forgets it and asks again.
     app.redecorate = true;
     let cursor = app.extensions.as_ref().map_or(0, |m| m.cursor);
-    // Quién estaba elegida, POR IDENTIDAD (ver `cursor_tras_relistar`): el id
-    // si era una cargada, los bytes del directorio si era una que no cargó.
-    let (id_elegido, rota_elegida) = app.extensions.as_ref().map_or((None, None), |m| {
+    // Who was chosen, BY IDENTITY (see `cursor_after_relist`): the id if it
+    // was a loaded one, the directory bytes if it was one that did not
+    // load.
+    let (chosen_id, chosen_broken) = app.extensions.as_ref().map_or((None, None), |m| {
         (
             m.selected().map(|p| p.id.clone()),
-            m.selected_broken().map(clave_de_rota),
+            m.selected_broken().map(broken_key),
         )
     });
-    // El foco viaja a mano, como el cursor y por lo mismo: este relistado
-    // es el de DESPUÉS de pulsar un botón, y perder el foco aquí sería
-    // devolver el teclado a la lista justo cuando el lector acaba de usar
-    // la ficha. Lo que el botón dice puede cambiar (encender ↔ apagar);
-    // cuántos hay, no.
+    // Focus travels by hand, like the cursor and for the same reason: this
+    // re-listing is the one AFTER pressing a button, and losing focus here
+    // would return the keyboard to the list right when the reader just used
+    // the card. What the button says can change (turn on ↔ turn off); how
+    // many there are, not.
     let foco = app
         .extensions
         .as_ref()
@@ -680,13 +686,14 @@ async fn relistar_extensiones(app: &mut App, backend: &Backend) {
         Ok(list) => {
             let mut plugins = list.plugins;
             crate::app::clamp_plugin_descriptions(&mut plugins);
-            // Este es el refresco de después de aprobar, activar o desinstalar
-            // (fase 3): si el catálogo se relee, lo aportado se redeclara.
+            // This is the refresh after approving, enabling or uninstalling
+            // (phase 3): if the catalogue is reread, what it contributes is
+            // redeclared.
             app.kinds.insert_panels(&plugins);
             let config = app.extensions.as_mut().and_then(|m| m.config.take());
-            let cursor = cursor_tras_relistar(
-                id_elegido.as_deref(),
-                rota_elegida.as_deref(),
+            let cursor = cursor_after_relist(
+                chosen_id.as_deref(),
+                chosen_broken.as_deref(),
                 &plugins,
                 &list.errors,
                 cursor,
@@ -703,11 +710,10 @@ async fn relistar_extensiones(app: &mut App, backend: &Backend) {
     }
 }
 
-/// El cursor del gestor sobrevive a un relistado por IDENTIDAD, no por
-/// posición.
+/// The manager's cursor survives a re-list by IDENTITY, not by position.
 #[cfg(test)]
-mod cursor_tras_relistar_tests {
-    use super::cursor_tras_relistar;
+mod cursor_after_relist_tests {
+    use super::cursor_after_relist;
     use norte_proto::methods::{PluginInfo, PluginLoadError};
 
     fn plugin(id: &str) -> PluginInfo {
@@ -729,67 +735,68 @@ mod cursor_tras_relistar_tests {
         }
     }
 
-    fn rota(dir: &str) -> PluginLoadError {
+    fn broken(dir: &str) -> PluginLoadError {
         PluginLoadError {
             dir: dir.to_owned(),
-            reason: "no cargó".to_owned(),
+            reason: "did not load".to_owned(),
             dir_bytes: Some(dir.as_bytes().to_vec()),
         }
     }
 
-    /// El caso que trajo la fila rota: cursor sobre la única rota, se
-    /// desinstala, y el catálogo vuelve con las dos cargadas. Por posición el
-    /// cursor caía sobre la SEGUNDA cargada, y la siguiente `e` la encendía
-    /// sin que nadie la eligiera.
+    /// The case that brought this on: cursor on the only broken row, it
+    /// gets uninstalled, and the catalogue comes back with the two loaded
+    /// ones. By position the cursor landed on the SECOND loaded one, and
+    /// the next `e` enabled it without anyone choosing it.
     #[test]
-    fn desinstalar_la_rota_no_deja_el_cursor_sobre_una_cargada() {
+    fn uninstalling_the_broken_one_does_not_leave_the_cursor_on_a_loaded_one() {
         let plugins = [plugin("org.a"), plugin("org.b")];
-        let cursor = cursor_tras_relistar(None, Some(b"org.rota"), &plugins, &[], 2);
-        assert_eq!(cursor, 1, "el tope, no una elección");
-        // Y lo que importa: no señala nada que se haya elegido.
+        let cursor = cursor_after_relist(None, Some(b"org.rota"), &plugins, &[], 2);
+        assert_eq!(cursor, 1, "the ceiling, not a choice");
+        // And what matters: it does not point at anything that was chosen.
         assert!(cursor < plugins.len());
     }
 
-    /// Aprobar reordena el catálogo (el core ordena por categoría e id): el
-    /// cursor sigue a SU extensión, no se queda en la fila.
+    /// Approving reorders the catalogue (the core sorts by category and
+    /// id): the cursor follows ITS extension, it does not stay on the row.
     #[test]
-    fn el_cursor_sigue_al_id_cuando_el_catalogo_se_reordena() {
-        let antes = [plugin("org.b")];
-        let despues = [plugin("org.a"), plugin("org.b")];
+    fn the_cursor_follows_the_id_when_the_catalogue_is_reordered() {
+        let before = [plugin("org.b")];
+        let after = [plugin("org.a"), plugin("org.b")];
         assert_eq!(
-            cursor_tras_relistar(Some(&antes[0].id), None, &despues, &[], 0),
+            cursor_after_relist(Some(&before[0].id), None, &after, &[], 0),
             1
         );
     }
 
-    /// Una rota se reconoce por los BYTES de su directorio, y sigue detrás de
-    /// las cargadas aunque su posición cambie.
+    /// A broken one is recognized by its directory's BYTES, and stays
+    /// behind the loaded ones even if its position changes.
     #[test]
-    fn el_cursor_sigue_a_la_rota_por_su_directorio() {
+    fn the_cursor_follows_the_broken_one_by_its_directory() {
         let plugins = [plugin("org.a")];
-        let errores = [rota("otra"), rota("org.rota")];
+        let errors = [broken("other"), broken("org.rota")];
         assert_eq!(
-            cursor_tras_relistar(None, Some(b"org.rota"), &plugins, &errores, 1),
+            cursor_after_relist(None, Some(b"org.rota"), &plugins, &errors, 1),
             plugins.len() + 1
         );
     }
 
-    /// Catálogo vacío: no hay fila que señalar y el cursor no se sale.
+    /// Empty catalogue: there is no row to point at and the cursor does not
+    /// go out of bounds.
     #[test]
-    fn un_catalogo_vacio_deja_el_cursor_en_cero() {
-        assert_eq!(cursor_tras_relistar(Some("org.a"), None, &[], &[], 3), 0);
+    fn an_empty_catalogue_leaves_the_cursor_at_zero() {
+        assert_eq!(cursor_after_relist(Some("org.a"), None, &[], &[], 3), 0);
     }
 }
 
-/// Conceder capabilities PREGUNTA (#280).
+/// Granting capabilities ASKS (#280).
 #[cfg(test)]
-mod aprobacion_tests {
+mod approval_tests {
     use super::{App, ExtensionManager};
     use crate::app::{Modal, Pane};
     use norte_vfs::VPath;
 
-    fn app_con(p: norte_proto::methods::PluginInfo) -> App {
-        let d = VPath::parse("file:///x").expect("wire de test");
+    fn app_with(p: norte_proto::methods::PluginInfo) -> App {
+        let d = VPath::parse("file:///x").expect("test wire");
         let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
         app.extensions = Some(ExtensionManager {
             plugins: vec![p],
@@ -820,68 +827,71 @@ mod aprobacion_tests {
         }
     }
 
-    /// `dialog.approve` sobre una extensión SIN aprobar abre la pregunta y no
-    /// concede nada todavía. Con el camino viejo esto llamaba al daemon en la
-    /// misma tecla, sin enumerar una sola capability.
+    /// `dialog.approve` on an UNAPPROVED extension opens the question and
+    /// grants nothing yet. With the old path this called the daemon on the
+    /// same key, without enumerating a single capability.
     #[tokio::test]
-    async fn conceder_abre_la_pregunta_y_enumera_las_capabilities() {
-        let mut app = app_con(plugin(false, false));
-        // Un engine embebido y vacío: estos dos tests comprueban que NO se
-        // llama al daemon, así que lo que haya detrás da igual mientras
-        // exista.
+    async fn granting_opens_the_question_and_enumerates_the_capabilities() {
+        let mut app = app_with(plugin(false, false));
+        // An embedded, empty engine: these two tests check that the daemon
+        // is NOT called, so whatever is behind it does not matter as long
+        // as it exists.
         let backend =
             norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()));
 
         super::on_extensions_list_cmd(&mut app, &backend, "dialog.approve").await;
 
         let Some(Modal::ConfirmPluginApproval { id, caps, .. }) = &app.modal else {
-            panic!("conceder tiene que preguntar: {:?}", app.modal);
+            panic!("granting has to ask: {:?}", app.modal);
         };
         assert_eq!(id, "org.acme.demo");
-        assert_eq!(caps.len(), 2, "una línea por capability: {caps:?}");
+        assert_eq!(caps.len(), 2, "one line per capability: {caps:?}");
     }
 
-    /// Y encender lo que no está aprobado se REHÚSA: un plugin apagado y sin
-    /// aprobar no puede saltarse la pregunta por la otra tecla.
+    /// And turning on something not approved is REFUSED: a disabled,
+    /// unapproved plugin cannot skip the question through the other key.
     #[tokio::test]
-    async fn encender_sin_aprobar_se_rehusa() {
-        let mut app = app_con(plugin(false, false));
-        // Un engine embebido y vacío: estos dos tests comprueban que NO se
-        // llama al daemon, así que lo que haya detrás da igual mientras
-        // exista.
+    async fn enabling_without_approval_is_refused() {
+        let mut app = app_with(plugin(false, false));
+        // An embedded, empty engine: these two tests check that the daemon
+        // is NOT called, so whatever is behind it does not matter as long
+        // as it exists.
         let backend =
             norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()));
 
         super::on_extensions_list_cmd(&mut app, &backend, "dialog.toggle-enabled").await;
 
-        assert!(app.modal.is_none(), "no abre ninguna pregunta");
-        assert!(app.message.is_some(), "y lo DICE en vez de callarse");
+        assert!(app.modal.is_none(), "opens no question");
+        assert!(
+            app.message.is_some(),
+            "and SAYS so instead of staying quiet"
+        );
     }
 
-    fn roto(dir: &str) -> norte_proto::methods::PluginLoadError {
+    fn broken(dir: &str) -> norte_proto::methods::PluginLoadError {
         norte_proto::methods::PluginLoadError {
             dir: dir.to_owned(),
-            reason: "el manifiesto no parsea".to_owned(),
+            reason: "the manifest does not parse".to_owned(),
             dir_bytes: Some(dir.as_bytes().to_vec()),
         }
     }
 
-    /// Una extensión que NO CARGÓ es una fila más: el cursor baja hasta ella,
-    /// `dialog.remove` pregunta por ella, y los demás verbos lo dicen. Antes
-    /// el cursor se paraba en la última cargada y un roto solo se quitaba a
-    /// mano.
+    /// An extension that did NOT LOAD is one more row: the cursor goes down
+    /// to it, `dialog.remove` asks about it, and the other verbs say so.
+    /// Before, the cursor stopped at the last loaded one and a broken one
+    /// could only be removed by hand.
     #[tokio::test]
-    async fn una_extension_rota_se_senala_y_solo_se_desinstala() {
-        let mut app = app_con(plugin(true, true));
+    async fn a_broken_extension_is_pointed_at_and_only_uninstalls() {
+        let mut app = app_with(plugin(true, true));
         if let Some(mgr) = &mut app.extensions {
-            mgr.errors = vec![roto("org.acme.roto"), roto("no un id")];
+            mgr.errors = vec![broken("org.acme.roto"), broken("not an id")];
             mgr.down();
         }
         let backend =
             norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()));
 
         super::on_extensions_list_cmd(&mut app, &backend, "dialog.approve").await;
-        assert!(app.modal.is_none(), "aprobar una rota no pregunta nada");
+        assert!(app.modal.is_none(), "approving a broken one asks nothing");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("ext-broken-only-uninstall").as_str())
@@ -889,7 +899,7 @@ mod aprobacion_tests {
 
         super::on_extensions_list_cmd(&mut app, &backend, "dialog.remove").await;
         let Some(Modal::ConfirmPluginUninstall { id, .. }) = &app.modal else {
-            panic!("desinstalar una rota pregunta: {:?}", app.modal);
+            panic!("uninstalling a broken one asks: {:?}", app.modal);
         };
         assert_eq!(id, "org.acme.roto");
 
@@ -899,7 +909,7 @@ mod aprobacion_tests {
             mgr.down();
         }
         super::on_extensions_list_cmd(&mut app, &backend, "dialog.remove").await;
-        assert!(app.modal.is_none(), "sin id no hay nada que preguntar");
+        assert!(app.modal.is_none(), "with no id there is nothing to ask");
         assert_eq!(
             app.message.as_deref(),
             Some(norte_i18n::t("ext-broken-not-id").as_str())
@@ -907,8 +917,8 @@ mod aprobacion_tests {
     }
 }
 
-/// El anillo de `tab` del gestor, ya con la pantalla delante: qué paradas
-/// tiene y qué dispara Enter en cada una.
+/// The manager's `tab` ring, with the screen already in front of it: which
+/// stops it has and what Enter fires at each one.
 #[cfg(test)]
 mod foco_tests {
     use super::App;
@@ -916,13 +926,13 @@ mod foco_tests {
     use crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::layout::Rect;
 
-    /// Un app con el gestor abierto y las zonas del último frame ya
-    /// devueltas al modelo, que es de donde el anillo saca sus paradas.
-    /// `ancho` decide si hay ficha: por debajo de `EXTENSIONS_WIDE_MIN` la
-    /// caja pinta una sola columna y no hay ningún botón.
-    fn app_pintado(ancho: u16) -> App {
+    /// An app with the manager open and the last frame's zones already fed
+    /// back to the model, which is where the ring gets its stops from.
+    /// `width` decides whether there is a card: below `EXTENSIONS_WIDE_MIN`
+    /// the box paints a single column and there is no button at all.
+    fn painted_app(width: u16) -> App {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
-        let d = norte_vfs::VPath::parse("file:///x").expect("wire de test");
+        let d = norte_vfs::VPath::parse("file:///x").expect("test wire");
         let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
         app.extensions = Some(ExtensionManager {
             plugins: vec![norte_proto::methods::PluginInfo {
@@ -949,15 +959,15 @@ mod foco_tests {
         let area = Rect {
             x: 0,
             y: 0,
-            width: ancho,
+            width,
             height: 24,
         };
-        let zonas = crate::ui::extension_zones(&app, area);
+        let zones = crate::ui::extension_zones(&app, area);
         crate::mouse::after_frame(
             &mut app,
             None,
             crate::mouse::FrameZones {
-                extensions: zonas,
+                extensions: zones,
                 ..crate::mouse::FrameZones::default()
             },
         );
@@ -965,21 +975,21 @@ mod foco_tests {
     }
 
     fn backend() -> norte_core::backend::Backend {
-        // Vacío a propósito: ninguno de estos tests llega al daemon.
+        // Empty on purpose: none of these tests reach the daemon.
         norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()))
     }
 
     fn foco(app: &App) -> ExtFoco {
-        app.extensions.as_ref().expect("gestor abierto").foco
+        app.extensions.as_ref().expect("manager open").foco
     }
 
-    /// `tab` lleva el foco de la lista al primer botón de la ficha. Antes
-    /// del anillo esta tecla era inerte aquí —el comando existía en el
-    /// catálogo y la pantalla no lo atendía—, y los botones solo respondían
-    /// al ratón.
+    /// `tab` moves focus from the list to the card's first button. Before
+    /// the ring this key was inert here — the command existed in the
+    /// catalogue and the screen did not handle it — and the buttons only
+    /// answered to the mouse.
     #[tokio::test]
-    async fn tab_lleva_el_foco_al_primer_boton() {
-        let mut app = app_pintado(100);
+    async fn tab_moves_focus_to_the_first_button() {
+        let mut app = painted_app(100);
         assert_eq!(foco(&app), ExtFoco::Lista);
 
         super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
@@ -987,15 +997,15 @@ mod foco_tests {
         assert_eq!(foco(&app), ExtFoco::Boton(0));
     }
 
-    /// Sin ficha pintada —caja estrecha— `tab` no mueve nada: las paradas
-    /// salen de lo que el frame pintó, no de lo que la ficha tendría si
-    /// cupiera.
+    /// With no card painted — narrow box — `tab` moves nothing: the stops
+    /// come from what the frame painted, not from what the card would have
+    /// if it fit.
     #[tokio::test]
-    async fn sin_ficha_tab_no_mueve_el_foco() {
-        let mut app = app_pintado(40);
+    async fn with_no_card_tab_does_not_move_focus() {
+        let mut app = painted_app(40);
         assert!(
             crate::mouse::painted_extension_buttons(&app).is_empty(),
-            "una caja de 40 celdas no pinta ficha"
+            "a 40-cell box paints no card"
         );
 
         super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
@@ -1003,97 +1013,98 @@ mod foco_tests {
         assert_eq!(foco(&app), ExtFoco::Lista);
     }
 
-    /// Con el foco en el SEGUNDO botón, Enter dispara ese botón —aprobar,
-    /// que pregunta— y no los ajustes, que es lo que Enter significa en la
-    /// lista.
+    /// With focus on the SECOND button, Enter fires that button —
+    /// approving, which asks — and not settings, which is what Enter means
+    /// in the list.
     #[tokio::test]
-    async fn enter_sobre_un_boton_dispara_ese_boton() {
-        let mut app = app_pintado(100);
+    async fn enter_on_a_button_fires_that_button() {
+        let mut app = painted_app(100);
         for _ in 0..2 {
             super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
         }
         assert_eq!(foco(&app), ExtFoco::Boton(1));
-        let cmd = super::boton_enfocado(&app).expect("el foco señala un botón pintado");
-        assert_eq!(cmd, "dialog.approve", "el segundo botón de la ficha");
+        let cmd = super::focused_button(&app).expect("focus points at a painted button");
+        assert_eq!(cmd, "dialog.approve", "the card's second button");
 
         super::on_extensions_list_cmd(&mut app, &backend(), &cmd).await;
 
         assert!(
             matches!(app.modal, Some(Modal::ConfirmPluginApproval { .. })),
-            "aprobar pregunta: {:?}",
+            "approving asks: {:?}",
             app.modal
         );
     }
 
-    /// Un foco que apunta más allá de los botones pintados NO dispara nada:
-    /// Enter vuelve a significar lo que significa en la lista. Disparar «el
-    /// botón n» de una ficha que ya no tiene n sería ejecutar un verbo que
-    /// el lector no leyó, y entre esos verbos está desinstalar.
+    /// A focus pointing past the painted buttons fires NOTHING: Enter goes
+    /// back to meaning what it means in the list. Firing "button n" of a
+    /// card that no longer has an n would run a verb the reader never read,
+    /// and uninstalling is among those verbs.
     #[tokio::test]
-    async fn un_foco_rebasado_no_dispara_otro_verbo() {
-        let mut app = app_pintado(100);
+    async fn an_out_of_bounds_focus_fires_no_other_verb() {
+        let mut app = painted_app(100);
         if let Some(mgr) = &mut app.extensions {
             mgr.foco = ExtFoco::Boton(99);
         }
 
-        assert_eq!(super::boton_enfocado(&app), None);
+        assert_eq!(super::focused_button(&app), None);
     }
 
-    /// `→` recorre los botones como `tab`, y `←` vuelve: desde la lista
-    /// salta al último. Arriba/abajo siguen siendo la lista.
+    /// `→` cycles the buttons like `tab`, and `←` goes back: from the list
+    /// it jumps to the last one. Up/down are still the list.
     #[tokio::test]
-    async fn las_flechas_recorren_los_botones() {
-        let mut app = app_pintado(100);
-        let botones = crate::mouse::painted_extension_buttons(&app).len();
-        assert!(botones >= 2, "la ficha pinta varios botones");
+    async fn the_arrows_cycle_the_buttons() {
+        let mut app = painted_app(100);
+        let buttons = crate::mouse::painted_extension_buttons(&app).len();
+        assert!(buttons >= 2, "the card paints several buttons");
 
-        assert!(super::flecha_de_botones(
+        assert!(super::button_arrow(
             &mut app,
             KeyModifiers::NONE,
             KeyCode::Right
         ));
         assert_eq!(foco(&app), ExtFoco::Boton(0));
-        assert!(super::flecha_de_botones(
+        assert!(super::button_arrow(
             &mut app,
             KeyModifiers::NONE,
             KeyCode::Right
         ));
         assert_eq!(foco(&app), ExtFoco::Boton(1));
-        assert!(super::flecha_de_botones(
+        assert!(super::button_arrow(
             &mut app,
             KeyModifiers::NONE,
             KeyCode::Left
         ));
-        assert!(super::flecha_de_botones(
+        assert!(super::button_arrow(
             &mut app,
             KeyModifiers::NONE,
             KeyCode::Left
         ));
         assert_eq!(foco(&app), ExtFoco::Lista);
-        assert!(super::flecha_de_botones(
+        assert!(super::button_arrow(
             &mut app,
             KeyModifiers::NONE,
             KeyCode::Left
         ));
-        assert_eq!(foco(&app), ExtFoco::Boton(botones - 1));
+        assert_eq!(foco(&app), ExtFoco::Boton(buttons - 1));
 
         assert!(
-            !super::flecha_de_botones(&mut app, KeyModifiers::NONE, KeyCode::Down),
-            "abajo no es de los botones"
+            !super::button_arrow(&mut app, KeyModifiers::NONE, KeyCode::Down),
+            "down is not one of the buttons'"
         );
         assert!(
-            !super::flecha_de_botones(&mut app, KeyModifiers::CONTROL, KeyCode::Right),
-            "con modificador la tecla sigue al keymap"
+            !super::button_arrow(&mut app, KeyModifiers::CONTROL, KeyCode::Right),
+            "with a modifier the key still goes to the keymap"
         );
     }
 
-    /// Dentro de los ajustes de un plugin, `tab` y `←` devuelven al anillo
-    /// de botones, y el foco sigue en el botón por el que se entró. Antes
-    /// solo `Esc` salía, y el lector que entró con `tab` se quedaba dentro.
+    /// Inside a plugin's settings, `tab` and `←` return to the button ring,
+    /// and focus stays on the button it was entered through. Before, only
+    /// `Esc` exited, and a reader who entered with `tab` stayed stuck
+    /// inside.
     #[tokio::test]
-    async fn tab_y_flecha_salen_de_los_ajustes() {
-        for salida in ["tab", "left"] {
-            let mut app = app_pintado(100);
+    async fn tab_and_arrow_exit_settings() {
+        for exit in ["tab", "left"] {
+            let mut app = painted_app(100);
             if let Some(mgr) = &mut app.extensions {
                 mgr.foco = ExtFoco::Boton(2);
                 mgr.config = Some(crate::app::PluginConfigPanel {
@@ -1103,32 +1114,28 @@ mod foco_tests {
                 });
             }
 
-            if salida == "tab" {
+            if exit == "tab" {
                 super::on_plugin_config_panel_cmd(&mut app, &backend(), "dialog.pane").await;
             } else {
-                assert!(super::flecha_de_botones(
+                assert!(super::button_arrow(
                     &mut app,
                     KeyModifiers::NONE,
                     KeyCode::Left
                 ));
             }
 
-            let mgr = app.extensions.as_ref().expect("el gestor sigue abierto");
-            assert!(mgr.config.is_none(), "{salida} cierra los ajustes");
-            assert_eq!(
-                mgr.foco,
-                ExtFoco::Boton(2),
-                "{salida}: el foco no se pierde"
-            );
+            let mgr = app.extensions.as_ref().expect("manager still open");
+            assert!(mgr.config.is_none(), "{exit} closes settings");
+            assert_eq!(mgr.foco, ExtFoco::Boton(2), "{exit}: focus is not lost");
         }
     }
 
-    /// Mover el cursor devuelve el foco a la lista: los botones son los del
-    /// plugin elegido, y uno enfocado mientras el cursor se va a otro sería
-    /// un botón de lo que ya no se está mirando.
+    /// Moving the cursor returns focus to the list: the buttons belong to
+    /// the chosen plugin, and one staying focused while the cursor moves to
+    /// another would be a button of what is no longer being looked at.
     #[tokio::test]
-    async fn bajar_por_la_lista_devuelve_el_foco() {
-        let mut app = app_pintado(100);
+    async fn moving_down_the_list_returns_focus() {
+        let mut app = painted_app(100);
         super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
         assert_eq!(foco(&app), ExtFoco::Boton(0));
 

@@ -1,9 +1,9 @@
 use super::*;
 
 #[tokio::test]
-async fn initialize_negocia_y_es_obligatorio() {
+async fn initialize_negotiates_and_is_mandatory() {
     let d = spawn_daemon(None).await;
-    // Sin initialize: cualquier método es NOT_INITIALIZED.
+    // Without initialize: any method is NOT_INITIALIZED.
     let c = Client::connect(&d.socket).await.expect("connect");
     let err = c
         .call::<_, FsListResult>(
@@ -16,32 +16,32 @@ async fn initialize_negocia_y_es_obligatorio() {
             },
         )
         .await
-        .expect_err("initialize primero");
+        .expect_err("initialize first");
     match err {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::NOT_INITIALIZED),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
-    // Con initialize, funciona.
+    // With initialize, it works.
     let _c2 = connected_client(&d).await;
 }
 
-/// La versión N-1 del daemon, DERIVADA de `PROTOCOL_VERSION`.
+/// The daemon's N-1 version, DERIVED from `PROTOCOL_VERSION`.
 ///
-/// Escrita a mano (era `"0.38.2"`), la ventana que este test dice comprobar
-/// pasaba a ser «una versión vieja cualquiera» al primer bump y un rojo al
-/// segundo, culpando al cambio que pasara por delante. En 0.x el minor es el
-/// major efectivo, así que N-1 es minor menos uno.
+/// Hand-written (it used to be `"0.38.2"`), the window this test says it
+/// checks turned into "some old version" on the first bump and went red on
+/// the second, blaming whatever change happened to pass by. In 0.x the minor
+/// is the effective major, so N-1 is minor minus one.
 pub(super) fn n_minus_one() -> String {
     let (major, rest) = methods::PROTOCOL_VERSION.split_once('.').expect("semver");
     let (minor, _) = rest.split_once('.').expect("semver");
-    let minor: u64 = minor.parse().expect("minor numérico");
-    assert_eq!(major, "0", "fuera de 0.x la ventana N-1 la define el major");
-    assert!(minor > 0, "0.0.x no tiene N-1 que pedir");
+    let minor: u64 = minor.parse().expect("numeric minor");
+    assert_eq!(major, "0", "outside 0.x the major defines the N-1 window");
+    assert!(minor > 0, "0.0.x has no N-1 to ask for");
     format!("{major}.{}.2", minor - 1)
 }
 
 #[tokio::test]
-async fn initialize_rechaza_version_incompatible() {
+async fn initialize_rejects_an_incompatible_version() {
     let d = spawn_daemon(None).await;
     let c = Client::connect(&d.socket).await.expect("connect");
     let err = c
@@ -55,18 +55,18 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect_err("0.1.0 no es ni N ni N-1");
+        .expect_err("0.1.0 is neither N nor N-1");
     match err {
         ClientError::Rpc(rpc) => {
-            // Código PROPIO: la señal de upgrade jamás se parsea de message.
+            // OUR OWN code: the upgrade signal is never parsed out of a message.
             assert_eq!(rpc.code, codes::VERSION_MISMATCH);
             assert!(norte_core::daemon::is_version_mismatch(&ClientError::Rpc(
                 rpc
             )));
         }
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
-    // N-1 SÍ entra.
+    // N-1 DOES get in.
     let c2 = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c2
         .call(
@@ -79,12 +79,12 @@ async fn initialize_rechaza_version_incompatible() {
             },
         )
         .await
-        .expect("N-1 aceptado");
+        .expect("N-1 accepted");
     assert_eq!(ok.protocol_version, methods::PROTOCOL_VERSION);
 }
 
 #[tokio::test]
-async fn initialize_rechaza_encoding_desconocido() {
+async fn initialize_rejects_an_unknown_encoding() {
     let d = spawn_daemon(None).await;
     let c = Client::connect(&d.socket).await.expect("connect");
     let err = c
@@ -98,24 +98,24 @@ async fn initialize_rechaza_encoding_desconocido() {
             },
         )
         .await
-        .expect_err("solo json en M2");
+        .expect_err("only json in M2");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
-/// `agent_session` se valida fail-closed en el handshake (encoding-auditor H1
-/// de T5): controles, bidi, vacío o kilométrico → `INVALID_PARAMS`. El id
-/// viaja a journal, logs y modales de aprobación — jamás lo elige libre el
-/// agente.
+/// `agent_session` is validated fail-closed at the handshake (encoding-auditor
+/// H1 from T5): controls, bidi, empty or kilometric → `INVALID_PARAMS`. The id
+/// travels to the journal, logs and approval modals — never freely chosen by
+/// the agent.
 #[tokio::test]
-async fn agent_session_hostil_se_rechaza_en_initialize() {
+async fn a_hostile_agent_session_is_rejected_at_initialize() {
     let d = spawn_daemon(None).await;
     let hostiles = [
-        "s1\nmem:///fake",       // inyección de líneas
-        "s1\u{202e}ypoc",        // override RTL
+        "s1\nmem:///fake",       // line injection
+        "s1\u{202e}ypoc",        // RTL override
         "s1\u{1b}]0;pwned\u{7}", // OSC/ANSI
-        "",                      // vacío
-        &"a".repeat(65),         // demasiado largo
-        "con espacios",          // fuera de charset
+        "",                      // empty
+        &"a".repeat(65),         // too long
+        "con espacios",          // outside the charset
     ];
     for session in hostiles {
         let c = Client::connect(&d.socket).await.expect("connect");
@@ -130,13 +130,13 @@ async fn agent_session_hostil_se_rechaza_en_initialize() {
                 },
             )
             .await
-            .expect_err("sesión hostil rechazada");
+            .expect_err("hostile session rejected");
         assert!(
             matches!(err, ClientError::Rpc(ref rpc) if rpc.code == codes::INVALID_PARAMS),
-            "esperaba INVALID_PARAMS para {session:?}, fue {err:?}"
+            "expected INVALID_PARAMS for {session:?}, got {err:?}"
         );
     }
-    // El charset legal completo pasa.
+    // The full legal charset passes.
     let c = Client::connect(&d.socket).await.expect("connect");
     let ok: methods::InitializeResult = c
         .call(
@@ -149,16 +149,16 @@ async fn agent_session_hostil_se_rechaza_en_initialize() {
             },
         )
         .await
-        .expect("sesión válida");
+        .expect("valid session");
     assert_eq!(ok.protocol_version, methods::PROTOCOL_VERSION);
 }
 
-/// `connection.trust_host_key` (0.7.0, fase 6e) existe en el dispatch y
-/// llega al engine: sin conector configurado responde la taxonomía
-/// `Unsupported` por el wire — no `METHOD_NOT_FOUND` (eso significaría que
-/// el handler falta).
+/// `connection.trust_host_key` (0.7.0, phase 6e) exists in the dispatch and
+/// reaches the engine: with no connector configured it answers the
+/// `Unsupported` taxonomy over the wire — not `METHOD_NOT_FOUND` (that would
+/// mean the handler is missing).
 #[tokio::test]
-async fn trust_host_key_llega_al_engine() {
+async fn trust_host_key_reaches_the_engine() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let err = c
@@ -172,25 +172,26 @@ async fn trust_host_key_llega_al_engine() {
             },
         )
         .await
-        .expect_err("sin conector: Unsupported");
+        .expect_err("no connector: Unsupported");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert!(
                 matches!(rpc.data, Some(norte_proto::Error::Unsupported)),
-                "taxonomía Unsupported, fue {:?}",
+                "Unsupported taxonomy, was {:?}",
                 rpc.data
             );
         }
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// #325, el gemelo del de arriba: `connection.provide_secret` existe en el
-/// dispatch y llega al engine. Sin conector responde `Unsupported` por el
-/// wire; un `METHOD_NOT_FOUND` querría decir que el handler falta.
+/// #325, the twin of the one above: `connection.provide_secret` exists in the
+/// dispatch and reaches the engine. With no connector it answers
+/// `Unsupported` over the wire; a `METHOD_NOT_FOUND` would mean the handler
+/// is missing.
 #[tokio::test]
-async fn provide_secret_llega_al_engine() {
+async fn provide_secret_reaches_the_engine() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let err = c
@@ -202,35 +203,35 @@ async fn provide_secret_llega_al_engine() {
             },
         )
         .await
-        .expect_err("sin conector: Unsupported");
+        .expect_err("no connector: Unsupported");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert!(
                 matches!(rpc.data, Some(norte_proto::Error::Unsupported)),
-                "taxonomía Unsupported, fue {:?}",
+                "Unsupported taxonomy, was {:?}",
                 rpc.data
             );
         }
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
 #[tokio::test]
-async fn metodo_desconocido_es_method_not_found() {
+async fn an_unknown_method_is_method_not_found() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let err = c
         .call::<_, serde_json::Value>("fs.inventado", &serde_json::json!({}))
         .await
-        .expect_err("no existe el método");
+        .expect_err("the method does not exist");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::METHOD_NOT_FOUND));
 }
 
 // ---------- lifecycle ----------
 
 #[tokio::test]
-async fn daemon_shutdown_graceful_espera_y_apaga() {
+async fn daemon_shutdown_graceful_waits_and_shuts_down() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let _: DaemonShutdownResult = c
@@ -242,35 +243,36 @@ async fn daemon_shutdown_graceful_espera_y_apaga() {
             },
         )
         .await
-        .expect("shutdown aceptado");
+        .expect("shutdown accepted");
     let joined = tokio::time::timeout(Duration::from_secs(5), d.run)
         .await
-        .expect("run() termina")
-        .expect("join limpio");
-    joined.expect("apagado sin error");
-    assert!(!d.socket.exists(), "el socket se retira del FS");
+        .expect("run() finishes")
+        .expect("clean join");
+    joined.expect("shutdown with no error");
+    assert!(!d.socket.exists(), "the socket is removed from the FS");
 }
 
-/// Cuando `run()` vuelve, las conexiones ya se CERRARON — con lo que tenían
-/// que decir ya escrito.
+/// When `run()` returns, the connections have already CLOSED — with
+/// whatever they had to say already written.
 ///
-/// Quien llama a `run()` suele ser un `main` que retorna justo después, y al
-/// soltar el runtime se lleva por delante toda task que siga viva. La que
-/// escribe la respuesta a `daemon.shutdown` era una de ellas: `norte daemon
-/// stop` fallaba de vez en cuando con «conexión cerrada con la request en
-/// vuelo» sobre un daemon que sí se había parado. Se mira en otra conexión
-/// abierta porque es observable sin esperar: si `run()` ya drenó, su lectura
-/// da EOF en el acto; si no, todavía no hay nada que leer.
+/// Whoever calls `run()` is usually a `main` that returns right after, and
+/// dropping the runtime takes down with it every task still alive. The one
+/// writing `daemon.shutdown`'s response used to be one of them: `norte
+/// daemon stop` used to fail now and then with "connection closed with the
+/// request in flight" on a daemon that had in fact stopped. It is checked on
+/// another open connection because it is observable without waiting: if
+/// `run()` already drained, its read gives EOF right away; if not, there is
+/// still nothing to read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn run_vuelve_con_las_conexiones_ya_cerradas() {
+async fn run_returns_with_the_connections_already_closed() {
     for _ in 0..30 {
-        run_vuelve_con_las_conexiones_ya_cerradas_una_vez().await;
+        run_returns_with_the_connections_already_closed_once().await;
     }
 }
 
-async fn run_vuelve_con_las_conexiones_ya_cerradas_una_vez() {
+async fn run_returns_with_the_connections_already_closed_once() {
     let d = spawn_daemon(None).await;
-    let otra = tokio::net::UnixStream::connect(&d.socket)
+    let other = tokio::net::UnixStream::connect(&d.socket)
         .await
         .expect("connect");
     let c = connected_client(&d).await;
@@ -283,26 +285,26 @@ async fn run_vuelve_con_las_conexiones_ya_cerradas_una_vez() {
             },
         )
         .await
-        .expect("shutdown aceptado");
+        .expect("shutdown accepted");
     tokio::time::timeout(Duration::from_secs(5), d.run)
         .await
-        .expect("run() termina")
-        .expect("join limpio")
-        .expect("apagado sin error");
+        .expect("run() finishes")
+        .expect("clean join")
+        .expect("shutdown with no error");
     let mut buf = [0u8; 16];
-    match otra.try_read(&mut buf) {
+    match other.try_read(&mut buf) {
         Ok(0) => {}
-        leido => panic!("la conexión sigue abierta al volver run(): {leido:?}"),
+        read => panic!("the connection is still open when run() returns: {read:?}"),
     }
 }
 
-/// Espera una `daemon.going_away` y devuelve si dice que vuelvas.
+/// Waits for a `daemon.going_away` and returns whether it says to come back.
 pub(super) async fn going_away(c: &mut Client) -> bool {
     loop {
         let n = tokio::time::timeout(Duration::from_secs(5), c.notification())
             .await
-            .expect("notificación antes del timeout")
-            .expect("conexión viva");
+            .expect("notification before the timeout")
+            .expect("connection alive");
         if n.method == methods::DAEMON_GOING_AWAY {
             let p: methods::DaemonGoingAway =
                 serde_json::from_value(n.params.expect("params")).expect("DaemonGoingAway");
@@ -311,9 +313,9 @@ pub(super) async fn going_away(c: &mut Client) -> bool {
     }
 }
 
-/// Un RELEVO avisa de que vuelvas, y avisa ANTES de dejar de aceptar.
+/// A HANDOVER says to come back, and says so BEFORE it stops accepting.
 #[tokio::test]
-async fn un_relevo_avisa_de_que_vuelvas() {
+async fn a_handover_says_to_come_back() {
     let d = spawn_daemon(None).await;
     let mut c = connected_client(&d).await;
     let _: DaemonShutdownResult = c
@@ -325,40 +327,42 @@ async fn un_relevo_avisa_de_que_vuelvas() {
             },
         )
         .await
-        .expect("relevo aceptado");
+        .expect("handover accepted");
 
-    assert!(going_away(&mut c).await, "un relevo dice que vuelvas");
+    assert!(going_away(&mut c).await, "a handover says to come back");
 }
 
-/// Y una parada corriente avisa de lo CONTRARIO. Es lo que separa «el daemon se
-/// paró» de «se cayó la conexión», que para quien lo lee no son lo mismo — y es
-/// lo que impide que un cliente resucite lo que el usuario acaba de parar.
+/// And an ordinary stop says the OPPOSITE. That is what separates "the daemon
+/// stopped" from "the connection dropped", which are not the same thing to
+/// whoever reads it — and it is what stops a client from resurrecting what the
+/// user just stopped.
 #[tokio::test]
-async fn una_parada_avisa_de_que_no_vuelvas() {
+async fn an_ordinary_stop_says_not_to_come_back() {
     let d = spawn_daemon(None).await;
     let mut c = connected_client(&d).await;
     let _: DaemonShutdownResult = c
         .call(methods::DAEMON_SHUTDOWN, &DaemonShutdownParams::default())
         .await
-        .expect("parada aceptada");
+        .expect("stop accepted");
 
-    assert!(!going_away(&mut c).await, "una parada dice que no vuelvas");
+    assert!(!going_away(&mut c).await, "a stop says not to come back");
 }
 
-/// Un relevo con una task VIVA se rehúsa, en la respuesta, mientras todavía hay
-/// alguien a quien contestar — y no toca nada: el daemon sigue aceptando.
+/// A handover with a LIVE task is refused, in the response, while there is
+/// still someone to answer to — and it touches nothing: the daemon keeps
+/// accepting.
 ///
-/// La negativa va DELANTE y no después de esperar a las tasks porque la
-/// respuesta de `daemon.shutdown` sale en el acto: una negativa decidida
-/// minutos más tarde no tendría a quién decírsela, y para entonces el listener
-/// ya habría dejado de aceptar — «rehusar» significaría volver a aceptar, que
-/// es una máquina de estados que nadie pidió.
+/// The refusal comes BEFORE, not after waiting for the tasks, because
+/// `daemon.shutdown`'s response goes out right away: a refusal decided
+/// minutes later would have nobody to tell it to, and by then the listener
+/// would have already stopped accepting — "refusing" would mean accepting
+/// again, a state machine nobody asked for.
 #[tokio::test]
-async fn un_relevo_con_una_task_viva_se_rehusa_y_no_toca_nada() {
+async fn a_handover_with_a_live_task_is_refused_and_touches_nothing() {
     let mem = MemProvider::new();
     write_file(&mem, "mem:///src.bin", &vec![7u8; 256 * 1024]).await;
-    // Latencia por operación: la copia sigue viva mientras se pide el relevo,
-    // de forma determinista y sin dormir a ciegas.
+    // Per-op latency: the copy stays alive while the handover is requested,
+    // deterministically and without sleeping blindly.
     mem.faults()
         .set_latency_per_op(Some(Duration::from_millis(50)));
     let d = spawn_daemon_mem(None, Duration::from_mins(2), mem).await;
@@ -378,7 +382,7 @@ async fn un_relevo_con_una_task_viva_se_rehusa_y_no_toca_nada() {
             },
         )
         .await
-        .expect("copia lanzada");
+        .expect("copy launched");
 
     let err = c
         .call::<_, DaemonShutdownResult>(
@@ -389,13 +393,13 @@ async fn un_relevo_con_una_task_viva_se_rehusa_y_no_toca_nada() {
             },
         )
         .await
-        .expect_err("con una copia viva, no");
+        .expect_err("not with a live copy");
     assert!(
         matches!(&err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST),
         "{err:?}"
     );
 
-    // Y no tocó nada: el daemon sigue en pie y sirviendo.
+    // And it touched nothing: the daemon is still up and serving.
     let _: FsStatResult = c
         .call(
             methods::FS_STAT,
@@ -405,28 +409,29 @@ async fn un_relevo_con_una_task_viva_se_rehusa_y_no_toca_nada() {
             },
         )
         .await
-        .expect("el daemon sigue aceptando tras rehusar el relevo");
+        .expect("the daemon keeps accepting after refusing the handover");
 }
 
-/// **El socket se retira ANTES de drenar, no después**, y eso solo importa
-/// desde que existe el relevo.
+/// **The socket is removed BEFORE draining, not after**, and that only
+/// matters since handover exists.
 ///
-/// Al apagar, el daemon suelta el listener y espera a sus tasks. Si el fichero
-/// del socket sigue ahí durante esa espera, un cliente que reconecte recibe
-/// `ECONNREFUSED`, arranca el reemplazo —cosa que ANTES de esta fase no hacía
-/// nunca—, el reemplazo borra la ruta rancia y enlaza la suya… y el daemon
-/// viejo, al terminar de drenar, borra el socket DEL REEMPLAZO. Éste se queda
-/// escuchando en un inodo sin nombre, y como el permiso de arranque es de un
-/// solo uso, nadie lo vuelve a levantar.
+/// On shutdown, the daemon drops the listener and waits for its tasks. If the
+/// socket file is still there during that wait, a client that reconnects
+/// gets `ECONNREFUSED`, starts the replacement — something it never did
+/// BEFORE this phase — the replacement deletes the stale path and binds its
+/// own... and the old daemon, once it finishes draining, deletes the
+/// REPLACEMENT's socket. That one is left listening on a nameless inode, and
+/// since the startup permission is single-use, nobody ever brings it back
+/// up.
 ///
-/// El test fija el orden: con una task viva —o sea, en pleno drenaje— la ruta
-/// ya no existe.
+/// The test pins the order: with a live task — i.e. in the middle of
+/// draining — the path no longer exists.
 #[tokio::test]
-async fn el_socket_se_retira_antes_de_drenar() {
+async fn the_socket_is_removed_before_draining() {
     let mem = MemProvider::new();
     write_file(&mem, "mem:///src.bin", &vec![7u8; 4 * 1024 * 1024]).await;
-    // Latencia ALTA por operación: el drenaje dura segundos, así que «el
-    // socket se fue» y «el daemon terminó» no pueden confundirse.
+    // HIGH per-op latency: draining takes seconds, so "the socket left" and
+    // "the daemon finished" cannot be confused.
     mem.faults()
         .set_latency_per_op(Some(Duration::from_millis(200)));
     let mut d = spawn_daemon_mem(None, Duration::from_mins(2), mem).await;
@@ -446,34 +451,34 @@ async fn el_socket_se_retira_antes_de_drenar() {
             },
         )
         .await
-        .expect("copia lanzada");
+        .expect("copy launched");
 
-    // Parada graceful: entra en el drenaje con la copia viva.
+    // Graceful stop: it enters draining with the copy alive.
     let _: DaemonShutdownResult = c
         .call(methods::DAEMON_SHUTDOWN, &DaemonShutdownParams::default())
         .await
-        .expect("parada aceptada");
+        .expect("stop accepted");
 
-    // La ruta tiene que desaparecer MIENTRAS todavía se drena. Las dos mitades
-    // son la aserción: sin la segunda, un drenaje que acabara rápido haría pasar
-    // el test con el borrado al final, que es justo lo que rompe el relevo.
-    let mut retirado = false;
+    // The path has to disappear WHILE draining is still happening. The two
+    // halves are the assertion: without the second, a fast drain would pass
+    // the test with the deletion at the end, exactly what breaks handover.
+    let mut removed = false;
     for _ in 0..50 {
         if !d.socket.exists() {
-            retirado = true;
+            removed = true;
             break;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    assert!(retirado, "el socket sigue ahí durante el drenaje");
+    assert!(removed, "the socket is still there during draining");
     assert!(
         futures::FutureExt::now_or_never(&mut d.run).is_none(),
-        "y el daemon TODAVÍA no ha terminado: si ya terminó, este test no          distingue el borrado temprano del tardío"
+        "and the daemon has NOT finished yet: if it already finished, this test does not          distinguish early deletion from late"
     );
 }
 
 pub(super) async fn spawn_daemon_at(socket: PathBuf) -> TestDaemon {
-    // El tempdir padre lo posee el caller; aquí un guard vacío.
+    // The parent tempdir is owned by the caller; here, an empty guard.
     let dir = tempfile::tempdir().expect("tempdir guard");
     let engine = Arc::new(Engine::new());
     let mem = Arc::new(MemProvider::new());
@@ -499,64 +504,65 @@ pub(super) async fn spawn_daemon_at(socket: PathBuf) -> TestDaemon {
     }
 }
 
-// ---------- protocolo crudo (frames hostiles) ----------
+// ---------- raw protocol (hostile frames) ----------
 
-/// Lee UNA línea completa del stream (UDS es stream: un read puede ser
-/// parcial — m4 del rust-reviewer).
+/// Reads ONE whole line from the stream (UDS is a stream: one read can be
+/// partial — rust-reviewer m4).
 pub(super) async fn read_frame(s: &mut tokio::net::UnixStream) -> serde_json::Value {
     use tokio::io::AsyncReadExt;
     let mut decoder = norte_proto::wire::FrameDecoder::new();
     let mut buf = vec![0u8; 4096];
     loop {
         if let Some(frame) = decoder.next_frame() {
-            return serde_json::from_slice(&frame).expect("respuesta JSON");
+            return serde_json::from_slice(&frame).expect("JSON response");
         }
         let n = tokio::time::timeout(Duration::from_secs(5), s.read(&mut buf))
             .await
-            .expect("respuesta antes del timeout")
+            .expect("response before the timeout")
             .expect("read");
-        assert_ne!(n, 0, "conexión cerrada esperando respuesta");
-        decoder.push(&buf[..n]).expect("frame razonable");
+        assert_ne!(n, 0, "connection closed while waiting for a response");
+        decoder.push(&buf[..n]).expect("reasonable frame");
     }
 }
 
-/// Frames hostiles directamente sobre el socket, sin el Client: JSON roto
-/// = -32700; JSON válido que no es envelope = -32600; request con id de
-/// tipo ilegal = -32600 (JAMÁS silencio); params null en daemon.shutdown
-/// (la forma canónica del golden) funciona.
+/// Hostile frames directly over the socket, without the Client: broken JSON
+/// = -32700; valid JSON that is not an envelope = -32600; a request with an
+/// illegally-typed id = -32600 (NEVER silence); null params on
+/// daemon.shutdown (the golden's canonical shape) works.
 #[tokio::test]
-async fn frames_hostiles_y_formas_canonicas_crudas() {
+async fn raw_hostile_frames_and_canonical_shapes() {
     use tokio::io::AsyncWriteExt;
     let d = spawn_daemon(None).await;
 
     let mut s = tokio::net::UnixStream::connect(&d.socket)
         .await
-        .expect("connect crudo");
+        .expect("raw connect");
 
     s.write_all(b"esto no es json\n").await.expect("write");
     let resp = read_frame(&mut s).await;
     assert_eq!(resp["error"]["code"], serde_json::json!(-32700));
     assert_eq!(resp["id"], serde_json::Value::Null);
 
-    // JSON válido, envelope inválido: -32600, no -32700 (M2 del guardian).
+    // Valid JSON, invalid envelope: -32600, not -32700 (guardian M2).
     s.write_all(b"{\"foo\":1}\n").await.expect("write");
     let resp = read_frame(&mut s).await;
     assert_eq!(resp["error"]["code"], serde_json::json!(-32600));
 
-    // id ilegal (negativo): -32600, jamás tragado como notification (M3).
+    // Illegal id (negative): -32600, never swallowed as a notification (M3).
     s.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":-1,\"method\":\"fs.stat\",\"params\":null}\n")
         .await
         .expect("write");
     let resp = read_frame(&mut s).await;
     assert_eq!(resp["error"]["code"], serde_json::json!(-32600));
 
-    // initialize + daemon.shutdown con params null (golden canónico, M1).
+    // initialize + daemon.shutdown with null params (canonical golden, M1).
     //
-    // La versión se INTERPOLA desde `PROTOCOL_VERSION` y no se escribe a mano:
-    // clavada aquí (era `"0.38.0"`), el frame envejecía sin que nadie lo
-    // tocara y este test se ponía rojo dos bumps después, culpando al cambio
-    // que pasara por delante. Lo que prueba es el marco crudo, no la ventana
-    // N/N-1 —de eso se ocupa `version_compatible` en `norte-proto`—.
+    // The version is INTERPOLATED from `PROTOCOL_VERSION` and not hand
+    // written: pinned here (it used to be `"0.38.0"`), the frame would age
+    // without anyone touching it and this test would turn red two bumps
+    // later, blaming whatever change happened to pass by. What it tests is
+    // the raw frame, not the N/N-1 window — `version_compatible` in
+    // `norte-proto` handles that.
     let hello = format!(
         "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{{\"client_info\":{{\"name\":\"raw\",\"version\":\"0\"}},\"protocol_version\":\"{}\",\"encodings\":[\"json\"]}}}}\n",
         methods::PROTOCOL_VERSION
@@ -568,13 +574,13 @@ async fn frames_hostiles_y_formas_canonicas_crudas() {
         .await
         .expect("write");
     let resp = read_frame(&mut s).await;
-    assert!(resp["error"].is_null(), "params null aceptado: {resp}");
+    assert!(resp["error"].is_null(), "null params accepted: {resp}");
 }
 
-/// initialize repetido = error de protocolo (decisión pinneada, m4 del
-/// guardian) — y la conexión sigue viva y usable.
+/// A repeated initialize = a protocol error (pinned decision, guardian m4) —
+/// and the connection stays alive and usable.
 #[tokio::test]
-async fn initialize_repetido_es_invalid_request() {
+async fn a_repeated_initialize_is_invalid_request() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let err = c
@@ -588,7 +594,7 @@ async fn initialize_repetido_es_invalid_request() {
             },
         )
         .await
-        .expect_err("re-initialize rechazado");
+        .expect_err("re-initialize rejected");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
     let _: FsListResult = c
         .call(
@@ -601,39 +607,36 @@ async fn initialize_repetido_es_invalid_request() {
             },
         )
         .await
-        .expect("la conexión sigue viva");
+        .expect("the connection is still alive");
 }
 
-// ---------- L2: la sesión de UI por el socket ----------
+// ---------- L2: the UI session over the socket ----------
 
-/// La sesión va y vuelve, y la revisión sube. La primera conexión humana que
-/// pregunta se la queda.
+/// The session goes and comes back, and the revision goes up. The first human
+/// connection that asks keeps it.
 #[tokio::test]
-async fn session_get_y_put_por_el_socket() {
-    // Con `state_dir`, porque `owner` significa «esto se guarda»: un daemon
-    // sin dónde escribir contesta que no, y con razón.
-    let estado = tempfile::tempdir().expect("tempdir");
-    let d = spawn_daemon_estado(estado.path()).await;
+async fn session_get_and_put_over_the_socket() {
+    // With `state_dir`, because `owner` means "this gets saved": a daemon
+    // with nowhere to write answers no, and rightly so.
+    let state = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_with_state(state.path()).await;
     let c = connected_client(&d).await;
     let g: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
     assert_eq!(g.session.revision, 0);
-    assert_eq!(
-        g.session.version, 0,
-        "sin esquema hasta que alguien escriba"
-    );
-    assert!(g.owner, "la primera conexión humana se la queda");
+    assert_eq!(g.session.version, 0, "no schema until someone writes");
+    assert!(g.owner, "the first human connection keeps it");
 
-    let cuerpo = serde_json::json!({ "version": 1, "slots": {} });
+    let body = serde_json::json!({ "version": 1, "slots": {} });
     let p: methods::SessionPutResult = c
         .call(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
                 revision: 0,
-                body: cuerpo.clone(),
+                body: body.clone(),
             },
         )
         .await
@@ -644,111 +647,113 @@ async fn session_get_y_put_por_el_socket() {
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert_eq!(g2.session.body, cuerpo, "vuelve el mismo documento");
+    assert_eq!(g2.session.body, body, "the same document comes back");
     assert_eq!(g2.session.version, 1);
     assert_eq!(g2.session.revision, 1);
 }
 
-/// `session.release` (fase 9) suelta la propiedad SIN desconectar, y lo que
-/// suelta es la propiedad y no el contenido.
+/// `session.release` (phase 9) releases ownership WITHOUT disconnecting, and
+/// what it releases is ownership, not the content.
 ///
-/// Las tres cosas que tiene que demostrar, y ninguna es obvia:
+/// The three things it has to demonstrate, and none is obvious:
 ///
-/// - la dueña recibe `released: true` y deja de serlo;
-/// - el CUERPO sigue donde estaba —es justo lo que el otro frontend va a
-///   leer—, y con su revisión;
-/// - la siguiente conexión humana se la lleva, que es lo que hace posible el
-///   relevo.
+/// - the owner receives `released: true` and stops being one;
+/// - the BODY stays where it was — exactly what the other frontend is going
+///   to read — with its revision;
+/// - the next human connection takes it, which is what makes handoff
+///   possible.
 #[tokio::test]
-async fn session_release_suelta_la_propiedad_y_conserva_el_cuerpo() {
-    let estado = tempfile::tempdir().expect("tempdir");
-    let daemon = spawn_daemon_estado(estado.path()).await;
-    let cliente = connected_client(&daemon).await;
-    let g: methods::SessionGetResult = cliente
+async fn session_release_gives_up_ownership_and_keeps_the_body() {
+    let state = tempfile::tempdir().expect("tempdir");
+    let daemon = spawn_daemon_with_state(state.path()).await;
+    let client = connected_client(&daemon).await;
+    let g: methods::SessionGetResult = client
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert!(g.owner, "la primera conexión humana se la queda");
+    assert!(g.owner, "the first human connection keeps it");
 
-    let cuerpo = serde_json::json!({ "version": 1, "slots": {} });
-    let p: methods::SessionPutResult = cliente
+    let body = serde_json::json!({ "version": 1, "slots": {} });
+    let p: methods::SessionPutResult = client
         .call(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
                 revision: 0,
-                body: cuerpo.clone(),
+                body: body.clone(),
             },
         )
         .await
         .expect("session.put");
     assert_eq!(p.revision, 1);
 
-    let r: methods::SessionReleaseResult = cliente
+    let r: methods::SessionReleaseResult = client
         .call(methods::SESSION_RELEASE, &serde_json::json!({}))
         .await
         .expect("session.release");
-    assert!(r.released, "era la dueña");
+    assert!(r.released, "it was the owner");
 
-    // Soltar DOS veces contesta `false` la segunda: ya no era ella, y eso hay
-    // que poder distinguirlo de un fallo.
-    let r2: methods::SessionReleaseResult = cliente
+    // Releasing TWICE answers `false` the second time: it was no longer
+    // theirs, and that has to be distinguishable from a failure.
+    let r2: methods::SessionReleaseResult = client
         .call(methods::SESSION_RELEASE, &serde_json::json!({}))
         .await
         .expect("session.release");
-    assert!(!r2.released, "ya no era la dueña");
+    assert!(!r2.released, "it was no longer the owner");
 
-    // Y otra conexión se la lleva, con el cuerpo intacto: es el relevo.
-    let cliente2 = connected_client(&daemon).await;
-    let g2: methods::SessionGetResult = cliente2
+    // And another connection takes it, with the body intact: that is the
+    // handoff.
+    let client2 = connected_client(&daemon).await;
+    let g2: methods::SessionGetResult = client2
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert!(g2.owner, "la sesión estaba libre y se la lleva");
-    assert_eq!(g2.session.body, cuerpo, "lo que se soltó fue la propiedad");
+    assert!(g2.owner, "the session was free and it takes it");
+    assert_eq!(g2.session.body, body, "what was released was ownership");
     assert_eq!(g2.session.revision, 1);
 }
 
-/// Un AGENTE no suelta la sesión de nadie: no tiene pantalla, y la respuesta
-/// es la misma que a `session.get` — `INVALID_REQUEST` antes de mirar nada.
+/// An AGENT does not release anyone's session: it has no screen, and the
+/// answer is the same as `session.get`'s — `INVALID_REQUEST` before looking
+/// at anything.
 #[tokio::test]
-async fn session_release_se_le_niega_a_un_agente() {
-    let estado = tempfile::tempdir().expect("tempdir");
-    let daemon = spawn_daemon_estado(estado.path()).await;
-    let humano = connected_client(&daemon).await;
-    let g: methods::SessionGetResult = humano
+async fn session_release_is_denied_to_an_agent() {
+    let state = tempfile::tempdir().expect("tempdir");
+    let daemon = spawn_daemon_with_state(state.path()).await;
+    let human = connected_client(&daemon).await;
+    let g: methods::SessionGetResult = human
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
     assert!(g.owner);
 
-    let agente = connected_agent(&daemon, "claude").await;
-    let err = agente
+    let agent = connected_agent(&daemon, "claude").await;
+    let err = agent
         .call::<_, methods::SessionReleaseResult>(methods::SESSION_RELEASE, &serde_json::json!({}))
         .await
-        .expect_err("un agente no tiene sesión");
+        .expect_err("an agent has no session");
     match err {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_REQUEST),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
-    // Y la del humano SIGUE siendo suya: el intento del agente no la tocó.
-    let r: methods::SessionReleaseResult = humano
+    // And the human's STAYS theirs: the agent's attempt did not touch it.
+    let r: methods::SessionReleaseResult = human
         .call(methods::SESSION_RELEASE, &serde_json::json!({}))
         .await
         .expect("session.release");
-    assert!(r.released, "el humano seguía siendo el dueño");
+    assert!(r.released, "the human was still the owner");
 }
 
-/// Una revisión rancia por el wire es la taxonomía `Conflict` en `data`, no un
-/// error de transporte: el cliente distingue «vuelve a leer» de «el daemon se
-/// rompió».
+/// A stale revision over the wire is the `Conflict` taxonomy in `data`, not a
+/// transport error: the client distinguishes "read again" from "the daemon
+/// broke".
 #[tokio::test]
-async fn session_put_rancio_es_conflict() {
-    // CON `state_dir`: desde la revisión de #237 un core que no persiste
-    // rehúsa el `put` entero, así que un conflicto de revisión solo se puede
-    // provocar donde de verdad se escribe.
-    let estado = tempfile::tempdir().expect("tmp");
-    let d = spawn_daemon_estado(estado.path()).await;
+async fn a_stale_session_put_is_conflict() {
+    // WITH `state_dir`: since #237's review, a core that does not persist
+    // refuses the whole `put`, so a revision conflict can only be triggered
+    // where writing actually happens.
+    let state = tempfile::tempdir().expect("tmp");
+    let d = spawn_daemon_with_state(state.path()).await;
     let c = connected_client(&d).await;
     let _: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
@@ -762,11 +767,11 @@ async fn session_put_rancio_es_conflict() {
     let _: methods::SessionPutResult = c
         .call(methods::SESSION_PUT, &params)
         .await
-        .expect("el primero entra");
+        .expect("the first one gets in");
     let err = c
         .call::<_, methods::SessionPutResult>(methods::SESSION_PUT, &params)
         .await
-        .expect_err("la revisión ya no es la vigente");
+        .expect_err("the revision is no longer current");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
@@ -779,35 +784,35 @@ async fn session_put_rancio_es_conflict() {
                 rpc.data
             );
         }
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Por encima del tope: `LimitExceeded` con SU token, y la sesión almacenada
-/// se queda como estaba.
+/// Above the cap: `LimitExceeded` with ITS token, and the stored session
+/// stays as it was.
 #[tokio::test]
-async fn session_put_sobre_el_tope_es_limit_exceeded() {
-    // CON `state_dir`, por lo mismo que el test de arriba: el tope se
-    // comprueba después de la propiedad, y sin escritor no se llega.
-    let estado = tempfile::tempdir().expect("tmp");
-    let d = spawn_daemon_estado(estado.path()).await;
+async fn session_put_over_the_cap_is_limit_exceeded() {
+    // WITH `state_dir`, for the same reason as the test above: the cap is
+    // checked after ownership, and with no writer it is never reached.
+    let state = tempfile::tempdir().expect("tmp");
+    let d = spawn_daemon_with_state(state.path()).await;
     let c = connected_client(&d).await;
     let _: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    let gordo = serde_json::json!({ "x": "y".repeat(methods::SESSION_BODY_MAX + 1) });
+    let fat = serde_json::json!({ "x": "y".repeat(methods::SESSION_BODY_MAX + 1) });
     let err = c
         .call::<_, methods::SessionPutResult>(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
                 revision: 0,
-                body: gordo,
+                body: fat,
             },
         )
         .await
-        .expect_err("no cabe");
+        .expect_err("does not fit");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
@@ -816,103 +821,104 @@ async fn session_put_sobre_el_tope_es_limit_exceeded() {
                     rpc.data,
                     Some(Error::LimitExceeded { ref limit }) if limit == Error::LIMIT_SESSION_BODY
                 ),
-                "LimitExceeded session-body, fue {:?}",
+                "LimitExceeded session-body, was {:?}",
                 rpc.data
             );
         }
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
     let g: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert_eq!(g.session.revision, 0, "no se escribió nada");
+    assert_eq!(g.session.revision, 0, "nothing was written");
 }
 
-/// El segundo cliente del MISMO daemon recibe una copia y corre suelto: su
-/// `put` se rehúsa y la sesión de la dueña se queda intacta.
+/// The SAME daemon's second client receives a copy and runs detached: its
+/// `put` is refused and the owner's session stays intact.
 #[tokio::test]
-async fn el_segundo_cliente_recibe_copia_y_no_escribe() {
-    let estado = tempfile::tempdir().expect("tempdir");
-    let d = spawn_daemon_estado(estado.path()).await;
-    let uno = connected_client(&d).await;
-    let g1: methods::SessionGetResult = uno
+async fn the_second_client_receives_a_copy_and_does_not_write() {
+    let state = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_with_state(state.path()).await;
+    let one = connected_client(&d).await;
+    let g1: methods::SessionGetResult = one
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
     assert!(g1.owner);
-    let _: methods::SessionPutResult = uno
+    let _: methods::SessionPutResult = one
         .call(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
                 revision: 0,
-                body: serde_json::json!({ "quien": "uno" }),
+                body: serde_json::json!({ "who": "one" }),
             },
         )
         .await
-        .expect("la dueña escribe");
+        .expect("the owner writes");
 
-    let dos = connected_client(&d).await;
-    let g2: methods::SessionGetResult = dos
+    let two = connected_client(&d).await;
+    let g2: methods::SessionGetResult = two
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert!(!g2.owner, "la segunda corre suelta");
+    assert!(!g2.owner, "the second one runs detached");
     assert_eq!(
-        g2.session.body["quien"],
-        serde_json::json!("uno"),
-        "recibe COPIA"
+        g2.session.body["who"],
+        serde_json::json!("one"),
+        "it receives a COPY"
     );
-    let err = dos
+    let err = two
         .call::<_, methods::SessionPutResult>(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
                 revision: 1,
-                body: serde_json::json!({ "quien": "dos" }),
+                body: serde_json::json!({ "who": "two" }),
             },
         )
         .await
-        .expect_err("quien no es dueña no escribe");
-    // Con taxonomía y no con prosa: el cliente distingue «no mandas» de «tus
-    // params están mal» sin leer inglés — y es la misma negativa que da el
-    // brazo embebido.
+        .expect_err("whoever is not the owner does not write");
+    // With a taxonomy and not prose: the client distinguishes "it's not
+    // yours" from "your params are wrong" without reading English — and it
+    // is the same denial the embedded arm gives.
     match err {
         ClientError::Rpc(ref rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert_eq!(rpc.data, Some(Error::PermissionDenied), "{:?}", rpc.data);
         }
-        ref other => panic!("esperaba Rpc, fue {other:?}"),
+        ref other => panic!("expected Rpc, got {other:?}"),
     }
-    let g3: methods::SessionGetResult = uno
+    let g3: methods::SessionGetResult = one
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert_eq!(g3.session.body["quien"], serde_json::json!("uno"));
+    assert_eq!(g3.session.body["who"], serde_json::json!("one"));
 }
 
-/// La dueña que se va SUELTA la sesión: la siguiente conexión humana la toma.
-/// Sin esto, un cliente que muere deja la pantalla de rehén hasta el relevo.
+/// The owner leaving RELEASES the session: the next human connection takes
+/// it. Without this, a client that dies leaves the screen hostage until a
+/// handover.
 #[tokio::test]
-async fn al_morir_la_duena_la_sesion_queda_libre() {
-    let estado = tempfile::tempdir().expect("tempdir");
-    let d = spawn_daemon_estado(estado.path()).await;
-    let uno = connected_client(&d).await;
-    let g1: methods::SessionGetResult = uno
+async fn the_session_frees_up_when_the_owner_dies() {
+    let state = tempfile::tempdir().expect("tempdir");
+    let d = spawn_daemon_with_state(state.path()).await;
+    let one = connected_client(&d).await;
+    let g1: methods::SessionGetResult = one
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
     assert!(g1.owner);
-    drop(uno);
+    drop(one);
 
-    // La desconexión se procesa en el servidor; se reintenta hasta verla. El
-    // límite es de TIEMPO y no un número de vueltas: bajo carga, «50 yields»
-    // es una carrera que se pierde y un rojo intermitente.
-    let libre = tokio::time::timeout(Duration::from_secs(10), async {
+    // The disconnection is processed on the server; retried until seen. The
+    // limit is one of TIME, not a number of loops: under load, "50 yields"
+    // is a race that gets lost and an intermittent red.
+    let free = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            let dos = connected_client(&d).await;
-            let g: methods::SessionGetResult = dos
+            let two = connected_client(&d).await;
+            let g: methods::SessionGetResult = two
                 .call(methods::SESSION_GET, &serde_json::json!({}))
                 .await
                 .expect("session.get");
@@ -924,28 +930,29 @@ async fn al_morir_la_duena_la_sesion_queda_libre() {
     })
     .await;
     assert!(
-        libre.is_ok(),
-        "la sesión quedó de rehén de una conexión muerta"
+        free.is_ok(),
+        "the session stayed hostage to a dead connection"
     );
 }
 
-/// Un daemon SIN dónde escribir no dice que manda: `owner: false`, y el
-/// cliente se ve suelto en vez de escribir cada segundo una pantalla que no
-/// va a llegar a ningún disco.
+/// A daemon with NOWHERE to write does not claim to be in charge: `owner:
+/// false`, and the client sees itself detached instead of writing a screen
+/// every second that will never reach any disk.
 #[tokio::test]
-async fn sin_state_dir_nadie_es_duena() {
+async fn with_no_state_dir_nobody_is_the_owner() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
     let g: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert!(!g.owner, "sin escritor no hay dueña que prometer");
+    assert!(!g.owner, "with no writer there is no owner to promise");
 }
 
-/// Daemon con `state_dir` propio: el que persiste la sesión de UI (L2). El
-/// directorio lo pone el test, y por eso ningún test toca el estado real.
-pub(super) async fn spawn_daemon_estado(state: &std::path::Path) -> TestDaemon {
+/// A daemon with its own `state_dir`: the one that persists the UI session
+/// (L2). The directory is set by the test, and that is why no test touches
+/// the real state.
+pub(super) async fn spawn_daemon_with_state(state: &std::path::Path) -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
@@ -972,12 +979,12 @@ pub(super) async fn spawn_daemon_estado(state: &std::path::Path) -> TestDaemon {
     }
 }
 
-/// El relevo es el evento por el que esto existe: un daemon se va, y lo que el
-/// cliente había puesto está en disco cuando arranca el siguiente.
+/// Handover is the event this exists for: a daemon leaves, and what the
+/// client had put is on disk by the time the next one starts.
 #[tokio::test]
-async fn la_sesion_sobrevive_a_un_relevo() {
-    let estado = tempfile::tempdir().expect("tmp");
-    let d = spawn_daemon_estado(estado.path()).await;
+async fn the_session_survives_a_handover() {
+    let state = tempfile::tempdir().expect("tmp");
+    let d = spawn_daemon_with_state(state.path()).await;
     let c = connected_client(&d).await;
     let _: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
@@ -1005,65 +1012,65 @@ async fn la_sesion_sobrevive_a_un_relevo() {
         .await
         .expect("daemon.shutdown");
     drop(c);
-    // El volcado y la suelta del lock ocurren DENTRO de `run`: esperarlo es
-    // esperar exactamente a lo que el sucesor necesita encontrar hecho.
-    d.run.await.expect("join").expect("apagado limpio");
+    // The flush and releasing the lock happen INSIDE `run`: waiting for it
+    // is waiting for exactly what the successor needs to find done.
+    d.run.await.expect("join").expect("clean shutdown");
 
-    let d2 = spawn_daemon_estado(estado.path()).await;
+    let d2 = spawn_daemon_with_state(state.path()).await;
     let c2 = connected_client(&d2).await;
     let g: methods::SessionGetResult = c2
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
     assert_eq!(g.session.body["dir"], serde_json::json!("file:///casa"));
-    assert_eq!(g.session.revision, 1, "la revisión también sobrevive");
+    assert_eq!(g.session.revision, 1, "the revision survives too");
     assert_eq!(g.session.version, 1);
 }
 
-/// #237: un daemon que arranca mientras OTRO core tiene el lock de la sesión
-/// no lo volvía a intentar jamás.
+/// #237: a daemon that starts while ANOTHER core holds the session lock used
+/// to never retry it.
 ///
-/// `session_persists` se calculaba una vez en el bind, así que contestaba
-/// `owner: false` durante toda su vida — también horas después de que el otro
-/// proceso se hubiera ido y el fichero llevara libre desde entonces. El brazo
-/// embebido ya reintentaba (#234); éste es el del daemon.
+/// `session_persists` used to be computed once at bind time, so it answered
+/// `owner: false` for its whole life — also hours after the other process
+/// had left and the file had been free ever since. The embedded arm already
+/// retried (#234); this is the daemon's.
 ///
-/// Y al tomarlo tarde ADOPTA el documento de disco: lo que el otro core
-/// escribió después de que éste arrancara es lo vigente, y servir la copia
-/// vieja con el número nuevo sería perderlo sin que nada lo notara.
+/// And taking it late ADOPTS the disk document: what the other core wrote
+/// after this one started is what is current, and serving the old copy with
+/// the new number would lose it without anything noticing.
 #[tokio::test]
-async fn un_daemon_suelto_toma_la_sesion_cuando_queda_libre() {
-    let estado = tempfile::tempdir().expect("tmp");
-    let uno = spawn_daemon_estado(estado.path()).await;
-    let c1 = connected_client(&uno).await;
+async fn a_detached_daemon_takes_the_session_once_it_frees_up() {
+    let state = tempfile::tempdir().expect("tmp");
+    let one = spawn_daemon_with_state(state.path()).await;
+    let c1 = connected_client(&one).await;
     let g1: methods::SessionGetResult = c1
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert!(g1.owner, "el primero tiene el lock");
+    assert!(g1.owner, "the first one has the lock");
 
-    // El segundo arranca CON el lock tomado: corre suelto.
-    let dos = spawn_daemon_estado(estado.path()).await;
-    let c2 = connected_client(&dos).await;
+    // The second one starts WITH the lock taken: it runs detached.
+    let two = spawn_daemon_with_state(state.path()).await;
+    let c2 = connected_client(&two).await;
     let g2: methods::SessionGetResult = c2
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert!(!g2.owner, "con el lock de otro, suelto");
+    assert!(!g2.owner, "with another's lock, detached");
 
-    // El primero escribe DESPUÉS de que el segundo haya arrancado: esto es lo
-    // que el segundo tiene que adoptar, y no puede haberlo leído al nacer.
+    // The first one writes AFTER the second one has started: this is what
+    // the second one has to adopt, and it cannot have read it at birth.
     let _: methods::SessionPutResult = c1
         .call(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
                 revision: 0,
-                body: serde_json::json!({ "quien": "el primero" }),
+                body: serde_json::json!({ "who": "the first one" }),
             },
         )
         .await
-        .expect("la dueña escribe");
+        .expect("the owner writes");
     let _: DaemonShutdownResult = c1
         .call(
             methods::DAEMON_SHUTDOWN,
@@ -1075,11 +1082,11 @@ async fn un_daemon_suelto_toma_la_sesion_cuando_queda_libre() {
         .await
         .expect("daemon.shutdown");
     drop(c1);
-    uno.run.await.expect("join").expect("apagado limpio");
+    one.run.await.expect("join").expect("clean shutdown");
 
-    // El límite es de TIEMPO y no un número de vueltas: el escritor reintenta
-    // en su tick, y bajo carga contar vueltas es un rojo intermitente.
-    let tomada = tokio::time::timeout(Duration::from_secs(20), async {
+    // The limit is one of TIME, not a number of loops: the writer retries on
+    // its tick, and counting loops under load is an intermittent red.
+    let taken = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             let g: methods::SessionGetResult = c2
                 .call(methods::SESSION_GET, &serde_json::json!({}))
@@ -1092,48 +1099,50 @@ async fn un_daemon_suelto_toma_la_sesion_cuando_queda_libre() {
         }
     })
     .await
-    .expect("el segundo nunca tomó una sesión que llevaba libre");
+    .expect("the second one never took a session that had been free");
 
     assert_eq!(
-        tomada.session.body["quien"],
-        serde_json::json!("el primero"),
-        "y adopta el documento que dejó el otro, no el que tenía al nacer"
+        taken.session.body["who"],
+        serde_json::json!("the first one"),
+        "and it adopts the document the other one left, not the one it had at birth"
     );
-    assert_eq!(tomada.session.revision, 1, "con su revisión");
+    assert_eq!(taken.session.revision, 1, "with its revision");
 }
 
-/// **La promesa de ADR 0059, de punta a punta**: una sesión que escribió un
-/// binario MÁS NUEVO no se lee y —lo que importa— no se pisa.
+/// **ADR 0059's promise, end to end**: a session written by a NEWER binary is
+/// not read and — what matters — not overwritten.
 ///
-/// Sin el gate en el escritor, esto se rompía en un segundo y en silencio: el
-/// fichero del futuro no se cargaba, el core arrancaba en la revisión 0, el
-/// primer `put` del cliente la aceptaba, y el volcado siguiente publicaba
-/// encima. Perder la sesión de un binario nuevo contra uno viejo no se
-/// recupera, así que la afirmación es sobre los BYTES del fichero.
+/// Without the gate in the writer, this used to break in a second and in
+/// silence: the future's file would not load, the core would start at
+/// revision 0, the client's first `put` would be accepted, and the next
+/// flush would publish over it. Losing a newer binary's session against an
+/// older one cannot be recovered, so the assertion is about the file's
+/// BYTES.
 #[tokio::test]
-async fn una_sesion_del_futuro_no_se_pisa_por_el_socket() {
-    let estado = tempfile::tempdir().expect("tmp");
-    let futura = methods::Session {
+async fn a_session_from_the_future_is_not_overwritten_over_the_socket() {
+    let state = tempfile::tempdir().expect("tmp");
+    let future = methods::Session {
         version: norte_core::ui_session::disk::SCHEMA_VERSION + 1,
         revision: 7,
-        body: serde_json::json!({ "de": "un binario más nuevo" }),
+        body: serde_json::json!({ "from": "a newer binary" }),
     };
-    norte_core::ui_session::disk::write(estado.path(), &futura).expect("escribe la del futuro");
-    let fichero = norte_core::ui_session::disk::path(estado.path());
-    let antes = std::fs::read(&fichero).expect("lee");
+    norte_core::ui_session::disk::write(state.path(), &future).expect("write the future one");
+    let file = norte_core::ui_session::disk::path(state.path());
+    let before = std::fs::read(&file).expect("read");
 
-    let d = spawn_daemon_estado(estado.path()).await;
+    let d = spawn_daemon_with_state(state.path()).await;
     let c = connected_client(&d).await;
     let g: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert!(!g.owner, "no se lee, así que tampoco se escribe");
-    assert_eq!(g.session.revision, 0, "arranca desde la configuración");
-    // Y un cliente que IGNORE `owner` tampoco la pisa. Antes se le aceptaba en
-    // memoria y el cuerpo moría con el proceso; desde la revisión de #237 se
-    // rehúsa de plano, que es lo que ya hacía el brazo embebido — y lo que hay
-    // que hacer en cuanto el escritor puede tomar el lock tarde.
+    assert!(!g.owner, "not read, so not written either");
+    assert_eq!(g.session.revision, 0, "starts from the configured default");
+    // And a client that IGNORES `owner` does not overwrite it either. It used
+    // to be accepted in memory and the body died with the process; since
+    // #237's review it is refused outright, which is what the embedded arm
+    // already did — and what has to happen once the writer can take the lock
+    // late.
     let err = c
         .call::<_, methods::SessionPutResult>(
             methods::SESSION_PUT,
@@ -1144,12 +1153,12 @@ async fn una_sesion_del_futuro_no_se_pisa_por_el_socket() {
             },
         )
         .await
-        .expect_err("sobre una sesión del futuro no se escribe ni en memoria");
+        .expect_err("over a session from the future, nothing is written, not even in memory");
     match err {
         ClientError::Rpc(ref rpc) => {
             assert_eq!(rpc.data, Some(Error::PermissionDenied), "{:?}", rpc.data);
         }
-        ref other => panic!("esperaba Rpc, fue {other:?}"),
+        ref other => panic!("expected Rpc, got {other:?}"),
     }
     let _: DaemonShutdownResult = c
         .call(
@@ -1162,22 +1171,22 @@ async fn una_sesion_del_futuro_no_se_pisa_por_el_socket() {
         .await
         .expect("daemon.shutdown");
     drop(c);
-    d.run.await.expect("join").expect("apagado limpio");
+    d.run.await.expect("join").expect("clean shutdown");
 
     assert_eq!(
-        std::fs::read(&fichero).expect("lee"),
-        antes,
-        "el fichero del futuro tiene que seguir byte a byte como estaba"
+        std::fs::read(&file).expect("read"),
+        before,
+        "the future file has to stay byte for byte as it was"
     );
 }
 
-/// El core que no tiene el lock sirve la pantalla y NO la escribe: dos cores
-/// sobre un mismo estado no se pisan.
+/// The core that does not hold the lock serves the screen and does NOT write
+/// it: two cores over the same state do not overwrite each other.
 #[tokio::test]
-async fn un_core_suelto_no_escribe_el_estado_ajeno() {
-    let estado = tempfile::tempdir().expect("tmp");
-    let duena = spawn_daemon_estado(estado.path()).await;
-    let c = connected_client(&duena).await;
+async fn a_detached_core_does_not_write_someone_elses_state() {
+    let state = tempfile::tempdir().expect("tmp");
+    let owner = spawn_daemon_with_state(state.path()).await;
+    let c = connected_client(&owner).await;
     let _: methods::SessionGetResult = c
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
@@ -1188,46 +1197,47 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
             &methods::SessionPutParams {
                 version: 1,
                 revision: 0,
-                body: serde_json::json!({ "quien": "la dueña" }),
+                body: serde_json::json!({ "who": "the owner" }),
             },
         )
         .await
         .expect("session.put");
 
-    // El segundo core arranca CON la pantalla —el lock decide quién escribe,
-    // no quién lee— aunque todavía no esté en disco.
-    let suelto = spawn_daemon_estado(estado.path()).await;
-    let c2 = connected_client(&suelto).await;
+    // The second core starts WITH the screen — the lock decides who writes,
+    // not who reads — even though it is not on disk yet.
+    let detached = spawn_daemon_with_state(state.path()).await;
+    let c2 = connected_client(&detached).await;
     let g2: methods::SessionGetResult = c2
         .call(methods::SESSION_GET, &serde_json::json!({}))
         .await
         .expect("session.get");
-    assert!(!g2.owner, "el segundo core corre suelto");
-    // La revisión sale de SU `get` y no se da por cero: el core suelto carga lo
-    // que haya en disco, y para cuando arranca, la dueña puede haber volcado ya
-    // —el primer tick de su escritor es inmediato—. Fijar el cero aquí era
-    // afirmar quién ganaba esa carrera, y bajo carga la perdía: rojo
-    // intermitente en un test que no habla de revisiones.
-    // Y desde la revisión de #237 el `put` de un core suelto se REHÚSA, igual
-    // que en el brazo embebido: aceptarlo en memoria dejó de ser inocuo cuando
-    // el escritor pudo tomar el lock tarde —el cuerpo aceptado suelto
-    // sobrevivía a la adopción y se publicaba encima de la pantalla ajena—.
+    assert!(!g2.owner, "the second core runs detached");
+    // The revision comes from ITS OWN `get` and is not assumed to be zero:
+    // the detached core loads whatever is on disk, and by the time it
+    // starts, the owner may have already flushed — its writer's first tick
+    // is immediate. Fixing zero here would assert who won that race, and
+    // under load it lost: intermittent red in a test that is not about
+    // revisions.
+    // And since #237's review, a detached core's `put` is REFUSED, same as
+    // in the embedded arm: accepting it in memory stopped being harmless
+    // once the writer could take the lock late — the detached, accepted body
+    // survived adoption and got published over someone else's screen.
     let err = c2
         .call::<_, methods::SessionPutResult>(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
                 version: 1,
                 revision: g2.session.revision,
-                body: serde_json::json!({ "quien": "el suelto" }),
+                body: serde_json::json!({ "who": "the detached one" }),
             },
         )
         .await
-        .expect_err("un core suelto no escribe NI en memoria");
+        .expect_err("a detached core does not write, not even in memory");
     match err {
         ClientError::Rpc(ref rpc) => {
             assert_eq!(rpc.data, Some(Error::PermissionDenied), "{:?}", rpc.data);
         }
-        ref other => panic!("esperaba Rpc, fue {other:?}"),
+        ref other => panic!("expected Rpc, got {other:?}"),
     }
     let _: DaemonShutdownResult = c2
         .call(
@@ -1240,27 +1250,28 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
         .await
         .expect("daemon.shutdown");
     drop(c2);
-    suelto.run.await.expect("join").expect("apagado limpio");
+    detached.run.await.expect("join").expect("clean shutdown");
 
-    // En disco no ha dejado NADA suyo. El fichero puede existir ya —la dueña
-    // vuelca cada segundo, y este test no compite con ese reloj— pero lo que
-    // diga es de ELLA. La afirmación no es «no hay fichero», que dependería
-    // del tick, sino «el fichero no es del suelto», que no depende de nada.
-    let fichero = norte_core::ui_session::disk::path(estado.path());
-    let quien = |ruta: &std::path::Path| -> Option<String> {
-        let raw = std::fs::read(ruta).ok()?;
+    // It has left NOTHING of its own on disk. The file may already exist —
+    // the owner flushes every second, and this test does not race that
+    // clock — but whatever it says belongs to HER. The assertion is not "no
+    // file exists", which would depend on the tick, but "the file is not the
+    // detached one's", which depends on nothing.
+    let file = norte_core::ui_session::disk::path(state.path());
+    let who = |path: &std::path::Path| -> Option<String> {
+        let raw = std::fs::read(path).ok()?;
         let s: methods::Session = serde_json::from_slice(&raw).ok()?;
-        Some(s.body["quien"].to_string())
+        Some(s.body["who"].to_string())
     };
-    if let Some(q) = quien(&fichero) {
+    if let Some(q) = who(&file) {
         assert_eq!(
-            q, "\"la dueña\"",
-            "un core suelto escribió el estado de otro"
+            q, "\"the owner\"",
+            "a detached core wrote another one's state"
         );
     }
 
-    // Y al apagarse la dueña, el fichero es suyo sin ambigüedad: su volcado
-    // final es el que manda.
+    // And once the owner shuts down, the file is unambiguously theirs: their
+    // final flush is what stands.
     let _: DaemonShutdownResult = c
         .call(
             methods::DAEMON_SHUTDOWN,
@@ -1272,32 +1283,32 @@ async fn un_core_suelto_no_escribe_el_estado_ajeno() {
         .await
         .expect("daemon.shutdown");
     drop(c);
-    duena.run.await.expect("join").expect("apagado limpio");
+    owner.run.await.expect("join").expect("clean shutdown");
     assert_eq!(
-        quien(&fichero).as_deref(),
-        Some("\"la dueña\""),
-        "el volcado final es el de la dueña"
+        who(&file).as_deref(),
+        Some("\"the owner\""),
+        "the final flush is the owner's"
     );
 }
 
 // ---------------------------------------------------------------------------
-// El registro del daemon por el cable (#328, ADR 0092).
+// The daemon's log over the wire (#328, ADR 0092).
 // ---------------------------------------------------------------------------
 
-/// Un daemon con anillo de registro montado, y el anillo.
+/// A daemon with a log ring mounted, and the ring.
 ///
-/// El anillo es EL MISMO objeto de los dos lados —el daemon lo sirve, el
-/// subscriber del test escribe en él— porque en el proceso de verdad también
-/// lo es: quien monta el registro es el binario, y el daemon solo lo sirve.
-pub(super) async fn spawn_daemon_con_anillo() -> (TestDaemon, norte_config::logring::LogRing) {
-    spawn_daemon_con_anillo_de(norte_config::logring::RING_DEFAULT).await
+/// The ring is THE SAME object on both sides — the daemon serves it, the
+/// test's subscriber writes into it — because in the real process it is too:
+/// the binary is the one that mounts the log, and the daemon only serves it.
+pub(super) async fn spawn_daemon_with_ring() -> (TestDaemon, norte_config::logring::LogRing) {
+    spawn_daemon_with_ring_of(norte_config::logring::RING_DEFAULT).await
 }
 
-/// El mismo, con el anillo del tamaño que pida el test.
+/// The same, with a ring of whatever size the test asks for.
 ///
-/// Un anillo PEQUEÑO es la única forma de llegar al desbordamiento sin emitir
-/// dos mil líneas, y el desbordamiento es lo que hace comprobable el `lost`.
-pub(super) async fn spawn_daemon_con_anillo_de(
+/// A SMALL ring is the only way to reach overflow without emitting two
+/// thousand lines, and overflow is what makes `lost` checkable.
+pub(super) async fn spawn_daemon_with_ring_of(
     cap: usize,
 ) -> (TestDaemon, norte_config::logring::LogRing) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -1305,7 +1316,7 @@ pub(super) async fn spawn_daemon_con_anillo_de(
     let engine = Arc::new(Engine::new());
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    let anillo = norte_config::logring::LogRing::new(cap);
+    let ring = norte_config::logring::LogRing::new(cap);
     let daemon = Daemon::bind(
         engine,
         DaemonConfig {
@@ -1318,7 +1329,7 @@ pub(super) async fn spawn_daemon_con_anillo_de(
     )
     .await
     .expect("bind")
-    .with_log_ring(anillo.clone());
+    .with_log_ring(ring.clone());
     let run = tokio::spawn(daemon.run());
     (
         TestDaemon {
@@ -1327,60 +1338,64 @@ pub(super) async fn spawn_daemon_con_anillo_de(
             dir,
             mem,
         },
-        anillo,
+        ring,
     )
 }
 
-/// Encamina las líneas de ESTE hilo al anillo mientras viva el guard.
+/// Routes THIS thread's lines to the ring while the guard lives.
 ///
-/// Un subscriber GLOBAL solo se puede instalar una vez por proceso, y estos
-/// tests necesitan el suyo; el de ámbito lo resuelve, igual que `con_lineas`
-/// en `norte-ui-host`. El daemon corre en el mismo hilo (el runtime de
-/// `#[tokio::test]` es de un hilo), así que sus líneas entran también — que es
-/// exactamente lo que pasa en el proceso de verdad.
+/// A GLOBAL subscriber can only be installed once per process, and these
+/// tests need their own; the scoped one solves it, same as `con_lineas` in
+/// `norte-ui-host`. The daemon runs on the same thread (`#[tokio::test]`'s
+/// runtime is single-threaded), so its lines go in too — exactly what
+/// happens in the real process.
 ///
-/// Por la capa de `tracing` y no metiendo líneas a mano: el filtro por el que
-/// pasa esa capa es donde vive la cota de `suppaftp`, y un atajo que se la
-/// saltara probaría un camino que no existe.
-pub(super) fn hacia_el_anillo(
-    anillo: &norte_config::logring::LogRing,
+/// Through the `tracing` layer and not by feeding lines by hand: the filter
+/// that layer goes through is where `suppaftp`'s cap lives, and a shortcut
+/// that skipped it would test a path that does not exist.
+pub(super) fn toward_the_ring(
+    ring: &norte_config::logring::LogRing,
 ) -> tracing::subscriber::DefaultGuard {
     use tracing_subscriber::layer::SubscriberExt as _;
-    let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(anillo));
+    let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(ring));
     tracing::subscriber::set_default(s)
 }
 
-/// LA prueba de este trabajo: la cota sigue viva al otro lado del socket.
+/// THE proof of this work: the cap stays alive on the other side of the
+/// socket.
 ///
-/// `suppaftp` escribe `PASS <contraseña>` en TRACE (#43, regla 10), y el nivel
-/// del anillo se sube DESDE la interfaz. Si subir el nivel por `log.level`
-/// dejara pasar un target de terceros, una pulsación en un panel pondría una
-/// contraseña en pantalla.
+/// `suppaftp` writes `PASS <password>` at TRACE (#43, rule 10), and the
+/// ring's level is raised FROM the interface. If raising the level via
+/// `log.level` let a third-party target through, a keystroke in a panel
+/// would put a password on screen.
 ///
-/// **Cubre el camino de `tracing`, no el del puente `log`.** `suppaftp` no
-/// emite eventos de `tracing`: emite `log::trace!`, y `tracing-log` los
-/// despacha con el `target` estático `"log"`. Ese otro camino ya está fijado
-/// en `norte-config`
-/// (`logring::tests::la_contrasena_no_entra_ni_por_el_puente_de_log`), y la
-/// cota es la MISMA función para los dos, así que repetirlo por el socket
-/// probaría dos veces lo mismo. Lo que este test añade es que subir el nivel
-/// POR EL CABLE no la levanta; el nombre `suppaftp` está aquí porque es el
-/// target que la lista blanca nombra, no porque éste sea su camino real.
+/// **Covers the `tracing` path, not the `log` bridge's.** `suppaftp` does not
+/// emit `tracing` events: it emits `log::trace!`, and `tracing-log` dispatches
+/// them with the static `target` `"log"`. That other path is already pinned
+/// in `norte-config`
+/// (`logring::tests::la_contrasena_no_entra_ni_por_el_puente_de_log`), and the
+/// cap is the SAME function for both, so repeating it over the socket would
+/// prove the same thing twice. What this test adds is that raising the level
+/// OVER THE WIRE does not lift it; the name `suppaftp` is here because it is
+/// the target the allowlist names, not because this is its real path.
 #[tokio::test]
-async fn subir_el_nivel_por_el_cable_no_levanta_la_cota() {
-    let (d, anillo) = spawn_daemon_con_anillo().await;
-    let _guard = hacia_el_anillo(&anillo);
+async fn raising_the_level_over_the_wire_does_not_lift_the_cap() {
+    let (d, ring) = spawn_daemon_with_ring().await;
+    let _guard = toward_the_ring(&ring);
     let c = connected_client(&d).await;
 
-    let nivel: methods::LogLevelResult = c
+    let level: methods::LogLevelResult = c
         .call(methods::LOG_LEVEL, &serde_json::json!({ "level": "trace" }))
         .await
-        .expect("el humano sube el nivel");
-    assert_eq!(nivel.level, "trace", "el daemon contesta el que QUEDÓ");
+        .expect("the human raises the level");
+    assert_eq!(
+        level.level, "trace",
+        "the daemon answers the one that RESULTED"
+    );
 
-    tracing::trace!(target: "suppaftp", "PASS secreto-de-verdad");
-    tracing::trace!(target: "hyper::proto", "cabecera cruda");
-    tracing::trace!(target: "norte_core::connect", "esto sí");
+    tracing::trace!(target: "suppaftp", "PASS real-secret");
+    tracing::trace!(target: "hyper::proto", "raw header");
+    tracing::trace!(target: "norte_core::connect", "this one");
 
     let r: methods::LogTailResult = c
         .call(
@@ -1388,88 +1403,90 @@ async fn subir_el_nivel_por_el_cable_no_levanta_la_cota() {
             &serde_json::json!({ "cursor": null, "max": 500 }),
         )
         .await
-        .expect("el humano lee el registro");
-    let mensajes: Vec<_> = r.lines.iter().map(|l| l.message.as_str()).collect();
-    assert!(mensajes.iter().any(|m| m.contains("esto sí")));
-    assert!(!mensajes.iter().any(|m| m.contains("secreto-de-verdad")));
-    assert!(!mensajes.iter().any(|m| m.contains("cabecera cruda")));
+        .expect("the human reads the log");
+    let messages: Vec<_> = r.lines.iter().map(|l| l.message.as_str()).collect();
+    assert!(messages.iter().any(|m| m.contains("this one")));
+    assert!(!messages.iter().any(|m| m.contains("real-secret")));
+    assert!(!messages.iter().any(|m| m.contains("raw header")));
 }
 
-/// El cursor sobrevive dos llamadas y no repite ni se salta líneas.
+/// The cursor survives two calls and neither repeats nor skips lines.
 #[tokio::test]
-async fn el_cursor_encadena_dos_llamadas() {
-    let (d, anillo) = spawn_daemon_con_anillo().await;
-    let _guard = hacia_el_anillo(&anillo);
+async fn the_cursor_chains_two_calls() {
+    let (d, ring) = spawn_daemon_with_ring().await;
+    let _guard = toward_the_ring(&ring);
     let c = connected_client(&d).await;
 
-    tracing::info!(target: "norte_core::prueba", "primera");
+    tracing::info!(target: "norte_core::prueba", "first");
     let a: methods::LogTailResult = c
         .call(
             methods::LOG_TAIL,
             &serde_json::json!({ "cursor": null, "max": 500 }),
         )
         .await
-        .expect("primera vuelta");
-    assert!(a.lines.iter().any(|l| l.message.contains("primera")));
-    tracing::info!(target: "norte_core::prueba", "segunda");
+        .expect("first round");
+    assert!(a.lines.iter().any(|l| l.message.contains("first")));
+    tracing::info!(target: "norte_core::prueba", "second");
     let b: methods::LogTailResult = c
         .call(
             methods::LOG_TAIL,
             &serde_json::json!({ "cursor": a.next, "max": 500 }),
         )
         .await
-        .expect("segunda vuelta");
-    assert!(b.lines.iter().any(|l| l.message.contains("segunda")));
-    assert!(!b.lines.iter().any(|l| l.message.contains("primera")));
-    // Sin cursor no se afirma ningún hueco: nadie perdió lo que nunca esperó.
+        .expect("second round");
+    assert!(b.lines.iter().any(|l| l.message.contains("second")));
+    assert!(!b.lines.iter().any(|l| l.message.contains("first")));
+    // With no cursor, no gap is asserted: nobody lost what they never
+    // expected.
     assert_eq!(a.lost, 0);
-    assert_eq!(b.lost, 0, "un cursor al día no se perdió nada");
-    // El nivel y el fondo de la historia viajan con las líneas, para que el
-    // panel pueda decir «esto es todo lo que hay» y a qué nivel se capturó.
-    assert_eq!(a.level, "info", "el anillo arranca en INFO");
+    assert_eq!(b.lost, 0, "a cursor that is caught up lost nothing");
+    // The level and the history's background travel with the lines, so the
+    // panel can say "this is everything there is" and at what level it was
+    // captured.
+    assert_eq!(a.level, "info", "the ring starts at INFO");
     assert_eq!(
         a.capacity,
-        u32::try_from(norte_config::logring::RING_DEFAULT).expect("cabe"),
+        u32::try_from(norte_config::logring::RING_DEFAULT).expect("fits"),
     );
 }
 
-/// Un cursor que se quedó atrás recibe el hueco CONTADO, y no un cero.
+/// A cursor that fell behind receives the gap COUNTED, not a zero.
 ///
-/// Es lo único que hace honesto el sondeo, y es el caso que ninguno de los
-/// otros tests toca: todos preguntan al día o sin cursor, así que el `lost` que
-/// viaja por el cable siempre valía cero — sustituir esa cuenta por un `0`
-/// literal en el daemon los habría dejado a todos verdes. El fallo que esto
-/// impide es concreto: un panel sondea, la máquina se atasca treinta segundos
-/// con el daemon a tope, el panel vuelve a preguntar y se le contesta un
-/// registro con un salto y ninguna explicación — una línea que falta es
-/// indistinguible de un suceso que no ocurrió.
+/// It is the only thing that makes polling honest, and it is the case none
+/// of the other tests touch: they all ask while caught up or with no cursor,
+/// so the `lost` that travels over the wire always came out zero —
+/// substituting that count with a literal `0` in the daemon would have left
+/// all of them green. The failure this prevents is concrete: a panel polls,
+/// the machine stalls for thirty seconds with the daemon maxed out, the
+/// panel asks again and is answered a log with a gap and no explanation — a
+/// missing line is indistinguishable from an event that never happened.
 ///
-/// Se afirma el número EXACTO, no `> 0`: un `lost` que solo tiene que ser
-/// positivo lo cumple cualquier cuenta mal hecha, y este número alimenta una
-/// marca de hueco que dice cuántas.
+/// The EXACT number is asserted, not `> 0`: a `lost` that only has to be
+/// positive is satisfied by any badly-made count, and this number feeds a
+/// gap marker that says how many.
 #[tokio::test]
-async fn un_cursor_que_se_quedo_atras_recibe_el_hueco_contado() {
+async fn a_cursor_that_fell_behind_receives_the_gap_counted() {
     const CAP: usize = 64;
-    const EMITIDAS: u64 = 100;
+    const EMITTED: u64 = 100;
 
-    let (d, anillo) = spawn_daemon_con_anillo_de(CAP).await;
-    let _guard = hacia_el_anillo(&anillo);
+    let (d, ring) = spawn_daemon_with_ring_of(CAP).await;
+    let _guard = toward_the_ring(&ring);
     let c = connected_client(&d).await;
 
-    tracing::info!(target: "norte_core::prueba", "la última que este cliente vio");
+    tracing::info!(target: "norte_core::prueba", "the last one this client saw");
     let a: methods::LogTailResult = c
         .call(
             methods::LOG_TAIL,
             &serde_json::json!({ "cursor": null, "max": 500 }),
         )
         .await
-        .expect("primera vuelta");
-    assert_eq!(a.lost, 0, "sin cursor no se afirma hueco");
+        .expect("first round");
+    assert_eq!(a.lost, 0, "with no cursor, no gap is asserted");
 
-    // El cliente se queda parado mientras el daemon sigue trabajando, y el
-    // anillo da la vuelta por debajo de su cursor.
-    for i in 0..EMITIDAS {
-        tracing::info!(target: "norte_core::prueba", "mientras no mirabas: {i}");
+    // The client stays still while the daemon keeps working, and the ring
+    // wraps around underneath its cursor.
+    for i in 0..EMITTED {
+        tracing::info!(target: "norte_core::prueba", "while you weren't looking: {i}");
     }
 
     let b: methods::LogTailResult = c
@@ -1478,47 +1495,49 @@ async fn un_cursor_que_se_quedo_atras_recibe_el_hueco_contado() {
             &serde_json::json!({ "cursor": a.next, "max": 500 }),
         )
         .await
-        .expect("segunda vuelta");
+        .expect("second round");
 
-    // Que entraron exactamente las mías y nada más es lo que hace legible el
-    // número de abajo: sin esto, un `lost` distinto no diría si falla la
-    // cuenta o si el daemon logueó por su cuenta.
+    // That exactly the test's own lines went in and nothing else is what
+    // makes the number below legible: without this, a different `lost`
+    // would not say whether the count is wrong or the daemon logged on its
+    // own.
     assert_eq!(
         b.next - a.next,
-        EMITIDAS,
-        "entre las dos vueltas entraron solo las líneas del test"
+        EMITTED,
+        "only the test's lines went in between the two rounds"
     );
-    // De las 100 que entraron, el anillo solo conserva 64: las 36 primeras
-    // —justo las que este cursor esperaba— se cayeron por detrás.
+    // Of the 100 that went in, the ring only keeps 64: the first 36 — exactly
+    // the ones this cursor was expecting — fell off the back.
     assert_eq!(
         b.lost,
-        EMITIDAS - u64::try_from(CAP).expect("cabe"),
-        "el hueco se cuenta, no se calla"
+        EMITTED - u64::try_from(CAP).expect("fits"),
+        "the gap is counted, not silenced"
     );
-    assert_eq!(b.lines.len(), CAP, "y llega el anillo entero");
+    assert_eq!(b.lines.len(), CAP, "and the whole ring arrives");
     assert!(
         !b.lines
             .iter()
-            .any(|l| l.message.contains("la última que este cliente vio")),
-        "esa ya se había caído: es de lo que el hueco cuenta"
+            .any(|l| l.message.contains("the last one this client saw")),
+        "that one had already fallen off: it is what the gap counts"
     );
-    // Y la vuelta siguiente, con el cursor al día, no arrastra el hueco de la
-    // anterior: `lost` es de ESTE cursor, no de todo lo que el anillo tiró.
+    // And the next round, caught up, does not carry over the previous gap:
+    // `lost` is about THIS cursor, not everything the ring ever dropped.
     let c2: methods::LogTailResult = c
         .call(
             methods::LOG_TAIL,
             &serde_json::json!({ "cursor": b.next, "max": 500 }),
         )
         .await
-        .expect("tercera vuelta");
-    assert_eq!(c2.lost, 0, "un cursor al día no perdió nada");
+        .expect("third round");
+    assert_eq!(c2.lost, 0, "a caught-up cursor lost nothing");
 }
 
-/// `max` se acota en el servidor: pedir un millón no manda un millón.
+/// `max` is capped on the server: asking for a million does not send a
+/// million.
 #[tokio::test]
-async fn el_servidor_acota_max() {
-    let (d, anillo) = spawn_daemon_con_anillo().await;
-    let _guard = hacia_el_anillo(&anillo);
+async fn the_server_caps_max() {
+    let (d, ring) = spawn_daemon_with_ring().await;
+    let _guard = toward_the_ring(&ring);
     let c = connected_client(&d).await;
 
     for i in 0..1200 {
@@ -1530,40 +1549,37 @@ async fn el_servidor_acota_max() {
             &serde_json::json!({ "cursor": 0, "max": 100_000 }),
         )
         .await
-        .expect("pedir de más no es un error");
-    // EXACTAMENTE mil, que aquí es determinista: 1200 líneas emitidas en un
-    // anillo de 2000, así que ninguna se cayó y el recorte es lo único que
-    // limita. Un `<=` habría pasado igual con un servidor que contestara una
-    // sola línea, o ninguna.
+        .expect("asking for more is not an error");
+    // EXACTLY a thousand, which here is deterministic: 1200 lines emitted
+    // into a ring of 2000, so none fell off and the trim is the only thing
+    // limiting it. A `<=` would have passed just as well with a server
+    // answering a single line, or none.
     assert_eq!(
         r.lines.len(),
         1000,
-        "el servidor recorta a su tope, ni más ni menos"
+        "the server trims to its cap, no more no less"
     );
-    // Y lo que no cupo NO se pierde: sigue después de `next`.
-    let siguiente: methods::LogTailResult = c
+    // And what did not fit is NOT lost: it is still there after `next`.
+    let next: methods::LogTailResult = c
         .call(
             methods::LOG_TAIL,
             &serde_json::json!({ "cursor": r.next, "max": 500 }),
         )
         .await
-        .expect("la vuelta siguiente recoge el resto");
-    assert!(
-        !siguiente.lines.is_empty(),
-        "quedaban líneas después del recorte"
-    );
+        .expect("the next round picks up the rest");
+    assert!(!next.lines.is_empty(), "lines were left after the trim");
 }
 
-/// `max: 0` es un error de params, no una página vacía.
+/// `max: 0` is a params error, not an empty page.
 ///
-/// Un panel que sondeara con cero recibiría una lista vacía cada vuelta con el
-/// cursor parado, y en pantalla eso se lee como «no está pasando nada» en vez
-/// de como el error de programación que es. Mismo criterio que
+/// A panel polling with zero would receive an empty list every round with
+/// the cursor stuck, and on screen that reads as "nothing is happening"
+/// instead of the programming error it is. Same criterion as
 /// `FsListParams::limit`.
 #[tokio::test]
-async fn max_cero_no_es_una_pagina_vacia() {
-    let (d, anillo) = spawn_daemon_con_anillo().await;
-    let _guard = hacia_el_anillo(&anillo);
+async fn max_zero_is_not_an_empty_page() {
+    let (d, ring) = spawn_daemon_with_ring().await;
+    let _guard = toward_the_ring(&ring);
     let c = connected_client(&d).await;
 
     let err = c
@@ -1572,25 +1588,27 @@ async fn max_cero_no_es_una_pagina_vacia() {
             &serde_json::json!({ "cursor": null, "max": 0 }),
         )
         .await
-        .expect_err("cero no es una página");
+        .expect_err("zero is not a page");
     match err {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Un daemon SIN anillo dice que no lo tiene, y no contesta una lista vacía.
+/// A daemon with NO ring says it does not have one, and does not answer an
+/// empty list.
 ///
-/// Es la diferencia que hace posible que el panel degrade a su registro local
-/// DICIENDO por qué: un registro vacío y un registro ausente no pueden leerse
-/// igual (#326). Es también el daemon compilado sin la feature `logging`, y el
-/// que arrancó cuando ya había otro subscriber instalado.
+/// It is the difference that lets the panel degrade to its local log WHILE
+/// SAYING why: an empty log and an absent log cannot be read the same way
+/// (#326). It is also the daemon compiled without the `logging` feature, and
+/// the one that started when there was already another subscriber
+/// installed.
 #[tokio::test]
-async fn sin_anillo_el_registro_no_existe_en_vez_de_estar_vacio() {
+async fn with_no_ring_the_log_does_not_exist_instead_of_being_empty() {
     let d = spawn_daemon(None).await;
     let c = connected_client(&d).await;
 
-    for (metodo, params) in [
+    for (method, params) in [
         (
             methods::LOG_TAIL,
             serde_json::json!({ "cursor": null, "max": 10 }),
@@ -1598,67 +1616,68 @@ async fn sin_anillo_el_registro_no_existe_en_vez_de_estar_vacio() {
         (methods::LOG_LEVEL, serde_json::json!({ "level": "debug" })),
     ] {
         let err = c
-            .call::<_, serde_json::Value>(metodo, &params)
+            .call::<_, serde_json::Value>(method, &params)
             .await
-            .expect_err("este daemon no tiene registro que servir");
+            .expect_err("this daemon has no log to serve");
         match err {
             ClientError::Rpc(rpc) => assert!(
                 matches!(rpc.data, Some(norte_proto::Error::Unsupported)),
-                "{metodo}: se esperaba Unsupported, fue {:?}",
+                "{method}: expected Unsupported, was {:?}",
                 rpc.data
             ),
-            other => panic!("esperaba Rpc, fue {other:?}"),
+            other => panic!("expected Rpc, got {other:?}"),
         }
     }
 }
 
-/// Un nivel que no está en el vocabulario NO se degrada al de por defecto.
+/// A level outside the vocabulary is NOT degraded to the default one.
 ///
-/// Aceptar lo que no se entiende y poner otra cosa dejaría al lector creyendo
-/// que pidió algo que nadie hizo.
+/// Accepting what is not understood and setting something else would leave
+/// the reader believing it asked for something nobody did.
 ///
-/// Y se rechaza con `INVALID_PARAMS`, que es OTRO error que el del daemon sin
-/// anillo (`Unsupported`, ver
-/// `sin_anillo_el_registro_no_existe_en_vez_de_estar_vacio`). Con un solo
-/// código, un cliente no podría distinguir «este daemon no tiene registro» de
-/// «mandé una errata», y las dos cosas piden respuestas distintas: la primera
-/// degrada al anillo local para siempre, la segunda se corrige y se reintenta.
+/// And it is rejected with `INVALID_PARAMS`, a DIFFERENT error from the one
+/// the ringless daemon gives (`Unsupported`, see
+/// `with_no_ring_the_log_does_not_exist_instead_of_being_empty`). With a
+/// single code, a client could not distinguish "this daemon has no log" from
+/// "I sent a typo", and the two call for different answers: the first
+/// degrades to the local ring forever, the second gets corrected and
+/// retried.
 #[tokio::test]
-async fn un_nivel_desconocido_se_rechaza_y_el_anillo_no_se_mueve() {
-    let (d, anillo) = spawn_daemon_con_anillo().await;
-    let _guard = hacia_el_anillo(&anillo);
+async fn an_unknown_level_is_rejected_and_the_ring_does_not_move() {
+    let (d, ring) = spawn_daemon_with_ring().await;
+    let _guard = toward_the_ring(&ring);
     let c = connected_client(&d).await;
 
     let err = c
         .call::<_, methods::LogLevelResult>(
             methods::LOG_LEVEL,
-            &serde_json::json!({ "level": "verboso-del-todo" }),
+            &serde_json::json!({ "level": "very-verbose" }),
         )
         .await
-        .expect_err("ese nivel no existe");
+        .expect_err("that level does not exist");
     match err {
         ClientError::Rpc(rpc) => assert_eq!(
             rpc.code,
             codes::INVALID_PARAMS,
-            "una errata no es una capacidad que falte"
+            "a typo is not a missing capability"
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
     assert_eq!(
-        anillo.level(),
+        ring.level(),
         norte_config::logline::LogLevel::Info,
-        "el anillo se queda donde estaba"
+        "the ring stays where it was"
     );
 
-    // Y bajar no baja: pedir menos verbosidad que la vigente contesta la
-    // vigente, que es la respuesta honesta y no un fallo.
+    // And lowering does not lower: asking for less verbosity than current
+    // answers the current one, which is the honest answer, not a failure.
     let _: methods::LogLevelResult = c
         .call(methods::LOG_LEVEL, &serde_json::json!({ "level": "debug" }))
         .await
-        .expect("sube a debug");
+        .expect("raises to debug");
     let r: methods::LogLevelResult = c
         .call(methods::LOG_LEVEL, &serde_json::json!({ "level": "error" }))
         .await
-        .expect("pedir menos no es un error");
-    assert_eq!(r.level, "debug", "el anillo NUNCA baja");
+        .expect("asking for less is not an error");
+    assert_eq!(r.level, "debug", "the ring NEVER lowers");
 }

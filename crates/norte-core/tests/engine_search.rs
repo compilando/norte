@@ -1,7 +1,8 @@
-//! Integración `Engine::search_as` (M4 live search, T3): el walker BFS
-//! cancelable emite hits en lotes por un canal, honra `max_hits`, salta
-//! entradas ilegibles sin abortar y valida los criterios ANTES de crear la
-//! Task. `MemProvider` in-memory → determinista, sin tocar disco.
+//! `Engine::search_as` integration (M4 live search, T3): the cancelable BFS
+//! walker emits hits in batches over a channel, honors `max_hits`, skips
+//! unreadable entries without aborting, and validates criteria BEFORE
+//! creating the Task. In-memory `MemProvider` → deterministic, without
+//! touching disk.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -19,11 +20,11 @@ use norte_vfs::{ByteSink, ByteStream, EntryStream, Provider};
 use tokio::sync::mpsc::Receiver;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
@@ -34,7 +35,7 @@ async fn mkdir(mem: &MemProvider, wire: &str) {
     mem.mkdir(&vp(wire)).await.expect("mkdir");
 }
 
-/// Engine + `MemProvider` in-memory registrado bajo `mem`.
+/// Engine + in-memory `MemProvider` registered under `mem`.
 fn setup() -> (Engine, Arc<MemProvider>) {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
@@ -42,12 +43,12 @@ fn setup() -> (Engine, Arc<MemProvider>) {
     (engine, mem)
 }
 
-/// Params base: solo raíz, todo lo demás vacío/false.
+/// Base params: only the root, everything else empty/false.
 fn params(root: &str) -> FsSearchParams {
     FsSearchParams::new(vp(root))
 }
 
-/// Drena el canal hasta el cierre; devuelve `(entry, match)` aplanado.
+/// Drains the channel until it closes; returns `(entry, match)` flattened.
 async fn drain(mut rx: Receiver<SearchHits>) -> Vec<(Entry, Option<MatchInfo>)> {
     let mut out = Vec::new();
     while let Some(hits) = rx.recv().await {
@@ -65,14 +66,14 @@ fn paths(hits: &[(Entry, Option<MatchInfo>)]) -> Vec<String> {
     p
 }
 
-/// Forma de display de un wire path (para comparar contra [`paths`]).
+/// A wire path's display form (to compare against [`paths`]).
 fn disp(wire: &str) -> String {
     vp(wire).display_lossy()
 }
 
 // 1 ───────────────────────────────────────────────────────────────────────
 #[tokio::test]
-async fn solo_nombre_encuentra_recursivo() {
+async fn name_only_finds_recursively() {
     let (engine, mem) = setup();
     mkdir(&mem, "mem:///a").await;
     mkdir(&mem, "mem:///a/sub").await;
@@ -89,23 +90,27 @@ async fn solo_nombre_encuentra_recursivo() {
         paths(&hits),
         vec![disp("mem:///a/sub/y.rs"), disp("mem:///a/x.rs")]
     );
-    // Nombre puro: sin contexto de contenido.
+    // Pure name: no content context.
     assert!(hits.iter().all(|(_, m)| m.is_none()));
 }
 
 // 2 ───────────────────────────────────────────────────────────────────────
+// NOTE: the accented Spanish content below ("año", "niño", etc.) is
+// deliberate — the accented bytes are what these encoding-detection tests
+// exercise, so they are kept as is (not translated), per the plan's rule for
+// content whose non-ASCII bytes are the point.
 #[tokio::test]
-async fn contenido_multiencoding_salta_binarios() {
+async fn multiencoding_content_skips_binaries() {
     let (engine, mem) = setup();
     write_file(&mem, "mem:///f1.txt", "hay un año aquí\n".as_bytes()).await;
-    // Latin-1: frase con varios bytes altos para que el detector la clave.
+    // Latin-1: a sentence with several high bytes so the detector locks onto it.
     write_file(
         &mem,
         "mem:///f2.txt",
         b"El ni\xF1o comi\xF3 en el jard\xEDn hace un a\xF1o entero\n",
     )
     .await;
-    // Binario: NUL + bytes de la aguja legacy → detect=Binary, se salta.
+    // Binary: NUL + legacy-needle bytes → detect=Binary, it is skipped.
     write_file(&mem, "mem:///f3.bin", b"\x00\x00a\xF1o binario").await;
 
     let mut p = params("mem:///");
@@ -117,9 +122,9 @@ async fn contenido_multiencoding_salta_binarios() {
         paths(&hits),
         vec![disp("mem:///f1.txt"), disp("mem:///f2.txt")]
     );
-    // Contexto de contenido poblado (línea + preview) en ambos.
+    // Content context populated (line + preview) in both.
     for (_, m) in &hits {
-        let m = m.as_ref().expect("match info de contenido");
+        let m = m.as_ref().expect("content match info");
         assert_eq!(m.line, Some(1));
         assert!(m.preview.as_ref().is_some_and(|s| s.contains('a')));
     }
@@ -127,17 +132,17 @@ async fn contenido_multiencoding_salta_binarios() {
 
 // 3 ───────────────────────────────────────────────────────────────────────
 #[tokio::test]
-async fn cancelacion_limpia_cierra_el_canal() {
+async fn clean_cancellation_closes_the_channel() {
     let (engine, mem) = setup();
     for i in 0..200 {
         write_file(
             &mem,
             &format!("mem:///f{i:03}.txt"),
-            b"contiene ano y mas\n",
+            b"contains ano and more\n",
         )
         .await;
     }
-    // Latencia por op: cada read del walker tarda, hay tiempo de cancelar.
+    // Latency per op: each read of the walker takes time, there is time to cancel.
     mem.faults()
         .set_latency_per_op(Some(Duration::from_millis(3)));
 
@@ -145,23 +150,23 @@ async fn cancelacion_limpia_cierra_el_canal() {
     p.content = Some("ano".to_owned());
     let (h, mut rx) = engine.search_as(p, Actor::User).await.expect("search");
 
-    // Espera el primer lote (la búsqueda ya arrancó) y cancela.
-    let first = rx.recv().await.expect("primer lote");
+    // Wait for the first batch (the search has already started) and cancel.
+    let first = rx.recv().await.expect("first batch");
     assert!(!first.entries.is_empty());
     h.cancel();
 
-    // El canal se cierra (drop de tx) y la Task termina Cancelled.
+    // The channel closes (tx drop) and the Task ends Cancelled.
     let mut got = first.entries.len();
     while let Some(b) = rx.recv().await {
         got += b.entries.len();
     }
-    assert!(got < 200, "cancelada a mitad: {got} < 200");
+    assert!(got < 200, "cancelled halfway: {got} < 200");
     assert_eq!(h.join().await, TaskState::Cancelled);
 }
 
 // 4 ───────────────────────────────────────────────────────────────────────
 #[tokio::test]
-async fn max_hits_trunca_y_completa() {
+async fn max_hits_truncates_and_completes() {
     let (engine, mem) = setup();
     for i in 0..10 {
         write_file(&mem, &format!("mem:///m{i}.rs"), b"").await;
@@ -171,19 +176,19 @@ async fn max_hits_trunca_y_completa() {
     p.max_hits = Some(3);
     let (h, rx) = engine.search_as(p, Actor::User).await.expect("search");
     let hits = drain(rx).await;
-    assert_eq!(hits.len(), 3, "exactamente max_hits");
+    assert_eq!(hits.len(), 3, "exactly max_hits");
     assert_eq!(h.join().await, TaskState::Completed);
 }
 
 // 5 ───────────────────────────────────────────────────────────────────────
 #[tokio::test]
-async fn errores_por_entrada_no_abortan() {
+async fn per_entry_errors_do_not_abort() {
     let (engine, mem) = setup();
     mkdir(&mem, "mem:///good").await;
     mkdir(&mem, "mem:///bad").await;
     write_file(&mem, "mem:///good/hit.rs", b"").await;
-    write_file(&mem, "mem:///bad/otro.rs", b"").await;
-    // El listado de `mem:///bad` falla: el walker lo salta y sigue.
+    write_file(&mem, "mem:///bad/other.rs", b"").await;
+    // Listing `mem:///bad` fails: the walker skips it and continues.
     mem.faults().fail_list_at(&vp("mem:///bad"));
 
     let mut p = params("mem:///");
@@ -191,38 +196,38 @@ async fn errores_por_entrada_no_abortan() {
     let (h, rx) = engine.search_as(p, Actor::User).await.expect("search");
     let hits = drain(rx).await;
     assert_eq!(h.join().await, TaskState::Completed);
-    // Solo el fichero del subdir legible aparece.
+    // Only the file from the readable subdir appears.
     assert_eq!(paths(&hits), vec![disp("mem:///good/hit.rs")]);
 }
 
 // 6 ───────────────────────────────────────────────────────────────────────
 #[tokio::test]
-async fn criterios_invalidos_fallan_antes_de_la_task() {
+async fn invalid_criteria_fail_before_the_task() {
     let (engine, _mem) = setup();
 
-    // Cero criterios.
+    // Zero criteria.
     let r = engine.search_as(params("mem:///"), Actor::User).await;
-    assert!(r.is_err(), "sin criterios = Err antes de la Task");
+    assert!(r.is_err(), "no criteria = Err before the Task");
 
-    // Glob Y regex de nombre a la vez (excluyentes por eje).
+    // Glob AND name regex at once (mutually exclusive per axis).
     let mut p = params("mem:///");
     p.name_glob = Some("*.rs".to_owned());
     p.name_regex = Some("^.*$".to_owned());
     assert!(engine.search_as(p, Actor::User).await.is_err());
 
-    // content Y content_regex a la vez.
+    // content AND content_regex at once.
     let mut p = params("mem:///");
     p.content = Some("x".to_owned());
     p.content_regex = Some("x".to_owned());
     assert!(engine.search_as(p, Actor::User).await.is_err());
 
-    // Glob que no compila.
+    // A glob that does not compile.
     let mut p = params("mem:///");
     p.name_glob = Some("a[".to_owned());
     assert!(engine.search_as(p, Actor::User).await.is_err());
 }
 
-/// Codifica `s` a UTF-16 con BOM (LE o BE).
+/// Encodes `s` to UTF-16 with a BOM (LE or BE).
 fn utf16_bom(s: &str, le: bool) -> Vec<u8> {
     let mut out = if le {
         vec![0xFF, 0xFE]
@@ -239,12 +244,12 @@ fn utf16_bom(s: &str, le: bool) -> Vec<u8> {
     out
 }
 
-// review MAJOR ── el match en una línea ≥2 de un UTF-16 NO se pierde ────────
+// review MAJOR ── a match on a line ≥2 of a UTF-16 file is NOT lost ─────────
 #[tokio::test]
-async fn utf16_match_en_linea_posterior_le_y_be() {
+async fn utf16_match_on_a_later_line_le_and_be() {
     let (engine, mem) = setup();
-    // "x\naño\n": el match está en la LÍNEA 2 — cortar por el byte 0x0A crudo
-    // desalinearía los pares y perdería el match (regresión del review).
+    // "x\naño\n": the match is on LINE 2 — cutting on the raw 0x0A byte would
+    // misalign the pairs and lose the match (the review's regression).
     write_file(&mem, "mem:///le.txt", &utf16_bom("x\naño\n", true)).await;
     write_file(&mem, "mem:///be.txt", &utf16_bom("x\naño\n", false)).await;
 
@@ -257,18 +262,19 @@ async fn utf16_match_en_linea_posterior_le_y_be() {
         paths(&hits),
         vec![disp("mem:///be.txt"), disp("mem:///le.txt")]
     );
-    // Y la línea reportada es la 2 (no la 1).
+    // And the reported line is 2 (not 1).
     for (_, m) in &hits {
         assert_eq!(m.as_ref().and_then(|m| m.line), Some(2));
     }
 }
 
-// review MINOR-1 ── una línea gigante no explota la RAM (se trunca) ─────────
+// review MINOR-1 ── a giant line does not blow up RAM (it is truncated) ─────
 #[tokio::test]
-async fn linea_gigante_se_trunca_pero_casa_al_inicio() {
+async fn a_giant_line_is_truncated_but_matches_at_the_start() {
     let (engine, mem) = setup();
-    // Regex de contenido → ruta decode-por-líneas. Línea única de 4 MiB con la
-    // aguja al PRINCIPIO: debe casar aunque la línea se trunque para el match.
+    // Content regex → the decode-by-lines path. A single 4 MiB line with the
+    // needle at the START: it must match even though the line gets truncated
+    // for the match.
     let mut giant = b"MATCH_ME ".to_vec();
     giant.extend(std::iter::repeat_n(b'a', 4 * 1024 * 1024));
     write_file(&mem, "mem:///huge.txt", &giant).await;
@@ -279,36 +285,36 @@ async fn linea_gigante_se_trunca_pero_casa_al_inicio() {
     let hits = drain(rx).await;
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(paths(&hits), vec![disp("mem:///huge.txt")]);
-    // El preview está acotado (no vuelca 4 MiB).
+    // The preview is bounded (it does not dump 4 MiB).
     let preview = hits[0].1.as_ref().and_then(|m| m.preview.clone()).unwrap();
     assert!(preview.chars().count() <= 160);
 }
 
-// 7 ── caso encoding-aware de los tres ficheros (deuda T2) ─────────────────
+// 7 ── encoding-aware case with three files (debt T2) ──────────────────────
 #[tokio::test]
-async fn contenido_encoding_aware_tres_ficheros() {
+async fn encoding_aware_content_three_files() {
     let (engine, mem) = setup();
-    // Latin-1: "año" = 0xF1; frase larga para detección estable.
+    // Latin-1: "año" = 0xF1; a long sentence for stable detection.
     write_file(
         &mem,
         "mem:///year_latin1.txt",
         b"Este documento cumple un a\xF1o; el ni\xF1o so\xF1\xF3 en espa\xF1ol.\n",
     )
     .await;
-    // UTF-16LE con BOM: "un año\n" → se enruta por DECODE, no por byte-scan.
+    // UTF-16LE with BOM: "un año\n" → routed through DECODE, not byte-scan.
     let mut u16 = vec![0xFF, 0xFE];
     for cu in "un año\n".encode_utf16() {
         u16.extend_from_slice(&cu.to_le_bytes());
     }
     write_file(&mem, "mem:///year_utf16bom.txt", &u16).await;
-    // CJK en UTF-8: contiene 0xF1 como byte LÍDER (U+44001) — NO debe casar
-    // la aguja latina corta con la búsqueda encoding-aware. Fixture canónica
-    // del corpus (`cjk_utf8_lead_f1`), no un literal ad-hoc.
+    // CJK in UTF-8: contains 0xF1 as a LEAD byte (U+44001) — must NOT match
+    // the short Latin needle with encoding-aware search. Canonical corpus
+    // fixture (`cjk_utf8_lead_f1`), not an ad-hoc literal.
     let cjk = norte_testkit::corpus::content_fixtures()
         .into_iter()
         .find(|f| f.id == "cjk_utf8_lead_f1")
-        .expect("fixture en el corpus");
-    assert!(cjk.bytes.contains(&0xF1), "0xF1 líder");
+        .expect("fixture in the corpus");
+    assert!(cjk.bytes.contains(&0xF1), "lead 0xF1");
     write_file(&mem, "mem:///cjk_utf8.txt", &cjk.bytes).await;
 
     let mut p = params("mem:///");
@@ -322,24 +328,28 @@ async fn contenido_encoding_aware_tres_ficheros() {
             disp("mem:///year_latin1.txt"),
             disp("mem:///year_utf16bom.txt"),
         ],
-        "Latin-1 y UTF-16-BOM casan; el CJK-UTF8 no (falso positivo evitado)"
+        "Latin-1 and UTF-16-BOM match; the CJK-UTF8 does not (false positive avoided)"
     );
 }
 
-// A1 (encoding, ALTA): saneo EN ORIGEN del preview ──────────────────────────
-/// Un match cuyo preview lleva RLO + isolate sin cerrar + ESC+OSC + C0 crudo
-/// (fixture canónica `preview_bidi_ctrl_injection`) DEBE salir por wire ya
-/// saneado: ningún char de `is_terminal_hazard` sobrevive (el consumidor —
-/// tool MCP de fs.search — lo pintaría directo). Regla §6: jamás controles/
-/// bidi crudos, y aplica al PRODUCTOR.
+// A1 (encoding, HIGH): sanitizing the preview AT THE SOURCE ────────────────
+/// A match whose preview carries an RLO + an unclosed isolate + ESC+OSC + raw
+/// C0 (canonical fixture `preview_bidi_ctrl_injection`) MUST come out over the
+/// wire already sanitized: no `is_terminal_hazard` char survives (the
+/// consumer — the fs.search MCP tool — would paint it directly). Rule §6:
+/// never raw controls/bidi, and it applies to the PRODUCER.
 #[tokio::test]
-async fn preview_de_contenido_hostil_sale_saneado_en_origen() {
+async fn a_hostile_content_preview_comes_out_sanitized_at_the_source() {
+    // NOTE: "aguja" (needle) below is fixture data baked into
+    // `norte-testkit`'s `PREVIEW_BIDI_CTRL_INJECTION` corpus fixture (owned by
+    // another task) and kept verbatim — see the T05 report's cross-file
+    // literals.
     let fixture = norte_testkit::corpus::content_fixtures()
         .into_iter()
         .find(|f| f.id == "preview_bidi_ctrl_injection")
-        .expect("fixture en el corpus");
+        .expect("fixture in the corpus");
     let (engine, mem) = setup();
-    write_file(&mem, "mem:///hostil.txt", &fixture.bytes).await;
+    write_file(&mem, "mem:///hostile.txt", &fixture.bytes).await;
 
     let mut p = params("mem:///");
     p.content = Some("aguja".to_owned());
@@ -350,29 +360,29 @@ async fn preview_de_contenido_hostil_sale_saneado_en_origen() {
     let preview = hits
         .iter()
         .find_map(|(_, m)| m.as_ref().and_then(|m| m.preview.clone()))
-        .expect("hay preview del match");
-    // La aguja limpia sigue ahí, pero ningún hazard crudo.
+        .expect("there is a match preview");
+    // The clean needle is still there, but no raw hazard.
     assert!(
         preview.contains("aguja"),
-        "conserva el texto legible: {preview:?}"
+        "keeps the readable text: {preview:?}"
     );
     assert!(
         !preview.chars().any(norte_encoding::is_terminal_hazard),
-        "el preview no lleva controles/bidi/invisibles crudos: {preview:?}"
+        "the preview carries no raw controls/bidi/invisibles: {preview:?}"
     );
-    // Y lo enmascarado salió como U+FFFD (marcado, no borrado en silencio).
+    // And what was masked came out as U+FFFD (marked, not silently dropped).
     assert!(
         preview.contains('\u{FFFD}'),
-        "los hazards salen como �: {preview:?}"
+        "hazards come out as �: {preview:?}"
     );
 }
 
-// 10 (security T4, MEDIA) ──────────────────────────────────────────────────
-/// Provider que delega en un `MemProvider` real pero, al listar `inject_under`,
-/// AÑADE entradas fabricadas cuyo path está FUERA del subtree — simula un
-/// provider con bug (o malicioso) que devuelve NO-descendientes. `run_walk`
-/// debe ignorarlas por completo (defensa en profundidad: el scope de la
-/// búsqueda es invariante DURO del core, no confía en la corrección del list).
+// 10 (security T4, MEDIUM) ──────────────────────────────────────────────────
+/// A provider that delegates to a real `MemProvider` but, when listing
+/// `inject_under`, ADDS fabricated entries whose path is OUTSIDE the subtree —
+/// simulates a buggy (or malicious) provider that returns NON-descendants.
+/// `run_walk` must ignore them entirely (defense in depth: the search's scope
+/// is a HARD invariant of the core, it does not trust the list's correctness).
 struct RogueList {
     inner: Arc<MemProvider>,
     inject_under: VPath,
@@ -396,7 +406,7 @@ impl Provider for RogueList {
         while let Some(e) = inner.next().await {
             items.push(e);
         }
-        // Inyecta los no-descendientes SOLO al listar el dir del ataque.
+        // Injects the non-descendants ONLY when listing the attack dir.
         if p == &self.inject_under {
             for e in &self.inject {
                 items.push(Ok(e.clone()));
@@ -422,17 +432,18 @@ impl Provider for RogueList {
 }
 
 #[tokio::test]
-async fn walk_ignora_entradas_fuera_del_root_aunque_el_provider_las_liste() {
+async fn walk_ignores_entries_outside_the_root_even_if_the_provider_lists_them() {
     let mem = Arc::new(MemProvider::new());
-    // Dentro del root del ataque: un fichero genuino con la aguja.
+    // Inside the attack's root: a genuine file with the needle.
     mkdir(&mem, "mem:///proj").await;
     write_file(&mem, "mem:///proj/inside.txt", "año dentro".as_bytes()).await;
-    // FUERA del root: un fichero con la aguja y un dir con un hijo con la aguja.
+    // OUTSIDE the root: a file with the needle and a dir with a child carrying
+    // the needle.
     write_file(&mem, "mem:///secret.txt", "año secreto".as_bytes()).await;
     mkdir(&mem, "mem:///other").await;
     write_file(&mem, "mem:///other/hidden.txt", "año oculto".as_bytes()).await;
 
-    // El provider inyecta esos no-descendientes al listar mem:///proj.
+    // The provider injects those non-descendants when listing mem:///proj.
     let rogue = Arc::new(RogueList {
         inner: Arc::clone(&mem),
         inject_under: vp("mem:///proj"),
@@ -461,7 +472,8 @@ async fn walk_ignora_entradas_fuera_del_root_aunque_el_provider_las_liste() {
     let (h, rx) = engine.search_as(p, Actor::User).await.expect("search");
     let hits = drain(rx).await;
     assert_eq!(h.join().await, TaskState::Completed);
-    // SOLO el descendiente genuino: los no-descendientes jamás se leen (secret)
-    // ni se descienden (other/hidden). El confinamiento no depende del provider.
+    // ONLY the genuine descendant: the non-descendants are never read
+    // (secret) nor descended into (other/hidden). Confinement does not depend
+    // on the provider.
     assert_eq!(paths(&hits), vec![disp("mem:///proj/inside.txt")]);
 }

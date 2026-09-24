@@ -1,13 +1,13 @@
-//! El overlay de ajustes (S3): una fila por ajuste, con el filtro libre de la
-//! palette y la edición inline del valor.
+//! The settings overlay (S3): one row per setting, with the palette's free
+//! filter and inline value editing.
 //!
-//! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, así que
-//! ni los tests de integración podían meterle una tecla sin que el bucle de
-//! eventos hiciera de intermediario.
+//! It used to live in the `ntc` binary's root — a crate DISTINCT from this
+//! lib — so not even the integration tests could feed it a key without the
+//! event loop acting as go-between.
 //!
-//! Fichero aparte de [`crate::settings`], que es el MODELO (las filas, el
-//! filtro, el buffer de edición); esto es quien lee sus teclas y lleva el
-//! resultado al disco.
+//! A file separate from [`crate::settings`], which is the MODEL (the rows,
+//! the filter, the edit buffer); this is the one that reads its keys and
+//! carries the result to disk.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 use norte_core::backend::Backend;
@@ -18,45 +18,47 @@ use crate::config;
 use crate::keymap::presets;
 use crate::shortcuts_editor::{Maps, shortcut_rows};
 
-/// Qué hacer tras procesar una tecla del overlay de ajustes — separa el
-/// cómputo PURO (dentro del borrow de `app.settings`, `on_settings_key`) del
-/// I/O async (`persist_setting`, fuera de ese borrow): `Settings::activate`/
-/// `edit_commit` no pueden devolver directamente y persistir en el mismo
-/// paso porque ya toman `&mut app.settings` — separarlo en un enum evita
-/// pedir prestado `app` dos veces a la vez.
+/// What to do after processing a settings-overlay key — separates the PURE
+/// computation (inside `app.settings`'s borrow, `on_settings_key`) from the
+/// async I/O (`persist_setting`, outside that borrow): `Settings::activate`/
+/// `edit_commit` cannot return directly and persist in the same step because
+/// they already take `&mut app.settings` — splitting it into an enum avoids
+/// borrowing `app` twice at once.
 enum SettingsKeyOutcome {
-    /// La tecla se consumió sin nada que persistir (navegación/filtro/
-    /// edición de buffer en curso).
+    /// The key was consumed with nothing to persist (navigation/filter/
+    /// buffer editing in progress).
     None,
-    /// Esc fuera de edición: cierra el overlay.
+    /// Esc outside of editing: closes the overlay.
     Close,
-    /// Un ajuste cambió — persistir y anunciar. Boxed: `PendingWrite` lleva
-    /// un `toml_edit::Value` propio y hace este brazo mucho más grande que
-    /// el resto (clippy `large_enum_variant`) — indirección, no un tipo
-    /// distinto.
+    /// A setting changed — persist and announce it. Boxed: `PendingWrite`
+    /// carries its own `toml_edit::Value` and makes this arm much bigger
+    /// than the rest (clippy `large_enum_variant`) — indirection, not a
+    /// different type.
     Write(Box<PendingWrite>),
-    /// `Ctrl+R`: quitar la clave de este ajuste de la capa de escritura.
-    /// Boxed por lo mismo que [`Self::Write`].
+    /// `Ctrl+R`: remove this setting's key from the write layer. Boxed for
+    /// the same reason as [`Self::Write`].
     Reset(Box<norte_frontend::settings::PendingReset>),
-    /// `Settings::edit_commit` rechazó el buffer — anunciar el error, sin
-    /// tocar nada (el buffer se queda, `Settings` ya lo conserva).
+    /// `Settings::edit_commit` rejected the buffer — announce the error,
+    /// touching nothing (the buffer stays, `Settings` already keeps it).
     Invalid(SettingsEditError),
-    /// K3c: `Ctrl+K` abre el editor de atajos POR ENCIMA de este overlay, que
-    /// se queda abierto detrás. Sale como outcome y no como una asignación
-    /// dentro del `match` porque las filas se construyen de los efectivos
-    /// VIVOS ([`Maps`]) y ese borrow no cabe dentro del de `app.settings`.
+    /// K3c: `Ctrl+K` opens the shortcuts editor ON TOP of this overlay,
+    /// which stays open behind it. It comes out as an outcome and not as an
+    /// assignment inside the `match` because the rows are built from the
+    /// LIVE effective ones ([`Maps`]) and that borrow does not fit inside
+    /// `app.settings`'s.
     OpenShortcuts,
 }
 
-/// Teclas del overlay de ajustes (`app.settings`, S3): mismo criterio que la
-/// palette (decisión 8 del plan H1) — editor de filtro libre, NO resuelve
-/// por el contexto `dialog`; sus teclas quedan hardcodeadas aquí. `ctrl+c`
-/// conserva su salida global. Mientras `Settings::is_editing()` las teclas
-/// van al buffer de edición inline (mismo patrón que `name_input` del popup
-/// de navegación: imprimibles/backspace crudos, Enter confirma, Esc
-/// cancela); si no, navegan/filtran como la palette y Enter activa la fila
-/// bajo el cursor (`Settings::activate` — cicla YA para `Bool`/`Enum`/
-/// `ThemeName`/`PresetName`, o abre el buffer para `Text`/`Int`).
+/// Keys of the settings overlay (`app.settings`, S3): same criterion as the
+/// palette (decision 8 of the H1 plan) — free-filter editor, it does NOT
+/// resolve through the `dialog` context; its keys stay hardcoded here.
+/// `ctrl+c` keeps its global quit. While `Settings::is_editing()` the keys
+/// go to the inline edit buffer (same pattern as the navigation popup's
+/// `name_input`: raw printables/backspace, Enter confirms, Esc cancels);
+/// otherwise they navigate/filter like the palette and Enter activates the
+/// row under the cursor (`Settings::activate` — already cycles for
+/// `Bool`/`Enum`/`ThemeName`/`PresetName`, or opens the buffer for
+/// `Text`/`Int`).
 pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers, code: KeyCode) {
     if mods.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.quit = true;
@@ -89,16 +91,16 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
             }
         } else {
             match code {
-                // ANTES del brazo genérico de `Char`, que se las comería: el
-                // filtro de este overlay captura TODO imprimible. Son teclas
-                // LOCALES, no comandos del catálogo — un comando obligaría a
-                // bindearlo en los siete presets, y el precio de aquí es que
-                // no se puede buscar un corchete, que no aparece en el nombre
-                // de ningún ajuste.
-                // Cambia de lado, como en la ayuda. `tab` en la pantalla
-                // `dialog` del catálogo es `dialog.pane`, y esto hace lo
-                // mismo con otro nombre: es una tecla LOCAL del overlay,
-                // que se come las teclas antes que el despachador.
+                // BEFORE the generic `Char` arm, which would swallow them:
+                // this overlay's filter captures EVERY printable. These are
+                // LOCAL keys, not catalogue commands — a command would force
+                // binding it in the seven presets, and the price paid here
+                // is that a bracket cannot be searched for, since it does
+                // not appear in any setting's name.
+                // Switches side, as in help. `tab` in the catalogue's
+                // `dialog` screen is `dialog.pane`, and this does the same
+                // under a different name: it is a LOCAL key of the overlay,
+                // which swallows keys before the dispatcher does.
                 KeyCode::Tab if plain => {
                     settings.toggle_focus();
                     SettingsKeyOutcome::None
@@ -120,14 +122,14 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
                     SettingsKeyOutcome::None
                 }
                 KeyCode::Esc if plain => SettingsKeyOutcome::Close,
-                // K3c: el editor de atajos. `Ctrl+K` y no una letra suelta
-                // porque el filtro de este overlay se come TODO imprimible
-                // (decisión 8 del plan H1) — una `k` es texto aquí.
+                // K3c: the shortcuts editor. `Ctrl+K` and not a bare letter
+                // because this overlay's filter swallows EVERY printable
+                // (decision 8 of the H1 plan) — a `k` is text here.
                 KeyCode::Char('k') if mods == KeyModifiers::CONTROL => {
                     SettingsKeyOutcome::OpenShortcuts
                 }
-                // Restablecer. `Ctrl+R` y no una letra suelta por lo mismo
-                // que `Ctrl+K`: aquí una `r` es texto del filtro.
+                // Reset. `Ctrl+R` and not a bare letter for the same reason
+                // as `Ctrl+K`: here an `r` is filter text.
                 KeyCode::Char('r') if mods == KeyModifiers::CONTROL => match settings.reset() {
                     Some(reset) => SettingsKeyOutcome::Reset(Box::new(reset)),
                     None => SettingsKeyOutcome::None,
@@ -149,10 +151,10 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
                     SettingsKeyOutcome::None
                 }
                 KeyCode::Enter if plain => {
-                    // Listas VIVAS para `ThemeName`/`PresetName` (mismo
-                    // criterio que `App::open_theme_picker`): resueltas aquí,
-                    // no `&'static` — el tema/keymap efectivo puede cambiar
-                    // en caliente.
+                    // LIVE lists for `ThemeName`/`PresetName` (same criterion
+                    // as `App::open_theme_picker`): resolved here, not
+                    // `&'static` — the effective theme/keymap can change on
+                    // the fly.
                     let theme_names = norte_frontend::theme::theme_names(&app.user_themes);
                     let all_presets = presets();
                     let preset_names: Vec<&str> = all_presets.iter().map(|(n, _)| *n).collect();
@@ -177,15 +179,15 @@ pub async fn on_settings_key(app: &mut App, maps: &Maps<'_>, mods: KeyModifiers,
     }
 }
 
-/// Quita la clave de un ajuste de la capa de escritura (`Ctrl+R`) y dice
-/// QUÉ pasó de verdad.
+/// Removes a setting's key from the write layer (`Ctrl+R`) and says WHAT
+/// really happened.
 ///
-/// Quitar la clave de tu capa no siempre devuelve el valor de fábrica: si el
-/// sistema, el perfil o el proyecto fijan la misma, el valor cambia y sigue
-/// sin ser el defecto. Así que después de escribir se relee la configuración
-/// y se mira la fila: si sigue modificada, lo dice. Sin esto, «restablecido»
-/// sería mentira la mitad de las veces y el lector iría a buscar el bug a
-/// donde no está.
+/// Removing the key from your layer does not always give back the factory
+/// value: if the system, the profile or the project set the same one, the
+/// value changes and is still not the default. So after writing, the
+/// configuration is reread and the row is checked: if it is still modified,
+/// it says so. Without this, "reset" would be a lie half the time and the
+/// reader would go looking for the bug in the wrong place.
 async fn reset_setting(app: &mut App, reset: norte_frontend::settings::PendingReset) {
     let Some(dir) = app.config_write_dir() else {
         app.message = Some(t("msg-settings-no-config-dir"));
@@ -197,33 +199,33 @@ async fn reset_setting(app: &mut App, reset: norte_frontend::settings::PendingRe
         id,
         name,
     } = reset;
-    // Las MISMAS capas con las que se escribe, perfil incluido: releer con
-    // otras contestaría sobre una configuración que este proceso no usa.
-    let capas = config::standard_layers_with_profile(app.active_profile.as_deref());
+    // The SAME layers used to write, profile included: rereading with
+    // others would answer about a configuration this process does not use.
+    let layers = config::standard_layers_with_profile(app.active_profile.as_deref());
     match tokio::task::spawn_blocking(move || {
         config::persist_unset(&dir, section, &key).map(|out| {
-            // La relectura va en el MISMO hilo de fondo: es I/O de fichero
-            // y aquí es donde se puede hacer (regla 2).
-            let sigue = config::load(&capas).ok().map(|cfg| {
+            // The reread happens on the SAME background thread: it is file
+            // I/O and this is where it can be done (rule 2).
+            let still_set = config::load(&layers).ok().map(|cfg| {
                 norte_frontend::settings::build_rows(&cfg, &[])
                     .into_iter()
                     .find(|r| r.id() == Some(id))
                     .is_some_and(|r| r.modified)
             });
-            (out, sigue)
+            (out, still_set)
         })
     })
     .await
     {
-        Ok(Ok((_out, sigue))) => {
-            // `None` = la relectura falló; se dice lo que sí se sabe (la
-            // clave se quitó) en vez de afirmar de dónde viene el valor.
-            let clave = if sigue == Some(true) {
+        Ok(Ok((_out, still_set))) => {
+            // `None` = the reread failed; say what IS known (the key was
+            // removed) instead of asserting where the value comes from.
+            let key = if still_set == Some(true) {
                 "settings-still-set-elsewhere"
             } else {
                 "settings-reset-done"
             };
-            app.message = Some(ta(clave, &[("name", &name)]));
+            app.message = Some(ta(key, &[("name", &name)]));
         }
         Ok(Err(e)) => {
             app.message = Some(ta(
@@ -232,22 +234,22 @@ async fn reset_setting(app: &mut App, reset: norte_frontend::settings::PendingRe
             ));
         }
         Err(e) => {
-            tracing::error!(error = %e, "tarea de fondo de reset_setting no terminó");
+            tracing::error!(error = %e, "background reset_setting task did not finish");
             app.message = Some(t("msg-settings-save-crashed"));
         }
     }
 }
 
-/// Persiste un [`PendingWrite`] (S3) — `spawn_blocking` (regla 2), mismo
-/// patrón que el persist del theme picker (`on_theme_picker_key` arriba):
-/// resuelve el directorio a mano en vez de reutilizar
-/// `config::persist_ui_theme` (esa wrapper no toma `section`/`key` — S2 solo
-/// dio el genérico `persist_set(dir, ...)` con `dir` explícito).
+/// Persists a [`PendingWrite`] (S3) — `spawn_blocking` (rule 2), same
+/// pattern as the theme picker's persist (`on_theme_picker_key` above): it
+/// resolves the directory by hand instead of reusing
+/// `config::persist_ui_theme` (that wrapper does not take `section`/`key` —
+/// S2 only gave the generic `persist_set(dir, ...)` with an explicit `dir`).
 ///
-/// Y ese directorio es el del PERFIL activo si lo hay
-/// ([`App::config_write_dir`]): el perfil está por encima de la capa del
-/// usuario, así que un ajuste escrito abajo que el perfil también fija queda
-/// tapado — guardado y sin efecto (ADR 0079).
+/// And that directory is the active PROFILE's if there is one
+/// ([`App::config_write_dir`]): the profile sits above the user's layer, so
+/// a setting written below that the profile also sets ends up covered —
+/// saved and with no effect (ADR 0079).
 pub async fn persist_setting(app: &mut App, write: PendingWrite) {
     let Some(dir) = app.config_write_dir() else {
         app.message = Some(t("msg-settings-no-config-dir"));
@@ -274,25 +276,25 @@ pub async fn persist_setting(app: &mut App, write: PendingWrite) {
                 &[("error", &io_error_category(&e))],
             ));
         }
-        // Revisión S I1: la tarea de `spawn_blocking` panicó o se canceló
-        // (antes: silencio total — la fila optimista de `Settings::
-        // commit_row` quedaba MINTIENDO "editado" aunque nada se escribió).
-        // No debe tumbar la TUI: se anuncia en la barra (categoría genérica,
-        // sin `{$error}` — un `JoinError` no trae una categoría limpia) y se
-        // deja rastro con `tracing` para diagnóstico — jamás `eprintln!`
-        // aquí, que corrompería la pantalla alterna de ratatui mientras la
-        // TUI sigue viva.
+        // Review S I1: the `spawn_blocking` task panicked or was cancelled
+        // (before: total silence — `Settings::commit_row`'s optimistic row
+        // was left LYING "edited" even though nothing was written). It must
+        // not take the TUI down: it is announced on the bar (generic
+        // category, no `{$error}` — a `JoinError` does not carry a clean
+        // category) and leaves a trace with `tracing` for diagnosis — never
+        // `eprintln!` here, which would corrupt ratatui's alternate screen
+        // while the TUI is still alive.
         Err(e) => {
-            tracing::error!(error = %e, "tarea de fondo de persist_setting no terminó");
+            tracing::error!(error = %e, "background persist_setting task did not finish");
             app.message = Some(t("msg-settings-save-crashed"));
         }
     }
 }
 
-/// Mensaje de barra para un [`SettingsEditError`] (S3) — por CATEGORÍA
-/// Fluent, nunca texto ad hoc (#73 pattern). Envoltorio fino (revisión S,
-/// M6): byte-idéntico al de la GUI (`settings_view::edit_error_message`) —
-/// hoisteado a [`norte_frontend::settings::edit_error_message`].
+/// Bar message for a [`SettingsEditError`] (S3) — by Fluent CATEGORY, never
+/// ad hoc text (#73 pattern). Thin wrapper (review S, M6): byte-identical
+/// to the GUI's (`settings_view::edit_error_message`) — hoisted to
+/// [`norte_frontend::settings::edit_error_message`].
 fn settings_edit_error_message(e: &SettingsEditError) -> String {
     norte_frontend::settings::edit_error_message(e)
 }
@@ -336,30 +338,30 @@ pub async fn plugin_config_summaries(
 mod settings_message_tests {
     use norte_i18n::{Lang, t_in};
 
-    /// Revisión S I1: `msg-settings-save-crashed` (el brazo `Err(_)` de
-    /// `persist_setting`, ver su doc) resuelve a texto REAL en ambos
-    /// locales — no al id crudo, que es lo que se vería en la barra si
-    /// faltara la clave en algún `.ftl`. Mismo criterio de cobertura que
-    /// `norte_frontend::settings`'s `fluent_keys_existen_en_ambos_locales_
-    /// para_cada_entrada`.
+    /// Review S I1: `msg-settings-save-crashed` (the `Err(_)` arm of
+    /// `persist_setting`, see its doc) resolves to REAL text in both
+    /// locales — not the raw id, which is what would show on the bar if the
+    /// key were missing from some `.ftl`. Same coverage criterion as
+    /// `norte_frontend::settings`'s `fluent_keys_exist_in_both_locales_
+    /// for_each_entry`.
     #[test]
-    fn msg_settings_save_crashed_existe_en_ambos_locales() {
+    fn msg_settings_save_crashed_exists_in_both_locales() {
         for lang in [Lang::Es, Lang::En] {
             assert_ne!(
                 t_in(lang, "msg-settings-save-crashed"),
                 "msg-settings-save-crashed",
-                "falta la clave en {lang:?}"
+                "missing the key in {lang:?}"
             );
         }
     }
 
-    /// Las dos claves de restablecer, por lo mismo: la que dice que otra
-    /// capa lo fija es justo la que nadie prueba a mano.
+    /// The two reset keys, for the same reason: the one that says another
+    /// layer sets it is exactly the one nobody tries by hand.
     #[test]
-    fn las_claves_de_restablecer_existen_en_ambos_locales() {
-        for clave in ["settings-reset-done", "settings-still-set-elsewhere"] {
+    fn reset_keys_exist_in_both_locales() {
+        for key in ["settings-reset-done", "settings-still-set-elsewhere"] {
             for lang in [Lang::Es, Lang::En] {
-                assert_ne!(t_in(lang, clave), clave, "falta «{clave}» en {lang:?}");
+                assert_ne!(t_in(lang, key), key, "missing \"{key}\" in {lang:?}");
             }
         }
     }

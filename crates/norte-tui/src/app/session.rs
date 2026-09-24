@@ -1,33 +1,33 @@
-//! La sesión de UI vista desde `App` (L2, ADR 0059): componer el cuerpo de
-//! AHORA, aplicar el que se leyó del disco, recolocar el cursor, adoptar los
-//! huecos huérfanos y sellar su edad.
+//! The UI session as seen from `App` (L2, ADR 0059): composing the body of
+//! NOW, applying the one read from disk, repositioning the cursor, adopting
+//! orphaned slots and sealing their age.
 
 use super::App;
 use super::pane::Pane;
 use norte_i18n::{t, ta};
 
 impl App {
-    /// Bajo qué clave de `layouts` va la pantalla de este proceso.
+    /// Under which `layouts` key this process' screen goes.
     ///
-    /// El nombre del perfil activo, o `default` si no hay ninguno — que es la
-    /// clave que usaba todo el mundo antes de que hubiera perfiles, así que un
-    /// lector que nunca elija uno lee y escribe exactamente donde ya escribía.
+    /// The active profile's name, or `default` if there is none — which is
+    /// the key everyone used before there were profiles, so a reader who
+    /// never picks one reads and writes exactly where they already wrote.
     ///
-    /// La conversión a texto es la única de D4: `layouts` es un objeto JSON.
-    /// Un perfil cuyo directorio no sea UTF-8 cae a `default`, que es la
-    /// consecuencia que el selector avisa por adelantado con su
+    /// The text conversion is D4's only one: `layouts` is a JSON object. A
+    /// profile whose directory isn't UTF-8 falls back to `default`, which is
+    /// the consequence the picker warns about upfront with its
     /// `carries_state`.
     fn session_key(&self) -> String {
-        let activo = self.session_key_active();
-        if activo.is_empty() {
+        let active = self.session_key_active();
+        if active.is_empty() {
             "default".to_owned()
         } else {
-            activo
+            active
         }
     }
 
-    /// El nombre del perfil activo para el campo `active` del cuerpo: vacío
-    /// cuando no hay ninguno, o cuando el que hay no puede ser una clave.
+    /// The active profile's name for the body's `active` field: empty when
+    /// there is none, or when the one there is can't be a key.
     fn session_key_active(&self) -> String {
         self.active_profile
             .as_ref()
@@ -36,47 +36,48 @@ impl App {
             .to_owned()
     }
 
-    /// La pantalla de AHORA como cuerpo de sesión (L2).
+    /// The screen of NOW as a session body (L2).
     ///
-    /// Lleva la disposición y, por hueco de listado, dónde está, cómo mira y
-    /// por dónde ha pasado. NO lleva las marcas: son el estado de una
-    /// operación a medias, no de una sesión, y devolverlas al arrancar sería
-    /// devolver un `F8` apuntando a lo que uno marcó ayer.
+    /// Carries the layout and, per listing slot, where it is, how it looks
+    /// and where it's been. Does NOT carry the marks: they're the state of
+    /// an operation half done, not of a session, and returning them on
+    /// startup would be handing back an `F8` pointed at what you marked
+    /// yesterday.
     ///
-    /// Los huecos que la sesión traía y este layout no tiene viajan de vuelta
-    /// intactos, en el rincón de huérfanos de [`super::SessionUi`].
+    /// Slots the session carried that this layout doesn't have travel back
+    /// intact, in [`super::SessionUi`]'s orphan corner.
     #[must_use]
     pub fn session_body(&self) -> norte_frontend::session::SessionBody {
-        self.session_body_con_marcas(false)
+        self.session_body_with_marks(false)
     }
 
-    /// La misma pantalla, CON lo marcado (fase 9): lo que se vuelca para un
-    /// relevo entre frontends.
+    /// The same screen, WITH what's marked (phase 9): what gets dumped for a
+    /// handoff between frontends.
     ///
-    /// **Las marcas viajan aquí y no en el volcado de siempre**, y esa es toda
-    /// la diferencia entre los dos métodos. En un relevo pasan segundos entre
-    /// soltar y reclamar, así que devolver lo señalado es devolver el trabajo
-    /// que se estaba haciendo; en un arranque cualquiera han pasado horas, y
-    /// devolverlo sería poner un `F8` sobre lo que uno marcó ayer. El
-    /// razonamiento de `session_body` sigue valiendo: lo que cambia no es la
-    /// doctrina, es que un relevo no es un arranque.
+    /// **The marks travel here and not in the usual dump**, and that's the
+    /// whole difference between the two methods. In a handoff, seconds pass
+    /// between letting go and claiming, so returning what's marked is
+    /// returning the work that was being done; in an ordinary startup, hours
+    /// have passed, and returning it would be putting an `F8` on what you
+    /// marked yesterday. `session_body`'s reasoning still holds: what
+    /// changes isn't the doctrine, it's that a handoff isn't a startup.
     #[must_use]
     pub fn session_body_for_handoff(&self) -> norte_frontend::session::SessionBody {
-        self.session_body_con_marcas(true)
+        self.session_body_with_marks(true)
     }
 
-    fn session_body_con_marcas(&self, marcas: bool) -> norte_frontend::session::SessionBody {
+    fn session_body_with_marks(&self, marks: bool) -> norte_frontend::session::SessionBody {
         use norte_frontend::session::{MARKS_CAP, SessionBody, SlotState};
 
-        // La disposición de ESTE perfil va bajo su nombre; las de los demás
-        // vuelven tal cual. Escribir solo la del activo borraría del documento
-        // el sitio donde los otros perfiles dejaron sus paneles.
+        // THIS profile's layout goes under its name; the others' come back
+        // as is. Writing only the active one's would erase from the
+        // document the place where the other profiles left their panels.
         let mut layouts = self.session.other_layouts.clone();
         layouts.insert(self.session_key(), self.layout.clone());
-        // En un RELEVO a la ventana, también bajo la clave de la ventana
-        // (ADR 0139): cada frontend recuerda la suya, pero entregar la
-        // pantalla es que la ventana abra con ESTA.
-        if marcas {
+        // In a HANDOFF to the window, also under the window's key
+        // (ADR 0139): each frontend remembers its own, but handing over the
+        // screen means the window opens with THIS one.
+        if marks {
             layouts.insert(
                 norte_frontend::session::window_layout_key(&self.session_key()),
                 self.layout.clone(),
@@ -105,18 +106,18 @@ impl App {
                         .unwrap_or_default(),
                     jump: history.and_then(|h| h.jump().cloned()),
                     sort: pane.sort(),
-                    // Las columnas son de la CONFIGURACIÓN por scheme, no
-                    // estado por hueco: capturarlas aquí inventaría un estado
-                    // que este frontend no tiene. El campo existe para quien
-                    // sí lo tenga.
+                    // Columns belong to the per-scheme CONFIGURATION, not
+                    // per-slot state: capturing them here would invent a
+                    // state this frontend doesn't have. The field exists for
+                    // whoever does have one.
                     columns: Vec::new(),
                     show_hidden: pane.show_hidden(),
                     touched_ms: self.session.touched.get(&id.0).copied().unwrap_or_default(),
-                    // Por RUTA, que es la identidad de la fila: un índice
-                    // restaurado sobre un listado que cambió señala otro
-                    // fichero, y lo que se devolvería es una selección que
-                    // nadie hizo. El tope es del modelo.
-                    marks: if marcas {
+                    // By PATH, which is the row's identity: an index
+                    // restored over a listing that changed points at another
+                    // file, and what would get returned is a selection
+                    // nobody made. The cap belongs to the model.
+                    marks: if marks {
                         pane.marked_entries()
                             .iter()
                             .take(MARKS_CAP)
@@ -131,151 +132,151 @@ impl App {
         body
     }
 
-    /// `ntc <DIR>` sobre una sesión aplicada: el panel ACTIVO pasa a `dir`
-    /// y nada más cambia. La sesión guardada es más específica que la
-    /// configuración, pero un directorio escrito en la línea de órdenes es
-    /// más específico que las dos: quien teclea `ntc ~/proyecto` quiere ver
-    /// `~/proyecto`, no donde cerró ayer.
+    /// `ntc <DIR>` over an applied session: the ACTIVE panel switches to
+    /// `dir` and nothing else changes. The saved session is more specific
+    /// than the config, but a directory typed on the command line is more
+    /// specific than both: whoever types `ntc ~/project` wants to see
+    /// `~/project`, not wherever they closed yesterday.
     ///
-    /// Conserva el orden y los ocultos del panel (son preferencias, no
-    /// sitio) y olvida el cursor guardado, que era una fila de OTRO
-    /// directorio. El hueco sigue en la lista de los que hay que listar.
+    /// Keeps the panel's order and hidden setting (they're preferences, not
+    /// location) and forgets the saved cursor, which was a row from ANOTHER
+    /// directory. The slot stays on the list of ones that need listing.
     pub fn pin_start_dir(&mut self, dir: norte_proto::VPath) {
         let idx = self.focus();
         let slot = self.panes.slot_of(idx);
         let pane = &self.panes[idx];
         let (sort, hidden) = (pane.sort(), pane.show_hidden());
-        // Por la puerta de adopción, como los otros dos listados que nacen
-        // fuera del constructor. Puesto a mano, este se quedaba sin la fila
-        // `..` — y `set_listing` no lo cura después, porque `poner_padre` no
-        // hace nada desde `Apagada`: el panel se quedaba sin ella hasta el
-        // siguiente hot-reload de la config.
+        // Through the adoption gate, like the other two listings born
+        // outside the constructor. Set by hand, this one was left without
+        // the `..` row — and `set_listing` doesn't fix it afterward, because
+        // `poner_padre` does nothing from `Apagada`: the panel was left
+        // without it until the config's next hot-reload.
         self.adoptar_pane(slot, Pane::new(dir, Vec::new()), Some(sort), Some(hidden));
         self.session.cursors.remove(&slot.0);
     }
 
-    /// Aplica una sesión guardada y dice qué huecos necesitan listado.
+    /// Applies a saved session and says which slots need listing.
     ///
-    /// Pone la disposición, siembra cada listado con su directorio, su orden,
-    /// sus ocultos y sus dos rastros, y GUARDA el cursor para cuando llegue el
-    /// listado ([`Self::restore_cursor`]): sobre un pane vacío no hay fila 12
-    /// donde ponerlo.
+    /// Sets the layout, seeds each listing with its directory, order, hidden
+    /// setting and both trails, and SAVES the cursor for when the listing
+    /// arrives ([`Self::restore_cursor`]): over an empty pane there's no row
+    /// 12 to put it on.
     ///
-    /// Lo que el layout no tiene se conserva aparte en vez de tirarse.
+    /// What the layout doesn't have is kept aside instead of dropped.
     pub fn apply_session(
         &mut self,
         body: &norte_frontend::session::SessionBody,
     ) -> Vec<norte_frontend::layout::SlotId> {
-        let clave = self.session_key();
-        if let Some(tree) = body.layouts.get(&clave) {
+        let key = self.session_key();
+        if let Some(tree) = body.layouts.get(&key) {
             self.set_layout(tree.clone());
         }
         self.palette_recent.clone_from(&body.palette_recent);
         self.popular = norte_frontend::history::Popular::from_entries(body.popular.clone());
-        // Lo de los OTROS perfiles se guarda entero para volver a escribirlo:
-        // este proceso mira un perfil y el documento es de todos.
+        // The OTHER profiles' data is kept whole to be written back: this
+        // process looks at one profile and the document belongs to all of
+        // them.
         self.session.other_layouts = body
             .layouts
             .iter()
-            .filter(|(k, _)| **k != clave)
+            .filter(|(k, _)| **k != key)
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         let mut ask = Vec::new();
         self.session.orphans.clear();
-        for (raw, estado) in &body.slots {
+        for (raw, state) in &body.slots {
             let id = norte_frontend::layout::SlotId(*raw);
-            self.session.touched.insert(*raw, estado.touched_ms);
-            // «¿Tiene ESTE layout el hueco?» se le pregunta al LAYOUT, no al
-            // almacén de panes: los huérfanos siguen en el almacén, así que
-            // `browser(id).is_some()` contestaba que sí para un hueco que la
-            // disposición no coloca — y ese hueco entraba por la puerta de
-            // adopción en vez de conservarse tal cual, que es lo que promete
-            // el párrafo de abajo.
+            self.session.touched.insert(*raw, state.touched_ms);
+            // "Does THIS layout have the slot?" is asked of the LAYOUT, not
+            // the pane store: orphans stay in the store, so
+            // `browser(id).is_some()` used to answer yes for a slot the
+            // layout doesn't place — and that slot came in through the
+            // adoption gate instead of being kept as is, which is what the
+            // paragraph below promises.
             if !self.layout.slot_ids().contains(&id) {
-                // Un hueco que este layout no tiene NO se borra: se guarda tal
-                // cual y se vuelve a escribir. Volver a la disposición de ayer
-                // devuelve el panel donde estaba.
-                self.session.orphans.insert(*raw, estado.clone());
+                // A slot this layout doesn't have does NOT get deleted: it's
+                // kept as is and written back. Returning to yesterday's
+                // layout gives the panel back where it was.
+                self.session.orphans.insert(*raw, state.clone());
                 continue;
             }
-            // El pane se levanta sobre la ruta guardada y ADOPTA la
-            // configuración de esta sesión: el orden y los ocultos son de la
-            // sesión, la fila `..` es de la config. Poniéndola a mano aquí,
-            // se perdía en cada restauración.
+            // The pane comes up on the saved path and ADOPTS this session's
+            // config: order and hidden setting belong to the session, the
+            // `..` row belongs to the config. Setting it by hand here got it
+            // lost on every restore.
             self.adoptar_pane(
                 id,
-                Pane::new(estado.path.clone(), Vec::new()),
-                Some(estado.sort.clone()),
-                Some(estado.show_hidden),
+                Pane::new(state.path.clone(), Vec::new()),
+                Some(state.sort.clone()),
+                Some(state.show_hidden),
             );
-            self.session.cursors.insert(*raw, estado.cursor);
-            // Las marcas de un RELEVO (fase 9), y solo entonces: `attach` lo
-            // pone `--attach`. Sin esa condición, un cuerpo que las trajera
-            // —porque el relevo se quedó a medias— resucitaría al día
-            // siguiente una selección que nadie hizo, que es exactamente lo
-            // que `session_body` se niega a guardar.
+            self.session.cursors.insert(*raw, state.cursor);
+            // A HANDOFF's marks, and only then: `attach` sets `--attach`.
+            // Without that condition, a body that carried them — because the
+            // handoff was left half done — would resurrect the next day a
+            // selection nobody made, which is exactly what `session_body`
+            // refuses to save.
             //
-            // Se GUARDAN aquí y se aplican cuando el listado llegue, por el
-            // mismo sitio que el cursor. Sembrarlas ahora no funciona, y el
-            // piloto lo destapó: el pane nace vacío, el listado se drena
-            // después, y `set_listing` limpia las marcas —que es lo correcto,
-            // un cd no conserva lo marcado—, así que la siembra temprana se
-            // borraba sola y el relevo devolvía la pantalla sin lo señalado.
-            if self.session.attach && !estado.marks.is_empty() {
-                self.session.marks.insert(*raw, estado.marks.clone());
+            // SAVED here and applied when the listing arrives, through the
+            // same spot as the cursor. Seeding them now doesn't work, and
+            // the pilot uncovered it: the pane is born empty, the listing
+            // drains afterward, and `set_listing` clears the marks — which
+            // is correct, a `cd` doesn't keep what's marked — so the early
+            // seeding erased itself and the handoff returned the screen
+            // with nothing marked.
+            if self.session.attach && !state.marks.is_empty() {
+                self.session.marks.insert(*raw, state.marks.clone());
             }
             let history = self.history.for_slot_mut(id);
-            history.seed(estado.back.clone(), estado.forward.clone());
-            history.seed_jump(estado.jump.clone());
+            history.seed(state.back.clone(), state.forward.clone());
+            history.seed_jump(state.jump.clone());
             ask.push(id);
         }
         ask
     }
 
-    /// Siembra los huecos que `[profile.start]` nombra y la sesión no conoce.
+    /// Seeds the slots `[profile.start]` names that the session doesn't
+    /// know.
     ///
-    /// Se llama DESPUÉS de [`Self::apply_session`]. Quién gana lo decide
-    /// [`norte_frontend::config::profile_start_seeds`], que es la función de
-    /// los dos frontends, y la respuesta es que la sesión gana:
-    /// `[profile.start]` es dónde abre un hueco la primera vez, no un marcador
-    /// que te devuelve al principio cada vez que entras al perfil.
+    /// Called AFTER [`Self::apply_session`]. Who wins is decided by
+    /// [`norte_frontend::config::profile_start_seeds`], the function both
+    /// frontends share, and the answer is that the session wins:
+    /// `[profile.start]` is where a slot opens the first time, not a marker
+    /// that sends you back to the start every time you enter the profile.
     ///
-    /// **Los dos vetos los pone este método, no el llamante.** Es lo leído del
-    /// disco y lo ya sembrado por este proceso, y ninguna de las dos cosas se
-    /// puede pasar por parámetro sin equivocarse: dándole
-    /// `App::session_body()` —la pantalla de AHORA— el filtro nombra todos los
-    /// huecos vivos y no se siembra nunca.
+    /// **Both vetoes are set by this method, not by the caller.** They're
+    /// what's read from disk and what this process has already seeded, and
+    /// neither can be passed in as a parameter without getting it wrong:
+    /// handing it `App::session_body()` — the screen of NOW — the filter
+    /// names every live slot and nothing ever gets seeded.
     ///
-    /// Solo se siembran huecos de LISTADO que esta disposición COLOCA. Al
-    /// almacén de panes no se le pregunta: guarda huérfanos y `insert` los
-    /// revive, así que un id que el perfil nombre y este layout no coloque
-    /// pisaría el pane que ese hueco tiene guardado para cuando se vuelva a
-    /// su disposición. Es la misma trampa que [`Self::apply_session`]
-    /// documenta treinta líneas más arriba.
+    /// Only LISTING slots this layout PLACES get seeded. The pane store
+    /// isn't asked: it keeps orphans and `insert` revives them, so an id the
+    /// profile names that this layout doesn't place would overwrite the
+    /// pane that slot has stored for when it returns to its layout. It's
+    /// the same trap [`Self::apply_session`] documents thirty lines up.
     ///
-    /// Devuelve los sembrados. El llamante los relista con `refresh_panes`,
-    /// que solo recorre los VISIBLES: un hueco sembrado detrás de una pestaña
-    /// oculta se queda frío hasta que se mire, igual que uno restaurado de la
-    /// sesión por ese mismo camino.
+    /// Returns the ones seeded. The caller re-lists them with
+    /// `refresh_panes`, which only walks the VISIBLE ones: a slot seeded
+    /// behind a hidden tab stays cold until it's looked at, same as one
+    /// restored from the session through that same path.
     pub fn seed_profile_start(
         &mut self,
         start: &std::collections::BTreeMap<u32, norte_proto::VPath>,
     ) -> Vec<norte_frontend::layout::SlotId> {
-        let colocados: std::collections::BTreeSet<u32> =
+        let placed: std::collections::BTreeSet<u32> =
             self.layout.slot_ids().into_iter().map(|s| s.0).collect();
-        // Un id que el perfil nombra y esta disposición no coloca no tiene
-        // dónde abrir. Se DICE: callarlo es la misma clase de silencio que la
-        // clave entera tenía antes de la ADR 0098 — escribes algo en el
-        // fichero y no pasa nada, sin que nada explique por qué.
-        let huerfanos = norte_frontend::config::profile_start_huerfanos(start, &colocados);
-        if !huerfanos.is_empty() {
-            let ids: Vec<String> = huerfanos.iter().map(u32::to_string).collect();
+        // An id the profile names that this layout doesn't place has
+        // nowhere to open. It's SAID: staying quiet about it is the same
+        // kind of silence the whole key had before ADR 0098 — you write
+        // something in the file and nothing happens, with nothing to
+        // explain why.
+        let orphans = norte_frontend::config::profile_start_huerfanos(start, &placed);
+        if !orphans.is_empty() {
+            let ids: Vec<String> = orphans.iter().map(u32::to_string).collect();
             self.message = Some(ta(
                 "msg-profile-start-orphans",
-                &[
-                    ("n", &huerfanos.len().to_string()),
-                    ("ids", &ids.join(", ")),
-                ],
+                &[("n", &orphans.len().to_string()), ("ids", &ids.join(", "))],
             ));
         }
         let mut ask = Vec::new();
@@ -285,7 +286,7 @@ impl App {
             &self.session.seeded,
         ) {
             let id = norte_frontend::layout::SlotId(raw);
-            if !colocados.contains(&raw) || self.panes.browser(id).is_none() {
+            if !placed.contains(&raw) || self.panes.browser(id).is_none() {
                 continue;
             }
             self.adoptar_pane(id, Pane::new(path, Vec::new()), None, None);
@@ -295,21 +296,21 @@ impl App {
         ask
     }
 
-    /// Coloca el cursor que traía la sesión, ahora que el listado ya está.
+    /// Places the cursor the session carried, now that the listing is there.
     ///
-    /// Se consume: es de UNA vez, la del arranque. Fuera del listado se clampa
-    /// —un directorio con menos entradas que ayer no deja el cursor fuera— y
-    /// eso lo hace [`Pane::set_cursor`].
+    /// Consumed: it's a ONE-TIME thing, startup's. Out of bounds it clamps —
+    /// a directory with fewer entries than yesterday doesn't leave the
+    /// cursor outside it — and [`Pane::set_cursor`] does that.
     pub fn restore_cursor(&mut self, id: norte_frontend::layout::SlotId) {
-        // Las marcas de un relevo van por la MISMA puerta que el cursor
-        // (fase 9), y por la misma razón: el pane nace vacío y el listado
-        // llega después. Sembrarlas antes las borraba `set_listing`, que
-        // limpia lo marcado en cada cd — correcto para un cd, y mortal para
-        // una siembra hecha demasiado pronto.
-        if let Some(marcas) = self.session.marks.remove(&id.0)
+        // A handoff's marks go through the SAME gate as the cursor
+        // (phase 9), and for the same reason: the pane is born empty and the
+        // listing arrives afterward. Seeding them earlier got them erased by
+        // `set_listing`, which clears what's marked on every `cd` — correct
+        // for a `cd`, and fatal for seeding done too soon.
+        if let Some(marks) = self.session.marks.remove(&id.0)
             && let Some(pane) = self.panes.browser_mut(id)
         {
-            pane.seed_marks(marcas);
+            pane.seed_marks(marks);
         }
         let Some(row) = self.session.cursors.remove(&id.0) else {
             return;
@@ -319,106 +320,110 @@ impl App {
         }
     }
 
-    /// Adopta huecos que otra ventana guardaba y esta no tenía (#231).
+    /// Adopts slots another window was keeping that this one didn't have
+    /// (#231).
     ///
-    /// Los que el layout VIVO tiene ganan los nuestros: esta pantalla es la que
-    /// acaba de moverse. Los demás se guardan en el rincón de huérfanos y se
-    /// vuelven a escribir tal cual — el único camino que trae este mapa es un
-    /// relevo de propiedad, o sea justo cuando lo guardado no es nuestro, y
-    /// reescribir encima sin más le tiraría a alguien el historial de un panel
-    /// al que iba a volver.
+    /// The ones the LIVE layout has win over ours: this screen is the one
+    /// that just moved. The rest get saved in the orphan corner and written
+    /// back as is — the only path that brings this map is an ownership
+    /// handoff, i.e. exactly when what's saved isn't ours, and overwriting
+    /// it outright would throw away someone's history for a panel they were
+    /// going to come back to.
     pub fn adopt_session_orphans(
         &mut self,
-        ajenos: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
+        foreign: std::collections::BTreeMap<u32, norte_frontend::session::SlotState>,
     ) {
         let alive: std::collections::BTreeSet<u32> =
             self.layout.slot_ids().into_iter().map(|s| s.0).collect();
-        for (id, estado) in ajenos {
+        for (id, state) in foreign {
             if alive.contains(&id) {
                 continue;
             }
-            self.session.touched.insert(id, estado.touched_ms);
-            self.session.orphans.insert(id, estado);
+            self.session.touched.insert(id, state.touched_ms);
+            self.session.orphans.insert(id, state);
         }
     }
 
-    /// Marca un hueco como tocado AHORA, para la barrida por edad.
+    /// Marks a slot as touched NOW, for the age sweep.
     pub fn touch_session_slot(&mut self, id: norte_frontend::layout::SlotId, now_ms: u64) {
         self.session.touched.insert(id.0, now_ms);
     }
 
-    /// Aplica el cuerpo OPACO que vino del core, o dice por qué no.
+    /// Applies the OPAQUE body that came from the core, or says why not.
     ///
-    /// Un cuerpo que no se puede leer NO deja pantalla en blanco: se queda la
-    /// disposición de la configuración y se avisa. Es la misma decisión que
-    /// toma el core con un fichero corrupto, un proceso más allá.
+    /// A body that can't be read does NOT leave a blank screen: the config's
+    /// layout stays and a warning is given. It's the same decision the core
+    /// makes with a corrupt file, one process removed.
     pub fn apply_session_value(&mut self, version: u32, v: &serde_json::Value) {
         match norte_frontend::session::SessionBody::from_value(version, v) {
             Ok(body) => {
-                // El perfil PEGAJOSO llega AQUÍ y no antes: vive en la sesión,
-                // y la sesión la tiene el daemon, al que se llega con la
-                // configuración que ya está cargada. Así que se pide el cambio
-                // y lo hace el bucle por el mismo camino que cualquier otro
-                // (ADR 0079, D8) — con la única baja que ese camino tiene:
-                // `[ui] lang` no se puede reaplicar, y se anuncia.
+                // The STICKY profile arrives HERE and not earlier: it lives
+                // in the session, and the session belongs to the daemon,
+                // which is reached with the config already loaded. So the
+                // switch is requested and the loop does it through the same
+                // path as any other one (ADR 0079, D8) — with the one gap
+                // that path has: `[ui] lang` can't be reapplied, and it gets
+                // announced.
                 //
-                // Un `--profile` explícito ya dejó `active_profile` puesto
-                // antes de llegar aquí, y entonces el pegajoso NO manda: el
-                // lector nombró uno para esta vez.
+                // An explicit `--profile` already left `active_profile` set
+                // before getting here, and then the sticky one does NOT win:
+                // the reader named one for this time.
                 if self.active_profile.is_none() && !body.active.is_empty() {
                     self.pending_profile = Some(std::ffi::OsString::from(&body.active));
                 }
-                // De qué huecos SABE lo guardado, antes de aplicarlo: es el
-                // veto de `[profile.start]`, y tiene que salir de aquí porque
-                // es el único sitio del terminal donde se ve el documento tal
-                // y como vino del disco.
+                // Which slots the saved data KNOWS ABOUT, before applying
+                // it: it's `[profile.start]`'s veto, and it has to come out
+                // of here because this is the only spot in the terminal
+                // where the document is seen exactly as it came off disk.
                 self.session.read = body.slots.keys().copied().collect();
                 self.apply_session(&body);
             }
-            // Un cuerpo de una versión MÁS NUEVA no se lee y tampoco se pisa:
-            // esta ventana se declara suelta y deja de escribir. Sin esto, el
-            // aviso salía y un segundo después el volcado publicaba encima la
-            // pantalla de la configuración — «no se lee» acabando en «se
-            // pierde», que es lo que ADR 0059 promete que no pasa.
+            // A body from a NEWER version doesn't get read and doesn't get
+            // overwritten either: this window declares itself detached and
+            // stops writing. Without this, the warning came out and a
+            // second later the dump published the config's screen right on
+            // top — "not read" ending in "gets lost", which is what
+            // ADR 0059 promises doesn't happen.
             Err(e @ norte_frontend::session::SessionError::FromTheFuture { .. }) => {
-                tracing::warn!(error = %e, "sesión de UI de una versión más nueva: no se escribe");
+                tracing::warn!(error = %e, "UI session from a newer version: not writing");
                 self.session.detached = true;
                 self.message = Some(t("msg-session-unreadable"));
             }
             Err(e) => {
-                tracing::warn!(error = %e, "sesión de UI ilegible");
+                tracing::warn!(error = %e, "unreadable UI session");
                 self.message = Some(t("msg-session-unreadable"));
             }
         }
     }
 
-    /// Pone la disposición `name`, y dice si lo consiguió.
+    /// Sets the `name` layout, and says whether it succeeded.
     ///
-    /// Primero `<dir>/layouts/<name>.toml` y después el preset de fábrica del
-    /// mismo nombre: gana el fichero del usuario, como en todas las demás
-    /// capas de configuración, y un preset se recupera borrando el fichero.
-    /// Si el fichero está roto se avisa Y se cae al preset — un layout que no
-    /// parsea no puede dejar a norte sin pantalla.
+    /// First `<dir>/layouts/<name>.toml` and then the factory preset of the
+    /// same name: the user's file wins, as in every other config layer, and
+    /// a preset is recovered by deleting the file. If the file is broken it
+    /// warns AND falls back to the preset — a layout that doesn't parse
+    /// can't leave norte without a screen.
     ///
-    /// La REGLA —fichero del usuario, y si no el preset— vive en
-    /// [`norte_frontend::layout::config::or_preset`], compartida con la
-    /// ventana: aquí estaba escrita a mano y la ventana no la tenía, así que
-    /// `norte-gui --layout mio` no podía abrir un layout del usuario. Lo que
-    /// queda aquí es lo que sí es del TUI: poner el árbol y pintar el aviso.
+    /// The RULE — user's file, and if not the preset — lives in
+    /// [`norte_frontend::layout::config::or_preset`], shared with the
+    /// window: it used to be written by hand here and the window didn't
+    /// have it, so `norte-gui --layout mine` couldn't open a user layout.
+    /// What's left here is what really belongs to the TUI: setting the tree
+    /// and painting the warning.
     ///
-    /// Lee un fichero pequeño de config en el hilo que llama, como el
-    /// `[ui] layout` del arranque.
+    /// Reads a small config file on the calling thread, like startup's
+    /// `[ui] layout`.
     pub fn apply_loaded_layout(
         &mut self,
         name: &std::ffi::OsStr,
         loaded: Result<norte_frontend::layout::Node, norte_frontend::layout::LayoutError>,
     ) -> bool {
-        // El nombre se PINTA, y viene de un fichero o de la línea de
-        // comandos: lossy marcado y hazards enmascarados, como cualquier otro
-        // nombre (#246 m3). Los bytes no se tocan: los usó el cargador.
-        // Y con su marca si hubo bytes que no se podían pintar: sin ella
-        // `$'\xff'` y `$'\xfe'` dan el MISMO mensaje y el lector no puede
-        // saber cuál de los dos nombró.
+        // The name gets PAINTED, and comes from a file or the command line:
+        // lossy and marked, and hazards masked, like any other name (#246
+        // m3). The bytes aren't touched: the loader used them. And with its
+        // mark if there were bytes that couldn't be painted: without it,
+        // `$'\xff'` and `$'\xfe'` give the SAME message and the reader can't
+        // tell which of the two was named.
         let (showable, lossy) = norte_frontend::display_os_name(name);
         let showable = norte_encoding::mask_terminal_hazards(&showable);
         let showable = if lossy {
@@ -427,9 +432,9 @@ impl App {
             showable
         };
         match norte_frontend::layout::config::or_preset(name, loaded) {
-            Ok((tree, roto)) => {
+            Ok((tree, broken)) => {
                 self.set_layout(tree);
-                if let Some(e) = roto {
+                if let Some(e) = broken {
                     self.message = Some(ta(
                         "msg-layout-load-failed",
                         &[("name", &showable), ("err", &e.to_string())],

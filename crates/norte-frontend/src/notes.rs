@@ -1,51 +1,51 @@
-//! Las frases que dicen que un listado NO está completo, o que no es lo que
-//! parece.
+//! The sentences that say a listing is NOT complete, or that it is not what
+//! it looks like.
 //!
-//! Todas obedecen la misma regla, escrita en su día para la barra del
-//! terminal: **un listado que enseña menos de lo que hay jamás es
-//! silencioso.** Lo que falta no está, así que no hay ninguna fila donde el
-//! lector pueda tropezarse con ello — si nadie lo dice, la pantalla afirma
-//! que eso es todo.
+//! All of them obey the same rule, written back in the day for the terminal's
+//! bar: **a listing that shows less than there is is never silent.** What is
+//! missing is not there, so there is no row where the reader could stumble
+//! on it — if nobody says so, the screen asserts that is all there is.
 //!
-//! Viven aquí porque los dos frontends las necesitan y cada uno las redactaba
-//! por su cuenta, que es la forma que tiene una decisión de divergir sin que
-//! nadie lo note (ADR 0077). Y ya habían divergido: la ventana decía «se
-//! saltaron N entradas» sin el ⚠ y **también con N igual a cero**, o sea que
-//! anunciaba un listado incompleto que estaba completo; y la marca de
-//! reinterpretación de nombres, que en el terminal es permanente porque los
-//! nombres pintados no son los bytes, allí no existía.
+//! They live here because both frontends need them and each one used to word
+//! them on its own, which is how a decision drifts without anyone noticing
+//! (ADR 0077). And they already had: the window said "N entries were
+//! skipped" without the ⚠, and **also with N equal to zero**, announcing an
+//! incomplete listing that was complete; and the name-reinterpretation mark,
+//! which in the terminal is permanent because the painted names are not the
+//! bytes, did not exist there at all.
 //!
-//! Cada una devuelve la cadena VACÍA cuando no hay nada que decir. Eso es la
-//! otra mitad del contrato y no un detalle: una frase que sale siempre es
-//! ruido, y el ruido enseña a saltarse la línea justo el día que dice algo.
+//! Each one returns the EMPTY string when there is nothing to say. That is
+//! the other half of the contract and not a detail: a sentence that always
+//! shows up is noise, and noise teaches people to skip the line on the exact
+//! day it says something.
 //!
-//! # El contrato del espaciado
+//! # The spacing contract
 //!
-//! **Una frase no lleva separador ni espacios en los extremos.** Cómo se
-//! separan es de quien las pone en fila: el terminal las une con dos espacios
-//! en una barra de texto, la ventana las manda en nodos distintos y las
-//! separa con CSS. Sin esta regla escrita, un `.ftl` con un espacio delante
-//! le da al terminal tres y a la ventana un hueco doble, y ningún test se
-//! entera — así que la fija `ninguna_frase_trae_su_propio_espaciado`, aquí
-//! abajo.
+//! **A sentence carries no separator and no spaces at its ends.** How they
+//! are separated is up to whoever lines them up: the terminal joins them with
+//! two spaces in a text bar, the window sends them in separate nodes and
+//! separates them with CSS. Without this rule written down, a `.ftl` with a
+//! leading space gives the terminal three and the window a double gap, and no
+//! test notices — so `no_sentence_carries_its_own_spacing`, below, pins it
+//! down.
 
 use norte_i18n::{Lang, t_in, ta_in};
 
-/// Lo que el provider se SALTÓ del listado: nombres que no pudo statear,
-/// entradas por encima de un tope suyo (#93, #96).
+/// What the provider SKIPPED from the listing: names it could not stat,
+/// entries past a limit of its own (#93, #96).
 ///
-/// Con cero se calla, y ese es el bug que esta función existe para no volver
-/// a cometer: «se saltaron 0 entradas» describe un listado completo como si
-/// estuviera incompleto, que gasta la única señal que hay para cuando de
-/// verdad falta algo.
+/// With zero it stays quiet, and that is the bug this function exists never
+/// to commit again: "0 entries were skipped" describes a complete listing as
+/// if it were incomplete, wasting the only signal there is for when
+/// something is truly missing.
 ///
 /// ```
 /// use norte_frontend::notes::skipped;
 /// use norte_i18n::Lang;
 ///
 /// assert!(skipped(Some(3), Lang::En).contains('3'));
-/// assert_eq!(skipped(Some(0), Lang::En), "", "cero omitidas no es un aviso");
-/// assert_eq!(skipped(None, Lang::En), "", "el provider no lleva la cuenta");
+/// assert_eq!(skipped(Some(0), Lang::En), "", "zero skipped is not a warning");
+/// assert_eq!(skipped(None, Lang::En), "", "the provider does not keep count");
 /// ```
 #[must_use]
 pub fn skipped(n: Option<u64>, lang: Lang) -> String {
@@ -55,18 +55,18 @@ pub fn skipped(n: Option<u64>, lang: Lang) -> String {
     }
 }
 
-/// Los nombres se están REINTERPRETANDO con otra codificación (#57).
+/// Names are being REINTERPRETED with a different encoding (#57).
 ///
-/// Permanente mientras dure, no solo en el mensaje del toggle: lo que se
-/// pinta no son los bytes que hay en el disco, y el lector tiene que poder
-/// saberlo en el momento en el que decide copiar o borrar algo, no medio
-/// minuto antes.
+/// Permanent for as long as it lasts, not only in the toggle's message: what
+/// is painted is not the bytes on disk, and the reader has to be able to know
+/// it at the moment they decide to copy or delete something, not half a
+/// minute earlier.
 ///
 /// ```
 /// use norte_frontend::notes::names_encoding;
 /// use norte_i18n::Lang;
 ///
-/// assert_eq!(names_encoding(None, Lang::En), "", "sin reinterpretar, nada");
+/// assert_eq!(names_encoding(None, Lang::En), "", "no reinterpretation, nothing");
 /// let cp437 = norte_encoding::NameEncoding::Cp437;
 /// assert!(names_encoding(Some(cp437), Lang::En).contains("cp437"));
 /// ```
@@ -77,12 +77,12 @@ pub fn names_encoding(enc: Option<norte_encoding::NameEncoding>, lang: Lang) -> 
     })
 }
 
-/// Marcas que el último refresco descartó porque su entrada ya no está.
+/// Marks the last refresh dropped because their entry is no longer there.
 ///
-/// Jamás silencioso, y por un motivo más duro que el resto: con la selección
-/// vacía el embudo del operando cae al CURSOR, así que callar que la
-/// selección se vació redirige la siguiente operación en masa a algo que
-/// nadie marcó.
+/// Never silent, and for a harder reason than the rest: with the selection
+/// empty the operand funnel falls back to the CURSOR, so staying quiet about
+/// the selection having emptied redirects the next bulk operation onto
+/// something nobody marked.
 ///
 /// ```
 /// use norte_frontend::notes::pruned_marks;
@@ -99,22 +99,22 @@ pub fn pruned_marks(n: usize, lang: Lang) -> String {
     ta_in(lang, "status-marks-pruned", &[("n", &n.to_string())])
 }
 
-/// Cuántas entradas hay marcadas y cuánto pesan.
+/// How many entries are marked and how much they weigh.
 ///
-/// La única de este módulo que no es un aviso, sino un contador, y por eso va
-/// DETRÁS de los demás donde el sitio se reparte: un aviso recortado deja de
-/// avisar y un contador recortado solo deja de contar.
+/// The only one in this module that is not a warning but a counter, and
+/// that is why it goes AFTER the rest where space is shared out: a trimmed
+/// warning stops warning, and a trimmed counter only stops counting.
 ///
-/// Los directorios se nombran aparte porque no suman bytes: un «3 marcadas,
-/// 12 KB» sobre dos carpetas y un fichero describe mal lo que se va a mover.
+/// Directories are named apart because they add no bytes: a "3 marked, 12 KB"
+/// over two folders and a file poorly describes what is about to be moved.
 ///
 /// ```
 /// use norte_frontend::notes::marked;
 /// use norte_i18n::Lang;
 ///
-/// assert_eq!(marked(0, 0, 0, Lang::En), "", "quien no marca no gana ruido");
+/// assert_eq!(marked(0, 0, 0, Lang::En), "", "marking nothing wins no noise");
 /// assert!(marked(2, 2048, 0, Lang::En).contains('2'));
-/// // Con directorios de por medio, la frase los cuenta aparte.
+/// // With directories involved, the sentence counts them apart.
 /// assert!(marked(3, 2048, 2, Lang::En).contains('3'));
 /// ```
 #[must_use]
@@ -134,15 +134,15 @@ pub fn marked(n: usize, bytes: u64, dirs: usize, lang: Lang) -> String {
     )
 }
 
-/// El listado se está RELLENANDO todavía (paginación, ADR 0017): esto es lo
-/// que hay POR AHORA.
+/// The listing is still FILLING IN (pagination, ADR 0017): this is what there
+/// is SO FAR.
 ///
 /// ```
 /// use norte_frontend::notes::filling;
 /// use norte_i18n::Lang;
 ///
 /// assert!(filling(true, 120, Lang::En).contains("120"));
-/// assert_eq!(filling(false, 120, Lang::En), "", "ya está entero");
+/// assert_eq!(filling(false, 120, Lang::En), "", "already complete");
 /// ```
 #[must_use]
 pub fn filling(loading: bool, so_far: usize, lang: Lang) -> String {
@@ -152,10 +152,10 @@ pub fn filling(loading: bool, so_far: usize, lang: Lang) -> String {
     ta_in(lang, "pane-loading", &[("n", &so_far.to_string())])
 }
 
-/// Este hueco NO se pudo listar (#235).
+/// This slot COULD NOT be listed (#235).
 ///
-/// Sin esto la pantalla afirma que el directorio está vacío, que es
-/// precisamente lo que no se sabe.
+/// Without this the screen asserts the directory is empty, which is exactly
+/// what is not known.
 ///
 /// ```
 /// use norte_frontend::notes::unlisted;
@@ -172,14 +172,14 @@ pub fn unlisted(yes: bool, lang: Lang) -> String {
     String::new()
 }
 
-/// Cuántas entradas aparta la OCULTACIÓN activa (#107).
+/// How many entries the active HIDING sets aside (#107).
 ///
 /// ```
 /// use norte_frontend::notes::hidden;
 /// use norte_i18n::Lang;
 ///
 /// assert!(hidden(4, Lang::En).contains('4'));
-/// assert_eq!(hidden(0, Lang::En), "", "un dir sin ocultos no dice nada");
+/// assert_eq!(hidden(0, Lang::En), "", "a dir with nothing hidden says nothing");
 /// ```
 #[must_use]
 pub fn hidden(n: usize, lang: Lang) -> String {
@@ -189,20 +189,21 @@ pub fn hidden(n: usize, lang: Lang) -> String {
     ta_in(lang, "status-hidden", &[("n", &n.to_string())])
 }
 
-/// «panel cerrado · alt+h vuelve a partir»: lo que se dice al cerrar un
-/// hueco, con el acorde que el preset PUESTO ata a `layout.split-h`.
+/// "pane closed · alt+h splits again": what is said when a slot is closed,
+/// with the chord the ACTIVE preset ties to `layout.split-h`.
 ///
-/// Cerrar un panel es fácil de hacer sin querer y difícil de deshacer si no
-/// se sabe con qué —el que lo hace se queda mirando media pantalla—, y el
-/// atajo no se cablea: sale del keymap efectivo, como el resto del cromo
-/// (ADR 0106). Sin ninguno atado, se nombra el menú, que siempre está.
+/// Closing a pane is easy to do by accident and hard to undo if you do not
+/// know with what — whoever does it is left staring at half a screen — and
+/// the shortcut is not hardcoded: it comes from the effective keymap, like
+/// the rest of the chrome (ADR 0106). With none bound, the menu is named,
+/// which is always there.
 ///
 /// ```
 /// use norte_frontend::notes::slot_closed;
 /// use norte_i18n::Lang;
 ///
 /// assert!(slot_closed(Some("alt+h"), Lang::Es).contains("alt+h"));
-/// assert!(!slot_closed(None, Lang::Es).is_empty(), "sin tecla, el menú");
+/// assert!(!slot_closed(None, Lang::Es).is_empty(), "no key, the menu");
 /// ```
 #[must_use]
 pub fn slot_closed(chord: Option<&str>, lang: Lang) -> String {
@@ -216,16 +217,17 @@ pub fn slot_closed(chord: Option<&str>, lang: Lang) -> String {
 mod tests {
     use super::*;
 
-    /// Ninguna clave se queda sin traducir en ninguno de los dos idiomas.
+    /// No key is left untranslated in either language.
     ///
-    /// `t_in` contesta la clave misma cuando no la tiene, así que una entrada
-    /// que falte en un `.ftl` se pintaría como `status-archive-skipped` al
-    /// lector — el eco que el resto del crate se cuida de no producir.
+    /// `t_in` answers with the key itself when it does not have it, so an
+    /// entry missing from a `.ftl` would be painted as `status-archive-skipped`
+    /// to the reader — the echo the rest of the crate takes care not to
+    /// produce.
     #[test]
-    fn las_frases_estan_en_los_dos_idiomas() {
+    fn the_sentences_exist_in_both_languages() {
         let cp437 = norte_encoding::NameEncoding::Cp437;
         for lang in [Lang::Es, Lang::En] {
-            for frase in [
+            for sentence in [
                 skipped(Some(2), lang),
                 names_encoding(Some(cp437), lang),
                 pruned_marks(1, lang),
@@ -237,25 +239,26 @@ mod tests {
                 slot_closed(Some("alt+h"), lang),
                 slot_closed(None, lang),
             ] {
-                assert!(!frase.is_empty(), "sin frase en {lang:?}");
+                assert!(!sentence.is_empty(), "no sentence in {lang:?}");
                 assert!(
-                    !frase.starts_with("status-")
-                        && !frase.starts_with("pane-")
-                        && !frase.contains('{'),
-                    "clave cruda o marca sin sustituir en {lang:?}: {frase}"
+                    !sentence.starts_with("status-")
+                        && !sentence.starts_with("pane-")
+                        && !sentence.contains('{'),
+                    "raw key or unsubstituted placeholder in {lang:?}: {sentence}"
                 );
             }
         }
     }
 
-    /// Ninguna trae separador ni espacios en los extremos: eso es de quien
-    /// las pone en fila, y cada frontend lo hace distinto. Un `.ftl` con un
-    /// espacio delante le da al terminal tres y a la ventana un hueco doble.
+    /// None of them carries a separator or spaces at its ends: that belongs
+    /// to whoever lines them up, and each frontend does it differently. A
+    /// `.ftl` with a leading space gives the terminal three and the window a
+    /// double gap.
     #[test]
-    fn ninguna_frase_trae_su_propio_espaciado() {
+    fn no_sentence_carries_its_own_spacing() {
         let cp437 = norte_encoding::NameEncoding::Cp437;
         for lang in [Lang::Es, Lang::En] {
-            for frase in [
+            for sentence in [
                 skipped(Some(2), lang),
                 names_encoding(Some(cp437), lang),
                 pruned_marks(1, lang),
@@ -266,34 +269,38 @@ mod tests {
                 slot_closed(Some("alt+h"), lang),
                 slot_closed(None, lang),
             ] {
-                assert_eq!(frase.trim(), frase, "trae espaciado propio: {frase:?}");
+                assert_eq!(
+                    sentence.trim(),
+                    sentence,
+                    "carries its own spacing: {sentence:?}"
+                );
             }
         }
     }
 
-    /// El aviso de omitidas lleva la MARCA: es lo que lo distingue de un
-    /// contador a un metro de la pantalla, y es la mitad de por qué el aviso
-    /// de la ventana no se leía como un aviso.
+    /// The skipped-entries warning carries the MARK: that is what tells it
+    /// apart from a counter a meter away from the screen, and it is half the
+    /// reason the window's warning did not read as a warning.
     #[test]
-    fn el_aviso_de_omitidas_va_marcado() {
+    fn the_skipped_warning_is_marked() {
         for lang in [Lang::Es, Lang::En] {
             assert!(
                 skipped(Some(9), lang).contains('⚠'),
-                "sin marca no se lee como aviso en {lang:?}"
+                "without the mark it does not read as a warning in {lang:?}"
             );
         }
     }
 
-    /// Y todas callan cuando no hay nada que decir. Es lo que hace que la que
-    /// habla signifique algo.
+    /// And all of them stay quiet when there is nothing to say. That is what
+    /// makes the one that speaks mean something.
     #[test]
-    fn el_silencio_es_el_caso_normal() {
+    fn silence_is_the_normal_case() {
         let l = Lang::Es;
         assert_eq!(skipped(None, l), "");
         assert_eq!(skipped(Some(0), l), "");
         assert_eq!(names_encoding(None, l), "");
         assert_eq!(pruned_marks(0, l), "");
-        assert_eq!(marked(0, 999, 3, l), "", "sin marcas no hay nada que sumar");
+        assert_eq!(marked(0, 999, 3, l), "", "no marks, nothing to add up");
         assert_eq!(filling(false, 9, l), "");
         assert_eq!(unlisted(false, l), "");
         assert_eq!(hidden(0, l), "");

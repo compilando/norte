@@ -17,7 +17,7 @@ fn template_dir() -> PathBuf {
 /// Builds the template to `wasm32-wasip2`, or `None` without the target.
 fn build_template() -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let target_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("wasm-guests");
@@ -121,12 +121,12 @@ fn the_template_builds_installs_and_runs() {
     // A setting written the way the host writes it changes the greeting.
     std::fs::write(
         cfg.path().join("plugins").join(ID).join("config.toml"),
-        "greeting = \"hola\"\n",
+        "greeting = \"hi\"\n",
     )
     .expect("config.toml");
     let reg = PluginRegistry::discover(cfg.path()).expect("rediscover");
     let out = reg
         .run_command(&rt, ID, "hello", "norte")
         .expect("hello runs with the setting");
-    assert_eq!(out, "hola, norte");
+    assert_eq!(out, "hi, norte");
 }

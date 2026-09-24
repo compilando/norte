@@ -1,6 +1,6 @@
-//! Panel de tasks del TUI (fase 5): snapshots vivos leídos del canal
-//! `watch` de cada [`TaskRef`] — el TUI jamás bloquea esperando a una
-//! task; el tick copia el último snapshot publicado.
+//! The TUI's task panel (phase 5): live snapshots read from each
+//! [`TaskRef`]'s `watch` channel — the TUI never blocks waiting on a task;
+//! the tick copies the last published snapshot.
 
 use norte_core::TransferOptions;
 use norte_core::backend::{TaskObserver, TaskRef};
@@ -8,122 +8,124 @@ use norte_proto::{TaskProgress, TaskState, VPath};
 
 use crate::app::TransferKind;
 
-/// Contexto para reintentar una transferencia tras una colisión.
+/// Context to retry a transfer after a collision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetrySpec {
-    /// Copy o Move.
+    /// Copy or Move.
     pub kind: TransferKind,
-    /// Origen.
+    /// Source.
     pub from: VPath,
-    /// Destino.
+    /// Destination.
     pub to: VPath,
-    /// Opciones del intento que falló.
+    /// The failed attempt's options.
     pub opts: TransferOptions,
-    /// Reinterpretación de nombres del pane ORIGEN, capturada al LANZAR la
-    /// operación (#98/M1): el modal de colisión llega async — el usuario
-    /// puede haber cambiado de pane o ciclado el encoding entre el submit y
-    /// la notificación, y el modal debe pintar el mismo texto por el que se
-    /// navegó, no el del pane que tenga el foco al llegar.
+    /// The SOURCE pane's name reinterpretation, captured when the operation
+    /// was LAUNCHED (#98/M1): the collision modal arrives async — the user
+    /// may have switched panes or cycled the encoding between the submit and
+    /// the notification, and the modal must paint the same text it was
+    /// navigated with, not the focused pane's when it arrives.
     pub name_encoding: Option<norte_encoding::NameEncoding>,
 }
 
-/// Una fila del panel.
+/// One row of the panel.
 pub struct TaskRow {
     task: TaskObserver,
     rx: tokio::sync::watch::Receiver<TaskProgress>,
-    /// Último snapshot copiado (lo que se pinta).
+    /// Last snapshot copied (what gets painted).
     pub last: TaskProgress,
-    /// Contexto de reintento (None en deletes).
+    /// Retry context (None on deletes).
     pub retry: Option<RetrySpec>,
-    /// Objetivo de un delete a papelera (ver [`Finished::trash_target`]).
+    /// Target of a delete to trash (see [`Finished::trash_target`]).
     pub trash_target: Option<VPath>,
-    /// Sobre QUÉ actúa la task: el último `current` que llegó a verse.
+    /// WHAT the task acts on: the last `current` that was ever seen.
     ///
-    /// PEGAJOSO a propósito. `TaskProgress::current` es «la entrada en curso»,
-    /// así que una task terminada suele publicarlo vacío — y una fila que dice
-    /// «copy ✓» sin decir qué se copió no informa de nada, que es la queja que
-    /// trajo esto. Guardando el último visto, la fila sigue nombrando su
-    /// operando después de acabar.
+    /// STICKY on purpose. `TaskProgress::current` is "the entry in progress",
+    /// so a finished task usually publishes it empty — and a row that says
+    /// "copy ✓" without saying what was copied informs of nothing, which is
+    /// the complaint that brought this in. Keeping the last one seen, the row
+    /// keeps naming its operand after it is done.
     pub operand: Option<VPath>,
-    /// El ritmo de esta task, estimado de sus propios snapshots (spec
-    /// 2026-09-15, fase 2).
+    /// This task's rate, estimated from its own snapshots (spec 2026-09-15,
+    /// phase 2).
     ///
-    /// Por FILA y no por tablero: dos copias a la vez van a velocidades
-    /// distintas, y una media de las dos no describe a ninguna.
+    /// PER ROW and not per board: two copies at once run at different
+    /// speeds, and an average of the two describes neither.
     pub rate: norte_frontend::tasks::Rate,
-    /// Cuándo se vio terminal por primera vez, en el reloj INYECTADO del
-    /// pintado ([`crate::app::App::now_ms`]). `None` mientras siga viva.
+    /// When it was first seen terminal, on the paint's INJECTED clock
+    /// ([`crate::app::App::now_ms`]). `None` while it stays alive.
     terminal_at_ms: Option<i64>,
-    /// Ya se emitió su evento terminal.
+    /// Its terminal event has already been emitted.
     reported: bool,
 }
 
-/// Evento: una task alcanzó estado terminal (se emite UNA vez).
+/// Event: a task reached a terminal state (emitted ONCE).
 #[derive(Debug)]
 pub struct Finished {
-    /// Estado final.
+    /// Final state.
     pub state: TaskState,
-    /// Contexto de reintento de la transferencia, si lo había.
+    /// The transfer's retry context, if there was one.
     pub retry: Option<RetrySpec>,
-    /// Para un delete a PAPELERA: el objetivo (si falla Unsupported, el
-    /// TUI reofrece el diálogo de permanente — ADR 0009).
+    /// For a delete to TRASH: the target (if it fails Unsupported, the TUI
+    /// re-offers the permanent-delete dialog — ADR 0009).
     pub trash_target: Option<VPath>,
-    /// El ÚLTIMO snapshot, el mismo que publicó el estado terminal.
+    /// The LAST snapshot, the same one that published the terminal state.
     ///
-    /// Hay tasks cuyo resultado ES su progreso —`fs.dir_size` cuenta bytes y
-    /// entradas, y el total es lo que lleva la última publicación (#139)— así
-    /// que sin esto habría que ir a buscarlo por `task_id` a un tablero que ya
-    /// lo tiene delante. Y trae el `kind`, que es lo que distingue «terminó una
-    /// mutación, recarga los paneles» de «terminó una cuenta, no toques nada».
+    /// Some tasks' result IS their progress — `fs.dir_size` counts bytes and
+    /// entries, and the total is what the last publication carries (#139) —
+    /// so without this it would have to be looked up by `task_id` on a board
+    /// that already has it in front of it. And it carries the `kind`, which
+    /// is what tells "a mutation finished, reload the panes" apart from "a
+    /// count finished, touch nothing".
     pub progress: TaskProgress,
 }
 
-/// Filas máximas del panel. Política: al empujar una task nueva caen las
-/// terminales YA reportadas más viejas; las VIVAS jamás se tiran (sus
-/// handles siguen en marcha), así que con más de `MAX_ROWS` tasks vivas el panel
-/// crece — deliberado: cortar sería mentir sobre trabajo en curso.
+/// The panel's maximum rows. Policy: pushing a new task drops the OLDEST
+/// already-reported terminal rows; LIVE ones are never dropped (their
+/// handles are still running), so with more than `MAX_ROWS` live tasks the
+/// panel grows — deliberate: cutting one off would lie about work in
+/// progress.
 const MAX_ROWS: usize = 6;
 
-/// Cuánto sigue en el panel una task ya terminada.
+/// How long an already-finished task stays in the panel.
 ///
-/// El panel se quedaba con el histórico entero hasta que otra task lo empujaba
-/// fuera por [`MAX_ROWS`], así que lo que enseñaba de un vistazo era trabajo de
-/// hace media hora. Diez segundos bastan para leer el `✓` o el error, y por
-/// debajo el panel vuelve a decir lo que pasa AHORA.
+/// The panel used to keep the whole history until another task pushed it out
+/// via [`MAX_ROWS`], so what it showed at a glance was work from half an hour
+/// ago. Ten seconds is enough to read the `✓` or the error, and below that
+/// the panel goes back to saying what is happening NOW.
 ///
-/// El reloj es el que inyecta el pintado, no `SystemTime`: los tests fijan
-/// `App::render_now_ms` y esto no les añade una espera.
+/// The clock is the one the paint injects, not `SystemTime`: the tests pin
+/// `App::render_now_ms` and this adds them no wait.
 const TERMINAL_TTL_MS: i64 = 10_000;
 
-/// Las tasks visibles en el panel.
+/// The tasks visible in the panel.
 #[derive(Default)]
 pub struct TaskBoard {
     rows: Vec<TaskRow>,
 }
 
 impl TaskBoard {
-    /// Añade una task recién encolada por ESTE frontend.
+    /// Adds a task THIS frontend just enqueued.
     pub fn push(&mut self, task: &TaskRef, retry: Option<RetrySpec>) {
         self.push_full(task, retry, None);
     }
 
-    /// Añade una task de la que este frontend conserva el handle: el tablero
-    /// se queda un [`TaskObserver`], no la task (#173). Es lo que permite que
-    /// una sincronización APLICÁNDOSE salga en el tablero sin quitarle a su
-    /// panel lo único con lo que se puede parar.
+    /// Adds a task this frontend keeps the handle for: the board keeps a
+    /// [`TaskObserver`], not the task (#173). This is what lets a sync that
+    /// is APPLYING show up on the board without taking away from its own
+    /// panel the only thing it can be stopped with.
     pub fn push_observed(&mut self, task: TaskObserver, retry: Option<RetrySpec>) {
         self.push_observed_full(task, retry, None);
     }
 
-    /// Añade una task FORÁNEA (otro frontend de la misma sesión, fase 3):
-    /// sin contexto de reintento (no la lanzamos nosotros) — se ve
-    /// progresar en el panel como una más. Duplicados por id se ignoran
-    /// (la propia puede llegar también por broadcast).
+    /// Adds a FOREIGN task (another frontend of the same session, phase 3):
+    /// with no retry context (we did not launch it) — it is seen progressing
+    /// on the panel like any other. Duplicates by id are ignored (our own can
+    /// also arrive via broadcast).
     pub fn push_foreign(&mut self, task: &TaskRef) {
         self.push_full(task, None, None);
     }
 
-    /// Como [`Self::push`], con objetivo de papelera (deletes Trash).
+    /// Like [`Self::push`], with a trash target (Trash deletes).
     pub fn push_full(
         &mut self,
         task: &TaskRef,
@@ -133,15 +135,15 @@ impl TaskBoard {
         self.push_observed_full(task.observer(), retry, trash_target);
     }
 
-    /// Como [`Self::push_full`], desde un observador ya obtenido.
+    /// Like [`Self::push_full`], from an already-obtained observer.
     pub fn push_observed_full(
         &mut self,
         task: TaskObserver,
         retry: Option<RetrySpec>,
         trash_target: Option<VPath>,
     ) {
-        // Duplicados por id se ignoran: la propia puede llegar también por
-        // broadcast, y una sincronización se empuja al lanzarla.
+        // Duplicates by id are ignored: our own can also arrive via
+        // broadcast, and a sync is pushed when it is launched.
         if self.rows.iter().any(|r| r.task.id() == task.id()) {
             return;
         }
@@ -159,8 +161,8 @@ impl TaskBoard {
             terminal_at_ms: None,
             reported: false,
         });
-        // Hueco: caen primero las terminales más viejas — solo las YA
-        // reportadas (una terminal sin reportar aún debe emitir su Finished).
+        // Room: the oldest terminals fall first — only the ALREADY reported
+        // ones (an unreported terminal must still emit its Finished).
         while self.rows.len() > MAX_ROWS {
             let Some(pos) = self
                 .rows
@@ -173,19 +175,19 @@ impl TaskBoard {
         }
     }
 
-    /// Copia los últimos snapshots y devuelve las tasks que ACABAN de
-    /// terminar (el estado terminal siempre se publica — contrato del
-    /// `ProgressReporter`).
+    /// Copies the latest snapshots and returns the tasks that JUST finished
+    /// (the terminal state is always published — the `ProgressReporter`'s
+    /// contract).
     pub fn tick(&mut self, now_ms: i64) -> Vec<Finished> {
         let mut out = Vec::new();
         for row in &mut self.rows {
             row.last = row.rx.borrow().clone();
-            // El ritmo se mide con el reloj del PINTADO, el mismo que caduca
-            // las filas: un snapshot no trae hora, y medir con otro reloj sería
-            // un número que los tests no pueden fijar.
+            // The rate is measured with the PAINT's clock, the same one that
+            // ages out the rows: a snapshot carries no time, and measuring
+            // with another clock would be a number the tests cannot pin.
             row.rate.observe(&row.last, now_ms);
-            // El operando NO se borra cuando el snapshot deja de traerlo: ver
-            // la nota de `TaskRow::operand`.
+            // The operand is NOT cleared when the snapshot stops carrying it:
+            // see `TaskRow::operand`'s note.
             if row.last.current.is_some() {
                 row.operand = row.last.current.clone();
             }
@@ -202,13 +204,14 @@ impl TaskBoard {
         out
     }
 
-    /// Sella la hora de las filas que acaban de terminar y tira las que
-    /// llevan terminadas más de diez segundos (`TERMINAL_TTL_MS`, privado).
+    /// Stamps the time of rows that just finished and drops the ones that
+    /// have been finished for more than ten seconds (`TERMINAL_TTL_MS`,
+    /// private).
     ///
-    /// Se llama DESPUÉS de [`Self::tick`] y con el mismo reloj del pintado.
-    /// Solo mira filas ya REPORTADAS: una terminal sin reportar todavía tiene
-    /// que emitir su `Finished`, y tirarla antes se comería el refresco de
-    /// panes que esa mutación pide.
+    /// Called AFTER [`Self::tick`] and with the same paint clock. Only looks
+    /// at already REPORTED rows: an unreported terminal still has to emit its
+    /// `Finished`, and dropping it earlier would eat the pane refresh that
+    /// mutation asks for.
     pub fn prune_terminal(&mut self, now_ms: i64) {
         for row in &mut self.rows {
             if row.reported && row.last.state.is_terminal() && row.terminal_at_ms.is_none() {
@@ -216,17 +219,17 @@ impl TaskBoard {
             }
         }
         self.rows.retain(|row| match row.terminal_at_ms {
-            // `saturating_sub` y no `-`: el reloj lo inyecta quien pinta y un
-            // test puede fijarlo hacia atrás; desbordar aquí tiraría filas
-            // vivas.
+            // `saturating_sub` and not `-`: the clock is injected by whoever
+            // paints and a test can set it backward; overflowing here would
+            // drop live rows.
             Some(t) => now_ms.saturating_sub(t) < TERMINAL_TTL_MS,
             None => true,
         });
     }
 
-    /// Cancela la task en marcha más RECIENTE. `false` si no hay ninguna.
-    /// Consulta el estado EN VIVO (el snapshot del tick puede tener hasta
-    /// 100 ms): "cancelando…" jamás se dice de algo ya terminado.
+    /// Cancels the most RECENT running task. `false` if there is none.
+    /// Queries the LIVE state (the tick's snapshot can be up to 100 ms
+    /// stale): "cancelling…" is never said of something already finished.
     pub fn cancel_last_running(&mut self) -> bool {
         for row in self.rows.iter().rev() {
             if !row.rx.borrow().state.is_terminal() {
@@ -237,25 +240,26 @@ impl TaskBoard {
         false
     }
 
-    /// La task en marcha más RECIENTE —la que cancelaría
-    /// [`Self::cancel_last_running`]— y si está pausada, consultado EN VIVO.
+    /// The most RECENT running task — the one
+    /// [`Self::cancel_last_running`] would cancel — and whether it is
+    /// paused, queried LIVE.
     #[must_use]
     pub fn last_running(&self) -> Option<(TaskObserver, bool)> {
         self.rows.iter().rev().find_map(|row| {
-            let estado = row.rx.borrow().state.clone();
-            (!estado.is_terminal()).then(|| (row.task.clone(), estado == TaskState::Paused))
+            let state = row.rx.borrow().state.clone();
+            (!state.is_terminal()).then(|| (row.task.clone(), state == TaskState::Paused))
         })
     }
 
-    /// La task de la fila `i`, para actuar sobre ella sin llevarse la fila.
+    /// Row `i`'s task, to act on it without taking the row along.
     #[must_use]
     pub fn task_at(&self, i: usize) -> Option<TaskObserver> {
         self.rows.get(i).map(|r| r.task.clone())
     }
 
-    /// El contexto de reintento de la transferencia fallida más reciente
-    /// (ADR 0148): la que `task.retry` repetiría. `None` si ninguna falló, o
-    /// si la que falló no era una transferencia.
+    /// The most recent failed transfer's retry context (ADR 0148): the one
+    /// `task.retry` would repeat. `None` if none failed, or if the one that
+    /// failed was not a transfer.
     #[must_use]
     pub fn last_failed_retry(&self) -> Option<RetrySpec> {
         self.rows.iter().rev().find_map(|row| {
@@ -268,12 +272,12 @@ impl TaskBoard {
         })
     }
 
-    /// Cancela la task de la fila `i`. `false` si no hay fila, o si ya
-    /// terminó.
+    /// Cancels row `i`'s task. `false` if there is no such row, or it already
+    /// finished.
     ///
-    /// Consulta el estado EN VIVO, igual que [`Self::cancel_last_running`]: el
-    /// snapshot del tick puede tener hasta 100 ms, y «cancelando…» no se dice
-    /// de algo que ya acabó.
+    /// Queries the LIVE state, same as [`Self::cancel_last_running`]: the
+    /// tick's snapshot can be up to 100 ms stale, and "cancelling…" is not
+    /// said of something already done.
     pub fn cancel_at(&mut self, i: usize) -> bool {
         let Some(row) = self.rows.get(i) else {
             return false;
@@ -285,27 +289,28 @@ impl TaskBoard {
         true
     }
 
-    /// Las filas visibles (recientes al final).
+    /// The visible rows (most recent last).
     #[must_use]
     pub fn rows(&self) -> &[TaskRow] {
         &self.rows
     }
 
-    /// Los ids de las filas visibles, en el orden en que se pintan.
+    /// The visible rows' ids, in the order they are painted.
     ///
-    /// Lo pide el cursor del panel de procesos, que guarda la IDENTIDAD de la
-    /// tarea elegida y no su posición: el tablero se mueve solo, y una fila
-    /// que se va por encima haría que la misma posición nombrara otra tarea.
+    /// The processes pane's cursor asks for this: it keeps the IDENTITY of
+    /// the chosen task, not its position — the board moves on its own, and a
+    /// row leaving from above would make the same position name a different
+    /// task.
     #[must_use]
     pub fn task_ids(&self) -> Vec<u64> {
         self.rows.iter().map(|r| r.last.task_id.get()).collect()
     }
 
-    /// `true` si alguna fila del panel sigue EN VUELO (S2, `[ui]
-    /// confirm_quit` modo `auto`): consulta el estado EN VIVO de cada task,
-    /// mismo criterio que [`Self::cancel_last_running`] — el snapshot del
-    /// tick puede tener hasta 100 ms de retraso, y "nada pendiente" no debe
-    /// decirse de algo que en realidad sigue corriendo.
+    /// `true` if any panel row is still IN FLIGHT (S2, `[ui] confirm_quit`
+    /// `auto` mode): queries each task's LIVE state, same criterion as
+    /// [`Self::cancel_last_running`] — the tick's snapshot can lag up to
+    /// 100 ms, and "nothing pending" must not be said of something that is
+    /// actually still running.
     #[must_use]
     pub fn has_active(&self) -> bool {
         self.rows

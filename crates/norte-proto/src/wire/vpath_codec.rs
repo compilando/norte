@@ -1,24 +1,24 @@
-//! Percent-encoding de segmentos de `VPath` (ADR 0001).
+//! Percent-encoding of `VPath` segments (ADR 0001).
 //!
-//! Reglas de encode (bytes → wire):
-//! - Secuencias UTF-8 válidas van literales.
-//! - Todo byte fuera de una secuencia UTF-8 válida → `%XX` (hex mayúscula).
-//! - `%` literal → `%25` (anti-ambigüedad).
-//! - Controles C0 (0x00–0x1F) y DEL (0x7F) → `%XX` aunque sean UTF-8 válido:
-//!   un wire jamás lleva bytes de control crudos (terminal injection en logs).
+//! Encode rules (bytes → wire):
+//! - Valid UTF-8 sequences go literal.
+//! - Every byte outside a valid UTF-8 sequence → `%XX` (uppercase hex).
+//! - A literal `%` → `%25` (anti-ambiguity).
+//! - C0 controls (0x00–0x1F) and DEL (0x7F) → `%XX` even if valid UTF-8: a
+//!   wire never carries raw control bytes (terminal injection in logs).
 //!
-//! Reglas de decode (wire → bytes):
-//! - `%XX` (hex en cualquier caja) → byte crudo.
-//! - Escape malformado (`%G1`, `%4`, `%` final) → [`VPathError::BadEscape`];
-//!   jamás pérdida silenciosa.
-//! - Leniente con formas no canónicas (`%41` ≡ `A`): el roundtrip garantizado
-//!   es bytes → wire → bytes.
+//! Decode rules (wire → bytes):
+//! - `%XX` (hex in either case) → raw byte.
+//! - A malformed escape (`%G1`, `%4`, a trailing `%`) → [`VPathError::BadEscape`];
+//!   never a silent loss.
+//! - Lenient with non-canonical forms (`%41` ≡ `A`): the guaranteed roundtrip
+//!   is bytes → wire → bytes.
 
 use crate::vpath::VPathError;
 
 const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
-/// Codifica los bytes crudos de un segmento sobre `out`.
+/// Encodes a segment's raw bytes into `out`.
 pub(crate) fn encode_segment(bytes: &[u8], out: &mut String) {
     let mut rest = bytes;
     while !rest.is_empty() {
@@ -29,9 +29,9 @@ pub(crate) fn encode_segment(bytes: &[u8], out: &mut String) {
             }
             Err(e) => {
                 let (valid, invalid) = rest.split_at(e.valid_up_to());
-                // Invariante: `valid_up_to` delimita UTF-8 válido por contrato de Utf8Error.
+                // Invariant: `valid_up_to` delimits valid UTF-8 by `Utf8Error`'s contract.
                 push_utf8(
-                    std::str::from_utf8(valid).expect("valid_up_to garantiza UTF-8"),
+                    std::str::from_utf8(valid).expect("valid_up_to guarantees UTF-8"),
                     out,
                 );
                 let bad_len = e.error_len().unwrap_or(invalid.len());
@@ -44,7 +44,7 @@ pub(crate) fn encode_segment(bytes: &[u8], out: &mut String) {
     }
 }
 
-/// Decodifica un segmento del wire a sus bytes crudos.
+/// Decodes a wire segment into its raw bytes.
 pub(crate) fn decode_segment(raw: &str) -> Result<Vec<u8>, VPathError> {
     let bytes = raw.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -66,8 +66,8 @@ pub(crate) fn decode_segment(raw: &str) -> Result<Vec<u8>, VPathError> {
 fn push_utf8(s: &str, out: &mut String) {
     for c in s.chars() {
         if c == '%' || c.is_ascii_control() {
-            // Invariante: `%` y los controles ASCII (C0 + DEL) caben en u8.
-            push_escape(u8::try_from(c).expect("char ASCII"), out);
+            // Invariant: `%` and ASCII controls (C0 + DEL) fit in a u8.
+            push_escape(u8::try_from(c).expect("ASCII char"), out);
         } else {
             out.push(c);
         }

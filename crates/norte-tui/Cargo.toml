@@ -1,6 +1,6 @@
 [package]
 name = "norte-tui"
-description = "Frontend TUI de norte: dual-pane ortodoxo sobre el core embebido"
+description = "TUI frontend for norte: an orthodox dual-pane view over the embedded core"
 license = "AGPL-3.0-only"
 version.workspace = true
 edition.workspace = true
@@ -8,20 +8,20 @@ rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-# El binario se llama `ntc` (norte commander): es lo que se teclea a diario y
-# nadie escribe `norte-tui` dos veces al día. El CRATE conserva su nombre —
-# renombrarlo arrastraría los manifiestos de sus dependientes y la identidad en
-# crates.io sin comprar nada, porque un nombre de crate no se teclea.
+# The binary is called `ntc` (norte commander): that is what gets typed daily
+# and nobody types `norte-tui` twice a day. The CRATE keeps its name —
+# renaming it would drag along its dependents' manifests and its identity on
+# crates.io without buying anything, because a crate name is not typed.
 [[bin]]
 name = "ntc"
 path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-# El cuerpo OPACO de la sesión de UI (L2) cruza el wire como
-# `serde_json::Value`: este crate lo captura y lo aplica, así que necesita el
-# tipo. Ya estaba aquí como dev-dependency y en el grafo vía norte-proto —
-# nada nuevo entra a compilar (regla 8).
+# The OPAQUE body of the UI session (L2) crosses the wire as
+# `serde_json::Value`: this crate captures and applies it, so it needs the
+# type. It was already here as a dev-dependency and in the graph via
+# norte-proto — nothing new enters the compile (rule 8).
 serde_json.workspace = true
 crossterm = { workspace = true, features = ["event-stream"] }
 futures.workspace = true
@@ -34,8 +34,8 @@ norte-frontend.workspace = true
 norte-help.workspace = true
 norte-i18n.workspace = true
 norte-proto.workspace = true
-# La rejilla del panel de terminal (#362). Es de casa y no arrastra nada
-# nuevo: su única dependencia externa es `vte`, justificada en su Cargo.toml.
+# The terminal panel's grid (#362). It is homegrown and drags in nothing
+# new: its only external dependency is `vte`, justified in its own Cargo.toml.
 norte-term = { workspace = true, features = ["pty"] }
 norte-theme.workspace = true
 norte-vfs-local.workspace = true
@@ -45,72 +45,74 @@ thiserror.workspace = true
 ratatui.workspace = true
 sha2.workspace = true
 toml.workspace = true
-# `signal` (S4, #135): al suspender la TUI se apaga el raw mode, lo que
-# devuelve `ISIG` a la terminal — y el hijo se queda en el grupo de procesos
-# de norte, que es el del primer plano. Sin un manejador registrado, el Ctrl+C
-# con el que cualquiera aborta un `make` mataría también a norte (paneles,
-# tablero de tasks y el write del `--cd-file` incluidos). Registrar el
-# manejador hace que norte sobreviva mientras el hijo, cuyas disposiciones
-# `exec` devolvió a `SIG_DFL`, sí muere: exactamente lo que el usuario espera.
-# No es una dependencia nueva, es una feature de una que ya estaba.
+# `signal` (S4, #135): suspending the TUI turns off raw mode, which returns
+# `ISIG` to the terminal — and the child stays in norte's process group,
+# which is the foreground one. Without a registered handler, the Ctrl+C that
+# aborts a `make` would also kill norte (panes, the tasks board and the
+# `--cd-file` write included). Registering the handler makes norte survive
+# while the child, whose `exec` dispositions were returned to `SIG_DFL`, does
+# die: exactly what the user expects.
+# Not a new dependency, it is a feature of one that was already there.
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "signal"] }
 tokio-util.workspace = true
-# Revisión S I1: `tracing::error!` para el brazo de defensa en profundidad
-# de `persist_setting` (la tarea de fondo de una escritura de ajustes se
-# canceló/panicó — nunca observado, la única causa de panic conocida ya se
-# arregló en `persist_set`). Ya es dependencia de workspace (`norte-core` y
-# otros la usan); extenderla a este binario no añade una dependencia NUEVA
-# al árbol, solo la enlaza aquí también.
+# S I1 review: `tracing::error!` for the defense-in-depth arm of
+# `persist_setting` (the background task of a settings write got
+# cancelled/panicked — never observed, the only known panic cause was already
+# fixed in `persist_set`). It is already a workspace dependency (`norte-core`
+# and others use it); extending it to this binary does not add a NEW
+# dependency to the tree, it just links it here too.
 tracing.workspace = true
-# `toml_edit::Value` es el tipo de `norte_config::persist_set` (S2, escritor
-# GENÉRICO detrás del overlay de ajustes, S3): el TUI construye el valor
-# tipado (bool/int/string nativos) antes de llamarlo.
+# `toml_edit::Value` is the type of `norte_config::persist_set` (S2, the
+# GENERIC writer behind the settings overlay, S3): the TUI builds the typed
+# value (native bool/int/string) before calling it.
 toml_edit.workspace = true
-# Ancho de CELDA de terminal para la elipsis media (#79): CJK/emoji ocupan 2
-# columnas y presupuestar por chars desborda el ancho → ratatui recorta por la
-# derecha comiéndose la cola. `unicode-width` es la herramienta estándar (la
-# usa la propia ratatui, misma versión ya en el árbol), MIT/Apache, mantenida.
+# Terminal CELL width for the middle ellipsis (#79): CJK/emoji take up 2
+# columns and budgeting by chars overflows the width → ratatui trims from
+# the right, eating the tail. `unicode-width` is the standard tool (ratatui
+# itself uses it, same version already in the tree), MIT/Apache, maintained.
 unicode-width = "0.2"
-# #325: lo que se teclea en el diálogo de contraseña es un secreto, y un
-# `String` normal deja su contenido en el heap tras el drop —donde acaba en un
-# core dump o en swap. `Zeroizing<String>` lo borra al soltarlo. No es una
-# dependencia nueva del árbol: `norte-connect` ya la usa para el mismo tipo
-# (`Secret`), y es la herramienta estándar del ecosistema (RustCrypto).
+# #325: what is typed in the password dialog is a secret, and a plain
+# `String` leaves its content on the heap after the drop —where it ends up
+# in a core dump or in swap. `Zeroizing<String>` erases it on release. Not a
+# new dependency in the tree: `norte-connect` already uses it for the same
+# type (`Secret`), and it is the ecosystem's standard tool (RustCrypto).
 zeroize.workspace = true
-# El SUBSHELL persistente de #142 necesita un pty de verdad: un shell
-# interactivo detrás de los paneles no puede vivir en una tubería —sin tty no
-# hay job control, ni prompt, ni line editing, y `bash` se pone en modo no
-# interactivo—. norte-tui no puede abrirlo a mano: `openpty`/`forkpty` son
-# `unsafe`, y la regla 5 reserva el `unsafe` para `norte-vfs-local`.
+# #142's persistent SUBSHELL needs a real pty: an interactive shell behind
+# the panes cannot live in a pipe —without a tty there is no job control, no
+# prompt, no line editing, and `bash` switches to non-interactive mode—.
+# norte-tui cannot open it by hand: `openpty`/`forkpty` are `unsafe`, and
+# rule 5 reserves `unsafe` for `norte-vfs-local`.
 #
-# `portable-pty` (wezterm, MIT) es la envoltura segura estándar: la usa el
-# propio wezterm, está mantenida, y `default-features = false` deja fuera
-# serde. Alternativas descartadas: `pty-process` (menos usada, y su API async
-# no compra nada aquí porque el bucle de adjuntar es de bloqueo por diseño) y
-# `nix` a pelo (volvería a poner `unsafe` en un frontend).
+# `portable-pty` (wezterm, MIT) is the standard safe wrapper: wezterm itself
+# uses it, it is maintained, and `default-features = false` leaves out
+# serde. Alternatives discarded: `pty-process` (less used, and its async API
+# buys nothing here because the attach loop is blocking by design) and bare
+# `nix` (would put `unsafe` back in a frontend).
 #
-# Lo que ARRASTRA, que es la mitad de la regla 8 y no estaba dicho: `nix 0.28`
-# (un SEGUNDO `nix` en el árbol), `bitflags 1.3` (una segunda rama mayor),
-# `cfg_aliases`, `downcast-rs`, `shell-words`, `winreg 0.10` (solo Windows) y
-# `serial2` — sí, soporte de puerto serie en un gestor de ficheros:
-# `default-features = false` NO lo quita, es incondicional en portable-pty.
-# Siete cajas por un `openpty` seguro es caro y se acepta a sabiendas: la
-# alternativa era `unsafe` en un frontend, que la regla 5 prohíbe. Si algún día
-# el pty se comparte con la ventana, este es el sitio donde reconsiderarlo.
+# What it DRAGS IN, which is half of rule 8 and was left unsaid: `nix 0.28`
+# (a SECOND `nix` in the tree), `bitflags 1.3` (a second major branch),
+# `cfg_aliases`, `downcast-rs`, `shell-words`, `winreg 0.10` (Windows only)
+# and `serial2` — yes, serial port support in a file manager:
+# `default-features = false` does NOT remove it, it is unconditional in
+# portable-pty. Seven crates for a safe `openpty` is expensive and accepted
+# knowingly: the alternative was `unsafe` in a frontend, which rule 5
+# forbids. If the pty is ever shared with the window, this is the place to
+# reconsider it.
 portable-pty = { version = "0.9.0", default-features = false }
-# El protocolo de gráficos de kitty (T4, fase 5 WOW) manda la miniatura en
-# base64 dentro del APC (`kitty_graphics::escape_colocar`). No es una
-# dependencia nueva del árbol: `norte-proto` y `norte-frontend` (`osc52`) ya la
-# usan para lo mismo —bytes arbitrarios, base64 en el canal—, solo se enlaza
-# aquí también.
+# The kitty graphics protocol (T4, phase 5 WOW) sends the thumbnail as
+# base64 inside the APC (`kitty_graphics::escape_colocar`). Not a new
+# dependency in the tree: `norte-proto` and `norte-frontend` (`osc52`)
+# already use it for the same thing —arbitrary bytes, base64 on the
+# channel—, it is just linked here too.
 base64.workspace = true
 
 [dev-dependencies]
-# Un `Provider` de test que devuelve `SecretNeeded`: es la respuesta que un
-# remoto da al reabrir cuando el daemon anterior se llevó el secreto, y no hay
-# forma de inyectarla con las averías de `norte-testkit` —que fallan con `Io` y
-# con `PermissionDenied`, no con esta—. Solo dev, y ya está en el grafo: el
-# `Provider` que se implementa es de `norte-vfs`, que la usa para declararlo.
+# A test `Provider` that returns `SecretNeeded`: it is the answer a remote
+# gives on reopening when the previous daemon took the secret with it, and
+# there is no way to inject it with `norte-testkit`'s faults —which fail
+# with `Io` and with `PermissionDenied`, not with this one—. Dev only, and
+# already in the graph: the `Provider` being implemented belongs to
+# `norte-vfs`, which uses it to declare it.
 async-trait.workspace = true
 bytes.workspace = true
 criterion.workspace = true
@@ -121,14 +123,15 @@ proptest.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 norte-vfs.workspace = true
-# test-util: `start_paused` en los tests con timers (deterministas, sin
-# carreras de wall-clock). Solo dev — no entra en el binario.
+# test-util: `start_paused` in the tests with timers (deterministic, no
+# wall-clock races). Dev only — does not enter the binary.
 tokio = { workspace = true, features = ["test-util"] }
-# El panel de registro (#323, #328) se prueba llenando el anillo por su camino
-# de VERDAD —la capa de `tracing` que lo alimenta—, y no con un `push` público.
-# Un `push` público se saltaría el filtro donde vive la cota de `suppaftp` (que
-# loguea `PASS <contraseña>` a nivel TRACE), y esa cota no es negociable. Es la
-# misma dependencia, por lo mismo, que en `norte-ui-host`.
+# The log panel (#323, #328) is tested by filling the ring through its REAL
+# path —the `tracing` layer that feeds it—, and not with a public `push`. A
+# public `push` would bypass the filter where the `suppaftp` cap lives
+# (which logs `PASS <password>` at TRACE level), and that cap is not
+# negotiable. It is the same dependency, for the same reason, as in
+# `norte-ui-host`.
 tracing-subscriber.workspace = true
 
 [[bench]]
@@ -136,10 +139,11 @@ name = "presupuestos"
 harness = false
 
 [features]
-# Generación de los JSON Schema publicados (golden test de docs/schema);
-# fuera del binario final (ADR 0007). `KeymapFile` vive en `norte-frontend`
-# desde GUI-c T2 — su derive `JsonSchema` está tras la MISMA feature ahí, así
-# que hay que reenviarla o `schema_for!` no compila.
+# Generation of the published JSON Schemas (docs/schema golden test);
+# outside the final binary (ADR 0007). `KeymapFile` has lived in
+# `norte-frontend` since GUI-c T2 — its `JsonSchema` derive is behind the
+# SAME feature there, so it has to be forwarded or `schema_for!` will not
+# compile.
 schema = ["dep:schemars", "norte-config/schema", "norte-frontend/schema"]
 
 [[test]]

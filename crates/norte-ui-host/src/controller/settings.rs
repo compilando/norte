@@ -1,194 +1,194 @@
-//! La vista de ajustes: enseñarlos, girarlos, pedir un valor y escribirlo.
+//! The settings screen: showing them, cycling them, requesting a value, and
+//! writing it.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `Estado`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// Lo que vuelve de escribir un ajuste, FUERA del actor.
+/// What comes back from writing a setting, OUTSIDE the actor.
 ///
-/// La escritura y la relectura van juntas en el mismo `spawn_blocking`: lo
-/// que la barra dice al final —«guardado» y qué no se aplicó— necesita las
-/// dos, y dos viajes por el buzón serían dos estados intermedios que nadie
-/// quiere ver.
+/// The write and the reread go together in the same `spawn_blocking`: what
+/// the bar says at the end — "saved" and what did not apply — needs both, and
+/// two trips through the mailbox would be two intermediate states nobody
+/// wants to see.
 pub(super) struct AjusteEscrito {
-    /// Cómo se llama la entrada, ya traducido, para el mensaje.
+    /// The entry's name, already translated, for the message.
     pub(super) nombre: String,
-    /// El valor nuevo como texto, para el mensaje.
+    /// The new value as text, for the message.
     pub(super) valor: String,
-    /// `Err` es la clave del motivo por el que NO se escribió. `Ok(None)` es
-    /// que se escribió pero la relectura falló: el fichero está bien —lo
-    /// acaba de escribir `persist_set`—, así que se dice «guardado» y la
-    /// ventana sigue con la configuración que tenía hasta reiniciar.
+    /// `Err` is the key for why it was NOT written. `Ok(None)` is that it was
+    /// written but the reread failed: the file is fine — `persist_set` just
+    /// wrote it —, so "saved" is said and the window keeps the configuration
+    /// it had until it restarts.
     pub(super) resultado: Result<Option<norte_frontend::config::FrontendConfig>, &'static str>,
 }
 
-/// Una clave de F11 ya NO está (o no se pudo quitar), y la configuración
-/// releída con ella.
+/// An F11 key is NO LONGER set (or could not be removed), and the
+/// configuration reread with it gone.
 ///
-/// Lleva el `id` porque el mensaje depende de lo que diga la fila DESPUÉS de
-/// releer: quitar la clave de tu capa no devuelve el valor de fábrica si el
-/// perfil o el proyecto fijan la misma.
+/// It carries the `id` because the message depends on what the row says AFTER
+/// rereading: removing the key from your layer does not return the factory
+/// value if the profile or the project set the same one.
 pub(super) struct AjusteRestablecido {
-    /// Cómo se llama la entrada, ya traducido, para el mensaje.
+    /// The entry's name, already translated, for the message.
     pub(super) nombre: String,
-    /// Su id del catálogo (`ui.theme`), para volver a encontrar la fila.
+    /// Its catalogue id (`ui.theme`), to find the row again.
     pub(super) id: &'static str,
-    /// `Err` es la clave del motivo por el que no se quitó.
+    /// `Err` is the key for why it was not removed.
     pub(super) resultado: Result<Option<norte_frontend::config::FrontendConfig>, &'static str>,
 }
 
 impl Estado {
-    /// Abre los ajustes.
+    /// Opens settings.
     ///
-    /// Las filas se construyen AQUÍ y se congelan, como las de la paleta y
-    /// por el mismo motivo: `build_rows` resuelve el valor efectivo de cada
-    /// entrada y formatea dos cadenas Fluent por fila. La configuración es la
-    /// que la ventana tiene PUESTA, que tras un cambio de perfil o un ajuste
-    /// escrito ya no es la del arranque.
+    /// The rows are built HERE and frozen, like the palette's and for the
+    /// same reason: `build_rows` resolves each entry's effective value and
+    /// formats two Fluent strings per row. The configuration is the one the
+    /// window has SET, which after a profile change or a written setting is
+    /// no longer the startup one.
     pub(super) fn abrir_ajustes(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.ajustes = Some(crate::settings::Ajustes::abrir(
             &self.config,
             &self.paths,
             self.lang,
         ));
-        let cambio = ViewChange::Settings {
+        let change = ViewChange::Settings {
             settings: self.vista_ajustes(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Un click en una fila de los ajustes: solo mueve el cursor.
+    /// A click on a settings row: only moves the cursor.
     pub(super) fn elegir_ajuste(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(a) = self.ajustes.as_mut() else {
+        let Some(settings) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        a.senalar(row as usize);
-        let cambio = ViewChange::Settings {
+        settings.senalar(row as usize);
+        let change = ViewChange::Settings {
             settings: self.vista_ajustes(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Un doble click en una fila: la señala y la activa, que es lo que hace
-    /// Enter. El mismo camino y no otro: el ratón es una segunda puerta a la
-    /// misma máquina, no una segunda máquina.
+    /// A double click on a row: selects it and activates it, which is what
+    /// Enter does. The SAME path and no other: the mouse is a second door
+    /// into the same machine, not a second machine.
     pub(super) fn activar_ajuste_por_raton(
         &mut self,
         row: u32,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(a) = self.ajustes.as_mut() else {
+        let Some(settings) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        a.senalar(row as usize);
-        self.activar_ajuste(buzon)
+        settings.senalar(row as usize);
+        self.activar_ajuste(mailbox)
     }
 
-    /// La proyección de los ajustes.
+    /// Settings' projection.
     ///
-    /// Las listas de temas y presets se resuelven AQUÍ y vivas, como al
-    /// activar una fila: el tema efectivo cambia en caliente, y un
-    /// desplegable con la lista de hace dos recargas ofrece lo que ya no
-    /// está.
+    /// The theme and preset lists are resolved HERE and live, like on
+    /// activating a row: the effective theme changes live, and a dropdown
+    /// with the list from two reloads ago offers what is no longer there.
     pub(super) fn vista_ajustes(&self) -> Option<crate::dto::SettingsView> {
-        let temas = norte_frontend::theme::theme_names(&self.config.user_themes);
+        let themes = norte_frontend::theme::theme_names(&self.config.user_themes);
         Some(self.ajustes.as_ref()?.vista(
             self.lang,
-            &temas,
+            &themes,
             norte_frontend::keymap::presets::NAMES,
         ))
     }
 
-    /// Lo que se ha escrito en el buscador.
+    /// What has been typed in the search box.
     ///
-    /// Con un diálogo delante, NO: el mismo guard que `activar_ajuste`, y
-    /// por un motivo peor. El prompt del valor se queda abierto con la
-    /// pantalla viva detrás, y filtrar debajo de él cambia qué filas hay —
-    /// lo que el diálogo confirme se busca por id, así que ya no escribe en
-    /// otra, pero la pantalla cambiando bajo un modal es lo que hace que
-    /// nadie entienda dónde acabó el valor.
+    /// With a dialog in front, NO: the same guard as `activar_ajuste`, and for
+    /// a worse reason. The value prompt stays open with the live screen
+    /// behind it, and filtering underneath it changes which rows there are —
+    /// whatever the dialog confirms is looked up by id, so it no longer
+    /// writes to a different one, but the screen changing under a modal is
+    /// what makes nobody understand where the value ended up.
     pub(super) fn buscar_ajuste(
         &mut self,
-        texto: &str,
+        text: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if !self.dialogos.is_empty() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        let Some(a) = self.ajustes.as_mut() else {
+        let Some(settings) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        a.consultar(texto);
-        let cambio = ViewChange::Settings {
+        settings.consultar(text);
+        let change = ViewChange::Settings {
             settings: self.vista_ajustes(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Un click en el índice: el cursor a la primera fila de esa sección.
+    /// A click on the index: the cursor to that section's first row.
     pub(super) fn saltar_a_seccion(
         &mut self,
-        seccion: &str,
+        section: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if !self.dialogos.is_empty() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        let Some(a) = self.ajustes.as_mut() else {
+        let Some(settings) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        a.saltar(seccion);
-        let cambio = ViewChange::Settings {
+        settings.saltar(section);
+        let change = ViewChange::Settings {
             settings: self.vista_ajustes(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Un control de la ventana puso un valor: se valida con el editor
-    /// compartido y, si vale, se escribe.
+    /// A window control set a value: it is validated with the shared editor
+    /// and, if valid, written.
     ///
-    /// Mismo camino que girar con Enter a partir de aquí —escritura en el
-    /// hilo de fondo, relectura, foto—, porque es la misma operación: lo
-    /// único distinto es quién eligió el valor.
+    /// Same path as cycling with Enter from here on — write on the background
+    /// thread, reread, snapshot — because it is the same operation: the only
+    /// difference is who chose the value.
     pub(super) fn poner_ajuste(
         &mut self,
         id: &str,
-        valor: &str,
-        buzon: &mpsc::Sender<Mensaje>,
+        value: &str,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if !self.dialogos.is_empty() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        let temas = norte_frontend::theme::theme_names(&self.config.user_themes);
-        let Some(a) = self.ajustes.as_mut() else {
+        let themes = norte_frontend::theme::theme_names(&self.config.user_themes);
+        let Some(settings) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        match a.poner(id, valor, &temas, norte_frontend::keymap::presets::NAMES) {
+        match settings.poner(id, value, &themes, norte_frontend::keymap::presets::NAMES) {
             Ok(write) => {
-                let cambio = ViewChange::Settings {
+                let change = ViewChange::Settings {
                     settings: self.vista_ajustes(),
                 };
-                let mut salidas = vec![self.parche(vec![cambio])];
-                let (motivo, partes) = self.escribir_ajuste(write, buzon);
-                salidas.extend(partes);
-                match motivo {
-                    Some(clave) => (
+                let mut outgoing = vec![self.parche(vec![change])];
+                let (reason, parts) = self.escribir_ajuste(write, mailbox);
+                outgoing.extend(parts);
+                match reason {
+                    Some(key) => (
                         ActionAck::Unavailable {
-                            reason_key: clave.to_owned(),
+                            reason_key: key.to_owned(),
                         },
-                        salidas,
+                        outgoing,
                     ),
-                    None => (self.aplicada(), salidas),
+                    None => (self.aplicada(), outgoing),
                 }
             }
-            // El rechazo se dice CON sus números, como el del teclado: una
-            // clave sola no dice entre qué y qué.
+            // The rejection is said WITH its numbers, like the keyboard's: a
+            // key alone does not say between what and what.
             Err(e) => {
-                let (clave, texto) = match e {
+                let (key, text) = match e {
                     norte_frontend::settings::SettingsEditError::NotAnInt => (
                         "msg-settings-invalid-int",
                         norte_i18n::t_in(self.lang, "msg-settings-invalid-int"),
@@ -205,56 +205,57 @@ impl Estado {
                         (key, norte_i18n::t_in(self.lang, key))
                     }
                 };
-                self.status.message = Some(clamp_display(texto));
-                let cambios = vec![
+                self.status.message = Some(clamp_display(text));
+                let changes = vec![
                     ViewChange::Settings {
                         settings: self.vista_ajustes(),
                     },
                     ViewChange::Status(self.status.clone()),
                 ];
-                let salidas = vec![self.parche(cambios)];
+                let outgoing = vec![self.parche(changes)];
                 (
                     ActionAck::Unavailable {
-                        reason_key: clave.to_owned(),
+                        reason_key: key.to_owned(),
                     },
-                    salidas,
+                    outgoing,
                 )
             }
         }
     }
 
-    /// Restablecer una fila: quitar su clave de la capa de escritura.
+    /// Resets a row: removes its key from the writing layer.
     ///
-    /// Va por el MISMO camino que escribir —hilo de fondo, buzón, relectura
-    /// y foto— porque es la misma clase de operación: I/O con un lock entre
-    /// procesos detrás. Lo único distinto es lo que se dice al final, y eso
-    /// se decide MIRANDO la fila releída: quitar la clave de tu capa no
-    /// devuelve el valor de fábrica si el perfil o el proyecto la fijan.
+    /// Goes through the SAME path as writing — background thread, mailbox,
+    /// reread and snapshot — because it is the same class of operation: I/O
+    /// with a cross-process lock behind it. The only difference is what gets
+    /// said at the end, and that is decided by LOOKING at the reread row:
+    /// removing the key from your layer does not return the factory value if
+    /// the profile or the project sets it.
     pub(super) fn restablecer_ajuste(
         &mut self,
         row: u32,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if !self.dialogos.is_empty() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        let Some(a) = self.ajustes.as_mut() else {
+        let Some(settings) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        a.senalar(row as usize);
-        let Some(reset) = a.restablecer(row as usize) else {
-            // Nada que quitar: ni aviso ni escritura. Una fila que ya está
-            // en su valor de fábrica no tiene clave en ningún sitio.
-            let cambio = ViewChange::Settings {
+        settings.senalar(row as usize);
+        let Some(reset) = settings.restablecer(row as usize) else {
+            // Nothing to remove: no notice and no write. A row already at its
+            // factory value has no key anywhere.
+            let change = ViewChange::Settings {
                 settings: self.vista_ajustes(),
             };
-            return (self.aplicada(), vec![self.parche(vec![cambio])]);
+            return (self.aplicada(), vec![self.parche(vec![change])]);
         };
         let Some(dir) = self.dir_de_escritura() else {
             return (self.aplicada(), self.decir("host-no-config-dir"));
         };
-        let capas = self.capas_actuales();
-        let buzon = buzon.clone();
+        let layers = self.capas_actuales();
+        let mailbox = mailbox.clone();
         let norte_frontend::settings::PendingReset {
             section,
             key,
@@ -262,148 +263,150 @@ impl Estado {
             name,
         } = reset;
         tokio::task::spawn_blocking(move || {
-            let resultado = match norte_config::persist_unset(&dir, section, &key) {
-                // El error NO viaja: puede llevar la ruta del fichero (#73).
+            let result = match norte_config::persist_unset(&dir, section, &key) {
+                // The error does NOT travel: it can carry the file's path
+                // (#73).
                 Err(e) => Err(clave_de_io(&e)),
-                Ok(_) => Ok(norte_frontend::config::load(&capas).ok()),
+                Ok(_) => Ok(norte_frontend::config::load(&layers).ok()),
             };
-            let hecho = AjusteRestablecido {
+            let done = AjusteRestablecido {
                 nombre: name,
                 id,
-                resultado,
+                resultado: result,
             };
-            let _ = buzon.blocking_send(Mensaje::Fondo(Box::new(Fondo::AjusteRestablecido(
-                Box::new(hecho),
+            let _ = mailbox.blocking_send(Mensaje::Fondo(Box::new(Fondo::AjusteRestablecido(
+                Box::new(done),
             ))));
         });
         (self.aplicada(), Vec::new())
     }
 
-    /// La clave ya no está (o no se pudo quitar): se aplica lo releído y se
-    /// dice lo que de verdad pasó.
+    /// The key is no longer there (or could not be removed): what was reread
+    /// is applied and what really happened is said.
     pub(super) fn ajuste_restablecido(
         &mut self,
-        hecho: AjusteRestablecido,
+        done: AjusteRestablecido,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let AjusteRestablecido {
             nombre,
             id,
             resultado,
-        } = hecho;
+        } = done;
         let cfg = match resultado {
-            Err(clave) => return self.decir(clave),
+            Err(key) => return self.decir(key),
             Ok(cfg) => cfg,
         };
         if let Some(cfg) = cfg {
-            self.aplicar_config(cfg, backend, buzon);
+            self.aplicar_config(cfg, backend, mailbox);
         }
-        if let Some(a) = self.ajustes.as_mut() {
-            a.refrescar(&self.config, self.lang);
+        if let Some(settings) = self.ajustes.as_mut() {
+            settings.refrescar(&self.config, self.lang);
         }
-        // El punto, releído, es la respuesta: si la fila sigue modificada,
-        // otra capa la fija y el valor no ha vuelto al de fábrica.
-        let sigue = self
+        // The reread point is the answer: if the row is still modified,
+        // another layer sets it and the value has not gone back to the
+        // factory one.
+        let still_set = self
             .ajustes
             .as_ref()
             .is_some_and(|a| a.sigue_modificada(id));
-        let clave = if sigue {
+        let key = if still_set {
             "settings-still-set-elsewhere"
         } else {
             "settings-reset-done"
         };
         self.status.message = Some(clamp_display(norte_i18n::ta_in(
             self.lang,
-            clave,
+            key,
             &[("name", &nombre)],
         )));
         let snap = self.snapshot();
         vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
     }
 
-    /// Las teclas mientras los ajustes están abiertos.
+    /// The keys while settings is open.
     ///
-    /// FIJAS, como las de la paleta y la ayuda: el catálogo no tiene
-    /// comandos para «bajar por esta lista». `enter` activa la fila: gira lo
-    /// que gira, y pide en un diálogo lo que se teclea.
+    /// FIXED, like the palette's and help's: the catalogue has no commands
+    /// for "go down this list". `enter` activates the row: cycles whatever
+    /// cycles, and asks in a dialog for whatever is typed.
     pub(super) fn tecla_en_ajustes(
         &mut self,
         k: &crate::keys::KeyInput,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        /// Cuántas filas mueve una página.
-        const PAGINA: i64 = 10;
+        /// How many rows a page moves.
+        const PAGE: i64 = 10;
         if self.ajustes.is_none() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        let verbo = match k.key.as_str() {
+        let verb = match k.key.as_str() {
             "Home" | "home" | "End" | "end" => None,
             _ => self.verbo_de_dialogo(k),
         };
-        if verbo.as_deref() == Some("dialog.confirm") {
-            return self.activar_ajuste(buzon);
+        if verb.as_deref() == Some("dialog.confirm") {
+            return self.activar_ajuste(mailbox);
         }
-        let Some(a) = self.ajustes.as_mut() else {
+        let Some(settings) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        match (verbo.as_deref(), k.key.as_str()) {
+        match (verb.as_deref(), k.key.as_str()) {
             (Some("dialog.cancel"), _) => self.ajustes = None,
-            (Some("dialog.down"), _) => a.mover(1),
-            (Some("dialog.up"), _) => a.mover(-1),
-            (Some("dialog.page-down"), _) => a.mover(PAGINA),
-            (Some("dialog.page-up"), _) => a.mover(-PAGINA),
-            (_, "Home" | "home") => a.mover(i64::MIN / 2),
-            (_, "End" | "end") => a.mover(i64::MAX / 2),
-            // Cambia de lado, como en la ayuda. Por la tecla y no por un
-            // verbo del catálogo: en esta pantalla `dialog.pane` no
-            // significa nada, y el índice no es un panel.
-            (_, "Tab" | "tab") => a.cambiar_lado(),
+            (Some("dialog.down"), _) => settings.mover(1),
+            (Some("dialog.up"), _) => settings.mover(-1),
+            (Some("dialog.page-down"), _) => settings.mover(PAGE),
+            (Some("dialog.page-up"), _) => settings.mover(-PAGE),
+            (_, "Home" | "home") => settings.mover(i64::MIN / 2),
+            (_, "End" | "end") => settings.mover(i64::MAX / 2),
+            // Switches sides, like in help. By the key and not by a catalogue
+            // verb: on this screen `dialog.pane` means nothing, and the index
+            // is not a panel.
+            (_, "Tab" | "tab") => settings.cambiar_lado(),
             _ => return (self.aplicada(), Vec::new()),
         }
-        let cambio = ViewChange::Settings {
+        let change = ViewChange::Settings {
             settings: self.vista_ajustes(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Activa la fila del cursor: lo que gira se escribe ya; lo que se
-    /// teclea se pide en un diálogo.
+    /// Activates the cursor's row: whatever cycles is written right away;
+    /// whatever is typed is requested in a dialog.
     ///
-    /// Las listas de temas y presets se resuelven AQUÍ y vivas, como en el
-    /// terminal: el tema efectivo puede haber cambiado en caliente.
+    /// The theme and preset lists are resolved HERE and live, like in the
+    /// terminal: the effective theme may have changed live.
     fn activar_ajuste(
         &mut self,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Con un diálogo delante no se activa nada: el teclado ya lo ordena
-        // así (el diálogo recibe la tecla antes), y el ratón tiene que
-        // hacer lo mismo o un doble clic con el prompt del valor abierto
-        // escribiría —o apilaría un segundo prompt— por detrás de él.
+        // With a dialog in front nothing activates: the keyboard already
+        // orders it this way (the dialog gets the key first), and the mouse
+        // has to do the same or a double click with the value prompt open
+        // would write — or stack a second prompt — behind it.
         if !self.dialogos.is_empty() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        let Some(a) = self.ajustes.as_mut() else {
+        let Some(settings) = self.ajustes.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let temas = norte_frontend::theme::theme_names(&self.config.user_themes);
-        match a.activar(&temas, norte_frontend::keymap::presets::NAMES) {
+        let themes = norte_frontend::theme::theme_names(&self.config.user_themes);
+        match settings.activar(&themes, norte_frontend::keymap::presets::NAMES) {
             crate::settings::Activacion::Nada => (self.aplicada(), Vec::new()),
             crate::settings::Activacion::Escribir(write) => {
-                let cambio = ViewChange::Settings {
+                let change = ViewChange::Settings {
                     settings: self.vista_ajustes(),
                 };
-                let mut salidas = vec![self.parche(vec![cambio])];
-                let (motivo, partes) = self.escribir_ajuste(*write, buzon);
-                salidas.extend(partes);
-                match motivo {
+                let mut outgoing = vec![self.parche(vec![change])];
+                let (reason, parts) = self.escribir_ajuste(*write, mailbox);
+                outgoing.extend(parts);
+                match reason {
                     Some(reason_key) => (
                         ActionAck::Unavailable {
                             reason_key: reason_key.to_owned(),
                         },
-                        salidas,
+                        outgoing,
                     ),
-                    None => (self.aplicada(), salidas),
+                    None => (self.aplicada(), outgoing),
                 }
             }
             crate::settings::Activacion::PedirTexto { nombre, actual, id } => {
@@ -412,23 +415,25 @@ impl Estado {
         }
     }
 
-    /// Pide el valor de una entrada de texto: el diálogo de un campo, con el
-    /// valor actual dentro, y el nombre de la entrada como cuerpo.
+    /// Requests a text entry's value: the field dialog, with the current
+    /// value inside, and the entry's name as the body.
     ///
-    /// Es la forma de la ventana de hacer lo que el terminal hace tecleando
-    /// en la fila: su campo es nativo y el texto vuelve entero al confirmar.
+    /// This is the window's way of doing what the terminal does by typing in
+    /// the row: its field is native and the text comes back whole on
+    /// confirming.
     fn pedir_valor_de_ajuste(
         &mut self,
-        nombre: &str,
-        actual: String,
-        ajuste: &'static str,
+        name: &str,
+        current: String,
+        setting_id: &'static str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
-        // El valor actual sale de un `norte.toml` que puede ser el del
-        // proyecto: se pinta enmascarado, y lo que se edita es lo real.
-        let (pintable, hostil) = norte_frontend::display_name(actual.as_bytes());
-        let vista = DialogView {
+        // The current value comes from a `norte.toml` that could be the
+        // project's: it is painted masked, and what is edited is the real
+        // one.
+        let (displayable, hostile) = norte_frontend::display_name(current.as_bytes());
+        let view = DialogView {
             id,
             title_key: "modal-setting-edit".to_owned(),
             destination: None,
@@ -437,7 +442,7 @@ impl Estado {
             deadline: None,
             deadline_at_ms: None,
             body: vec![crate::dto::DialogLine {
-                text: clamp_display(nombre.to_owned()),
+                text: clamp_display(name.to_owned()),
                 hostile: false,
             }],
             overflow_note: String::new(),
@@ -454,58 +459,59 @@ impl Estado {
                     destructive: false,
                 },
             ],
-            input: Some(clamp_display(pintable)),
-            input_hostile: hostil,
+            input: Some(clamp_display(displayable)),
+            input_hostile: hostile,
             input_secret: false,
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
         self.dialogos.push(Dialogo {
             id,
-            vista,
-            tecleado: Tecleado::Texto(actual),
+            vista: view,
+            tecleado: Tecleado::Texto(current),
             reconocido: true,
-            al_confirmar: Some(Pendiente::EditarAjuste { id: ajuste }),
+            al_confirmar: Some(Pendiente::EditarAjuste { id: setting_id }),
         });
-        let cambio = ViewChange::Dialogs {
+        let change = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// El diálogo trajo el valor de la fila `fila`: se valida con el editor
-    /// compartido y, si vale, se escribe.
+    /// The dialog brought the value for row `fila`: it is validated with the
+    /// shared editor and, if valid, written.
     ///
-    /// Un rechazo se dice en la barra CON sus números —«entre 8 y 32»— y
-    /// vuelve al acuse por su clave, sin escribir nada.
+    /// A rejection is said on the bar WITH its numbers — "between 8 and 32" —
+    /// and goes back to the acknowledgment by its key, without writing
+    /// anything.
     pub(super) fn confirmar_valor_de_ajuste(
         &mut self,
         id: &'static str,
-        texto: &str,
-        buzon: &mpsc::Sender<Mensaje>,
+        text: &str,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(a) = self.ajustes.as_mut() else {
-            // Los ajustes se cerraron con el diálogo delante: no hay fila a
-            // la que volver, y escribir «a ciegas» sería escribir otra cosa.
+        let Some(settings) = self.ajustes.as_mut() else {
+            // Settings closed with the dialog in front: there is no row to go
+            // back to, and writing "blind" would be writing something else.
             return (
                 Some("host-settings-closed"),
                 self.decir("host-settings-closed"),
             );
         };
-        match a.confirmar_texto(id, texto) {
+        match settings.confirmar_texto(id, text) {
             Ok(write) => {
-                let cambio = ViewChange::Settings {
+                let change = ViewChange::Settings {
                     settings: self.vista_ajustes(),
                 };
-                let mut salidas = vec![self.parche(vec![cambio])];
-                let (motivo, partes) = self.escribir_ajuste(write, buzon);
-                salidas.extend(partes);
-                (motivo, salidas)
+                let mut outgoing = vec![self.parche(vec![change])];
+                let (reason, parts) = self.escribir_ajuste(write, mailbox);
+                outgoing.extend(parts);
+                (reason, outgoing)
             }
             Err(e) => {
-                // Con los números: la clave sola no dice entre qué y qué. Y
-                // con el idioma del HOST, que es el de la barra.
-                let (clave, texto) = match e {
+                // With the numbers: the key alone does not say between what
+                // and what. And with the HOST's language, which is the bar's.
+                let (key, text) = match e {
                     norte_frontend::settings::SettingsEditError::NotAnInt => (
                         "msg-settings-invalid-int",
                         norte_i18n::t_in(self.lang, "msg-settings-invalid-int"),
@@ -522,34 +528,35 @@ impl Estado {
                         (key, norte_i18n::t_in(self.lang, key))
                     }
                 };
-                self.status.message = Some(clamp_display(texto));
-                let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
-                (Some(clave), vec![parche])
+                self.status.message = Some(clamp_display(text));
+                let patch = self.parche(vec![ViewChange::Status(self.status.clone())]);
+                (Some(key), vec![patch])
             }
         }
     }
 
-    /// Escribe `write` en la capa que esta ventana escribe y relee la
-    /// configuración, FUERA del actor.
+    /// Writes `write` to the layer this window writes and rereads the
+    /// configuration, OUTSIDE the actor.
     ///
-    /// El actor es el único escritor del estado y esto es I/O con un lock
-    /// entre procesos detrás (`persist_set` bloquea mientras otro norte
-    /// escribe): hacerlo aquí congelaría la ventana entera. Vuelve por el
-    /// buzón como el tema y los favoritos.
+    /// The actor is the state's only writer and this is I/O with a
+    /// cross-process lock behind it (`persist_set` blocks while another norte
+    /// writes): doing it here would freeze the whole window. It comes back
+    /// through the mailbox like the theme and the favorites.
     ///
-    /// La capa es la del PERFIL activo si lo hay, y la del usuario si no
-    /// ([`Self::dir_de_escritura`]): un ajuste escrito abajo que el perfil
-    /// también fija queda tapado — guardado y sin efecto (ADR 0079).
+    /// The layer is the active PROFILE's if there is one, and the user's if
+    /// not ([`Self::dir_de_escritura`]): a setting written below one the
+    /// profile also sets ends up covered — saved and with no effect (ADR
+    /// 0079).
     pub(super) fn escribir_ajuste(
         &mut self,
         write: norte_frontend::settings::PendingWrite,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(dir) = self.dir_de_escritura() else {
             return (Some("host-no-config-dir"), self.decir("host-no-config-dir"));
         };
-        let capas = self.capas_actuales();
-        let buzon = buzon.clone();
+        let layers = self.capas_actuales();
+        let mailbox = mailbox.clone();
         let norte_frontend::settings::PendingWrite {
             section,
             key,
@@ -558,74 +565,75 @@ impl Estado {
             display,
         } = write;
         tokio::task::spawn_blocking(move || {
-            let resultado = match norte_config::persist_set(&dir, section, &key, value) {
-                // El error NO viaja: puede llevar la ruta del fichero, y lo
-                // que la barra dice sale del catálogo (#73). La categoría
-                // basta para saber qué pasó.
+            let result = match norte_config::persist_set(&dir, section, &key, value) {
+                // The error does NOT travel: it can carry the file's path,
+                // and what the bar says comes from the catalogue (#73). The
+                // category is enough to know what happened.
                 Err(e) => Err(clave_de_io(&e)),
-                Ok(_) => Ok(norte_frontend::config::load(&capas).ok()),
+                Ok(_) => Ok(norte_frontend::config::load(&layers).ok()),
             };
-            let hecho = AjusteEscrito {
+            let done = AjusteEscrito {
                 nombre: name,
                 valor: display,
-                resultado,
+                resultado: result,
             };
-            let _ = buzon.blocking_send(Mensaje::Fondo(Box::new(Fondo::AjusteEscrito(Box::new(
-                hecho,
-            )))));
+            let _ = mailbox.blocking_send(Mensaje::Fondo(Box::new(Fondo::AjusteEscrito(
+                Box::new(done),
+            ))));
         });
         (None, Vec::new())
     }
 
-    /// El ajuste ya está (o no) en el fichero: se dice, y la configuración
-    /// releída se aplica por el mismo camino que un cambio de perfil.
+    /// The setting is now (or is not) in the file: it is said, and the reread
+    /// configuration is applied through the same path as a profile change.
     ///
-    /// Si los ajustes siguen abiertos, sus filas se rehacen sobre lo releído:
-    /// la fila giró optimista al activarla, y esto la deja diciendo lo que
-    /// el fichero dice. Termina en una FOTO y no en un parche porque el tema
-    /// y el keymap mueven la pantalla entera.
+    /// If settings is still open, its rows are rebuilt over what was reread:
+    /// the row cycled optimistically on activating it, and this leaves it
+    /// saying what the file says. It ends in a SNAPSHOT and not a patch
+    /// because the theme and the keymap move the whole screen.
     pub(super) fn ajuste_escrito(
         &mut self,
-        hecho: AjusteEscrito,
+        done: AjusteEscrito,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let AjusteEscrito {
             nombre,
             valor,
             resultado,
-        } = hecho;
+        } = done;
         let cfg = match resultado {
-            Err(clave) => {
-                // La fila optimista MENTÍA: se rehace sobre lo que hay puesto.
-                if let Some(a) = self.ajustes.as_mut() {
-                    a.refrescar(&self.config, self.lang);
+            Err(key) => {
+                // The optimistic row was LYING: it is rebuilt over what is
+                // actually set.
+                if let Some(settings) = self.ajustes.as_mut() {
+                    settings.refrescar(&self.config, self.lang);
                 }
-                let mut salidas = self.decir(clave);
-                let cambio = ViewChange::Settings {
+                let mut outgoing = self.decir(key);
+                let change = ViewChange::Settings {
                     settings: self.vista_ajustes(),
                 };
-                salidas.push(self.parche(vec![cambio]));
-                return salidas;
+                outgoing.push(self.parche(vec![change]));
+                return outgoing;
             }
             Ok(None) => {
-                tracing::warn!("el ajuste se escribió pero la configuración no se pudo releer");
+                tracing::warn!("the setting was written but the configuration could not be reread");
                 None
             }
             Ok(Some(cfg)) => Some(cfg),
         };
-        let fuera = cfg.map_or_else(Vec::new, |cfg| self.aplicar_config(cfg, backend, buzon));
-        // Lo que el fichero del perfil activo trae y no se entiende sigue
-        // ahí tras releer: se deja rastro, como al cambiar de perfil. Sin el
-        // mensaje de la barra, que aquí la ocupa el «guardado» y el perfil
-        // ya lo dijo al ponerse.
-        for aviso in &self.config.common.profile_warnings {
-            tracing::warn!(motivo = %aviso, "línea del perfil ignorada");
+        let unapplied = cfg.map_or_else(Vec::new, |cfg| self.aplicar_config(cfg, backend, mailbox));
+        // Whatever the active profile's file brings that is not understood is
+        // still there after rereading: a trace is left, like on a profile
+        // change. Without the bar message, which here is taken by "saved" and
+        // the profile already said it when it was set.
+        for warning in &self.config.common.profile_warnings {
+            tracing::warn!(motivo = %warning, "profile line ignored");
         }
-        if let Some(a) = self.ajustes.as_mut() {
-            a.refrescar(&self.config, self.lang);
+        if let Some(settings) = self.ajustes.as_mut() {
+            settings.refrescar(&self.config, self.lang);
         }
-        self.status.message = Some(clamp_display(if fuera.is_empty() {
+        self.status.message = Some(clamp_display(if unapplied.is_empty() {
             norte_i18n::ta_in(
                 self.lang,
                 "msg-settings-saved",

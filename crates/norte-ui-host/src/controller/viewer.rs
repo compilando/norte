@@ -1,26 +1,26 @@
-//! El visor de ficheros y de imágenes.
+//! The file and image viewer.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `Estado`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
 impl Estado {
-    /// Las teclas mientras el visor está abierto.
+    /// The keys while the viewer is open.
     ///
-    /// Resuelven con el mapa de la pantalla `viewer`, y lo que no está ligado
-    /// ahí NO cae al listado: un visor abierto que dejara pasar `F8` sería un
-    /// borrado con la pantalla tapada.
+    /// They resolve with the `viewer` screen's map, and whatever is not bound
+    /// there does NOT fall through to the listing: an open viewer that let
+    /// `F8` through would be a delete with the screen covered.
     pub(super) fn tecla_en_visor(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Ok(chord) = k.to_chord() else {
             return (
@@ -31,67 +31,69 @@ impl Estado {
             );
         };
         let Resolution::Run { command, count } = self.resolver_visor.push(chord) else {
-            // Prefijo a medias, contador o nada: el visor no tiene barra de
-            // estado propia todavía, así que no hay nada que pintar.
+            // Half-finished prefix, a count, or nothing: the viewer has no
+            // status bar of its own yet, so there is nothing to paint.
             return (self.aplicada(), Vec::new());
         };
         if command == "app.help" {
-            // La ayuda es de la APLICACIÓN y no del visor, así que no está en
-            // su lista de comandos —y no puede estarlo: las dos listas son
-            // disjuntas a propósito—. Se atiende aquí para que `F1` con el
-            // visor abierto abra la página del visor y no conteste «aquí no».
-            return self.abrir_ayuda(backend, buzon);
+            // Help belongs to the APPLICATION and not to the viewer, so it is
+            // not in its command list — and it cannot be: the two lists are
+            // disjoint on purpose. It is handled here so that `F1` with the
+            // viewer open opens the viewer's help page instead of answering
+            // "not here".
+            return self.abrir_ayuda(backend, mailbox);
         }
-        let Some(efecto) = crate::commands::efecto_visor_de(&command, count.times()) else {
-            // En el catálogo y ligado a esta pantalla, pero este host no lo
-            // hace: se dice, con la misma frase que el TUI.
-            let frase = norte_frontend::keymap::unavailable_message_in(
+        let Some(effect) = crate::commands::efecto_visor_de(&command, count.times()) else {
+            // In the catalogue and bound to this screen, but this host does
+            // not do it: it is said, with the same phrase as the TUI.
+            let phrase = norte_frontend::keymap::unavailable_message_in(
                 &command,
                 Availability::NotHere,
                 self.lang,
             );
-            self.status.message = Some(clamp_display(frase));
-            let cambio = ViewChange::Status(self.status.clone());
+            self.status.message = Some(clamp_display(phrase));
+            let change = ViewChange::Status(self.status.clone());
             return (
                 ActionAck::Unavailable {
                     reason_key: "cmd-not-here".to_owned(),
                 },
-                vec![self.parche(vec![cambio])],
+                vec![self.parche(vec![change])],
             );
         };
-        // Las hermanas se atienden ANTES de tomar prestado el visor: no lo
-        // mueven, abren OTRO fichero, así que necesitan el estado entero.
-        if let crate::commands::EfectoVisor::Hermana { adelante } = efecto {
-            return self.hermana_del_visor(adelante, backend, buzon);
+        // Siblings are handled BEFORE borrowing the viewer: they do not move
+        // it, they open ANOTHER file, so they need the whole state.
+        if let crate::commands::EfectoVisor::Hermana { adelante } = effect {
+            return self.hermana_del_visor(adelante, backend, mailbox);
         }
-        let alto = self.alto_del_visor();
+        let height = self.alto_del_visor();
         let Some(v) = self.visor.as_mut() else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
-        // `unsigned_abs`, no `abs`: el delta de la rueda llega CRUDO del
-        // renderer, y `i64::MIN.abs()` desborda —panic en debug, envuelto en
-        // release—, o sea que un mensaje mal formado tumbaría el host.
-        let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
-        match efecto {
+        // `unsigned_abs`, not `abs`: the wheel's delta arrives RAW from the
+        // renderer, and `i64::MIN.abs()` overflows — panics in debug, wraps
+        // in release — meaning a malformed message would bring the host
+        // down.
+        let steps = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
+        match effect {
             crate::commands::EfectoVisor::Cerrar => {
                 self.visor = None;
                 self.visor_en_vuelo = None;
                 self.visor_token = None;
-                // La imagen se SUELTA al cerrar: son megas, y un visor
-                // cerrado no tiene nada que enseñar.
+                // The image is RELEASED on closing: it is megabytes, and a
+                // closed viewer has nothing to show.
                 self.imagen = None;
                 self.miniatura = None;
             }
-            crate::commands::EfectoVisor::Linea(n) if n < 0 => v.scroll_up(pasos(n)),
-            crate::commands::EfectoVisor::Linea(n) => v.scroll_down(pasos(n)),
+            crate::commands::EfectoVisor::Linea(n) if n < 0 => v.scroll_up(steps(n)),
+            crate::commands::EfectoVisor::Linea(n) => v.scroll_down(steps(n)),
             crate::commands::EfectoVisor::Pagina(n) if n < 0 => {
-                v.scroll_up(pasos(n).saturating_mul(alto));
+                v.scroll_up(steps(n).saturating_mul(height));
             }
             crate::commands::EfectoVisor::Pagina(n) => {
-                v.scroll_down(pasos(n).saturating_mul(alto));
+                v.scroll_down(steps(n).saturating_mul(height));
             }
-            crate::commands::EfectoVisor::Columna(n) if n < 0 => v.scroll_left(pasos(n)),
-            crate::commands::EfectoVisor::Columna(n) => v.scroll_right(pasos(n)),
+            crate::commands::EfectoVisor::Columna(n) if n < 0 => v.scroll_left(steps(n)),
+            crate::commands::EfectoVisor::Columna(n) => v.scroll_right(steps(n)),
             crate::commands::EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
             crate::commands::EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
             crate::commands::EfectoVisor::Hex => v.toggle_hex(),
@@ -100,76 +102,79 @@ impl Estado {
             crate::commands::EfectoVisor::Zoom { acercar: true } => v.zoom_in(),
             crate::commands::EfectoVisor::Zoom { acercar: false } => v.zoom_out(),
             crate::commands::EfectoVisor::ZoomAjustar => v.zoom_fit(),
-            // Atendida arriba, ANTES de tomar prestado el visor: abre otro
-            // fichero en vez de mover este, así que aquí no llega. El brazo
-            // existe porque el compilador exige cubrir la variante, y no
-            // hace nada porque no hay nada que mover.
+            // Handled above, BEFORE borrowing the viewer: it opens another
+            // file instead of moving this one, so it never reaches here. The
+            // arm exists because the compiler requires covering the variant,
+            // and does nothing because there is nothing to move.
             crate::commands::EfectoVisor::Hermana { .. } => {}
         }
-        // Un PARCHE del visor. La foto entera mandaba, por cada línea de
-        // scroll, las filas visibles de todos los listados que hay debajo.
-        let cambio = ViewChange::Viewer {
+        // A viewer PATCH. The whole snapshot used to send, for every scroll
+        // line, the visible rows of every listing underneath.
+        let change = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// La RUEDA sobre el visor a pantalla completa (puente 59).
+    /// The WHEEL over the full-screen viewer (bridge 59).
     ///
-    /// Los dos ejes, porque un solo gesto los produce: la rueda a secas baja,
-    /// con `shift` va de lado. Un parche del visor y no una foto, por lo mismo
-    /// que las teclas: la foto entera mandaría, por cada giro, las filas
-    /// visibles de todos los listados que hay debajo y que nadie ve.
+    /// Both axes, because a single gesture produces them: the plain wheel
+    /// goes down, with `shift` it goes sideways. A viewer patch and not a
+    /// snapshot, for the same reason as the keys: the whole snapshot would
+    /// send, on every turn, the visible rows of every listing underneath that
+    /// nobody sees.
     pub(super) fn desplazar_visor(
         &mut self,
-        lineas: i64,
-        columnas: i64,
+        lines: i64,
+        columns: i64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(v) = self.visor.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        // `unsigned_abs`, no `abs`: el delta de la rueda llega CRUDO del
-        // renderer, y `i64::MIN.abs()` desborda —panic en debug, envuelto en
-        // release—, o sea que un mensaje mal formado tumbaría el host.
-        let pasos = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
-        if lineas < 0 {
-            v.scroll_up(pasos(lineas));
+        // `unsigned_abs`, not `abs`: the wheel's delta arrives RAW from the
+        // renderer, and `i64::MIN.abs()` overflows — panics in debug, wraps
+        // in release — meaning a malformed message would bring the host
+        // down.
+        let steps = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
+        if lines < 0 {
+            v.scroll_up(steps(lines));
         } else {
-            v.scroll_down(pasos(lineas));
+            v.scroll_down(steps(lines));
         }
-        if columnas < 0 {
-            v.scroll_left(pasos(columnas));
+        if columns < 0 {
+            v.scroll_left(steps(columns));
         } else {
-            v.scroll_right(pasos(columnas));
+            v.scroll_right(steps(columns));
         }
-        let cambio = ViewChange::Viewer {
+        let change = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Guarda el catálogo de atributos de un esquema y repinta.
+    /// Stores a scheme's attribute catalogue and repaints.
     ///
-    /// Manda una FOTO y no un parche: el catálogo cambia cómo se leen celdas
-    /// que ya viajaron —un modo que llegó como número y ahora es `rwx`—, y
-    /// eso no es un cambio de filas, es otra lectura de todo lo que hay.
+    /// Sends a SNAPSHOT and not a patch: the catalogue changes how cells that
+    /// already travelled are read — a mode that arrived as a number and is
+    /// now `rwx` — and that is not a row change, it is a different reading of
+    /// everything there is.
     pub(super) fn aplicar_catalogo(
         &mut self,
         scheme: String,
-        catalogo: norte_proto::AttrCatalog,
+        catalog: norte_proto::AttrCatalog,
     ) -> BridgeEnvelope<UiUpdate> {
-        self.catalogos.insert(scheme, catalogo);
+        self.catalogos.insert(scheme, catalog);
         let snap = self.snapshot();
         self.sobre(UiUpdate::Snapshot(Box::new(snap)))
     }
 
-    /// Pide el contenido de la entrada bajo el cursor para abrir el visor.
+    /// Requests the content of the entry under the cursor to open the viewer.
     pub(super) fn pedir_visor(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+        let Some(entry) = self.hueco().pane.selected().cloned() else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-nothing-to-view".to_owned(),
@@ -177,8 +182,9 @@ impl Estado {
                 Vec::new(),
             );
         };
-        if entrada.kind == EntryKind::Dir {
-            // Ver un directorio es entrar en él, y eso ya tiene su tecla.
+        if entry.kind == EntryKind::Dir {
+            // Viewing a directory is entering it, and that already has its
+            // own key.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-cannot-view-dir".to_owned(),
@@ -186,151 +192,157 @@ impl Estado {
                 Vec::new(),
             );
         }
-        self.pedir_visor_de(entrada.path, backend, buzon)
+        self.pedir_visor_de(entry.path, backend, mailbox)
     }
 
-    /// Lo mismo, pero para una ruta EXPLÍCITA en vez de la fila del cursor.
+    /// The same, but for an EXPLICIT path instead of the cursor's row.
     ///
-    /// Existe por las hermanas del visor: `viewer.next` abre una fila que NO
-    /// es la señalada —bajo un filtro de búsqueda rápida, «lo señalado» ni
-    /// siquiera es la fila del cursor—, así que la ruta la trae quien la
-    /// eligió y aquí no se vuelve a resolver.
+    /// It exists for the viewer's siblings: `viewer.next` opens a row that is
+    /// NOT the selected one — under a quick-search filter, "the selected one"
+    /// is not even the cursor's row — so the path is brought by whoever chose
+    /// it, and it is not resolved again here.
     pub(super) fn pedir_visor_de(
         &mut self,
         path: VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.token += 1;
         let token = RequestToken(self.token);
         self.visor_en_vuelo = Some(token);
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            // Un byte de más que el presupuesto: es lo que delata que el
-            // fichero seguía. El resto NO se lee.
-            let lectura = backend.read(
+            // One byte more than the budget: that is what gives away that the
+            // file kept going. The rest is NOT read.
+            let reading = backend.read(
                 path.clone(),
                 Some(norte_proto::ByteRange {
                     offset: 0,
                     len: Some(VISOR_CAP + 1),
                 }),
             );
-            // Con plazo: un montaje colgado no puede dejar la tecla F3 sin
-            // desenlace para siempre.
-            let leido = match tokio::time::timeout(PLAZO_VISOR, lectura).await {
+            // With a deadline: a hung mount cannot leave the F3 key with no
+            // outcome forever.
+            let read_bytes = match tokio::time::timeout(PLAZO_VISOR, reading).await {
                 Ok(r) => r,
-                // El wire no tiene «se acabó el tiempo»; lo que hubo es una
-                // lectura que no llegó, y para el usuario es lo mismo que un
-                // provider que no responde.
+                // The wire has no "timed out"; what happened is a read that
+                // did not arrive, and to the user that is the same as a
+                // provider that does not answer.
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            // Se abre YA con lo leído. A los plugins se les pregunta después
-            // (`pedir_estilo`, ADR 0141): el visor esperaba al previewer para
-            // abrirse, y un previewer tarda lo que tarde — con la compilación
-            // por medio, segundos por cada F3.
-            let _ = buzon
-                .send(Mensaje::Contenido(Box::new((token, path, leido, None))))
+            // It opens RIGHT AWAY with what was read. Plugins are asked
+            // afterwards (`pedir_estilo`, ADR 0141): the viewer used to wait
+            // for the previewer to open, and a previewer takes however long
+            // it takes — with compilation in the mix, seconds per F3.
+            let _ = mailbox
+                .send(Mensaje::Contenido(Box::new((
+                    token, path, read_bytes, None,
+                ))))
                 .await;
         });
         (self.aplicada(), Vec::new())
     }
 
-    /// Abre la hermana siguiente (o anterior) de la misma clase, sin salir.
+    /// Opens the next (or previous) sibling of the same class, without
+    /// leaving.
     ///
-    /// Tres decisiones que se notan:
+    /// Three decisions worth noting:
     ///
-    /// - **La fila de partida se busca por RUTA, no por el cursor.** Bajo un
-    ///   filtro de búsqueda rápida «lo señalado» no es la fila del cursor, y el
-    ///   visor pudo abrirse justo desde ahí; preguntarle al cursor daría la
-    ///   hermana de otra fila.
-    /// - **La clase la decide el VISOR**, que la sabe por los bytes que ya leyó
-    ///   ([`norte_frontend::viewer::Viewer::is_image`]): una foto guardada como
-    ///   `.dat` sigue llevando a la foto siguiente.
-    /// - **El cursor se mueve a la hermana**, y por eso al cerrar el visor el
-    ///   listado está donde el lector estaba mirando, no donde entró.
+    /// - **The starting row is looked up by PATH, not by the cursor.** Under a
+    ///   quick-search filter "the selected one" is not the cursor's row, and
+    ///   the viewer may have opened from exactly there; asking the cursor
+    ///   would give another row's sibling.
+    /// - **The VIEWER decides the class**, which it knows from the bytes it
+    ///   already read ([`norte_frontend::viewer::Viewer::is_image`]): a photo
+    ///   saved as `.dat` still leads to the next photo.
+    /// - **The cursor moves to the sibling**, and that is why on closing the
+    ///   viewer the listing is where the reader was looking, not where they
+    ///   entered.
     fn hermana_del_visor(
         &mut self,
         adelante: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(v) = self.visor.as_ref() else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
-        let quiero = if v.is_image_by_bytes() {
+        let wanted = if v.is_image_by_bytes() {
             norte_frontend::viewer::Clase::Imagen
         } else {
             norte_frontend::viewer::Clase::Otro
         };
-        let abierta = v.path.clone();
+        let open_path = v.path.clone();
         let pane = &self.hueco().pane;
         let entries = pane.entries();
-        // Solo por lo que el lector VE: con un filtro vivo, la escalera es la
-        // del filtro y no el listado entero.
-        let visibles = pane.quick_visible();
-        let destino = entries
+        // Only by what the reader SEES: with a live filter, the ladder is the
+        // filter's and not the whole listing's.
+        let visible = pane.quick_visible();
+        let target = entries
             .iter()
-            .position(|e| e.path == abierta)
-            .and_then(|desde| {
-                norte_frontend::viewer::hermana(entries, visibles, desde, adelante, quiero)
+            .position(|e| e.path == open_path)
+            .and_then(|from| {
+                norte_frontend::viewer::hermana(entries, visible, from, adelante, wanted)
             })
             .and_then(|i| entries.get(i).map(|e| (i, e.path.clone())));
-        let Some((fila, path)) = destino else {
+        let Some((row, path)) = target else {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "host-no-sibling",
             )));
-            let cambio = ViewChange::Status(self.status.clone());
+            let change = ViewChange::Status(self.status.clone());
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-sibling".to_owned(),
                 },
-                vec![self.parche(vec![cambio])],
+                vec![self.parche(vec![change])],
             );
         };
-        // Un «no hay más» de antes no puede sobrevivir a un salto que SÍ pasó.
+        // An earlier "no more" cannot survive a jump that DID happen.
         self.status.message = None;
-        self.hueco_mut().pane.senalar(fila);
-        self.pedir_visor_de(path, backend, buzon)
+        self.hueco_mut().pane.senalar(row);
+        self.pedir_visor_de(path, backend, mailbox)
     }
 
-    /// Pide la vista CON ESTILO del fichero del visor a los plugins, sin
-    /// hacer esperar a nadie (ADR 0141): el visor ya está abierto con la
-    /// cruda, y esto la sustituye si llega a tiempo y el visor sigue siendo
-    /// el mismo. Un previewer que falla, que tarda o que no aplica NO es un
-    /// error: se queda la cruda, que es lo que el TUI ya hace.
+    /// Requests the STYLED view of the viewer's file from plugins, without
+    /// making anyone wait (ADR 0141): the viewer is already open with the raw
+    /// one, and this replaces it if it arrives in time and the viewer is
+    /// still the same one. A previewer that fails, that takes too long, or
+    /// that does not apply is NOT an error: the raw one stays, which is what
+    /// the TUI already does.
     fn pedir_estilo(
         &self,
         path: &VPath,
         token: RequestToken,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) {
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let path = path.clone();
-        // El ancho del visor, en celdas, para el previewer (proto 0.66.0):
-        // el que midió el renderer, o el viewport si aún no lo ha pintado.
-        let columnas = Some(self.visor_columnas.unwrap_or(u32::from(self.viewport.0)));
+        // The viewer's width, in cells, for the previewer (proto 0.66.0): the
+        // one the renderer measured, or the viewport if it has not painted it
+        // yet.
+        let columns = Some(self.visor_columnas.unwrap_or(u32::from(self.viewport.0)));
         tokio::spawn(async move {
             let preview = match tokio::time::timeout(
                 PLAZO_PLUGINS,
-                backend.plugin_preview_styled(path, columnas),
+                backend.plugin_preview_styled(path, columns),
             )
             .await
             {
                 Ok(Ok(p)) => p,
                 _ => None,
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Mensaje::Fondo(Box::new(Fondo::Estilo(token, preview))))
                 .await;
         });
     }
 
-    /// La vista con estilo, llegada: sustituye a la cruda si el visor sigue
-    /// siendo el que la pidió, en la misma línea en que estaba.
+    /// The styled view, arrived: it replaces the raw one if the viewer is
+    /// still the one that requested it, at the same line it was at.
     pub(super) fn aplicar_estilo(
         &mut self,
         token: RequestToken,
@@ -340,129 +352,131 @@ impl Estado {
             return None;
         }
         let p = preview?;
-        let actual = self.visor.as_ref()?;
-        // Si el lector ya ELIGIÓ cómo verlo —hexadecimal, otra codificación—
-        // mientras llegaba el estilo, se respeta: sustituir el visor se lo
-        // desharía sin decir nada.
-        if actual.hex || actual.is_forced() {
+        let current = self.visor.as_ref()?;
+        // If the reader already CHOSE how to view it — hex, another encoding
+        // — while the style was arriving, it is respected: replacing the
+        // viewer would undo it without saying anything.
+        if current.hex || current.is_forced() {
             return None;
         }
-        let path = actual.path.clone();
-        let arriba = actual.scroll;
-        // El veredicto por bytes viaja del visor viejo al nuevo: el estilo
-        // sustituye lo que se PINTA, no lo que el fichero es.
-        let por_bytes = actual.is_image_by_bytes();
-        let mut nuevo = norte_frontend::viewer::Viewer::with_plugin_preview_styled(
+        let path = current.path.clone();
+        let scroll_at = current.scroll;
+        // The by-bytes verdict travels from the old viewer to the new one:
+        // the style replaces what is PAINTED, not what the file IS.
+        let by_bytes = current.is_image_by_bytes();
+        let mut new_viewer = norte_frontend::viewer::Viewer::with_plugin_preview_styled(
             path,
             p.plugin_name,
             &p.lines,
             p.lossy,
         );
-        nuevo.set_image_by_bytes(por_bytes);
-        // Donde el lector ya estaba: pudo bajar mientras llegaba el estilo.
-        // Es la misma FILA, no siempre la misma línea del fichero: un
-        // previewer que parte una línea larga en dos mueve lo de debajo.
-        nuevo.scroll = arriba.min(nuevo.total_rows().saturating_sub(1));
-        self.visor = Some(nuevo);
-        let cambio = ViewChange::Viewer {
+        new_viewer.set_image_by_bytes(by_bytes);
+        // Where the reader already was: they may have scrolled down while the
+        // style was arriving. It is the SAME ROW, not always the same line of
+        // the file: a previewer that splits a long line in two shifts what is
+        // below.
+        new_viewer.scroll = scroll_at.min(new_viewer.total_rows().saturating_sub(1));
+        self.visor = Some(new_viewer);
+        let change = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// Abre el visor con lo que se leyó.
+    /// Opens the viewer with what was read.
     pub(super) fn abrir_visor(
         &mut self,
         token: RequestToken,
         path: VPath,
-        leido: Result<Vec<u8>, Error>,
+        read_bytes: Result<Vec<u8>, Error>,
         preview: Option<norte_proto::methods::PluginPreviewStyled>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         if self.visor_en_vuelo != Some(token) {
-            // El usuario cerró el visor, pidió otro fichero o se fue a otro
-            // sitio mientras esto volaba. Abrirlo ahora sería abrir una
-            // ventana que nadie ha pedido — y cambiarle el teclado de mapa.
+            // The user closed the viewer, requested another file, or moved
+            // elsewhere while this was in flight. Opening it now would be
+            // opening a window nobody asked for — and switching their
+            // keyboard's map.
             return None;
         }
         self.visor_en_vuelo = None;
         self.visor_token = Some(token);
-        // Un visor nuevo: la imagen del anterior sobra. Y hay que soltarla,
-        // no solo dejar de pintarla: son megas.
+        // A new viewer: the previous one's image is no longer needed. And it
+        // has to be released, not just stop being painted: it is megabytes.
         self.imagen = None;
         self.miniatura = None;
-        match leido {
+        match read_bytes {
             Ok(mut bytes) => {
                 let cap = usize::try_from(VISOR_CAP).unwrap_or(usize::MAX);
-                let truncado = bytes.len() > cap;
-                if truncado {
+                let truncated = bytes.len() > cap;
+                if truncated {
                     bytes.truncate(cap);
                 }
-                let ruta = path.clone();
-                // Por BYTES, antes del previewer: ver `set_image_by_bytes`.
-                let por_bytes = norte_frontend::viewer::image_format(&bytes).is_some();
-                let mut abierto = match preview {
-                    // Un previewer aplicó: se enseña LO SUYO. Los bytes ya
-                    // leídos no se tiran —hicieron falta para saber que el
-                    // fichero se puede leer— pero no se pintan: pintar las
-                    // dos cosas sería enseñar el mismo fichero dos veces.
+                let target_path = path.clone();
+                // By BYTES, before the previewer: see `set_image_by_bytes`.
+                let by_bytes = norte_frontend::viewer::image_format(&bytes).is_some();
+                let mut opened = match preview {
+                    // A previewer applied: ITS OWN is shown. The bytes
+                    // already read are not thrown away — they were needed to
+                    // know the file can be read — but they are not painted:
+                    // painting both would be showing the same file twice.
                     Some(p) => norte_frontend::viewer::Viewer::with_plugin_preview_styled(
                         path,
                         p.plugin_name,
                         &p.lines,
                         p.lossy,
                     ),
-                    None => norte_frontend::viewer::Viewer::new(path, bytes, truncado),
+                    None => norte_frontend::viewer::Viewer::new(path, bytes, truncated),
                 };
-                abierto.set_image_by_bytes(por_bytes);
-                self.visor = Some(abierto);
-                // Una imagen que la ventana pinta SOLA no pasa por ningún
-                // plugin (ADR 0141): ni la vista con estilo —que la convertía
-                // en arte ANSI y la dejaba sin imagen propia— ni la miniatura.
-                // Eran dos plugins compilados por abrir una foto.
-                let propia = self
+                opened.set_image_by_bytes(by_bytes);
+                self.visor = Some(opened);
+                // An image the window paints ON ITS OWN goes through no
+                // plugin (ADR 0141): neither the styled view — which turned
+                // it into ANSI art and left it with no image of its own — nor
+                // the thumbnail. That was two plugins compiled just to open a
+                // photo.
+                let own_image = self
                     .visor
                     .as_ref()
                     .is_some_and(|v| matches!(Self::imagen_de(v), Ok(Some(_))));
-                self.pedir_imagen(&ruta, token, backend, buzon);
-                if !propia {
-                    self.pedir_miniatura(&ruta, token, backend, buzon);
-                    self.pedir_estilo(&ruta, token, backend, buzon);
+                self.pedir_imagen(&target_path, token, backend, mailbox);
+                if !own_image {
+                    self.pedir_miniatura(&target_path, token, backend, mailbox);
+                    self.pedir_estilo(&target_path, token, backend, mailbox);
                 }
             }
             Err(e) => {
-                // No se pudo leer: se DICE y no se abre un visor vacío que
-                // parezca un fichero de cero bytes.
-                // El texto de un error puede venir de un peer más nuevo
-                // (`LimitExceeded` con un token desconocido, una huella de
-                // host) y acaba en el DOM: se enmascara como cualquier otro
-                // texto ajeno.
-                let (pintable, _) = norte_frontend::display_name(format!("{e}").as_bytes());
-                self.status.message = Some(clamp_display(pintable));
-                let cambio = ViewChange::Status(self.status.clone());
-                return Some(self.parche(vec![cambio]));
+                // Could not be read: it is SAID, instead of opening an empty
+                // viewer that looks like a zero-byte file.
+                // An error's text can come from a newer peer (`LimitExceeded`
+                // with an unknown token, a host fingerprint) and ends up in
+                // the DOM: it is masked like any other foreign text.
+                let (displayable, _) = norte_frontend::display_name(format!("{e}").as_bytes());
+                self.status.message = Some(clamp_display(displayable));
+                let change = ViewChange::Status(self.status.clone());
+                return Some(self.parche(vec![change]));
             }
         }
         let snap = self.snapshot();
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
     }
 
-    /// Trae los bytes ENTEROS de la imagen, si el visor tiene una aceptada.
+    /// Brings the image's WHOLE bytes, if the viewer has an accepted one.
     ///
-    /// La cabecera ya se leyó con el visor y ya dijo que sí; esto trae el
-    /// resto. Si el fichero cabía en lo que se leyó no hay segundo viaje: los
-    /// bytes ya están.
+    /// The header was already read with the viewer and already said yes;
+    /// this brings the rest. If the file fit in what was already read there
+    /// is no second trip: the bytes are already there.
     ///
-    /// El tope es una NEGATIVA, no un recorte. Media imagen decodificada es
-    /// una imagen de otra cosa, así que un fichero por encima de
-    /// [`IMAGEN_CAP`] no se pinta y se dice.
+    /// The cap is a REFUSAL, not a truncation. Half a decoded image is an
+    /// image of something else, so a file above [`IMAGEN_CAP`] is not painted
+    /// and it is said.
     pub(super) fn pedir_imagen(
         &mut self,
         path: &VPath,
         token: RequestToken,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) {
         let Some(v) = self.visor.as_ref() else {
             return;
@@ -471,51 +485,58 @@ impl Estado {
             return;
         }
         if !v.truncated {
-            // Cabía entera en la lectura del visor: no hay nada que pedir.
+            // It fit whole in the viewer's read: there is nothing to
+            // request.
             self.imagen = v.image_bytes().map(|b| std::sync::Arc::new(b.to_vec()));
             return;
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let path = path.clone();
         tokio::spawn(async move {
-            // Un byte de más que el tope: es lo que delata que no cabe.
-            let lectura = backend.read(
+            // One byte more than the cap: that is what gives away it does not
+            // fit.
+            let reading = backend.read(
                 path,
                 Some(norte_proto::ByteRange {
                     offset: 0,
                     len: Some(IMAGEN_CAP + 1),
                 }),
             );
-            let leido = match tokio::time::timeout(PLAZO_VISOR, lectura).await {
+            let read_bytes = match tokio::time::timeout(PLAZO_VISOR, reading).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::Imagen(token, leido))))
+            let _ = mailbox
+                .send(Mensaje::Fondo(Box::new(Fondo::Imagen(token, read_bytes))))
                 .await;
         });
     }
 
-    /// Los bytes de la imagen, llegados.
+    /// The image's bytes, arrived.
     ///
-    /// Se descartan si el visor ya es otro: pintar la foto anterior sobre el
-    /// fichero de ahora es la misma clase de error que abrir un visor que
-    /// nadie pidió.
-    /// Pide a un plugin la MINIATURA del fichero del visor (ADR 0107), y
-    /// solo cuando el visor no tiene imagen propia que pintar: un formato
-    /// que la webview no decodifica, o una imagen que no cabe en sus topes.
-    /// Con imagen propia no se molesta a nadie. El lado pedido es el alto
-    /// del visor en píxeles estimados (`alto` filas × 22), acotado.
+    /// Discarded if the viewer is already a different one: painting the
+    /// previous picture over the current file is the same class of error as
+    /// opening a viewer nobody asked for.
+    // TODO(translation): review — this paragraph documents `aplicar_imagen`
+    /// below, but the item right after it is `pedir_miniatura`'s doc, about
+    /// requesting a plugin thumbnail; it looks like a stale fragment left by
+    /// an earlier edit.
+    /// Asks a plugin for the viewer's file's THUMBNAIL (ADR 0107), and only
+    /// when the viewer has no image of its own to paint: a format the webview
+    /// does not decode, or an image that does not fit its caps. With its own
+    /// image, nobody is bothered. The requested side is the viewer's height
+    /// in estimated pixels (`height` rows × 22), bounded.
     pub(super) fn pedir_miniatura(
         &mut self,
         path: &VPath,
         token: RequestToken,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) {
-        // El techo es el del plugin-host (`THUMB_MAX_EDGE`), repetido aquí
-        // porque este crate no lo conoce: acota igual en los dos lados.
+        // The ceiling is the plugin-host's (`THUMB_MAX_EDGE`), repeated here
+        // because this crate does not know it: it bounds the same on both
+        // sides.
         const MINIATURA_MAX_EDGE: u32 = 2048;
         let Some(v) = self.visor.as_ref() else {
             return;
@@ -523,10 +544,10 @@ impl Estado {
         if matches!(Self::imagen_de(v), Ok(Some(_))) {
             return;
         }
-        let filas = u32::from(self.viewport.1).max(10);
-        let max_edge = (filas * 22).clamp(128, MINIATURA_MAX_EDGE);
+        let rows = u32::from(self.viewport.1).max(10);
+        let max_edge = (rows * 22).clamp(128, MINIATURA_MAX_EDGE);
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let path = path.clone();
         tokio::spawn(async move {
             let thumb =
@@ -536,16 +557,16 @@ impl Estado {
                     Ok(Ok(t)) => t,
                     _ => None,
                 };
-            let _ = buzon
+            let _ = mailbox
                 .send(Mensaje::Fondo(Box::new(Fondo::Miniatura(token, thumb))))
                 .await;
         });
     }
 
-    /// La miniatura llegó (o no): con ella, el visor la anuncia como imagen
-    /// y dice de quién es; sin ella, nada cambia. Los bytes ya vienen
-    /// verificados por el plugin-host (ADR 0107 decisión 3); aquí se acota
-    /// el nombre del plugin, que es texto suyo.
+    /// The thumbnail arrived (or did not): with it, the viewer announces it
+    /// as an image and says whose it is; without it, nothing changes. The
+    /// bytes already come verified by the plugin-host (ADR 0107 decision 3);
+    /// here only the plugin's name is clamped, which is its own text.
     pub(super) fn aplicar_miniatura(
         &mut self,
         token: RequestToken,
@@ -558,12 +579,12 @@ impl Estado {
         if t.bytes.is_empty() || t.width == 0 || t.height == 0 {
             return None;
         }
-        let (nombre, _) = norte_frontend::display_name(t.plugin_name.as_bytes());
+        let (name, _) = norte_frontend::display_name(t.plugin_name.as_bytes());
         self.imagen = Some(std::sync::Arc::new(t.bytes));
         self.miniatura = Some((
             crate::dto::ImageView {
-                // La etiqueta que el visor pinta para una imagen propia es el
-                // formato en mayúsculas (`PNG`); la misma forma aquí.
+                // The label the viewer paints for its own image is the
+                // format in uppercase (`PNG`); the same shape here.
                 format: t
                     .mimetype
                     .rsplit('/')
@@ -573,39 +594,39 @@ impl Estado {
                 width: t.width,
                 height: t.height,
             },
-            clamp_display(nombre),
+            clamp_display(name),
         ));
-        let cambio = ViewChange::Viewer {
+        let change = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
     pub(super) fn aplicar_imagen(
         &mut self,
         token: RequestToken,
-        leido: Result<Vec<u8>, Error>,
+        read_bytes: Result<Vec<u8>, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         if self.visor_token != Some(token) {
             return None;
         }
-        let Ok(bytes) = leido else {
+        let Ok(bytes) = read_bytes else {
             return None;
         };
         if bytes.len() as u64 > IMAGEN_CAP {
-            // No cabe. Se dice y se enseña la vista cruda: enseñarla a medias
-            // sería enseñar otra imagen.
+            // Does not fit. It is said and the raw view is shown: showing it
+            // halfway would be showing a different image.
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "viewer-image-too-large",
             )));
-            let cambio = ViewChange::Status(self.status.clone());
-            return Some(self.parche(vec![cambio]));
+            let change = ViewChange::Status(self.status.clone());
+            return Some(self.parche(vec![change]));
         }
         self.imagen = Some(std::sync::Arc::new(bytes));
-        let cambio = ViewChange::Viewer {
+        let change = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 }

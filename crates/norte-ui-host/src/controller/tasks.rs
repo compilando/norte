@@ -1,142 +1,147 @@
-//! El tablero de tasks: progreso, desenlace, informe y cancelación.
+//! The tasks board: progress, outcome, report and cancellation.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are `Estado` methods, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Enumerating them here would be a
+// forty-line list per file, in 32 files, that goes stale the moment the
+// parent imports something — `super::*` tracks it on its own.
 use super::sums::Publicado;
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// Un lote de sumas en vuelo (#311).
+/// A checksums batch in flight (#311).
 ///
-/// La Task ya está en el tablero; lo que se espera aquí es su INFORME, que es
-/// donde viajan los digests — no caben en el desenlace de una Task ni en su
-/// progreso.
+/// The Task is already on the board; what is awaited here is its REPORT,
+/// which is where the digests travel — they do not fit in a Task's outcome
+/// nor in its progress.
 pub(super) struct SumasEnVuelo {
-    /// La Task cuyo informe se espera.
+    /// The Task whose report is awaited.
     pub(super) task: norte_proto::TaskId,
-    /// En qué época de CONEXIÓN vive esa Task: tras un relevo los ids del
-    /// daemon vuelven a empezar en 1, y un informe de otra tarea con el mismo
-    /// número contaría la comprobación de otra cosa.
+    /// Which CONNECTION epoch that Task lives in: after a handoff the
+    /// daemon's ids start over at 1, and a report for another task with the
+    /// same number would count the check for something else.
     pub(super) epoca_conexion: u64,
-    /// Su informe ya se pidió: pedirlo es una RPC y una reconexión reanuncia
-    /// el desenlace.
+    /// Its report has already been requested: requesting it is an RPC and a
+    /// reconnection re-announces the outcome.
     pub(super) informe_pedido: bool,
-    /// Lo que el fichero de sumas publicaba, si esto es una COMPROBACIÓN.
-    /// `None` = solo calcular.
+    /// What the checksums file was publishing, if this is a CHECK. `None` =
+    /// only computing.
     pub(super) publicado: Option<Publicado>,
 }
 
-/// El informe de una Task terminada, por clase.
+/// A finished Task's report, by class.
 ///
-/// Dos clases lo tienen —un lote de renombrado y un undo— y las dos por el
-/// mismo motivo: lo que quedó a medias no cabe en el desenlace de una Task.
+/// Two classes have one — a rename batch and an undo — and both for the same
+/// reason: what was left halfway does not fit in a Task's outcome.
 pub(super) enum Informe {
-    /// El de un lote de renombrado (#272).
+    /// A rename batch's (#272).
     Lote(Result<norte_proto::methods::FsRenameBatchReportResult, Error>),
-    /// El de un undo de sesión.
+    /// A session undo's.
     Undo(Result<norte_proto::methods::PolicyUndoReportResult, Error>),
-    /// El de un empaquetado (#250). El único de los tres que cuenta algo de una
-    /// Task que salió BIEN: el archivo se escribió entero y aun así puede
-    /// llevar nombres que en otro sistema se colocan en otro sitio.
+    /// A pack's (#250). The only one of the three that counts something
+    /// about a Task that came out FINE: the archive was written whole and
+    /// can still carry names that land somewhere else on another system.
     Empaquetado(Result<norte_proto::methods::ArchivePackReportResult, Error>),
 }
 
-/// A qué task apunta un `task.cancel`.
+/// What a `task.cancel` points at.
 ///
-/// Tres casos y no dos: «no hay ninguna» y «la señalada ya terminó» se leen
-/// distinto, y colapsarlos haría que cancelar una task acabada dijera que no
-/// hay tasks mientras el tablero enseña cuatro.
+/// Three cases and not two: "there is none" and "the pointed-at one already
+/// finished" read differently, and collapsing them would make cancelling a
+/// finished task say there are no tasks while the board shows four.
 pub(super) enum Objetivo {
-    /// No hay ninguna a la que pedirle que pare.
+    /// There is none to ask to stop.
     Ninguna,
-    /// La señalada ya es terminal.
+    /// The pointed-at one is already terminal.
     Terminada,
-    /// Esta.
+    /// This one.
     Viva(u64),
 }
 
-/// Una task viva en el tablero.
+/// A task alive on the board.
 pub(super) struct TaskViva {
     pub(super) vista: TaskView,
-    /// El ritmo de ESTA task, estimado de sus propios snapshots (spec
-    /// 2026-09-15, ADR 0115).
+    /// THIS task's rate, estimated from its own snapshots (spec 2026-09-15,
+    /// ADR 0115).
     ///
-    /// No viene del wire: `TaskProgress` dice cuánto va hecho y no a qué
-    /// velocidad. Es por task y no por tablero porque dos copias a la vez van
-    /// a velocidades distintas, y una media de las dos no describe a ninguna.
+    /// It does not come from the wire: `TaskProgress` says how much is done
+    /// and not at what speed. It is per task and not per board because two
+    /// copies at once run at different speeds, and an average of the two
+    /// describes neither.
     rate: norte_frontend::tasks::Rate,
-    /// Cómo pedirle que pare. Cancelar dos veces no es un error.
+    /// How to ask it to stop. Cancelling twice is not an error.
     pub(super) cancel: std::sync::Arc<dyn Fn() + Send + Sync>,
-    /// Cómo pausarla o reanudarla (ADR 0147); `None` si no se puede.
+    /// How to pause or resume it (ADR 0147); `None` if it cannot be.
     pub(super) pause: Option<crate::backend::Pausa>,
-    /// Cómo subirla o bajarla en la cola (ADR 0149); `None` si no se puede.
+    /// How to move it up or down the queue (ADR 0149); `None` if it cannot
+    /// be.
     pub(super) cola: Option<crate::backend::Pausa>,
-    /// Su informe ya se pidió. Lo llevan las clases que TIENEN informe —un
-    /// lote de renombrado y un undo— y evita pedirlo dos veces si el daemon
-    /// repite el último progreso (una reconexión reanuncia las tasks,
-    /// terminales incluidas).
+    /// Its report has already been requested. Carried by the classes that
+    /// HAVE a report — a rename batch and an undo — and it avoids
+    /// requesting it twice if the daemon repeats the last progress (a
+    /// reconnection re-announces tasks, terminal ones included).
     informe_pedido: bool,
-    /// En qué época de conexión se registró. Un id repetido de OTRA época es
-    /// otra task, no la misma.
+    /// Which connection epoch it was registered in. A repeated id from a
+    /// DIFFERENT epoch is a different task, not the same one.
     epoca: u64,
-    /// El progreso EN VIVO, para preguntarle si sigue corriendo.
+    /// The LIVE progress, to ask it whether it is still running.
     ///
-    /// `vista` es una proyección que se actualiza cuando el `Mensaje::Progreso`
-    /// sale del buzón, así que decidir sobre ella qué cancelar es decidir
-    /// sobre una foto rancia: se decía «cancelando…» de algo ya terminado, y
-    /// la elección de «la última viva» podía saltarse la que de verdad corre.
-    /// El TUI pregunta al estado vivo por este mismo motivo.
+    /// `vista` is a projection that updates when `Mensaje::Progreso` leaves
+    /// the mailbox, so deciding what to cancel based on it is deciding based
+    /// on a stale snapshot: it used to answer "cancelling…" about something
+    /// already finished, and choosing "the last alive one" could skip the
+    /// one that is really running. The TUI asks the live state for this
+    /// exact reason.
     pub(super) progreso: tokio::sync::watch::Receiver<norte_proto::TaskProgress>,
-    /// Los directorios que esta task deja DISTINTOS.
+    /// The directories this task leaves OUT OF DATE.
     ///
-    /// Se apuntan al encolar y no se deducen del progreso: el progreso dice
-    /// qué fichero va por dentro, no qué pantallas mienten cuando termine.
-    /// Vacío = nada que refrescar (una búsqueda, una task ajena de la que
-    /// solo se conoce el id).
+    /// Noted down when enqueuing and not derived from progress: progress
+    /// says which file is currently in flight, not which screens lie once
+    /// it finishes. Empty = nothing to refresh (a search, an unrelated task
+    /// whose id is all that is known).
     pub(super) afectados: Vec<VPath>,
-    /// Con qué reintentar si CHOCA (#274). `None` en todo lo que no es una
-    /// transferencia: un borrado o un undo no tienen otra política que ofrecer.
+    /// What to retry with if it COLLIDES (#274). `None` for everything that
+    /// is not a transfer: a delete or an undo have no other policy to
+    /// offer.
     reintento: Option<Reintento>,
 }
 
-/// La cuenta de UN lote de transferencias (#271).
+/// The count of ONE transfer batch (#271).
 ///
-/// Un lote grande contra un destino poblado produce muchas filas `Failed` —
-/// `CollisionPolicy::Fail` es lo que se manda—, y el tablero las enseña una a
-/// una hasta su tope. Lo que el lector necesita no es la fila 213: es «de
-/// estas 500, 460 bien y 40 mal».
+/// A large batch against a populated destination produces many `Failed`
+/// rows — `CollisionPolicy::Fail` is what is sent — and the board shows them
+/// one by one up to its cap. What the reader needs is not row 213: it is
+/// "of these 500, 460 fine and 40 not".
 ///
-/// Y los rechazos al ENCOLAR tenían el problema gemelo: cada uno pintaba un
-/// mensaje en la barra y el siguiente lo pisaba, así que de N rechazos
-/// sobrevivía el último. Se cuentan en vez de decirse.
+/// And rejections on ENQUEUING had the twin problem: each one painted a
+/// message in the status bar and the next one overwrote it, so of N
+/// rejections only the last one survived. They are counted instead of
+/// reported.
 ///
-/// UNA sola frase, y al final: la mitad del lote no es una respuesta, es
-/// ruido que se pisa a sí mismo. El lote se cierra cuando todo lo que se pidió
-/// está resuelto — encolado o rechazado, y lo encolado, terminal.
+/// ONE single phrase, and at the end: half the batch is not an answer, it is
+/// noise overwriting itself. The batch closes when everything requested is
+/// resolved — enqueued or rejected, and what was enqueued, terminal.
 #[derive(Debug, Default)]
 pub(super) struct Lote {
-    /// Cuántas entradas se pidieron.
+    /// How many entries were requested.
     pub(super) total: usize,
-    /// Cuántas llegaron a ser task.
+    /// How many became a task.
     pub(super) encoladas: usize,
-    /// Cuántas rechazó el daemon al encolar.
+    /// How many the daemon rejected on enqueuing.
     pub(super) rechazadas: usize,
-    /// Los ids de las que se encolaron, para reconocer su desenlace. Un id que
-    /// no está aquí es de otra cosa (una búsqueda, un undo, otro cliente).
+    /// The ids of the ones enqueued, to recognize their outcome. An id not
+    /// here belongs to something else (a search, an undo, another client).
     pub(super) ids: std::collections::BTreeSet<u64>,
-    /// Desenlaces terminales BUENOS de las encoladas.
+    /// GOOD terminal outcomes of the enqueued ones.
     pub(super) hechas: usize,
-    /// Desenlaces terminales malos: falló o se canceló.
+    /// Bad terminal outcomes: failed or cancelled.
     pub(super) fallidas: usize,
 }
 
 impl Lote {
-    /// Todo lo que se pidió está resuelto.
+    /// Everything requested is resolved.
     fn cerrado(&self) -> bool {
         self.encoladas + self.rechazadas >= self.total
             && self.hechas + self.fallidas >= self.encoladas
@@ -144,18 +149,19 @@ impl Lote {
 }
 
 impl Estado {
-    /// Hace sitio en el tablero tirando lo más viejo TERMINADO.
+    /// Makes room on the board by dropping the oldest FINISHED one.
     ///
-    /// Se prefiere desalojar una TERMINADA BIEN: una fallida o una cancelada
-    /// es la única superficie que dice qué no llegó —un fallo no deja entrada
-    /// de journal—, y en un lote grande con colisiones son justo las que se
-    /// acumulan. Una VIVA no se toca: tiene progreso que bombear y, quizá, un
-    /// directorio que relistar.
-    /// Le pone reloj a una task recién terminada: a los [`TTL_TASK_TERMINAL`]
-    /// se va del tablero.
+    /// Evicting a WELL-finished one is preferred: a failed or cancelled one
+    /// is the only surface saying what did not arrive — a failure leaves no
+    /// journal entry — and in a large batch with collisions those are
+    /// exactly the ones that pile up. A LIVE one is not touched: it has
+    /// progress to pump and, perhaps, a directory to re-list.
+    /// Sets a clock on a freshly finished task: at [`TTL_TASK_TERMINAL`] it
+    /// leaves the board.
     ///
-    /// Mismo patrón que el TTL de una aprobación: un `spawn` que duerme y
-    /// manda un mensaje al actor, porque el estado lo toca un solo escritor.
+    /// Same pattern as an approval's TTL: a `spawn` that sleeps and sends a
+    /// message to the actor, because the state is touched by a single
+    /// writer.
     pub(super) fn programar_caducidad(id: u64, epoca: u64, buzon: &mpsc::Sender<Mensaje>) {
         let buzon = buzon.clone();
         tokio::spawn(async move {
@@ -164,17 +170,18 @@ impl Estado {
         });
     }
 
-    /// Se acabó el rato de una task terminada: fuera del tablero.
+    /// A finished task's time is up: off the board.
     ///
-    /// Tres cosas se comprueban antes, y ninguna es paranoia:
+    /// Three things are checked first, and none is paranoia:
     ///
-    /// - la ÉPOCA, porque tras un relevo del daemon los ids empiezan de nuevo
-    ///   y este reloj lleva diez segundos volando;
-    /// - que siga TERMINAL, porque un id reanunciado puede volver a estar en
-    ///   marcha;
-    /// - que no deba un refresco (`afectados`), que es el invariante que el
-    ///   desalojo por tope ya afirma: tirar la fila se llevaría por delante la
-    ///   relectura del directorio que esa mutación cambió.
+    /// - the EPOCH, because after a daemon handoff the ids start over and
+    ///   this clock has been flying for ten seconds;
+    /// - that it is still TERMINAL, because a re-announced id can be running
+    ///   again;
+    /// - that it does not owe a refresh (`afectados`), which is the
+    ///   invariant cap-based eviction already asserts: dropping the row
+    ///   would sweep away the re-read of the directory that mutation
+    ///   changed.
     pub(super) fn caducar_task(
         &mut self,
         id: u64,
@@ -194,12 +201,13 @@ impl Estado {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
         }])];
-        // Y AQUÍ se cierra el panel que se abrió solo (ADR 0115). Preguntarlo
-        // solo desde `progreso` dejaba la mitad del gesto sin hacer: cuando la
-        // última fila caduca no llega ningún progreso más, así que nadie
-        // volvía a mirar y el panel se quedaba puesto el resto de la sesión.
-        // El terminal no tenía el fallo porque su bucle reevalúa la misma
-        // condición en cada vuelta — la divergencia que el ADR 0077 persigue.
+        // And HERE is where the panel that opened on its own closes
+        // (ADR 0115). Asking only from `progreso` left half the gesture
+        // undone: when the last row expires no more progress arrives, so
+        // nobody checked again and the panel stayed up for the rest of the
+        // session. The terminal did not have the bug because its loop
+        // re-evaluates the same condition every round — the divergence
+        // ADR 0077 goes after.
         envios.extend(self.procesos_automaticos(backend, buzon));
         envios
     }
@@ -221,19 +229,19 @@ impl Estado {
         if let Some(viejo) = viejo {
             debug_assert!(
                 self.tasks[&viejo].afectados.is_empty(),
-                "se desaloja una task con un refresco pendiente"
+                "evicting a task with a pending refresh"
             );
             self.tasks.remove(&viejo);
         }
     }
 
-    /// Relanza la transferencia que chocó, con la política elegida (#274).
+    /// Relaunches the transfer that collided, with the chosen policy (#274).
     ///
-    /// Repite el MISMO verbo: un «sobrescribir» sobre una copia que se
-    /// convirtiera en un movimiento borraría el origen que nadie mandó tocar.
-    /// Y vuelve a viajar con su `Reintento`, porque el segundo intento puede
-    /// chocar otra vez —`Skip` y `RenameAuto` no, pero `Newer` sí— y entonces
-    /// hay que poder volver a preguntar.
+    /// Repeats the SAME verb: an "overwrite" over a copy that turned into a
+    /// move would delete the source nobody asked to touch. And it travels
+    /// again with its `Reintento`, because the second attempt can collide
+    /// again — `Skip` and `RenameAuto` cannot, but `Newer` can — and then it
+    /// has to be possible to ask again.
     pub(super) fn lanzar_reintento(
         con: Reintento,
         politica: norte_proto::CollisionPolicy,
@@ -241,9 +249,9 @@ impl Estado {
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        // El destino cambia; el origen también deja de estar si es un
-        // movimiento. Se apuntan los dos padres, como en la transferencia
-        // original.
+        // The destination changes; the source also stops being there if it
+        // is a move. Both parents are noted down, like in the original
+        // transfer.
         let mut afectados: Vec<VPath> = con.to.parent().into_iter().collect();
         if con.mover
             && let Some(padre) = con.from.parent()
@@ -271,17 +279,19 @@ impl Estado {
         });
     }
 
-    /// Entrega el secreto al core y devuelve el desenlace por el buzón (#327).
+    /// Delivers the secret to the core and returns the outcome through the
+    /// mailbox (#327).
     ///
-    /// El `TypedSecret` se MUEVE a la task y muere con ella, así que la copia
-    /// del host se pisa con ceros en cuanto el core contesta. El `String` en
-    /// claro que exige la llamada nace lo más tarde posible y vive lo mínimo.
-    /// De las copias de más allá —los params, el frame, el `Value` del
-    /// daemon— habla el ADR 0015.
+    /// The `TypedSecret` is MOVED into the task and dies with it, so the
+    /// host's copy is overwritten with zeros as soon as the core answers.
+    /// The plaintext `String` the call requires is born as late as possible
+    /// and lives for the bare minimum. ADR 0015 talks about the copies
+    /// beyond that — the params, the frame, the daemon's `Value`.
     ///
-    /// No devuelve nada: como todo lo que TARDA en esta ventana, la respuesta
-    /// vuelve al actor como un mensaje más. El único escritor no espera a
-    /// nadie, así que el cursor sigue respondiendo mientras el core autentica.
+    /// Returns nothing: like everything that TAKES A WHILE in this window,
+    /// the answer comes back to the actor as just another message. The sole
+    /// writer waits for nobody, so the cursor keeps responding while the
+    /// core authenticates.
     pub(super) fn lanzar_secreto(
         conn: String,
         secreto: norte_frontend::secret::TypedSecret,
@@ -303,12 +313,14 @@ impl Estado {
         });
     }
 
-    /// El reintento que ya tenía esta task, si la hay y es de esta época.
+    /// The retry this task already had, if any and if it belongs to this
+    /// epoch.
     ///
-    /// Un reanuncio de la reconexión no sabe con qué se pidió la task, así que
-    /// sustituirlo por `None` dejaría sin salida justo a la colisión que el
-    /// lector encuentra al volver. La época importa: tras un relevo del daemon
-    /// los ids vuelven a empezar, y lo que había con ese número era otra cosa.
+    /// A reconnection's re-announcement does not know what the task was
+    /// requested with, so replacing it with `None` would leave the very
+    /// collision the reader finds on returning with no way out. The epoch
+    /// matters: after a daemon handoff the ids start over, and whatever was
+    /// there with that number was something else.
     pub(super) fn reintento_heredado(&self, id: u64) -> Option<Reintento> {
         self.tasks
             .get(&id)
@@ -316,12 +328,14 @@ impl Estado {
             .and_then(|t| t.reintento.clone())
     }
 
-    /// Ata la intención de «editar uno nuevo» a la task que lo crea (#290).
+    /// Ties the intent of "editing a new one" to the task that creates it
+    /// (#290).
     ///
-    /// Aquí y no antes: el id no existe hasta que el daemon contesta, y el
-    /// gesto ya había vuelto. Solo a una task PROPIA y solo si la intención
-    /// todavía no tiene id — una ajena que pase por aquí no puede adoptar la
-    /// intención de esta ventana, que es justo el fallo que esto evita.
+    /// Here and not earlier: the id does not exist until the daemon answers,
+    /// and the gesture had already returned. Only to an OWN task and only if
+    /// the intent has no id yet — an unrelated one passing through here
+    /// cannot adopt this window's intent, which is exactly the bug this
+    /// prevents.
     pub(super) fn atar_la_creacion(&mut self, id: u64, ajena: bool, kind: norte_proto::TaskKind) {
         if !ajena
             && kind == norte_proto::TaskKind::Create
@@ -332,16 +346,17 @@ impl Estado {
         }
     }
 
-    /// Conserva el detalle que un REANUNCIO no trae.
+    /// Keeps the detail a RE-ANNOUNCEMENT does not carry.
     ///
-    /// El SDK vuelve a ofrecer las tasks al reconectar, y ese progreso no sabe
-    /// nada del informe que ya se pidió por esta task. Proyectarlo tal cual
-    /// borraba del tablero la única señal de que el directorio se quedó a
-    /// medias, justo cuando la conexión se recupera y el lector vuelve a
-    /// mirarlo.
+    /// The SDK offers the tasks again on reconnecting, and that progress
+    /// knows nothing about the report already requested for this task.
+    /// Projecting it as is used to erase from the board the only signal
+    /// that the directory was left halfway, right when the connection
+    /// recovers and the reader looks at it again.
     ///
-    /// Solo se hereda de la MISMA época: tras un relevo del daemon el id
-    /// vuelve a empezar en 1, y lo que había con ese número era otra task.
+    /// Only inherited from the SAME epoch: after a daemon handoff the id
+    /// starts over at 1, and whatever was there with that number was a
+    /// different task.
     fn heredar_detalle(&self, id: u64, vista: &mut crate::dto::TaskView) {
         let Some(anterior) = self
             .tasks
@@ -357,8 +372,8 @@ impl Estado {
         }
     }
 
-    /// Mete una Task recién encolada en el tablero y deja su progreso
-    /// bombeando hacia el actor.
+    /// Puts a freshly enqueued Task on the board and leaves its progress
+    /// pumping toward the actor.
     pub(super) fn registrar_task(
         &mut self,
         task: crate::backend::HostTask,
@@ -369,8 +384,8 @@ impl Estado {
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let id = task.id.get();
         let ajena = task.foreign;
-        // Alta en la cuenta del lote (#271), antes de cualquier desalojo: lo
-        // que se encoló se encoló aunque su fila no llegue a caber.
+        // Registered in the batch's count (#271), before any eviction: what
+        // was enqueued was enqueued even if its row does not end up fitting.
         if let Some(lote) = self.lote.as_mut()
             && !ajena
             && lote.encoladas + lote.rechazadas < lote.total
@@ -379,23 +394,25 @@ impl Estado {
             lote.encoladas += 1;
         }
         self.desalojar_del_tablero();
-        // Y el techo DURO de lo retenido (#271). Solo se llega aquí con el
-        // tablero lleno de tasks VIVAS, y solo desde el canal de ajenas: las
-        // propias no pasan de `pedir_transferencia`, que rehúsa el lote entero
-        // si no cabe. Una fila ajena que se cae no pierde nada —viene con
-        // `afectados` vacío, o sea sin refresco que deber— salvo una fila que
-        // esta ventana nunca prometió enseñar.
+        // And the HARD ceiling on what is retained (#271). This is only
+        // reached with the board full of LIVE tasks, and only from the
+        // unrelated-tasks channel: own ones never get past
+        // `pedir_transferencia`, which refuses the whole batch if it does
+        // not fit. An unrelated row that falls loses nothing — it arrives
+        // with empty `afectados`, i.e. no refresh it owes — except a row
+        // this window never promised to show.
         if self.tasks.len() >= MAX_TASKS_RETAINED && !self.tasks.contains_key(&id) {
-            tracing::debug!(task = id, "tablero lleno: no se retiene una task ajena");
+            tracing::debug!(task = id, "board full: an unrelated task is not retained");
             return Vec::new();
         }
         let mut rx = task.progress.clone();
         let nacio = rx.borrow().clone();
         self.atar_la_creacion(id, ajena, nacio.kind);
-        // #311: la Task de sumas ya tiene id, así que la intención apuntada al
-        // encolarla se convierte en el lote que espera su informe. Solo la
-        // PROPIA: una task ajena del mismo kind es la comprobación de otra
-        // ventana, y colgarle este informe le daría los digests de otro.
+        // #311: the checksums Task already has an id, so the intent noted
+        // down when enqueuing it turns into the batch awaiting its report.
+        // Only the OWN one: an unrelated task of the same kind is another
+        // window's check, and hanging this report off it would give it
+        // someone else's digests.
         if !ajena
             && nacio.kind == norte_proto::TaskKind::Checksum
             && let Some(encolada) = self.sumas_pendientes.take()
@@ -410,11 +427,12 @@ impl Estado {
         let mut vista = Self::vista_de(&nacio);
         vista.foreign = ajena;
         self.heredar_detalle(id, &mut vista);
-        // Si esta task YA estaba en el tablero —una reconexión la reanuncia
-        // por el canal de ajenas— lo que llega no sabe qué directorios tocaba,
-        // así que se conserva lo apuntado: sustituirlo por una lista vacía
-        // perdía el relistado justo en el camino donde la pantalla es más
-        // probable que esté rancia.
+        // If this task was ALREADY on the board — a reconnection
+        // re-announces it through the unrelated-tasks channel — what
+        // arrives does not know which directories it touched, so what was
+        // noted down is kept: replacing it with an empty list lost the
+        // re-listing exactly on the path where the screen is most likely
+        // to be stale.
         let afectados = if afectados.is_empty() {
             self.tasks
                 .get(&id)
@@ -424,19 +442,19 @@ impl Estado {
         } else {
             afectados
         };
-        // Una mutación ACEPTADA es la prueba de que el journal volvió: el
-        // daemon rehúsa mutar sin él (regla dura 4), así que si esta entró,
-        // el aviso de «no se registra» dejó de ser verdad. No hay
-        // notificación de recuperación —el TUI la tiene porque su journal es
-        // embebido—, y un aviso que no sabe apagarse miente sobre lo único
-        // que describe de toda la sesión.
+        // An ACCEPTED mutation is proof the journal came back: the daemon
+        // refuses to mutate without it (hard rule 4), so if this one got
+        // in, the "not being recorded" warning stopped being true. There is
+        // no recovery notification — the TUI has one because its journal is
+        // embedded — and a warning that does not know how to turn off lies
+        // about the one thing it describes for the whole session.
         let apaga_el_aviso = self.journal_rehusado && !ajena && Self::muta(vista.kind.as_str());
         if apaga_el_aviso {
             self.journal_rehusado = false;
         }
-        // Igual que con los afectados: si ya estaba, se conserva que su
-        // informe se pidió. Una reconexión que reanuncia un lote terminado no
-        // puede volver a abrir el mismo informe.
+        // Same as with the affected directories: if it was already there,
+        // whether its report was requested is preserved. A reconnection
+        // re-announcing a finished batch cannot reopen the same report.
         let informe_pedido = self
             .tasks
             .get(&id)
@@ -446,8 +464,9 @@ impl Estado {
             id,
             TaskViva {
                 vista,
-                // El ritmo empieza de cero: hace falta una segunda foto para
-                // que haya velocidad, y hasta entonces la fila calla.
+                // The rate starts from zero: a second snapshot is needed
+                // for there to be a speed, and until then the row stays
+                // silent.
                 rate: norte_frontend::tasks::Rate::default(),
                 cancel: task.cancel,
                 pause: task.pause,
@@ -461,11 +480,11 @@ impl Estado {
         );
         let buzon2 = buzon.clone();
         tokio::spawn(async move {
-            // El estado de AHORA ya lo proyectó el registro; lo que bombea
-            // esto son los CAMBIOS. El terminal va por la misma cola ordenada
-            // que todo lo demás y se manda antes de soltar el canal: un
-            // desenlace que se pierde deja al usuario mirando un progreso que
-            // no avanza.
+            // The NOW state was already projected by the registration; what
+            // this pumps are the CHANGES. The terminal one goes through the
+            // same ordered queue as everything else and is sent before
+            // releasing the channel: an outcome that gets lost leaves the
+            // user looking at progress that does not advance.
             while rx.changed().await.is_ok() {
                 let snapshot = rx.borrow_and_update().clone();
                 let terminal = matches!(
@@ -484,14 +503,14 @@ impl Estado {
                 }
             }
         });
-        // Puede nacer TERMINAL: el daemon la completó antes de que esta
-        // llamada volviera, y entonces `rx.changed()` no dispara nunca y
-        // `progreso` no se llama ni una vez. Sin esto, una copia rapidísima
-        // dejaba el destino sin relistar para siempre — la carrera que la
-        // tarea 5.1 nombra literalmente.
+        // It can be born TERMINAL: the daemon completed it before this call
+        // returned, and then `rx.changed()` never fires and `progreso` is
+        // never called even once. Without this, a very fast copy left the
+        // destination un-re-listed forever — the race task 5.1 names
+        // literally.
         //
-        // La barra ligera también la ve desde aquí: una que nace terminada
-        // es la copia rápida cuyo «✓» es lo único que dirá que ocurrió.
+        // The light bar also sees it from here: one born finished is the
+        // fast copy whose "✓" is the only thing that will say it happened.
         self.anotar_tira(buzon);
         let mut cambios = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
@@ -504,12 +523,13 @@ impl Estado {
         vec![self.parche(cambios)]
     }
 
-    /// Lo que hay que atender cuando una task llega al tablero YA terminada.
+    /// What has to be handled when a task arrives on the board ALREADY
+    /// finished.
     ///
-    /// Todo esto lo haría `progreso`, y `progreso` no se va a llamar ni una
-    /// vez: `rx.changed()` no dispara para un canal que nació con su valor
-    /// final. Sin ello, una copia rapidísima dejaba el destino sin relistar
-    /// para siempre — la carrera que la tarea 5.1 nombra literalmente.
+    /// All of this would be done by `progreso`, and `progreso` is not going
+    /// to be called even once: `rx.changed()` does not fire for a channel
+    /// born with its final value. Without it, a very fast copy left the
+    /// destination un-re-listed forever — the race task 5.1 names literally.
     pub(super) fn nacio_terminal(
         &mut self,
         id: u64,
@@ -525,26 +545,26 @@ impl Estado {
         else {
             return Vec::new();
         };
-        // Su rato en el tablero se cuenta desde aquí, por lo mismo.
+        // Its time on the board is counted from here, for the same reason.
         Self::programar_caducidad(id, self.epoca_conexion, buzon);
         let mut cambios = Vec::new();
         if self.anota_desenlace_de_lote(id, estado) {
             cambios.push(self.cambio_de_banners());
         }
         cambios.extend(self.refrescar_afectados(id, backend, buzon));
-        // Y su informe, por el mismo motivo que el relistado: es la única
-        // señal de que el directorio se quedó a medias, y un lote rapidísimo
-        // se quedaba sin ella justo cuando el desenlace de la Task más parece
-        // que todo fue bien.
+        // And its report, for the same reason as the re-listing: it is the
+        // only signal that the directory was left halfway, and a very fast
+        // batch used to be left without it right when the Task's outcome
+        // most looks like everything went fine.
         self.pedir_informe_de_lote(nacio, backend, buzon);
-        // #311: y el de las sumas, por lo mismo. Un lote de tres ficheros
-        // pequeños nace terminal casi siempre, así que sin esto el camino
-        // rápido —el que más se usa— no enseñaba nada.
+        // #311: and the checksums' one, for the same reason. A batch of
+        // three small files is born terminal almost always, so without this
+        // the fast path — the most used one — showed nothing.
         self.pedir_informe_de_sumas(nacio, backend, buzon);
         cambios
     }
 
-    /// Aplica un snapshot de progreso al tablero.
+    /// Applies a progress snapshot to the board.
     pub(super) fn progreso(
         &mut self,
         p: &norte_proto::TaskProgress,
@@ -557,10 +577,11 @@ impl Estado {
         let ajena = viva.vista.foreign;
         let era_terminal = Self::terminal(viva.vista.state);
         let epoca = viva.epoca;
-        // El ritmo ANTES de proyectar: se mide entre esta foto y la anterior
-        // (spec 2026-09-15, ADR 0115). El wire no lo trae, así que lo estima
-        // quien mira — y lo escribe el host, para que la ventana y el terminal
-        // digan la misma velocidad con las mismas unidades.
+        // The rate BEFORE projecting: it is measured between this snapshot
+        // and the previous one (spec 2026-09-15, ADR 0115). The wire does
+        // not carry it, so whoever is watching estimates it — and the host
+        // writes it, so the window and the terminal say the same speed with
+        // the same units.
         viva.rate.observe(p, super::ahora_ms());
         let (ritmo, queda) = (
             norte_frontend::tasks::human_rate(viva.rate.bps()),
@@ -569,25 +590,27 @@ impl Estado {
         viva.vista = Self::vista_de(p);
         viva.vista.rate = ritmo;
         viva.vista.eta = queda;
-        // De quién es la task no lo dice el progreso: lo dice de dónde vino.
+        // Whose task it is is not said by progress: it is said by where it
+        // came from.
         viva.vista.foreign = ajena;
-        // Leído de la vista que se acaba de proyectar: volver a construirla
-        // solo para mirar su estado cuesta dos `String` y un `path_display`
-        // en cada tick de progreso de cada task del lote.
+        // Read from the view that was just projected: rebuilding it only to
+        // look at its state costs two `String`s and a `path_display` on
+        // every progress tick of every task in the batch.
         let acabo = Self::terminal(viva.vista.state);
         let estado_final = viva.vista.state;
-        // Acaba de terminar: empieza su rato en el tablero. Solo en la
-        // TRANSICIÓN — el daemon repite el último progreso al reconectar, y
-        // rearmar el reloj en cada repetición dejaría la fila ahí para
-        // siempre, que es justo lo contrario de lo que se pide.
+        // It just finished: its time on the board starts. Only on the
+        // TRANSITION — the daemon repeats the last progress on reconnecting,
+        // and rearming the clock on every repeat would leave the row there
+        // forever, which is exactly the opposite of what is asked for.
         if acabo && !era_terminal {
             Self::programar_caducidad(p.task_id.get(), epoca, buzon);
         }
-        // El panel que se abre y se cierra solo (`[ui] processes_panel =
-        // "auto"`, ADR 0115): un panel que ocupa sitio para decir «nada en
-        // marcha» no se lo gana, y buscar el botón justo cuando empieza una
-        // copia tampoco. Solo cierra lo que abrió él, y va por las DOS MITADES
-        // del gesto, nunca por el interruptor.
+        // The panel that opens and closes on its own (`[ui] processes_panel
+        // = "auto"`, ADR 0115): a panel taking up space to say "nothing
+        // running" does not earn it, and hunting for the button right when a
+        // copy starts does not either. It only closes what it itself opened,
+        // and goes through BOTH HALVES of the gesture, never through the
+        // toggle.
         self.anotar_tira(buzon);
         let del_panel = self.procesos_automaticos(backend, buzon);
         let mut cambios = self.cambios_de_linea();
@@ -595,16 +618,16 @@ impl Estado {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
         });
-        // El desenlace entra en la cuenta del lote (#271). Solo cuando el lote
-        // queda RESUELTO viaja algo: doscientas frases de «una más» no dicen
-        // nada que la fila no diga ya.
+        // The outcome enters the batch's count (#271). Something only
+        // travels when the batch is RESOLVED: two hundred "one more"
+        // phrases say nothing the row does not already say.
         if acabo && self.anota_desenlace_de_lote(p.task_id.get(), estado_final) {
             cambios.push(self.cambio_de_banners());
         }
-        // Un deshacer que TERMINA suelta su sesión: mientras corre, la fila
-        // lo dice y `u` sobre ella se rehúsa —dos undos de la misma sesión
-        // caminan la misma lista de entradas— y eso no puede quedarse pegado
-        // para siempre.
+        // An undo that FINISHES releases its session: while it runs, the
+        // row says so and `u` over it is refused — two undos of the same
+        // session walk the same entry list — and that cannot stay stuck
+        // forever.
         if acabo && let Some(sesion) = self.agencia.undos.remove(&p.task_id.get()) {
             self.agencia.sesiones.deshecha(&sesion);
             if self.agencia.panel {
@@ -613,18 +636,18 @@ impl Estado {
                 });
             }
         }
-        // Si la que acaba de terminar es LA búsqueda, su vista deja de decir
-        // «buscando…»: una lista que ya no crece y una que sigue creciendo se
-        // leen igual si nadie las distingue.
-        // CON el desenlace, no solo «ya no está viva»: una búsqueda que falló
-        // al segundo directorio y otra que recorrió el árbol entero se
-        // pintaban las dos como «N hallazgos», que es una afirmación falsa
-        // sobre el disco — y quien la lee deja de buscar.
+        // If the one that just finished is THE search, its view stops saying
+        // "searching…": a list that no longer grows and one that keeps
+        // growing read the same if nobody tells them apart.
+        // WITH the outcome, not just "is no longer alive": a search that
+        // failed on the second directory and another that walked the whole
+        // tree both painted as "N hits", which is a false assertion about
+        // the disk — and whoever reads it stops searching.
         //
-        // Y quién es un desenlace lo dice el crate compartido, no un
-        // `!= Running`: `Pending`, `Paused` y `Unknown` tampoco lo son, y con
-        // aquel predicado una búsqueda encolada —o una de un daemon más
-        // nuevo— se anunciaba terminada sin hallazgos.
+        // And what counts as an outcome is said by the shared crate, not by
+        // a `!= Running`: `Pending`, `Paused` and `Unknown` are not one
+        // either, and with that predicate an enqueued search — or one from a
+        // newer daemon — announced itself finished with no hits.
         let lang = self.lang;
         let desenlace = norte_frontend::search_status::outcome_of(&p.state, |e| {
             clamp_display(norte_frontend::error::error_category_in(lang, e))
@@ -638,63 +661,67 @@ impl Estado {
                 search: self.vista_busqueda(),
             });
         }
-        // Una mutación que terminó deja pantallas desactualizadas: la entrada
-        // nueva está en el disco y no en el listado. Solo con un desenlace de
-        // VERDAD —`Running` no lo es—, y una sola vez.
+        // A mutation that finished leaves screens out of date: the new entry
+        // is on disk and not in the listing. Only with a REAL outcome —
+        // `Running` is not one — and only once.
         if acabo {
             cambios.extend(self.refrescar_afectados(p.task_id.get(), backend, buzon));
             self.pedir_informe_de_lote(p, backend, buzon);
-            // Y la línea de tiempo (#359): lo que acaba de hacerse —o de
-            // deshacerse— tiene que aparecer en un panel que sigue abierto.
+            // And the timeline (#359): what just happened — or was just
+            // undone — has to show up in a panel that stays open.
             self.recargar_lineas();
             cambios.extend(self.cerrar_comparacion(p));
             cambios.extend(self.cerrar_sincronizacion(p));
             self.pedir_informe_de_sync(p, backend, buzon);
-            // #311: y el de las sumas, que es donde viajan los digests.
+            // #311: and the checksums' one, which is where the digests
+            // travel.
             self.pedir_informe_de_sumas(p, backend, buzon);
             cambios.extend(self.decir_el_recuento(p));
             cambios.extend(self.ofrecer_reintento(p));
             self.abrir_lo_creado(p, backend, buzon);
             self.avisar_del_desenlace(p);
         }
-        // El panel automático viaja DETRÁS del parche y aparte: abrir o cerrar
-        // un hueco rehace el reparto entero, así que son envolturas ya hechas
-        // —con su propia foto— y no un cambio más de esta lista.
+        // The automatic panel travels BEHIND the patch and separately:
+        // opening or closing a slot rebuilds the whole layout, so those are
+        // already-built envelopes — with their own snapshot — and not one
+        // more change in this list.
         let mut fuera = vec![self.parche(cambios)];
         fuera.extend(del_panel);
         fuera
     }
 
-    /// El TOTAL de un recuento, que es lo único que ese recuento produce
+    /// A count's TOTAL, which is the only thing that count produces
     /// (#139, #290).
     ///
-    /// `fs.dir_size` no publica nada ni muta nada: su resultado **es** su
-    /// progreso terminal. Sin esto, la ventana lanzaría la cuenta, la vería
-    /// terminar en el tablero y no diría nunca cuánto ocupaba.
+    /// `fs.dir_size` publishes nothing and mutates nothing: its result **is**
+    /// its terminal progress. Without this, the window would launch the
+    /// count, see it finish on the board, and never say how much it took up.
     ///
-    /// **Un total con algo ilegible dentro se dice DISTINTO**: un recuento
-    /// sirve para decidir si algo CABE en el destino, así que darlo redondo
-    /// sin haberlo podido contar entero es una respuesta equivocada, no una
-    /// incompleta. Con ilegibles se dice «al menos», que es lo que se sabe.
+    /// **A total with something unreadable inside is stated DIFFERENTLY**: a
+    /// count is used to decide whether something FITS at the destination, so
+    /// giving it round without having been able to count it in full is a
+    /// wrong answer, not an incomplete one. With unreadable ones, "at least"
+    /// is said, which is what is known.
     ///
-    /// `unreadable: None` —un daemon 0.52, que no los contaba— se lee como
-    /// cero, igual que en el TUI (`refresh.rs`): callar el total porque el
-    /// otro extremo es viejo sería peor que darlo. Las dos superficies tienen
-    /// que decir lo mismo ante el mismo progreso.
+    /// `unreadable: None` — a 0.52 daemon, which did not count them — reads
+    /// as zero, same as in the TUI (`refresh.rs`): staying quiet about the
+    /// total because the other end is old would be worse than giving it.
+    /// Both surfaces have to say the same thing given the same progress.
     ///
-    /// Solo con `Completed`: una cuenta cancelada o fallida no tiene total que
-    /// dar, y pintar el parcial de una cancelación como si fuera la respuesta
-    /// es el mismo error de arriba con otro nombre.
-    /// Saca un aviso por el escritorio cuando un agente PIDE permiso (#285).
+    /// Only with `Completed`: a cancelled or failed count has no total to
+    /// give, and painting a cancellation's partial as if it were the answer
+    /// is the same bug above under another name.
+    /// Sends a desktop notification when an agent ASKS for permission
+    /// (#285).
     ///
-    /// De los tres avisos, este es el que justifica el mecanismo: una
-    /// aprobación tiene TTL y se deniega sola si nadie contesta, así que no
-    /// enterarse cambia el desenlace. Una copia terminada sigue terminada
-    /// cuando vuelves.
+    /// Of the three notifications, this is the one that justifies the
+    /// mechanism: an approval has a TTL and denies itself if nobody answers,
+    /// so not noticing changes the outcome. A finished copy stays finished
+    /// when you come back.
     ///
-    /// Lleva la OPERACIÓN y quién la pide, no las rutas: el cuerpo de la
-    /// petición puede ser largo y el diálogo lo enseña entero cuando se abra.
-    /// Lo que la notificación tiene que conseguir es que alguien mire.
+    /// Carries the OPERATION and who is asking, not the paths: the
+    /// request's body can be long and the dialog shows it in full when it
+    /// opens. What the notification has to achieve is that someone looks.
     pub(super) fn avisar_de_aprobacion(
         &mut self,
         req: &norte_proto::methods::PolicyApprovalRequired,
@@ -714,18 +741,18 @@ impl Estado {
         self.nativo(crate::dto::NativeEffect::Notify { titulo, cuerpo });
     }
 
-    /// Saca un aviso por el escritorio cuando una task TERMINA (#285).
+    /// Sends a desktop notification when a task FINISHES (#285).
     ///
-    /// Solo con la ventana SIN foco: si está delante, la barra y el tablero
-    /// cuentan ya lo mismo, y repetirlo por fuera es ruido. Es la única
-    /// condición — un aviso que además dependiera de cuánto tardó la task
-    /// necesitaría un umbral, y elegirlo bien es otra decisión.
+    /// Only with the window WITHOUT focus: if it is up front, the status bar
+    /// and the board already say the same thing, and repeating it outside is
+    /// noise. It is the only condition — a notification that also depended
+    /// on how long the task took would need a threshold, and picking a good
+    /// one is a separate decision.
     ///
-    /// El nombre del fichero SÍ va dentro, y por eso pasa por el mismo
-    /// enmascarado que el listado: una notificación acaba en el historial del
-    /// escritorio y puede verse en la pantalla de bloqueo, así que un nombre
-    /// con bidi o con caracteres de control no puede fingir ahí lo que no
-    /// puede fingir aquí.
+    /// The file's name DOES go inside, and that is why it goes through the
+    /// same masking as the listing: a notification ends up in the desktop's
+    /// history and can be seen on the lock screen, so a name with bidi or
+    /// control characters cannot fake there what it cannot fake here.
     pub(super) fn avisar_del_desenlace(&mut self, p: &norte_proto::TaskProgress) {
         if self.enfocada {
             return;
@@ -733,19 +760,21 @@ impl Estado {
         let (clave, cuenta) = match &p.state {
             norte_proto::TaskState::Completed => ("notify-task-done", p.entries_done),
             norte_proto::TaskState::Failed { .. } => ("notify-task-failed", p.entries_done),
-            // Cancelar lo pidió quien está delante: no hace falta contárselo.
+            // Cancelling was requested by whoever is in front: no need to
+            // tell them.
             _ => return,
         };
-        // Qué fichero iba, si el progreso lo dice. `current` es una ruta del
-        // otro extremo: se enmascara y se acorta igual que una fila.
+        // Which file was in flight, if progress says so. `current` is a
+        // path from the other end: it is masked and shortened the same as a
+        // row.
         //
-        // Sobre los bytes CRUDOS del último segmento, no sobre
-        // `display_lossy()`: ahí los U+FFFD ya están puestos, y enmascarar un
-        // texto que ya es UTF-8 impecable devuelve «fiel» siempre. Aquí el
-        // veredicto no se usa —una notificación del escritorio no tiene dónde
-        // poner una insignia— pero el ENMASCARADO sí, y sobre el lossy no
-        // hacía nada: es el mismo error que se acaba de arreglar en el
-        // diálogo de colisión, dos funciones más abajo.
+        // Over the last segment's RAW bytes, not over `display_lossy()`:
+        // there, the U+FFFDs are already in place, and masking text that is
+        // already flawless UTF-8 always returns "faithful". Here the verdict
+        // is not used — a desktop notification has nowhere to put a badge —
+        // but the MASKING is, and over the lossy version it did nothing: it
+        // is the same bug just fixed in the collision dialog, two functions
+        // below.
         let detalle = p.current.as_ref().map_or_else(
             || cuenta.to_string(),
             |path| {
@@ -765,16 +794,16 @@ impl Estado {
         self.nativo(crate::dto::NativeEffect::Notify { titulo, cuerpo });
     }
 
-    /// Una transferencia que CHOCÓ abre la pregunta que faltaba (#274).
+    /// A transfer that COLLIDED opens the missing question (#274).
     ///
-    /// La ventana manda siempre `CollisionPolicy::Fail`, que es el default
-    /// seguro —sobrescribir o renombrar son decisiones del lector—, pero no
-    /// tenía dónde tomarlas: quedaba una task fallida en el tablero y ningún
-    /// camino hacia delante, mientras el TUI sí ofrece las cuatro salidas.
+    /// The window always sends `CollisionPolicy::Fail`, the safe default —
+    /// overwriting or renaming are the reader's decisions — but had nowhere
+    /// to make them: a failed task was left on the board with no path
+    /// forward, while the TUI does offer the four outcomes.
     ///
-    /// Solo con un `Conflict` y solo si la task trae con qué reintentar: un
-    /// borrado o un undo no tienen otra política que ofrecer, y una task ajena
-    /// no es de esta ventana.
+    /// Only with a `Conflict` and only if the task carries something to
+    /// retry with: a delete or an undo have no other policy to offer, and an
+    /// unrelated task does not belong to this window.
     pub(super) fn ofrecer_reintento(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
         if !matches!(
             p.state,
@@ -791,12 +820,12 @@ impl Estado {
         else {
             return Vec::new();
         };
-        // El destino, en su propio campo y enmascarado: es un nombre de
-        // fichero del otro extremo, y es LO que el lector tiene que mirar para
-        // decidir si sobrescribe. Por el embudo, que enmascara los bytes
-        // CRUDOS: sobre `display_lossy()` los U+FFFD ya estaban puestos y el
-        // veredicto salía «fiel» — sin insignia, en la única pantalla donde
-        // se aprueba sobrescribir.
+        // The destination, in its own field and masked: it is a file name
+        // from the other end, and it is WHAT the reader has to look at to
+        // decide whether to overwrite. Through the funnel, which masks the
+        // RAW bytes: over `display_lossy()` the U+FFFDs were already in
+        // place and the verdict came out "faithful" — no badge, on the one
+        // screen where overwriting is approved.
         let destino = Self::linea_con_encoding(&con.to, con.enc);
         let modal = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
@@ -814,20 +843,19 @@ impl Estado {
             }],
             overflow_note: String::new(),
             overflow_hostile: false,
-            // Las MISMAS cuatro que el TUI, y en el mismo orden: es la tabla
-            // de `dialog.*` del catálogo compartido, no una lista inventada
-            // aquí.
+            // The SAME four as the TUI, and in the same order: it is the
+            // shared catalog's `dialog.*` table, not a list invented here.
             choices: vec![
                 DialogChoice {
                     id: "overwrite".to_owned(),
                     label_key: "dialog-overwrite".to_owned(),
-                    // Sobrescribir DESTRUYE lo que hay en el destino.
+                    // Overwriting DESTROYS what is at the destination.
                     destructive: true,
                 },
                 DialogChoice {
                     id: "newer".to_owned(),
                     label_key: "dialog-newer".to_owned(),
-                    // También sobrescribe, solo que condicionado a la fecha.
+                    // It also overwrites, only conditioned on the date.
                     destructive: true,
                 },
                 DialogChoice {
@@ -856,10 +884,11 @@ impl Estado {
             id: modal,
             vista,
             tecleado: Tecleado::Texto(String::new()),
-            // Se abrió SOLO —llega cuando la task termina, encima de lo que el
-            // lector estuviera haciendo—, así que la primera respuesta solo lo
-            // reconoce. Es la misma regla que una aprobación de agente, y aquí
-            // importa igual: la primera opción es «sobrescribir».
+            // It opened ON ITS OWN — it arrives when the task finishes, on
+            // top of whatever the reader was doing — so the first answer
+            // only acknowledges it. It is the same rule as an agent
+            // approval, and here it matters just as much: the first option
+            // is "overwrite".
             reconocido: false,
             al_confirmar: Some(Pendiente::Reintentar { con }),
         });
@@ -898,25 +927,27 @@ impl Estado {
         vec![ViewChange::Status(self.status.clone())]
     }
 
-    /// Un lote de renombrado que acaba de terminar: se le pide su informe.
+    /// A rename batch that just finished: its report is requested.
     ///
-    /// Es la ÚNICA señal de que el directorio se quedó A MEDIAS, y hay que
-    /// pedirla AUNQUE la Task diga `Completed`: el desenlace de la Task
-    /// habla del lote, y el informe habla de lo que quedó en el disco.
+    /// It is the ONLY signal that the directory was left HALFWAY, and it has
+    /// to be requested EVEN IF the Task says `Completed`: the Task's outcome
+    /// talks about the batch, and the report talks about what was left on
+    /// disk.
     ///
-    /// Se pide también para un lote AJENO —otro cliente de esta sesión— por
-    /// el mismo motivo: el directorio medio renombrado es el mismo mire quien
-    /// lo mire, y quien tiene esta ventana delante es quien lo va a ver.
+    /// It is also requested for an UNRELATED batch — another client of this
+    /// session — for the same reason: the half-renamed directory is the same
+    /// no matter who looks at it, and whoever has this window in front of
+    /// them is who is going to see it.
     pub(super) fn pedir_informe_de_lote(
         &mut self,
         p: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
-        // Tres clases tienen informe, y las tres por el mismo motivo: lo que
-        // hay que decir no cabe en el desenlace de una Task. Las dos primeras
-        // cuentan lo que quedó a medias; la tercera cuenta algo de un
-        // empaquetado que salió BIEN (#250).
+        // Three classes have a report, and all three for the same reason:
+        // what has to be said does not fit in a Task's outcome. The first
+        // two count what was left halfway; the third counts something about
+        // a pack that came out FINE (#250).
         #[derive(Clone, Copy)]
         enum Cual {
             Lote,
@@ -926,13 +957,13 @@ impl Estado {
         let cual = match p.kind {
             norte_proto::TaskKind::RenameBatch => Cual::Lote,
             norte_proto::TaskKind::Undo => Cual::Undo,
-            // **Solo un empaquetado que COMPLETÓ.** Los otros dos informes
-            // hablan de lo que quedó a medias, así que un `Failed` o un
-            // `Cancelled` es justo cuando más falta hacen; este habla de un
-            // archivo, y de un empaquetado cancelado no hay ninguno —la
-            // cancelación deja el destino limpio—. El informe existe igual
-            // (se calcula antes de escribir), y pintarlo diría «empaquetado,
-            // pero…» sobre algo que nadie empaquetó.
+            // **Only a pack that COMPLETED.** The other two reports talk
+            // about what was left halfway, so a `Failed` or a `Cancelled` is
+            // exactly when they are most needed; this one talks about an
+            // archive, and there is no such thing as a cancelled pack —
+            // cancellation leaves the destination clean. The report exists
+            // regardless (it is computed before writing), and painting it
+            // would say "packed, but…" about something nobody packed.
             norte_proto::TaskKind::Pack if matches!(p.state, norte_proto::TaskState::Completed) => {
                 Cual::Empaquetado
             }
@@ -958,22 +989,23 @@ impl Estado {
         });
     }
 
-    /// Encolar una mutación falló: se dice, y si fue por el journal se
-    /// queda dicho.
+    /// Enqueuing a mutation failed: it is reported, and if it was because of
+    /// the journal it stays reported.
     ///
-    /// `error_key` devuelve una CLAVE Fluent, y el contrato de
-    /// `StatusView.message` dice «ya traducido por el host»: sin traducir, el
-    /// usuario leía `err-not-found` en la barra.
+    /// `error_key` returns a Fluent KEY, and `StatusView.message`'s contract
+    /// says "already translated by the host": untranslated, the user read
+    /// `err-not-found` in the status bar.
     pub(super) fn task_fallida(&mut self, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
         let clave = norte_frontend::error::error_key(e);
         self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
-        // Un rechazo por journal no es una mutación que salió mal: es que
-        // ESTA SESIÓN no muta hasta que el fichero se arregle (regla dura 4).
-        // Eso dura más que un mensaje.
+        // A journal rejection is not a mutation gone wrong: it is that THIS
+        // SESSION does not mutate until the file is fixed (hard rule 4).
+        // That lasts longer than one message.
         self.journal_rehusado |= matches!(e, Error::JournalUnavailable);
-        // Una creación que ni llegó a encolarse suelta su intención: sin task
-        // no hay desenlace que la consuma, y quedarse pegada haría que el
-        // SIGUIENTE `edit-new` abriera el fichero de este, que no existe.
+        // A creation that never even got enqueued releases its intent: with
+        // no task there is no outcome to consume it, and staying stuck
+        // would make the NEXT `edit-new` open this one's file, which does
+        // not exist.
         if self
             .abrir_al_crear
             .as_ref()
@@ -990,42 +1022,44 @@ impl Estado {
         vec![parche, aviso]
     }
 
-    /// Una entrada del lote la rechazó el daemon al encolar (#271).
+    /// A batch entry was rejected by the daemon on enqueuing (#271).
     ///
-    /// No pinta nada: cuenta. Con `CollisionPolicy::Fail` contra un destino
-    /// poblado los rechazos son la norma, y N mensajes de los que sobrevive el
-    /// último no dicen ni cuántos hubo.
+    /// Paints nothing: it counts. With `CollisionPolicy::Fail` against a
+    /// populated destination, rejections are the norm, and N messages of
+    /// which only the last survives do not even say how many there were.
     ///
-    /// Sin lote abierto —no debería pasar, el bucle solo manda esto dentro de
-    /// uno— cae a la barra, que es lo que hacía antes: perder el aviso entero
-    /// es peor que pintarlo donde ya se pintaba.
+    /// With no batch open — should not happen, the loop only sends this
+    /// inside one — it falls back to the status bar, which is what it used
+    /// to do before: losing the whole notice entirely is worse than painting
+    /// it where it was already being painted.
     pub(super) fn rechazo_de_lote(&mut self, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Some(lote) = self.lote.as_mut() else {
             return self.task_fallida(e);
         };
         lote.rechazadas += 1;
-        // Un rechazo por journal sigue significando lo mismo aunque venga de
-        // un lote: esta sesión NO muta hasta que el fichero se arregle (regla
-        // dura 4), y eso dura más que cualquier resumen — y es lo único de un
-        // rechazo suelto que SÍ viaja antes del final.
+        // A journal rejection still means the same thing even coming from a
+        // batch: this session does NOT mutate until the file is fixed (hard
+        // rule 4), and that lasts longer than any summary — and it is the
+        // only thing about a lone rejection that DOES travel before the end.
         let antes = self.journal_rehusado;
         self.journal_rehusado |= matches!(e, Error::JournalUnavailable);
         let banner_nuevo = self.journal_rehusado != antes;
         if !self.resumen_de_lote_si_cerrado() && !banner_nuevo {
-            // Un parche por rechazo es la tormenta que esto existe para
-            // apagar: mientras el lote siga abierto, nada viaja.
+            // A patch per rejection is the storm this exists to silence:
+            // while the batch stays open, nothing travels.
             return Vec::new();
         }
         let cambio = self.cambio_de_banners();
         vec![self.parche(vec![cambio])]
     }
 
-    /// Anota el desenlace de UNA task del lote (#271). `true` si con ella el
-    /// lote quedó resuelto y `status.message` ya lleva el resumen.
+    /// Notes down ONE batch task's outcome (#271). `true` if the batch was
+    /// resolved by it and `status.message` already carries the summary.
     ///
-    /// El id se saca de la cuenta al anotarlo: un progreso terminal puede
-    /// llegar más de una vez —un reanuncio tras reconectar trae el estado
-    /// final otra vez— y la segunda no es un segundo desenlace.
+    /// The id is removed from the count when noted down: terminal progress
+    /// can arrive more than once — a re-announcement after reconnecting
+    /// brings the final state again — and the second one is not a second
+    /// outcome.
     pub(super) fn anota_desenlace_de_lote(&mut self, id: u64, estado: TaskStateView) -> bool {
         let Some(lote) = self.lote.as_mut() else {
             return false;
@@ -1041,7 +1075,8 @@ impl Estado {
         self.resumen_de_lote_si_cerrado()
     }
 
-    /// Si el lote está resuelto, pone el resumen en la barra y lo cierra.
+    /// If the batch is resolved, puts the summary in the status bar and
+    /// closes it.
     pub(super) fn resumen_de_lote_si_cerrado(&mut self) -> bool {
         let Some(lote) = self.lote.as_ref() else {
             return false;
@@ -1049,9 +1084,10 @@ impl Estado {
         if !lote.cerrado() {
             return false;
         }
-        // Rechazada al encolar y terminada mal son el mismo desenlace para
-        // quien mira: no llegó. Distinguirlas pediría dos números más en una
-        // frase que tiene que caber en la barra.
+        // Rejected on enqueuing and terminated badly are the same outcome
+        // for whoever is watching: it did not arrive. Telling them apart
+        // would need two more numbers in a phrase that has to fit in the
+        // status bar.
         let total = lote.total.to_string();
         let bien = lote.hechas.to_string();
         let mal = (lote.rechazadas + lote.fallidas).to_string();
@@ -1064,17 +1100,18 @@ impl Estado {
         true
     }
 
-    /// Un informe llegó: al tablero, y delante si dejó algo a medias.
+    /// A report arrived: onto the board, and up front if it left something
+    /// halfway.
     pub(super) fn informe(
         &mut self,
         epoca: u64,
         task_id: u64,
         cual: &Informe,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // Un informe que salió ANTES de la reconexión habla de una task de
-        // otro daemon, y el id puede estar reutilizado: colgarlo de la fila
-        // que hoy lleva ese número abriría un «se quedó a medias» sobre un
-        // directorio que no es.
+        // A report that came out BEFORE the reconnection talks about a task
+        // from a different daemon, and the id can be reused: hanging it off
+        // the row that carries that number today would open a "was left
+        // halfway" about the wrong directory.
         if epoca != self.epoca_conexion {
             return Vec::new();
         }
@@ -1085,13 +1122,13 @@ impl Estado {
         }
     }
 
-    /// El informe de un empaquetado llegó (#250).
+    /// A pack's report arrived (#250).
     ///
-    /// **Un informe limpio no dice nada, y eso es el diseño**: la respuesta
-    /// corriente es que el archivo viaja entero, y avisar de ello enseñaría a
-    /// no leer el aviso que sí importa. Un error tampoco se pinta: contra un
-    /// daemon N-1 el método no existe, y «no se pudo preguntar» no es un
-    /// hallazgo sobre el archivo.
+    /// **A clean report says nothing, and that is the design**: the normal
+    /// answer is that the archive travels whole, and warning about it would
+    /// teach people to skip the warning that does matter. An error is not
+    /// painted either: against an N-1 daemon the method does not exist, and
+    /// "could not ask" is not a finding about the archive.
     pub(super) fn informe_de_empaquetado(
         &mut self,
         res: &Result<norte_proto::methods::ArchivePackReportResult, Error>,
@@ -1102,9 +1139,9 @@ impl Estado {
         if informe.risky.is_empty() {
             return Vec::new();
         }
-        // Recortado dice «al menos»: la lista se corta en
-        // `ARCHIVE_PACK_REPORT_MAX`, y pintar el tope como si fuera el total es
-        // la mentira que `truncated` existe para impedir.
+        // Trimmed says "at least": the list is cut off at
+        // `ARCHIVE_PACK_REPORT_MAX`, and painting the cap as if it were the
+        // total is the lie `truncated` exists to prevent.
         let clave = if informe.truncated {
             "msg-pack-warnings-partial"
         } else {
@@ -1120,20 +1157,22 @@ impl Estado {
         vec![self.parche(vec![cambio])]
     }
 
-    /// El informe de un undo llegó: al tablero, y delante si algo no volvió.
+    /// An undo's report arrived: onto the board, and up front if something
+    /// did not come back.
     ///
-    /// Misma forma que [`Self::informe_de_lote`] porque es la misma pregunta
-    /// —qué quedó sin deshacer— hecha sobre otra clase de Task.
+    /// Same shape as [`Self::informe_de_lote`] because it is the same
+    /// question — what was left undone — asked about a different Task
+    /// class.
     pub(super) fn informe_de_undo(
         &mut self,
         task_id: u64,
         resultado: &Result<norte_proto::methods::PolicyUndoReportResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // Una fila que ya no está NO tira el informe: el tablero está acotado
-        // y la task pudo caerse mientras el informe volaba, pero lo que se
-        // perdía así era justo el «se quedó a medias», que jamás se doblega
-        // dentro de «fue bien». Sin fila se salta el detalle y se enseña
-        // igual lo que haya que decir.
+        // A row that is no longer there does NOT drop the report: the board
+        // is capped and the task could have fallen off while the report was
+        // in flight, but what got lost that way was exactly "was left
+        // halfway", which never folds into "went fine". With no row, the
+        // detail is skipped and whatever needs to be said is still shown.
         let fallo_la_task = self.tasks.get(&task_id).is_some_and(|viva| {
             matches!(
                 viva.vista.state,
@@ -1184,19 +1223,19 @@ impl Estado {
         salidas
     }
 
-    /// `true` si el undo devolvió TODO lo que tocaba.
+    /// `true` if the undo returned EVERYTHING it should have.
     ///
-    /// Lo saltado cuenta como no-limpio: una entrada irreversible o una
-    /// creación que se queda porque el destino no tiene papelera son cosas
-    /// que NO volvieron, y un informe que las callara diría que el árbol
-    /// está como estaba.
+    /// What was skipped counts as not-clean: an irreversible entry or a
+    /// creation that stays because the destination has no trash are things
+    /// that did NOT come back, and a report that stayed quiet about them
+    /// would say the tree is as it was.
     pub(super) fn undo_limpio(r: &norte_proto::methods::PolicyUndoReportResult) -> bool {
         norte_frontend::undo_report_is_clean(r)
     }
 
-    /// El cuerpo del informe de un undo: qué volvió y qué no. Las líneas las
-    /// decide `norte_frontend::undo_report_lines`, que es también lo que
-    /// enseña la terminal; aquí solo se pintan.
+    /// An undo report's body: what came back and what did not. The lines are
+    /// decided by `norte_frontend::undo_report_lines`, which is also what the
+    /// terminal shows; here they are only painted.
     pub(super) fn cuerpo_de_undo(
         &self,
         r: &norte_proto::methods::PolicyUndoReportResult,
@@ -1204,8 +1243,8 @@ impl Estado {
         Self::pintar_informe(norte_frontend::undo_report_lines(r, self.lang))
     }
 
-    /// Las líneas de un informe compartido, pintadas: las frases acotadas, y
-    /// cada ruta como línea de ruta —enmascarada y marcada—.
+    /// A shared report's lines, painted: the phrases clamped, and each path
+    /// as a path line — masked and flagged.
     fn pintar_informe(lineas: Vec<norte_frontend::ReportLine>) -> Vec<crate::dto::DialogLine> {
         lineas
             .into_iter()
@@ -1219,20 +1258,21 @@ impl Estado {
             .collect()
     }
 
-    /// El informe llegó: se apunta en el tablero y, si el lote dejó algo a
-    /// medias, se dice DELANTE.
+    /// The report arrived: it is noted on the board and, if the batch left
+    /// something halfway, it is said UP FRONT.
     ///
-    /// Dos superficies y no una: la fila del tablero se queda con el resumen
-    /// —sobrevive a que alguien cierre lo que sea—, y el diálogo es lo que
-    /// hace que un directorio medio renombrado no pase inadvertido. Un lote
-    /// limpio no abre nada: no hay nada que buscar.
+    /// Two surfaces and not one: the board's row keeps the summary — it
+    /// survives whatever anyone closes — and the dialog is what keeps a
+    /// half-renamed directory from going unnoticed. A clean batch opens
+    /// nothing: there is nothing to look for.
     pub(super) fn informe_de_lote(
         &mut self,
         task_id: u64,
         resultado: &Result<norte_proto::methods::FsRenameBatchReportResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // Ver [`Self::informe_de_undo`]: sin fila, el informe se enseña
-        // igual. Lo que no se hace es inventarse una fila para colgarlo.
+        // See [`Self::informe_de_undo`]: with no row, the report is shown
+        // just the same. What is not done is inventing a row to hang it off
+        // of.
         let fallo_la_task = self.tasks.get(&task_id).is_some_and(|viva| {
             matches!(
                 viva.vista.state,
@@ -1256,9 +1296,9 @@ impl Estado {
                 )
             }
         };
-        // El detalle de la fila es «qué va por dentro» mientras corre; ya
-        // terminada, lo que importa es en qué quedó. No hay más progreso
-        // detrás que lo pise: el estado es terminal.
+        // The row's detail is "what is currently in flight" while it runs;
+        // once finished, what matters is what it ended up as. There is no
+        // more progress behind it to overwrite it: the state is terminal.
         if let Some(t) = self.tasks.get_mut(&task_id) {
             t.vista.detail = Some(clamp_display(detalle));
             t.vista.detail_hostile = false;
@@ -1267,14 +1307,15 @@ impl Estado {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
         }];
-        // Se abre por lo que el INFORME dice, no por cómo terminó la Task:
-        // un lote `Completed` con un paso atascado es exactamente el caso
-        // que el desenlace de la Task no cuenta.
+        // It opens by what the REPORT says, not by how the Task finished: a
+        // `Completed` batch with a stuck step is exactly the case the
+        // Task's outcome does not count.
         let hay_que_decirlo = match resultado {
             Ok(r) => !Self::lote_limpio(r),
-            // Un informe que no se pudo pedir sobre un lote que además falló
-            // deja el directorio sin explicación: eso se dice delante. Si el
-            // lote terminó bien, la fila del tablero basta.
+            // A report that could not be requested about a batch that also
+            // failed leaves the directory with no explanation: that is said
+            // up front. If the batch finished fine, the board's row is
+            // enough.
             Err(_) => fallo_la_task,
         };
         let mut caidos = Vec::new();
@@ -1289,12 +1330,12 @@ impl Estado {
         salidas
     }
 
-    /// `true` si el lote no dejó nada que buscar ni que rematar.
+    /// `true` if the batch left nothing to look for or to finish off.
     pub(super) fn lote_limpio(r: &norte_proto::methods::FsRenameBatchReportResult) -> bool {
         norte_frontend::batch_report_is_clean(r)
     }
 
-    /// El resumen de una línea que se queda en la fila del tablero.
+    /// The one-line summary that stays in the board's row.
     pub(super) fn detalle_de_lote(
         lang: norte_i18n::Lang,
         r: &norte_proto::methods::FsRenameBatchReportResult,
@@ -1312,13 +1353,13 @@ impl Estado {
         )
     }
 
-    /// El cuerpo del informe: qué se aplicó, qué no se pudo devolver, y CÓMO
-    /// SE LLAMA AHORA lo que se quedó a medias.
+    /// The report's body: what was applied, what could not be returned, and
+    /// WHAT THE THING LEFT HALFWAY IS CALLED NOW.
     ///
-    /// Las líneas las decide `norte_frontend::batch_report_lines`, que es
-    /// también lo que imprime la CLI; aquí solo se pintan. El nombre de ahora
-    /// va como línea de ruta —enmascarada y marcada—, nunca dentro de una
-    /// frase.
+    /// The lines are decided by `norte_frontend::batch_report_lines`, which
+    /// is also what the CLI prints; here they are only painted. The current
+    /// name goes as a path line — masked and flagged — never inside a
+    /// sentence.
     pub(super) fn cuerpo_de_lote(
         &self,
         r: &norte_proto::methods::FsRenameBatchReportResult,
@@ -1326,22 +1367,22 @@ impl Estado {
         Self::pintar_informe(norte_frontend::batch_report_lines(r, self.lang))
     }
 
-    /// Apila un diálogo, con techo.
+    /// Stacks a dialog, with a cap.
     ///
-    /// El techo existe porque la pila la alimenta el WIRE desde la tarea 5.3
-    /// (aprobaciones e informes, también de tasks ajenas). Se cae el más
-    /// viejo SIN reconocer —lo que nadie ha llegado a mirar— y nunca el de
-    /// arriba, que es el que se está contestando; si todos están reconocidos,
-    /// el más viejo. Que se cayó alguno se DICE: una pregunta que desaparece
-    /// en silencio es peor que una pila larga.
+    /// The cap exists because the stack is fed by the WIRE since task 5.3
+    /// (approvals and reports, unrelated tasks' too). The oldest UNACKNOWLEDGED
+    /// one falls — the one nobody has gotten around to looking at — and never
+    /// the top one, which is the one being answered; if all are acknowledged,
+    /// the oldest one. That one fell IS SAID: a question disappearing in
+    /// silence is worse than a long stack.
     pub(super) fn apilar_dialogo(&mut self, dialogo: Dialogo) -> Vec<BridgeEnvelope<UiUpdate>> {
         let mut fuera = Vec::new();
         if self.dialogos.len() >= MAX_DIALOGS {
-            // Se sacrifica un INFORME antes que una decisión: el informe
-            // también vive en la fila del tablero, y una aprobación que
-            // desaparece deja a un agente esperando. Si solo quedan
-            // decisiones, cae la más vieja — a esa el daemon le acabará
-            // aplicando su TTL, que es una denegación.
+            // A REPORT is sacrificed before a decision: the report also
+            // lives on the board's row, and an approval that disappears
+            // leaves an agent waiting. If only decisions are left, the
+            // oldest one falls — the daemon will eventually apply its TTL to
+            // that one, which is a denial.
             let victima = self
                 .dialogos
                 .iter()
@@ -1355,8 +1396,8 @@ impl Estado {
         fuera
     }
 
-    /// Abre el diálogo de un informe. Solo informa: no tiene nada que
-    /// ejecutar, y su única respuesta lo cierra.
+    /// Opens a report's dialog. It only informs: it has nothing to execute,
+    /// and its only answer closes it.
     pub(super) fn abrir_informe(
         &mut self,
         title_key: String,
@@ -1390,7 +1431,7 @@ impl Estado {
             id,
             vista,
             tecleado: Tecleado::Texto(String::new()),
-            // Se abre SOLO, cuando el daemon contesta.
+            // It opens ON ITS OWN, when the daemon answers.
             reconocido: false,
             al_confirmar: None,
         });
@@ -1402,22 +1443,23 @@ impl Estado {
         )
     }
 
-    /// `task.cancel`: le pide parar a UNA task, y dice a cuál o que no hay.
+    /// `task.cancel`: asks ONE task to stop, and says which or that there is
+    /// none.
     ///
-    /// Qué task es depende de dónde está el foco, y no por gusto: con el
-    /// panel de procesos delante, el tablero pinta un cursor, y una tecla que
-    /// cancelara otra cosa dejaría ese cursor pintando una selección que no
-    /// manda. Sin ese panel enfocado se cancela la ÚLTIMA viva, que es lo que
-    /// hace el TUI con la misma tecla.
+    /// Which task it is depends on where focus is, and not by whim: with the
+    /// processes panel in front, the board paints a cursor, and a key
+    /// cancelling something else would leave that cursor painting a
+    /// selection with no say. Without that panel focused, the LAST alive one
+    /// is cancelled, which is what the TUI does with the same key.
     pub(super) fn cancelar_por_comando(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match self.task_a_cancelar() {
             Objetivo::Ninguna => (self.aplicada(), self.decir("msg-no-tasks")),
             Objetivo::Terminada => (self.aplicada(), self.decir("msg-task-finished")),
             Objetivo::Viva(id) => {
-                // Una ventana sin efectos no aborta la task de OTRO cliente:
-                // cancelar una copia deja el destino limpio o un
-                // `.norte-partial`, o sea que toca el disco. Las propias sí,
-                // que para lanzarlas ya hacía falta el interruptor.
+                // A window with no effects does not abort ANOTHER client's
+                // task: cancelling a copy leaves the destination clean or a
+                // `.norte-partial`, i.e. it touches disk. Its own ones,
+                // though, since launching them already needed the toggle.
                 if self.efectos == crate::commands::Efectos::SoloLectura
                     && self.tasks.get(&id).is_some_and(|t| t.vista.foreign)
                 {
@@ -1430,14 +1472,14 @@ impl Estado {
         }
     }
 
-    /// Pausa la tarea elegida, o la reanuda si ya está pausada (ADR 0147).
+    /// Pauses the chosen task, or resumes it if already paused (ADR 0147).
     ///
-    /// La elige como cancelar —la del cursor con el panel de procesos
-    /// enfocado, y si no la más reciente viva—, y mira su estado EN VIVO para
-    /// decidir el sentido. La petición va al daemon fuera del actor; si no
-    /// sabe pausar (`Unsupported`, un daemon 0.81) vuelve un mensaje que lo
-    /// dice, porque una pausa que no ocurre y no se dice es peor que no
-    /// ofrecerla.
+    /// Chosen the same way as cancel — the cursor's with the processes panel
+    /// focused, and otherwise the most recent alive one — and looks at its
+    /// LIVE state to decide the direction. The request goes to the daemon
+    /// outside the actor; if it does not know how to pause (`Unsupported`, a
+    /// 0.81 daemon) a message comes back saying so, because a pause that
+    /// does not happen and is not reported is worse than not offering it.
     pub(super) fn pausar_por_comando(
         &mut self,
         buzon: &mpsc::Sender<Mensaje>,
@@ -1478,8 +1520,8 @@ impl Estado {
         (self.aplicada(), self.decir(aviso))
     }
 
-    /// Enciende o apaga la cola en serie para lo que se lance a partir de
-    /// ahora (ADR 0149). Lo ya encolado sigue en su cola.
+    /// Turns the serial queue on or off for whatever launches from now on
+    /// (ADR 0149). What is already queued stays in its queue.
     pub(super) fn alternar_cola(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.encolar = !self.encolar;
         let aviso = if self.encolar {
@@ -1490,11 +1532,11 @@ impl Estado {
         (self.aplicada(), self.decir(aviso))
     }
 
-    /// Sube o baja en la cola la tarea señalada del tablero (ADR 0149).
+    /// Moves the board's pointed-at task up or down the queue (ADR 0149).
     ///
-    /// La petición va fuera del actor, como la pausa: lo que de verdad pasó
-    /// se ve en el orden en que salen, y un daemon que no conoce la cola lo
-    /// dice.
+    /// The request goes outside the actor, like the pause: what really
+    /// happened shows in the order they come out in, and a daemon that does
+    /// not know the queue says so.
     pub(super) fn mover_en_cola_por_comando(
         &mut self,
         arriba: bool,
@@ -1517,12 +1559,12 @@ impl Estado {
         (self.aplicada(), self.decir("msg-queued-moved"))
     }
 
-    /// Lo que está llegando a `hueco`, 0–100 (ADR 0148): el porcentaje de la
-    /// tarea de TRABAJO viva cuyos directorios afectados incluyen el suyo.
+    /// What is arriving at `hueco`, 0–100 (ADR 0148): the percentage of the
+    /// live WORK task whose affected directories include its own.
     ///
-    /// Con varias manda la MENOS avanzada, como en la regla de la fila
-    /// (`processes::progress_for`): lo que falta para que ese panel esté
-    /// tranquilo es lo que le falte a la más atrasada.
+    /// With several, the LEAST advanced rules, as in the row's rule
+    /// (`processes::progress_for`): what that pane needs to be at ease is
+    /// whatever the most behind one still needs.
     pub(super) fn progreso_de_hueco(&self, hueco: &Hueco) -> Option<u8> {
         let dir = hueco.pane.dir();
         self.tasks
@@ -1534,8 +1576,8 @@ impl Estado {
             .min()
     }
 
-    /// Los cambios de línea fina que haya que mandar, comparando con lo
-    /// último que cruzó: dos píxeles no valen un listado.
+    /// The fine-grained line changes that need sending, compared with the
+    /// last one that crossed: two pixels are not worth a listing.
     pub(super) fn cambios_de_linea(&mut self) -> Vec<ViewChange> {
         let ahora: Vec<(u32, Option<u8>)> = self
             .huecos
@@ -1555,13 +1597,13 @@ impl Estado {
         cambios
     }
 
-    /// Repite la transferencia fallida más reciente, con sus MISMAS opciones
+    /// Repeats the most recent failed transfer, with its SAME options
     /// (ADR 0148).
     ///
-    /// El contexto ya se guardaba para el diálogo de colisión (#274); lo que
-    /// faltaba era poder usarlo cuando lo que falló no fue una colisión —una
-    /// red que se cayó, un destino que se llenó— y había que rehacer la
-    /// operación a mano.
+    /// The context was already saved for the collision dialog (#274); what
+    /// was missing was being able to use it when what failed was not a
+    /// collision — a network that dropped, a destination that filled up —
+    /// and the operation had to be redone by hand.
     pub(super) fn reintentar_por_comando(
         &mut self,
         backend: &Arc<dyn HostBackend>,
@@ -1582,8 +1624,9 @@ impl Estado {
         let Some(con) = con else {
             return (self.aplicada(), self.decir("msg-no-retry"));
         };
-        // Con la política que se pidió la primera vez: repetir no es decidir
-        // otra cosa, y una colisión vuelve a preguntar como entonces.
+        // With the policy requested the first time: repeating is not
+        // deciding something else, and a collision asks again just like
+        // before.
         Self::lanzar_reintento(
             con,
             norte_proto::CollisionPolicy::Fail,
@@ -1594,12 +1637,12 @@ impl Estado {
         (self.aplicada(), self.decir("msg-retrying"))
     }
 
-    /// Mueve la fila elegida del tablero.
+    /// Moves the board's chosen row.
     ///
-    /// Sin necesitar el foco del panel de procesos: el tablero se pinta
-    /// también cuando ese hueco no existe —las tasks salen en el sobre— y un
-    /// comando que solo funcionara con un hueco concreto abierto sería una
-    /// tecla que depende de la disposición.
+    /// Without needing the processes panel's focus: the board is painted
+    /// even when that slot does not exist — tasks go out in the envelope —
+    /// and a command that only worked with one specific slot open would be a
+    /// key that depends on the layout.
     pub(super) fn mover_en_tablero(
         &mut self,
         atras: bool,
@@ -1613,11 +1656,12 @@ impl Estado {
         } else {
             self.cursor_procesos.down(&ids);
         }
-        // FOTO y no parche. Desde el puente 57 el cursor sí tiene por dónde
-        // viajar (`ViewChange::Tasks`), así que esto ya no es «no hay
-        // contrato»: es que una tecla que solo mueve la elección no necesita
-        // reenviar el tablero entero, y la foto es lo que este camino lleva
-        // haciendo sin queja. Cambiarlo es una optimización, no un arreglo.
+        // SNAPSHOT and not a patch. Since bridge 57 the cursor DOES have
+        // somewhere to travel (`ViewChange::Tasks`), so this is no longer
+        // "there is no contract": it is that a key that only moves the
+        // choice does not need to resend the whole board, and the snapshot
+        // is what this path has been doing without complaint. Changing it
+        // is an optimization, not a fix.
         let snap = self.snapshot();
         (
             self.aplicada(),
@@ -1625,11 +1669,11 @@ impl Estado {
         )
     }
 
-    /// Quita del tablero la fila elegida, si YA terminó.
+    /// Removes the board's chosen row, if it has ALREADY finished.
     ///
-    /// Una viva no se descarta: pararla es `task.cancel`, y quitar de la
-    /// vista algo que sigue escribiendo en el disco es perder de vista
-    /// justo lo que hay que mirar.
+    /// A live one is not discarded: stopping it is `task.cancel`, and
+    /// removing from view something still writing to disk is losing sight
+    /// of exactly what needs watching.
     pub(super) fn descartar_task(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let ids = self.ids_del_tablero();
         if ids.is_empty() {
@@ -1649,12 +1693,13 @@ impl Estado {
         }
         self.tasks.remove(&id);
         self.undos_sin_task(id);
-        // El cursor NO se re-acota aquí, y antes sí: la regla del tipo
-        // compartido es leer la fila por la IDENTIDAD de la elegida y caer a
-        // la posición recordada solo si esa ya no está. Descartar la última
-        // deja la selección en la que ahora es la última —igual que antes— y,
-        // a diferencia de antes, si el tablero vuelve a crecer la elección
-        // vuelve a donde estaba en vez de haberse quedado pegada.
+        // The cursor is NOT re-clamped here, and it used to be: the shared
+        // type's rule is to read the row by the chosen one's IDENTITY and
+        // fall back to the remembered position only if that one is gone.
+        // Discarding the last one leaves the selection on what is now the
+        // last one — same as before — and, unlike before, if the board grows
+        // again the choice goes back to where it was instead of having
+        // stayed stuck.
         let mut fuera = vec![self.parche(vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
             cursor: self.cursor_del_tablero(),
@@ -1664,24 +1709,24 @@ impl Estado {
         (self.aplicada(), fuera)
     }
 
-    /// Suelta el «deshaciendo» de una sesión cuya task se descarta.
+    /// Releases the "undoing" of a session whose task is discarded.
     ///
-    /// Descartar la fila de un undo que terminó es lo mismo que verlo
-    /// terminar: si no se soltara aquí, esa sesión se quedaría marcada como
-    /// «deshaciendo» para siempre y `u` sobre ella se rehusaría sin motivo.
+    /// Discarding a finished undo's row is the same as seeing it finish: if
+    /// it were not released here, that session would stay marked "undoing"
+    /// forever and `u` over it would be refused for no reason.
     pub(super) fn undos_sin_task(&mut self, task_id: u64) {
         if let Some(sesion) = self.agencia.undos.remove(&task_id) {
             self.agencia.sesiones.deshecha(&sesion);
         }
     }
 
-    /// A qué task le toca parar.
+    /// Which task is due to stop.
     pub(super) fn task_a_cancelar(&self) -> Objetivo {
         if self.procesos_tienen_el_foco() {
-            // La del cursor, sea cual sea su estado: la eligió un humano
-            // mirándola. Si ya terminó se DICE, en vez de saltar a otra —
-            // cancelar una task que no es la señalada es peor que no
-            // cancelar nada.
+            // The cursor's, whatever its state: a human chose it by looking
+            // at it. If it already finished, it IS SAID, instead of jumping
+            // to another one — cancelling a task that is not the pointed-at
+            // one is worse than not cancelling anything.
             let Some((id, viva)) = self
                 .tasks_visibles()
                 .nth(self.cursor_procesos.fila_o_cero(&self.ids_del_tablero()))
@@ -1694,8 +1739,8 @@ impl Estado {
                 Objetivo::Terminada
             };
         }
-        // El tablero va por id, y el daemon los reparte crecientes: la última
-        // viva es la de id mayor.
+        // The board goes by id, and the daemon hands them out increasing:
+        // the last alive one is the one with the highest id.
         self.tasks
             .iter()
             .rev()
@@ -1703,12 +1748,13 @@ impl Estado {
             .map_or(Objetivo::Ninguna, |(id, _)| Objetivo::Viva(*id))
     }
 
-    /// `true` si esta clase de task ESCRIBE.
+    /// `true` if this task class WRITES.
     ///
-    /// Por la clave del catálogo y no por `TaskKind`, que es no exhaustivo:
-    /// una clase de un daemon más nuevo cae en `unknown` y NO cuenta como
-    /// mutación, que es el lado seguro — apagar el aviso del journal por algo
-    /// que este host no sabe qué hace sería apagarlo por si acaso.
+    /// By the catalog's key and not by `TaskKind`, which is not exhaustive:
+    /// a class from a newer daemon falls into `unknown` and does NOT count
+    /// as a mutation, which is the safe side — turning off the journal
+    /// warning for something this host does not know what it does would be
+    /// turning it off just in case.
     pub(super) fn muta(clase: &str) -> bool {
         matches!(
             clase,
@@ -1720,23 +1766,25 @@ impl Estado {
                 | "undo"
                 | "pack"
                 | "sync"
-                // #314: cambiar permisos MUTA, con journal y reversa.
+                // #314: changing permissions MUTATES, with a journal entry
+                // and a reversal.
                 | "set-mode"
         )
     }
 
-    /// `true` si a esta task todavía se le puede pedir que pare.
+    /// `true` if this task can still be asked to stop.
     ///
-    /// Pregunta al progreso EN VIVO y no a la vista proyectada: entre que el
-    /// daemon marca el desenlace y el `Mensaje::Progreso` sale del buzón, la
-    /// vista dice que sigue corriendo. Sobre esa foto se contestaba
-    /// «cancelando…» a algo ya terminado y se elegía como «última viva» a una
-    /// que ya no lo era, dejando corriendo la que de verdad quedaba.
+    /// Asks the LIVE progress and not the projected view: between the daemon
+    /// marking the outcome and `Mensaje::Progreso` leaving the mailbox, the
+    /// view says it is still running. Over that snapshot, "cancelling…" used
+    /// to be answered about something already finished, and the one chosen
+    /// as "last alive" was one that no longer was, leaving the one that
+    /// really remained still running.
     pub(super) fn sigue_viva(t: &TaskViva) -> bool {
         !t.progreso.borrow().state.is_terminal()
     }
 
-    /// `true` si el foco está en el panel de procesos.
+    /// `true` if focus is on the processes panel.
     pub(super) fn procesos_tienen_el_foco(&self) -> bool {
         self.roles
             .get(RoleId::Active)
@@ -1744,11 +1792,11 @@ impl Estado {
             .is_some_and(|k| k.as_str() == "processes")
     }
 
-    /// Dice una frase: en la barra de estado Y como aviso.
+    /// States a phrase: in the status bar AND as a notification.
     ///
-    /// Las dos cosas y por la misma llamada, que es lo que ya hace una task
-    /// fallida: la barra es donde se lee al mirar, y el aviso es lo que el
-    /// renderer puede anunciar a un lector de pantalla.
+    /// Both things, and through the same call, which is what a failed task
+    /// already does: the status bar is where it is read on looking, and the
+    /// notification is what the renderer can announce to a screen reader.
     pub(super) fn decir_con(
         &mut self,
         clave: &str,
@@ -1763,7 +1811,7 @@ impl Estado {
         vec![parche, aviso]
     }
 
-    /// Como [`Self::decir_con`], sin argumentos.
+    /// Like [`Self::decir_con`], with no arguments.
     pub(super) fn decir(&mut self, clave: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
         self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
         let parche = self.parche(vec![ViewChange::Status(self.status.clone())]);
@@ -1774,8 +1822,8 @@ impl Estado {
         vec![parche, aviso]
     }
 
-    /// Pide la cancelación de una task. Idempotente por contrato: pedirla dos
-    /// veces no es un error ni cambia nada.
+    /// Requests a task's cancellation. Idempotent by contract: requesting it
+    /// twice is not an error and changes nothing.
     pub(super) fn cancelar(&mut self, task_id: u64) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(viva) = self.tasks.get(&task_id) else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
@@ -1784,43 +1832,45 @@ impl Estado {
         (self.aplicada(), Vec::new())
     }
 
-    /// El tablero que cruza el puente, acotado a [`MAX_TASKS`].
+    /// The board that crosses the bridge, capped to [`MAX_TASKS`].
     ///
-    /// El desalojo de `registrar_task` solo puede tirar tasks TERMINADAS, así
-    /// que un lote más grande que el tope —marcar tres mil ficheros y pulsar
-    /// F5 es el flujo normal— no tiene nada que desalojar y el mapa crece por
-    /// encima del tope que el contrato del puente promete. Se acota aquí, que
-    /// es donde el número significa algo: cuántas filas viajan.
+    /// `registrar_task`'s eviction can only drop FINISHED tasks, so a batch
+    /// larger than the cap — marking three thousand files and pressing F5
+    /// is the normal flow — has nothing to evict and the map grows past the
+    /// cap the bridge's contract promises. It is capped here, which is where
+    /// the number means something: how many rows travel.
     ///
-    /// Se quedan las MÁS NUEVAS (el mapa está ordenado por id, que es
-    /// monótono): lo que interesa de un lote en marcha es su frente, no las
-    /// primeras que se encolaron.
+    /// The NEWEST ones stay (the map is ordered by id, which is monotonic):
+    /// what matters about a batch in progress is its front, not the first
+    /// ones enqueued.
     pub(super) fn vistas_de_tasks(&self) -> Vec<TaskView> {
         self.tasks_visibles()
             .map(|(_, t)| t.vista.clone())
             .collect()
     }
 
-    /// Las tasks que CRUZAN el puente, en el orden en que se pintan.
+    /// The tasks that CROSS the bridge, in the order they are painted.
     ///
-    /// UNA sola definición de «las visibles», y no por gusto: el tablero se
-    /// recorta a [`MAX_TASKS`] y el cursor es un ÍNDICE. Mientras el recorte
-    /// vivía solo aquí y el cursor contaba sobre el mapa entero, con más de
-    /// 256 tasks —marcar tres mil ficheros y pulsar F5 es el flujo normal, y
-    /// el desalojo solo se lleva las TERMINADAS— la fila resaltada y la task
-    /// que se cancelaba eran dos tasks distintas. Es literalmente lo que el
-    /// rustdoc del panel prohíbe: «dos listas de tareas se separan, y la que
-    /// se ve deja de ser la que se cancela».
+    /// ONE single definition of "the visible ones", and not by whim: the
+    /// board is trimmed to [`MAX_TASKS`] and the cursor is an INDEX. While
+    /// the trim lived only here and the cursor counted over the whole map,
+    /// with more than 256 tasks — marking three thousand files and pressing
+    /// F5 is the normal flow, and eviction only takes the FINISHED ones —
+    /// the highlighted row and the task being cancelled were two different
+    /// tasks. It is literally what the panel's rustdoc forbids: "two task
+    /// lists split apart, and the one that is seen stops being the one that
+    /// is cancelled".
     pub(super) fn tasks_visibles(&self) -> impl Iterator<Item = (&u64, &TaskViva)> {
         let sobran = self.tasks.len().saturating_sub(MAX_TASKS);
         self.tasks.iter().skip(sobran)
     }
 
-    /// Abre o cierra el panel de procesos por su cuenta, y dice qué cambió.
+    /// Opens or closes the processes panel on its own, and says what
+    /// changed.
     ///
-    /// Las dos MITADES del gesto, nunca el interruptor: reutilizar
-    /// `alternar_hueco` cerraría el panel al empezar la segunda tarea y
-    /// reabriría el que el lector acaba de cerrar (ADR 0115).
+    /// Both HALVES of the gesture, never the toggle: reusing
+    /// `alternar_hueco` would close the panel when the second task starts
+    /// and reopen the one the reader just closed (ADR 0115).
     pub(super) fn procesos_automaticos(
         &mut self,
         backend: &Arc<dyn HostBackend>,
@@ -1831,10 +1881,11 @@ impl Estado {
         {
             return Vec::new();
         }
-        // ABRE cuando la ráfaga de trabajo ya DURA (ADR 0146): lo que acaba
-        // antes lo cuenta la barra de estado sin quitarle un tercio de
-        // pantalla al listado. CIERRA como siempre, cuando no queda ninguna
-        // fila de trabajo: así se ve terminada la que tardó.
+        // OPENS when the work burst has already LASTED (ADR 0146): what
+        // finishes sooner is counted by the status bar without taking a
+        // third of the screen away from the listing. CLOSES as always, when
+        // no work row is left: that way the one that took a while is seen
+        // finished.
         let abre = self.tira.wants_panel(self.reloj_tira());
         let hay = self.hay_trabajo();
         let abierto = self.hueco_de_kind("processes").is_some();
@@ -1849,21 +1900,23 @@ impl Estado {
         Vec::new()
     }
 
-    /// El reloj de la barra ligera, en ms desde que arrancó el host: de
-    /// tokio, para que los tests lo pausen y adelanten.
+    /// The light bar's clock, in ms since the host started: tokio's, so
+    /// tests can pause and fast-forward it.
     pub(super) fn reloj_tira(&self) -> i64 {
         i64::try_from(self.tira_base.elapsed().as_millis()).unwrap_or(i64::MAX)
     }
 
-    /// Le enseña el tablero a la barra ligera (ADR 0146) y programa el
-    /// próximo despertar si la barra va a cambiar sin que llegue progreso.
+    /// Shows the board to the light bar (ADR 0146) and schedules the next
+    /// wake-up if the bar is going to change with no progress arriving.
     pub(super) fn anotar_tira(&mut self, buzon: &mpsc::Sender<Mensaje>) {
         let ahora = self.reloj_tira();
-        // Copias: el progreso vive tras un `watch`, y su guarda no puede
-        // cruzar la llamada. Son pocas (el tablero tiene tope) y pequeñas.
+        // Copies: progress lives behind a `watch`, and its guard cannot
+        // cross the call. There are few of them (the board has a cap) and
+        // they are small.
         //
-        // Solo las de ESTA conexión: una task de un daemon que ya no está no
-        // va a terminar nunca, y con ella dentro la ráfaga no se cerraría.
+        // Only THIS connection's: a task from a daemon that is no longer
+        // there is never going to finish, and with it inside the burst
+        // would never close.
         let fotos: Vec<(norte_proto::TaskProgress, Option<f64>)> = self
             .tasks
             .values()
@@ -1895,9 +1948,10 @@ impl Estado {
         });
     }
 
-    /// Llegó la hora que la barra pidió: se reanota, y viaja un parche solo
-    /// si algo de lo que depende de ella cambió (los elementos de la barra de
-    /// estado los compara `parche` solo; el panel, `procesos_automaticos`).
+    /// The time the bar asked for arrived: it is renoted, and a patch
+    /// travels only if something depending on it changed (the status bar's
+    /// elements are compared by `parche` alone; the panel, by
+    /// `procesos_automaticos`).
     pub(super) fn despertar_tira(
         &mut self,
         backend: &Arc<dyn HostBackend>,
@@ -1914,46 +1968,50 @@ impl Estado {
         envios
     }
 
-    /// Cuántas filas tiene el tablero PINTADO.
+    /// How many rows the PAINTED board has.
     pub(super) fn filas_de_tablero(&self) -> usize {
         self.tasks.len().min(MAX_TASKS)
     }
 
-    /// `true` si hay TRABAJO en marcha, que es lo único que abre el panel solo.
+    /// `true` if there is WORK in progress, the only thing that opens the
+    /// panel on its own.
     ///
-    /// No es `filas_de_tablero() > 0`: el tablero lista también las clases
-    /// observacionales —una búsqueda, una suma, un tamaño de directorio—, y
-    /// abrir medio tercio de pantalla por una búsqueda tapa la lista de
-    /// hallazgos para decir lo que esa lista ya dice. La TUI no las metió
-    /// nunca en su tablero, así que sin esta cuenta aparte los dos frontends
-    /// abrían el panel en escenarios distintos; la regla vive una sola vez, en
+    /// Not `filas_de_tablero() > 0`: the board also lists the observational
+    /// classes — a search, a checksum, a directory size — and opening a
+    /// third of the screen for a search covers the hits list to say what
+    /// that list already says. The TUI never put those in its board, so
+    /// without this separate count the two frontends opened the panel in
+    /// different scenarios; the rule lives in one single place, in
     /// [`norte_frontend::tasks::counts_as_work`] (ADR 0077, ADR 0115).
     ///
-    /// Pregunta al progreso EN VIVO porque es donde está la clase tipada; la
-    /// vista proyectada solo lleva su nombre.
+    /// Asks the LIVE progress because that is where the typed class is; the
+    /// projected view only carries its name.
     fn hay_trabajo(&self) -> bool {
-        // Solo de esta conexión, por lo mismo que en `anotar_tira`: el trabajo
-        // de un daemon anterior no va a acabar, y el panel no se cerraría.
+        // Only this connection's, for the same reason as in `anotar_tira`:
+        // a previous daemon's work is never going to finish, and the panel
+        // would not close.
         self.tasks.values().any(|t| {
             t.epoca == self.epoca_conexion
                 && norte_frontend::tasks::counts_as_work(t.progreso.borrow().kind)
         })
     }
 
-    /// Los ids de las tasks PINTADAS, en el orden en que se pintan.
+    /// The PAINTED tasks' ids, in the order they are painted.
     ///
-    /// Es lo que el cursor del panel necesita: guarda la IDENTIDAD de la
-    /// elegida, no su posición, porque el tablero se mueve solo y una fila que
-    /// caduca por encima haría que la misma posición nombrara otra tarea.
+    /// It is what the panel's cursor needs: it stores the chosen one's
+    /// IDENTITY, not its position, because the board moves on its own and a
+    /// row expiring above it would make the same position name a different
+    /// task.
     pub(super) fn ids_del_tablero(&self) -> Vec<u64> {
         self.tasks_visibles().map(|(id, _)| *id).collect()
     }
 
-    /// Qué fila del tablero está elegida, sobre las filas PINTADAS.
+    /// Which board row is chosen, over the PAINTED rows.
     ///
-    /// Índice sobre lo que el renderer resalta, no sobre el mapa entero: con
-    /// el tablero recortado por el tope señalaba a otra. `None` con cero
-    /// filas, porque un índice sin fila detrás resalta la nada.
+    /// An index over what the renderer highlights, not over the whole map:
+    /// with the board trimmed by the cap, it pointed at a different one.
+    /// `None` with zero rows, because an index with no row behind it
+    /// highlights nothing.
     pub(super) fn cursor_del_tablero(&self) -> Option<u64> {
         self.cursor_procesos
             .fila(&self.ids_del_tablero())

@@ -1,6 +1,6 @@
-//! La OTRA decisión que `walk_trail` depende de y nadie pinchaba: qué
-//! navegaciones entran en el rastro. El guard `trail == Trail::Record` es la
-//! única línea que impide que `nav.back` se alimente de su propio rastro.
+//! The OTHER decision `walk_trail` depends on that nobody was poking at:
+//! which navigations enter the trail. The `trail == Trail::Record` guard is
+//! the only line stopping `nav.back` from feeding off its own trail.
 
 use norte_frontend::history::Popular;
 use norte_proto::VPath;
@@ -9,13 +9,13 @@ use norte_tui::nav;
 use norte_tui::navigate::record_step;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire de test")
+    VPath::parse(wire).expect("test wire")
 }
 
-/// Una navegación del USUARIO deja huella en las tres estructuras: el
-/// rastro que recorre `nav.back`, la MRU que pinta el popup y los populares.
+/// A USER navigation leaves a mark in all three structures: the trail
+/// `nav.back` walks, the MRU the popup paints, and the populars.
 #[test]
-fn una_navegacion_del_usuario_entra_en_el_rastro_y_en_la_mru() {
+fn a_user_navigation_enters_the_trail_and_the_mru() {
     let (mut h, mut p) = (nav::History::default(), Popular::default());
     record_step(
         &mut h,
@@ -24,22 +24,21 @@ fn una_navegacion_del_usuario_entra_en_el_rastro_y_en_la_mru() {
         &vp("mem:///b"),
         Trail::Record,
     );
-    assert_eq!(h.back_len(), 1, "un paso en el rastro");
-    assert!(h.entries().contains(&vp("mem:///a")), "y en la MRU");
+    assert_eq!(h.back_len(), 1, "one step in the trail");
+    assert!(h.entries().contains(&vp("mem:///a")), "and in the MRU");
     assert_eq!(
         p.entries()[0].path,
         vp("mem:///b"),
-        "y una visita a donde llega"
+        "and a visit to where it lands"
     );
 }
 
-/// EL guard. Un `Replay` es el rastro recorriéndose a sí mismo: si
-/// registrara, volver de B a A grabaría «estuve en B», el siguiente atrás
-/// devolvería a B, y el lector oscilaría entre dos directorios para
-/// siempre. Borra `|| trail != Trail::Record` de `record_visit` y este
-/// test se pone rojo.
+/// THE guard. A `Replay` is the trail walking itself: if it recorded, going
+/// back from B to A would log "was at B", the next back would return to B,
+/// and the reader would oscillate between two directories forever. Delete
+/// `|| trail != Trail::Record` from `record_visit` and this test goes red.
 #[test]
-fn un_replay_no_alimenta_el_rastro() {
+fn a_replay_does_not_feed_the_trail() {
     let (mut h, mut p) = (nav::History::default(), Popular::default());
     record_step(
         &mut h,
@@ -48,18 +47,18 @@ fn un_replay_no_alimenta_el_rastro() {
         &vp("mem:///a"),
         Trail::Replay(TrailStep::Back),
     );
-    assert_eq!(h.back_len(), 0, "un paso atrás jamás produce rastro");
+    assert_eq!(h.back_len(), 0, "a step back never produces a trail entry");
     assert!(
         h.entries().is_empty(),
-        "ni entra en la MRU: volver no es visitar un sitio nuevo"
+        "nor does it enter the MRU: going back is not visiting a new place"
     );
-    assert!(p.entries().is_empty(), "ni cuenta como visita");
+    assert!(p.entries().is_empty(), "nor does it count as a visit");
 }
 
-/// Un cd al MISMO dir (refresh-like) no es un paso que el lector diera:
-/// registrarlo haría que el siguiente `nav.back` no hiciera nada visible.
+/// A cd to the SAME dir (refresh-like) is not a step the reader took:
+/// recording it would make the next `nav.back` do nothing visible.
 #[test]
-fn un_cd_al_mismo_dir_no_es_un_paso() {
+fn a_cd_to_the_same_dir_is_not_a_step() {
     let (mut h, mut p) = (nav::History::default(), Popular::default());
     record_step(
         &mut h,

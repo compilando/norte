@@ -1,9 +1,10 @@
-//! Puente entre el modelo de tema (`norte-theme`, ADR 0020) y ratatui: resuelve
-//! el tema efectivo, detecta la profundidad de color del terminal y traduce
-//! [`norte_theme::Style`] a [`ratatui::style::Style`] a esa profundidad.
+//! Bridge between the theme model (`norte-theme`, ADR 0020) and ratatui:
+//! resolves the effective theme, detects the terminal's color depth, and
+//! translates [`norte_theme::Style`] to [`ratatui::style::Style`] at that
+//! depth.
 //!
-//! Vive en el frontend (regla 7: presentación, no lógica de negocio). La GUI de
-//! M5 tendrá su propio puente contra el MISMO `norte-theme`.
+//! Lives in the frontend (rule 7: presentation, not business logic). M5's GUI
+//! will have its own bridge against the SAME `norte-theme`.
 
 use norte_proto::EntryKind;
 use norte_theme::{Color, ColorDepth, FileKind, ResolvedColor, Role, Theme};
@@ -11,7 +12,7 @@ use ratatui::style::{Color as RColor, Modifier, Style as RStyle};
 
 pub use norte_frontend::theme::{ResolveError, resolve_theme};
 
-/// El tema resuelto + la profundidad de color a la que se pinta.
+/// The resolved theme + the color depth it is painted at.
 #[derive(Debug, Clone)]
 pub struct TuiTheme {
     theme: Theme,
@@ -25,40 +26,40 @@ impl Default for TuiTheme {
 }
 
 impl TuiTheme {
-    /// Tema + profundidad explícitos.
+    /// Explicit theme + depth.
     #[must_use]
     pub fn new(theme: Theme, depth: ColorDepth) -> Self {
         Self { theme, depth }
     }
 
-    /// La profundidad de color con la que se pinta: para construir OTRO tema
-    /// con la misma (la vista previa del asistente).
+    /// The color depth things are painted at: for building ANOTHER theme with
+    /// the same one (the wizard's preview).
     #[must_use]
     pub fn depth(&self) -> ColorDepth {
         self.depth
     }
 
-    /// `true` si el tema declara efectos de GPU (la TUI los ignora; solo lo
-    /// expone para diagnósticos).
+    /// `true` if the theme declares GPU effects (the TUI ignores them; it
+    /// only exposes this for diagnostics).
     #[must_use]
     pub fn has_effects(&self) -> bool {
         self.theme.has_effects()
     }
 
-    /// El nombre del tema resuelto (para casar el cursor del selector con el
-    /// tema vigente).
+    /// The resolved theme's name (to match the selector's cursor against the
+    /// current theme).
     #[must_use]
     pub fn name(&self) -> Option<&str> {
         self.theme.name.as_deref()
     }
 
-    /// El estilo ratatui de un rol semántico.
+    /// The ratatui style of a semantic role.
     #[must_use]
     pub fn role(&self, role: Role) -> RStyle {
         self.convert(self.theme.style(role))
     }
 
-    /// El estilo ratatui de una ENTRADA de fichero (color por extensión/kind,
+    /// The ratatui style of a file ENTRY (colored by extension/kind,
     /// ADR 0020 D2).
     #[must_use]
     pub fn entry(&self, name: &[u8], kind: EntryKind) -> RStyle {
@@ -90,19 +91,19 @@ impl TuiTheme {
     }
 }
 
-/// `EntryKind` del protocolo → `FileKind` del tema.
+/// Protocol `EntryKind` → theme `FileKind`.
 ///
-/// Delega en `norte_frontend::theme::file_kind_of`, que es de los DOS
-/// frontends: la ventana necesita el mismo mapeo desde el puente 66, y la
-/// misma decisión escrita dos veces diverge en silencio (ADR 0077). El porqué
-/// —que el `Entry` no lleva modo— está allí.
+/// Delegates to `norte_frontend::theme::file_kind_of`, which belongs to BOTH
+/// frontends: the window needs the same mapping since bridge 66, and the same
+/// decision written twice drifts apart in silence (ADR 0077). The why — that
+/// `Entry` carries no mode — is there.
 fn map_kind(kind: EntryKind) -> FileKind {
     norte_frontend::theme::file_kind_of(kind)
 }
 
-/// Detecta la profundidad de color del terminal (heurística — no hay API
-/// portable fiable, ADR 0020 D4): `COLORTERM=truecolor/24bit` → truecolor;
-/// `TERM` con `256` → 256; en otro caso, 16 colores.
+/// Detects the terminal's color depth (heuristic — there is no reliable
+/// portable API, ADR 0020 D4): `COLORTERM=truecolor/24bit` → truecolor; `TERM`
+/// containing `256` → 256; otherwise, 16 colors.
 #[must_use]
 pub fn detect_depth() -> ColorDepth {
     if let Ok(ct) = std::env::var("COLORTERM")
@@ -116,12 +117,12 @@ pub fn detect_depth() -> ColorDepth {
     ColorDepth::Ansi16
 }
 
-/// Resuelve la especificación `[ui].theme` al [`TuiTheme`] (tema compartido
-/// más profundidad del terminal). La resolución nombre/ruta vive en
-/// `norte_frontend::theme` (compartida con la GUI).
+/// Resolves the `[ui].theme` spec to a [`TuiTheme`] (shared theme plus the
+/// terminal's depth). The name/path resolution lives in
+/// `norte_frontend::theme` (shared with the GUI).
 ///
 /// # Errors
-/// Los de [`resolve_theme`].
+/// Those of [`resolve_theme`].
 pub fn resolve(spec: Option<&str>, depth: ColorDepth) -> Result<TuiTheme, ResolveError> {
     Ok(TuiTheme::new(resolve_theme(spec)?, depth))
 }

@@ -1,25 +1,25 @@
-//! Alt pulsado y soltado SOLO abre la barra de menús (`[ui] alt_menu`).
+//! Alt pressed and released ALONE opens the menu bar (`[ui] alt_menu`).
 //!
-//! Un terminal no avisa de un modificador suelto: en la codificación de
-//! siempre, Alt solo no produce ningún byte. Solo el protocolo de teclado de
-//! kitty lo cuenta, y únicamente en su modo «report all keys» (flag 8), con
-//! los tipos de evento (flag 2) para saber cuándo se SUELTA. Lo implementan
-//! kitty, foot, `WezTerm` y Ghostty; tmux, xterm y los terminales de VTE no, y
-//! ahí esta clave no hace nada.
+//! A terminal does not report a bare modifier: under the classic encoding,
+//! Alt alone produces no byte at all. Only kitty's keyboard protocol counts
+//! it, and only in its "report all keys" mode (flag 8), with event types
+//! (flag 2) to know when it is RELEASED. kitty, foot, `WezTerm`, and Ghostty
+//! implement it; tmux, xterm, and the VTE terminals do not, and there this
+//! key does nothing.
 //!
-//! Por qué va apagada por defecto: en ese modo el terminal manda la TECLA y
-//! no el texto, y crossterm no lee el texto asociado (flag 16). Una letra
-//! compuesta con tecla muerta —la `é` de un teclado español— o un símbolo
-//! escrito con `AltGr` —`@`, `#`, `[`— llega como su tecla base: en un
-//! renombrado, `a@b` puede quedar `a2b`. El flag 4 solo arregla Shift, porque
-//! `AltGr` no es un modificador del protocolo. Quien la encienda lo hace
-//! sabiendo eso.
+//! Why it ships off by default: in that mode the terminal sends the KEY and
+//! not the text, and crossterm does not read the associated text (flag 16).
+//! A letter composed with a dead key — the `é` of a Spanish keyboard — or a
+//! symbol typed with `AltGr` — `@`, `#`, `[` — arrives as its base key: in a
+//! rename, `a@b` can end up as `a2b`. Flag 4 only fixes Shift, because
+//! `AltGr` is not a protocol modifier. Whoever turns it on does so knowing
+//! that.
 //!
-//! Dos piezas, y ninguna decide qué hace el menú:
-//! - [`set`] pide o retira el protocolo. Su estado es de PROCESO, como el raw
-//!   mode, para que suspender, salir y el hook de pánico lo devuelvan sin que
-//!   nadie tenga que pasarles nada.
-//! - [`AltSolo`] reconoce el gesto sobre los eventos que llegan.
+//! Two pieces, and neither decides what the menu does:
+//! - [`set`] requests or withdraws the protocol. Its state is PROCESS-wide,
+//!   like raw mode, so suspending, quitting, and the panic hook can undo it
+//!   without anyone having to pass them anything.
+//! - [`AltSolo`] recognizes the gesture over the events that arrive.
 
 use std::io::{self, IsTerminal, Write};
 use std::sync::OnceLock;
@@ -30,175 +30,178 @@ use crossterm::event::{
     PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 
-/// ¿Está pedido el protocolo ahora mismo en el terminal?
-static PEDIDO: AtomicBool = AtomicBool::new(false);
+/// Is the protocol requested right now on the terminal?
+static REQUESTED: AtomicBool = AtomicBool::new(false);
 
-/// Desambiguar (1), tipos de evento (2), teclas alternativas (4) y todas las
-/// teclas como escape (8).
+/// Disambiguate (1), event types (2), alternate keys (4), and all keys as
+/// escape codes (8).
 ///
-/// El 4 no es opcional: sin él, con el 8 puesto, `Shift+a` llega como la
-/// tecla `a` con SHIFT, y el adaptador del keymap —que confía en que un
-/// `Char` ya trae la mayúscula— leería una minúscula. Con el 4 crossterm usa
-/// la tecla desplazada y quita el SHIFT, que es la forma de siempre.
+/// The 4 is not optional: without it, with 8 set, `Shift+a` arrives as the
+/// key `a` with SHIFT, and the keymap adapter — which trusts that a `Char`
+/// already carries the uppercase letter — would read a lowercase one. With 4,
+/// crossterm uses the shifted key and drops SHIFT, the usual way.
 const FLAGS: KeyboardEnhancementFlags = KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
     .union(KeyboardEnhancementFlags::REPORT_EVENT_TYPES)
     .union(KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS)
     .union(KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES);
 
-/// Pide (o retira) el protocolo si hace falta. Idempotente, como
-/// `mouse::Capture::set`: la recarga de config lo llama en cada vuelta.
+/// Requests (or withdraws) the protocol if needed. Idempotent, like
+/// `mouse::Capture::set`: the config reload calls it every turn.
 ///
-/// `soportado` solo se consulta al ENCENDER, y es una función para que los
-/// tests no pregunten a un terminal que no hay. Un terminal que no lo soporta
-/// no recibe nada y la clave se queda sin efecto, sin error: no hay nada que
-/// el lector pueda arreglar desde norte.
+/// `supported` is only consulted when TURNING ON, and it is a function so
+/// tests do not have to ask a terminal that is not there. A terminal that
+/// does not support it receives nothing and the key stays without effect,
+/// with no error: there is nothing the reader could fix from norte.
 ///
 /// # Errors
-/// La de escribir en `out`.
-pub fn set(want: bool, soportado: impl FnOnce() -> bool, out: &mut impl Write) -> io::Result<()> {
-    if want == PEDIDO.load(Ordering::Relaxed) {
+/// Whatever comes from writing to `out`.
+pub fn set(want: bool, supported: impl FnOnce() -> bool, out: &mut impl Write) -> io::Result<()> {
+    if want == REQUESTED.load(Ordering::Relaxed) {
         return Ok(());
     }
     if want {
-        if !soportado() {
+        if !supported() {
             return Ok(());
         }
         crossterm::execute!(out, PushKeyboardEnhancementFlags(FLAGS))?;
-    } else if !CEDIDO.swap(false, Ordering::Relaxed) {
-        // Cedido ya está fuera de la pila: quitarlo otra vez se llevaría una
-        // entrada que es del shell.
+    } else if !YIELDED.swap(false, Ordering::Relaxed) {
+        // Yielded is already off the stack: popping it again would take an
+        // entry that belongs to the shell.
         crossterm::execute!(out, PopKeyboardEnhancementFlags)?;
     }
-    PEDIDO.store(want, Ordering::Relaxed);
+    REQUESTED.store(want, Ordering::Relaxed);
     Ok(())
 }
 
-/// Pedido, pero retirado mientras otro programa tiene la terminal. Es lo que
-/// empareja [`ceder`] con [`recuperar`]: sin esto, un fallo ANTES de ceder
-/// dejaba a `recuperar` apilando una segunda entrada que la salida no quita.
-static CEDIDO: AtomicBool = AtomicBool::new(false);
+/// Requested, but withdrawn while another program has the terminal. This is
+/// what pairs [`ceder`] with [`recuperar`]: without it, a failure BEFORE
+/// yielding left `recuperar` stacking a second entry that exiting does not
+/// pop.
+static YIELDED: AtomicBool = AtomicBool::new(false);
 
-/// Lo que contestó el terminal, preguntado UNA vez.
-static SOPORTE: OnceLock<bool> = OnceLock::new();
+/// What the terminal answered, asked ONCE.
+static SUPPORT: OnceLock<bool> = OnceLock::new();
 
-/// Pregunta al terminal si habla el protocolo, y guarda la respuesta.
+/// Asks the terminal whether it speaks the protocol, and caches the answer.
 ///
-/// Se llama al ARRANCAR, antes de que el bucle levante su lector de eventos,
-/// y en ningún otro momento. Dos motivos, y los dos cuestan caro:
-/// - con el lector vivo, ese hilo tiene el lock de crossterm; la pregunta
-///   espera dos segundos, se rinde y contesta «no». Una recarga de config
-///   congelaba la TUI dos segundos y dejaba el gesto apagado.
-/// - crossterm manda la pregunta por STDOUT si no puede escribir en la
-///   terminal de control, y bajo `--pick` stdout es la tubería de datos de
-///   quien llama. Sin un terminal en stdout no se pregunta: se da por «no».
+/// Called at STARTUP, before the loop raises its event reader, and at no
+/// other time. Two reasons, and both are expensive:
+/// - with the reader alive, that thread holds crossterm's lock; the query
+///   waits two seconds, gives up, and answers "no". A config reload used to
+///   freeze the TUI for two seconds and leave the gesture off.
+/// - crossterm sends the query over STDOUT if it cannot write to the control
+///   terminal, and under `--pick` stdout is the caller's data pipe. With no
+///   terminal on stdout, it does not ask: it assumes "no".
 ///
-/// Un error se lee como «no»: una clave de presentación no tumba el arranque.
+/// An error reads as "no": a presentation key must not bring down startup.
 pub fn consultar_soporte() -> bool {
-    *SOPORTE.get_or_init(|| {
+    *SUPPORT.get_or_init(|| {
         io::stdout().is_terminal()
             && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
     })
 }
 
-/// La respuesta de [`consultar_soporte`], sin preguntar. Si no se preguntó,
-/// «no».
+/// [`consultar_soporte`]'s answer, without asking. If it was never asked,
+/// "no".
 #[must_use]
 pub fn soportado() -> bool {
-    SOPORTE.get().copied().unwrap_or(false)
+    SUPPORT.get().copied().unwrap_or(false)
 }
 
-/// Devuelve el terminal a la codificación de siempre SIN olvidar que estaba
-/// pedido: para ceder la terminal a un shell o a un editor, que no hablan
-/// este protocolo y recibirían escapes en vez de letras. Dos veces seguidas
-/// ceden una.
+/// Returns the terminal to its usual encoding WITHOUT forgetting it was
+/// requested: to yield the terminal to a shell or an editor, which do not
+/// speak this protocol and would receive escapes instead of letters. Two
+/// yields in a row are one.
 ///
 /// # Errors
-/// La de escribir en `out`.
+/// Whatever comes from writing to `out`.
 pub fn ceder(out: &mut impl Write) -> io::Result<()> {
-    if PEDIDO.load(Ordering::Relaxed) && !CEDIDO.swap(true, Ordering::Relaxed) {
+    if REQUESTED.load(Ordering::Relaxed) && !YIELDED.swap(true, Ordering::Relaxed) {
         crossterm::execute!(out, PopKeyboardEnhancementFlags)?;
     }
     Ok(())
 }
 
-/// La pareja de [`ceder`]: al volver de una suspensión. Solo apila lo que se
-/// cedió.
+/// [`ceder`]'s counterpart: on returning from a suspension. Only re-pushes
+/// what was yielded.
 ///
 /// # Errors
-/// La de escribir en `out`.
+/// Whatever comes from writing to `out`.
 pub fn recuperar(out: &mut impl Write) -> io::Result<()> {
-    if PEDIDO.load(Ordering::Relaxed) && CEDIDO.swap(false, Ordering::Relaxed) {
+    if REQUESTED.load(Ordering::Relaxed) && YIELDED.swap(false, Ordering::Relaxed) {
         crossterm::execute!(out, PushKeyboardEnhancementFlags(FLAGS))?;
     }
     Ok(())
 }
 
-/// Lo retira desde el hook de pánico, OLVIDANDO que estaba pedido.
+/// Withdraws it from the panic hook, FORGETTING that it was requested.
 ///
-/// Un pánico dentro de una tarea de tokio corre el hook y el proceso sigue
-/// vivo; al salir, `tty::restore` quitaría el protocolo otra vez, ya fuera de
-/// la pantalla alternativa, y se llevaría una entrada de la pila del shell.
+/// A panic inside a tokio task runs the hook and the process stays alive; on
+/// exit, `tty::restore` would remove the protocol again, already outside the
+/// alternate screen, and would take an entry off the shell's stack.
 ///
 /// # Errors
-/// La de escribir en `out`.
+/// Whatever comes from writing to `out`.
 pub fn soltar_en_panico(out: &mut impl Write) -> io::Result<()> {
-    let pedido = PEDIDO.swap(false, Ordering::Relaxed);
-    let cedido = CEDIDO.swap(false, Ordering::Relaxed);
-    if pedido && !cedido {
+    let requested = REQUESTED.swap(false, Ordering::Relaxed);
+    let yielded = YIELDED.swap(false, Ordering::Relaxed);
+    if requested && !yielded {
         crossterm::execute!(out, PopKeyboardEnhancementFlags)?;
     }
     Ok(())
 }
 
-/// ¿Es la pulsación de una tecla modificadora sola? Esas no son teclas para
-/// el keymap: dejarlas pasar resetearía una secuencia a medias (`g` … `g`)
-/// en cuanto el lector rozara Alt o Shift.
+/// Is this the press of a lone modifier key? Those are not keys for the
+/// keymap: letting them through would reset a half-done sequence (`g` … `g`)
+/// the moment the reader brushed Alt or Shift.
 #[must_use]
 pub const fn es_modificador(ev: &KeyEvent) -> bool {
     matches!(ev.code, KeyCode::Modifier(_))
 }
 
-/// El gesto: Alt baja sin otro modificador y sube sin nada en medio.
+/// The gesture: Alt goes down with no other modifier and comes up with
+/// nothing in between.
 #[derive(Debug, Default)]
 pub struct AltSolo {
-    armado: bool,
+    armed: bool,
 }
 
 impl AltSolo {
-    /// Un evento de teclado. `true` = acaba de completarse el gesto.
+    /// A keyboard event. `true` = the gesture just completed.
     ///
-    /// Cualquier otra pulsación desarma, así que `Alt+x` no abre el menú al
-    /// soltar Alt. La repetición de Alt mantenido no desarma. `AltGr` no es
-    /// Alt: el terminal lo manda como `IsoLevel3Shift`, y en un teclado
-    /// español escribe `@` y `#`.
+    /// Any other keystroke disarms it, so `Alt+x` does not open the menu on
+    /// releasing Alt. Repeating a held Alt does not disarm it. `AltGr` is not
+    /// Alt: the terminal sends it as `IsoLevel3Shift`, and on a Spanish
+    /// keyboard it types `@` and `#`.
     pub fn tecla(&mut self, ev: &KeyEvent) -> bool {
-        let es_alt = matches!(
+        let is_alt = matches!(
             ev.code,
             KeyCode::Modifier(ModifierKeyCode::LeftAlt | ModifierKeyCode::RightAlt)
         );
         match ev.kind {
             KeyEventKind::Press => {
-                self.armado = es_alt && ev.modifiers.difference(KeyModifiers::ALT).is_empty();
+                self.armed = is_alt && ev.modifiers.difference(KeyModifiers::ALT).is_empty();
                 false
             }
             KeyEventKind::Repeat => {
-                if !es_alt {
-                    self.armado = false;
+                if !is_alt {
+                    self.armed = false;
                 }
                 false
             }
             KeyEventKind::Release => {
-                if !es_alt {
+                if !is_alt {
                     return false;
                 }
-                std::mem::take(&mut self.armado)
+                std::mem::take(&mut self.armed)
             }
         }
     }
 
-    /// Algo que no es teclado se metió en medio: un clic, la rueda.
+    /// Something other than a keystroke got in the middle: a click, the
+    /// wheel.
     pub const fn soltar(&mut self) {
-        self.armado = false;
+        self.armed = false;
     }
 }
 
@@ -217,7 +220,7 @@ mod tests {
     }
 
     fn alt(kind: KeyEventKind) -> KeyEvent {
-        // crossterm pone ALT en los modificadores del propio Alt.
+        // crossterm puts ALT in Alt's own modifiers.
         ev(
             KeyCode::Modifier(ModifierKeyCode::LeftAlt),
             kind,
@@ -226,14 +229,14 @@ mod tests {
     }
 
     #[test]
-    fn bajar_y_soltar_alt_es_el_gesto() {
+    fn pressing_and_releasing_alt_is_the_gesture() {
         let mut a = AltSolo::default();
         assert!(!a.tecla(&alt(KeyEventKind::Press)));
         assert!(a.tecla(&alt(KeyEventKind::Release)));
     }
 
     #[test]
-    fn alt_mantenido_que_se_repite_sigue_siendo_el_gesto() {
+    fn a_held_alt_that_repeats_is_still_the_gesture() {
         let mut a = AltSolo::default();
         a.tecla(&alt(KeyEventKind::Press));
         a.tecla(&alt(KeyEventKind::Repeat));
@@ -241,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    fn alt_mas_otra_tecla_no_lo_es() {
+    fn alt_plus_another_key_is_not_it() {
         let mut a = AltSolo::default();
         a.tecla(&alt(KeyEventKind::Press));
         a.tecla(&ev(
@@ -258,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    fn altgr_no_es_alt() {
+    fn altgr_is_not_alt() {
         let mut a = AltSolo::default();
         let altgr = |k| {
             ev(
@@ -272,7 +275,7 @@ mod tests {
     }
 
     #[test]
-    fn con_ctrl_bajado_no_se_arma() {
+    fn with_ctrl_held_it_does_not_arm() {
         let mut a = AltSolo::default();
         a.tecla(&ev(
             KeyCode::Modifier(ModifierKeyCode::LeftAlt),
@@ -283,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn un_clic_en_medio_lo_desarma() {
+    fn a_click_in_the_middle_disarms_it() {
         let mut a = AltSolo::default();
         a.tecla(&alt(KeyEventKind::Press));
         a.soltar();
@@ -291,8 +294,8 @@ mod tests {
     }
 
     #[test]
-    fn soltar_una_letra_no_desarma_ni_dispara() {
-        // Una letra que se tenía pulsada ANTES de Alt y se suelta después.
+    fn releasing_a_letter_neither_disarms_nor_fires() {
+        // A letter that was held BEFORE Alt and is released afterward.
         let mut a = AltSolo::default();
         a.tecla(&alt(KeyEventKind::Press));
         assert!(!a.tecla(&ev(
@@ -304,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn las_modificadoras_no_son_teclas_para_el_keymap() {
+    fn modifier_keys_are_not_keys_for_the_keymap() {
         assert!(es_modificador(&alt(KeyEventKind::Press)));
         assert!(!es_modificador(&ev(
             KeyCode::Char('a'),
@@ -313,56 +316,57 @@ mod tests {
         )));
     }
 
-    /// Encender escribe el PUSH con los cuatro flags y apagar el POP, una
-    /// vez cada uno; y un terminal sin soporte no recibe nada. Un solo test
-    /// porque el estado es de proceso.
+    /// Turning on writes the PUSH with all four flags, and turning off the
+    /// POP, once each; and a terminal with no support receives nothing. One
+    /// test because the state is process-wide.
     #[test]
-    fn set_pide_y_retira_una_vez_y_respeta_el_soporte() {
+    fn set_requests_and_withdraws_once_and_respects_support() {
         let mut out = Vec::new();
-        set(false, || true, &mut out).expect("escribe");
+        set(false, || true, &mut out).expect("writes");
         out.clear();
 
-        set(true, || false, &mut out).expect("escribe");
-        assert!(out.is_empty(), "sin soporte no se manda nada");
+        set(true, || false, &mut out).expect("writes");
+        assert!(out.is_empty(), "with no support nothing is sent");
 
-        set(true, || true, &mut out).expect("escribe");
+        set(true, || true, &mut out).expect("writes");
         assert_eq!(String::from_utf8_lossy(&out), "\x1b[>15u");
         out.clear();
-        set(true, || panic!("no vuelve a preguntar"), &mut out).expect("escribe");
-        assert!(out.is_empty(), "idempotente");
+        set(true, || panic!("does not ask again"), &mut out).expect("writes");
+        assert!(out.is_empty(), "idempotent");
 
-        // Ceder y recuperar van EMPAREJADOS: dos veces cada uno es uno.
-        ceder(&mut out).expect("escribe");
-        ceder(&mut out).expect("escribe");
-        recuperar(&mut out).expect("escribe");
-        recuperar(&mut out).expect("escribe");
+        // Yielding and recovering come in PAIRS: twice each is one.
+        ceder(&mut out).expect("writes");
+        ceder(&mut out).expect("writes");
+        recuperar(&mut out).expect("writes");
+        recuperar(&mut out).expect("writes");
         assert_eq!(
             String::from_utf8_lossy(&out),
             "\x1b[<1u\x1b[>15u",
-            "un pop y un push"
+            "one pop and one push"
         );
         out.clear();
 
-        set(false, || true, &mut out).expect("escribe");
+        set(false, || true, &mut out).expect("writes");
         assert_eq!(String::from_utf8_lossy(&out), "\x1b[<1u");
         out.clear();
-        ceder(&mut out).expect("escribe");
-        assert!(out.is_empty(), "apagado no hay nada que ceder");
+        ceder(&mut out).expect("writes");
+        assert!(out.is_empty(), "when off there is nothing to yield");
 
-        // Apagar mientras está CEDIDO no quita nada: ya está fuera de la pila.
-        set(true, || true, &mut out).expect("escribe");
-        ceder(&mut out).expect("escribe");
+        // Turning off while YIELDED removes nothing: it is already off the
+        // stack.
+        set(true, || true, &mut out).expect("writes");
+        ceder(&mut out).expect("writes");
         out.clear();
-        set(false, || true, &mut out).expect("escribe");
-        assert!(out.is_empty(), "cedido no se quita dos veces");
-        recuperar(&mut out).expect("escribe");
-        assert!(out.is_empty(), "apagado no se recupera");
+        set(false, || true, &mut out).expect("writes");
+        assert!(out.is_empty(), "yielded is not removed twice");
+        recuperar(&mut out).expect("writes");
+        assert!(out.is_empty(), "off is not recovered");
 
-        // Tras un pánico, la salida no vuelve a quitarlo.
-        set(true, || true, &mut out).expect("escribe");
+        // After a panic, exiting does not remove it again.
+        set(true, || true, &mut out).expect("writes");
         out.clear();
-        soltar_en_panico(&mut out).expect("escribe");
-        set(false, || true, &mut out).expect("escribe");
-        assert_eq!(String::from_utf8_lossy(&out), "\x1b[<1u", "un solo pop");
+        soltar_en_panico(&mut out).expect("writes");
+        set(false, || true, &mut out).expect("writes");
+        assert_eq!(String::from_utf8_lossy(&out), "\x1b[<1u", "just one pop");
     }
 }

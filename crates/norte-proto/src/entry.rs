@@ -1,13 +1,13 @@
-//! `Entry`: lo que el VFS sabe de un nodo (resultado de `fs.stat` / `fs.list`).
+//! `Entry`: what the VFS knows about a node (result of `fs.stat` / `fs.list`).
 
 use serde::{Deserialize, Serialize};
 
 use crate::VPath;
 
-/// Clase de un nodo del VFS.
+/// Class of a VFS node.
 ///
-/// Los valores desconocidos (protocolo N+1) deserializan a [`EntryKind::Other`]:
-/// un cliente viejo degrada, no revienta.
+/// Unknown values (protocol N+1) deserialize to [`EntryKind::Other`]: an old
+/// client degrades, it does not break.
 ///
 /// ```
 /// use norte_proto::EntryKind;
@@ -18,20 +18,21 @@ use crate::VPath;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntryKind {
-    /// Archivo regular.
+    /// Regular file.
     File,
-    /// Directorio.
+    /// Directory.
     Dir,
-    /// Symlink (M0: jamás se sigue; se preserva o `Unsupported`).
+    /// Symlink (M0: never followed; preserved or `Unsupported`).
     Symlink,
-    /// Cualquier otra cosa (device, socket, fifo, o kind de protocolo futuro).
+    /// Anything else (device, socket, fifo, or a future protocol's kind).
     #[serde(other)]
     Other,
 }
 
-/// Metadatos de un nodo del VFS.
+/// Metadata of a VFS node.
 ///
-/// Campos opcionales `None` = "el provider no lo sabe", nunca un 0 fingido.
+/// Optional fields `None` = "the provider does not know it", never a
+/// fabricated 0.
 ///
 /// ```
 /// use norte_proto::attrs::AttrValue;
@@ -46,35 +47,36 @@ pub enum EntryKind {
 /// let json = serde_json::to_string(&e).unwrap();
 /// assert_eq!(serde_json::from_str::<Entry>(&json).unwrap(), e);
 ///
-/// // Sin attrs, el wire es EXACTAMENTE el de 0.29.
+/// // Without attrs, the wire is EXACTLY 0.29's.
 /// let plain = Entry { attrs: Default::default(), ..e };
 /// assert!(!serde_json::to_string(&plain).unwrap().contains("attrs"));
 ///
-/// // Una clave de atributo mal formada NO llega al mapa: se descarta al
-/// // decodificar, sin error (ver [`Entry::attrs`]).
+/// // A malformed attribute key does NOT reach the map: it is dropped on
+/// // decode, with no error (see [`Entry::attrs`]).
 /// let wire = r#"{"path":"file:///a.txt","kind":"file","attrs":{"MODE":{"uint":1}}}"#;
-/// let filtrada: Entry = serde_json::from_str(wire).unwrap();
-/// assert!(filtrada.attrs.is_empty());
+/// let filtered: Entry = serde_json::from_str(wire).unwrap();
+/// assert!(filtered.attrs.is_empty());
 /// ```
 ///
-/// OJO: `PartialEq`/`Eq`/`Hash` derivados son REPRESENTACIONALES, no de
-/// IDENTIDAD: dos `Entry` del MISMO nodo difieren si una se pidió con
-/// atributos y la otra no, o si se pidieron ids distintos. Para "¿es el mismo
-/// nodo?" se compara [`Entry::path`]; estas derivaciones existen para
-/// fixtures, tests y deduplicado de listados idénticos, no para decidir
-/// identidad.
+/// NOTE: derived `PartialEq`/`Eq`/`Hash` are REPRESENTATIONAL, not of
+/// IDENTITY: two `Entry`s of the SAME node differ if one was requested with
+/// attributes and the other was not, or if different ids were requested. For
+/// "is this the same node?" compare [`Entry::path`]; these derivations exist
+/// for fixtures, tests and deduplicating identical listings, not for
+/// deciding identity.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Entry {
-    /// Path completo del nodo (los frontends operan con él, no con el nombre).
+    /// Full path of the node (frontends operate on it, not on the name).
     pub path: VPath,
-    /// Clase del nodo.
+    /// Class of the node.
     pub kind: EntryKind,
-    /// Tamaño en bytes; `None` si el provider no lo conoce (p. ej. directorios).
+    /// Size in bytes; `None` if the provider does not know it (e.g.
+    /// directories).
     #[serde(default)]
     pub size: Option<u64>,
-    /// Última modificación en milisegundos desde epoch UTC; `i64` porque las
-    /// fechas pre-1970 existen en FS reales. `None` = desconocida.
+    /// Last modification in milliseconds since the UTC epoch; `i64` because
+    /// pre-1970 dates exist on real FSes. `None` = unknown.
     #[serde(default)]
     pub mtime_ms: Option<i64>,
     /// Provider attributes (0.30.0, ADR 0039): typed metadata BEYOND the four
@@ -145,54 +147,55 @@ pub struct Entry {
     pub attrs: std::collections::BTreeMap<String, crate::attrs::AttrValue>,
 }
 
-/// Longitud exacta, en caracteres, de un [`DirAnchor`] bien formado.
+/// Exact length, in characters, of a well-formed [`DirAnchor`].
 pub const DIR_ANCHOR_LEN: usize = 32;
 
-/// La identidad OPACA del directorio que un listado devolvió, para que la
-/// petición que escribe en él pueda decir CUÁL era (#295, 0.54.0).
+/// The OPAQUE identity of the directory a listing returned, so a request that
+/// writes into it can say WHICH one it was (#295, 0.54.0).
 ///
-/// # Qué problema resuelve
+/// # What problem it solves
 ///
-/// El core abre el directorio destino como raíz confinada (ADR 0072), así que
-/// una sustitución POSTERIOR a esa apertura ya no desvía nada. Lo que no puede
-/// distinguir es un enlace que **ya estaba puesto** cuando miró por primera
-/// vez: desde dentro del core, `dest/sub -> /etc` recién plantado y un
-/// `~/copias -> /mnt/disco/copias` legítimo son idénticos —los dos resuelven a
-/// otro sitio—, y rechazar los dos rompe copiar a `/tmp` en macOS o a `/bin`
-/// en un Linux con usrmerge.
+/// The core opens the destination directory as a confined root (ADR 0072), so
+/// a substitution AFTER that open no longer redirects anything. What it
+/// cannot tell apart is a link that was **already in place** the first time it
+/// looked: from inside the core, a `dest/sub -> /etc` planted just now and a
+/// legitimate `~/copias -> /mnt/disco/copias` are identical — both resolve
+/// somewhere else — and rejecting both breaks copying to `/tmp` on macOS or to
+/// `/bin` on a Linux with usrmerge.
 ///
-/// Lo único que los separa es la identidad que se observó **cuando el humano
-/// aprobó**: el listado que estaba mirando. Eso es esto.
+/// The only thing that tells them apart is the identity that was observed
+/// **when the human approved**: the listing they were looking at. That is
+/// this.
 ///
-/// # Es opaco a propósito
+/// # It is opaque on purpose
 ///
-/// Dentro no hay un inodo ni un número de volumen, sino un valor derivado de
-/// ellos con un secreto del daemon: dos rutas del mismo nodo dan el mismo
-/// ancla, y un cliente no puede ni fabricar una ni deducir qué nodo hay
-/// detrás. Un cliente lo trata como bytes: lo guarda, lo devuelve y jamás lo
-/// interpreta ni lo construye.
+/// Inside there is no inode or volume number, but a value derived from them
+/// with a daemon secret: two paths of the same node give the same anchor, and
+/// a client can neither fabricate one nor deduce which node is behind it. A
+/// client treats it as bytes: stores it, returns it, and never interprets or
+/// constructs it.
 ///
-/// Un ancla **no sobrevive al reinicio del daemon**, que renueva el secreto.
-/// Un cliente que reconecta ha perdido su listado de todas formas y vuelve a
-/// pedirlo, así que la ventana que importa —mirar, aprobar, escribir— cae
-/// entera dentro de una sesión.
+/// An anchor **does not survive a daemon restart**, which renews the secret.
+/// A client that reconnects has lost its listing anyway and asks for it
+/// again, so the window that matters — look, approve, write — falls entirely
+/// within one session.
 ///
 /// ```
 /// use norte_proto::entry::{DIR_ANCHOR_LEN, DirAnchor};
 /// let a = DirAnchor::new("0123456789abcdef0123456789abcdef".to_owned());
 /// assert!(a.is_well_formed());
 /// assert_eq!(a.as_str().len(), DIR_ANCHOR_LEN);
-/// // Va por el wire como una cadena y nada más.
+/// // It travels on the wire as a plain string and nothing else.
 /// assert_eq!(
 ///     serde_json::to_string(&a).unwrap(),
 ///     "\"0123456789abcdef0123456789abcdef\""
 /// );
 ///
-/// // Lo que no está bien formado NO es un error de decodificación: llega,
-/// // y quien compare no encontrará jamás un nodo que le case, que es la
-/// // respuesta segura (un ancla que no se reconoce no autoriza nada).
-/// let raro: DirAnchor = serde_json::from_str("\"../etc\"").unwrap();
-/// assert!(!raro.is_well_formed());
+/// // Something that is not well-formed is NOT a decoding error: it arrives,
+/// // and whoever compares it will never find a node that matches, which is
+/// // the safe answer (an anchor that is not recognized authorizes nothing).
+/// let odd: DirAnchor = serde_json::from_str("\"../etc\"").unwrap();
+/// assert!(!odd.is_well_formed());
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -200,12 +203,12 @@ pub const DIR_ANCHOR_LEN: usize = 32;
 pub struct DirAnchor(String);
 
 impl DirAnchor {
-    /// Envuelve el valor que produjo el daemon.
+    /// Wraps the value the daemon produced.
     ///
-    /// No valida: quien lo emite sabe lo que emite, y quien lo recibe por el
-    /// wire pregunta con [`DirAnchor::is_well_formed`]. Esa asimetría es la
-    /// misma que [`Entry::attrs`] documenta y por el mismo motivo — el fallo
-    /// de un productor tiene que seguir siendo visible.
+    /// Does not validate: whoever emits it knows what it emits, and whoever
+    /// receives it over the wire asks with [`DirAnchor::is_well_formed`]. That
+    /// asymmetry is the same one [`Entry::attrs`] documents and for the same
+    /// reason — a producer's failure has to stay visible.
     ///
     /// ```
     /// use norte_proto::entry::DirAnchor;
@@ -216,7 +219,7 @@ impl DirAnchor {
         Self(value)
     }
 
-    /// El valor tal cual, para guardarlo o devolverlo. Nunca para leerlo.
+    /// The value as is, to store or return it. Never to read it.
     ///
     /// ```
     /// use norte_proto::entry::DirAnchor;
@@ -228,13 +231,13 @@ impl DirAnchor {
         &self.0
     }
 
-    /// ¿Tiene la forma que emite un daemon: [`DIR_ANCHOR_LEN`] dígitos hex en
-    /// minúscula?
+    /// Does it have the shape a daemon emits: [`DIR_ANCHOR_LEN`] lowercase hex
+    /// digits?
     ///
-    /// Un ancla mal formada no es un error del wire —no rompe la petición—,
-    /// pero tampoco casa con ningún nodo, así que la operación que la traía se
-    /// rechaza. Fallar cerrado es lo correcto aquí: el ancla existe para
-    /// autorizar, no para dispensar.
+    /// A malformed anchor is not a wire error — it does not break the
+    /// request — but it also does not match any node, so the operation that
+    /// carried it is rejected. Failing closed is the right call here: the
+    /// anchor exists to authorize, not to dispense.
     ///
     /// ```
     /// use norte_proto::entry::DirAnchor;

@@ -1,77 +1,78 @@
-//! Buscar: el filtro rápido, la búsqueda normal y la semántica.
+//! Searching: the quick filter, normal search and semantic search.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `Estado`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// En qué acabó una búsqueda. El tipo y la precedencia de sus frases son del
-/// crate compartido: aquí estaban escritos aparte y ya discrepaban.
+/// How a search ended. The type and the precedence of its phrases belong to
+/// the shared crate: here they used to be written separately and had already
+/// diverged.
 use norte_frontend::search_status::Outcome as Desenlace;
 
-/// Los CAMPOS del formulario de búsqueda, tal como cruzan el puente (91).
+/// The search form's FIELDS, exactly as they cross the bridge (91).
 ///
-/// Los valores se enmascaran y se acotan AQUÍ, como todo lo que cruza: lo que
-/// se teclea acaba pintado en una etiqueta, y un `U+202E` pegado desde otro
-/// sitio no puede reordenar la línea. Lo tecleado de verdad se queda en
-/// `Tecleado::Formulario`, sin recortar — es la misma separación que
-/// `input`/`Tecleado::Texto` de un diálogo de un campo.
+/// The values are masked and clamped HERE, like everything that crosses:
+/// what is typed ends up painted in a label, and a `U+202E` pasted from
+/// somewhere else cannot reorder the line. What was really typed stays in
+/// `Tecleado::Formulario`, unclamped — it is the same separation as a single
+/// field dialog's `input`/`Tecleado::Texto`.
 ///
-/// Las etiquetas de los interruptores son claves PROPIAS (`search-toggle-*`)
-/// y no las del terminal: aquellas llevan dentro el nombre de la tecla y un
-/// `{ $on }` con el estado, que aquí es estructural — el renderer pinta una
-/// casilla, no una frase.
+/// The toggles' labels are OWN keys (`search-toggle-*`) and not the
+/// terminal's: those carry the key's name inside plus a `{ $on }` with the
+/// state, which here is structural — the renderer paints a checkbox, not a
+/// sentence.
 pub(super) fn campos_de_busqueda(
     form: &norte_frontend::search::SearchForm,
 ) -> Vec<crate::dto::DialogFieldView> {
     use crate::dto::{DialogFieldKind, DialogFieldView};
     use norte_frontend::search::{self as busqueda, SearchField};
 
-    let texto = |f: SearchField| {
-        let (pintable, hostil) = norte_frontend::display_name(form.texto(f).as_bytes());
+    let text_field = |f: SearchField| {
+        let (displayable, hostile) = norte_frontend::display_name(form.texto(f).as_bytes());
         DialogFieldView {
             id: f.id().to_owned(),
             label_key: f.clave().to_owned(),
-            value: clamp_display(pintable),
-            hostile: hostil,
+            value: clamp_display(displayable),
+            hostile,
             kind: DialogFieldKind::Text,
         }
     };
-    let interruptor = |id: &str, clave: &str, on: bool| DialogFieldView {
+    let toggle_field = |id: &str, key: &str, on: bool| DialogFieldView {
         id: id.to_owned(),
-        label_key: clave.to_owned(),
+        label_key: key.to_owned(),
         value: String::new(),
         hostile: false,
         kind: DialogFieldKind::Toggle { on },
     };
 
-    let mut campos: Vec<DialogFieldView> = SearchField::ORDEN.into_iter().map(texto).collect();
-    campos.push(interruptor(
+    let mut fields: Vec<DialogFieldView> = SearchField::ORDEN.into_iter().map(text_field).collect();
+    fields.push(toggle_field(
         busqueda::ID_REGEX,
         "search-toggle-regex",
         form.regex,
     ));
-    campos.push(interruptor(
+    fields.push(toggle_field(
         busqueda::ID_CASE,
         "search-toggle-case",
         form.case,
     ));
-    campos.push(interruptor(
+    fields.push(toggle_field(
         busqueda::ID_WHOLE_WORD,
         "search-toggle-whole-word",
         form.whole_word,
     ));
-    campos.push(interruptor(
+    fields.push(toggle_field(
         busqueda::ID_RECURSIVE,
         "search-toggle-recursive",
         form.recursive,
     ));
-    campos.push(DialogFieldView {
+    fields.push(DialogFieldView {
         id: busqueda::ID_KINDS.to_owned(),
         label_key: "search-toggle-kinds".to_owned(),
         value: String::new(),
@@ -80,84 +81,86 @@ pub(super) fn campos_de_busqueda(
             value_key: form.kinds.clave().to_owned(),
         },
     });
-    campos
+    fields
 }
 
-/// Una búsqueda viva y lo que lleva encontrado.
+/// A live search and what it has found so far.
 pub(super) struct Busqueda {
-    /// Cuál de todas las búsquedas de esta ventana es.
+    /// Which of this window's searches it is.
     ///
-    /// La identidad NO puede ser la Task: el id lo trae el daemon y llega
-    /// tarde, así que hasta entonces no habría con qué distinguir un lote de
-    /// la búsqueda anterior. La época se conoce al LANZAR, que es cuando hace
-    /// falta.
+    /// The identity CANNOT be the Task: the daemon brings the id and it
+    /// arrives late, so until then there would be nothing to tell a batch
+    /// apart from the previous search's. The epoch is known at LAUNCH time,
+    /// which is when it is needed.
     pub(super) epoca: u64,
-    /// La Task del daemon, en cuanto se sabe. Cero mientras no se sabe.
+    /// The daemon's Task, once it is known. Zero while it is not.
     pub(super) task: norte_proto::TaskId,
-    /// La vista se cerró y lo que quede de esta búsqueda sobra.
+    /// The view closed and whatever is left of this search is unneeded.
     ///
-    /// La comparte con su reenviador, que es quien puede cancelar antes de
-    /// que el id llegue al actor: `esc` justo tras lanzar es la ventana en la
-    /// que nadie más tiene a quién cancelar.
-    abandonada: Arc<std::sync::atomic::AtomicBool>,
-    /// Lo que se buscó, para poder decirlo.
+    /// It is shared with its forwarder, which is the one that can cancel
+    /// before the id reaches the actor: `esc` right after launching is the
+    /// window where nobody else has anyone to cancel.
+    abandoned: Arc<std::sync::atomic::AtomicBool>,
+    /// What was searched for, so it can be said.
     query: String,
-    /// Dónde se buscó.
+    /// Where it was searched.
     root: VPath,
-    /// Lo encontrado, en el orden en que llegó.
-    hits: Vec<Hallazgo>,
-    /// Esta búsqueda es SEMÁNTICA: se preguntó por significado contra el
-    /// índice, no por nombre contra el árbol.
-    semantica: bool,
-    /// Dónde está el cursor.
+    /// What was found, in the order it arrived.
+    hits: Vec<Hit>,
+    /// This search is SEMANTIC: it asked by meaning against the index, not
+    /// by name against the tree.
+    semantic: bool,
+    /// Where the cursor is.
     cursor: usize,
-    /// En qué acabó, o que sigue corriendo.
+    /// How it ended, or that it is still running.
     ///
-    /// Un `bool` decía solo si sigue viva, y entonces TODO desenlace se
-    /// pintaba «N hallazgos» — o sea que una búsqueda que falló al segundo
-    /// directorio y otra que recorrió el árbol entero se leían igual. Eso no
-    /// es una imprecisión de la interfaz: es una afirmación falsa sobre el
-    /// disco, y quien la lee deja de buscar.
+    /// A `bool` only said whether it was still alive, and then EVERY outcome
+    /// painted "N hits" — i.e. a search that failed on the second directory
+    /// and another that walked the whole tree read the same. That is not an
+    /// interface imprecision: it is a false claim about the disk, and
+    /// whoever reads it stops searching.
     ///
-    /// El tipo es del crate COMPARTIDO, y con él la precedencia de las
-    /// frases: los dos frontends la decidían aparte y ya discrepaban en el
-    /// par «cancelada justo en el tope» (ADR 0077).
+    /// The type belongs to the SHARED crate, and with it the phrases'
+    /// precedence: the two frontends used to decide it separately and
+    /// already disagreed on the pair "cancelled right at the cap" (ADR
+    /// 0077).
     pub(super) desenlace: Desenlace,
-    /// El tope que se pidió: alcanzarlo significa que hay más.
-    tope: u32,
+    /// The cap that was requested: reaching it means there is more.
+    cap: u32,
 }
 
-/// Un hallazgo de una búsqueda, venga de donde venga.
+/// A search hit, wherever it came from.
 #[derive(Clone)]
-struct Hallazgo {
-    /// Dónde está.
+struct Hit {
+    /// Where it is.
     path: VPath,
-    /// Qué es, si se sabe. `None` en un hallazgo SEMÁNTICO: el índice
-    /// devuelve rutas y parecidos, no clases, y decir «fichero» porque suele
-    /// serlo es inventarse la respuesta.
+    /// What it is, if known. `None` on a SEMANTIC hit: the index returns
+    /// paths and similarities, not kinds, and saying "file" because it
+    /// usually is one is making up the answer.
     kind: Option<EntryKind>,
-    /// Cuánto se parece a lo que se preguntó, en `[-1, 1]`. `None` en una
-    /// búsqueda por nombre: ahí no hay grados, o casa o no casa.
+    /// How similar it is to what was asked, in `[-1, 1]`. `None` on a
+    /// name search: there are no degrees there, it either matches or it does
+    /// not.
     score: Option<f64>,
 }
 
 impl Estado {
-    /// Tope de resultados de UNA búsqueda.
+    /// Cap on ONE search's results.
     ///
-    /// Acota el mensaje y la memoria del host: un árbol grande con un patrón
-    /// laxo devuelve todo lo que hay. Alcanzarlo NO es un fallo —la Task
-    /// completa— y se DICE, porque «100 resultados» y «los primeros 100 de
-    /// no se sabe cuántos» son dos respuestas distintas.
+    /// Bounds the message and the host's memory: a big tree with a loose
+    /// pattern returns everything there is. Reaching it is NOT a failure —
+    /// the Task completes — and it is SAID, because "100 results" and "the
+    /// first 100 of who knows how many" are two different answers.
     pub(super) const MAX_RESULTADOS: u32 = 2000;
 
-    /// Abre el prompt de buscar. Lo que se teclea es el patrón.
-    /// Abre el prompt de un GLOB para marcar —o desmarcar— por patrón.
+    /// Opens the search prompt. What is typed is the pattern.
+    /// Opens a GLOB prompt to mark — or unmark — by pattern.
     ///
-    /// Un prompt y no una tecla: el operando es un patrón que se teclea, y
-    /// eso ya tiene forma en este host. Lo que se marca lo decide el modelo
-    /// COMPARTIDO (`mark_glob`), que pliega el nombre antes de casar y sabe
-    /// que un `*` sobre nombres enmascarados no puede significar «todos los
-    /// que se pintan raro».
+    /// A prompt and not a key: the operand is a pattern that is typed, and
+    /// that already has a shape in this host. What gets marked is decided by
+    /// the SHARED model (`mark_glob`), which folds the name before matching
+    /// and knows that a `*` over masked names cannot mean "everything that
+    /// paints oddly".
     pub(super) fn pedir_patron(
         &mut self,
         marcar: bool,
@@ -204,35 +207,37 @@ impl Estado {
             tecleado: Tecleado::Texto(String::new()),
             al_confirmar: Some(Pendiente::Patron { marcar }),
         });
-        let cambio = ViewChange::Dialogs {
+        let change = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Aplica el patrón tecleado.
+    /// Applies the typed pattern.
     pub(super) fn aplicar_patron(
         &mut self,
         marcar: bool,
-        patron: &str,
+        pattern: &str,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        if patron.is_empty() {
-            // Un glob vacío no casa nada, y decirlo es mejor que no hacer
-            // nada: quien pulsó cree que marcó.
+        if pattern.is_empty() {
+            // An empty glob matches nothing, and saying so is better than
+            // doing nothing: whoever pressed the key believes they marked
+            // something.
             return (Some("err-empty-pattern"), self.decir("err-empty-pattern"));
         }
-        match self.hueco_mut().pane.mark_glob(patron, marcar) {
+        match self.hueco_mut().pane.mark_glob(pattern, marcar) {
             Ok(n) => {
-                // La clave del TUI, que ya existía y dice «N marcas
-                // cambiadas»: sirve para las dos direcciones, y una segunda
-                // definición de la misma clave la tira Fluent en silencio —
-                // la trampa que este repo ya se ha comido dos veces.
-                let mut fuera = self.decir_con("msg-marked-by-pattern", &[("n", &n.to_string())]);
-                fuera.push(self.parche_filas());
-                (None, fuera)
+                // The TUI's key, which already existed and says "N marks
+                // changed": it serves both directions, and a second
+                // definition of the same key is silently dropped by Fluent —
+                // the trap this repo has already run into twice.
+                let mut outgoing =
+                    self.decir_con("msg-marked-by-pattern", &[("n", &n.to_string())]);
+                outgoing.push(self.parche_filas());
+                (None, outgoing)
             }
-            // Un glob que no compila se DICE: es lo que el lector acaba de
-            // teclear, y callar deja una tecla que no hizo nada.
+            // A glob that does not compile is SAID: it is what the reader
+            // just typed, and staying quiet leaves a key that did nothing.
             Err(_) => (Some("err-bad-pattern"), self.decir("err-bad-pattern")),
         }
     }
@@ -240,7 +245,7 @@ impl Estado {
     pub(super) fn pedir_busqueda(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let form = norte_frontend::search::SearchForm::new();
         let root = self.hueco().pane.dir().clone();
-        let donde = Self::linea_de_ruta(&root);
+        let where_line = Self::linea_de_ruta(&root);
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
         self.dialogos.push(Dialogo {
@@ -254,7 +259,7 @@ impl Estado {
                 asker: None,
                 deadline: None,
                 deadline_at_ms: None,
-                body: vec![donde],
+                body: vec![where_line],
                 overflow_note: String::new(),
                 overflow_hostile: false,
                 choices: vec![
@@ -269,9 +274,9 @@ impl Estado {
                         destructive: false,
                     },
                 ],
-                // Un formulario no tiene «el» campo: los tiene todos en
-                // `fields`. `input` se queda en `None` para que un renderer
-                // no pinte además una caja suelta sin etiqueta.
+                // A form has no "the" field: it has all of them in `fields`.
+                // `input` stays `None` so a renderer does not also paint a
+                // loose, unlabeled box.
                 input: None,
                 input_hostile: false,
                 input_secret: false,
@@ -281,84 +286,88 @@ impl Estado {
             tecleado: Tecleado::Formulario(Box::new(form)),
             al_confirmar: Some(Pendiente::Buscar { root }),
         });
-        let cambio = ViewChange::Dialogs {
+        let change = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Lanza la búsqueda y engancha el canal por el que llegan sus lotes.
+    /// Launches the search and hooks up the channel its batches arrive
+    /// through.
     ///
-    /// Los parámetros vienen YA construidos, del mapeo compartido
-    /// (`norte_frontend::search::params`): el terminal pregunta la misma
-    /// búsqueda, y dos mapeos divergen en silencio. `etiqueta` es lo que la
-    /// vista de resultados enseña como consulta — el patrón de nombre, o el
-    /// de contenido si aquel está vacío—, y no se usa para buscar.
+    /// The parameters arrive ALREADY built, from the shared mapping
+    /// (`norte_frontend::search::params`): the terminal asks the same
+    /// search, and two mappings diverge silently. `etiqueta` is what the
+    /// results view shows as the query — the name pattern, or the content
+    /// one if that one is empty — and is not used to search.
     pub(super) fn lanzar_busqueda(
         &mut self,
         params: norte_proto::methods::FsSearchParams,
         etiqueta: String,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // La raíz se copia ANTES: `params` se mueve al backend, y la vista de
-        // resultados la necesita para decir dónde se buscó.
+        // The root is copied BEFORE: `params` moves into the backend, and the
+        // results view needs it to say where the search happened.
         let root = params.root.clone();
         let backend = Arc::clone(backend);
-        let buzon2 = buzon.clone();
+        let mailbox2 = mailbox.clone();
         self.epoca_busqueda += 1;
-        let epoca = self.epoca_busqueda;
-        let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let abandonada2 = Arc::clone(&abandonada);
-        // La búsqueda se lanza y CONTESTA por el buzón, como todo lo demás:
-        // el actor sigue atendiendo teclas mientras el daemon camina el árbol.
+        let epoch = self.epoca_busqueda;
+        let abandoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let abandoned2 = Arc::clone(&abandoned);
+        // The search is launched and ANSWERS through the mailbox, like
+        // everything else: the actor keeps handling keys while the daemon
+        // walks the tree.
         tokio::spawn(async move {
             let (task, mut rx) = match backend.search(params).await {
-                Ok(par) => par,
+                Ok(pair) => pair,
                 Err(e) => {
-                    // Por los DOS caminos: la barra lo dice una vez y la
-                    // vista de la búsqueda deja de afirmar que sigue
-                    // buscando. Sin lo segundo se quedaba en «buscando…»
-                    // para siempre sobre algo que nunca llegó a existir.
-                    let _ = buzon2
+                    // Through BOTH paths: the bar says it once and the
+                    // search view stops claiming it is still searching.
+                    // Without the second, it stayed at "searching…" forever
+                    // over something that never got to exist.
+                    let _ = mailbox2
                         .send(Mensaje::Fondo(Box::new(Fondo::BusquedaRota(
-                            epoca,
+                            epoch,
                             Box::new(e.clone()),
                         ))))
                         .await;
-                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = mailbox2.send(Mensaje::TaskFallida(Box::new(e))).await;
                     return;
                 }
             };
             let id = task.id;
             let cancel = Arc::clone(&task.cancel);
-            let _ = buzon2
+            let _ = mailbox2
                 .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
                 .await;
-            // Bautizada AQUÍ y no con el primer lote: puede no haber primer
-            // lote —el core no manda lotes vacíos— y entonces la búsqueda se
-            // quedaba sin nombre, sin poder terminar y sin poder cancelarse.
-            let _ = buzon2
-                .send(Mensaje::Fondo(Box::new(Fondo::BusquedaViva(epoca, id))))
+            // Named HERE and not with the first batch: there may be no first
+            // batch — the core does not send empty batches — and then the
+            // search was left with no name, unable to finish and unable to
+            // be cancelled.
+            let _ = mailbox2
+                .send(Mensaje::Fondo(Box::new(Fondo::BusquedaViva(epoch, id))))
                 .await;
-            // La vista pudo cerrarse mientras el daemon aceptaba la Task: en
-            // esa ventana el actor no tiene a quién cancelar, así que cancela
-            // quien sí lo tiene.
-            if abandonada2.load(std::sync::atomic::Ordering::SeqCst) {
+            // The view may have closed while the daemon was accepting the
+            // Task: in that window the actor has nobody to cancel, so
+            // whoever does have someone cancels.
+            if abandoned2.load(std::sync::atomic::Ordering::SeqCst) {
                 cancel();
                 return;
             }
-            // La bomba vive lo que el canal: cuando el daemon lo cierra, la
-            // búsqueda terminó y el progreso ya lo dijo por su lado.
-            while let Some(lote) = rx.recv().await {
-                if abandonada2.load(std::sync::atomic::Ordering::SeqCst) {
+            // The pump lives as long as the channel: when the daemon closes
+            // it, the search finished and the progress already said so on
+            // its own.
+            while let Some(batch) = rx.recv().await {
+                if abandoned2.load(std::sync::atomic::Ordering::SeqCst) {
                     cancel();
                     return;
                 }
-                if buzon2
+                if mailbox2
                     .send(Mensaje::Fondo(Box::new(Fondo::Resultados(
-                        epoca,
-                        Box::new(lote),
+                        epoch,
+                        Box::new(batch),
                     ))))
                     .await
                     .is_err()
@@ -367,214 +376,216 @@ impl Estado {
                 }
             }
         });
-        // La vista se abre YA, vacía y diciendo que corre: esperar al primer
-        // lote es una ventana que no reacciona a una tecla que sí hizo algo.
+        // The view opens RIGHT AWAY, empty and saying it is running: waiting
+        // for the first batch is a window that does not react to a key that
+        // did do something.
         self.busqueda = Some(Busqueda {
-            semantica: false,
-            epoca,
-            // Todavía no se sabe: `Fondo::BusquedaViva` la trae. Cero jamás
-            // es una Task real.
+            semantic: false,
+            epoca: epoch,
+            // Not known yet: `Fondo::BusquedaViva` brings it. Zero is never
+            // a real Task.
             task: norte_proto::TaskId::new(0),
-            abandonada,
+            abandoned,
             query: etiqueta,
             root,
             hits: Vec::new(),
             cursor: 0,
             desenlace: Desenlace::Running,
-            tope: Self::MAX_RESULTADOS,
+            cap: Self::MAX_RESULTADOS,
         });
-        let cambio = ViewChange::Search {
+        let change = ViewChange::Search {
             search: self.vista_busqueda(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
-    /// Un lote de resultados.
+    /// A batch of results.
     ///
-    /// Casa por ÉPOCA, que se conoce al lanzar. Con el id de la Task no
-    /// bastaba: hasta que llegaba, `b.task` era cero y el primer lote que
-    /// apareciese bautizaba la búsqueda —incluido uno rezagado de la
-    /// ANTERIOR, cuyo reenviador sigue vivo—, así que los hallazgos de un
-    /// patrón llenaban la lista rotulada con otro.
+    /// Matched by EPOCH, known at launch. The Task's id was not enough: until
+    /// it arrived, `b.task` was zero and the first batch to show up named the
+    /// search — including a late one from the PREVIOUS search, whose
+    /// forwarder is still alive — so one pattern's hits filled the list
+    /// labelled with another's.
     pub(super) fn aplicar_resultados(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         lote: &norte_proto::methods::SearchHits,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let b = self.busqueda.as_mut()?;
-        if b.epoca != epoca {
+        if b.epoca != epoch {
             return None;
         }
-        let sitio = usize::try_from(b.tope).unwrap_or(usize::MAX);
+        let room = usize::try_from(b.cap).unwrap_or(usize::MAX);
         for e in &lote.entries {
-            if b.hits.len() >= sitio {
+            if b.hits.len() >= room {
                 break;
             }
-            b.hits.push(Hallazgo {
+            b.hits.push(Hit {
                 path: e.path.clone(),
                 kind: Some(e.kind),
                 score: None,
             });
         }
-        let cambio = ViewChange::Search {
+        let change = ViewChange::Search {
             search: self.vista_busqueda(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
-    /// La proyección de la búsqueda.
+    /// The search's projection.
     pub(super) fn vista_busqueda(&self) -> Option<crate::dto::SearchView> {
         let b = self.busqueda.as_ref()?;
-        let (donde, root_hostil) = norte_frontend::path_display(&b.root);
+        let (where_text, root_hostile) = norte_frontend::path_display(&b.root);
         Some(crate::dto::SearchView {
-            semantic: b.semantica,
+            semantic: b.semantic,
             query: clamp_display(norte_frontend::display_name(b.query.as_bytes()).0),
-            root: clamp_display(donde),
-            root_hostile: root_hostil,
+            root: clamp_display(where_text),
+            root_hostile,
             rows: b
                 .hits
                 .iter()
                 .map(|e| {
-                    let nombre = e
+                    let name = e
                         .path
                         .file_name()
                         .map_or_else(Vec::new, |s| s.as_bytes().to_vec());
-                    let (pintable, hostil) = norte_frontend::display_name(&nombre);
-                    let (padre, padre_hostil) = e.path.parent().map_or_else(
+                    let (displayable, hostile) = norte_frontend::display_name(&name);
+                    let (parent, parent_hostile) = e.path.parent().map_or_else(
                         || (String::new(), false),
                         |p| norte_frontend::path_display(&p),
                     );
                     crate::dto::SearchRowView {
-                        name: clamp_display(pintable),
-                        hostile: hostil,
-                        parent: clamp_display(padre),
-                        parent_hostile: padre_hostil,
+                        name: clamp_display(displayable),
+                        hostile,
+                        parent: clamp_display(parent),
+                        parent_hostile,
                         is_dir: e.kind == Some(EntryKind::Dir),
                         score: e.score,
                     }
                 })
                 .collect(),
-            // `then` y no `then_some`: el argumento de `then_some` se evalúa
-            // SIEMPRE, y con cero hallazgos el `len() - 1` se desbordaba.
+            // `then` and not `then_some`: `then_some`'s argument is ALWAYS
+            // evaluated, and with zero hits `len() - 1` overflowed.
             cursor: (!b.hits.is_empty()).then(|| b.cursor.min(b.hits.len() - 1) as u64),
             status: clamp_display(Self::estado_de_busqueda(b, self.lang)),
             running: b.desenlace == Desenlace::Running,
         })
     }
 
-    /// Una búsqueda que no llegó a encolarse: deja de decir que busca.
-    pub(super) fn busqueda_rota(&mut self, epoca: u64, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let categoria = clamp_display(norte_frontend::error::error_category_in(self.lang, e));
-        let Some(b) = self.busqueda.as_mut().filter(|b| b.epoca == epoca) else {
+    /// A search that never got queued: it stops claiming it is searching.
+    pub(super) fn busqueda_rota(&mut self, epoch: u64, e: &Error) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let category = clamp_display(norte_frontend::error::error_category_in(self.lang, e));
+        let Some(b) = self.busqueda.as_mut().filter(|b| b.epoca == epoch) else {
             return Vec::new();
         };
-        b.desenlace = Desenlace::Failed(categoria);
-        let cambio = ViewChange::Search {
+        b.desenlace = Desenlace::Failed(category);
+        let change = ViewChange::Search {
             search: self.vista_busqueda(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
-    /// La frase de estado de una búsqueda.
+    /// A search's status phrase.
     ///
-    /// Reutiliza la familia del TUI (`search-status-*`) en vez de inventar
-    /// otra: es la misma información y no hay dos maneras de decirla.
+    /// Reuses the TUI's family (`search-status-*`) instead of inventing
+    /// another: it is the same information and there are not two ways to say
+    /// it.
     ///
-    /// La PRECEDENCIA la decide el crate compartido, que es donde estaba el
-    /// desacuerdo: parar la búsqueda justo en el tope decía «cancelada» en el
-    /// terminal y «hay más» aquí.
+    /// The PRECEDENCE is decided by the shared crate, which is where the
+    /// disagreement was: stopping the search right at the cap said
+    /// "cancelled" in the terminal and "there is more" here.
     ///
-    /// El fallo no lleva recuento: lo que hay que leer ahí no es cuántos se
-    /// encontraron, sino que la respuesta está incompleta y por qué.
+    /// The failure carries no count: what needs to be read there is not how
+    /// many were found, but that the answer is incomplete and why.
     pub(super) fn estado_de_busqueda(b: &Busqueda, lang: norte_i18n::Lang) -> String {
-        let al_tope = b.hits.len() >= usize::try_from(b.tope).unwrap_or(usize::MAX);
-        let clave = norte_frontend::search_status::status_key(&b.desenlace, al_tope);
-        if let Desenlace::Failed(categoria) = &b.desenlace {
-            return norte_i18n::ta_in(lang, clave, &[("error", categoria)]);
+        let at_cap = b.hits.len() >= usize::try_from(b.cap).unwrap_or(usize::MAX);
+        let key = norte_frontend::search_status::status_key(&b.desenlace, at_cap);
+        if let Desenlace::Failed(category) = &b.desenlace {
+            return norte_i18n::ta_in(lang, key, &[("error", category)]);
         }
-        norte_i18n::ta_in(lang, clave, &[("n", &b.hits.len().to_string())])
+        norte_i18n::ta_in(lang, key, &[("n", &b.hits.len().to_string())])
     }
 
-    /// Las teclas mientras la búsqueda está abierta.
+    /// The keys while the search is open.
     pub(super) fn tecla_en_busqueda(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        /// Cuántas filas mueve una página.
+        /// How many rows a page moves.
         const PAGINA: usize = 10;
         let Some(b) = self.busqueda.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let ultimo = b.hits.len().saturating_sub(1);
+        let last = b.hits.len().saturating_sub(1);
         match k.key.as_str() {
             "Escape" | "esc" => {
-                // Cerrar la búsqueda CANCELA la Task: seguir caminando un
-                // árbol para nadie es gastar el daemon en un resultado que ya
-                // no tiene dónde aparecer.
-                b.abandonada
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                // Closing the search CANCELS the Task: continuing to walk a
+                // tree for nobody is spending the daemon on a result that no
+                // longer has anywhere to appear.
+                b.abandoned.store(true, std::sync::atomic::Ordering::SeqCst);
                 let task = b.task;
                 self.busqueda = None;
                 if task.get() != 0 {
                     self.cancelar(task.get());
                 }
-                // Y si era una consulta SEMÁNTICA, se aborta: no tiene Task
-                // que cancelar —es una llamada directa— y lo que la para es
-                // soltarla, que hace que el SDK mande `rpc.cancel`.
-                if let Some(vuelo) = self.semantica_en_vuelo.take() {
-                    vuelo.abort();
+                // And if it was a SEMANTIC query, it is aborted: it has no
+                // Task to cancel — it is a direct call — and what stops it is
+                // dropping it, which makes the SDK send `rpc.cancel`.
+                if let Some(flight) = self.semantica_en_vuelo.take() {
+                    flight.abort();
                 }
             }
-            "ArrowDown" | "down" => b.cursor = (b.cursor + 1).min(ultimo),
+            "ArrowDown" | "down" => b.cursor = (b.cursor + 1).min(last),
             "ArrowUp" | "up" => b.cursor = b.cursor.saturating_sub(1),
-            "PageDown" | "pgdn" => b.cursor = (b.cursor + PAGINA).min(ultimo),
+            "PageDown" | "pgdn" => b.cursor = (b.cursor + PAGINA).min(last),
             "PageUp" | "pgup" => b.cursor = b.cursor.saturating_sub(PAGINA),
             "Home" | "home" => b.cursor = 0,
-            "End" | "end" => b.cursor = ultimo,
+            "End" | "end" => b.cursor = last,
             "Enter" | "enter" => {
-                let fila = u32::try_from(b.cursor).unwrap_or(u32::MAX);
-                return self.ir_al_resultado(fila, backend, buzon);
+                let row = u32::try_from(b.cursor).unwrap_or(u32::MAX);
+                return self.ir_al_resultado(row, backend, mailbox);
             }
             _ => return (self.aplicada(), Vec::new()),
         }
-        let cambio = ViewChange::Search {
+        let change = ViewChange::Search {
             search: self.vista_busqueda(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Va al resultado `fila`: el panel navega a su directorio y el cursor
-    /// queda ENCIMA de él.
+    /// Goes to result `fila`: the panel navigates to its directory and the
+    /// cursor ends up ON it.
     ///
-    /// Sin reconstruir ninguna ruta: la del hallazgo es la que mandó el
-    /// daemon, y se le pasa entera al panel para que la case byte a byte
-    /// cuando aterrice el listado. Un nombre pintado no vuelve a ser un path
-    /// nunca — por ahí es por donde se acaba abriendo otro fichero.
+    /// Without rebuilding any path: the hit's is the one the daemon sent, and
+    /// it is handed whole to the panel so it matches it byte for byte once
+    /// the listing lands. A painted name never becomes a path again — that is
+    /// exactly how you end up opening a different file.
     pub(super) fn ir_al_resultado(
         &mut self,
         fila: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(b) = self.busqueda.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        // Fuera de rango no se recorta: recortar navegaba al ÚLTIMO hallazgo
-        // en vez de no hacer nada. Los hallazgos solo se añaden por el final,
-        // así que un índice válido nombra siempre el mismo y esta lista no
-        // necesita generación; uno que se pasa es que la lista se vació.
+        // Out of range is not clamped: clamping used to navigate to the LAST
+        // hit instead of doing nothing. Hits are only ever appended, so a
+        // valid index always names the same one and this list needs no
+        // generation; one that overshoots means the list was emptied.
         let Some(hit) = b.hits.get(fila as usize).cloned() else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
         b.cursor = fila as usize;
-        // Un directorio se abre por dentro; un fichero, en su carpeta con el
-        // cursor encima.
-        // Sin clase —un hallazgo semántico— se trata como fichero: se abre
-        // su carpeta con el cursor encima. Es lo conservador; entrar EN algo
-        // que resulta no ser un directorio no lleva a ninguna parte.
-        let (destino, foco) = if hit.kind == Some(EntryKind::Dir) {
+        // A directory opens from the inside; a file, in its folder with the
+        // cursor on it.
+        // With no kind — a semantic hit — it is treated as a file: its
+        // folder opens with the cursor on it. That is the conservative
+        // choice; entering INTO something that turns out not to be a
+        // directory leads nowhere.
+        let (target, focus) = if hit.kind == Some(EntryKind::Dir) {
             (hit.path.clone(), None)
         } else {
             match hit.path.parent() {
@@ -587,21 +598,21 @@ impl Estado {
         if task.get() != 0 {
             self.cancelar(task.get());
         }
-        if let Some(child) = foco {
+        if let Some(child) = focus {
             self.hueco_mut().pane.set_pending_focus(child);
         }
-        let cierre = self.parche(vec![ViewChange::Search { search: None }]);
-        let mut envios = vec![cierre];
-        envios.extend(self.navegar(&destino, Trail::Record, backend, buzon));
-        (self.aplicada(), envios)
+        let closing = self.parche(vec![ViewChange::Search { search: None }]);
+        let mut outgoing = vec![closing];
+        outgoing.extend(self.navegar(&target, Trail::Record, backend, mailbox));
+        (self.aplicada(), outgoing)
     }
 
-    /// La tecla, cuando el buscador incremental está abierto.
+    /// The key, when the incremental search box is open.
     ///
-    /// `None` = esta tecla no es suya y sigue su camino normal (una tecla de
-    /// función, un atajo con modificador): abrir el buscador NO desconecta el
-    /// resto del teclado, solo se queda el texto, el borrado y las tres
-    /// teclas que lo gobiernan.
+    /// `None` = this key is not its own and goes its normal way (a function
+    /// key, a shortcut with a modifier): opening the quick search does NOT
+    /// disconnect the rest of the keyboard, it only keeps text, backspace,
+    /// and the three keys that govern it.
     pub(super) fn tecla_en_quick(
         &mut self,
         k: &crate::keys::KeyInput,
@@ -618,8 +629,8 @@ impl Estado {
             "Backspace" | "backspace" => pane.quick_backspace(),
             "ArrowDown" | "down" => pane.quick_down(),
             "ArrowUp" | "up" => pane.quick_up(),
-            otro => {
-                let mut chars = otro.chars();
+            other => {
+                let mut chars = other.chars();
                 let (Some(c), None) = (chars.next(), chars.next()) else {
                     return None;
                 };
@@ -629,19 +640,22 @@ impl Estado {
         Some((self.aplicada(), vec![self.parche_filas()]))
     }
 
-    /// Abre el prompt de una consulta SEMÁNTICA.
-    /// Abre el prompt de una consulta SEMÁNTICA.
+    /// Opens a SEMANTIC query's prompt.
+    // TODO(translation): review — this one-line doc is duplicated verbatim
+    /// right below (both lines said the exact same thing in the source); it
+    /// looks like a stale leftover from an earlier edit, kept as-is.
+    /// Opens a SEMANTIC query's prompt.
     ///
-    /// No lleva raíz, y eso es lo que dice el diálogo: el índice se construye
-    /// por raíces y no por lo que se esté mirando, así que acotar la búsqueda
-    /// al directorio del panel prometería un alcance que el índice puede no
-    /// tener. Se pregunta al índice ENTERO, igual que el TUI.
+    /// It carries no root, and that is what the dialog says: the index is
+    /// built by roots and not by what is currently being looked at, so
+    /// scoping the search to the panel's directory would promise a scope the
+    /// index might not have. The WHOLE index is asked, same as the TUI.
     pub(super) fn pedir_consulta_semantica(
         &mut self,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
-        let vista = DialogView {
+        let view = DialogView {
             id,
             title_key: "modal-semantic-title".to_owned(),
             destination: None,
@@ -675,176 +689,182 @@ impl Estado {
         };
         self.dialogos.push(Dialogo {
             id,
-            vista: vista.clone(),
+            vista: view.clone(),
             tecleado: Tecleado::Texto(String::new()),
             reconocido: true,
             al_confirmar: Some(Pendiente::ConsultaSemantica),
         });
-        let cambio = ViewChange::Dialogs {
+        let change = ViewChange::Dialogs {
             dialogs: self.vistas_de_dialogos(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Lanza la consulta contra el índice. La respuesta vuelve al actor.
+    /// Launches the query against the index. The answer comes back to the
+    /// actor.
     ///
-    /// Época nueva por consulta: la respuesta tarda —hay un embed de por
-    /// medio— y quien pregunta dos veces no puede acabar mirando los
-    /// resultados de la primera.
+    /// A new epoch per query: the answer takes a while — there is an embed in
+    /// the middle — and whoever asks twice cannot end up looking at the
+    /// first one's results.
     pub(super) fn lanzar_semantica(
         &mut self,
-        consulta: String,
+        query: String,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if consulta.trim().is_empty() {
-            // Una consulta vacía no sale del proceso: no significa nada, y
-            // lo que sale va a un proveedor externo.
+        if query.trim().is_empty() {
+            // An empty query does not leave the process: it means nothing,
+            // and what leaves goes to an external provider.
             //
-            // El mensaje es el MISMO que el de la terminal (#122). Antes era
-            // `err-empty-pattern`, que es el de buscar por nombre y dice «uno
-            // vacío casa el árbol entero» — falso aquí: una consulta semántica
-            // vacía no casa nada, no hay con qué comparar. Dos frontends
-            // negando lo mismo por dos motivos distintos, y uno de ellos
-            // inventado.
+            // The message is the SAME as the terminal's (#122). It used to be
+            // `err-empty-pattern`, which is the name-search one and says "an
+            // empty one matches the whole tree" — false here: an empty
+            // semantic query matches nothing, there is nothing to compare
+            // against. Two frontends refusing the same thing for two
+            // different reasons, and one of them made up.
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "modal-semantic-empty-query",
             )));
-            // Y el campo VUELVE, que es la otra mitad de la paridad: la
-            // terminal deja el modal abierto con el error debajo, así que un
-            // mensaje pidiendo escribir una consulta sobre una pantalla sin
-            // dónde escribirla no era una negativa, era un callejón. El campo
-            // estaba vacío, así que no se pierde nada al rehacerlo.
-            let (_, mut fuera) = self.pedir_consulta_semantica();
-            let cambio = ViewChange::Status(self.status.clone());
-            fuera.push(self.parche(vec![cambio]));
-            return fuera;
+            // And the field COMES BACK, which is the other half of parity:
+            // the terminal leaves the modal open with the error underneath,
+            // so a message asking to type a query over a screen with nowhere
+            // to type it was not a refusal, it was a dead end. The field was
+            // empty, so nothing is lost by rebuilding it.
+            let (_, mut outgoing) = self.pedir_consulta_semantica();
+            let change = ViewChange::Status(self.status.clone());
+            outgoing.push(self.parche(vec![change]));
+            return outgoing;
         }
         self.epoca_busqueda += 1;
-        let epoca = self.epoca_busqueda;
+        let epoch = self.epoca_busqueda;
         self.busqueda = Some(Busqueda {
-            semantica: true,
-            epoca,
+            semantic: true,
+            epoca: epoch,
             task: norte_proto::TaskId::new(0),
-            abandonada: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            query: consulta.clone(),
-            // El alcance es el índice entero: no hay raíz que enseñar, y la
-            // vista lo dice por `semantic`.
+            abandoned: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            query: query.clone(),
+            // The scope is the whole index: there is no root to show, and
+            // the view says so via `semantic`.
             root: self.hueco().pane.dir().clone(),
             hits: Vec::new(),
             cursor: 0,
             desenlace: Desenlace::Running,
-            tope: norte_proto::methods::INDEX_SEMANTIC_MAX_K,
+            cap: norte_proto::methods::INDEX_SEMANTIC_MAX_K,
         });
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let handle = tokio::spawn(async move {
             let hits = backend
-                .semantic_search(consulta, norte_frontend::SEMANTIC_K)
+                .semantic_search(query, norte_frontend::SEMANTIC_K)
                 .await;
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::Semanticos(epoca, hits))))
+            let _ = mailbox
+                .send(Mensaje::Fondo(Box::new(Fondo::Semanticos(epoch, hits))))
                 .await;
         });
-        // Relanzar ABORTA la anterior, y abortar la cancela de verdad: el SDK
-        // manda `rpc.cancel` al soltar la llamada. Dejarla correr sería pagar
-        // un embed y un barrido del índice por una respuesta que la época ya
-        // condena a descartarse.
-        if let Some(vieja) = self.semantica_en_vuelo.replace(handle) {
-            vieja.abort();
+        // Relaunching ABORTS the previous one, and aborting really does
+        // cancel it: the SDK sends `rpc.cancel` on dropping the call. Letting
+        // it run would be paying for an embed and an index sweep for an
+        // answer the epoch already condemns to being discarded.
+        if let Some(old_handle) = self.semantica_en_vuelo.replace(handle) {
+            old_handle.abort();
         }
-        let cambio = ViewChange::Search {
+        let change = ViewChange::Search {
             search: self.vista_busqueda(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
-    /// La respuesta del índice: entra si sigue siendo la consulta de ahora.
+    /// The index's answer: it goes in if it is still the current query.
     pub(super) fn aplicar_semanticos(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         hits: Result<Vec<norte_proto::methods::SemanticHit>, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // La vista pudo cerrarse o relevarse mientras el embed corría.
-        if self.busqueda.as_ref().is_none_or(|b| b.epoca != epoca) {
+        // The view may have closed or been superseded while the embed was
+        // running.
+        if self.busqueda.as_ref().is_none_or(|b| b.epoca != epoch) {
             return Vec::new();
         }
         let hits = match hits {
-            // El barrido del wire es el COMPARTIDO: acota la `k` y rehúsa un
-            // score no finito, que serializado como `null` envenenaría el
-            // orden.
+            // The wire sweep is the SHARED one: it clamps `k` and refuses a
+            // non-finite score, which serialized as `null` would poison the
+            // order.
             Ok(h) => {
                 let Some(h) = norte_frontend::validate_semantic_hits(h) else {
                     self.busqueda = None;
-                    let mut fuera = vec![self.parche(vec![ViewChange::Search { search: None }])];
-                    fuera.extend(self.decir("msg-semantic-bad-hits"));
-                    return fuera;
+                    let mut outgoing = vec![self.parche(vec![ViewChange::Search { search: None }])];
+                    outgoing.extend(self.decir("msg-semantic-bad-hits"));
+                    return outgoing;
                 };
                 h
             }
             Err(e) => {
                 self.busqueda = None;
-                let clave = match e {
-                    // `NotFound` aquí NO es «no hay resultados»: es que ese
-                    // root no tiene filas en el índice. Leerlo como una
-                    // búsqueda vacía deja al lector creyendo que no hay nada
-                    // parecido a lo que preguntó.
+                let key = match e {
+                    // `NotFound` here is NOT "there are no results": it is
+                    // that this root has no rows in the index. Reading it as
+                    // an empty search leaves the reader believing there is
+                    // nothing like what they asked for.
                     Error::NotFound => "msg-semantic-no-index",
                     Error::Unsupported => "msg-semantic-unsupported",
                     _ => norte_frontend::error::error_key(&e),
                 };
-                // La vista se QUEDA, diciendo por qué se rompió, en vez de
-                // cerrarse dejando el motivo en la barra: ahí se lo lleva la
-                // siguiente tecla, y entonces el lector se queda sin índice y
-                // sin saberlo. Mismo trato que una búsqueda normal que falla
-                // (`Desenlace::Failed` es persistente); las claves propias de
-                // la semántica —«no hay índice», «no está soportado»— son las
-                // que de verdad explican esto, así que ganan a la categoría
-                // genérica del error.
-                let motivo = clamp_display(norte_i18n::t_in(self.lang, clave));
+                // The view STAYS, saying why it broke, instead of closing and
+                // leaving the reason on the bar: the next key takes it away
+                // there, and the reader is left with no index and no idea.
+                // Same treatment as a normal search that fails
+                // (`Desenlace::Failed` is persistent); semantic's own keys —
+                // "no index", "not supported" — are the ones that really
+                // explain this, so they win over the error's generic
+                // category.
+                let reason = clamp_display(norte_i18n::t_in(self.lang, key));
                 if let Some(b) = self.busqueda.as_mut() {
-                    b.desenlace = Desenlace::Failed(motivo);
+                    b.desenlace = Desenlace::Failed(reason);
                 }
-                let mut fuera = vec![self.parche(vec![ViewChange::Search {
+                let mut outgoing = vec![self.parche(vec![ViewChange::Search {
                     search: self.vista_busqueda(),
                 }])];
-                fuera.extend(self.decir(clave));
-                return fuera;
+                outgoing.extend(self.decir(key));
+                return outgoing;
             }
         };
         self.semantica_en_vuelo = None;
         if let Some(b) = self.busqueda.as_mut() {
             b.hits = hits
                 .into_iter()
-                .map(|h| Hallazgo {
+                .map(|h| Hit {
                     path: h.path,
-                    // El índice devuelve rutas y parecidos, no clases.
+                    // The index returns paths and similarities, not kinds.
                     kind: None,
                     score: Some(h.score),
                 })
                 .collect();
             b.desenlace = Desenlace::Done;
         }
-        let cambio = ViewChange::Search {
+        let change = ViewChange::Search {
             search: self.vista_busqueda(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
-    /// Abre el prompt de crear directorio, con su campo de texto vacío.
-    /// Arranca el buscador incremental del listado.
+    /// Opens the create-directory prompt, with its text field empty.
+    // TODO(translation): review — this paragraph describes a create-directory
+    /// prompt, but the item right after it is `buscar_rapido`'s own doc,
+    /// about starting the quick search; it looks like a stale fragment left
+    /// by an earlier edit.
+    /// Starts the listing's incremental search.
     ///
-    /// Filtrar es el modo por DEFECTO —el que no mueve el listado bajo el
-    /// cursor mientras se teclea—, pero lo elige `[ui] quick_search`, igual
-    /// que en el terminal.
+    /// Filtering is the DEFAULT mode — the one that does not move the
+    /// listing under the cursor while typing —, but `[ui] quick_search`
+    /// chooses it, same as in the terminal.
     pub(super) fn buscar_rapido(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // El modo lo dice `[ui] quick_search`, como en el terminal. Estaba a
-        // fuego en `Filter`, así que `quick_search = "jump"` movía el cursor
-        // en `ntc` y acotaba el listado en la ventana: la misma clave con dos
-        // comportamientos.
-        let modo = self.config.quick_search_mode;
-        self.hueco_mut().pane.quick_start(modo);
+        // The mode is set by `[ui] quick_search`, like in the terminal. It
+        // used to be hardcoded to `Filter`, so `quick_search = "jump"` moved
+        // the cursor in `ntc` and clamped the listing in the window: the same
+        // key with two behaviors.
+        let mode = self.config.quick_search_mode;
+        self.hueco_mut().pane.quick_start(mode);
         (self.aplicada(), vec![self.parche_filas()])
     }
 }

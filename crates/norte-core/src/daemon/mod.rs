@@ -1,11 +1,12 @@
-//! Daemon JSON-RPC sobre UDS (ADR 0011, spec §17.6): un daemon por usuario,
-//! jamás root, autenticado por `SO_PEERCRED`. Windows queda diferido con
-//! issue (el modo embebido sigue siendo el camino allí).
+//! Daemon JSON-RPC over UDS (ADR 0011, spec §17.6): one daemon per user,
+//! never root, authenticated by `SO_PEERCRED`. Windows is deferred behind an
+//! issue (the embedded mode remains the path there).
 //!
-//! - [`Daemon`] (server): acepta conexiones, autentica, despacha
-//!   `fs.*`/`task.*` y difunde `task.progress` a los humanos y al dueño de
-//!   cada task (#66: una conexión de agente no observa tasks ajenas).
-//! - [`Client`]: conexión de frontend (initialize, call, notificaciones,
+//! - [`Daemon`] (server): accepts connections, authenticates, dispatches
+//!   `fs.*`/`task.*` and broadcasts `task.progress` to humans and to the
+//!   owner of each task (#66: an agent connection does not observe other
+//!   agents' tasks).
+//! - [`Client`]: frontend connection (initialize, call, notifications,
 //!   `connect_or_spawn`).
 
 pub mod approvals;
@@ -16,45 +17,45 @@ pub use approvals::DaemonApprovalResolver;
 pub use componer::componer;
 pub use server::{Daemon, DaemonConfig};
 
-// El lado CLIENTE vive en `norte-client` desde ADR 0066: el SDK no puede
-// depender del core, así que la dirección del socket y el JSON-RPC enmarcado
-// viven allí y se re-exportan aquí para que los consumidores de siempre
-// (CLI, MCP, tests e2e) sigan nombrándolos donde los nombraban.
+// The CLIENT side has lived in `norte-client` since ADR 0066: the SDK cannot
+// depend on the core, so the socket address and the framed JSON-RPC live
+// there and are re-exported here so the usual consumers (CLI, MCP, e2e
+// tests) keep naming them where they always named them.
 pub use norte_client::{
     Client, ClientError, daemon_run_argv, default_socket_path, is_version_mismatch,
 };
 
-/// Errores del ciclo de vida del daemon (lado servidor).
+/// Errors of the daemon's lifecycle (server side).
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
-    /// I/O del socket o del filesystem del socket.
-    #[error("i/o del daemon: {0}")]
+    /// I/O on the socket or the socket's filesystem.
+    #[error("daemon i/o: {0}")]
     Io(#[from] std::io::Error),
-    /// El daemon JAMÁS corre como root (spec §17.6).
-    #[error("el daemon no corre como root")]
+    /// The daemon NEVER runs as root (spec §17.6).
+    #[error("the daemon does not run as root")]
     Root,
-    /// El directorio del socket no es seguro (dueño/modo/symlink).
-    #[error("directorio del socket inseguro: {reason}")]
+    /// The socket's directory is not safe (owner/mode/symlink).
+    #[error("unsafe socket directory: {reason}")]
     InsecureDir {
-        /// Qué comprobación falló.
+        /// Which check failed.
         reason: &'static str,
     },
-    /// El dir por defecto en `/tmp/norte-<uid>` no es utilizable (#34.1):
-    /// típicamente pre-ocupado por otro usuario (`squat`, denegación de
-    /// disponibilidad no de integridad: el daemon rehúsa secuestrarlo).
-    /// Accionable: fijar `XDG_RUNTIME_DIR` (el camino soportado) o pasar
-    /// `--socket <ruta>` a un dir propio.
+    /// The default dir under `/tmp/norte-<uid>` is not usable (#34.1):
+    /// typically pre-occupied by another user (`squat`, a denial of
+    /// availability, not of integrity: the daemon refuses to hijack it).
+    /// Actionable: set `XDG_RUNTIME_DIR` (the supported path) or pass
+    /// `--socket <path>` pointing at a directory the user owns.
     #[error(
-        "el dir del socket por defecto ({path}) no es utilizable ({reason}); \
-         fija XDG_RUNTIME_DIR o pasa --socket <ruta>"
+        "the default socket dir ({path}) is not usable ({reason}); \
+         set XDG_RUNTIME_DIR or pass --socket <path>"
     )]
     UnusableDefaultDir {
-        /// El path del dir fallback que no se pudo usar.
+        /// The path of the fallback dir that could not be used.
         path: std::path::PathBuf,
-        /// Qué comprobación falló.
+        /// Which check failed.
         reason: &'static str,
     },
-    /// Ya hay un daemon vivo escuchando en el socket.
-    #[error("ya hay un daemon escuchando en el socket")]
+    /// A daemon is already alive and listening on the socket.
+    #[error("a daemon is already listening on the socket")]
     AlreadyRunning,
 }

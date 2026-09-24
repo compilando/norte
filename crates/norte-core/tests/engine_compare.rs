@@ -1,13 +1,13 @@
-//! Integración `Engine::compare_as` (C6 del plan de comparación de
-//! directorios): la Task de [`TaskKind::Compare`], la bomba de lotes
-//! coalescidos, el progreso que cuenta FILAS y la cancelación limpia.
+//! `Engine::compare_as` integration (C6 of the directory-compare plan): the
+//! [`TaskKind::Compare`] Task, the coalesced-batch pump, progress that counts
+//! ROWS, and clean cancellation.
 //!
-//! La cascada, el emparejamiento y el walk son de `norte-compare` y ya tienen
-//! sus tests contra `MemProvider`; aquí se prueba SOLO lo que el core añade:
-//! el lote, el contador y el final.
+//! The cascade, the pairing and the walk belong to `norte-compare` and already
+//! have their tests against `MemProvider`; here only what the core adds is
+//! tested: the batch, the counter and the ending.
 //!
-//! No hay nada de journal que comprobar: la comparación no escribe un byte
-//! (regla dura 4 no aplica).
+//! There is no journal to check: comparing does not write a single byte (hard
+//! rule 4 does not apply).
 
 use std::sync::Arc;
 
@@ -22,11 +22,11 @@ use norte_vfs::Provider;
 use tokio::sync::mpsc::Receiver;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
@@ -37,7 +37,7 @@ async fn mkdir(mem: &MemProvider, wire: &str) {
     mem.mkdir(&vp(wire)).await.expect("mkdir");
 }
 
-/// Engine + `MemProvider` in-memory registrado bajo `mem`.
+/// Engine + in-memory `MemProvider` registered under `mem`.
 fn setup() -> (Engine, Arc<MemProvider>) {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
@@ -45,7 +45,7 @@ fn setup() -> (Engine, Arc<MemProvider>) {
     (engine, mem)
 }
 
-/// Params base: dos raíces, criterios por defecto (sin hash).
+/// Base params: two roots, default criteria (no hash).
 fn params(left: &str, right: &str) -> FsCompareParams {
     FsCompareParams {
         left: vp(left),
@@ -58,7 +58,7 @@ fn params(left: &str, right: &str) -> FsCompareParams {
     }
 }
 
-/// Dos árboles GEMELOS de `n` ficheros bajo `mem:///l` y `mem:///r`.
+/// Two TWIN trees of `n` files under `mem:///l` and `mem:///r`.
 async fn twin_trees(mem: &MemProvider, n: usize) {
     mkdir(mem, "mem:///l").await;
     mkdir(mem, "mem:///r").await;
@@ -68,8 +68,8 @@ async fn twin_trees(mem: &MemProvider, n: usize) {
     }
 }
 
-/// Drena el canal hasta el cierre; devuelve los LOTES tal cual llegaron (la
-/// forma del lote es lo que se está probando, no solo su contenido).
+/// Drains the channel until it closes; returns the BATCHES exactly as they
+/// arrived (the batch's shape is what is being tested, not just its content).
 async fn drain(mut rx: Receiver<CompareRowsBatch>) -> Vec<CompareRowsBatch> {
     let mut out = Vec::new();
     while let Some(b) = rx.recv().await {
@@ -79,10 +79,10 @@ async fn drain(mut rx: Receiver<CompareRowsBatch>) -> Vec<CompareRowsBatch> {
 }
 
 // 1 ───────────────────────────────────────────────────────────────────────
-/// Los lotes van acotados y COALESCIDOS, el mismo contrato que `search.hits`:
-/// mil filas no pueden convertirse en mil frames.
+/// Batches are bounded and COALESCED, the same contract as `search.hits`: a
+/// thousand rows cannot turn into a thousand frames.
 #[tokio::test]
-async fn las_filas_llegan_en_lotes_acotados_y_coalescidos() {
+async fn rows_arrive_in_bounded_coalesced_batches() {
     let (engine, mem) = setup();
     twin_trees(&mem, 1_000).await;
 
@@ -98,29 +98,29 @@ async fn las_filas_llegan_en_lotes_acotados_y_coalescidos() {
         batches
             .iter()
             .all(|b| b.rows.len() <= COMPARE_ROWS_MAX_BATCH),
-        "lote por encima del tope: {:?}",
+        "a batch above the cap: {:?}",
         batches.iter().map(|b| b.rows.len()).collect::<Vec<_>>()
     );
     let rows: usize = batches.iter().map(|b| b.rows.len()).sum();
-    assert_eq!(rows, 1_000, "una fila por pareja");
+    assert_eq!(rows, 1_000, "one row per pair");
     assert!(
         batches.len() < 1_000,
-        "una frame por fila no es coalescer: {} lotes",
+        "one frame per row is not coalescing: {} batches",
         batches.len()
     );
     assert!(
         batches.iter().all(|b| b.task_id == id),
-        "todos los lotes llevan el task_id de SU comparación"
+        "every batch carries the task_id of ITS comparison"
     );
 }
 
 // 2 ───────────────────────────────────────────────────────────────────────
-/// Regla dura 3 en la frontera de la Task: cancelar termina en `Cancelled`
-/// —el `Err` del motor es SOLO eso, no un fallo— y los lotes paran.
+/// Hard rule 3 at the Task boundary: cancelling ends in `Cancelled` — the
+/// engine's `Err` is ONLY that, not a failure — and the batches stop.
 ///
-/// Nada que limpiar: la comparación no escribe.
+/// Nothing to clean up: comparing does not write.
 #[tokio::test]
-async fn cancelar_la_task_para_los_lotes_y_termina_en_cancelled() {
+async fn cancelling_the_task_stops_the_batches_and_ends_in_cancelled() {
     let (engine, mem) = setup();
     twin_trees(&mem, 3_000).await;
 
@@ -128,7 +128,7 @@ async fn cancelar_la_task_para_los_lotes_y_termina_en_cancelled() {
         .compare_as(params("mem:///l", "mem:///r"), Actor::User)
         .await
         .expect("compare");
-    let first = rx.recv().await.expect("al menos un lote");
+    let first = rx.recv().await.expect("at least one batch");
     assert!(!first.rows.is_empty());
     h.cancel();
 
@@ -138,17 +138,17 @@ async fn cancelar_la_task_para_los_lotes_y_termina_en_cancelled() {
     }
     assert!(
         seen < 3_000,
-        "los lotes siguieron llegando tras el cancel: {seen}"
+        "batches kept arriving after the cancel: {seen}"
     );
     assert_eq!(h.join().await, TaskState::Cancelled);
 }
 
 // 3 ───────────────────────────────────────────────────────────────────────
-/// `entries_done` cuenta FILAS emitidas, y es CONTRATO (C1): es la única señal
-/// con la que un cliente detecta que se le perdió un `compare.rows` — aquí no
-/// hay `max_hits` contra el que contar como en `fs.search`.
+/// `entries_done` counts emitted ROWS, and it is a CONTRACT (C1): it is the
+/// only signal by which a client detects that it missed a `compare.rows` —
+/// there is no `max_hits` to count against here as there is in `fs.search`.
 #[tokio::test]
-async fn el_progreso_cuenta_las_filas_emitidas() {
+async fn progress_counts_the_emitted_rows() {
     let (engine, mem) = setup();
     twin_trees(&mem, 10).await;
 
@@ -162,21 +162,21 @@ async fn el_progreso_cuenta_las_filas_emitidas() {
 
     let rows: u64 = batches
         .iter()
-        .map(|b| u64::try_from(b.rows.len()).expect("cabe"))
+        .map(|b| u64::try_from(b.rows.len()).expect("fits"))
         .sum();
     assert_eq!(rows, 10);
     assert_eq!(
         progress.borrow().entries_done,
         rows,
-        "el último snapshot tiene que cuadrar con lo emitido"
+        "the last snapshot has to match what was emitted"
     );
 }
 
 // 4 ───────────────────────────────────────────────────────────────────────
-/// Los veredictos son los del motor, sin traducción por el camino: dos árboles
-/// idénticos son todo `Same`.
+/// The verdicts are the engine's, with no translation along the way: two
+/// identical trees are all `Same`.
 #[tokio::test]
-async fn dos_arboles_identicos_son_todo_same() {
+async fn two_identical_trees_are_all_same() {
     let (engine, mem) = setup();
     twin_trees(&mem, 3).await;
 
@@ -196,15 +196,15 @@ async fn dos_arboles_identicos_son_todo_same() {
     assert!(
         rows.iter()
             .all(|r| r.sides_are_consistent() && r.reason_is_consistent()),
-        "el daemon no puede emitir filas incoherentes: {rows:#?}"
+        "the daemon cannot emit inconsistent rows: {rows:#?}"
     );
 }
 
 // 5 ───────────────────────────────────────────────────────────────────────
-/// Comparar una raíz contra sí misma no llega a ser Task: es un error de quien
-/// llama, y se rechaza antes de crearla.
+/// Comparing a root against itself never becomes a Task: it is the caller's
+/// error, and it is rejected before creating one.
 #[tokio::test]
-async fn comparar_una_raiz_contra_si_misma_no_crea_task() {
+async fn comparing_a_root_against_itself_creates_no_task() {
     let (engine, mem) = setup();
     mkdir(&mem, "mem:///d").await;
 
@@ -212,35 +212,36 @@ async fn comparar_una_raiz_contra_si_misma_no_crea_task() {
         .compare_as(params("mem:///d", "mem:///d"), Actor::User)
         .await
     else {
-        panic!("comparar una raíz consigo misma tenía que rechazarse");
+        panic!("comparing a root against itself had to be rejected");
     };
-    assert!(matches!(err, ProtoError::InvalidPath), "fue {err:?}");
+    assert!(matches!(err, ProtoError::InvalidPath), "was {err:?}");
 }
 
 // 6 ───────────────────────────────────────────────────────────────────────
-/// El motor ACEPTA `follow_symlinks` y lo IGNORA; quien lo recibe del wire
-/// tiene que rechazarlo en vez de servir en silencio un recorrido distinto del
-/// pedido. El engine es la primera frontera pública, así que lo rechaza él.
+/// The engine ACCEPTS `follow_symlinks` and IGNORES it; whoever receives it
+/// from the wire has to reject it instead of silently serving a walk different
+/// from the one requested. The engine is the first public boundary, so it is
+/// the one that rejects it.
 #[tokio::test]
-async fn follow_symlinks_se_rechaza_en_vez_de_ignorarse() {
+async fn follow_symlinks_is_rejected_instead_of_ignored() {
     let (engine, mem) = setup();
     twin_trees(&mem, 1).await;
 
     let mut p = params("mem:///l", "mem:///r");
     p.follow_symlinks = true;
     let Err(err) = engine.compare_as(p, Actor::User).await else {
-        panic!("follow_symlinks tenía que rechazarse");
+        panic!("follow_symlinks had to be rejected");
     };
-    assert!(matches!(err, ProtoError::Unsupported), "fue {err:?}");
+    assert!(matches!(err, ProtoError::Unsupported), "was {err:?}");
 }
 
 // ADR 0054 ────────────────────────────────────────────────────────────────
-/// #153/#145: la comparación pliega como pliega LA RAÍZ, no como pliega el
-/// provider. El `MemProvider` declara `CASE_SENSITIVE` para sí mismo y guioniza
-/// un `+F` solo para la raíz derecha; si `fs.compare` preguntase por el
-/// provider —lo que hacía—, esta pareja saldría como dos huérfanas.
+/// #153/#145: the comparison folds the way THE ROOT folds, not the way the
+/// provider folds. `MemProvider` declares `CASE_SENSITIVE` for itself and only
+/// hyphenates a `+F` for the right root; if `fs.compare` asked the provider —
+/// which it used to — this pair would come out as two orphans.
 #[tokio::test]
-async fn la_comparacion_pliega_como_pliega_la_raiz() {
+async fn the_comparison_folds_the_way_the_root_folds() {
     let (engine, mem) = setup();
     mkdir(&mem, "mem:///l").await;
     mkdir(&mem, "mem:///r").await;
@@ -249,7 +250,7 @@ async fn la_comparacion_pliega_como_pliega_la_raiz() {
         norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+            .unwrap_or_else(|| panic!("fixture {id} in the corpus"))
             .bytes
     };
     let zett = String::from_utf8(fixture("ext4_full_fold_es_zett")).expect("UTF-8");
@@ -276,11 +277,11 @@ async fn la_comparacion_pliega_como_pliega_la_raiz() {
     assert_eq!(
         rows.len(),
         1,
-        "una pareja, no dos huérfanas: {:?}",
+        "one pair, not two orphans: {:?}",
         rows.iter().map(|r| r.verdict).collect::<Vec<_>>()
     );
     assert!(
         rows[0].left.is_some() && rows[0].right.is_some(),
-        "y la fila lleva los dos lados"
+        "and the row carries both sides"
     );
 }

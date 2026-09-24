@@ -1,38 +1,38 @@
-//! Los panes vistos desde `App`: cuál tiene el foco, cómo se cambia y se
-//! intercambia, qué ventana de entradas necesita `stat`, y las pestañas de
-//! un hueco (abrir, cerrar, ciclar, ir a una y moverla).
+//! The panes as seen from `App`: which one has focus, how it's switched and
+//! swapped, which window of entries needs a `stat`, and a slot's tabs (open,
+//! close, cycle, go to one and move it).
 
 use super::pane::Pane;
 use super::{App, KeyOwner};
 use norte_proto::{EntryKind, VPath};
 
 impl App {
-    /// Índice del pane con foco (0 = izquierda, 1 = derecha).
+    /// Index of the focused pane (0 = left, 1 = right).
     #[must_use]
     pub fn focus(&self) -> usize {
         self.focus
     }
 
-    /// El pane con foco.
+    /// The focused pane.
     #[must_use]
     pub fn focused(&self) -> &Pane {
         &self.panes[self.focus]
     }
 
-    /// (índice, path) de la entrada File enfocada sin `size`: candidata a la
-    /// sonda de stat on-focus (#52, listado lazy).
+    /// (index, path) of the focused File entry with no `size`: a candidate
+    /// for the stat-on-focus probe (#52, lazy listing).
     #[must_use]
     pub fn focused_needs_stat(&self) -> Option<(usize, VPath)> {
         let e = self.focused().selected()?;
         (e.kind == EntryKind::File && e.size.is_none()).then(|| (self.focus(), e.path.clone()))
     }
 
-    /// Candidatas a hidratar de la VENTANA visible (#52, listado lazy) en
-    /// LOS DOS panes — ambos se pintan a la vez, así que sondear solo la
-    /// entrada enfocada dejaba las columnas Tamaño/Fecha en blanco en todo
-    /// lo demás. El pane con foco va primero; la selección DENTRO de cada
-    /// pane es del modelo compartido
-    /// ([`norte_frontend::PaneState::needs_stat_window`], regla 7).
+    /// Candidates to hydrate from the visible WINDOW (#52, lazy listing) in
+    /// BOTH panes — both get painted at once, so probing only the focused
+    /// entry left the Size/Date columns blank in everything else. The
+    /// focused pane goes first; the selection WITHIN each pane belongs to
+    /// the shared model ([`norte_frontend::PaneState::needs_stat_window`],
+    /// rule 7).
     #[must_use]
     pub fn needs_stat_window(&self, radius: usize) -> Vec<(usize, VPath)> {
         let mut out = Vec::new();
@@ -47,39 +47,42 @@ impl App {
         out
     }
 
-    /// El pane con foco, mutable.
+    /// The focused pane, mutable.
     pub fn focused_mut(&mut self) -> &mut Pane {
         &mut self.panes[self.focus]
     }
 
-    /// Pasa el foco al siguiente LISTADO, ciclando (`pane.switch`, el `Tab`
-    /// ortodoxo).
+    /// Moves focus to the next LISTING, cycling (`pane.switch`, the orthodox
+    /// `Tab`).
     ///
-    /// Era `focus ^= 1`, y eso es una cuenta de DOS. En cuanto `layout.split-v`
-    /// pone un tercer listado en pantalla —`[izquierda, nuevo, derecha]`— el
-    /// tabulador solo alternaba entre los dos primeros: desde el índice 2,
-    /// `2 ^ 1` es 3, que no existe, y `PaneSlots` ACOTA fuera de rango en vez
-    /// de panicar, así que la tecla no hacía nada y no lo decía. El panel que
-    /// no habías partido era inalcanzable.
+    /// Used to be `focus ^= 1`, and that's a count of TWO. As soon as
+    /// `layout.split-v` puts a third listing on screen —
+    /// `[left, new, right]` — the tab key only alternated between the first
+    /// two: from index 2, `2 ^ 1` is 3, which doesn't exist, and
+    /// `PaneSlots` CLAMPS out of range instead of panicking, so the key did
+    /// nothing and didn't say so. The panel you hadn't split was
+    /// unreachable.
     ///
-    /// Solo listados, y por eso no es [`Self::layout_focus`]: `Tab` es «el
-    /// otro panel» de cualquier gestor ortodoxo, y con la barra de sitios, el
-    /// árbol y el visor abiertos un anillo de toda la pantalla obligaría a dar
-    /// cinco pulsaciones para volver al listado de al lado. A los laterales se
-    /// llega con `layout.focus-next` y con la tecla de cada uno.
+    /// Listings only, and that's why it isn't [`Self::layout_focus`]: `Tab`
+    /// is "the other panel" of any orthodox manager, and with the places
+    /// bar, the tree and the viewer open, a ring over the whole screen
+    /// would force five keypresses just to get back to the listing next
+    /// door. The side panels are reached with `layout.focus-next` and each
+    /// one's own key.
     ///
-    /// Y por el MISMO aterrizaje que el anillo grande, que es lo que además
-    /// devuelve el teclado: `tab` está en `[global]`, así que se puede pulsar
-    /// con el visor acoplado enfocado, y sin esto el borde de foco saltaba al
-    /// listado de al lado mientras las flechas seguían moviendo el visor.
-    /// `Tab` saca de un panel lateral — eso es lo que garantiza que ninguna
-    /// combinación deje al lector dentro.
+    /// And with the SAME landing as the big ring, which is also what hands
+    /// back the keyboard: `tab` is in `[global]`, so it can be pressed with
+    /// the docked viewer focused, and without this the focus border jumped
+    /// to the listing next door while the arrows kept moving the viewer.
+    /// `Tab` gets you out of a side panel — that's what guarantees no
+    /// combination leaves the reader stuck inside one.
     pub fn switch_focus(&mut self) {
         let n = self.panes.len();
         if n < 2 {
-            // Con un solo listado no hay «el otro», y el teclado se devuelve
-            // igual: pulsar `Tab` dentro de un lateral tiene que sacar de él
-            // aunque no haya a dónde ir después.
+            // With a single listing there's no "the other one", and the
+            // keyboard gets handed back anyway: pressing `Tab` inside a side
+            // panel has to get you out of it even if there's nowhere to go
+            // afterward.
             self.return_keys_to_panes();
             return;
         }
@@ -110,32 +113,32 @@ impl App {
     pub fn swap_panes(&mut self) {
         self.panes.swap(0, 1);
         self.history.swap(0, 1);
-        // Lo ÚNICO que queda como rastro de que hubo intercambio: todo lo
-        // demás viaja con su pane, así que quien compare por lado no ve
-        // moverse nada (ver [`Self::swap_seq`]).
+        // The ONLY thing left as a trace that a swap happened: everything
+        // else travels with its pane, so whoever compares by side sees
+        // nothing move (see [`Self::swap_seq`]).
         self.swap_seq = self.swap_seq.wrapping_add(1);
     }
 
-    /// Acuña un `SlotId` que no se ha usado nunca en esta sesión.
+    /// Mints a `SlotId` never used before in this session.
     pub(super) fn mint_slot(&mut self) -> norte_frontend::layout::SlotId {
         let id = norte_frontend::layout::SlotId(self.next_slot);
         self.next_slot = self.next_slot.saturating_add(1);
         id
     }
 
-    /// El hueco que el lado enfocado enseña ahora.
+    /// The slot the focused side is showing right now.
     #[must_use]
     pub fn focused_slot(&self) -> norte_frontend::layout::SlotId {
         self.panes.slot_of(self.focus)
     }
 
-    /// Abre una pestaña nueva junto al pane enfocado, en el mismo directorio,
-    /// con su listado ya heredado ([`App::fork_pane`]).
+    /// Opens a new tab next to the focused pane, in the same directory, with
+    /// its listing already inherited ([`App::fork_pane`]).
     pub fn tab_new(&mut self) {
         let focus = self.focused_slot();
         let id = self.mint_slot();
-        let nuevo = self.fork_pane(self.focus);
-        self.panes.insert_browser(id, nuevo);
+        let new_pane = self.fork_pane(self.focus);
+        self.panes.insert_browser(id, new_pane);
         self.layout = self.layout.add_tab(
             focus,
             &norte_frontend::layout::Node::slot(id, norte_frontend::layout::KindId::browser()),
@@ -144,17 +147,17 @@ impl App {
         self.podar_por_arbol();
     }
 
-    /// Cierra la pestaña enfocada. Sin efecto si el pane no está en un grupo.
+    /// Closes the focused tab. No effect if the pane isn't in a group.
     pub fn tab_close(&mut self) {
         let focus = self.focused_slot();
-        if let Some(nuevo) = self.layout.close_tab(focus) {
-            self.layout = nuevo;
+        if let Some(new_layout) = self.layout.close_tab(focus) {
+            self.layout = new_layout;
             self.panes.refresh_visible(&self.layout);
             self.podar_por_arbol();
         }
     }
 
-    /// Cambia de pestaña dentro del grupo enfocado, ciclando.
+    /// Switches tabs within the focused group, cycling.
     pub fn tab_cycle(&mut self, delta: isize) {
         let focus = self.focused_slot();
         let Some((tabs, active)) = self.layout.tabs_of(focus) else {
@@ -169,28 +172,28 @@ impl App {
         self.layout = self.layout.set_active_for(focus, dest);
         self.panes.refresh_visible(&self.layout);
         self.podar_por_arbol();
-        // #329: cambiar de pestaña puede esconder el panel que tenía el
-        // teclado, y entonces las teclas iban a algo que ya no está en
-        // pantalla. No lo cierra nadie, así que sin esto no había quien lo
-        // devolviera a los listados.
+        // #329: switching tabs can hide the panel that held the keyboard,
+        // and then keys went to something no longer on screen. Nothing
+        // closes it, so without this there was nothing to hand it back to
+        // the listings.
         self.settle_key_owner();
     }
 
-    /// Va a la pestaña `n` (base 1) del grupo enfocado.
+    /// Goes to tab `n` (1-based) of the focused group.
     pub fn tab_goto(&mut self, n: usize) {
         let focus = self.focused_slot();
         if self.layout.tabs_of(focus).is_some() {
             self.layout = self.layout.set_active_for(focus, n.saturating_sub(1));
             self.panes.refresh_visible(&self.layout);
             self.podar_por_arbol();
-            // Mismo motivo que en `tab_cycle` (#329).
+            // Same reason as in `tab_cycle` (#329).
             self.settle_key_owner();
         }
     }
 
-    /// Mueve la pestaña enfocada dentro de su grupo. No da la vuelta: una
-    /// pestaña que salta del final al principio por una pulsación de más es
-    /// justo lo que nadie quería.
+    /// Moves the focused tab within its group. Doesn't wrap around: a tab
+    /// jumping from the end to the start on one extra keypress is exactly
+    /// what nobody wanted.
     pub fn tab_move(&mut self, delta: isize) {
         let focus = self.focused_slot();
         if self.layout.tabs_of(focus).is_some() {
@@ -200,7 +203,7 @@ impl App {
         }
     }
 
-    /// Cuántos `browser` hay en el árbol, visibles u ocultos.
+    /// How many `browser`s are in the tree, visible or hidden.
     pub(super) fn browsers_in_tree(&self) -> usize {
         self.layout
             .slot_ids()
@@ -213,22 +216,21 @@ impl App {
             .count()
     }
 
-    /// Los sitios del anillo del teclado, en el orden en que están en
-    /// pantalla.
+    /// The keyboard ring's stops, in the order they appear on screen.
     ///
-    /// Quién entra lo dice el REGISTRO de kinds, no una lista escrita aquí:
-    /// `takes_keys` es exactamente la pregunta —¿este panel consume teclas
-    /// propias?— y ya está contestada en un sitio que los dos frontends
-    /// comparten. Por eso los metadatos quedan fuera: se ENFOCAN (el reparto
-    /// los cuenta) pero no toman teclas, así que pararse ahí sería un sitio
-    /// del que ninguna tecla saca.
+    /// Who gets in is decided by the kind REGISTRY, not a list written here:
+    /// `takes_keys` is exactly the question — does this panel consume its
+    /// own keys? — and it's already answered in a spot both frontends
+    /// share. That's why metadata is left out: it gets FOCUSED (the layout
+    /// counts it) but doesn't take keys, so stopping there would be a spot
+    /// no key gets you out of.
     ///
-    /// El orden es el del ÁRBOL, que es el de la pantalla: ciclar tiene que
-    /// seguir la vista, no el orden en que se abrieron los paneles.
+    /// The order is the TREE's, which is the screen's: cycling has to
+    /// follow the view, not the order the panels were opened in.
     ///
-    /// Un kind que toma teclas y que esta pantalla no sabe enfocar —`compare`,
-    /// `sync`, que en el TUI son overlays y no huecos— se salta: no tiene
-    /// [`KeyOwner`] al que pasarle nada.
+    /// A kind that takes keys and that this screen doesn't know how to
+    /// focus — `compare`, `sync`, which in the TUI are overlays and not
+    /// slots — gets skipped: it has no [`KeyOwner`] to hand anything to.
     #[must_use]
     fn focus_ring(&self) -> Vec<FocusStop> {
         self.layout
@@ -238,25 +240,27 @@ impl App {
             .collect()
     }
 
-    /// El sitio del anillo que ocupa el hueco `id`, o `None` si ese hueco no
-    /// toma teclas.
+    /// The ring stop the `id` slot occupies, or `None` if that slot doesn't
+    /// take keys.
     ///
-    /// Es la ÚNICA traducción de «hueco» a «quién se queda el teclado», y la
-    /// comparten el anillo del `Tab` y el ratón: dos tablas de kinds a
-    /// [`KeyOwner`] son dos formas de llegar a un panel que un día divergen y
-    /// dejan un panel al que se llega con el ratón y no con el teclado.
+    /// It's the ONLY translation from "slot" to "who keeps the keyboard",
+    /// and it's shared by the `Tab` ring and the mouse: two tables from
+    /// kinds to [`KeyOwner`] are two ways to reach a panel that one day
+    /// drift apart and leave a panel reachable by mouse but not by
+    /// keyboard.
     #[must_use]
     fn focus_stop(&self, id: norte_frontend::layout::SlotId) -> Option<FocusStop> {
-        // El registro VIVO de la app, no uno de serie recién hecho: desde la
-        // fase 3 lleva dentro los paneles que aportan los plugins, y con
-        // `builtin()` un panel aportado no pasaba ni esta puerta — quedaba
-        // fuera del anillo del `Tab` y fuera del alcance del ratón.
+        // The app's LIVE registry, not a freshly built stock one: since
+        // phase 3 it carries the panels plugins contribute inside it, and
+        // with `builtin()` a contributed panel didn't even get past this
+        // gate — it was left out of the `Tab` ring and out of the mouse's
+        // reach.
         let kind = self.layout.kind_of(id)?;
         if !self.kinds.get(kind).is_some_and(|d| d.takes_keys) {
             return None;
         }
-        // Un panel de plugin se resuelve por PREFIJO, antes que la tabla de
-        // nombres de casa: su kind no se conoce al compilar.
+        // A plugin panel is resolved by PREFIX, before the built-in name
+        // table: its kind isn't known at compile time.
         if kind.as_str().starts_with("plugin:") {
             return Some(FocusStop::Side(KeyOwner::Panel));
         }
@@ -271,9 +275,10 @@ impl App {
             crate::logview::KIND => Some(FocusStop::Side(KeyOwner::Log)),
             crate::diskmap::KIND => Some(FocusStop::Side(KeyOwner::DiskMap)),
             crate::timeline::KIND => Some(FocusStop::Side(KeyOwner::Timeline)),
-            // El terminal sólo es parada del anillo si HAY por dónde salir.
-            // Sin acorde suelto que lo saque, entrar sería quedarse dentro: el
-            // panel se ve y se mira, y el teclado sigue en los listados.
+            // The terminal is only a ring stop if there IS a way out. With
+            // no loose chord to exit it, entering would mean staying stuck
+            // inside: the panel is seen and looked at, and the keyboard
+            // stays with the listings.
             crate::termpanel::KIND => self
                 .terminal_chord
                 .map(|_| FocusStop::Side(KeyOwner::Terminal)),
@@ -281,70 +286,70 @@ impl App {
         }
     }
 
-    /// Le da el teclado al hueco `id` —y el foco, si es un listado—, y dice
-    /// si lo aceptó.
+    /// Hands the keyboard to slot `id` — and focus, if it's a listing — and
+    /// says whether it accepted.
     ///
-    /// Lo llama el RATÓN: señalar un panel es decir «ahora trabajo aquí», y
-    /// eso incluye las teclas. Antes el click movía el cursor del listado y
-    /// dejaba las flechas donde estuvieran, así que el borde de foco decía
-    /// una cosa y el teclado iba a otra.
+    /// Called by the MOUSE: pointing at a panel means "I work here now",
+    /// and that includes the keys. Before, a click moved the listing's
+    /// cursor and left the arrows wherever they were, so the focus border
+    /// said one thing and the keyboard went to another.
     ///
-    /// Un hueco que no toma teclas —los metadatos, la franja de tareas, la
-    /// barra de estado— devuelve `false` y no cambia nada: pulsar algo que no
-    /// escucha no puede dejar al teclado sin dueño.
+    /// A slot that doesn't take keys — metadata, the task strip, the
+    /// status bar — returns `false` and changes nothing: clicking something
+    /// that isn't listening can't leave the keyboard without an owner.
     pub fn focus_slot(&mut self, id: norte_frontend::layout::SlotId) -> bool {
         let Some(stop) = self.focus_stop(id) else {
             return false;
         };
         self.aterrizar(stop);
-        // Señalar un panel de plugin dice CUÁL, y eso no cabe en
-        // `KeyOwner::Panel`: sin esto, con dos paneles aportados visibles el
-        // teclado iba a uno y `layout.grow` al otro.
+        // Pointing at a plugin panel says WHICH one, and that doesn't fit in
+        // `KeyOwner::Panel`: without this, with two contributed panels
+        // visible the keyboard went to one and `layout.grow` to the other.
         if stop == FocusStop::Side(KeyOwner::Panel) {
             self.panel_focus = Some(id);
         }
         true
     }
 
-    /// Pone el teclado (y el foco) en un sitio del anillo.
+    /// Puts the keyboard (and focus) on a ring stop.
     fn aterrizar(&mut self, stop: FocusStop) {
         match stop {
             FocusStop::Pane(i) => {
                 self.return_keys_to_panes();
                 self.set_focus(i);
-                // Cambia cuál es el listado enfocado, así que cambia a dónde
-                // apunta el árbol.
+                // Changes which listing is focused, so it changes what the
+                // tree points at.
                 self.follow_tree();
             }
             FocusStop::Side(owner) => self.key_owner = owner,
         }
     }
 
-    /// Pasa el teclado al siguiente panel del anillo, ciclando.
+    /// Hands the keyboard to the ring's next panel, cycling.
     ///
-    /// A TODOS los paneles, no solo a los listados. `Tab` alterna entre los
-    /// dos listados y cada panel lateral se abre y se enfoca con su propia
-    /// tecla, así que con el sidebar y el visor delante no había forma de
-    /// recorrer la pantalla: para pasar del sidebar al visor había que
-    /// acordarse de la tecla de cada uno. Esta es la que no exige memorizar
-    /// nada.
+    /// To ALL panels, not just the listings. `Tab` alternates between the
+    /// two listings and every side panel opens and gets focused with its own
+    /// key, so with the sidebar and the viewer up front there was no way to
+    /// walk the screen: getting from the sidebar to the viewer meant
+    /// remembering each one's key. This is the one that requires memorizing
+    /// nothing.
     ///
-    /// Un anillo de un solo sitio no hace nada, y ese caso importa: `delta`
-    /// sobre una pantalla con un único listado y ningún panel debe ser un
-    /// no-op, no un `set_focus` que se acota a sí mismo.
+    /// A single-stop ring does nothing, and that case matters: `delta` over
+    /// a screen with a single listing and no panels must be a no-op, not a
+    /// `set_focus` that clamps against itself.
     pub fn layout_focus(&mut self, delta: isize) {
         let ring = self.focus_ring();
         if ring.len() < 2 {
             return;
         }
-        let actual = match self.key_owner() {
+        let current = match self.key_owner() {
             KeyOwner::Panes => FocusStop::Pane(self.focus),
-            otro => FocusStop::Side(otro),
+            other => FocusStop::Side(other),
         };
-        // Si el sitio de ahora no está en el anillo —un frame en el que el
-        // reparto todavía no ha colocado nada— se empieza por el principio en
-        // vez de no ir a ninguna parte.
-        let i = ring.iter().position(|s| *s == actual).unwrap_or(0);
+        // If the current spot isn't in the ring — a frame where the layout
+        // hasn't placed anything yet — it starts from the beginning instead
+        // of going nowhere.
+        let i = ring.iter().position(|s| *s == current).unwrap_or(0);
         let n = isize::try_from(ring.len()).unwrap_or(1);
         let dest =
             usize::try_from((isize::try_from(i).unwrap_or(0) + delta).rem_euclid(n)).unwrap_or(0);
@@ -352,17 +357,17 @@ impl App {
     }
 }
 
-/// Un sitio del anillo que recorre [`App::layout_focus`].
+/// A ring stop [`App::layout_focus`] walks through.
 ///
-/// Un listado se nombra por su POSICIÓN y un panel lateral por quién se queda
-/// el teclado, porque son las dos formas que tiene `App` de decir «aquí»:
-/// [`App::focus`] es un índice sobre los listados visibles y no puede apuntar
-/// a un sidebar (ver [`KeyOwner`]).
+/// A listing is named by its POSITION and a side panel by who keeps the
+/// keyboard, because those are the two ways `App` has of saying "here":
+/// [`App::focus`] is an index over the visible listings and can't point at
+/// a sidebar (see [`KeyOwner`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FocusStop {
-    /// El listado en esa posición.
+    /// The listing at that position.
     Pane(usize),
-    /// El panel lateral que se queda el teclado.
+    /// The side panel that keeps the keyboard.
     Side(KeyOwner),
 }
 
@@ -373,11 +378,11 @@ mod tests {
     use crate::app::testutil::*;
     use norte_proto::EntryKind;
 
-    /// #52: `needs_stat_window` hidrata lo VISIBLE, no solo lo enfocado —
-    /// las columnas Tamaño/Fecha salían en blanco en todas las filas salvo
-    /// la del cursor. Los dos panes se pintan a la vez, así que los dos
-    /// aportan candidatas (el enfocado primero); fuera del radio, no; un
-    /// Dir, nunca; ya hidratada, tampoco.
+    /// #52: `needs_stat_window` hydrates what's VISIBLE, not just what's
+    /// focused — the Size/Date columns came out blank in every row except
+    /// the cursor's. Both panes get painted at once, so both contribute
+    /// candidates (the focused one first); out of radius, no; a Dir, never;
+    /// already hydrated, not either.
     #[test]
     fn needs_stat_window_cubre_los_dos_panes_dentro_del_radio() {
         let lazy = |n: &str| {
@@ -390,7 +395,7 @@ mod tests {
         let left = vec![lazy("a.txt"), lazy("b.txt"), lazy("c.txt"), dir_lazy];
         let right = vec![lazy("d.txt"), file("e.txt")];
         let mut app = App::new(Pane::new(root(), left), Pane::new(root(), right));
-        // `Pane::new` ordena (dirs primero): [z-dir, a, b, c].
+        // `Pane::new` sorts (dirs first): [z-dir, a, b, c].
         app.panes[0].set_cursor(1);
 
         let window = app.needs_stat_window(1);
@@ -405,34 +410,35 @@ mod tests {
                 && names
                     .iter()
                     .any(|n| n.starts_with("0:") && n.ends_with("/b.txt")),
-            "cursor ± radio del pane con foco: {names:?}"
+            "cursor ± radius of the focused pane: {names:?}"
         );
         assert!(
             !names.iter().any(|n| n.contains("c.txt")),
-            "fuera del radio no se sondea: {names:?}"
+            "out of radius doesn't get probed: {names:?}"
         );
         assert!(
             !names.iter().any(|n| n.contains("z-dir")),
-            "un Dir jamás se sondea: {names:?}"
+            "a Dir is never probed: {names:?}"
         );
         assert!(
             names
                 .iter()
                 .any(|n| n.starts_with("1:") && n.ends_with("/d.txt")),
-            "el pane SIN foco también se pinta: {names:?}"
+            "the UNFOCUSED pane also gets painted: {names:?}"
         );
         assert!(
             !names.iter().any(|n| n.contains("e.txt")),
-            "ya hidratada, no es candidata: {names:?}"
+            "already hydrated, not a candidate: {names:?}"
         );
-        assert_eq!(window[0].0, 0, "el pane con foco va primero");
+        assert_eq!(window[0].0, 0, "the focused pane goes first");
 
-        // Un radio generoso alcanza el listado entero de ambos panes.
+        // A generous radius reaches both panes' whole listing.
         assert_eq!(app.needs_stat_window(64).len(), 4);
     }
 
-    /// #52: `focused_needs_stat` señala la entrada File enfocada SIN `size`
-    /// (candidata a la sonda lazy). Ya hidratada o siendo un Dir, no aplica.
+    /// #52: `focused_needs_stat` flags the focused File entry with NO
+    /// `size` (a candidate for the lazy probe). Already hydrated or being a
+    /// Dir, it doesn't apply.
     #[test]
     fn focused_needs_stat_solo_file_lazy() {
         let mut lazy = file("a.txt");
@@ -444,148 +450,150 @@ mod tests {
         assert_eq!(
             app.focused_needs_stat(),
             Some((0, lazy.path.clone())),
-            "File sin size es candidato"
+            "a File with no size is a candidate"
         );
 
-        // Ya hidratada: deja de ser candidata.
+        // Already hydrated: stops being a candidate.
         app.panes[0].hydrate(&lazy.path, Some(5), None);
-        assert!(app.focused_needs_stat().is_none(), "ya tiene size");
+        assert!(app.focused_needs_stat().is_none(), "already has a size");
 
-        // Un Dir jamás se sondea, aunque venga sin size.
+        // A Dir is never probed, even without a size.
         let mut dir_lazy = file("b");
         dir_lazy.kind = EntryKind::Dir;
         dir_lazy.size = None;
         app.panes[0] = Pane::new(root(), vec![dir_lazy]);
-        assert!(app.focused_needs_stat().is_none(), "un Dir no se sondea");
+        assert!(app.focused_needs_stat().is_none(), "a Dir isn't probed");
     }
 
-    /// El intercambio cruza el pane Y su historial, y deja el foco en el
-    /// mismo LADO: quien miraba a la izquierda sigue mirando a la izquierda,
-    /// y ahora ahí está lo que había a la derecha.
+    /// The swap crosses the pane AND its history, and leaves focus on the
+    /// same SIDE: whoever was looking left keeps looking left, and now
+    /// what's there is what used to be on the right.
     #[test]
     fn el_intercambio_cruza_pane_e_historial_y_no_mueve_el_foco() {
-        let mut app = app_en("mem:///izq", "mem:///der");
-        app.history[0].record(vp("mem:///rastro-izq"));
-        app.history[1].record(vp("mem:///rastro-der"));
+        let mut app = app_en("mem:///left", "mem:///right");
+        app.history[0].record(vp("mem:///trail-left"));
+        app.history[1].record(vp("mem:///trail-right"));
         app.set_focus(0);
 
         app.swap_panes();
 
-        assert_eq!(app.panes[0].dir(), &vp("mem:///der"));
-        assert_eq!(app.panes[1].dir(), &vp("mem:///izq"));
-        assert_eq!(app.focus(), 0, "el foco se queda en su lado");
-        // El rastro viaja con el CONTENIDO, no con el lado: si no, el popup
-        // ofrecería llevar «atrás» a sitios donde ese contenido nunca estuvo.
+        assert_eq!(app.panes[0].dir(), &vp("mem:///right"));
+        assert_eq!(app.panes[1].dir(), &vp("mem:///left"));
+        assert_eq!(app.focus(), 0, "focus stays on its side");
+        // The trail travels with the CONTENT, not with the side: otherwise
+        // the popup would offer to take you "back" to places that content
+        // never was.
         assert_eq!(
             app.history[0].entries().front(),
-            Some(&vp("mem:///rastro-der"))
+            Some(&vp("mem:///trail-right"))
         );
         assert_eq!(
             app.history[1].entries().front(),
-            Some(&vp("mem:///rastro-izq"))
+            Some(&vp("mem:///trail-left"))
         );
-        // Y el RASTRO de atrás/adelante viaja también, no solo la MRU que
-        // pinta el popup: son dos estructuras dentro del mismo `History`.
+        // And the back/forward TRAIL travels too, not just the MRU the
+        // popup paints: they're two structures inside the same `History`.
         assert_eq!(app.history[0].back_len(), 1);
         assert_eq!(
-            app.history[0].step_back(vp("mem:///der")),
-            Some(vp("mem:///rastro-der")),
-            "el atrás del pane 0 apunta al rastro que llegó con su contenido"
+            app.history[0].step_back(vp("mem:///right")),
+            Some(vp("mem:///trail-right")),
+            "pane 0's back points at the trail that arrived with its content"
         );
     }
 
-    /// Dos intercambios son la identidad.
+    /// Two swaps are the identity.
     #[test]
     fn dos_intercambios_dejan_todo_como_estaba() {
-        let mut app = app_en("mem:///izq", "mem:///der");
+        let mut app = app_en("mem:///left", "mem:///right");
         app.swap_panes();
         app.swap_panes();
-        assert_eq!(app.panes[0].dir(), &vp("mem:///izq"));
-        assert_eq!(app.panes[1].dir(), &vp("mem:///der"));
+        assert_eq!(app.panes[0].dir(), &vp("mem:///left"));
+        assert_eq!(app.panes[1].dir(), &vp("mem:///right"));
     }
 
-    /// El foco se queda en el LADO también cuando estaba a la derecha: el
-    /// intercambio no toca `focus` en absoluto. (Mutación de control:
-    /// añadir `self.focus ^= 1` a `swap_panes` rompe aquí y en el test de
-    /// arriba a la vez.)
+    /// Focus also stays on the SIDE when it was on the right: the swap
+    /// doesn't touch `focus` at all. (Control mutation: adding
+    /// `self.focus ^= 1` to `swap_panes` breaks here and in the test above
+    /// at the same time.)
     #[test]
     fn el_intercambio_con_el_foco_a_la_derecha_tampoco_lo_mueve() {
-        let mut app = app_en("mem:///izq", "mem:///der");
+        let mut app = app_en("mem:///left", "mem:///right");
         app.set_focus(1);
         app.swap_panes();
         assert_eq!(app.focus(), 1);
         assert_eq!(
             app.focused().dir(),
-            &vp("mem:///izq"),
-            "en el lado derecho ahora está lo que había a la izquierda"
+            &vp("mem:///left"),
+            "on the right side now is what used to be on the left"
         );
     }
 
-    /// El anillo recorre TODOS los paneles, no solo los listados.
+    /// The ring walks ALL panels, not just the listings.
     ///
-    /// Era lo que faltaba: `Tab` alterna los dos listados y cada panel lateral
-    /// se abre con su propia tecla, así que con el sidebar y el visor delante
-    /// no había forma de recorrer la pantalla sin acordarse de tres teclas
-    /// distintas.
+    /// This was the missing piece: `Tab` alternates the two listings and
+    /// every side panel opens with its own key, so with the sidebar and the
+    /// viewer up front there was no way to walk the screen without
+    /// remembering three different keys.
     #[test]
     fn el_anillo_pasa_por_los_paneles_laterales() {
         let mut app = app_dos_panes();
         app.toggle_places();
         app.toggle_preview();
-        // Abrir un panel se lleva el teclado; el anillo se prueba desde los
-        // listados.
+        // Opening a panel takes the keyboard; the ring is tested from the
+        // listings.
         app.return_keys_to_panes();
         app.set_focus(0);
 
-        // El sidebar está acoplado a la IZQUIERDA, así que es el primero del
-        // anillo y desde el listado 0 se llega yendo hacia ATRÁS.
+        // The sidebar is docked on the LEFT, so it's first in the ring and
+        // from listing 0 it's reached going BACKWARD.
         app.layout_focus(-1);
         assert_eq!(app.key_owner(), KeyOwner::Places);
 
-        // Y hacia delante se recorren los dos listados y el visor.
-        let mut vistos = vec![(app.key_owner(), app.focus())];
+        // And going forward it walks both listings and the viewer.
+        let mut seen = vec![(app.key_owner(), app.focus())];
         for _ in 0..3 {
             app.layout_focus(1);
-            vistos.push((app.key_owner(), app.focus()));
+            seen.push((app.key_owner(), app.focus()));
         }
         assert_eq!(
-            vistos,
+            seen,
             vec![
                 (KeyOwner::Places, 0),
                 (KeyOwner::Panes, 0),
                 (KeyOwner::Panes, 1),
                 (KeyOwner::Preview, 1),
             ],
-            "el orden es el de la pantalla: sidebar, listados, visor"
+            "the order is the screen's: sidebar, listings, viewer"
         );
 
-        // Y da la vuelta.
+        // And it wraps around.
         app.layout_focus(1);
         assert_eq!(app.key_owner(), KeyOwner::Places);
     }
 
-    /// Sin nada más que un listado, ciclar no hace nada. Importa porque el
-    /// cálculo anterior era un módulo sobre el número de listados, y un
-    /// anillo de uno lo dejaba dando vueltas sobre sí mismo.
+    /// With nothing but a listing, cycling does nothing. It matters because
+    /// the previous calculation was a modulo over the number of listings,
+    /// and a ring of one left it spinning on itself.
     #[test]
     fn un_anillo_de_uno_no_va_a_ninguna_parte() {
         use norte_frontend::layout::{KindId, Node, SlotId};
         let mut app = app_dos_panes();
-        // Una disposición de un solo listado y ningún panel: la trae un
-        // layout guardado, no `layout.close` —que se niega a dejar la
-        // pantalla sin dos listados—.
+        // A single-listing, no-panel layout: it comes from a saved layout,
+        // not `layout.close` — which refuses to leave the screen without
+        // two listings.
         app.set_layout(Node::slot(SlotId(0), KindId::browser()));
         app.layout_focus(1);
         assert_eq!(app.key_owner(), KeyOwner::Panes);
         assert_eq!(app.focus(), 0);
     }
 
-    /// **`Tab` alcanza el tercer listado.**
+    /// **`Tab` reaches the third listing.**
     ///
-    /// Era `focus ^= 1`, una cuenta de dos: con `[izquierda, nuevo, derecha]`
-    /// en pantalla, desde el índice 2 daba 3 —que no existe— y `PaneSlots`
-    /// ACOTA fuera de rango en vez de panicar, así que la tecla no hacía nada
-    /// y no lo decía. El panel que no habías partido era inalcanzable.
+    /// Used to be `focus ^= 1`, a count of two: with `[left, new, right]`
+    /// on screen, from index 2 that gave 3 — which doesn't exist — and
+    /// `PaneSlots` CLAMPS out of range instead of panicking, so the key did
+    /// nothing and didn't say so. The panel you hadn't split was
+    /// unreachable.
     #[test]
     fn el_tabulador_alcanza_el_tercer_listado() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
@@ -599,23 +607,23 @@ mod tests {
                 Node::slot(SlotId(2), KindId::browser()),
             ],
         });
-        assert_eq!(app.panes.len(), 3, "tres listados en pantalla");
+        assert_eq!(app.panes.len(), 3, "three listings on screen");
 
         app.set_focus(0);
-        let mut vistos = Vec::new();
+        let mut seen = Vec::new();
         for _ in 0..3 {
             app.switch_focus();
-            vistos.push(app.focus());
+            seen.push(app.focus());
         }
         assert_eq!(
-            vistos,
+            seen,
             vec![1, 2, 0],
-            "los tres, y la vuelta entera en tres saltos"
+            "all three, and the whole loop in three jumps"
         );
     }
 
-    /// Con un solo listado, `Tab` es un no-op: no hay otro panel, y girar
-    /// sobre uno mismo sería fingir que pasó algo.
+    /// With a single listing, `Tab` is a no-op: there's no other panel, and
+    /// spinning on yourself would be pretending something happened.
     #[test]
     fn el_tabulador_sobre_un_solo_listado_no_hace_nada() {
         use norte_frontend::layout::{KindId, Node, SlotId};
@@ -625,8 +633,8 @@ mod tests {
         assert_eq!(app.focus(), 0);
     }
 
-    /// El panel de METADATOS no entra en el anillo: no tiene `KeyOwner`, así
-    /// que pararse ahí sería un sitio del que ninguna tecla saca.
+    /// The METADATA panel isn't a ring stop: it has no `KeyOwner`, so
+    /// stopping there would be a spot no key gets you out of.
     #[test]
     fn los_metadatos_no_son_una_parada() {
         let mut app = app_dos_panes();
@@ -637,6 +645,6 @@ mod tests {
             app.layout_focus(1);
         }
         assert_eq!(app.key_owner(), KeyOwner::Panes);
-        assert_eq!(app.focus(), 0, "dos saltos entre dos listados: vuelta");
+        assert_eq!(app.focus(), 0, "two jumps between two listings: full loop");
     }
 }

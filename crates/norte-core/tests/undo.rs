@@ -1,5 +1,5 @@
-//! Integración del undo de sesión (M3-2): `Engine::undo_session` deshace en
-//! LIFO, estricto (nunca pisa), con compensaciones append-only.
+//! Session undo integration (M3-2): `Engine::undo_session` undoes in strict
+//! LIFO order (never overwrites), with append-only compensations.
 
 use std::sync::Arc;
 
@@ -38,18 +38,18 @@ async fn run_undo(engine: &Engine, actor: Actor) -> (TaskState, UndoReport) {
     (state, r)
 }
 
-/// **Deshacer un cambio de ORTOGRAFÍA vuelve al nombre de antes** (#274).
+/// **Undoing a SPELLING change goes back to the previous name** (#274).
 ///
-/// El origen «está ocupado» siempre: en el volumen que pliega —el único donde
-/// ese rename ocurre— `stat("Foo.txt")` encuentra el `foo.txt` que se acaba de
-/// crear, así que la comprobación de «libre» decía que no y el undo se
-/// bloqueaba de forma garantizada. Y un `Blocked` estrangula el LIFO: deja
-/// varado todo lo anterior de la sesión.
+/// The source "is occupied" always: on the folding volume — the only one
+/// where that rename happens — `stat("Foo.txt")` finds the `foo.txt` that was
+/// just created, so the "free" check said no and undo was guaranteed to
+/// block. And a `Blocked` strangles LIFO: it strands everything earlier in
+/// the session.
 ///
-/// Lo que desempata es la identidad: lo que ocupa el origen ES el nodo que se
-/// está devolviendo.
+/// What breaks the tie is identity: what occupies the source IS the node
+/// being returned.
 #[tokio::test]
-async fn deshacer_un_cambio_de_ortografia_vuelve_al_nombre_de_antes() {
+async fn undoing_a_spelling_change_goes_back_to_the_previous_name() {
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("j"),
     ));
@@ -72,20 +72,20 @@ async fn deshacer_un_cambio_de_ortografia_vuelve_al_nombre_de_antes() {
 
     let (state, r) = run_undo(&engine, Actor::User).await;
     assert_eq!(state, TaskState::Completed);
-    assert_eq!(r.undone, 1, "y no BLOQUEADO: {r:?}");
+    assert_eq!(r.undone, 1, "and not BLOCKED: {r:?}");
     assert!(
         mem.stat(&vp("mem:///Foo.txt")).await.is_ok(),
-        "vuelve a llamarse como se llamaba"
+        "it is named the way it was named again"
     );
-    let quedan: Vec<Vec<u8>> = {
-        let mut s = mem.list(&vp("mem:///")).await.expect("lista");
+    let left: Vec<Vec<u8>> = {
+        let mut s = mem.list(&vp("mem:///")).await.expect("list");
         let mut out = Vec::new();
         while let Some(e) = s.next().await {
             out.push(
-                e.expect("entrada")
+                e.expect("entry")
                     .path
                     .file_name()
-                    .expect("hoja")
+                    .expect("leaf")
                     .as_bytes()
                     .to_vec(),
             );
@@ -93,45 +93,45 @@ async fn deshacer_un_cambio_de_ortografia_vuelve_al_nombre_de_antes() {
         out
     };
     assert!(
-        !quedan.iter().any(|n| n.starts_with(b".norte-rename-")),
-        "sin residuo del rodeo: {quedan:?}"
+        !left.iter().any(|n| n.starts_with(b".norte-rename-")),
+        "no detour residue: {left:?}"
     );
 }
 
-/// **`fs.create` crea un fichero VACÍO, y su deshacer lo borra** (#290).
+/// **`fs.create` creates an EMPTY file, and undoing it deletes it** (#290).
 ///
-/// Es una mutación como cualquier otra: journal `Created` con su reversa. Lo
-/// que este test clava es que no hay excepción por ser pequeña.
+/// It is a mutation like any other: journal `Created` with its reversal. What
+/// this test pins down is that there is no exception for being small.
 #[tokio::test]
-async fn crear_un_fichero_vacio_se_deshace() {
+async fn creating_an_empty_file_undoes() {
     let (engine, mem, _j) = setup().await;
     let h = engine
-        .create_file(&vp("mem:///nuevo.txt"))
+        .create_file(&vp("mem:///new.txt"))
         .await
         .expect("create");
     assert_eq!(h.join().await, TaskState::Completed);
-    let e = mem.stat(&vp("mem:///nuevo.txt")).await.expect("existe");
-    assert_eq!(e.size, Some(0), "y VACÍO: crear no inventa contenido");
+    let e = mem.stat(&vp("mem:///new.txt")).await.expect("exists");
+    assert_eq!(e.size, Some(0), "and EMPTY: creating invents no content");
 
     let (state, r) = run_undo(&engine, Actor::User).await;
     assert_eq!(state, TaskState::Completed);
     assert_eq!(r.undone, 1);
     assert!(matches!(
-        mem.stat(&vp("mem:///nuevo.txt")).await,
+        mem.stat(&vp("mem:///new.txt")).await,
         Err(norte_proto::Error::NotFound)
     ));
 }
 
-/// Y NUNCA pisa lo que haya.
+/// And it NEVER overwrites what is there.
 ///
-/// No hay ninguna lectura de «crear» que signifique «vaciar lo que hay», y un
-/// método que trunca en silencio es una pérdida de datos con nombre inocente.
+/// There is no reading of "create" that means "empty out what is there", and a
+/// method that silently truncates is data loss with an innocent name.
 #[tokio::test]
-async fn crear_sobre_algo_que_existe_falla_sin_tocarlo() {
+async fn creating_over_something_that_exists_fails_without_touching_it() {
     let (engine, mem, _j) = setup().await;
-    write_file(&mem, "mem:///ocupado.txt", b"contenido que importa").await;
+    write_file(&mem, "mem:///taken.txt", b"content that matters").await;
     let h = engine
-        .create_file(&vp("mem:///ocupado.txt"))
+        .create_file(&vp("mem:///taken.txt"))
         .await
         .expect("submit");
     assert!(
@@ -141,13 +141,16 @@ async fn crear_sobre_algo_que_existe_falla_sin_tocarlo() {
                 error: norte_proto::Error::Conflict { .. }
             }
         ),
-        "un nombre ocupado es un conflicto"
+        "a taken name is a conflict"
     );
-    let e = mem.stat(&vp("mem:///ocupado.txt")).await.expect("sigue");
+    let e = mem
+        .stat(&vp("mem:///taken.txt"))
+        .await
+        .expect("still there");
     assert_eq!(
         e.size,
         Some(21),
-        "y con sus bytes intactos: el fallo no vació nada"
+        "and with its bytes intact: the failure emptied nothing"
     );
 }
 
@@ -187,7 +190,7 @@ async fn undo_restores_renamed() {
     assert_eq!(r.undone, 1);
     assert!(
         mem.stat(&vp("mem:///a.txt")).await.is_ok(),
-        "origen restaurado"
+        "source restored"
     );
     assert!(matches!(
         mem.stat(&vp("mem:///b.txt")).await,
@@ -214,7 +217,7 @@ async fn undo_lifo_reverts_all_then_double_undo_is_noop() {
             Err(norte_proto::Error::NotFound)
         ));
     }
-    // 2º undo: todo ya compensado → 0.
+    // 2nd undo: everything already compensated → 0.
     let (_s2, r2) = run_undo(&engine, Actor::User).await;
     assert_eq!(r2.undone, 0);
 }
@@ -225,7 +228,7 @@ async fn undo_blocks_when_target_occupied_by_foreign_state() {
     let agent = Actor::Agent {
         session: "s1".into(),
     };
-    // Estado FS coherente con un Renamed a→b del agente: b existe, a no.
+    // FS state coherent with a Renamed a→b by the agent: b exists, a does not.
     write_file(&mem, "mem:///b.txt", b"x").await;
     journal
         .journal()
@@ -239,18 +242,18 @@ async fn undo_blocks_when_target_occupied_by_foreign_state() {
         )
         .await
         .expect("seed");
-    // Drift: alguien ocupa el origen `a` (NO en la sesión del agente).
-    write_file(&mem, "mem:///a.txt", b"ocupado").await;
+    // Drift: someone occupies the source `a` (NOT in the agent's session).
+    write_file(&mem, "mem:///a.txt", b"taken").await;
 
     let (state, r) = run_undo(&engine, agent).await;
     assert_eq!(state, TaskState::Completed);
     assert_eq!(r.undone, 0);
     assert!(
         matches!(r.blocked, Some((_, norte_proto::Error::Conflict { .. }))),
-        "origen ocupado bloquea, {:?}",
+        "an occupied source blocks, {:?}",
         r.blocked
     );
-    // No pisó: ambos intactos.
+    // Nothing overwritten: both intact.
     assert!(mem.stat(&vp("mem:///a.txt")).await.is_ok());
     assert!(mem.stat(&vp("mem:///b.txt")).await.is_ok());
 }
@@ -270,9 +273,9 @@ async fn undo_skips_irreversible_permanent_delete() {
 
     let (state, r) = run_undo(&engine, Actor::User).await;
     assert_eq!(state, TaskState::Completed);
-    assert_eq!(r.undone, 1, "deshace la copia");
-    assert_eq!(r.skipped_irreversible, 1, "salta el borrado permanente");
-    assert!(r.blocked.is_none(), "irreversible NO bloquea");
+    assert_eq!(r.undone, 1, "undoes the copy");
+    assert_eq!(r.skipped_irreversible, 1, "skips the permanent delete");
+    assert!(r.blocked.is_none(), "irreversible does NOT block");
     assert!(matches!(
         mem.stat(&vp("mem:///copy.txt")).await,
         Err(norte_proto::Error::NotFound)
@@ -288,7 +291,7 @@ async fn undo_filters_by_actor() {
         .await
         .expect("copy");
     assert_eq!(h.join().await, TaskState::Completed);
-    // Created del agente (sembrado; FS coherente).
+    // The agent's Created (seeded; coherent FS).
     write_file(&mem, "mem:///agent_made.txt", b"x").await;
     let agent = Actor::Agent {
         session: "s1".into(),
@@ -314,15 +317,15 @@ async fn undo_filters_by_actor() {
     ));
     assert!(
         mem.stat(&vp("mem:///user_copy.txt")).await.is_ok(),
-        "no tocó al User"
+        "did not touch the User's"
     );
 }
 
 #[tokio::test]
 async fn undo_trashed_logical_restores_from_dest() {
-    // Papelera lógica sembrada: un Trashed con reversal_ref = ruta del payload.
+    // Seeded logical trash: a Trashed with reversal_ref = the payload's path.
     let (engine, mem, journal) = setup().await;
-    // FS coherente: el original NO existe; el payload en la papelera SÍ.
+    // Coherent FS: the original does NOT exist; the payload in the trash DOES.
     mem.mkdir(&vp("mem:///.trash")).await.expect("mkdir trash");
     mem.mkdir(&vp("mem:///.trash/1")).await.expect("mkdir id");
     write_file(&mem, "mem:///.trash/1/v.txt", b"payload").await;
@@ -343,7 +346,7 @@ async fn undo_trashed_logical_restores_from_dest() {
     assert_eq!(state, TaskState::Completed);
     assert_eq!(r.undone, 1);
     assert_eq!(
-        // Restaurado al original desde el payload.
+        // Restored to the original from the payload.
         {
             let mut s = mem.read(&vp("mem:///v.txt"), None).await.expect("read");
             let mut out = Vec::new();
@@ -359,7 +362,7 @@ async fn undo_trashed_logical_restores_from_dest() {
             mem.stat(&vp("mem:///.trash/1/v.txt")).await,
             Err(norte_proto::Error::NotFound)
         ),
-        "el payload se movió fuera de la papelera"
+        "the payload was moved out of the trash"
     );
 }
 
@@ -367,7 +370,7 @@ async fn undo_trashed_logical_restores_from_dest() {
 async fn undo_cancellation_is_clean() {
     let (engine, mem, journal) = setup().await;
     write_file(&mem, "mem:///s.txt", b"x").await;
-    // 4 Created para tener trabajo que cancelar a mitad.
+    // 4 Created to have work to cancel halfway through.
     for d in ["mem:///a", "mem:///b", "mem:///c", "mem:///d"] {
         let h = engine
             .copy(&vp("mem:///s.txt"), &vp(d))
@@ -375,11 +378,11 @@ async fn undo_cancellation_is_clean() {
             .expect("copy");
         assert_eq!(h.join().await, TaskState::Completed);
     }
-    // Latencia por op → ventana determinista para cancelar antes de terminar.
+    // Per-op latency → a deterministic window to cancel before finishing.
     mem.faults()
-        // No se puede pausar el reloj aquí: el journal sqlx agota el pool
-        // (`PoolTimedOut`) cuando tokio adelanta el tiempo. Ventana ancha en
-        // su lugar: 200 ms por op frente a 15 ms de espera, 50x de margen.
+        // The clock cannot be paused here: sqlx's journal pool times out
+        // (`PoolTimedOut`) when tokio fast-forwards time. A wide window
+        // instead: 200 ms per op against a 15 ms wait, 50x of margin.
         .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
 
     let (h, report) = engine.undo_session(Actor::User).await.expect("submit");
@@ -387,16 +390,16 @@ async fn undo_cancellation_is_clean() {
     h.cancel();
     let state = h.join().await;
 
-    assert_eq!(state, TaskState::Cancelled, "corte cooperativo limpio");
+    assert_eq!(state, TaskState::Cancelled, "clean cooperative cut");
     let r = report.lock().expect("lock").clone();
     assert!(
         r.undone < 4,
-        "cancelada antes de terminar (undone={})",
+        "cancelled before finishing (undone={})",
         r.undone
     );
-    assert!(r.blocked.is_none(), "cancelación no es bloqueo");
-    // Coherencia: el corte es ENTRE entradas (cada paso es op+compensación por
-    // entrada), nunca a mitad de una — la cadena sigue íntegra.
+    assert!(r.blocked.is_none(), "cancellation is not a block");
+    // Coherence: the cut is BETWEEN entries (each step is an op+compensation
+    // per entry), never halfway through one — the chain stays intact.
     mem.faults().set_latency_per_op(None);
     assert!(
         journal
@@ -405,25 +408,25 @@ async fn undo_cancellation_is_clean() {
             .await
             .expect("verify")
             .is_intact(),
-        "hash-chain íntegra tras cancelar"
+        "hash chain intact after cancelling"
     );
 }
 
 #[tokio::test]
 async fn undo_without_journal_is_unsupported() {
-    let engine = Engine::new(); // observer no-op, sin journal
+    let engine = Engine::new(); // no-op observer, no journal
     let err = engine
         .undo_session(Actor::User)
         .await
         .err()
-        .expect("sin journal");
+        .expect("no journal");
     assert!(matches!(err, norte_proto::Error::Unsupported));
 }
 
 #[tokio::test]
 async fn undo_delete_mode_trash_then_restore_via_engine() {
-    // MemProvider trashea con "vanish" (dest=None) → restore_trashed default
-    // Unsupported → el undo BLOQUEA limpio (no hay papelera nativa que consultar).
+    // MemProvider trashes with "vanish" (dest=None) → restore_trashed default
+    // Unsupported → undo BLOCKS cleanly (no native trash to query).
     let (engine, mem, _j) = setup().await;
     write_file(&mem, "mem:///t.txt", b"x").await;
     let h = engine
@@ -437,24 +440,24 @@ async fn undo_delete_mode_trash_then_restore_via_engine() {
     assert_eq!(r.undone, 0);
     assert!(
         matches!(r.blocked, Some((_, norte_proto::Error::Unsupported))),
-        "MemProvider vanish: sin restore nativo, bloquea, {:?}",
+        "MemProvider vanish: no native restore, it blocks, {:?}",
         r.blocked
     );
 }
 
-/// M3-4 T2: un HUMANO deshace la sesión de un agente cuyo scope ya no existe
-/// (expiró / nunca se renovó). El target selecciona las entradas; el EJECUTOR
-/// (User, allow-all) pasa el gate y firma las compensaciones — sin el split,
-/// el undo moría en `out-of-scope` del propio agente.
+/// M3-4 T2: a HUMAN undoes the session of an agent whose scope no longer
+/// exists (expired / never renewed). The target selects the entries; the
+/// EXECUTOR (User, allow-all) passes the gate and signs the compensations —
+/// without the split, the undo would die at the agent's own `out-of-scope`.
 #[tokio::test]
-async fn undo_de_sesion_de_agente_ejecutado_por_humano() {
+async fn undo_of_an_agents_session_run_by_a_human() {
     use norte_core::approval::DenyAll;
     use norte_core::{PolicyConfig, ScopeRegistry, ScopedPolicy};
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("j"),
     ));
-    // Policy REAL instalada y registro de scopes VACÍO: el agente está fuera
-    // de todo scope (como tras expirar su TTL).
+    // A REAL policy installed and an EMPTY scope registry: the agent is
+    // outside every scope (as if its TTL had expired).
     let engine = Engine::with_journal(Arc::clone(&journal)).with_policy(
         Arc::new(ScopedPolicy::new(
             ScopeRegistry::new(),
@@ -465,7 +468,7 @@ async fn undo_de_sesion_de_agente_ejecutado_por_humano() {
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
 
-    // Mutación del agente sembrada (patrón de undo_filters_by_actor).
+    // The agent's mutation seeded (the pattern from undo_filters_by_actor).
     write_file(&mem, "mem:///agent_made.txt", b"x").await;
     let agent = Actor::Agent {
         session: "s1".into(),
@@ -483,26 +486,26 @@ async fn undo_de_sesion_de_agente_ejecutado_por_humano() {
         .await
         .expect("seed");
 
-    // Sanity: el agente sin scope NO puede deshacerse a sí mismo. Desde #171
-    // eso es una fila de `denied` y no un `blocked` —la policy se pregunta
-    // unidad a unidad, dentro de la Task— pero el efecto sobre el árbol es el
-    // mismo: no se toca nada.
+    // Sanity: the agent without scope CANNOT undo itself. Since #171 that is
+    // a `denied` row and not a `blocked` — policy is asked unit by unit,
+    // inside the Task — but the effect on the tree is the same: nothing is
+    // touched.
     let (h, report) = engine
         .undo_session(agent.clone())
         .await
         .expect("submit self-undo");
     let _ = h.join().await;
     let r = report.lock().expect("lock").clone();
-    assert_eq!(r.denied_total, 1, "out-of-scope deniega el self-undo");
-    assert!(r.blocked.is_none(), "y no es un bloqueo por drift");
+    assert_eq!(r.denied_total, 1, "out-of-scope denies the self-undo");
+    assert!(r.blocked.is_none(), "and it is not a block from drift");
     assert_eq!(r.undone, 0);
     assert!(mem.stat(&vp("mem:///agent_made.txt")).await.is_ok());
 
-    // El humano deshace la sesión del agente: target=agente, ejecutor=User.
+    // The human undoes the agent's session: target=agent, executor=User.
     let (h, report) = engine
         .undo_session_for(&agent, Actor::User)
         .await
-        .expect("submit undo humano");
+        .expect("submit human undo");
     assert_eq!(h.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
     assert_eq!(r.undone, 1);
@@ -512,28 +515,29 @@ async fn undo_de_sesion_de_agente_ejecutado_por_humano() {
         Err(norte_proto::Error::NotFound)
     ));
 
-    // La compensación la firma el EJECUTOR (User), no el agente.
+    // The compensation is signed by the EXECUTOR (User), not the agent.
     let entries = journal.journal().entries().await.expect("entries");
     let comp = entries
         .iter()
         .find(|e| e.undoes_seq.is_some())
-        .expect("hay compensatoria");
-    assert_eq!(comp.actor_kind, "user", "la firma el ejecutor humano");
+        .expect("there is a compensation");
+    assert_eq!(comp.actor_kind, "user", "signed by the human executor");
 }
 
-/// #65: la reversa de un `Created` en un provider SIN cap `TRASH` (sftp/object
-/// con `logical_trash` OFF — el caso común remoto) NO cae a borrado permanente:
-/// se SALTA con contador propio y el nodo se queda. Sin `node_id` en `Created`,
-/// «lo que hoy vive en ese path» puede ser trabajo del humano posterior a la
-/// creación; el undo jamás lo destruye de forma irrecuperable.
+/// #65: the reversal of a `Created` on a provider WITHOUT the `TRASH` cap
+/// (sftp/object with `logical_trash` OFF — the common remote case) does NOT
+/// fall back to permanent delete: it is SKIPPED with its own counter and the
+/// node stays. Without `node_id` in `Created`, "what lives at that path today"
+/// can be human work done after the creation; undo never destroys it
+/// unrecoverably.
 #[tokio::test]
-async fn undo_created_sin_trash_se_salta_no_borra_permanente() {
+async fn undo_created_without_trash_is_skipped_not_permanently_deleted() {
     use norte_proto::CapabilityFlags;
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("j"),
     ));
     let engine = Engine::with_journal(Arc::clone(&journal));
-    // Como MemProvider::new() pero SIN TRASH.
+    // Like MemProvider::new() but WITHOUT TRASH.
     let mem = Arc::new(MemProvider::with_flags(
         CapabilityFlags::RENAME_ATOMIC
             | CapabilityFlags::CASE_SENSITIVE
@@ -554,20 +558,23 @@ async fn undo_created_sin_trash_se_salta_no_borra_permanente() {
     assert_eq!(r.undone, 0);
     assert_eq!(
         r.skipped_created_no_trash, 1,
-        "la reversa permanente se salta y se cuenta"
+        "the permanent reversal is skipped and counted"
     );
-    assert!(r.blocked.is_none(), "saltar no es bloquear: el LIFO sigue");
+    assert!(
+        r.blocked.is_none(),
+        "skipping is not blocking: LIFO continues"
+    );
     assert!(
         mem.stat(&vp("mem:///dst.txt")).await.is_ok(),
-        "el nodo creado SIGUE: jamás borrado permanente por undo"
+        "the created node STAYS: never permanently deleted by undo"
     );
 }
 
-/// El orden importa (#65): un DRIFT (el nodo creado ya no está) bloquea
-/// SIEMPRE, incluso sin cap `TRASH` — clasificarlo como skip tragaría la
-/// señal de divergencia del modo estricto.
+/// Order matters (#65): a DRIFT (the created node is no longer there) ALWAYS
+/// blocks, even without the `TRASH` cap — classifying it as a skip would
+/// swallow strict mode's divergence signal.
 #[tokio::test]
-async fn undo_created_sin_trash_con_drift_bloquea() {
+async fn undo_created_without_trash_with_drift_blocks() {
     use norte_proto::CapabilityFlags;
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("j"),
@@ -586,42 +593,42 @@ async fn undo_created_sin_trash_con_drift_bloquea() {
         .await
         .expect("copy");
     assert_eq!(h.join().await, TaskState::Completed);
-    // Drift: alguien quitó el nodo por fuera del undo.
+    // Drift: someone removed the node outside of undo.
     mem.remove(&vp("mem:///dst.txt")).await.expect("remove");
 
     let (_state, r) = run_undo(&engine, Actor::User).await;
-    assert_eq!(r.skipped_created_no_trash, 0, "drift NO es skip");
-    let (_seq, err) = r.blocked.expect("bloquea en el drift");
+    assert_eq!(r.skipped_created_no_trash, 0, "drift is NOT a skip");
+    let (_seq, err) = r.blocked.expect("blocks on the drift");
     assert!(matches!(err, norte_proto::Error::NotFound));
 }
 
-/// **Organizar se deshace ENTERO: los ficheros vuelven y las carpetas que
-/// creó desaparecen** (fase 8).
+/// **Organizing undoes ENTIRELY: files come back and the folders it created
+/// disappear** (phase 8).
 ///
-/// Es la propiedad que obliga a que `fs.organize` sea un método y no N
-/// llamadas del cliente. Con los `fs.create` fuera del lote, deshacer
-/// devolvería los ficheros y dejaría un árbol de directorios vacíos que el
-/// humano no hizo — y que tendría que ir borrando a mano sin saber cuáles
-/// eran suyos.
+/// This is the property that requires `fs.organize` to be one method and not
+/// N calls from the client. With the `fs.create`s outside the batch, undoing
+/// would return the files and leave a tree of empty directories the human did
+/// not make — and that they would have to delete by hand without knowing
+/// which ones were theirs.
 #[tokio::test]
-async fn organizar_se_deshace_entero_con_sus_carpetas() {
+async fn organizing_undoes_entirely_with_its_folders() {
     let (engine, mem, journal) = setup().await;
     mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
-    write_file(&mem, "mem:///d/factura.pdf", b"x").await;
-    write_file(&mem, "mem:///d/nota.txt", b"y").await;
+    write_file(&mem, "mem:///d/invoice.pdf", b"x").await;
+    write_file(&mem, "mem:///d/note.txt", b"y").await;
 
     let moves = vec![
         norte_proto::methods::OrganizeMove {
-            current: "factura.pdf".to_owned(),
-            proposed_rel: "facturas/2026/marzo.pdf".to_owned(),
+            current: "invoice.pdf".to_owned(),
+            proposed_rel: "invoices/2026/march.pdf".to_owned(),
         },
         norte_proto::methods::OrganizeMove {
-            current: "nota.txt".to_owned(),
-            proposed_rel: "notas/nota.txt".to_owned(),
+            current: "note.txt".to_owned(),
+            proposed_rel: "notes/note.txt".to_owned(),
         },
     ];
     let dir = vp("mem:///d");
-    let plan = norte_core::organize::OrganizePlan::bind(&dir, &moves).expect("plan válido");
+    let plan = norte_core::organize::OrganizePlan::bind(&dir, &moves).expect("valid plan");
     let h = engine
         .organize(&dir, &moves, plan.hash(), Actor::User)
         .await
@@ -629,212 +636,211 @@ async fn organizar_se_deshace_entero_con_sus_carpetas() {
     assert_eq!(h.join().await, TaskState::Completed);
 
     assert!(
-        mem.stat(&vp("mem:///d/facturas/2026/marzo.pdf"))
+        mem.stat(&vp("mem:///d/invoices/2026/march.pdf"))
             .await
             .is_ok()
     );
-    assert!(mem.stat(&vp("mem:///d/notas/nota.txt")).await.is_ok());
+    assert!(mem.stat(&vp("mem:///d/notes/note.txt")).await.is_ok());
     assert!(matches!(
-        mem.stat(&vp("mem:///d/factura.pdf")).await,
+        mem.stat(&vp("mem:///d/invoice.pdf")).await,
         Err(norte_proto::Error::NotFound)
     ));
 
-    // Y ahora entero para atrás.
+    // And now entirely back.
     let (state, r) = run_undo(&engine, Actor::User).await;
     assert_eq!(state, TaskState::Completed);
-    assert!(
-        r.blocked.is_none(),
-        "nada debería bloquear: {:?}",
-        r.blocked
-    );
+    assert!(r.blocked.is_none(), "nothing should block: {:?}", r.blocked);
 
     assert!(
-        mem.stat(&vp("mem:///d/factura.pdf")).await.is_ok(),
-        "el fichero vuelve a su sitio"
+        mem.stat(&vp("mem:///d/invoice.pdf")).await.is_ok(),
+        "the file goes back to its place"
     );
-    assert!(mem.stat(&vp("mem:///d/nota.txt")).await.is_ok());
-    for carpeta in [
-        "mem:///d/facturas/2026",
-        "mem:///d/facturas",
-        "mem:///d/notas",
+    assert!(mem.stat(&vp("mem:///d/note.txt")).await.is_ok());
+    for folder in [
+        "mem:///d/invoices/2026",
+        "mem:///d/invoices",
+        "mem:///d/notes",
     ] {
         assert!(
             matches!(
-                mem.stat(&vp(carpeta)).await,
+                mem.stat(&vp(folder)).await,
                 Err(norte_proto::Error::NotFound)
             ),
-            "la carpeta {carpeta} la creó el lote, así que el undo se la lleva"
+            "folder {folder} was created by the batch, so undo takes it down"
         );
     }
 
-    // Y las entradas del lote comparten `batch_id`: eso es lo que las hace
-    // UNA unidad deshacible, y sin ello nada de lo de arriba se sostiene.
-    let filas = journal
+    // And the batch's entries share a `batch_id`: that is what makes them ONE
+    // undoable unit, and without it none of the above holds.
+    let rows = journal
         .journal()
         .page(None, 50, Some("user"))
         .await
         .expect("page");
-    let del_lote: Vec<_> = filas
+    let from_batch: Vec<_> = rows
         .iter()
         .filter(|e| e.entry.undoes_seq.is_none())
         .collect();
-    let primero = del_lote[0].entry.batch_id;
-    assert!(primero.is_some(), "el lote tiene id");
+    let first = from_batch[0].entry.batch_id;
+    assert!(first.is_some(), "the batch has an id");
     assert!(
-        del_lote.iter().all(|e| e.entry.batch_id == primero),
-        "las carpetas y los movimientos van en el MISMO lote"
+        from_batch.iter().all(|e| e.entry.batch_id == first),
+        "the folders and the moves go in the SAME batch"
     );
 }
 
-/// Un destino que se sale del directorio no llega ni a intentarse: el plan
-/// entero se rechaza antes de crear una sola carpeta.
+/// A destination that escapes the directory is not even attempted: the whole
+/// plan is rejected before creating a single folder.
 #[tokio::test]
-async fn organizar_rechaza_un_destino_que_se_sale() {
+async fn organizing_rejects_a_destination_that_escapes() {
     let (engine, mem, _j) = setup().await;
     mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
     write_file(&mem, "mem:///d/a.txt", b"x").await;
     let dir = vp("mem:///d");
-    let bueno = vec![norte_proto::methods::OrganizeMove {
+    let good = vec![norte_proto::methods::OrganizeMove {
         current: "a.txt".to_owned(),
         proposed_rel: "sub/a.txt".to_owned(),
     }];
-    let plan = norte_core::organize::OrganizePlan::bind(&dir, &bueno).expect("plan");
+    let plan = norte_core::organize::OrganizePlan::bind(&dir, &good).expect("plan");
 
-    let malo = vec![norte_proto::methods::OrganizeMove {
+    let bad = vec![norte_proto::methods::OrganizeMove {
         current: "a.txt".to_owned(),
-        proposed_rel: "../fuera.txt".to_owned(),
+        proposed_rel: "../outside.txt".to_owned(),
     }];
-    let Err(err) = engine.organize(&dir, &malo, plan.hash(), Actor::User).await else {
-        panic!("un `..` no se aplica");
+    let Err(err) = engine.organize(&dir, &bad, plan.hash(), Actor::User).await else {
+        panic!("a `..` is not applied");
     };
     assert!(matches!(err, norte_proto::Error::InvalidPath));
     assert!(
         mem.stat(&vp("mem:///d/a.txt")).await.is_ok(),
-        "y no se tocó nada"
+        "and nothing was touched"
     );
 }
 
-/// Un `plan_hash` que no es el del plan que se revisó se rechaza: lo que se
-/// aplica tiene que ser lo que un humano leyó.
+/// A `plan_hash` that is not the one from the reviewed plan is rejected: what
+/// gets applied has to be what a human read.
 #[tokio::test]
-async fn organizar_rechaza_un_plan_que_no_es_el_revisado() {
+async fn organizing_rejects_a_plan_that_is_not_the_reviewed_one() {
     let (engine, mem, _j) = setup().await;
     mem.mkdir(&vp("mem:///d")).await.expect("mkdir");
     write_file(&mem, "mem:///d/a.txt", b"x").await;
     let dir = vp("mem:///d");
-    let revisado = vec![norte_proto::methods::OrganizeMove {
+    let reviewed = vec![norte_proto::methods::OrganizeMove {
         current: "a.txt".to_owned(),
         proposed_rel: "sub/a.txt".to_owned(),
     }];
-    let plan = norte_core::organize::OrganizePlan::bind(&dir, &revisado).expect("plan");
+    let plan = norte_core::organize::OrganizePlan::bind(&dir, &reviewed).expect("plan");
 
-    // El humano aprobó «a sub/», y lo que llega mueve a otro sitio.
-    let otro = vec![norte_proto::methods::OrganizeMove {
+    // The human approved "to sub/", and what arrives moves somewhere else.
+    let other = vec![norte_proto::methods::OrganizeMove {
         current: "a.txt".to_owned(),
-        proposed_rel: "otro/a.txt".to_owned(),
+        proposed_rel: "other/a.txt".to_owned(),
     }];
-    let Err(err) = engine.organize(&dir, &otro, plan.hash(), Actor::User).await else {
-        panic!("el token es del plan que se leyó");
+    let Err(err) = engine
+        .organize(&dir, &other, plan.hash(), Actor::User)
+        .await
+    else {
+        panic!("the token is the reviewed plan's");
     };
     assert!(matches!(err, norte_proto::Error::PlanStale));
 }
 
-/// **Deshacer HASTA UN PUNTO deja intacto lo anterior** (fase 7,
+/// **Undoing UP TO A POINT leaves what came before intact** (phase 7,
 /// `journal.undo_after`).
 ///
-/// Es la propiedad de la que depende toda la línea de tiempo: el humano
-/// señala una fila y dice «vuelve aquí». Si el corte se fuera una entrada
-/// hacia atrás, deshacer se llevaría por delante una mutación que el humano
-/// estaba mirando y quería conservar — y el journal no distingue una
-/// compensación pedida de una pedida por error.
+/// This is the property the whole timeline depends on: the human points at a
+/// row and says "go back here". If the cut moved one entry backward, undo
+/// would take down a mutation the human was looking at and wanted to keep —
+/// and the journal does not tell a requested compensation apart from one
+/// requested by mistake.
 #[tokio::test]
-async fn deshacer_hasta_un_punto_respeta_lo_anterior() {
+async fn undoing_up_to_a_point_respects_what_came_before() {
     let (engine, mem, journal) = setup().await;
-    write_file(&mem, "mem:///uno.txt", b"1").await;
-    write_file(&mem, "mem:///dos.txt", b"2").await;
+    write_file(&mem, "mem:///one.txt", b"1").await;
+    write_file(&mem, "mem:///two.txt", b"2").await;
 
-    // Dos copias del humano, una detrás de otra.
+    // Two human copies, one after the other.
     for (src, dst) in [
-        ("mem:///uno.txt", "mem:///uno.copia"),
-        ("mem:///dos.txt", "mem:///dos.copia"),
+        ("mem:///one.txt", "mem:///one.copy"),
+        ("mem:///two.txt", "mem:///two.copy"),
     ] {
         let h = engine.copy(&vp(src), &vp(dst)).await.expect("copy");
         assert_eq!(h.join().await, TaskState::Completed);
     }
 
-    // El corte: el `seq` de la PRIMERA copia. Se conserva.
-    let seq_primera = journal
+    // The cut: the FIRST copy's `seq`. It is kept.
+    let seq_first = journal
         .journal()
         .page(None, 50, Some("user"))
         .await
         .expect("page")
         .last()
-        .expect("hay entradas")
+        .expect("there are entries")
         .entry
         .seq;
 
     let (h, report) = engine
-        .undo_after(seq_primera, None)
+        .undo_after(seq_first, None)
         .await
         .expect("undo submit");
     let id = h.id();
     assert_eq!(h.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
 
-    // El engine lo retiene para `policy.undo_report`, y lo suelta cuando el
-    // daemon no llega a entregar el id (OVERLOADED): un informe de una tarea
-    // que nadie recibió no tiene a quién servirse.
+    // The engine retains it for `policy.undo_report`, and releases it when the
+    // daemon fails to deliver the id (OVERLOADED): a report for a task nobody
+    // received has nobody to serve it to.
     assert_eq!(engine.undo_report(id).map(|(_, r)| r.undone), Some(1));
     engine.forget_undo_report(id);
-    assert!(engine.undo_report(id).is_none(), "olvidado");
+    assert!(engine.undo_report(id).is_none(), "forgotten");
 
-    assert_eq!(r.undone, 1, "sólo la segunda copia");
+    assert_eq!(r.undone, 1, "only the second copy");
     assert!(r.blocked.is_none());
     assert!(
-        mem.stat(&vp("mem:///uno.copia")).await.is_ok(),
-        "lo anterior al corte NO se toca"
+        mem.stat(&vp("mem:///one.copy")).await.is_ok(),
+        "what came before the cut is NOT touched"
     );
     assert!(
         matches!(
-            mem.stat(&vp("mem:///dos.copia")).await,
+            mem.stat(&vp("mem:///two.copy")).await,
             Err(norte_proto::Error::NotFound)
         ),
-        "lo posterior sí"
+        "what came after is"
     );
 }
 
-/// Y no se lleva lo de un AGENTE, aunque sea posterior al corte: «deshaz lo
-/// mío» es lo mío. Lo de un agente se deshace por `policy.undo_session`, que
-/// es otra pregunta con otra respuesta.
+/// And it does not take down an AGENT's, even if it comes after the cut:
+/// "undo mine" is mine. An agent's is undone through `policy.undo_session`,
+/// which is a different question with a different answer.
 #[tokio::test]
-async fn deshacer_hasta_un_punto_no_toca_lo_de_un_agente() {
+async fn undoing_up_to_a_point_does_not_touch_an_agents() {
     let (engine, mem, journal) = setup().await;
     write_file(&mem, "mem:///a.txt", b"a").await;
 
     let h = engine
-        .copy(&vp("mem:///a.txt"), &vp("mem:///humano.copia"))
+        .copy(&vp("mem:///a.txt"), &vp("mem:///human.copy"))
         .await
         .expect("copy");
     assert_eq!(h.join().await, TaskState::Completed);
-    let corte = journal
+    let cut = journal
         .journal()
         .page(None, 50, Some("user"))
         .await
         .expect("page")
         .first()
-        .expect("hay entradas")
+        .expect("there are entries")
         .entry
         .seq;
 
-    // La mutación del agente se SIEMBRA en el journal con el fichero ya
-    // puesto, que es como lo hacen los demás tests de este fichero: lo que se
-    // comprueba es a quién mira el undo, no por qué puerta entró la entrada.
-    write_file(&mem, "mem:///agente.copia", b"a").await;
+    // The agent's mutation is SEEDED in the journal with the file already in
+    // place, the same way the other tests in this file do it: what is being
+    // checked is who undo looks at, not which door the entry came through.
+    write_file(&mem, "mem:///agent.copy", b"a").await;
     journal
         .journal()
         .record(
             "created",
-            b"mem:///agente.copia",
+            b"mem:///agent.copy",
             None,
             Reversal::Delete,
             None,
@@ -843,41 +849,41 @@ async fn deshacer_hasta_un_punto_no_toca_lo_de_un_agente() {
             },
         )
         .await
-        .expect("record del agente");
+        .expect("agent record");
 
-    let (h, report) = engine.undo_after(corte, None).await.expect("undo submit");
+    let (h, report) = engine.undo_after(cut, None).await.expect("undo submit");
     assert_eq!(h.join().await, TaskState::Completed);
     let r = report.lock().expect("lock").clone();
 
-    assert_eq!(r.undone, 0, "nada del humano después del corte");
+    assert_eq!(r.undone, 0, "nothing of the human's after the cut");
     assert!(
-        mem.stat(&vp("mem:///agente.copia")).await.is_ok(),
-        "lo del agente sigue donde estaba"
+        mem.stat(&vp("mem:///agent.copy")).await.is_ok(),
+        "the agent's is still where it was"
     );
 }
 
-/// **Un undo en cola detrás de otro se cancela limpio** (#358, regla 3).
+/// **An undo queued behind another cancels cleanly** (#358, rule 3).
 ///
-/// El turno de undo es una espera nueva, y toda espera de una Task tiene que
-/// atender su token: un undo que el humano cancela mientras espera detrás de
-/// otro largo acaba `Cancelled` sin tocar nada, y el de delante termina lo
-/// suyo.
+/// An undo's turn is a new wait, and every wait for a Task has to honor its
+/// token: an undo the human cancels while waiting behind another long one ends
+/// `Cancelled` without touching anything, and the one ahead of it finishes its
+/// own.
 #[tokio::test]
-async fn un_undo_en_cola_se_cancela_limpio() {
+async fn a_queued_undo_cancels_cleanly() {
     let (engine, mem, journal) = setup().await;
     write_file(&mem, "mem:///a.txt", b"a").await;
     let h = engine
-        .copy(&vp("mem:///a.txt"), &vp("mem:///ancla.txt"))
+        .copy(&vp("mem:///a.txt"), &vp("mem:///anchor.txt"))
         .await
         .expect("copy");
     assert_eq!(h.join().await, TaskState::Completed);
-    let corte = journal
+    let cut = journal
         .journal()
         .page(None, 50, Some("user"))
         .await
         .expect("page")
         .first()
-        .expect("la copia")
+        .expect("the copy")
         .entry
         .seq;
     let h = engine
@@ -886,58 +892,60 @@ async fn un_undo_en_cola_se_cancela_limpio() {
         .expect("mv");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    // El primero, lento: tiene el turno mientras el segundo espera.
+    // The first one, slow: it has the turn while the second one waits.
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(300)));
-    let (h1, _r1) = engine.undo_after(corte, None).await.expect("primer undo");
-    let (h2, r2) = engine.undo_after(corte, None).await.expect("segundo undo");
+    let (h1, _r1) = engine.undo_after(cut, None).await.expect("first undo");
+    let (h2, r2) = engine.undo_after(cut, None).await.expect("second undo");
     h2.cancel();
     assert_eq!(
         h2.join().await,
         TaskState::Cancelled,
-        "cancelado en la cola"
+        "cancelled in the queue"
     );
     assert_eq!(
         h1.join().await,
         TaskState::Completed,
-        "el de delante termina"
+        "the one ahead finishes"
     );
     assert_eq!(
         r2.lock().expect("lock").undone,
         0,
-        "y el cancelado no tocó nada"
+        "and the cancelled one touched nothing"
     );
     assert!(mem.stat(&vp("mem:///a.txt")).await.is_ok());
 }
 
-/// **Dos undos que eligieron lo mismo no lo deshacen dos veces** (#358).
+/// **Two undos that chose the same thing do not undo it twice** (#358).
 ///
-/// Elegir y ejecutar están separados: las entradas se escogen al pedir el
-/// undo, y las reversas corren después dentro de la Task. Un doble clic, dos
-/// frontends contra un daemon o un reintento tras timeout dan a dos Tasks la
-/// MISMA pila. Sin volver a mirar dentro de la Task, la segunda revertía otra
-/// vez lo que la primera ya había devuelto — y si entretanto el humano había
-/// vuelto a crear el destino, lo renombraba encima.
+/// Choosing and running are separate: entries are picked when the undo is
+/// requested, and the reversals run afterward inside the Task. A double
+/// click, two frontends against one daemon, or a retry after a timeout give
+/// two Tasks the SAME stack. Without looking inside the Task again, the
+/// second one used to revert what the first had already returned — and if the
+/// human had recreated the destination in the meantime, it would rename over
+/// it.
 ///
-/// Los dos `undo_after` se piden ANTES de que ninguno ejecute: la selección
-/// ocurre al pedirlo y la Task corre después, que es justo la ventana.
+/// Both `undo_after` calls are requested BEFORE either runs: selection
+/// happens at request time and the Task runs afterward, which is exactly the
+/// window.
 #[tokio::test]
-async fn dos_undos_que_eligieron_lo_mismo_no_lo_deshacen_dos_veces() {
+async fn two_undos_that_chose_the_same_thing_do_not_undo_it_twice() {
     let (engine, mem, journal) = setup().await;
     write_file(&mem, "mem:///a.txt", b"a").await;
-    // El corte tiene que ser una entrada que exista: una copia que se conserva.
+    // The cut has to be an entry that exists: a copy that is kept.
     let h = engine
-        .copy(&vp("mem:///a.txt"), &vp("mem:///ancla.txt"))
+        .copy(&vp("mem:///a.txt"), &vp("mem:///anchor.txt"))
         .await
         .expect("copy");
     assert_eq!(h.join().await, TaskState::Completed);
-    let corte = journal
+    let cut = journal
         .journal()
         .page(None, 50, Some("user"))
         .await
         .expect("page")
         .first()
-        .expect("la copia")
+        .expect("the copy")
         .entry
         .seq;
     let h = engine
@@ -946,16 +954,16 @@ async fn dos_undos_que_eligieron_lo_mismo_no_lo_deshacen_dos_veces() {
         .expect("mv");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    // Latencia por operación del provider: la Task del primero sigue a medias
-    // mientras se elige el segundo (una consulta al journal, milisegundos).
-    // Sin ella, en este runtime de un hilo la primera Task corre ENTERA
-    // durante esa consulta y el segundo ya no elige nada. Bajo mucha carga,
-    // lo peor que pasa es que el test deje de ver la carrera (un verde que
-    // no prueba nada), nunca un rojo falso.
+    // Per-op latency on the provider: the first one's Task stays halfway
+    // while the second one is chosen (one journal query, milliseconds).
+    // Without it, on this single-thread runtime the first Task would run
+    // ENTIRELY during that query and the second one would choose nothing at
+    // all anymore. Under heavy load, the worst that happens is the test stops
+    // seeing the race (a green that proves nothing), never a false red.
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(200)));
-    let (h1, r1) = engine.undo_after(corte, None).await.expect("primer undo");
-    let (h2, r2) = engine.undo_after(corte, None).await.expect("segundo undo");
+    let (h1, r1) = engine.undo_after(cut, None).await.expect("first undo");
+    let (h2, r2) = engine.undo_after(cut, None).await.expect("second undo");
     assert_eq!(h1.join().await, TaskState::Completed);
     assert_eq!(h2.join().await, TaskState::Completed);
     let (r1, r2) = (
@@ -963,17 +971,17 @@ async fn dos_undos_que_eligieron_lo_mismo_no_lo_deshacen_dos_veces() {
         r2.lock().expect("lock").clone(),
     );
 
-    assert!(mem.stat(&vp("mem:///a.txt")).await.is_ok(), "volvió");
+    assert!(mem.stat(&vp("mem:///a.txt")).await.is_ok(), "it came back");
     assert_eq!(
         r1.undone + r2.undone,
         1,
-        "UNO de los dos lo deshizo: {r1:?} / {r2:?}"
+        "ONE of the two undid it: {r1:?} / {r2:?}"
     );
     assert!(
         r1.blocked.is_none() && r2.blocked.is_none(),
-        "y el otro no tropezó con el árbol ya devuelto: {r1:?} / {r2:?}"
+        "and the other did not trip over the tree already returned: {r1:?} / {r2:?}"
     );
-    let compensaciones = journal
+    let compensations = journal
         .journal()
         .page(None, 50, None)
         .await
@@ -981,20 +989,20 @@ async fn dos_undos_que_eligieron_lo_mismo_no_lo_deshacen_dos_veces() {
         .iter()
         .filter(|p| p.entry.undoes_seq.is_some())
         .count();
-    assert_eq!(compensaciones, 1, "una sola compensación en el journal");
+    assert_eq!(compensations, 1, "a single compensation in the journal");
 }
 
-/// **El techo (`upto_seq`, 0.80.0): no se deshace lo que no se contó.**
+/// **The ceiling (`upto_seq`, 0.80.0): what was not counted is not undone.**
 ///
-/// La línea de tiempo cuenta sobre lo que tiene cargado. Lo hecho después de
-/// pintarla —con el panel abierto, que es lo normal— entraba en el undo sin
-/// haberse contado: la pregunta prometía una y se deshacían dos. Con el techo,
-/// lo más nuevo que lo contado se queda donde está.
+/// The timeline counts over what it has loaded. What was done afterward —
+/// with the panel open, which is normal — used to enter undo without having
+/// been counted: the question promised one and two got undone. With the
+/// ceiling, anything newer than what was counted stays where it is.
 #[tokio::test]
-async fn el_techo_deja_fuera_lo_que_no_se_conto() {
+async fn the_ceiling_leaves_out_what_was_not_counted() {
     let (engine, mem, journal) = setup().await;
     write_file(&mem, "mem:///a.txt", b"a").await;
-    let copia = |dst: &'static str| {
+    let copy = |dst: &'static str| {
         let engine = &engine;
         async move {
             let h = engine
@@ -1004,40 +1012,44 @@ async fn el_techo_deja_fuera_lo_que_no_se_conto() {
             assert_eq!(h.join().await, TaskState::Completed);
         }
     };
-    let ultimo = || async {
+    let last = || async {
         journal
             .journal()
             .page(None, 1, Some("user"))
             .await
             .expect("page")
             .first()
-            .expect("entrada")
+            .expect("entry")
             .entry
             .seq
     };
-    copia("mem:///corte.txt").await;
-    let corte = ultimo().await;
-    copia("mem:///contada.txt").await;
-    let techo = ultimo().await;
-    // Lo que se hace DESPUÉS de pintar la lista: el recuento no lo vio.
-    copia("mem:///nueva.txt").await;
+    copy("mem:///cut.txt").await;
+    let cut = last().await;
+    copy("mem:///counted.txt").await;
+    let ceiling = last().await;
+    // What is done AFTER the list is painted: the count never saw it.
+    copy("mem:///new.txt").await;
 
     let (h, report) = engine
-        .undo_after(corte, Some(techo))
+        .undo_after(cut, Some(ceiling))
         .await
         .expect("undo submit");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(report.lock().expect("lock").undone, 1, "solo la contada");
-    assert!(
-        mem.stat(&vp("mem:///contada.txt")).await.is_err(),
-        "la contada se deshizo"
+    assert_eq!(
+        report.lock().expect("lock").undone,
+        1,
+        "only the counted one"
     );
     assert!(
-        mem.stat(&vp("mem:///nueva.txt")).await.is_ok(),
-        "la que no se contó se queda"
+        mem.stat(&vp("mem:///counted.txt")).await.is_err(),
+        "the counted one was undone"
     );
     assert!(
-        mem.stat(&vp("mem:///corte.txt")).await.is_ok(),
-        "y la señalada, como siempre"
+        mem.stat(&vp("mem:///new.txt")).await.is_ok(),
+        "the one that was not counted stays"
+    );
+    assert!(
+        mem.stat(&vp("mem:///cut.txt")).await.is_ok(),
+        "and the pointed-at one, as always"
     );
 }

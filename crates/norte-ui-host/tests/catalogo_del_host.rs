@@ -1,86 +1,86 @@
-//! Toda clave Fluent que el HOST elige EXISTE en los dos catálogos.
+//! Every Fluent key the HOST chooses EXISTS in both catalogues.
 //!
-//! El gemelo en Rust de `norte-gui-tauri/tests/catalogo_completo.rs`, y hacía
-//! falta porque ese solo ve lo que pide el TypeScript. Estas claves las elige
-//! el host —`ActionAck::Unavailable { reason_key }`, el título de un diálogo,
-//! la etiqueta de cada respuesta— y viajan por el puente como datos, así que
-//! el renderer las pinta con `t(key)` sin que aparezcan en ningún literal
-//! suyo.
+//! The Rust twin of `norte-gui-tauri/tests/catalogo_completo.rs`, and it was
+//! needed because that one only sees what the TypeScript requests. These
+//! keys are chosen by the host — `ActionAck::Unavailable { reason_key }`, a
+//! dialog's title, each response's label — and they travel across the
+//! bridge as data, so the renderer paints them with `t(key)` without them
+//! appearing in any literal of its own.
 //!
-//! Faltaban VEINTIUNA, y entre ellas las dos respuestas del diálogo donde un
-//! humano aprueba la mutación que pidió un agente: los botones se pintaban
-//! `dialog-approve` y `dialog-deny`. `t` contesta una clave ausente con la
-//! clave misma, así que nada se cae — se lee.
+//! TWENTY-ONE were missing, among them the two responses of the dialog where
+//! a human approves the mutation an agent requested: the buttons were
+//! painting `dialog-approve` and `dialog-deny`. `t` answers an absent key
+//! with the key itself, so nothing crashes — it just reads oddly.
 //!
-//! El test lee el CÓDIGO y no una lista escrita a mano: una lista se separa
-//! del código en la primera superficie nueva, que es exactamente lo que pasó.
+//! The test reads the CODE and not a hand-written list: a list drifts away
+//! from the code at the first new surface, which is exactly what happened.
 
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Los ficheros del host donde se eligen claves: TODO `src/`, recorrido.
+/// The host's files where keys are chosen: ALL of `src/`, walked.
 ///
-/// Antes era una lista de cinco `include_str!`. Cuando `controller.rs` se
-/// partió en treinta y tres ficheros (ADR 0086) la lista se quedó nombrando
-/// uno que ya no existía, y mantenerla a mano habría dejado de mirar los
-/// treinta y dos nuevos sin decir nada — que es exactamente la deriva que la
-/// cabecera de este fichero dice que hay que evitar. Se recorre el árbol: un
-/// fichero nuevo entra solo.
-fn fuentes() -> Vec<(String, String)> {
-    fn recorrer(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
-        let mut entradas: Vec<_> = std::fs::read_dir(dir)
-            .unwrap_or_else(|e| panic!("se lee {}: {e}", dir.display()))
-            .map(|e| e.expect("entrada").path())
+/// It used to be a list of five `include_str!`. When `controller.rs` was
+/// split into thirty-three files (ADR 0086) the list was left naming one
+/// that no longer existed, and maintaining it by hand would have stopped
+/// looking at the thirty-two new ones without saying a word — which is
+/// exactly the drift this file's header says must be avoided. The tree is
+/// walked: a new file joins on its own.
+fn sources() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        let mut entries: Vec<_> = std::fs::read_dir(dir)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
+            .map(|e| e.expect("entry").path())
             .collect();
-        entradas.sort();
-        for ruta in entradas {
-            if ruta.is_dir() {
-                recorrer(&ruta, out);
-            } else if ruta.extension().is_some_and(|e| e == "rs") {
-                let nombre = ruta
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                let name = path
                     .file_name()
                     .and_then(|n| n.to_str())
-                    .expect("nombre")
+                    .expect("name")
                     .to_owned();
-                let texto = std::fs::read_to_string(&ruta)
-                    .unwrap_or_else(|e| panic!("se lee {}: {e}", ruta.display()));
-                out.push((nombre, texto));
+                let text = std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
+                out.push((name, text));
             }
         }
     }
     let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut out = Vec::new();
-    recorrer(&src, &mut out);
+    walk(&src, &mut out);
     assert!(
         out.len() >= 30,
-        "el barrido tiene que ver el host entero, y ve {}",
+        "the sweep has to see the whole host, and it sees {}",
         out.len()
     );
     out
 }
 
-/// Los campos cuyo valor ES una clave Fluent.
-const CAMPOS: &[&str] = &["reason_key", "title_key", "label_key"];
+/// The fields whose value IS a Fluent key.
+const FIELDS: &[&str] = &["reason_key", "title_key", "label_key"];
 
-/// Las LLAMADAS que traducen una clave en el sitio.
+/// The CALLS that translate a key on the spot.
 ///
-/// Los campos de arriba solo ven las claves que VIAJAN al renderer. Una que el
-/// host traduce él mismo —para la barra de estado, para una línea de un
-/// diálogo— no pasa por ningún campo `*_key`, así que este barrido no la veía:
-/// `err-bad-name` llevaba desde la fase 2 sin existir en ningún idioma, y
-/// confirmar un nombre ilegal ponía el identificador crudo en la barra.
-const LLAMADAS: &[&str] = &[
+/// The fields above only see the keys that TRAVEL to the renderer. One the
+/// host translates itself — for the status bar, for a line in a dialog —
+/// does not go through any `*_key` field, so this sweep did not see it:
+/// `err-bad-name` had gone since phase 2 without existing in any language,
+/// and confirming an illegal name put the raw identifier on the bar.
+const CALLS: &[&str] = &[
     "norte_i18n::t(",
     "norte_i18n::t_in(",
     "norte_i18n::ta(",
     "norte_i18n::ta_in(",
 ];
 
-/// Las funciones COMPARTIDAS que devuelven una clave, con su fichero.
+/// The SHARED functions that return a key, with their file.
 ///
-/// El host no las escribe, las llama, así que el barrido de literales no las
-/// ve. Las tres son `match` cerrados sobre `&'static str`, o sea que su
-/// vocabulario ENTERO está en su cuerpo y se puede comprobar igual.
-const INDIRECTAS: &[(&str, &str, &str)] = &[
+/// The host does not write them, it calls them, so the literal sweep does
+/// not see them. All three are `match` blocks closed over `&'static str`, so
+/// their WHOLE vocabulary is in their body and can be checked the same way.
+const INDIRECT: &[(&str, &str, &str)] = &[
     (
         "error.rs",
         include_str!("../../norte-frontend/src/error.rs"),
@@ -98,56 +98,56 @@ const INDIRECTAS: &[(&str, &str, &str)] = &[
     ),
 ];
 
-/// Lo que se acepta como clave NO literal en un sitio del host.
+/// What is accepted as a NON-literal key at a spot in the host.
 ///
-/// Cada una está cubierta por `INDIRECTAS` o por otro sitio del propio
-/// barrido, y aquí se nombra para que añadir una cuarta forma de calcular una
-/// clave falle en vez de colarse.
-const CALCULADAS: &[&str] = &[
+/// Each one is covered by `INDIRECT` or by another spot in the sweep itself,
+/// and it is named here so that adding a fourth way to compute a key fails
+/// instead of slipping through.
+const COMPUTED: &[&str] = &[
     "error::error_key",
     "availability::reason_key",
     "empty_message()",
-    // La devuelve `elegir_pagina`, y es una de las de `availability`.
+    // Returned by `elegir_pagina`, and it is one of `availability`'s.
     "reason_key: clave",
-    // El motivo por el que una respuesta de diálogo NO hizo nada. Sale de
-    // `bytes_del_rename` / `segmento_tecleado`, que devuelven claves
-    // literales y por tanto SÍ las ve este barrido en su origen.
+    // The reason a dialog response did NOTHING. It comes from
+    // `bytes_del_rename` / `segmento_tecleado`, which return literal keys
+    // and so this sweep DOES see them at their origin.
     "reason_key: reason_key",
 ];
 
-/// Cuánto texto se mira tras un campo para encontrar sus literales.
+/// How much text is looked at after a field to find its literals.
 ///
-/// Un `match` de tres brazos o un `if/else` caben de sobra; el corte está
-/// para que un campo sin literal se detecte en vez de tragarse el resto del
-/// fichero.
-const VENTANA: usize = 600;
+/// A three-arm `match` or an `if/else` fit comfortably; the cutoff is there
+/// so a field with no literal is detected instead of swallowing the rest of
+/// the file.
+const WINDOW: usize = 600;
 
-/// Recorta `fuente` hasta `hasta` sin partir un carácter.
+/// Trims `source` up to `upto` without splitting a character.
 ///
-/// El barrido corta por BYTES —una ventana de 600 detrás de una llamada—, y
-/// el código de este host está comentado en castellano: una raya o una tilde
-/// a caballo del corte panicaba el test, que es una avería del arnés y no del
-/// host. Se retrocede hasta el límite de carácter más cercano.
-fn hasta_limite(fuente: &str, hasta: usize) -> usize {
-    let mut fin = hasta.min(fuente.len());
-    while fin > 0 && !fuente.is_char_boundary(fin) {
-        fin -= 1;
+/// The sweep cuts by BYTES — a 600 window after a call — and this host's
+/// code is commented in Spanish: a dash or an accent straddling the cut
+/// would panic the test, which is a harness failure and not the host's.
+/// Backs up to the nearest character boundary.
+fn upto_boundary(source: &str, upto: usize) -> usize {
+    let mut end = upto.min(source.len());
+    while end > 0 && !source.is_char_boundary(end) {
+        end -= 1;
     }
-    fin
+    end
 }
 
-/// Lo mismo por el otro extremo: avanza hasta un límite de carácter.
-fn desde_limite(fuente: &str, desde: usize) -> usize {
-    let mut ini = desde.min(fuente.len());
-    while ini < fuente.len() && !fuente.is_char_boundary(ini) {
-        ini += 1;
+/// The same from the other end: advances to a character boundary.
+fn from_boundary(source: &str, from: usize) -> usize {
+    let mut start = from.min(source.len());
+    while start < source.len() && !source.is_char_boundary(start) {
+        start += 1;
     }
-    ini
+    start
 }
 
-/// Un literal que puede ser una clave Fluent: minúsculas, dígitos y guiones,
-/// con al menos un guion. Descarta rutas, formatos y nombres de kind.
-fn parece_clave(s: &str) -> bool {
+/// A literal that could be a Fluent key: lowercase, digits and dashes, with
+/// at least one dash. Discards paths, formats and kind names.
+fn looks_like_key(s: &str) -> bool {
     s.contains('-')
         && !s.is_empty()
         && s.chars()
@@ -156,120 +156,123 @@ fn parece_clave(s: &str) -> bool {
         && !s.ends_with('-')
 }
 
-/// ¿Lo que sigue al campo es un TIPO, o sea que esto declara y no elige?
+/// Is what follows the field a TYPE, meaning this declares rather than
+/// chooses?
 ///
-/// Los tipos que un campo de clave puede llevar son pocos y todos empiezan
-/// por mayúscula o por `&`; un valor elegido empieza por comilla, por `self`,
-/// por una llamada o por un `match`. Se mira el primer token y ya.
-fn es_declaracion(ventana: &str) -> bool {
-    let t = ventana.trim_start();
+/// The types a key field can carry are few and all start with an uppercase
+/// letter or with `&`; a chosen value starts with a quote, with `self`, with
+/// a call or with a `match`. Only the first token is looked at.
+fn is_declaration(window: &str) -> bool {
+    let t = window.trim_start();
     ["String", "Option<", "Cow<", "&'static str", "&str"]
         .iter()
-        .any(|tipo| t.starts_with(tipo))
+        .any(|ty| t.starts_with(ty))
 }
 
-/// Las claves que el host elige, por fichero y sitio.
-fn claves_elegidas() -> BTreeMap<String, Vec<String>> {
+/// The keys the host chooses, by file and site.
+fn chosen_keys() -> BTreeMap<String, Vec<String>> {
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let fuentes = fuentes();
-    for (nombre, fuente) in &fuentes {
-        for campo in CAMPOS {
-            let aguja = format!("{campo}:");
-            let mut desde = 0usize;
-            while let Some(i) = fuente[desde..].find(&aguja) {
-                let inicio = desde + i + aguja.len();
-                desde = inicio;
-                let fin = hasta_limite(fuente, inicio + VENTANA);
-                let ventana = &fuente[inicio..fin];
-                // DECLARAR el campo no es ELEGIR una clave. Desde que el
-                // barrido mira todo `src/` ve también la definición del tipo
-                // (`reason_key: String` en `bridge.rs`), y un tipo no tiene
-                // literal que seguir. Se reconoce porque lo que sigue es un
-                // TIPO: en una elección, detrás va un literal, un `self.` o
-                // una llamada, nunca `String` ni `Option<`.
-                if es_declaracion(ventana) {
+    let sources = sources();
+    for (name, source) in &sources {
+        for field in FIELDS {
+            let needle = format!("{field}:");
+            let mut from = 0usize;
+            while let Some(i) = source[from..].find(&needle) {
+                let start = from + i + needle.len();
+                from = start;
+                let end = upto_boundary(source, start + WINDOW);
+                let window = &source[start..end];
+                // DECLARING the field is not CHOOSING a key. Since the sweep
+                // looks at all of `src/` it also sees the type's definition
+                // (`reason_key: String` in `bridge.rs`), and a type has no
+                // literal to follow. It is recognized because what follows
+                // is a TYPE: in a choice, what follows is a literal, a
+                // `self.` or a call, never `String` nor `Option<`.
+                if is_declaration(window) {
                     continue;
                 }
-                let encontradas: Vec<String> = literales(ventana)
+                let found: Vec<String> = literals(window)
                     .into_iter()
-                    .filter(|s| parece_clave(s))
+                    .filter(|s| looks_like_key(s))
                     .collect();
-                let linea = fuente[..inicio].lines().count();
-                if encontradas.is_empty() {
-                    // Un campo cuyo valor se calcula solo vale si lo calcula
-                    // algo que este test SÍ mira.
-                    // Con el nombre del campo delante: es parte de la forma
-                    // que se reconoce.
-                    let desde_campo = desde_limite(fuente, inicio.saturating_sub(aguja.len() + 2));
-                    let cabecera = &fuente[desde_campo..hasta_limite(fuente, inicio + 80)];
+                let line = source[..start].lines().count();
+                if found.is_empty() {
+                    // A field whose value is computed only counts if it is
+                    // computed by something this test DOES look at.
+                    // With the field's name in front: it is part of the
+                    // shape being recognized.
+                    let from_field = from_boundary(source, start.saturating_sub(needle.len() + 2));
+                    let header = &source[from_field..upto_boundary(source, start + 80)];
                     assert!(
-                        CALCULADAS.iter().any(|c| cabecera.contains(c)),
-                        "{nombre}:{linea}: `{campo}` sin literal y sin estar en \
-                         `CALCULADAS`. Una clave que este test no puede seguir es \
-                         una clave que se pintará como su propio identificador el \
-                         día que falte: o es literal, o su origen se nombra aquí."
+                        COMPUTED.iter().any(|c| header.contains(c)),
+                        "{name}:{line}: `{field}` with no literal and not in \
+                         `COMPUTED`. A key this test cannot follow is a key \
+                         that will paint as its own identifier the day it is \
+                         missing: either it is a literal, or its origin is \
+                         named here."
                     );
                     continue;
                 }
-                out.entry(format!("{nombre}:{linea}"))
+                out.entry(format!("{name}:{line}"))
                     .or_default()
-                    .extend(encontradas);
+                    .extend(found);
             }
         }
     }
-    // Las que el host traduce en el sitio. Se toma el PRIMER literal que
-    // parezca una clave dentro de la ventana: `t_in` lleva el idioma delante y
-    // `ta_in` los argumentos detrás, así que el primero es siempre el id.
-    for (nombre, fuente) in &fuentes {
-        for llamada in LLAMADAS {
-            let mut desde = 0usize;
-            while let Some(i) = fuente[desde..].find(llamada) {
-                let inicio = desde + i + llamada.len();
-                desde = inicio;
-                let fin = hasta_limite(fuente, inicio + VENTANA);
-                let encontradas: Vec<String> = literales(&fuente[inicio..fin])
+    // The ones the host translates on the spot. The FIRST literal that looks
+    // like a key within the window is taken: `t_in` carries the language in
+    // front and `ta_in` the arguments behind, so the first one is always the
+    // id.
+    for (name, source) in &sources {
+        for call in CALLS {
+            let mut from = 0usize;
+            while let Some(i) = source[from..].find(call) {
+                let start = from + i + call.len();
+                from = start;
+                let end = upto_boundary(source, start + WINDOW);
+                let found: Vec<String> = literals(&source[start..end])
                     .into_iter()
-                    .filter(|s| parece_clave(s))
+                    .filter(|s| looks_like_key(s))
                     .take(1)
                     .collect();
-                if encontradas.is_empty() {
-                    // Una clave calculada: la trae una variable, y su origen
-                    // tiene que ser algo que este test SÍ mire.
+                if found.is_empty() {
+                    // A computed key: a variable carries it, and its origin
+                    // has to be something this test DOES look at.
                     continue;
                 }
-                let linea = fuente[..inicio].lines().count();
-                out.entry(format!("{nombre}:{linea}"))
+                let line = source[..start].lines().count();
+                out.entry(format!("{name}:{line}"))
                     .or_default()
-                    .extend(encontradas);
+                    .extend(found);
             }
         }
     }
-    for (nombre, fuente, firma) in INDIRECTAS {
-        let i = fuente
-            .find(firma)
-            .unwrap_or_else(|| panic!("{nombre}: `{firma}` ya no está ahí"));
-        let cuerpo = &fuente[i..];
-        let fin = cuerpo.find("\n}").unwrap_or(cuerpo.len());
-        let claves: Vec<String> = literales(&cuerpo[..fin])
+    for (name, source, signature) in INDIRECT {
+        let i = source
+            .find(signature)
+            .unwrap_or_else(|| panic!("{name}: `{signature}` is not there anymore"));
+        let body = &source[i..];
+        let end = body.find("\n}").unwrap_or(body.len());
+        let keys: Vec<String> = literals(&body[..end])
             .into_iter()
-            .filter(|s| parece_clave(s))
+            .filter(|s| looks_like_key(s))
             .collect();
         assert!(
-            !claves.is_empty(),
-            "{nombre}: `{firma}` no devuelve ninguna clave literal; el barrido \
-             dejó de ver su vocabulario"
+            !keys.is_empty(),
+            "{name}: `{signature}` returns no literal key; the sweep stopped \
+             seeing its vocabulary"
         );
-        let linea = fuente[..i].lines().count();
-        out.entry(format!("{nombre}:{linea}"))
+        let line = source[..i].lines().count();
+        out.entry(format!("{name}:{line}"))
             .or_default()
-            .extend(claves);
+            .extend(keys);
     }
     out
 }
 
-/// Los literales de cadena de un trozo de Rust, sin interpretar escapes: aquí
-/// solo hay claves ASCII.
-fn literales(s: &str) -> Vec<String> {
+/// The string literals in a chunk of Rust, without interpreting escapes:
+/// here there are only ASCII keys.
+fn literals(s: &str) -> Vec<String> {
     let mut out = Vec::new();
     let b = s.as_bytes();
     let mut i = 0;
@@ -294,44 +297,44 @@ fn literales(s: &str) -> Vec<String> {
 }
 
 #[test]
-fn el_host_no_elige_ninguna_clave_que_no_exista() {
+fn the_host_chooses_no_key_that_does_not_exist() {
     let en: BTreeSet<String> = norte_i18n::message_ids(norte_i18n::Lang::En)
         .into_iter()
         .collect();
     let es: BTreeSet<String> = norte_i18n::message_ids(norte_i18n::Lang::Es)
         .into_iter()
         .collect();
-    let mut faltan: Vec<String> = Vec::new();
-    for (sitio, claves) in claves_elegidas() {
-        for k in claves {
+    let mut missing: Vec<String> = Vec::new();
+    for (site, keys) in chosen_keys() {
+        for k in keys {
             if !en.contains(&k) || !es.contains(&k) {
-                faltan.push(format!(
-                    "{sitio}: `{k}` (en={} es={})",
+                missing.push(format!(
+                    "{site}: `{k}` (en={} es={})",
                     en.contains(&k),
                     es.contains(&k)
                 ));
             }
         }
     }
-    faltan.sort();
-    faltan.dedup();
+    missing.sort();
+    missing.dedup();
     assert!(
-        faltan.is_empty(),
-        "el host elige claves que el catálogo no tiene, y el renderer las \
-         PINTA tal cual:\n{}",
-        faltan.join("\n")
+        missing.is_empty(),
+        "the host chooses keys the catalogue does not have, and the \
+         renderer PAINTS them as-is:\n{}",
+        missing.join("\n")
     );
 }
 
-/// Y el test se mira a sí mismo: si deja de encontrar claves, deja de servir
-/// sin decir nada.
+/// And the test looks at itself: if it stops finding keys, it stops serving
+/// without saying a word.
 #[test]
-fn el_barrido_encuentra_algo_que_comprobar() {
-    let sitios = claves_elegidas();
+fn the_sweep_finds_something_to_check() {
+    let sites = chosen_keys();
     assert!(
-        sitios.len() > 20,
-        "el barrido encontró {} sitios: o el host cambió de forma de nombrar \
-         sus claves, o este test ya no mira donde están",
-        sitios.len()
+        sites.len() > 20,
+        "the sweep found {} sites: either the host changed how it names its \
+         keys, or this test no longer looks where they are",
+        sites.len()
     );
 }

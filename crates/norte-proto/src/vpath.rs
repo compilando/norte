@@ -1,10 +1,10 @@
-//! `VPath`: la representación de paths del VFS — bytes con forma URI.
+//! `VPath`: the VFS's path representation — bytes with a URI shape.
 //!
-//! Los nombres de archivo NO son UTF-8 (principio 3 de la spec): cada segmento
-//! guarda bytes crudos (Unix: los bytes del OS tal cual; Windows: la forma
-//! WTF-8 de `OsStr::as_encoded_bytes`). UTF-8 es solo una vista para display,
-//! lossy y marcada. El wire format (percent-encoding) está fijado por el
-//! ADR 0001 y sus golden tests.
+//! Filenames are NOT UTF-8 (spec principle 3): each segment stores raw bytes
+//! (Unix: the OS's bytes as is; Windows: the WTF-8 form of
+//! `OsStr::as_encoded_bytes`). UTF-8 is only a display view, lossy and
+//! marked. The wire format (percent-encoding) is pinned by ADR 0001 and its
+//! golden tests.
 
 use std::fmt;
 
@@ -13,64 +13,66 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::wire::vpath_codec;
 
-/// Error de validación o parseo de [`VPath`] y sus componentes.
+/// Validation or parse error of [`VPath`] and its components.
 ///
-/// `non_exhaustive`: como [`Error`](crate::Error) — un consumidor externo
-/// no debe romper cuando una versión nueva añade una causa de rechazo.
+/// `non_exhaustive`: like [`Error`](crate::Error) — an external consumer must
+/// not break when a new version adds a rejection cause.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum VPathError {
-    /// El wire no contiene el separador `://`.
+    /// The wire does not contain the `://` separator.
     #[error("missing scheme: expected `scheme://…`")]
     MissingScheme,
-    /// El scheme no cumple `[a-z][a-z0-9+.-]*` (sin case-folding).
+    /// The scheme does not match `[a-z][a-z0-9+.-]*` (no case-folding).
     #[error("invalid scheme: expected `[a-z][a-z0-9+.-]*`")]
     InvalidScheme,
-    /// La authority está vacía, sale del charset (ASCII imprimible sin `/` ni
-    /// `%`) o lleva un `:` en el userinfo (password inline, #46).
+    /// The authority is empty, falls outside the charset (printable ASCII
+    /// without `/` or `%`), or carries a `:` in the userinfo (inline
+    /// password, #46).
     #[error(
         "invalid authority: non-empty printable ASCII without `/`/`%`, and no `:` in the userinfo"
     )]
     InvalidAuthority,
-    /// Segmento vacío (`//` doble o slash final fuera de la raíz).
+    /// Empty segment (double `//` or a trailing slash outside the root).
     #[error("empty path segment")]
     EmptySegment,
-    /// Segmento `.` o `..` (literal o vía escape): `VPath` no resuelve rutas relativas.
+    /// A `.` or `..` segment (literal or via escape): `VPath` does not
+    /// resolve relative paths.
     #[error("dot segment (`.`/`..`) is not allowed")]
     DotSegment,
-    /// Byte NUL en un segmento (literal o vía escape).
+    /// A NUL byte in a segment (literal or via escape).
     #[error("NUL byte in segment")]
     NulByte,
-    /// Byte inválido en un segmento (p. ej. `/` introducido vía `%2F`).
+    /// Invalid byte in a segment (e.g. a `/` introduced via `%2F`).
     #[error("invalid byte in segment (separator cannot be escaped in)")]
     InvalidByte,
-    /// Escape percent malformado (`%G1`, `%4`, `%` final).
+    /// Malformed percent escape (`%G1`, `%4`, a trailing `%`).
     #[error("malformed percent escape")]
     BadEscape,
-    /// Direccionamiento de archivo-como-directorio malformado (ADR 0018):
-    /// marcador `!` ausente en un scheme compuesto, `!` en posición
-    /// prohibida al componer, o formato fuera de [`ARCHIVE_FORMATS`].
+    /// Malformed file-as-directory addressing (ADR 0018): missing `!` marker
+    /// on a compound scheme, `!` in a forbidden position while composing, or
+    /// a format outside [`ARCHIVE_FORMATS`].
     #[error("malformed archive addressing (`!` marker / format, ADR 0018)")]
     ArchiveAddressing,
 }
 
-/// Tokens de formato de archivo-como-directorio reconocidos (ADR 0018,
-/// ADR 0028 para `tar+gz`).
+/// Recognized file-as-directory format tokens (ADR 0018, ADR 0028 for
+/// `tar+gz`).
 ///
-/// Un scheme es compuesto si y solo si su prefijo hasta el `+` que lo separa
-/// del scheme interior coincide EXACTAMENTE con uno de estos tokens; ampliar
-/// la lista es cambio de protocolo. `tar+gz` es un token COMPUESTO (contiene
-/// un `+` propio): la capa gzip es opaca dentro del formato, no un mecanismo
-/// general de capas (el anidamiento GENERAL es #56: formatos encadenados,
-/// `zip+tar+file`, cada capa con su marcador). La resolución es
-/// longest-match contra esta whitelist (`scheme_format_prefix`):
-/// `tar+gz+file` es formato `tar+gz` sobre `file`, nunca formato `tar` sobre
-/// un interior huérfano `gz+file`. Reserva normativa: ningún provider
-/// registra schemes que empiecen por `<formato>+`.
+/// A scheme is compound if and only if its prefix up to the `+` that
+/// separates it from the inner scheme matches EXACTLY one of these tokens;
+/// growing the list is a protocol change. `tar+gz` is a COMPOUND token
+/// (it contains its own `+`): the gzip layer is opaque inside the format, not
+/// a general layering mechanism (GENERAL nesting is #56: chained formats,
+/// `zip+tar+file`, each layer with its own marker). Resolution is
+/// longest-match against this whitelist (`scheme_format_prefix`):
+/// `tar+gz+file` is format `tar+gz` over `file`, never format `tar` over an
+/// orphan interior `gz+file`. Normative reservation: no provider registers
+/// schemes starting with `<format>+`.
 pub const ARCHIVE_FORMATS: &[&str] = &["zip", "tar", "tar+gz", "rar"];
 
-/// Referencia desmontada de un path de archivo-como-directorio (ADR 0018):
-/// `<formato>+<scheme>://auth/<exterior>/!/<interior>`.
+/// Disassembled reference of a file-as-directory path (ADR 0018):
+/// `<format>+<scheme>://auth/<outer>/!/<inner>`.
 ///
 /// ```
 /// use norte_proto::VPath;
@@ -82,29 +84,30 @@ pub const ARCHIVE_FORMATS: &[&str] = &["zip", "tar", "tar+gz", "rar"];
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ArchiveRef {
-    /// Formato del contenedor (token de [`ARCHIVE_FORMATS`]).
+    /// Container format (a token from [`ARCHIVE_FORMATS`]).
     pub format: String,
-    /// Path del ARCHIVO contenedor en su provider interior.
+    /// Path of the CONTAINER FILE in its inner provider.
     pub outer: VPath,
-    /// Segmentos interiores relativos a la raíz del archivo.
+    /// Inner segments relative to the archive's root.
     pub inner: Vec<Segment>,
 }
 
-/// Scheme de un [`VPath`] (`file`, `sftp`, `mem`…), validado a `[a-z][a-z0-9+.-]*`.
+/// Scheme of a [`VPath`] (`file`, `sftp`, `mem`…), validated as
+/// `[a-z][a-z0-9+.-]*`.
 ///
 /// ```
 /// use norte_proto::Scheme;
 /// assert!(Scheme::new("file").is_ok());
-/// assert!(Scheme::new("FILE").is_err()); // sin case-folding
+/// assert!(Scheme::new("FILE").is_err()); // no case-folding
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Scheme(String);
 
 impl Scheme {
-    /// Valida y construye un scheme.
+    /// Validates and builds a scheme.
     ///
     /// # Errors
-    /// [`VPathError::InvalidScheme`] si no cumple `[a-z][a-z0-9+.-]*`.
+    /// [`VPathError::InvalidScheme`] if it does not match `[a-z][a-z0-9+.-]*`.
     pub fn new(s: &str) -> Result<Self, VPathError> {
         let bytes = s.as_bytes();
         let head_ok = bytes.first().is_some_and(u8::is_ascii_lowercase);
@@ -118,20 +121,21 @@ impl Scheme {
         }
     }
 
-    /// El scheme como `&str` (siempre ASCII lowercase).
+    /// The scheme as a `&str` (always ASCII lowercase).
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-/// Authority de un [`VPath`] (host, `host:puerto`, nombre de conexión…).
+/// Authority of a [`VPath`] (host, `host:port`, connection name…).
 ///
-/// Charset validado: ASCII imprimible (0x21–0x7E) sin `/` ni `%`; nunca vacía
-/// (la ausencia de authority es `None`, no `""`). No hay percent-encoding en
-/// la authority: viaja literal, y por eso el primer `/` tras `://` separa
-/// siempre authority de path (inyectividad del wire). Hosts no-ASCII van en
-/// punycode — decisión del provider, no de proto.
+/// Validated charset: printable ASCII (0x21–0x7E) without `/` or `%`; never
+/// empty (absence of authority is `None`, not `""`). There is no
+/// percent-encoding in the authority: it travels literally, and that is why
+/// the first `/` after `://` always separates authority from path
+/// (injectivity of the wire). Non-ASCII hosts go in punycode — a provider
+/// decision, not proto's.
 ///
 /// ```
 /// use norte_proto::Authority;
@@ -143,27 +147,28 @@ impl Scheme {
 pub struct Authority(String);
 
 impl Authority {
-    /// Valida y construye una authority.
+    /// Validates and builds an authority.
     ///
-    /// Rechaza un `:` en el userinfo (`user:pass@host`): una password inline
-    /// en la URL acabaría en config/logs (regla 10). Defensa RAÍZ, proto 0.8.0
-    /// (#46): los guards de la CLI/`norte-connect` quedan como defensa en
-    /// profundidad. El `:` del `host:port` (tras `@`, o sin `@`) y el de un
-    /// IPv6 con corchetes siguen siendo válidos.
+    /// Rejects a `:` in the userinfo (`user:pass@host`): an inline password
+    /// in the URL would end up in config/logs (rule 10). ROOT defense, proto
+    /// 0.8.0 (#46): the CLI/`norte-connect` guards remain as defense in
+    /// depth. The `:` of `host:port` (after `@`, or without `@`) and the one
+    /// in a bracketed IPv6 stay valid.
     ///
     /// # Errors
-    /// [`VPathError::InvalidAuthority`] si está vacía, contiene bytes fuera de
-    /// ASCII imprimible / `/` / `%`, o lleva un `:` en el userinfo.
+    /// [`VPathError::InvalidAuthority`] if it is empty, contains bytes
+    /// outside printable ASCII / `/` / `%`, or carries a `:` in the userinfo.
     pub fn new(s: &str) -> Result<Self, VPathError> {
         let charset_ok = !s.is_empty()
             && s.bytes()
                 .all(|b| b.is_ascii_graphic() && b != b'/' && b != b'%');
-        // userinfo = lo anterior al ÚLTIMO `@`; un `:` ahí es `user:pass`. Se
-        // usa el último `@` (no el primero) para que un authority patológico
-        // con varios `@` (`a@b:c@host`) no cuele un `:` en un tramo intermedio;
-        // un authority legítimo tiene a lo sumo un `@` (el host no lleva `@`),
-        // así que esto no rechaza nada válido. Coincide con el `rsplit_once`
-        // del guard de la CLI (defensa en profundidad consistente).
+        // userinfo = whatever precedes the LAST `@`; a `:` there is
+        // `user:pass`. The last `@` is used (not the first) so a pathological
+        // authority with several `@`s (`a@b:c@host`) cannot sneak a `:` into
+        // an intermediate segment; a legitimate authority has at most one `@`
+        // (the host itself carries no `@`), so this rejects nothing valid.
+        // Matches the `rsplit_once` in the CLI's guard (consistent defense in
+        // depth).
         let no_inline_password = match s.rfind('@') {
             Some(at) => !s[..at].contains(':'),
             None => true,
@@ -175,17 +180,17 @@ impl Authority {
         }
     }
 
-    /// La authority como `&str` (siempre ASCII imprimible).
+    /// The authority as a `&str` (always printable ASCII).
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-/// Un segmento de path: bytes crudos, jamás forzados a UTF-8.
+/// A path segment: raw bytes, never forced into UTF-8.
 ///
-/// Invariantes (validadas en construcción, nunca saneadas en silencio):
-/// no vacío, sin NUL, sin `/`, distinto de `.` y `..`.
+/// Invariants (validated on construction, never silently sanitized): not
+/// empty, no NUL, no `/`, different from `.` and `..`.
 ///
 /// The wire form is a percent-encoded string (ADR 0001, the same codec
 /// `VPath` uses), and it is what serde (de)serializes — see
@@ -193,7 +198,7 @@ impl Authority {
 ///
 /// ```
 /// use norte_proto::Segment;
-/// let s = Segment::new(vec![0xFF, 0xFE]).unwrap(); // bytes no-UTF8: válidos
+/// let s = Segment::new(vec![0xFF, 0xFE]).unwrap(); // non-UTF-8 bytes: valid
 /// assert_eq!(s.as_bytes(), &[0xFF, 0xFE]);
 /// assert_eq!(s.to_string(), "%FF%FE");
 /// assert!(Segment::new(b"a/b".to_vec()).is_err());
@@ -202,11 +207,12 @@ impl Authority {
 pub struct Segment(Vec<u8>);
 
 impl Segment {
-    /// Valida y construye un segmento desde bytes crudos.
+    /// Validates and builds a segment from raw bytes.
     ///
     /// # Errors
     /// [`VPathError::EmptySegment`], [`VPathError::NulByte`],
-    /// [`VPathError::InvalidByte`] (contiene `/`) o [`VPathError::DotSegment`].
+    /// [`VPathError::InvalidByte`] (contains `/`), or
+    /// [`VPathError::DotSegment`].
     pub fn new(bytes: impl Into<Vec<u8>>) -> Result<Self, VPathError> {
         let bytes = bytes.into();
         if bytes.is_empty() {
@@ -224,7 +230,7 @@ impl Segment {
         Ok(Self(bytes))
     }
 
-    /// Los bytes crudos del segmento.
+    /// The segment's raw bytes.
     #[must_use]
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
@@ -271,17 +277,18 @@ impl fmt::Debug for Segment {
     }
 }
 
-/// `Display` es la forma wire (lossless), igual que en `VPath`.
+/// `Display` is the wire form (lossless), same as on `VPath`.
 impl fmt::Display for Segment {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_wire())
     }
 }
 
-/// Path del VFS: `scheme://authority/<segmentos en bytes>`.
+/// VFS path: `scheme://authority/<segments in bytes>`.
 ///
-/// Siempre absoluto respecto a la raíz del provider; sin `.`/`..`; el wire
-/// format es un string percent-encoded (ADR 0001) y es lo que serializa serde.
+/// Always absolute with respect to the provider's root; no `.`/`..`; the wire
+/// format is a percent-encoded string (ADR 0001) and is what serde
+/// serializes.
 ///
 /// ```
 /// use norte_proto::VPath;
@@ -298,7 +305,7 @@ pub struct VPath {
 }
 
 impl VPath {
-    /// La raíz de un provider: `scheme://authority/` sin segmentos.
+    /// The root of a provider: `scheme://authority/` with no segments.
     #[must_use]
     pub fn root(scheme: Scheme, authority: Option<Authority>) -> Self {
         Self {
@@ -308,13 +315,13 @@ impl VPath {
         }
     }
 
-    /// Parsea la forma wire. Acepta formas no canónicas (`%41` ≡ `A`,
-    /// raíz sin slash final); [`Self::to_wire`] canonicaliza.
+    /// Parses the wire form. Accepts non-canonical forms (`%41` ≡ `A`, a root
+    /// without a trailing slash); [`Self::to_wire`] canonicalizes.
     ///
     /// # Errors
-    /// Cualquier [`VPathError`]; las invariantes de segmento se validan
-    /// POST-decode (un `%2F` no fabrica un separador, un `%2E%2E` no cuela
-    /// un `..`).
+    /// Any [`VPathError`]; segment invariants are validated POST-decode (a
+    /// `%2F` does not fabricate a separator, a `%2E%2E` does not smuggle in a
+    /// `..`).
     pub fn parse(wire: &str) -> Result<Self, VPathError> {
         let (scheme_raw, rest) = wire.split_once("://").ok_or(VPathError::MissingScheme)?;
         let scheme = Scheme::new(scheme_raw)?;
@@ -347,7 +354,8 @@ impl VPath {
         })
     }
 
-    /// La forma wire canónica (la que viaja por el protocolo y serializa serde).
+    /// The canonical wire form (the one that travels over the protocol and
+    /// that serde serializes).
     #[must_use]
     pub fn to_wire(&self) -> String {
         let mut out = String::with_capacity(16 + self.segments.len() * 12);
@@ -363,13 +371,12 @@ impl VPath {
         out
     }
 
-    /// Vista para humanos, forma `⟨scheme authority⟩/seg/…`: UTF-8 lossy con
-    /// `�` marcando bytes no decodificables, caracteres de control Y
-    /// formateadores bidi/invisibles (jamás controles ni overrides RTL
-    /// crudos hacia un terminal — spoofing de dirección, issue #21).
-    /// Deliberadamente NO tiene forma wire (sin `://`): [`Self::parse`]
-    /// sobre un display siempre falla, así que nunca reconstruye un path
-    /// por accidente (usa [`Self::to_wire`]).
+    /// Human-facing view, shaped `⟨scheme authority⟩/seg/…`: lossy UTF-8 with
+    /// `�` marking undecodable bytes, control characters AND bidi/invisible
+    /// formatters (never raw controls or RTL overrides toward a terminal —
+    /// direction spoofing, issue #21). Deliberately has NO wire form (no
+    /// `://`): [`Self::parse`] on a display always fails, so it can never
+    /// reconstruct a path by accident (use [`Self::to_wire`]).
     #[must_use]
     pub fn display_lossy(&self) -> String {
         let mut out = String::from("⟨");
@@ -396,30 +403,30 @@ impl VPath {
         out
     }
 
-    /// El scheme del provider.
+    /// The provider's scheme.
     #[must_use]
     pub fn scheme(&self) -> &str {
         self.scheme.as_str()
     }
 
-    /// La authority (host, conexión…), si la hay.
+    /// The authority (host, connection…), if there is one.
     #[must_use]
     pub fn authority(&self) -> Option<&str> {
         self.authority.as_ref().map(Authority::as_str)
     }
 
-    /// Iterador sobre los bytes crudos de cada segmento.
+    /// Iterator over each segment's raw bytes.
     pub fn segments(&self) -> impl Iterator<Item = &[u8]> {
         self.segments.iter().map(Segment::as_bytes)
     }
 
-    /// `true` si es la raíz del provider (sin segmentos).
+    /// `true` if this is the provider's root (no segments).
     #[must_use]
     pub fn is_root(&self) -> bool {
         self.segments.is_empty()
     }
 
-    /// Path hijo con `segment` añadido al final.
+    /// Child path with `segment` appended at the end.
     #[must_use]
     pub fn join(&self, segment: Segment) -> Self {
         let mut child = self.clone();
@@ -427,7 +434,7 @@ impl VPath {
         child
     }
 
-    /// El path padre; `None` en la raíz.
+    /// The parent path; `None` at the root.
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
         if self.segments.is_empty() {
@@ -438,14 +445,14 @@ impl VPath {
         Some(p)
     }
 
-    /// El último segmento; `None` en la raíz.
+    /// The last segment; `None` at the root.
     #[must_use]
     pub fn file_name(&self) -> Option<&Segment> {
         self.segments.last()
     }
 
-    /// Reemplaza el último segmento (p. ej. para derivar `x` → `x.norte-partial`);
-    /// `None` en la raíz.
+    /// Replaces the last segment (e.g. to derive `x` → `x.norte-partial`);
+    /// `None` at the root.
     #[must_use]
     pub fn with_file_name(&self, segment: Segment) -> Option<Self> {
         if self.segments.is_empty() {
@@ -456,14 +463,14 @@ impl VPath {
         Some(p)
     }
 
-    /// Compone el path de una entrada DENTRO de un archivo (ADR 0018):
-    /// `<format>+<scheme-de-outer>://<auth-de-outer>/<outer>/!/<inner>`.
+    /// Composes the path of an entry INSIDE an archive (ADR 0018):
+    /// `<format>+<outer's-scheme>://<outer's-auth>/<outer>/!/<inner>`.
     ///
-    /// Solo sobre segmentos ya validados — jamás fabrica paths que
-    /// [`Self::archive_split`] no pueda deshacer (roundtrip garantizado).
-    /// Puramente sintáctico: un `outer` raíz (`file:///`) compone sin error
-    /// y es el provider quien responde `TypeMismatch` (la raíz no es un
-    /// archivo).
+    /// Only over already validated segments — it never fabricates paths
+    /// [`Self::archive_split`] could not undo (roundtrip guaranteed). Purely
+    /// syntactic: a root `outer` (`file:///`) composes without error and it
+    /// is the provider that answers `TypeMismatch` (the root is not an
+    /// archive).
     ///
     /// ```
     /// use norte_proto::VPath;
@@ -473,21 +480,21 @@ impl VPath {
     /// ```
     ///
     /// # Errors
-    /// [`VPathError::ArchiveAddressing`] si `format` no está en
-    /// [`ARCHIVE_FORMATS`], si `outer` ya es compuesto (v1 = una capa), si
-    /// `outer`/`inner` contienen un segmento `!` literal (el exterior no
-    /// sería direccionable; el interior, incontrastable con el índice, que
-    /// omite esos componentes), o si el scheme resultante NO re-resuelve a
-    /// `format` por longest-match (ambigüedad de token compuesto: p. ej.
-    /// `archive_compose("tar", <outer de scheme "gz+mem">, …)` formaría
-    /// `tar+gz+mem`, que [`Self::archive_split`] leería como formato
-    /// `tar+gz` sobre `mem`, no como `tar` sobre `gz+mem` — se rechaza para
-    /// sostener la garantía de roundtrip, ADR 0028). [`VPathError::InvalidScheme`]
-    /// si la concatenación no forma un scheme válido (imposible con formatos
-    /// de la whitelist; defensa en profundidad).
+    /// [`VPathError::ArchiveAddressing`] if `format` is not in
+    /// [`ARCHIVE_FORMATS`], if `outer` is already compound (v1 = one layer),
+    /// if `outer`/`inner` contain a literal `!` segment (the outer part would
+    /// not be addressable; the inner part cannot be matched against the
+    /// index, which omits those components), or if the resulting scheme does
+    /// NOT re-resolve to `format` by longest-match (compound-token ambiguity:
+    /// e.g. `archive_compose("tar", <outer with scheme "gz+mem">, …)` would
+    /// form `tar+gz+mem`, which [`Self::archive_split`] would read as format
+    /// `tar+gz` over `mem`, not as `tar` over `gz+mem` — rejected to uphold
+    /// the roundtrip guarantee, ADR 0028). [`VPathError::InvalidScheme`] if
+    /// the concatenation does not form a valid scheme (impossible with
+    /// formats from the whitelist; defense in depth).
     ///
     /// # Panics
-    /// Nunca en la práctica: `!` es un segmento válido por construcción.
+    /// Never in practice: `!` is a valid segment by construction.
     pub fn archive_compose(
         format: &str,
         outer: &Self,
@@ -496,10 +503,10 @@ impl VPath {
         if !ARCHIVE_FORMATS.contains(&format) {
             return Err(VPathError::ArchiveAddressing);
         }
-        // #56: un exterior COMPUESTO es legal si y solo si es a su vez un
-        // path de archivo BIEN FORMADO (su propio split resuelve) — anidar
-        // una capa más. Un exterior plano con marcadores sigue prohibido
-        // (chequeo de abajo).
+        // #56: a COMPOUND outer is legal if and only if it is itself a
+        // WELL-FORMED archive path (its own split resolves) — nesting one
+        // more layer. A flat outer with markers stays forbidden (check
+        // below).
         let outer_nested = match outer.archive_split() {
             Ok(Some(_)) => true,
             Ok(None) => false,
@@ -509,19 +516,20 @@ impl VPath {
             return Err(VPathError::ArchiveAddressing);
         }
         let composed_scheme = format!("{format}+{}", outer.scheme());
-        // Guardia de roundtrip (ADR 0028): con tokens compuestos como
-        // `tar+gz`, anteponer `format` al scheme de `outer` puede formar un
-        // scheme que el longest-match de `scheme_format_prefix` resuelve a
-        // OTRO formato (ver ejemplo en el rustdoc de arriba). Si no
-        // re-resuelve exactamente a `format`, `archive_split` jamás podría
-        // deshacer este compose tal y como se pidió: se rechaza aquí en vez
-        // de fabricar un path que rompe su propio contrato.
+        // Roundtrip guard (ADR 0028): with compound tokens like `tar+gz`,
+        // prepending `format` to `outer`'s scheme can form a scheme that
+        // `scheme_format_prefix`'s longest-match resolves to ANOTHER format
+        // (see the example in the rustdoc above). If it does not re-resolve
+        // exactly to `format`, `archive_split` could never undo this compose
+        // the way it was requested: rejected here instead of fabricating a
+        // path that breaks its own contract.
         if scheme_format_prefix(&composed_scheme) != Some(format) {
             return Err(VPathError::ArchiveAddressing);
         }
-        let marker = || Segment::new(MARKER.to_vec()).expect("`!` es segmento válido");
-        // El interior JAMÁS lleva marcador; el exterior solo los lleva si es
-        // un path de archivo bien formado (#56 — sus marcadores son suyos).
+        let marker = || Segment::new(MARKER.to_vec()).expect("`!` is a valid segment");
+        // The inner part NEVER carries a marker; the outer part only carries
+        // them if it is a well-formed archive path (#56 — its markers are its
+        // own).
         if (!outer_nested && outer.segments.iter().any(|s| s.as_bytes() == MARKER))
             || inner.iter().any(|s| s.as_bytes() == MARKER)
         {
@@ -535,10 +543,10 @@ impl VPath {
             authority: outer.authority.clone(),
             segments,
         };
-        // Guardia de roundtrip EXTENDIDA (#56): el split del resultado debe
-        // devolver EXACTAMENTE lo compuesto (formato, exterior, interior) —
-        // con capas anidadas la elección de marcador (primera/última) tiene
-        // que deshacer este compose tal cual, o se rechaza aquí.
+        // EXTENDED roundtrip guard (#56): splitting the result must return
+        // EXACTLY what was composed (format, outer, inner) — with nested
+        // layers the marker choice (first/last) has to undo this compose
+        // exactly, or it is rejected here.
         match composed.archive_split() {
             Ok(Some(r)) if r.format == format && r.outer == *outer && r.inner == inner => {
                 Ok(composed)
@@ -547,49 +555,49 @@ impl VPath {
         }
     }
 
-    /// Deshace [`Self::archive_compose`] UNA capa: `Ok(None)` si el scheme
-    /// no es compuesto (el prefijo hasta el primer `+` no es un formato de
-    /// [`ARCHIVE_FORMATS`] — `s3+v2.x-y` es un scheme de provider legítimo,
-    /// no un archivo). Con el interior PLANO corta en el PRIMER segmento
-    /// `!` (regla v1: los `!` posteriores quedan en el interior, cuyo
-    /// índice jamás los contiene → `NotFound` aguas abajo); con el interior
-    /// a su vez COMPUESTO (#56, ADR 0018 A3: `zip+tar+file`) corta en el
-    /// ÚLTIMO — los marcadores anteriores pertenecen a las capas de abajo y
-    /// el exterior devuelto se pela recursivamente. Puramente sintáctico:
-    /// no valida que el exterior nombre un archivo ni que la capa honda
-    /// tenga su marcador (eso falla limpio al usarla).
+    /// Undoes [`Self::archive_compose`] ONE layer: `Ok(None)` if the scheme
+    /// is not compound (the prefix up to the first `+` is not a format from
+    /// [`ARCHIVE_FORMATS`] — `s3+v2.x-y` is a legitimate provider scheme, not
+    /// an archive). With a FLAT inner part it cuts at the FIRST `!` segment
+    /// (v1 rule: later `!`s stay in the inner part, whose index never
+    /// contains them → `NotFound` downstream); with an inner part that is
+    /// itself COMPOUND (#56, ADR 0018 A3: `zip+tar+file`) it cuts at the
+    /// LAST one — the earlier markers belong to the layers below and the
+    /// returned outer part is peeled recursively. Purely syntactic: it does
+    /// not validate that the outer part names an archive nor that the deep
+    /// layer has its marker (that fails cleanly when used).
     ///
     /// ```
     /// use norte_proto::VPath;
-    /// let plano = VPath::parse("file:///a.zip").unwrap();
-    /// assert!(plano.archive_split().unwrap().is_none());
+    /// let flat = VPath::parse("file:///a.zip").unwrap();
+    /// assert!(flat.archive_split().unwrap().is_none());
     /// ```
     ///
     /// ```
     /// use norte_proto::VPath;
-    /// // #56: dos capas — la externa (zip) toma el último marcador.
-    /// let anidado = VPath::parse("zip+tar+file:///b.tar/!/i.zip/!/f").unwrap();
-    /// let r = anidado.archive_split().unwrap().unwrap();
+    /// // #56: two layers — the outer one (zip) takes the last marker.
+    /// let nested = VPath::parse("zip+tar+file:///b.tar/!/i.zip/!/f").unwrap();
+    /// let r = nested.archive_split().unwrap().unwrap();
     /// assert_eq!(r.format, "zip");
     /// assert_eq!(r.outer.to_wire(), "tar+file:///b.tar/!/i.zip");
     /// ```
     ///
     /// # Errors
-    /// [`VPathError::ArchiveAddressing`] si el scheme es compuesto pero no
-    /// hay marcador `!` en el path. [`VPathError::InvalidScheme`] si tras
-    /// quitar el formato el scheme interior queda vacío.
+    /// [`VPathError::ArchiveAddressing`] if the scheme is compound but there
+    /// is no `!` marker in the path. [`VPathError::InvalidScheme`] if the
+    /// inner scheme is empty after removing the format.
     pub fn archive_split(&self) -> Result<Option<ArchiveRef>, VPathError> {
         let Some(format) = scheme_format_prefix(self.scheme.as_str()) else {
             return Ok(None);
         };
         let inner_scheme = &self.scheme.as_str()[format.len() + 1..];
-        // #56 (ADR 0018 A3, resolución derecha→izquierda): con un interior a
-        // su vez COMPUESTO, esta capa (la más externa) corta en el ÚLTIMO
-        // marcador — los anteriores pertenecen a las capas de abajo. Con un
-        // interior PLANO se conserva la regla v1 (PRIMER marcador): los `!`
-        // extra van al interior, cuyo índice jamás los contiene → NotFound
-        // aguas abajo — un marcador rogue NUNCA re-direcciona el exterior
-        // hacia un objeto real llamado `!` del provider plano.
+        // #56 (ADR 0018 A3, right-to-left resolution): with an inner part
+        // that is itself COMPOUND, this layer (the outermost) cuts at the
+        // LAST marker — earlier ones belong to the layers below. With a FLAT
+        // inner part the v1 rule is kept (FIRST marker): extra `!`s go to the
+        // inner part, whose index never contains them → NotFound downstream —
+        // a rogue marker NEVER redirects the outer part toward a real object
+        // called `!` in the flat provider.
         let nested = scheme_format_prefix(inner_scheme).is_some();
         let marker_pos = if nested {
             self.segments.iter().rposition(|s| s.as_bytes() == MARKER)
@@ -618,15 +626,15 @@ impl VPath {
     }
 }
 
-/// `true` si `c` no debe ir crudo a un display (terminal/GUI): controles
-/// C0/C1 **y** formateadores bidi/invisibles. Estos últimos (overrides RTL
-/// como U+202E, marcas de dirección, zero-width, BOM) permiten spoofing
-/// visual del nombre —un `.exe` que se ve como `.jpg`— sin ser `is_control`
+/// `true` if `c` must not go raw to a display (terminal/GUI): C0/C1 controls
+/// **and** bidi/invisible formatters. The latter (RTL overrides like
+/// U+202E, direction marks, zero-width, BOM) allow visually spoofing a
+/// name — a `.exe` that looks like a `.jpg` — without being `is_control`
 /// (issue #21).
 fn is_display_hazard(c: char) -> bool {
-    // Controles C0/C1 + formateadores/overrides BIDI. NO se enmascaran
-    // ZWJ/ZWNJ (U+200C/200D): son legítimos en secuencias emoji y en escrituras
-    // (persa, índicas) — el vector de #21 es la dirección bidi, no la unión.
+    // C0/C1 controls + BIDI formatters/overrides. ZWJ/ZWNJ (U+200C/200D) are
+    // NOT masked: they are legitimate in emoji sequences and in scripts
+    // (Persian, Indic) — #21's vector is bidi direction, not joining.
     c.is_control()
         || matches!(c,
             '\u{200E}' | '\u{200F}' | '\u{061C}'
@@ -635,18 +643,18 @@ fn is_display_hazard(c: char) -> bool {
         )
 }
 
-/// El segmento marcador de ADR 0018.
+/// ADR 0018's marker segment.
 const MARKER: &[u8] = b"!";
 
-/// El token de formato si `scheme` es compuesto (`zip+file` → `Some("zip")`,
-/// `tar+gz+file` → `Some("tar+gz")`); `None` si ningún prefijo de
-/// [`ARCHIVE_FORMATS`] encaja.
+/// The format token if `scheme` is compound (`zip+file` → `Some("zip")`,
+/// `tar+gz+file` → `Some("tar+gz")`); `None` if no [`ARCHIVE_FORMATS`] prefix
+/// matches.
 ///
-/// LONGEST-MATCH, no `split_once('+')`: un token puede contener `+` propio
-/// (`tar+gz`), así que cortar en el primer `+` dejaría `tar+gz+file` como
-/// formato `tar` sobre un interior huérfano `gz+file`. Se prueban TODOS los
-/// formatos de la whitelist y se queda con el más largo que encaje como
-/// prefijo seguido de `+` (ADR 0028).
+/// LONGEST-MATCH, not `split_once('+')`: a token can contain its own `+`
+/// (`tar+gz`), so cutting at the first `+` would leave `tar+gz+file` as
+/// format `tar` over an orphan interior `gz+file`. ALL formats in the
+/// whitelist are tried, and the longest one that matches as a prefix
+/// followed by `+` is kept (ADR 0028).
 fn scheme_format_prefix(scheme: &str) -> Option<&str> {
     ARCHIVE_FORMATS
         .iter()
@@ -657,20 +665,21 @@ fn scheme_format_prefix(scheme: &str) -> Option<&str> {
         .copied()
 }
 
-/// Wrapper público del prefijo de formato para frontends (CLI/TUI) que
-/// necesitan reconocer un scheme de archivo-como-directorio (p. ej. para
-/// aceptar URLs `tar+gz+file://…`) sin duplicar la gramática de longest-match
-/// contra [`ARCHIVE_FORMATS`] (ADR 0028, #55).
+/// Public wrapper of the format prefix for frontends (CLI/TUI) that need to
+/// recognize a file-as-directory scheme (e.g. to accept `tar+gz+file://…`
+/// URLs) without duplicating the longest-match grammar against
+/// [`ARCHIVE_FORMATS`] (ADR 0028, #55).
 ///
-/// Puramente sintáctico, igual que [`VPath::archive_split`]: no valida que
-/// el exterior nombre un archivo real, y `Some` no implica un marcador `!`
-/// bien formado (eso lo valida `archive_split`/`archive_compose`).
+/// Purely syntactic, same as [`VPath::archive_split`]: it does not validate
+/// that the outer part names a real archive, and `Some` does not imply a
+/// well-formed `!` marker (that is validated by
+/// `archive_split`/`archive_compose`).
 ///
 /// ```
 /// use norte_proto::scheme_archive_format;
 /// assert_eq!(scheme_archive_format("tar+gz+file"), Some("tar+gz"));
 /// assert_eq!(scheme_archive_format("zip+file"), Some("zip"));
-/// assert_eq!(scheme_archive_format("s3+v2.x-y"), None); // provider, no archivo
+/// assert_eq!(scheme_archive_format("s3+v2.x-y"), None); // a provider, not an archive
 /// assert_eq!(scheme_archive_format("file"), None);
 /// ```
 #[must_use]
@@ -684,8 +693,8 @@ impl fmt::Debug for VPath {
     }
 }
 
-/// `Display` es la forma wire (lossless), pensada para logs y errores.
-/// Para vista humana usa [`VPath::display_lossy`].
+/// `Display` is the wire form (lossless), meant for logs and errors.
+/// For a human-facing view use [`VPath::display_lossy`].
 impl fmt::Display for VPath {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.to_wire())

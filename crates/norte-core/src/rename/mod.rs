@@ -3,9 +3,9 @@
 //! regex, case, cleanup) will feed it too — it only produces pairs.
 
 pub mod exec;
-// `pub(crate)` y no privado desde #274: el cambio de ortografía de `ops` y su
-// undo necesitan el MISMO prefijo de temporal que el ejecutor de lotes. Dos
-// gramáticas de nombre de maquinaria son dos cosas que barrer.
+// `pub(crate)` and not private since #274: the spelling change of `ops` and
+// its undo need the SAME temporary prefix as the batch executor. Two
+// grammars for machinery names are two things to sweep.
 pub(crate) mod naming;
 pub mod plan;
 
@@ -81,16 +81,16 @@ fn kind_to_proto(kind: CollisionKind) -> methods::RenameCollisionKind {
 /// rather than dropped anyway: a plan silently missing a step or a verdict is a
 /// plan that says something the core did not decide.
 pub fn plan_to_proto(plan: &DirPlan) -> Result<methods::FsRenameBatchPlanResult, Error> {
-    // `what` dice DÓNDE (paso o veredicto) y en qué índice: un error de
-    // «no puede pasar» es justo el que hay que poder diagnosticar desde una
-    // sola línea de log, y `Error::Internal` no se distingue de ningún otro.
+    // `what` says WHERE (step or verdict) and at which index: a "cannot
+    // happen" error is exactly the kind that has to be diagnosable from a
+    // single log line, and `Error::Internal` looks like any other.
     fn seg(bytes: &[u8], what: &str, index: usize) -> Result<Segment, Error> {
         Segment::new(bytes.to_vec()).map_err(|e| {
             tracing::error!(
                 error = %e,
                 what,
                 index,
-                "un nombre del plan no es una entrada de directorio"
+                "a name in the plan is not a directory entry"
             );
             Error::Internal { panic: false }
         })
@@ -191,18 +191,21 @@ mod tests {
                 K::AmbiguousSource
             ],
         );
-        // Cada veredicto del wire, salvo el fallback, sale de un veredicto del
-        // core. Un `K::Unknown` producido por el core sería el core inventando
-        // una clase que él mismo no entiende.
+        // Every wire verdict, except the fallback, comes from a core
+        // verdict. A `K::Unknown` produced by the core would be the core
+        // inventing a class it doesn't even understand itself.
         for wire in [
             K::Internal,
             K::External,
             K::AbsentSource,
             K::AmbiguousSource,
         ] {
-            assert!(mapped.contains(&wire), "{wire:?} sin veredicto de core");
+            assert!(mapped.contains(&wire), "{wire:?} has no core verdict");
         }
-        assert!(!mapped.contains(&K::Unknown), "el core jamás emite Unknown");
+        assert!(
+            !mapped.contains(&K::Unknown),
+            "the core never emits Unknown"
+        );
     }
 
     /// The wire hash is the DIRECTORY-bound one: the same pairs against two
@@ -223,9 +226,12 @@ mod tests {
             &norte_proto::VPath::parse("mem:///there").expect("path"),
             plan_batch(&pairs, &listing, caps),
         );
-        let a = plan_to_proto(&here).expect("plan de wire");
-        let b = plan_to_proto(&there).expect("plan de wire");
-        assert_eq!(a.steps, b.steps, "los pasos SÍ son los mismos");
-        assert_ne!(a.plan_hash, b.plan_hash, "el token va atado al directorio");
+        let a = plan_to_proto(&here).expect("wire plan");
+        let b = plan_to_proto(&there).expect("wire plan");
+        assert_eq!(a.steps, b.steps, "the steps ARE the same");
+        assert_ne!(
+            a.plan_hash, b.plan_hash,
+            "the token is bound to the directory"
+        );
     }
 }

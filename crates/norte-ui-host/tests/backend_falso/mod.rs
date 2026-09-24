@@ -1,9 +1,10 @@
-//! El backend de tabla que comparten los tests: un árbol de directorios
-//! determinista, sin daemon y sin red.
+//! The table backend the tests share: a deterministic directory tree, with
+//! no daemon and no network.
 //!
-//! Cada test usa la parte que necesita —el de paridad no borra, el del
-//! controlador no compara árboles— así que aquí sobra código para cualquiera
-//! de ellos por separado. Es el precio de tener UN falso y no tres.
+//! Each test uses the part it needs — the parity one does not delete, the
+//! controller one does not compare trees — so there is spare code here for
+//! any one of them on its own. That is the price of having ONE fake instead
+//! of three.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -14,12 +15,12 @@ use futures::future::BoxFuture;
 use norte_proto::{DeleteMode, Entry, EntryKind, Error, VPath};
 use norte_ui_host::backend::{HostBackend, HostTask};
 
-/// Un pestillo de un solo sentido: se abre una vez y se queda abierto.
+/// A one-way latch: it opens once and stays open.
 ///
-/// `notify_waiters` solo despierta a quien YA espera, así que la bandera es
-/// la que manda y el aviso solo evita el sondeo. Una vez abierta, cualquier
-/// petición posterior pasa de largo — que es lo que hace falta cuando el
-/// host repide el listado y el stream nuevo vuelve a llegar aquí.
+/// `notify_waiters` only wakes whoever is ALREADY waiting, so the flag is
+/// what rules and the notice only avoids polling. Once open, any later
+/// request just passes through — which is what is needed when the host
+/// re-requests the listing and the new stream arrives here again.
 #[derive(Default)]
 pub struct Puerta {
     abierta: std::sync::atomic::AtomicBool,
@@ -27,309 +28,317 @@ pub struct Puerta {
 }
 
 impl Puerta {
-    /// Deja pasar el drenaje, ahora y para siempre.
+    /// Lets the drain through, now and forever.
     pub fn abrir(&self) {
         self.abierta.store(true, Ordering::SeqCst);
         self.aviso.notify_waiters();
     }
 
-    async fn esperar(&self) {
+    async fn wait(&self) {
         loop {
             if self.abierta.load(Ordering::SeqCst) {
                 return;
             }
-            // El futuro se arma ANTES de la segunda comprobación: armarlo
-            // después perdería un `abrir` que cayera justo en medio.
-            let esperando = self.aviso.notified();
+            // The future is armed BEFORE the second check: arming it after
+            // would lose an `abrir` that landed right in between.
+            let waiting = self.aviso.notified();
             if self.abierta.load(Ordering::SeqCst) {
                 return;
             }
-            esperando.await;
+            waiting.await;
         }
     }
 }
 
-/// Un backend de tabla: para cada directorio, los nombres que contiene y de
-/// qué clase son.
+/// A table backend: for each directory, the names it contains and what
+/// class they are.
 //
-// `clippy::struct_excessive_bools`: permitido a propósito. Son MANDOS
-// independientes de un doble de test —el listado viene perezoso, el borrado
-// quita de verdad, el provider escribe el padre distinto— y cualquier
-// combinación de ellos es un escenario real. Plegarlos en una máquina de
-// estados sería inventar estados que no existen; envolver cada uno en un enum
-// de dos variantes dejaría cada test escribiendo `Lazy::Si, BorrarDeVerdad::No`
-// para nada: el nombre del campo ya dice a qué pregunta contesta.
+// `clippy::struct_excessive_bools`: allowed on purpose. These are
+// INDEPENDENT knobs of a test double — the listing comes lazy, the delete
+// really removes, the provider writes the parent under another spelling —
+// and any combination of them is a real scenario. Folding them into a state
+// machine would invent states that do not exist; wrapping each in a
+// two-variant enum would leave every test writing `Lazy::Yes,
+// RealDelete::No` for nothing: the field name already says which question
+// it answers.
 #[derive(Default)]
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "hechos independientes: cada campo dice a qué pregunta contesta"
+    reason = "independent facts: each field says which question it answers"
 )]
 pub struct Falso {
-    /// Un aviso por cada cosa que el doble ANOTA.
+    /// A notice for every thing the double RECORDS.
     ///
-    /// Es lo que convierte «duerme 30 ms y mira» en «espera a que pase». El
-    /// actor encola cada mutación con `tokio::spawn` y contesta el ack antes
-    /// de que la task corra, así que el test que quiera ver lo encolado
-    /// tiene que esperar a ALGO; sin esto, ese algo era el reloj.
+    /// It is what turns "sleep 30 ms and look" into "wait until it happens".
+    /// The actor queues every mutation with `tokio::spawn` and answers the
+    /// ack before the task runs, so the test that wants to see the queued
+    /// work has to wait for SOMETHING; without this, that something was the
+    /// clock.
     ///
-    /// `notify_waiters` solo despierta a quien YA espera, así que quien
-    /// espera arma el futuro antes de volver a mirar (`Falso::hasta`), igual
-    /// que hace `Puerta::esperar`.
+    /// `notify_waiters` only wakes whoever is ALREADY waiting, so whoever
+    /// waits arms the future before looking again (`Falso::hasta`), the same
+    /// way `Puerta::wait` does.
     ///
-    /// `Arc` porque hay anotaciones que ocurren FUERA de `&self`: el cierre
-    /// de cancelación de una task se queda vivo cuando el doble ya no está a
-    /// mano, y también tiene que avisar.
+    /// `Arc` because some recordings happen OUTSIDE `&self`: a task's
+    /// cancellation closure stays alive after the double is no longer at
+    /// hand, and it also has to notify.
     pub pulso: Arc<tokio::sync::Notify>,
-    /// `wire del dir` → `(nombre, es_dir)`.
+    /// `dir wire` → `(name, is_dir)`.
     pub arbol: HashMap<String, Vec<(Vec<u8>, bool)>>,
-    /// El kind EXACTO de una entrada, por su ruta de cable. Ver
-    /// [`Falso::pon_kind`]: `arbol` solo sabe de directorios y ficheros.
+    /// The EXACT kind of an entry, by its wire path. See
+    /// [`Falso::pon_kind`]: `arbol` only knows about directories and files.
     pub kinds: HashMap<String, EntryKind>,
     pub listados: AtomicUsize,
-    /// Lecturas PEDIDAS y ya SERVIDAS: listados, sondeos y contenidos.
+    /// Reads REQUESTED and already SERVED: listings, probes and contents.
     ///
-    /// Los dos números solo se separan con `retraso_ms`, y es justo ahí donde
-    /// hace falta: un test que quiere ver qué hace el host con una respuesta
-    /// TARDÍA tiene que saber cuándo ha llegado. Antes lo adivinaba durmiendo
-    /// más que el retraso. `servidos == pedidos` es «ya no vuela ninguna»,
-    /// que es la pregunta que esos tests hacen de verdad — y que no exige
-    /// contar a mano cuántas respuestas pone en vuelo cada caso.
+    /// The two numbers only diverge with `retraso_ms`, and that is exactly
+    /// where it is needed: a test that wants to see what the host does with
+    /// a LATE response has to know when it arrived. It used to guess that by
+    /// sleeping longer than the delay. `servidos == pedidos` is "nothing is
+    /// in flight anymore", which is the question those tests actually ask —
+    /// and it does not require counting by hand how many responses each case
+    /// puts in flight.
     pub pedidos: AtomicUsize,
-    /// La otra mitad de `pedidos`: `Arc` porque quien la sube es la respuesta,
-    /// que corre en su propia task cuando el doble ya no está a mano.
+    /// The other half of `pedidos`: `Arc` because what bumps it is the
+    /// response, which runs in its own task once the double is no longer at
+    /// hand.
     pub servidos: Arc<AtomicUsize>,
-    /// Retraso artificial, para provocar la carrera de una respuesta tardía.
+    /// Artificial delay, to provoke the race of a late response.
     ///
-    /// Este `sleep` se queda: es la latencia que el doble SIMULA, no una
-    /// apuesta del test sobre cuánto tarda el actor. Lo que no se adivina es
-    /// cuándo acabó — eso lo dice `servidos`.
+    /// This `sleep` stays: it is the latency the double SIMULATES, not a
+    /// test's bet on how long the actor takes. What is not guessed is when
+    /// it finished — `servidos` says that.
     pub retraso_ms: u64,
-    /// Detiene el stream JUSTO después de la primera página, hasta que el
-    /// test la abre.
+    /// Stops the stream RIGHT AFTER the first page, until the test opens it.
     ///
-    /// Es la única forma de estar DENTRO de la ventana en la que `en_vuelo`
-    /// ya se limpió y `drenando` sigue vivo, que es donde vive el bug que
-    /// este mando existe para probar. Un `sleep` valdría de casualidad; esto
-    /// no depende del reloj.
+    /// It is the only way to be INSIDE the window where `en_vuelo` has
+    /// already cleared and `drenando` is still alive, which is where the bug
+    /// this knob exists to test lives. A `sleep` would work by coincidence;
+    /// this does not depend on the clock.
     pub puerta_drenaje: Option<Arc<Puerta>>,
-    /// La sesión que el daemon devuelve, y si esta ventana es su dueña.
+    /// The session the daemon returns, and whether this window owns it.
     pub sesion: std::sync::Mutex<(norte_proto::methods::Session, bool)>,
-    /// Lo ÚLTIMO que se escribió, para comprobar qué guarda el host.
+    /// The LAST thing written, to check what the host saves.
     pub escrito: std::sync::Mutex<Option<serde_json::Value>>,
-    /// La última transferencia pidió la COLA (ADR 0149).
+    /// The last transfer asked for the QUEUE (ADR 0149).
     pub encoladas: std::sync::Mutex<bool>,
-    /// TODOS los cuerpos que se intentaron poner, en orden — rechazados
-    /// incluidos. Es lo que permite ver que un reintento manda algo DISTINTO
-    /// (#316), que es la diferencia entre degradar y repetir el mismo error.
+    /// ALL the bodies that were tried, in order — rejected ones included. It
+    /// is what lets you see that a retry sends something DIFFERENT (#316),
+    /// which is the difference between degrading and repeating the same
+    /// error.
     pub puestas: std::sync::Mutex<Vec<serde_json::Value>>,
-    /// Cuántos `session_put` seguidos se rechazan por TAMAÑO antes de aceptar
-    /// uno. `0` (el defecto) = ninguno.
+    /// How many consecutive `session_put` calls are rejected for SIZE before
+    /// one is accepted. `0` (the default) = none.
     pub rechazos_por_tamano: std::sync::Mutex<u32>,
-    /// La escritura falla con conflicto: otra ventana escribió en medio.
+    /// The write fails with a conflict: another window wrote in between.
     pub conflicto: bool,
-    /// El listado viene PEREZOSO, como el del provider local: sin tamaño ni
-    /// fecha. Quien las quiera, que sondee.
+    /// The listing comes LAZY, like the local provider's: no size, no date.
+    /// Whoever wants them can probe.
     pub lazy: bool,
-    /// El `stat` contesta con el nombre en MAYÚSCULAS: otra ortografía de lo
-    /// mismo, como un servidor sin distinción de caja o un HFS+ en NFD.
+    /// `stat` answers with the name in UPPERCASE: another spelling of the
+    /// same thing, like a case-insensitive server or an HFS+ in NFD.
     pub stat_grita: bool,
-    /// Los `attrs` que se pidieron en cada listado, en orden.
+    /// The `attrs` requested in each listing, in order.
     pub attrs_pedidos: std::sync::Mutex<Vec<Vec<String>>>,
-    /// Los lotes que pidió `dir_size`, en orden: es lo que permite comprobar
-    /// que se cuenta lo MARCADO y en UNA sola Task.
+    /// The batches `dir_size` requested, in order: it is what lets you check
+    /// that what is MARKED is counted, and in a SINGLE Task.
     pub recuentos: std::sync::Mutex<Vec<Vec<VPath>>>,
-    /// Lo que se pidió empaquetar, con su formato y su base.
+    /// What was requested to be packed, with its format and its base.
     pub empaquetados: std::sync::Mutex<Vec<norte_proto::methods::ArchivePackParams>>,
-    /// Los contenedores que se mandó comprobar.
+    /// The containers that were asked to be tested.
     pub comprobados: std::sync::Mutex<Vec<norte_proto::methods::ArchiveTestParams>>,
-    /// Lo que se mandó partir, con su tamaño de trozo ya en bytes.
+    /// What was asked to be split, with its chunk size already in bytes.
     pub partidos: std::sync::Mutex<Vec<norte_proto::methods::FileSplitParams>>,
-    /// Los trozos que se mandó juntar.
+    /// The chunks that were asked to be combined.
     pub juntados: std::sync::Mutex<Vec<norte_proto::methods::FileCombineParams>>,
-    /// Lo que el daemon contesta a `connection.list` (#264). Por defecto una
-    /// lista vacía, que es lo que ve quien no tiene ninguna configurada.
+    /// What the daemon answers to `connection.list` (#264). Defaults to an
+    /// empty list, which is what whoever has none configured sees.
     pub conexiones:
         std::sync::Mutex<Option<Result<norte_proto::methods::ConnectionListResult, Error>>>,
-    /// Las sesiones que se mandó CERRAR, en orden (#140).
+    /// The sessions that were asked to be CLOSED, in order (#140).
     pub cerradas: std::sync::Mutex<Vec<VPath>>,
-    /// Lo que `connection.close` contesta. `None` = «sí, había una».
+    /// What `connection.close` answers. `None` = "yes, there was one".
     pub cierre: std::sync::Mutex<Option<Result<bool, Error>>>,
-    /// Contenido por path, para el visor.
+    /// Content by path, for the viewer.
     pub contenido: HashMap<String, Vec<u8>>,
-    /// Los paths que se sondearon, en orden: es lo que permite comprobar que
-    /// un sondeo fallido no se repite en bucle.
+    /// The paths that were probed, in order: it is what lets you check that
+    /// a failed probe does not repeat in a loop.
     pub sondeos: std::sync::Mutex<Vec<VPath>>,
-    /// Lo que se pidió borrar, en orden.
+    /// What was asked to be deleted, in order.
     pub borrados: std::sync::Mutex<Vec<(VPath, DeleteMode)>>,
-    /// Un borrado QUITA la entrada del árbol, como en la vida real.
+    /// A delete REMOVES the entry from the tree, like in real life.
     ///
-    /// Apagado por defecto para no mover los tests que solo miran qué se
-    /// pidió. Encendido, es lo único que permite comprobar qué hace un
-    /// listado que llega con una entrada MENOS — que es donde un cursor por
-    /// índice deja de nombrar el mismo fichero.
+    /// Off by default so as not to move the tests that only look at what was
+    /// requested. On, it is the only way to check what a listing does when
+    /// it arrives with ONE FEWER entry — which is where a cursor by index
+    /// stops naming the same file.
     pub borrar_de_verdad: bool,
-    /// Con qué error se RECHAZA un borrado antes de encolar nada. `None` =
-    /// el borrado se encola.
+    /// The error a delete is REJECTED with before queuing anything. `None` =
+    /// the delete gets queued.
     ///
-    /// Tras un `Mutex` para que un test pueda ARREGLARLO a mitad: el caso que
-    /// importa es el de un daemon que rehúsa una vez y acepta la siguiente.
+    /// Behind a `Mutex` so a test can FIX IT midway: the case that matters is
+    /// a daemon that refuses once and accepts the next time.
     pub error_al_borrar: std::sync::Mutex<Option<Error>>,
-    /// Los wire de lo ya borrado, que `list` se salta.
+    /// The wire paths of what has already been deleted, which `list` skips.
     pub desaparecidos: std::sync::Mutex<std::collections::HashSet<String>>,
-    /// El provider escribe el PADRE de sus entradas con otra ortografía que
-    /// la que se le pidió (la última componente en mayúsculas).
+    /// The provider writes the PARENT of its entries under another spelling
+    /// than the one it was asked for (the last component in uppercase).
     ///
-    /// Es lo que pasa de verdad en macOS (NFD contra NFC) y contra un
-    /// servidor sin distinción de caja, y lo que hace que el padre de una
-    /// entrada y el directorio del panel sean dos cadenas para el mismo
-    /// sitio.
+    /// This is what really happens on macOS (NFD vs NFC) and against a
+    /// case-insensitive server, and what makes an entry's parent and the
+    /// pane's directory two strings for the same place.
     pub padre_distinto: bool,
-    /// Cuántas veces se pidió cancelar la task que se lanzó.
+    /// How many times cancelling the launched task was requested.
     pub cancelaciones: Arc<AtomicUsize>,
-    /// El emisor del progreso de la última task, para que el test lo mueva.
+    /// The progress sender of the last task, for the test to move it.
     pub progreso: std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
-    /// El emisor de la task de `create_file`, guardado solo para que NO se
-    /// caiga.
+    /// The sender of the `create_file` task, kept only so it does NOT drop.
     ///
-    /// Es la única del doble que nace corriendo y termina por detrás, así que
-    /// es la única cuyo canal tiene que seguir abierto cuando el host va a
-    /// leer el desenlace. Aparte de `progreso` porque ese lo MUEVEN los
-    /// tests, y esta no la mueve nadie.
+    /// It is the only one of the double's tasks that is born running and
+    /// finishes behind, so it is the only one whose channel has to stay open
+    /// while the host is about to read the outcome. Separate from `progreso`
+    /// because tests MOVE that one, and nobody moves this one.
     pub progreso_create:
         std::sync::Mutex<Option<tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
-    /// Los emisores de TODAS las tasks de transferencia, por id.
+    /// The senders of ALL the transfer tasks, by id.
     ///
-    /// Un solo hueco no vale para un lote: al llegar la segunda se soltaba el
-    /// `Sender` de la primera, el bombeo del host veía `changed()` fallar y
-    /// esa fila se quedaba `Running` para siempre. O sea que el doble no
-    /// podía mover un lote, que es justo el caso caro.
+    /// A single slot does not work for a batch: when the second one arrived
+    /// it dropped the first one's `Sender`, the host's pumping saw
+    /// `changed()` fail, and that row stayed `Running` forever. In other
+    /// words the double could not move a batch, which is exactly the
+    /// expensive case.
     pub progresos:
         std::sync::Mutex<HashMap<u64, tokio::sync::watch::Sender<norte_proto::TaskProgress>>>,
-    /// El catálogo de extensiones que contesta `plugin.list`.
+    /// The extension catalogue `plugin.list` answers.
     ///
-    /// Tras un `Mutex` porque el gobierno lo CAMBIA: el host repide el
-    /// catálogo tras aprobar o encender, y un falso que contestara siempre lo
-    /// mismo dejaría pasar una pantalla que dice «aprobada» sin que el
-    /// daemon lo hubiera confirmado.
+    /// Behind a `Mutex` because governance CHANGES it: the host re-requests
+    /// the catalogue after approving or enabling, and a fake that always
+    /// answered the same thing would let a screen say "approved" through
+    /// without the daemon having confirmed it.
     pub plugins: std::sync::Mutex<Vec<norte_proto::methods::PluginInfo>>,
-    /// El `help.md` de cada extensión, por id. Un id ausente contesta como
-    /// un daemon que no tiene la página: markdown vacío.
+    /// Each extension's `help.md`, by id. An absent id answers the way a
+    /// daemon without that page would: empty markdown.
     pub paginas: HashMap<String, String>,
-    /// La preview con estilo que contesta un previewer, por wire. Ausente =
-    /// ningún previewer aplica, que NO es un error.
+    /// The styled preview a previewer answers, by wire. Absent = no
+    /// previewer applies, which is NOT an error.
     pub previews: HashMap<String, norte_proto::methods::PluginPreviewStyled>,
-    /// Las MINIATURAS que un plugin daría por ruta de wire (ADR 0107).
+    /// The THUMBNAILS a plugin would give by wire path (ADR 0107).
     pub thumbnails: HashMap<String, norte_proto::methods::PluginThumbnail>,
-    /// El ancho que cada petición de preview con estilo dijo (0.66.0), en
-    /// orden. Es lo que permite comprobar que el viewport CRUZA.
+    /// The width each styled-preview request said (0.66.0), in order. It is
+    /// what lets you check that the viewport CROSSES over.
     pub anchos_de_preview: std::sync::Mutex<Vec<Option<u32>>>,
-    /// Cuántas entradas dice el provider que se saltó. `None` = no lleva la
-    /// cuenta, que NO es lo mismo que cero.
+    /// How many entries the provider says it skipped. `None` = it does not
+    /// keep count, which is NOT the same as zero.
     pub omitidas: Option<u64>,
-    /// La insignia que un decorador pone en cada ruta, por wire. Vacío =
-    /// NINGÚN decorador consentido, que es lo que contesta el daemon.
+    /// The badge a decorator puts on each path, by wire. Empty = NO decorator
+    /// consented, which is what the daemon answers.
     pub decoraciones: HashMap<String, String>,
-    /// El ICONO que un segundo decorador, de hueco `icon` (ADR 0105), pone
-    /// en cada ruta, por wire. Vacío = ningún decorador de iconos.
+    /// The ICON a second decorator, of `icon` slot (ADR 0105), puts on each
+    /// path, by wire. Empty = no icon decorator.
     pub iconos: HashMap<String, String>,
-    /// Las clases que llegaron con cada lote decorado, en orden: lo que
-    /// permite comprobar que la ventana MANDA la clase, sin la que un
-    /// decorador de iconos no sabe qué es carpeta.
+    /// The classes that arrived with each decorated batch, in order: what
+    /// lets you check that the window SENDS the class, without which an icon
+    /// decorator does not know what is a folder.
     pub clases_decoradas: std::sync::Mutex<Vec<Vec<norte_proto::EntryKind>>>,
-    /// Los lotes que se pidieron decorar, en orden. Es lo que permite
-    /// comprobar que solo se pide la VENTANA.
+    /// The batches that were asked to be decorated, in order. It is what
+    /// lets you check that only the WINDOW is requested.
     pub decorados: std::sync::Mutex<Vec<Vec<VPath>>>,
-    /// El valor de una columna de plugin, por `(columna, wire)`.
+    /// The value of a plugin column, by `(column, wire)`.
     pub valores_de_columna: HashMap<(String, String), String>,
-    /// Lo que se pidió a `plugin.column_values`, en orden.
+    /// What was requested from `plugin.column_values`, in order.
     pub columnas_pedidas: std::sync::Mutex<Vec<(String, String, Vec<VPath>)>>,
-    /// El marco que contesta `plugin.panel_render` (fase 3). `None` = ningún
-    /// plugin consentido pinta ese panel, que es el caso de casi todos los
+    /// The frame `plugin.panel_render` answers (phase 3). `None` = no
+    /// consented plugin paints that panel, which is the case for almost all
     /// tests.
     pub marco_de_panel: Option<norte_proto::methods::PanelFrame>,
-    /// Lo que se pidió a `plugin.panel_render`, en orden: con esto se
-    /// comprueba QUÉ se le cuenta al guest —el directorio, el tamaño sin
-    /// marco, la fila bajo el cursor— y que no se le pide dos veces lo mismo.
+    /// What was requested from `plugin.panel_render`, in order: this checks
+    /// WHAT the guest is told — the directory, the size without the frame,
+    /// the row under the cursor — and that it is not asked for the same
+    /// thing twice.
     pub paneles_pedidos: std::sync::Mutex<Vec<norte_proto::methods::PluginPanelRenderParams>>,
-    /// Lo que contesta una búsqueda, por patrón: `(glob, hallazgos)`.
+    /// What a search answers, by pattern: `(glob, hits)`.
     pub hallazgos: HashMap<String, Vec<VPath>>,
-    /// Los patrones que se buscaron, en orden.
+    /// The patterns that were searched, in order.
     pub busquedas: std::sync::Mutex<Vec<String>>,
-    /// Y los PARÁMETROS enteros de cada una, también en orden.
+    /// And the FULL PARAMETERS of each one, also in order.
     ///
-    /// Aparte del patrón porque desde el puente 91 la ventana manda siete
-    /// campos y cuatro interruptores: un test que solo pueda mirar el glob no
-    /// distingue «se aplicó el filtro» de «se ignoró», que es justo lo que
-    /// hay que demostrar.
+    /// Separate from the pattern because since bridge 91 the window sends
+    /// seven fields and four switches: a test that can only look at the glob
+    /// cannot tell "the filter was applied" from "it was ignored", which is
+    /// exactly what needs to be shown.
     pub params_busqueda: std::sync::Mutex<Vec<norte_proto::methods::FsSearchParams>>,
-    /// Los volúmenes que contesta `host.volumes`.
+    /// The volumes `host.volumes` answers.
     pub volumenes: Vec<norte_proto::methods::Volume>,
-    /// Cómo PLIEGA nombres cada ubicación (#268/#274). Clave: el wire del
-    /// directorio. Ausente = lo que dice `Capabilities::default()`.
+    /// How each location FOLDS names (#268/#274). Key: the directory's wire.
+    /// Absent = what `Capabilities::default()` says.
     ///
-    /// Es el mando que faltaba para poder escribir estos tests: sin él ningún
-    /// doble podía fingir un APFS, un NTFS o un exFAT, y las fixtures de
-    /// gemelos de caja del corpus no tenían contra qué correr.
+    /// This is the knob that was missing to be able to write these tests:
+    /// without it no double could pretend to be an APFS, an NTFS or an
+    /// exFAT, and the corpus's case-twin fixtures had nothing to run
+    /// against.
     pub capacidades: std::collections::HashMap<String, norte_proto::Capabilities>,
-    /// `fs.capabilities` FALLA, así que el hueco no llega a tener ninguna.
+    /// `fs.capabilities` FAILS, so the slot never gets any.
     ///
-    /// Es el estado que pierde datos si alguien lo confunde con «no hay
-    /// papelera», y sin este mando no se podía escribir: el doble siempre
-    /// contestaba algo.
+    /// It is the state that loses data if someone confuses it with "no
+    /// trash", and without this knob it could not be written: the double
+    /// always answered something.
     pub error_de_capacidades: bool,
-    /// Directorios de plugin que no cargaron: `(dir, motivo)`.
+    /// Plugin directories that failed to load: `(dir, reason)`.
     pub errores_de_carga: Vec<(String, String)>,
-    /// Los BYTES del directorio de un error de carga (#265), por su cadena.
-    /// Lo que un daemon 0.53 manda; ausente = un peer 0.52.
+    /// The BYTES of a load error's directory (#265), by its string. What a
+    /// 0.53 daemon sends; absent = a 0.52 peer.
     pub bytes_de_carga: std::collections::HashMap<String, Vec<u8>>,
-    /// El esquema `[config]` de cada extensión, por id.
+    /// Each extension's `[config]` schema, by id.
     pub esquemas: HashMap<String, Vec<norte_proto::methods::PluginConfigKeyWire>>,
-    /// Lo que contesta `ai.rename_plan`. `None` = el daemon falla.
+    /// What `ai.rename_plan` answers. `None` = the daemon fails.
     pub plan_ia: Option<Vec<(String, String)>>,
-    /// Lo que contesta `plugin.rename_plan` (C3). `None` = el daemon falla.
+    /// What `plugin.rename_plan` answers (C3). `None` = the daemon fails.
     pub plan_renamer: Option<Vec<(String, String)>>,
-    /// Con qué frase REHÚSA el renamer (#332): gana a `plan_renamer`.
+    /// The phrase the renamer REFUSES with (#332): wins over `plan_renamer`.
     pub renamer_rehusa: Option<String>,
-    /// Qué renamer se pidió, con qué nombres: `(plugin, renamer, nombres)`.
+    /// Which renamer was requested, with which names: `(plugin, renamer,
+    /// names)`.
     pub renamers_pedidos: std::sync::Mutex<Vec<(String, String, Vec<String>)>>,
-    /// Lo que TARDA el modelo. Es lo que abre la ventana en la que el lector
-    /// puede descartar la revisión antes de que llegue el plan.
+    /// How long the model TAKES. It is what opens the window in which the
+    /// reader can dismiss the review before the plan arrives.
     pub retraso_ia_ms: u64,
-    /// Retiene el plan de IA hasta que el test la abre.
+    /// Holds back the AI plan until the test opens it.
     ///
-    /// `retraso_ia_ms` simula latencia, y eso vale para ver qué hace la
-    /// ventana MIENTRAS el modelo piensa. Lo que no vale es para sincronizar:
-    /// un test que necesite que el plan siga en vuelo mientras teclea está
-    /// apostando a que sus pulsaciones tardan menos que el reloj, y bajo carga
-    /// esa apuesta se pierde. Con la puerta, «sigue pensando» es un hecho y no
-    /// una ventana de tiempo. Mismo pestillo que [`Puerta`] usa para el
-    /// drenaje, y por el mismo motivo.
+    /// `retraso_ia_ms` simulates latency, and that is good for seeing what
+    /// the window does WHILE the model thinks. What it is not good for is
+    /// synchronizing: a test that needs the plan to stay in flight while it
+    /// types is betting that its keystrokes take less time than the clock,
+    /// and under load that bet loses. With the gate, "still thinking" is a
+    /// fact and not a time window. Same latch [`Puerta`] uses for the drain,
+    /// and for the same reason.
     pub puerta_ia: Option<Arc<Puerta>>,
-    /// Las instrucciones que se pidieron, en orden.
+    /// The instructions that were requested, in order.
     pub instrucciones: std::sync::Mutex<Vec<String>>,
-    /// Los NOMBRES que viajaron con cada plan (#121): vacío = el directorio
-    /// entero. Es lo que permite comprobar que marcar cinco ficheros no manda
-    /// los mil del directorio al proveedor.
+    /// The NAMES that travelled with each plan (#121): empty = the whole
+    /// directory. It is what lets you check that marking five files does not
+    /// send the provider the thousand in the directory.
     pub nombres_ia: std::sync::Mutex<Vec<Vec<String>>>,
-    /// Lo que contesta `session.release` (fase 9): si esta conexión era la
-    /// dueña. `false` es la rama que importa — la que NO tiene que lanzar
-    /// nada.
+    /// What `session.release` answers (phase 9): whether this connection
+    /// owned it. `false` is the branch that matters — the one that must NOT
+    /// launch anything.
     pub suelta_la_sesion: bool,
-    /// Cuántas veces se pidió soltar la sesión.
+    /// How many times releasing the session was requested.
     pub sueltas: std::sync::atomic::AtomicUsize,
-    /// Lo que contesta un plan de ORGANIZAR (fase 8), venga del modelo o de un
-    /// plugin: `(nombre actual, destino relativo)`. `None` = el daemon falla.
+    /// What an ORGANIZE plan answers (phase 8), whether from the model or a
+    /// plugin: `(current name, relative destination)`. `None` = the daemon
+    /// fails.
     pub plan_organizar: Option<Vec<(String, String)>>,
-    /// Con qué frase REHÚSA el productor del plan de organizar: gana a
+    /// The phrase the organize-plan producer REFUSES with: wins over
     /// `plan_organizar`.
     pub organizar_rehusa: Option<String>,
-    /// El token que acompaña al plan de organizar. `None` = un daemon que
-    /// manda un plan SIN token, que es un plan que no se puede aprobar — y
-    /// esta es la forma de comprobar que la revisión no se abre.
+    /// The token that comes with the organize plan. `None` = a daemon that
+    /// sends a plan WITHOUT a token, which is a plan that cannot be approved
+    /// — and this is the way to check that the review does not open.
     pub organizar_hash: Option<norte_proto::methods::PlanHash>,
-    /// Qué organizer se pidió y con qué nombres: `(plugin, organizer, nombres)`.
+    /// Which organizer was requested and with which names: `(plugin,
+    /// organizer, names)`.
     pub organizers_pedidos: std::sync::Mutex<Vec<(String, String, Vec<String>)>>,
-    /// Los planes de organizar que se mandaron EJECUTAR: `(dir, moves, hash)`.
+    /// The organize plans that were sent to EXECUTE: `(dir, moves, hash)`.
     pub organizados: std::sync::Mutex<
         Vec<(
             VPath,
@@ -337,11 +346,11 @@ pub struct Falso {
             norte_proto::methods::PlanHash,
         )>,
     >,
-    /// El veredicto que contesta `fs.rename_batch_plan`. `None` = falla.
+    /// The verdict `fs.rename_batch_plan` answers. `None` = it fails.
     pub veredicto: Option<norte_proto::methods::FsRenameBatchPlanResult>,
-    /// Las parejas con las que se pidió el veredicto, en orden.
+    /// The pairs the verdict was requested with, in order.
     pub veredictos_pedidos: std::sync::Mutex<Vec<Vec<norte_proto::methods::RenamePair>>>,
-    /// Los lotes que se mandaron EJECUTAR: `(dir, parejas, hash)`.
+    /// The batches that were sent to EXECUTE: `(dir, pairs, hash)`.
     pub lotes: std::sync::Mutex<
         Vec<(
             VPath,
@@ -349,222 +358,230 @@ pub struct Falso {
             norte_proto::methods::PlanHash,
         )>,
     >,
-    /// El informe que contesta `fs.rename_batch_report`. `None` = el daemon
-    /// no sabe informar (`Unsupported`), que es un caso propio: no se puede
-    /// confundir con «el lote fue bien».
+    /// The report `fs.rename_batch_report` answers. `None` = the daemon does
+    /// not know how to report (`Unsupported`), which is its own case: it
+    /// must not be confused with "the batch went fine".
     pub informe: std::sync::Mutex<Option<norte_proto::methods::FsRenameBatchReportResult>>,
-    /// Los ids de task cuyo informe se pidió, en orden.
+    /// The task ids whose report was requested, in order.
     pub informes_pedidos: std::sync::Mutex<Vec<u64>>,
-    /// Lo que contesta `sync.plan`: sus pasos y el cierre. `None` = el
-    /// método falla con `Unsupported`.
+    /// What `sync.plan` answers: its steps and the closing. `None` = the
+    /// method fails with `Unsupported`.
     pub plan_de_sync: std::sync::Mutex<
         Option<(
             Vec<norte_proto::methods::SyncStep>,
             norte_proto::methods::SyncPlanDone,
         )>,
     >,
-    /// El informe que contesta `sync.report`. `None` = `Unsupported`.
+    /// The report `sync.report` answers. `None` = `Unsupported`.
     pub informe_de_sync: std::sync::Mutex<Option<norte_proto::methods::SyncReportResult>>,
-    /// Las sesiones de agente que se pidió deshacer, en orden.
+    /// The agent sessions that were asked to be undone, in order.
     pub deshechas: std::sync::Mutex<Vec<String>>,
-    /// Lo que contesta `journal.list`, de lo más nuevo a lo más viejo, y
-    /// paginado de verdad por `before_seq`. `None` = `Unsupported` (un daemon
-    /// sin journal).
+    /// What `journal.list` answers, newest to oldest, and really paginated by
+    /// `before_seq`. `None` = `Unsupported` (a daemon with no journal).
     pub journal: Option<Vec<norte_proto::methods::JournalRow>>,
-    /// Los cortes que se pidió deshacer (`journal.undo_after`), con su techo,
-    /// en orden.
+    /// The cuts that were asked to be undone (`journal.undo_after`), with
+    /// their ceiling, in order.
     pub deshechos_hasta: std::sync::Mutex<Vec<(i64, Option<i64>)>>,
-    /// Cuántas veces se ha pedido el catálogo de extensiones.
+    /// How many times the extension catalogue has been requested.
     pub catalogos_pedidos: std::sync::atomic::AtomicU64,
-    /// Con qué DESENLACE termina una búsqueda.
+    /// What OUTCOME a search finishes with.
     ///
-    /// El doble siempre las completaba, así que «falló» y «se canceló» no se
-    /// podían escribir como test — que es exactamente por lo que la ventana
-    /// pintaba las tres igual («N hallazgos») sin que nada se quejara.
+    /// The double always completed them, so "failed" and "was cancelled"
+    /// could not be written as a test — which is exactly why the window
+    /// painted all three the same ("N hits") without anything complaining.
     pub desenlace_de_busqueda: Option<norte_proto::TaskState>,
-    /// La búsqueda ni siquiera se ENCOLA, y con este error.
+    /// The search does not even get QUEUED, and with this error.
     ///
-    /// Es otro camino que el anterior: ahí hay Task y su progreso trae el
-    /// desenlace; aquí no hay Task, así que no hay progreso que lo traiga —
-    /// y sin este mando ese camino no se podía escribir como test, que es
-    /// por lo que la vista se quedaba diciendo «buscando…» para siempre.
+    /// It is a different path from the one above: there, there is a Task and
+    /// its progress carries the outcome; here there is no Task, so there is
+    /// no progress to carry it — and without this knob that path could not
+    /// be written as a test, which is why the view kept saying "searching…"
+    /// forever.
     pub error_de_busqueda: Option<Error>,
-    /// Cuántas veces se han enumerado los volúmenes.
+    /// How many times the volumes have been enumerated.
     ///
-    /// Lo cuenta para poder anclar un test NEGATIVO: «el diálogo no dice
-    /// nada» sigue verde si nadie preguntó, y entonces no prueba que callar
-    /// sea la respuesta — solo que no hubo pregunta.
+    /// It counts this so a NEGATIVE test can anchor on it: "the dialog says
+    /// nothing" stays green if nobody asked, and then it does not prove that
+    /// staying silent is the answer — only that there was no question.
     pub volumenes_pedidos: std::sync::atomic::AtomicU64,
-    /// Los cambios de gobierno pedidos, en orden (`approval:id:true`…).
+    /// The governance changes requested, in order (`approval:id:true`…).
     pub gobierno: std::sync::Mutex<Vec<String>>,
-    /// Con qué falla un cambio de gobierno, si falla.
+    /// What a governance change fails with, if it fails.
     pub error_al_gobernar: std::sync::Mutex<Option<Error>>,
-    /// Las claves escritas, en orden: `(plugin, clave, valor)`.
+    /// The keys written, in order: `(plugin, key, value)`.
     pub escrituras: std::sync::Mutex<Vec<(String, String, String)>>,
-    /// Con qué falla `plugin.set_config`, si falla.
+    /// What `plugin.set_config` fails with, if it fails.
     pub error_al_escribir: std::sync::Mutex<Option<Error>>,
-    /// Los comandos ejecutados, en orden: `(plugin, comando)`.
+    /// The commands run, in order: `(plugin, command)`.
     pub ejecutados: std::sync::Mutex<Vec<(String, String)>>,
-    /// Qué contesta `plugin.run_command`. `None` = la salida vacía, que NO
-    /// es un error: un comando puede no imprimir nada.
+    /// What `plugin.run_command` answers. `None` = empty output, which is
+    /// NOT an error: a command can print nothing.
     pub salida_de_comando: std::sync::Mutex<Option<Result<String, Error>>>,
-    /// Con qué falla `sync.apply`, si falla.
+    /// What `sync.apply` fails with, if it fails.
     pub error_al_aplicar: std::sync::Mutex<Option<Error>>,
-    /// Los ids de task a los que se les pidió parar, en orden.
+    /// The task ids that were asked to stop, in order.
     pub canceladas_por_id: Arc<std::sync::Mutex<Vec<u64>>>,
-    /// Los hashes con los que se pidió aplicar, en orden.
+    /// The hashes apply was requested with, in order.
     pub aplicados: std::sync::Mutex<Vec<norte_proto::methods::PlanHash>>,
-    /// Los planes que se pidieron: `(origen, destino, modo)`.
+    /// The plans that were requested: `(source, destination, mode)`.
     pub planes_pedidos: std::sync::Mutex<Vec<(VPath, VPath, norte_proto::methods::SyncMode)>>,
-    /// Las filas que contesta `fs.compare`, en un solo lote. `None` = el
-    /// método falla con `Unsupported`.
+    /// The rows `fs.compare` answers, in a single batch. `None` = the method
+    /// fails with `Unsupported`.
     pub filas_comparadas: std::sync::Mutex<Option<Vec<norte_proto::methods::CompareRow>>>,
-    /// Las comparaciones que se pidieron: `(izquierda, derecha)`.
+    /// The comparisons that were requested: `(left, right)`.
     pub comparaciones: std::sync::Mutex<Vec<(VPath, VPath)>>,
-    /// Lo que contesta `index.search_semantic`. `None` = `NotFound` (no hay
-    /// índice), que es el caso que hay que saber leer.
+    /// What `index.search_semantic` answers. `None` = `NotFound` (no index),
+    /// which is the case that needs to be read correctly.
     pub semanticos: std::sync::Mutex<Option<Vec<norte_proto::methods::SemanticHit>>>,
-    /// Las consultas semánticas que se pidieron, con su `k`.
+    /// The semantic queries that were requested, with their `k`.
     pub semanticas_pedidas: std::sync::Mutex<Vec<(String, u32)>>,
-    /// El informe que contesta `policy.undo_report`. `None` = `Unsupported`.
+    /// The report `policy.undo_report` answers. `None` = `Unsupported`.
     pub informe_undo: std::sync::Mutex<Option<norte_proto::methods::PolicyUndoReportResult>>,
-    /// Los ids de task cuyo informe de undo se pidió, en orden.
+    /// The task ids whose undo report was requested, in order.
     pub informes_undo_pedidos: std::sync::Mutex<Vec<u64>>,
-    /// El informe que contesta `archive.pack_report` (#250). `None` =
-    /// `Unsupported`, que es lo que contesta un daemon N-1.
+    /// The report `archive.pack_report` answers (#250). `None` =
+    /// `Unsupported`, which is what an N-1 daemon answers.
     pub informe_pack: std::sync::Mutex<Option<norte_proto::methods::ArchivePackReportResult>>,
-    /// Los ids cuyo informe de empaquetado se pidió, en orden.
+    /// The ids whose pack report was requested, in order.
     pub informes_pack_pedidos: std::sync::Mutex<Vec<u64>>,
-    /// Los ids cuya ficha se pidió, en orden.
+    /// The ids whose card was requested, in order.
     pub fichas_pedidas: std::sync::Mutex<Vec<String>>,
-    /// Los ids que se pidieron a `plugin.help`, en orden: es lo que permite
-    /// comprobar que una página se pide UNA vez y que un id inválido jamás
-    /// llega al wire.
+    /// The ids that were requested from `plugin.help`, in order: it is what
+    /// lets you check that a page is requested ONCE and that an invalid id
+    /// never reaches the wire.
     pub paginas_pedidas: std::sync::Mutex<Vec<String>>,
-    /// Los canales de la conexión, para que el test empuje eventos y tasks
-    /// ajenas como haría un daemon.
+    /// The connection's channels, so the test can push events and foreign
+    /// tasks the way a daemon would.
     pub eventos:
         std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<norte_client::ConnEvent>>>,
     pub ajenas: std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>>,
-    /// El canal de `connection.degraded`, para que el test empuje uno.
+    /// The `connection.degraded` channel, so the test can push one.
     pub degradadas: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionDegraded>>,
     >,
-    /// El PRIMER `list` sobre un directorio que existe falla con esto (#327),
-    /// y se consume: el reintento tras entregar el secreto entra.
+    /// The FIRST `list` on a directory that exists fails with this (#327),
+    /// and it is consumed: the retry after handing over the secret goes
+    /// through.
     pub pide_secreto: std::sync::Mutex<Option<Error>>,
-    /// Lo entregado por `provide_secret` (#327): `(conn, secreto)`, en orden.
+    /// What was handed over by `provide_secret` (#327): `(conn, secret)`, in
+    /// order.
     ///
-    /// El secreto se guarda EN CLARO aquí a propósito: es lo que el test tiene
-    /// que poder comprobar —que llega tal cual y a la conexión que lo pidió—,
-    /// y este doble solo vive dentro de un test.
+    /// The secret is stored IN THE CLEAR here on purpose: it is what the test
+    /// needs to be able to check — that it arrives as-is and to the
+    /// connection that asked for it — and this double only lives inside a
+    /// test.
     pub secretos_dados: std::sync::Mutex<Vec<(String, String)>>,
-    /// Qué contesta `provide_secret`. `None` = lo acepta.
+    /// What `provide_secret` answers. `None` = it accepts it.
     pub secreto: std::sync::Mutex<Option<Result<(), Error>>>,
-    /// El canal de `connection.failed` (#322), para que el test empuje uno.
-    /// Aparte del de arriba, como en el backend de verdad.
+    /// The `connection.failed` channel (#322), so the test can push one.
+    /// Separate from the one above, like the real backend.
     pub fallidas: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::ConnectionFailed>>,
     >,
-    /// El canal de `plugin.notice` (ADR 0100), para que el test empuje uno.
+    /// The `plugin.notice` channel (ADR 0100), so the test can push one.
     pub avisos_plugin: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PluginNotice>>,
     >,
-    /// Los directorios que se pidió crear.
+    /// The directories that were asked to be created.
     pub creados: std::sync::Mutex<Vec<VPath>>,
-    /// Qué encuentra un `stat` sobre algo que este falso CREÓ (#303).
+    /// What a `stat` finds on something this fake CREATED (#303).
     ///
-    /// `EntryKind::File` —el defecto— es la vida normal: el fichero que el
-    /// daemon acaba de poner sigue ahí y sigue siendo un fichero. Ponerlo a
-    /// `Symlink` es el ataque entero: entre crear el nombre y abrirlo, alguien
-    /// con permiso de escritura en ese directorio lo desenlaza y deja un
-    /// enlace con el mismo nombre. El árbol de `pon` no vale para esto: lo que
-    /// se crea no está en él, y quien lo comprueba pregunta por la ruta
-    /// creada.
+    /// `EntryKind::File` — the default — is normal life: the file the daemon
+    /// just put there is still there and still a file. Setting it to
+    /// `Symlink` is the whole attack: between creating the name and opening
+    /// it, someone with write permission on that directory unlinks it and
+    /// leaves a symlink with the same name. The `pon` tree does not work for
+    /// this: what gets created is not in it, and whoever checks it asks about
+    /// the created path.
     pub creado_aparece_como: Option<EntryKind>,
-    /// Los lotes de permisos que se pidieron: rutas y modo (#314).
+    /// The permission batches that were requested: paths and mode (#314).
     pub permisos: std::sync::Mutex<Vec<(Vec<VPath>, u32)>>,
-    /// Las rutas de cada lote de sumas que se pidió (#311).
+    /// The paths of each checksum batch that was requested (#311).
     pub sumas_pedidas: std::sync::Mutex<Vec<Vec<VPath>>>,
-    /// El directorio de cada medida de mapa de disco que se pidió (fase 4).
+    /// The directory of each disk-usage measurement that was requested
+    /// (phase 4).
     ///
-    /// Existe para poder afirmar que se midió UNA vez: la sonda corre tras cada
-    /// mensaje del actor, así que la mitad de su valor está en que no vuelva a
-    /// pedir lo mismo. Sin esta lista, «midió» y «mide en bucle» se ven igual.
+    /// It exists so you can assert it was measured ONCE: the probe runs
+    /// after every message from the actor, so half its value is in never
+    /// asking for the same thing again. Without this list, "measured" and
+    /// "measures in a loop" look the same.
     pub mapas_pedidos: std::sync::Mutex<Vec<VPath>>,
-    /// Los ids de task cuyo INFORME de sumas se pidió, en orden.
+    /// The task ids whose checksum REPORT was requested, in order.
     ///
-    /// Existe para poder esperar a que el informe haya vuelto: un test que
-    /// afirma que un informe a medias NO abre nada tiene que haberlo tenido
-    /// en la mano, o estaría comprobando que todavía no ha llegado.
+    /// It exists so you can wait for the report to have come back: a test
+    /// that asserts a half-finished report does NOT open anything has to
+    /// have had it in hand, or it would be checking that it simply had not
+    /// arrived yet.
     pub sumas_informes_pedidos: std::sync::Mutex<Vec<u64>>,
-    /// El informe que devuelve `checksum_report`. Por defecto, vacío y
-    /// completo — un test que quiera digests lo pone.
+    /// The report `checksum_report` returns. Empty and complete by default —
+    /// a test that wants digests sets it.
     pub sumas_informe: std::sync::Mutex<norte_proto::methods::FsChecksumReportResult>,
-    /// El catálogo de atributos que devuelve el falso daemon.
+    /// The attribute catalogue the fake daemon returns.
     pub catalogo: std::sync::Mutex<norte_proto::AttrCatalog>,
-    /// Con qué error falla `policy.decide`. `None` = la decisión llega.
+    /// What `policy.decide` fails with. `None` = the decision arrives.
     pub error_al_decidir: std::sync::Mutex<Option<Error>>,
-    /// El canal de aprobaciones, para que el test empuje una.
+    /// The approvals channel, so the test can push one.
     pub aprobaciones: std::sync::Mutex<
         Option<tokio::sync::mpsc::UnboundedReceiver<norte_proto::methods::PolicyApprovalRequired>>,
     >,
-    /// Las decisiones que se mandaron: `(id, aprobada)`.
+    /// The decisions that were sent: `(id, approved)`.
     pub decisiones: std::sync::Mutex<Vec<(u64, bool)>>,
-    /// Lo que se pidió transferir, en orden:
-    /// `(origen, destino, mover, política de colisión)`.
+    /// What was requested to be transferred, in order:
+    /// `(source, destination, move, collision policy)`.
     ///
-    /// La política se apunta porque es el ÚNICO parámetro que separa «la task
-    /// falla» de «el fichero del destino desaparece»: sin clavarla, cambiarla
-    /// a `Overwrite` dejaría toda la suite verde.
+    /// The policy is recorded because it is the ONLY parameter that separates
+    /// "the task fails" from "the destination file disappears": without
+    /// pinning it, changing it to `Overwrite` would leave the whole suite
+    /// green.
     pub transferencias: std::sync::Mutex<Vec<(VPath, VPath, bool, norte_proto::CollisionPolicy)>>,
-    /// El estado en que NACE la task de una transferencia. `Running` (el
-    /// default) deja que el test la mueva; `Failed` es la colisión que
-    /// devuelve un daemon con `on_collision = Fail`.
+    /// The state a transfer's task is BORN in. `Running` (the default) lets
+    /// the test move it; `Failed` is the collision a daemon with
+    /// `on_collision = Fail` returns.
     pub estado_transferencia: Option<norte_proto::TaskState>,
-    /// Ids que ya repartió una transferencia: dos copias son dos tasks, y
-    /// devolver el mismo id las fundiría en una fila del tablero.
+    /// Ids a transfer has already handed out: two copies are two tasks, and
+    /// returning the same id would merge them into one board row.
     pub siguiente_task: AtomicUsize,
-    /// ENCOLAR una transferencia falla con este error: un provider de solo
-    /// lectura, un scope que no llega. No es lo mismo que una task que falla
-    /// —esto pasa antes de que haya task— y la pantalla tiene que
-    /// distinguirlo.
+    /// QUEUING a transfer fails with this error: a read-only provider, a
+    /// scope that does not reach. It is not the same as a task that fails —
+    /// this happens before there is a task — and the screen has to tell
+    /// them apart.
     pub transferencia_rechazada: Option<Error>,
-    /// Lo que `log.tail` entrega en la SIGUIENTE vuelta: `(líneas, next)`
-    /// (#328). Se sirve UNA vez y se vacía.
+    /// What `log.tail` delivers on the NEXT round: `(lines, next)` (#328).
+    /// Served ONCE and then emptied.
     ///
-    /// Se vacía porque un anillo de verdad no vuelve a entregar lo que ya dio:
-    /// un doble que repitiera haría que un sondeo de más duplicara líneas en
-    /// el panel, y entonces un test que cuenta apariciones estaría midiendo el
-    /// reloj en vez del encadenado del cursor.
+    /// It is emptied because a real ring never delivers again what it
+    /// already gave: a double that repeated would make an extra poll
+    /// duplicate lines in the panel, and then a test that counts occurrences
+    /// would be measuring the clock instead of the cursor's chaining.
     pub registro_remoto: std::sync::Mutex<Option<(Vec<norte_proto::methods::LogLine>, u64)>>,
-    /// El `next` de la última respuesta servida. `None` = este daemon NO tiene
-    /// registro que servir y contesta `Unsupported`, que es lo que hace uno de
-    /// la misma versión compilado sin la feature `logging` — el único caso de
-    /// degradación alcanzable, porque uno más viejo muere en el `initialize`.
+    /// The `next` of the last response served. `None` = this daemon has NO
+    /// log to serve and answers `Unsupported`, which is what one of the same
+    /// version compiled without the `logging` feature does — the only
+    /// reachable degradation case, because an older one dies at
+    /// `initialize`.
     pub registro_next: std::sync::Mutex<Option<u64>>,
-    /// Los cursores con los que se pidió `log.tail`, en orden. Es lo que
-    /// permite comprobar que la primera vuelta manda `None` («lo que haya») y
-    /// las siguientes encadenan.
+    /// The cursors `log.tail` was requested with, in order. It is what lets
+    /// you check that the first round sends `None` ("whatever there is") and
+    /// the following ones chain.
     pub cursores_de_registro: std::sync::Mutex<Vec<Option<u64>>>,
-    /// El nivel que el daemon dice tener puesto: lo contestan TANTO
-    /// `log.level` como cada `log.tail`, igual que el daemon de verdad.
-    /// `None` = no sabe de registro y `log.level` contesta `Unsupported`.
+    /// The level the daemon says it has set: BOTH `log.level` and every
+    /// `log.tail` answer it, just like the real daemon. `None` = it knows
+    /// nothing about logging and `log.level` answers `Unsupported`.
     pub nivel_remoto: std::sync::Mutex<Option<String>>,
-    /// Los niveles que se le pidieron al daemon, en orden.
+    /// The levels that were requested from the daemon, in order.
     pub niveles_pedidos: std::sync::Mutex<Vec<String>>,
-    /// Retiene la respuesta de `log.tail` hasta que el test la suelta.
+    /// Holds back the `log.tail` response until the test releases it.
     ///
-    /// Es la única forma de estar DENTRO de la ventana en la que una petición
-    /// sigue volando mientras el panel se cierra y se vuelve a abrir, que es
-    /// donde vive la pregunta de si una respuesta rancia puede colarse en el
-    /// panel nuevo. Un `sleep` valdría de casualidad; esto no depende del
-    /// reloj.
+    /// It is the only way to be INSIDE the window where a request is still
+    /// in flight while the panel closes and reopens, which is where the
+    /// question of whether a stale response can slip into the new panel
+    /// lives. A `sleep` would work by coincidence; this does not depend on
+    /// the clock.
     pub puerta_registro: Option<Arc<Puerta>>,
 }
 
 impl Falso {
-    /// Un directorio con ficheros sueltos.
+    /// A directory with loose files.
     pub fn con(nombres: &[&'static str]) -> Arc<Self> {
         let mut f = Self::default();
         f.pon(
@@ -579,66 +596,66 @@ impl Falso {
             .insert(dir.to_owned(), entradas.into_iter().collect());
     }
 
-    /// El KIND exacto de una entrada, cuando «directorio o fichero» no basta.
+    /// The exact KIND of an entry, when "directory or file" is not enough.
     ///
-    /// `pon` solo distingue esas dos cosas, que es lo que casi todo test
-    /// necesita. Un SYMLINK es otra: `Enter` sobre él no significa lo mismo
-    /// que sobre un fichero, y sin poder fabricar uno esa divergencia entre
-    /// frontends no se podía escribir como test.
+    /// `pon` only distinguishes those two things, which is what almost every
+    /// test needs. A SYMLINK is another: `Enter` on it does not mean the same
+    /// as on a file, and without being able to make one that divergence
+    /// between frontends could not be written as a test.
     pub fn pon_kind(&mut self, wire: &str, kind: EntryKind) {
         self.kinds.insert(wire.to_owned(), kind);
     }
 
-    /// Arma la SIGUIENTE respuesta de `log.tail` (#328).
+    /// Arms the NEXT `log.tail` response (#328).
     ///
-    /// A partir de aquí el doble sabe de registro: las vueltas posteriores a
-    /// ésta contestan sin líneas nuevas y con el mismo `next`, que es lo que
-    /// hace un anillo al que ya se le vació la cola.
+    /// From here on the double knows about logging: rounds after this one
+    /// answer with no new lines and the same `next`, which is what a ring
+    /// whose queue has already been drained does.
     pub fn responde_log_tail(&self, lineas: Vec<norte_proto::methods::LogLine>, next: u64) {
         *self.registro_remoto.lock().expect("registro") = Some((lineas, next));
     }
 
-    /// Este daemon no tiene registro que servir: los dos métodos contestan
-    /// `Unsupported`. Es el estado por defecto, escrito para que el test que
-    /// lo prueba lo DIGA en vez de depender de un `Default`.
+    /// This daemon has no log to serve: both methods answer `Unsupported`.
+    /// It is the default state, written so the test that checks it SAYS so
+    /// instead of relying on a `Default`.
     pub fn log_tail_no_soportado(&self) {
         *self.registro_remoto.lock().expect("registro") = None;
         *self.registro_next.lock().expect("next") = None;
     }
 
-    /// El nivel que el daemon dice tener puesto, en `log.level` y en cada
-    /// `log.tail`. Los dos contestan lo mismo, como el daemon de verdad: el
-    /// nivel es UNO y global al proceso.
+    /// The level the daemon says it has set, in `log.level` and in every
+    /// `log.tail`. Both answer the same thing, like the real daemon: the
+    /// level is ONE and global to the process.
     pub fn log_level_contesta(&self, nivel: &str) {
         *self.nivel_remoto.lock().expect("nivel") = Some(nivel.to_owned());
     }
 
-    /// Los niveles que se le pidieron al daemon, en orden.
+    /// The levels that were requested from the daemon, in order.
     pub fn log_level_pedidos(&self) -> Vec<String> {
         self.niveles_pedidos.lock().expect("niveles").clone()
     }
 
-    /// Los cursores con los que se pidió `log.tail`, en orden.
+    /// The cursors `log.tail` was requested with, in order.
     pub fn cursores_pedidos(&self) -> Vec<Option<u64>> {
         self.cursores_de_registro.lock().expect("cursores").clone()
     }
 
-    /// El doble acaba de anotar algo: quien esperaba, que mire.
+    /// The double just recorded something: let whoever was waiting look.
     ///
-    /// Va DESPUÉS de la anotación, siempre. Avisar antes despertaría a un
-    /// test que volvería a ver el estado viejo y a dormirse, y esa carrera
-    /// es exactamente la que este mecanismo existe para quitar.
+    /// Always goes AFTER the recording. Notifying before would wake a test
+    /// that would see the old state again and go back to sleep, and that
+    /// race is exactly what this mechanism exists to remove.
     pub fn latido(&self) {
         self.pulso.notify_waiters();
     }
 
-    /// Lo que contestan los DOS productores de un plan de organizar (fase 8).
+    /// What the TWO producers of an organize plan answer (phase 8).
     ///
-    /// Uno solo, porque el host trata sus respuestas igual a propósito: un
-    /// plan de plugin y uno de modelo aterrizan en la misma revisión, y dos
-    /// dobles distintos dejarían que esa igualdad se rompiera sin que ningún
-    /// test lo notara.
-    fn respuesta_de_organizar(
+    /// Just one, because the host treats their responses the same on
+    /// purpose: a plugin plan and a model plan land in the same review, and
+    /// two different doubles would let that equality break without any test
+    /// noticing.
+    fn organize_response(
         &self,
     ) -> BoxFuture<'static, Result<norte_proto::methods::AiOrganizePlanResult, Error>> {
         let plan = self.plan_organizar.clone();
@@ -671,44 +688,48 @@ impl Falso {
         })
     }
 
-    /// Espera a que el doble haya anotado lo que se le pregunta. Sin reloj.
+    /// Waits until the double has recorded what it is asked about. Without a
+    /// clock.
     ///
-    /// `que` mira el doble y devuelve `Some` cuando ya está: el valor sale
-    /// clonado, porque el `MutexGuard` no puede cruzar un `await`.
+    /// `que` looks at the double and returns `Some` once it is there: the
+    /// value comes out cloned, because the `MutexGuard` cannot cross an
+    /// `await`.
     ///
-    /// El plazo de socorro NO es una espera: es el presupuesto de FALLO. En
-    /// el camino verde no se consume ni un milisegundo —el aviso llega y la
-    /// función vuelve—, y cuando se agota el test dice QUÉ esperaba en vez
-    /// de reventar veinte líneas más abajo en una aserción que no explica
-    /// nada. Bajo carga tampoco se vuelve frágil: quince segundos son tres
-    /// órdenes de magnitud más de lo que tarda un `spawn` en correr.
+    /// The relief deadline is NOT a wait: it is the FAILURE budget. On the
+    /// green path it does not consume a single millisecond — the notice
+    /// arrives and the function returns — and when it runs out the test says
+    /// WHAT it was waiting for instead of blowing up twenty lines further
+    /// down in an assertion that explains nothing. Under load it does not
+    /// get flaky either: fifteen seconds is three orders of magnitude more
+    /// than a `spawn` takes to run.
     pub async fn hasta<T>(&self, que_esperaba: &str, que: impl Fn(&Self) -> Option<T>) -> T {
-        const SOCORRO: std::time::Duration = std::time::Duration::from_secs(15);
-        let espera = async {
+        const RELIEF: std::time::Duration = std::time::Duration::from_secs(15);
+        let wait = async {
             loop {
                 if let Some(v) = que(self) {
                     return v;
                 }
-                // El futuro se arma ANTES de la segunda comprobación:
-                // armarlo después perdería un latido caído justo en medio.
-                let avisado = self.pulso.notified();
+                // The future is armed BEFORE the second check: arming it
+                // after would lose a notification that landed right in
+                // between.
+                let notified = self.pulso.notified();
                 if let Some(v) = que(self) {
                     return v;
                 }
-                avisado.await;
+                notified.await;
             }
         };
-        let Ok(v) = tokio::time::timeout(SOCORRO, espera).await else {
-            panic!("el doble nunca anotó: {que_esperaba}")
+        let Ok(v) = tokio::time::timeout(RELIEF, wait).await else {
+            panic!("the double never recorded it: {que_esperaba}")
         };
         v
     }
 
-    /// El cuerpo compartido de copiar y mover en el falso: apunta lo que se
-    /// pidió y devuelve una Task con id PROPIO.
-    /// Una task de archivo (empaquetar o comprobar) con su propio id, para que
-    /// dos gestos seguidos no se pisen el canal de progreso.
-    fn task_de_archivo(
+    /// The shared body of copy and move in the fake: records what was
+    /// requested and returns a Task with its OWN id.
+    /// An archive task (pack or test) with its own id, so two gestures in a
+    /// row do not step on each other's progress channel.
+    fn archive_task(
         &self,
         kind: norte_proto::TaskKind,
         id: u64,
@@ -742,7 +763,7 @@ impl Falso {
         })
     }
 
-    fn transferir(
+    fn transfer(
         &self,
         from: VPath,
         to: VPath,
@@ -803,22 +824,22 @@ impl Falso {
         self.listados.load(Ordering::SeqCst)
     }
 
-    /// Cuántas lecturas ya VOLVIERON (listados, sondeos y contenidos).
+    /// How many reads have already RETURNED (listings, probes and contents).
     pub fn servidos(&self) -> usize {
         self.servidos.load(Ordering::SeqCst)
     }
 
-    /// Cuántas lecturas se PIDIERON.
+    /// How many reads were REQUESTED.
     pub fn pedidos(&self) -> usize {
         self.pedidos.load(Ordering::SeqCst)
     }
 
-    /// ¿No vuela ninguna lectura? Todo lo que se pidió, ya volvió.
+    /// Is no read in flight? Everything requested has already returned.
     pub fn en_calma(&self) -> bool {
         self.servidos() >= self.pedidos()
     }
 
-    /// Las entradas de un directorio, tal como las devolvería el listado.
+    /// A directory's entries, the way the listing would return them.
     pub fn entradas_de(&self, dir: &VPath) -> Vec<Entry> {
         let mut out: Vec<Entry> = self
             .arbol
@@ -827,7 +848,7 @@ impl Falso {
             .unwrap_or_default()
             .into_iter()
             .map(|(nombre, es_dir)| {
-                let path = dir.join(norte_proto::Segment::new(nombre).expect("segmento"));
+                let path = dir.join(norte_proto::Segment::new(nombre).expect("segment"));
                 let kind = self
                     .kinds
                     .get(&path.to_wire())
@@ -840,8 +861,8 @@ impl Falso {
                 Entry {
                     kind,
                     path,
-                    // Un directorio no tiene tamaño, como en la vida real: es
-                    // lo que hace que la AUSENCIA de celda se pueda probar.
+                    // A directory has no size, like in real life: it is what
+                    // makes the ABSENCE of a cell testable.
                     size: if es_dir || self.lazy { None } else { Some(1) },
                     mtime_ms: None,
                     attrs: std::collections::BTreeMap::new(),
@@ -853,23 +874,23 @@ impl Falso {
     }
 }
 
-/// El mismo path con el último segmento en mayúsculas.
-fn otra_ortografia(path: &VPath) -> VPath {
+/// The same path with its last segment in uppercase.
+fn other_spelling(path: &VPath) -> VPath {
     let Some(nombre) = path.file_name() else {
         return path.clone();
     };
-    let gritado: Vec<u8> = nombre.as_bytes().to_ascii_uppercase();
+    let shouted: Vec<u8> = nombre.as_bytes().to_ascii_uppercase();
     let Some(padre) = path.parent() else {
         return path.clone();
     };
-    match norte_proto::Segment::new(gritado) {
+    match norte_proto::Segment::new(shouted) {
         Ok(seg) => padre.join(seg),
         Err(_) => path.clone(),
     }
 }
 
-/// El árbol que usan los escenarios de paridad: un directorio con dos
-/// subdirectorios y un nombre hostil.
+/// The tree the parity scenarios use: a directory with two subdirectories
+/// and a hostile name.
 pub fn arbol_de_prueba() -> Falso {
     let mut f = Falso::default();
     f.pon(
@@ -879,12 +900,12 @@ pub fn arbol_de_prueba() -> Falso {
             (b"fotos".to_vec(), true),
             (b"notas.txt".to_vec(), false),
             (vec![0x63, 0x61, 0x66, 0xC3, 0x28], false),
-            // Un COMPRIMIDO y un ENLACE, que son las dos entradas sobre las
-            // que `Enter` significa algo distinto de «es un fichero, no
-            // pasa nada». El arnés de paridad no podía tocar la divergencia
-            // número uno del inventario porque este árbol solo tenía
-            // directorios y ficheros; su propia cabecera lo decía y apuntaba
-            // a que hacía falta que el doble supiera de kinds. Ya lo sabe.
+            // A COMPRESSED file and a SYMLINK, the two entries on which
+            // `Enter` means something other than "it's a file, nothing
+            // happens". The parity harness could not touch the number-one
+            // divergence in the inventory because this tree only had
+            // directories and files; its own header said so and pointed out
+            // that the double needed to know about kinds. Now it does.
             (b"cosas.zip".to_vec(), false),
             (b"atajo".to_vec(), false),
         ],
@@ -894,12 +915,12 @@ pub fn arbol_de_prueba() -> Falso {
         vec![(b"a.md".to_vec(), false), (b"b.md".to_vec(), false)],
     );
     f.pon("mem:///casa/fotos", vec![(b"gato.png".to_vec(), false)]);
-    // El enlace apunta a un directorio que SÍ se lista: un enlace a un
-    // fichero no se resuelve —el `cd` falla y se absorbe—, y eso es otro
-    // caso, no el que este árbol tiene que poder describir.
+    // The symlink points to a directory that DOES get listed: a symlink to a
+    // file does not get resolved — `cd` fails and it is absorbed — and that
+    // is a different case, not the one this tree has to be able to describe.
     f.pon_kind("mem:///casa/atajo", EntryKind::Symlink);
     f.pon("mem:///casa/atajo", vec![(b"dentro.md".to_vec(), false)]);
-    // Y la raíz virtual del contenedor, que es a donde compone `Enter`.
+    // And the container's virtual root, which is where `Enter` composes to.
     f.pon(
         "zip+mem:///casa/cosas.zip!/",
         vec![(b"leeme.txt".to_vec(), false)],
@@ -915,8 +936,8 @@ impl HostBackend for Falso {
         if self.error_de_capacidades {
             return Box::pin(async move { Err(Error::ProviderUnavailable { retryable: true }) });
         }
-        // Por UBICACIÓN, no por provider: se busca el directorio exacto y, si
-        // no está, su padre — que es lo que hace un mount de verdad.
+        // By LOCATION, not by provider: the exact directory is looked up
+        // and, if absent, its parent — which is what a real mount does.
         let caps = self
             .capacidades
             .get(&path.to_wire())
@@ -925,8 +946,9 @@ impl HostBackend for Falso {
                     .and_then(|p| self.capacidades.get(&p.to_wire()))
             })
             .copied()
-            // Sin mando: lo que dice un ext4 corriente —distingue la caja— que
-            // es el suelo honesto para un doble que corre en Linux.
+            // With no knob set: what a plain ext4 says — it distinguishes
+            // case — which is the honest floor for a double running on
+            // Linux.
             .unwrap_or(norte_proto::Capabilities {
                 flags: norte_proto::CapabilityFlags::CASE_SENSITIVE,
                 max_path: None,
@@ -964,7 +986,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<norte_proto::methods::PluginHelpResult, Error>> {
         self.paginas_pedidas
             .lock()
-            .expect("mutex de páginas")
+            .expect("pages mutex")
             .push(id.clone());
         self.latido();
         let markdown = self.paginas.get(&id).cloned().unwrap_or_default();
@@ -993,11 +1015,11 @@ impl HostBackend for Falso {
         let patron = params.name_glob.clone().unwrap_or_default();
         self.busquedas
             .lock()
-            .expect("mutex de búsquedas")
+            .expect("searches mutex")
             .push(patron.clone());
         self.params_busqueda
             .lock()
-            .expect("mutex de parámetros")
+            .expect("params mutex")
             .push(params.clone());
         self.latido();
         if let Some(e) = self.error_de_busqueda.clone() {
@@ -1035,11 +1057,12 @@ impl HostBackend for Falso {
                         attrs: std::collections::BTreeMap::new(),
                     })
                     .collect();
-                // Un lote VACÍO no se manda: `norte-core` corta antes
-                // (`if batch.is_empty() { return FlushOutcome::Continue }`),
-                // y un doble que sí lo mande esconde todo lo que dependa de
-                // que el primer lote llegue. Es la divergencia que tapó que
-                // una búsqueda sin hallazgos no se cancelaba nunca.
+                // An EMPTY batch is not sent: `norte-core` cuts it off
+                // before (`if batch.is_empty() { return
+                // FlushOutcome::Continue }`), and a double that did send it
+                // would hide everything that depends on the first batch
+                // arriving. This is the divergence that covered up a search
+                // with no hits never getting cancelled.
                 if !entradas.is_empty() {
                     let _ = tx
                         .send(norte_proto::methods::SearchHits {
@@ -1049,9 +1072,10 @@ impl HostBackend for Falso {
                         })
                         .await;
                 }
-                // Y termina: la vista deja de decir «buscando…». CON su
-                // desenlace, que no es cosmética — «terminó», «la pararon» y
-                // «se rompió» dicen tres cosas distintas sobre el disco.
+                // And it ends: the view stops saying "searching…". WITH its
+                // outcome, which is not cosmetic — "finished", "was
+                // stopped" and "broke" say three different things about the
+                // disk.
                 let _ = ptx.send(norte_proto::TaskProgress {
                     task_id: id,
                     kind: norte_proto::TaskKind::Search,
@@ -1064,8 +1088,8 @@ impl HostBackend for Falso {
                     unreadable: None,
                     unvisited: None,
                 });
-                // El emisor vive lo que la task: soltarlo cierra el canal y
-                // eso ES el final de la búsqueda.
+                // The sender lives as long as the task: dropping it closes
+                // the channel and that IS the end of the search.
                 std::mem::forget(ptx);
             });
             Ok((
@@ -1091,7 +1115,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<Option<norte_proto::methods::PluginPreviewStyled>, Error>> {
         self.anchos_de_preview
             .lock()
-            .expect("mutex de anchos")
+            .expect("widths mutex")
             .push(columns);
         let p = self.previews.get(&path.to_wire()).cloned();
         Box::pin(async move { Ok(p) })
@@ -1113,19 +1137,20 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<Vec<norte_proto::methods::PluginDecorations>, Error>> {
         self.decorados
             .lock()
-            .expect("mutex de decorados")
+            .expect("decorated mutex")
             .push(paths.clone());
         self.clases_decoradas
             .lock()
-            .expect("mutex de clases")
+            .expect("classes mutex")
             .push(kinds);
         self.latido();
         let tabla = self.decoraciones.clone();
         let iconos = self.iconos.clone();
-        // Si el catálogo conoce a `acme.git` y está APAGADO, no decora: es lo
-        // que hace el daemon de verdad, y lo que permite comprobar que apagar
-        // un plugin desde el gestor quita sus insignias de las filas. Un
-        // catálogo que no lo nombra decora como siempre.
+        // If the catalogue knows `acme.git` and it is DISABLED, it does not
+        // decorate: that is what the real daemon does, and what lets you
+        // check that disabling a plugin from the manager removes its badges
+        // from the rows. A catalogue that does not name it decorates as
+        // always.
         let git_apagado = self
             .plugins
             .lock()
@@ -1134,8 +1159,8 @@ impl HostBackend for Falso {
             .any(|p| p.id == "acme.git" && !p.enabled);
         Box::pin(async move {
             let mut out = Vec::new();
-            // Sin decoradores consentidos: «ninguna», que es lo que
-            // contesta el daemon de verdad. NO una lista de vacíos.
+            // With no consented decorators: "none", which is what the real
+            // daemon answers. NOT a list of empties.
             if !tabla.is_empty() && !git_apagado {
                 out.push(norte_proto::methods::PluginDecorations {
                     plugin_id: "acme.git".to_owned(),
@@ -1175,15 +1200,16 @@ impl HostBackend for Falso {
         column: String,
         paths: Vec<VPath>,
     ) -> BoxFuture<'static, Result<Vec<Option<String>>, Error>> {
-        self.columnas_pedidas
-            .lock()
-            .expect("mutex de columnas")
-            .push((plugin, column.clone(), paths.clone()));
+        self.columnas_pedidas.lock().expect("columns mutex").push((
+            plugin,
+            column.clone(),
+            paths.clone(),
+        ));
         self.latido();
         let tabla = self.valores_de_columna.clone();
         Box::pin(async move {
-            // Posicional 1:1 con `paths`, SIEMPRE: es el contrato, y un
-            // vector corto es la forma de romperlo sin que se note.
+            // Positional 1:1 with `paths`, ALWAYS: that is the contract, and
+            // a short vector is how to break it without it showing.
             Ok(paths
                 .iter()
                 .map(|p| tabla.get(&(column.clone(), p.to_wire())).cloned())
@@ -1197,7 +1223,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<Option<norte_proto::methods::PanelFrame>, Error>> {
         self.paneles_pedidos
             .lock()
-            .expect("mutex de paneles")
+            .expect("panels mutex")
             .push(params);
         self.latido();
         let marco = self.marco_de_panel.clone();
@@ -1217,7 +1243,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<norte_proto::methods::PluginGetConfigResult, Error>> {
         self.fichas_pedidas
             .lock()
-            .expect("mutex de fichas")
+            .expect("cards mutex")
             .push(id.clone());
         self.latido();
         let keys = self.esquemas.get(&id).cloned().unwrap_or_default();
@@ -1333,18 +1359,18 @@ impl HostBackend for Falso {
         approved: bool,
         expected_digest: Option<String>,
     ) -> BoxFuture<'static, Result<(), Error>> {
-        // El ancla se APUNTA (#282): que la ventana la mande es lo que un test
-        // puede afirmar desde aquí, y sin apuntarla el hilo entero sería una
-        // cadena de firmas sin nadie que las lea.
+        // The anchor is RECORDED (#282): that the window sends it is what a
+        // test can assert from here, and without recording it the whole
+        // thread would be a chain of signatures nobody reads.
         self.gobierno.lock().expect("gobierno").push(format!(
             "approval:{id}:{approved}:{}",
             expected_digest.as_deref().unwrap_or("-")
         ));
         self.latido();
         let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
-        // Y el catálogo cambia: el host lo REPIDE tras un OK, así que un
-        // falso que contestara siempre lo mismo dejaría pasar una pantalla
-        // que dice «aprobada» sin que nadie lo confirmara.
+        // And the catalogue changes: the host RE-REQUESTS it after an OK, so
+        // a fake that always answered the same thing would let a screen say
+        // "approved" through without anyone confirming it.
         if fallo.is_none() {
             for p in self.plugins.lock().expect("plugins").iter_mut() {
                 if p.id == id {
@@ -1385,8 +1411,9 @@ impl HostBackend for Falso {
         let fallo = self.error_al_gobernar.lock().expect("gobierno").clone();
         let mut tenia = false;
         if fallo.is_none() {
-            // Y desaparece del catálogo: el host lo REPIDE tras un OK, y una
-            // fila que siguiera ahí sería la pantalla enseñando lo borrado.
+            // And it disappears from the catalogue: the host RE-REQUESTS it
+            // after an OK, and a row that stayed there would be the screen
+            // showing what was deleted.
             let mut plugins = self.plugins.lock().expect("plugins");
             tenia = plugins.iter().any(|p| p.id == id && p.approved);
             plugins.retain(|p| p.id != id);
@@ -1458,19 +1485,20 @@ impl HostBackend for Falso {
         self.latido();
         let grita = self.stat_grita;
         let retraso = self.retraso_ms;
-        // El padre del path dice en qué directorio buscarlo; la entrada sale
-        // del mismo árbol, pero AHORA con tamaño: es lo que hace un `stat`.
+        // The path's parent says which directory to look it up in; the entry
+        // comes from the same tree, but NOW with a size: that is what `stat`
+        // does.
         let entrada = path.parent().and_then(|dir| {
             self.arbol.get(&dir.to_wire()).and_then(|entradas| {
                 entradas
                     .iter()
                     .find(|(n, _)| path.file_name().is_some_and(|f| f.as_bytes() == n))
                     .map(|(_, es_dir)| Entry {
-                        // Un provider puede contestar con OTRA ortografía del
-                        // mismo nombre; el host tiene que hidratar la entrada
-                        // que pidió, no la que le devuelven.
+                        // A provider can answer with ANOTHER spelling of the
+                        // same name; the host has to hydrate the entry it
+                        // asked for, not the one it gets back.
                         path: if grita {
-                            otra_ortografia(&path)
+                            other_spelling(&path)
                         } else {
                             path.clone()
                         },
@@ -1485,8 +1513,9 @@ impl HostBackend for Falso {
                     })
             })
         });
-        // Lo que este falso CREÓ existe, aunque no esté en el árbol de `pon`:
-        // el árbol es el listado de antes de crear nada (#303).
+        // What this fake CREATED exists, even if it is not in the `pon`
+        // tree: the tree is the listing from before anything was created
+        // (#303).
         let entrada = entrada.or_else(|| {
             let creado = self
                 .creados
@@ -1539,11 +1568,7 @@ impl HostBackend for Falso {
             .expect("decisiones")
             .push((approval_id, approve));
         self.latido();
-        let fallo = self
-            .error_al_decidir
-            .lock()
-            .expect("error al decidir")
-            .clone();
+        let fallo = self.error_al_decidir.lock().expect("decide error").clone();
         Box::pin(async move { fallo.map_or(Ok(()), Err) })
     }
 
@@ -1563,12 +1588,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.aplicados.lock().expect("aplicados").push(plan_hash);
         self.latido();
-        if let Some(e) = self
-            .error_al_aplicar
-            .lock()
-            .expect("error al aplicar")
-            .clone()
-        {
+        if let Some(e) = self.error_al_aplicar.lock().expect("apply error").clone() {
             return Box::pin(async move { Err(e) });
         }
         let n = self.siguiente_task.fetch_add(1, Ordering::SeqCst);
@@ -1591,8 +1611,8 @@ impl HostBackend for Falso {
             .lock()
             .expect("progresos")
             .insert(id.get(), tx);
-        // Cancelable DE VERDAD: con un cancelador que no cuenta, un test de
-        // cancelación pasa igual con el panel congelado.
+        // REALLY cancellable: with a canceller that does not count, a
+        // cancellation test would pass just the same with the panel frozen.
         let canceladas = Arc::clone(&self.canceladas_por_id);
         let pulso = Arc::clone(&self.pulso);
         Box::pin(async move {
@@ -1659,8 +1679,8 @@ impl HostBackend for Falso {
             .insert(id.get(), tx);
         Box::pin(async move {
             let (pasos, mut done) = plan.ok_or(Error::Unsupported)?;
-            // El cierre lleva SU Task: el modelo compartido descarta el de
-            // otro plan por este id, que es justo lo que tiene que hacer.
+            // The closing carries ITS OWN Task: the shared model discards
+            // another plan's for this id, which is exactly what it must do.
             done.task_id = id;
             let (etx, erx) = tokio::sync::mpsc::channel(4);
             tokio::spawn(async move {
@@ -1785,8 +1805,9 @@ impl HostBackend for Falso {
         self.avisos_plugin.lock().expect("avisos_plugin").take()
     }
 
-    /// #311: apunta el lote de sumas y devuelve una Task ya terminada. El
-    /// informe lo sirve `checksum_report` con lo que diga `sumas_informe`.
+    /// #311: records the checksum batch and returns an already-finished
+    /// Task. The report is served by `checksum_report` with whatever
+    /// `sumas_informe` says.
     fn checksum(
         &self,
         params: norte_proto::methods::FsChecksumParams,
@@ -1830,9 +1851,9 @@ impl HostBackend for Falso {
             .expect("mapas")
             .push(params.path.clone());
         self.latido();
-        // Ya terminada: el host pide el informe en cuanto la Task es terminal,
-        // así que un doble que la deje corriendo no llegaría nunca a aterrizar
-        // nada y el test mediría un silencio.
+        // Already finished: the host asks for the report as soon as the Task
+        // is terminal, so a double that left it running would never manage
+        // to land anything and the test would be measuring silence.
         let progreso = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(11),
             kind: norte_proto::TaskKind::DirUsage,
@@ -1864,8 +1885,9 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<norte_proto::methods::FsDirUsageReportResult, Error>> {
         let _ = task;
         self.latido();
-        // Un mapa vacío pero LISTADO: el hueco se pinta sin rectángulos y sin
-        // decir que mide, que es lo que un directorio vacío produce de verdad.
+        // An empty map but LISTED: the slot paints with no rectangles and
+        // without saying it is measuring, which is what an empty directory
+        // really produces.
         Box::pin(async move {
             Ok(norte_proto::methods::FsDirUsageReportResult {
                 listed: true,
@@ -1880,16 +1902,16 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<norte_proto::methods::FsChecksumReportResult, Error>> {
         self.sumas_informes_pedidos
             .lock()
-            .expect("informes de sumas")
+            .expect("checksum reports")
             .push(task.get());
         self.latido();
         let informe = self.sumas_informe.lock().expect("informe").clone();
         Box::pin(async move { Ok(informe) })
     }
 
-    /// #314: apunta el lote de permisos que se pidió, para que un test pueda
-    /// afirmar QUÉ rutas y con QUÉ modo — que es lo único que el host decide;
-    /// el resto lo decide el core.
+    /// #314: records the permission batch that was requested, so a test can
+    /// assert WHICH paths and with WHICH mode — which is the only thing the
+    /// host decides; the core decides the rest.
     fn set_mode(
         &self,
         params: norte_proto::methods::FsSetModeParams,
@@ -1955,15 +1977,15 @@ impl HostBackend for Falso {
     fn create_file(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.creados.lock().expect("creados").push(path);
         self.latido();
-        // Con id PROPIO: el gesto de «editar uno nuevo» mira el desenlace de
-        // SU task para abrir el fichero, y compartir el 8 con `mkdir` haría
-        // que un test de crear directorio disparase esa apertura.
+        // With its OWN id: the "edit a new one" gesture watches ITS task's
+        // outcome to open the file, and sharing the 8 with `mkdir` would make
+        // a create-directory test trigger that opening.
         //
-        // Y nace CORRIENDO, con su terminal por detrás. Las otras del falso
-        // nacen ya terminadas con el emisor caído, y eso no es lo que hace un
-        // backend de verdad: el host bombea los CAMBIOS del canal, así que un
-        // canal muerto no le entrega jamás un desenlace. Lo que aquí hace
-        // falta es justo el desenlace.
+        // And it is born RUNNING, with its own terminal behind it. The
+        // fake's other tasks are born already finished with the sender
+        // dropped, and that is not what a real backend does: the host pumps
+        // the channel's CHANGES, so a dead channel never delivers it an
+        // outcome. What is needed here is exactly the outcome.
         let vivo = norte_proto::TaskProgress {
             task_id: norte_proto::TaskId::new(14),
             kind: norte_proto::TaskKind::Create,
@@ -1977,12 +1999,12 @@ impl HostBackend for Falso {
             unvisited: None,
         };
         let (tx, rx) = tokio::sync::watch::channel(vivo.clone());
-        // El emisor se queda vivo mientras viva el doble. Soltarlo tras el
-        // envío cierra el canal antes de que el host haya leído el cambio, y
-        // esa es justo la carrera que este falso existe para no tener; antes
-        // se compraba durmiendo cincuenta milisegundos, que es una apuesta
-        // sobre cuándo bombea el host.
-        *self.progreso_create.lock().expect("progreso create") = Some(tx.clone());
+        // The sender stays alive as long as the double lives. Dropping it
+        // after sending closes the channel before the host has read the
+        // change, and that is exactly the race this fake exists to avoid;
+        // it used to be bought by sleeping fifty milliseconds, which is a
+        // bet on when the host pumps.
+        *self.progreso_create.lock().expect("create progress") = Some(tx.clone());
         tokio::spawn(async move {
             let _ = tx.send(norte_proto::TaskProgress {
                 state: norte_proto::TaskState::Completed,
@@ -2010,9 +2032,9 @@ impl HostBackend for Falso {
         self.attrs_pedidos.lock().expect("attrs").push(attrs);
         self.listados.fetch_add(1, Ordering::SeqCst);
         self.latido();
-        // #327: la conexión pide su contraseña. Se consume UNA vez —quien la
-        // entrega vuelve a listar y esta vez tiene que entrar—, que es
-        // exactamente el flujo que hay que poder probar.
+        // #327: the connection asks for its password. It is consumed ONCE —
+        // whoever hands it over lists again and this time has to get in —
+        // which is exactly the flow that must be testable.
         if let Some(fallo) = self
             .pide_secreto
             .lock()
@@ -2025,11 +2047,11 @@ impl HostBackend for Falso {
         if !self.arbol.contains_key(&dir.to_wire()) {
             return Box::pin(async { Err(Error::NotFound) });
         }
-        // Se cuenta DESPUÉS del `NotFound`: el que no vuela no se espera.
+        // Counted AFTER the `NotFound`: what does not fly is not waited for.
         self.pedidos.fetch_add(1, Ordering::SeqCst);
         let lazy = self.lazy;
-        // El directorio bajo el que el provider cuelga sus entradas. Con
-        // `padre_distinto`, OTRA ortografía del mismo sitio.
+        // The directory the provider hangs its entries under. With
+        // `padre_distinto`, ANOTHER spelling of the same place.
         let padre = if self.padre_distinto {
             match dir.file_name() {
                 Some(seg) => dir.parent().unwrap_or_else(|| dir.clone()).join(
@@ -2042,8 +2064,8 @@ impl HostBackend for Falso {
             dir.clone()
         };
         let idos = self.desaparecidos.lock().expect("desaparecidos").clone();
-        // Sin ordenar: ordenar es cosa de `PaneState`, y devolverlo ya
-        // ordenado escondería que el host lo delega.
+        // Unsorted: sorting is `PaneState`'s job, and returning it already
+        // sorted would hide that the host delegates it.
         let entradas: Vec<Entry> = self
             .arbol
             .get(&dir.to_wire())
@@ -2052,10 +2074,10 @@ impl HostBackend for Falso {
             .into_iter()
             .map(|(nombre, es_dir)| {
                 let path = padre.join(norte_proto::Segment::new(nombre).expect("segmento"));
-                // El kind exacto, si alguien lo fijó (`pon_kind`). Este doble
-                // construye entradas en DOS sitios —aquí y en `entradas_de`—
-                // y el override tiene que estar en los dos: parchear uno solo
-                // deja el test mirando un listado que el host nunca ve.
+                // The exact kind, if someone set it (`pon_kind`). This double
+                // builds entries in TWO places — here and in `entradas_de` —
+                // and the override has to be in both: patching only one
+                // leaves the test looking at a listing the host never sees.
                 let kind = self
                     .kinds
                     .get(&path.to_wire())
@@ -2068,16 +2090,18 @@ impl HostBackend for Falso {
                 Entry {
                     kind,
                     path,
-                    // Un directorio no tiene tamaño, como en la vida real: es lo
-                    // que hace que la AUSENCIA de celda se pueda probar. Con
-                    // `lazy`, tampoco lo tiene un fichero: es el listado del
-                    // provider local (#52), donde el tamaño se sondea aparte.
+                    // A directory has no size, like in real life: it is what
+                    // makes the ABSENCE of a cell testable. With `lazy`, a
+                    // file does not have one either: it is the local
+                    // provider's listing (#52), where the size gets probed
+                    // separately.
                     size: if es_dir || lazy { None } else { Some(1) },
                     mtime_ms: None,
                     attrs: {
                         let mut m = std::collections::BTreeMap::new();
-                        // 0o100644: lo que un provider POSIX manda de verdad,
-                        // y lo que sin catálogo se pintaría como «33188».
+                        // 0o100644: what a real POSIX provider actually
+                        // sends, and what would paint as "33188" without a
+                        // catalogue.
                         m.insert("posix.mode".to_owned(), norte_proto::AttrValue::Uint(33188));
                         m
                     },
@@ -2096,8 +2120,8 @@ impl HostBackend for Falso {
             }
             servidos.fetch_add(1, Ordering::SeqCst);
             pulso.notify_waiters();
-            // 100 = `FIRST_PAGE` del host: la entrada 101 es la primera del
-            // DRENAJE, y es ahí donde se corta.
+            // 100 = the host's `FIRST_PAGE`: entry 101 is the first of the
+            // DRAIN, and that is where it cuts off.
             let stream: norte_client::EntryStream = Box::pin(futures::stream::unfold(
                 (entradas.into_iter().enumerate(), puerta),
                 |(mut it, puerta)| async move {
@@ -2105,7 +2129,7 @@ impl HostBackend for Falso {
                     if i == 100
                         && let Some(p) = &puerta
                     {
-                        p.esperar().await;
+                        p.wait().await;
                     }
                     Some((Ok(e), (it, puerta)))
                 },
@@ -2118,10 +2142,10 @@ impl HostBackend for Falso {
         &self,
     ) -> BoxFuture<'static, Result<(norte_proto::methods::Session, bool), Error>> {
         let (sesion, duena) = self.sesion.lock().expect("sesión").clone();
-        // Sin sesión puesta —revisión 0, lo que `Default` da— esta ventana es
-        // la dueña, como en una instalación nueva: el daemon contesta
-        // `owner: true` a la primera conexión aunque no haya nada guardado.
-        // Un test que quiera una ventana SUELTA pone una sesión y dice `false`.
+        // With no session set — revision 0, what `Default` gives — this
+        // window owns it, like on a fresh install: the daemon answers
+        // `owner: true` to the first connection even with nothing saved. A
+        // test that wants a DETACHED window sets a session and says `false`.
         let duena = duena || sesion.revision == 0;
         Box::pin(async move { Ok((sesion, duena)) })
     }
@@ -2129,10 +2153,10 @@ impl HostBackend for Falso {
     fn session_release(&self) -> BoxFuture<'static, Result<bool, Error>> {
         self.sueltas.fetch_add(1, Ordering::SeqCst);
         self.latido();
-        // Lo que contesta el daemon de verdad: `true` si esta conexión era la
-        // dueña. El doble lo dice por bandera, para poder probar las dos
-        // ramas — y el `false` es la que importa, porque es la que NO tiene
-        // que lanzar nada.
+        // What the real daemon answers: `true` if this connection owned it.
+        // The double says so by flag, so both branches can be tested — and
+        // the `false` one is the one that matters, because it is the one
+        // that must NOT launch anything.
         let suelta = self.suelta_la_sesion;
         Box::pin(async move { Ok(suelta) })
     }
@@ -2150,9 +2174,9 @@ impl HostBackend for Falso {
                 })
             });
         }
-        // El core rehúsa el cuerpo ENTERO por tamaño (#316). El mando cuenta
-        // los rechazos que le quedan, así que un test puede pedir «el primero
-        // no, el segundo sí», que es la degradación con reintento.
+        // The core refuses the WHOLE body for size (#316). The knob counts
+        // the rejections it has left, so a test can ask for "the first no,
+        // the second yes", which is degrade-with-retry.
         {
             let mut quedan = self.rechazos_por_tamano.lock().expect("rechazos");
             if *quedan > 0 {
@@ -2180,7 +2204,7 @@ impl HostBackend for Falso {
         queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         *self.encoladas.lock().expect("encoladas") = queued;
-        self.transferir(from, to, false, on_collision)
+        self.transfer(from, to, false, on_collision)
     }
 
     fn ai_rename_plan(
@@ -2194,25 +2218,27 @@ impl HostBackend for Falso {
             .expect("instrucciones")
             .push(instruction);
         self.latido();
-        // Los nombres que viajaron (#121): es lo que permite ver que un plan
-        // pedido sobre cinco ficheros no manda los mil del directorio.
+        // The names that travelled (#121): it is what lets you see that a
+        // plan requested over five files does not send the directory's
+        // thousand.
         self.nombres_ia.lock().expect("nombres_ia").push(names);
         self.latido();
         let plan = self.plan_ia.clone();
         let retraso = self.retraso_ia_ms;
         let puerta = self.puerta_ia.clone();
-        // Pedir un plan es una LECTURA: el modelo no muta nada. Entra en la
-        // misma cuenta que los listados, que es lo que permite esperar a que
-        // «no vuele ninguna» sin contar a mano las respuestas de cada caso.
+        // Requesting a plan is a READ: the model mutates nothing. It counts
+        // toward the same total as listings, which is what lets you wait for
+        // "nothing in flight" without counting each case's responses by
+        // hand.
         self.pedidos.fetch_add(1, Ordering::SeqCst);
         let servidos = Arc::clone(&self.servidos);
         let pulso = Arc::clone(&self.pulso);
         Box::pin(async move {
-            // Con puerta, el plan no contesta hasta que el test la abre: el
-            // modelo «sigue pensando» como un HECHO, no como una ventana de
-            // milisegundos que una máquina cargada se salta.
+            // With the gate, the plan does not answer until the test opens
+            // it: the model "keeps thinking" as a FACT, not as a
+            // millisecond window a loaded machine can skip past.
             if let Some(puerta) = puerta {
-                puerta.esperar().await;
+                puerta.wait().await;
             }
             if retraso > 0 {
                 tokio::time::sleep(std::time::Duration::from_millis(retraso)).await;
@@ -2273,7 +2299,7 @@ impl HostBackend for Falso {
         _names: Vec<String>,
     ) -> BoxFuture<'static, Result<norte_proto::methods::AiOrganizePlanResult, Error>> {
         self.latido();
-        self.respuesta_de_organizar()
+        self.organize_response()
     }
 
     fn plugin_organize_plan(
@@ -2283,15 +2309,15 @@ impl HostBackend for Falso {
         _dir: VPath,
         names: Vec<String>,
     ) -> BoxFuture<'static, Result<norte_proto::methods::AiOrganizePlanResult, Error>> {
-        // Los NOMBRES que viajaron: un plugin no lista nada, así que con la
-        // lista vacía contesta que no mueve nada — y eso es un fallo del
-        // llamante que ningún test vería si esto no se anotara.
+        // The NAMES that travelled: a plugin lists nothing, so with an empty
+        // list it answers that it moves nothing — and that is a caller
+        // failure no test would see if this were not recorded.
         self.organizers_pedidos
             .lock()
             .expect("organizers")
             .push((plugin_id, organizer_id, names));
         self.latido();
-        self.respuesta_de_organizar()
+        self.organize_response()
     }
 
     fn organize(
@@ -2413,10 +2439,10 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<norte_proto::methods::PolicyUndoReportResult, Error>> {
         self.informes_undo_pedidos
             .lock()
-            .expect("informes undo")
+            .expect("undo reports")
             .push(task_id.get());
         self.latido();
-        let informe = self.informe_undo.lock().expect("informe undo").clone();
+        let informe = self.informe_undo.lock().expect("undo report").clone();
         Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
 
@@ -2426,10 +2452,10 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<norte_proto::methods::ArchivePackReportResult, Error>> {
         self.informes_pack_pedidos
             .lock()
-            .expect("informes pack")
+            .expect("pack reports")
             .push(task_id.get());
         self.latido();
-        let informe = self.informe_pack.lock().expect("informe pack").clone();
+        let informe = self.informe_pack.lock().expect("pack report").clone();
         Box::pin(async move { informe.ok_or(Error::Unsupported) })
     }
 
@@ -2441,16 +2467,11 @@ impl HostBackend for Falso {
         queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         *self.encoladas.lock().expect("encoladas") = queued;
-        self.transferir(from, to, true, on_collision)
+        self.transfer(from, to, true, on_collision)
     }
 
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>> {
-        if let Some(e) = self
-            .error_al_borrar
-            .lock()
-            .expect("error al borrar")
-            .clone()
-        {
+        if let Some(e) = self.error_al_borrar.lock().expect("delete error").clone() {
             self.borrados.lock().expect("borrados").push((path, mode));
             self.latido();
             return Box::pin(async move { Err(e) });
@@ -2498,7 +2519,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.empaquetados.lock().expect("empaquetados").push(params);
         self.latido();
-        self.task_de_archivo(norte_proto::TaskKind::Pack, 11)
+        self.archive_task(norte_proto::TaskKind::Pack, 11)
     }
 
     fn test_archive(
@@ -2507,7 +2528,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.comprobados.lock().expect("comprobados").push(params);
         self.latido();
-        self.task_de_archivo(norte_proto::TaskKind::TestArchive, 12)
+        self.archive_task(norte_proto::TaskKind::TestArchive, 12)
     }
 
     fn connections(
@@ -2532,9 +2553,9 @@ impl HostBackend for Falso {
         conn: String,
         secret: String,
     ) -> BoxFuture<'static, Result<(), Error>> {
-        // Se apunta lo entregado para que el test compruebe que llega TAL
-        // CUAL: el punto entero de #327 es que la contraseña no la toca nadie
-        // entre el campo y el core.
+        // What was handed over is recorded so the test can check it arrives
+        // AS IS: the whole point of #327 is that nobody touches the password
+        // between the field and the core.
         self.secretos_dados
             .lock()
             .expect("secretos_dados")
@@ -2567,7 +2588,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.partidos.lock().expect("partidos").push(params);
         self.latido();
-        self.task_de_archivo(norte_proto::TaskKind::Split, 13)
+        self.archive_task(norte_proto::TaskKind::Split, 13)
     }
 
     fn combine_files(
@@ -2576,7 +2597,7 @@ impl HostBackend for Falso {
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
         self.juntados.lock().expect("juntados").push(params);
         self.latido();
-        self.task_de_archivo(norte_proto::TaskKind::Combine, 14)
+        self.archive_task(norte_proto::TaskKind::Combine, 14)
     }
 
     fn log_tail(
@@ -2589,9 +2610,9 @@ impl HostBackend for Falso {
             .expect("cursores")
             .push(cursor);
         self.latido();
-        // La respuesta se resuelve AQUÍ, no dentro del futuro: lo que el test
-        // arma es lo que estaba puesto cuando la petición SALIÓ, y con la
-        // puerta echada hay dos peticiones vivas a la vez.
+        // The response is resolved HERE, not inside the future: what the
+        // test arms is whatever was set when the request WENT OUT, and with
+        // the gate shut there are two requests alive at once.
         let armado = self.registro_remoto.lock().expect("registro").take();
         let nivel = self
             .nivel_remoto
@@ -2609,10 +2630,10 @@ impl HostBackend for Falso {
         let puerta = self.puerta_registro.clone();
         Box::pin(async move {
             if let Some(p) = puerta {
-                p.esperar().await;
+                p.wait().await;
             }
-            // Sin `next` no se ha servido nada nunca: este daemon no tiene
-            // anillo que servir.
+            // With no `next`, nothing has ever been served: this daemon has
+            // no ring to serve.
             let Some(next) = next else {
                 return Err(Error::Unsupported);
             };
@@ -2632,9 +2653,9 @@ impl HostBackend for Falso {
             .expect("niveles")
             .push(level.clone());
         self.latido();
-        // Lo que contesta es lo que el daemon TIENE puesto, no lo que se pidió:
-        // su anillo nunca baja de nivel, así que pedir menos verbosidad deja el
-        // que ya había.
+        // What it answers is what the daemon HAS set, not what was
+        // requested: its ring never lowers its level, so asking for less
+        // verbosity leaves whatever was already there.
         let nivel = self.nivel_remoto.lock().expect("nivel").clone();
         Box::pin(async move { nivel.ok_or(Error::Unsupported) })
     }

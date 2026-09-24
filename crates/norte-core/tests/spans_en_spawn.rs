@@ -1,59 +1,60 @@
-//! Nadie lanza trabajo sin su span (ADR 0127).
+//! Nobody launches work without its span (ADR 0127).
 //!
-//! `tokio::spawn` y `spawn_blocking` no heredan el span de quien los llama, y
-//! lo que registra la tarea lanzada sale sin su `rpc` ni su `task`. La puerta
-//! es `crate::blocking::{spawn, spawn_blocking}`. `spawn_blocking` lo impide
-//! además clippy (`clippy.toml`); `tokio::spawn` no puede, porque los tests de
-//! integración lo usan a montones y el lint no distingue. Esto lo impide en el
-//! CÓDIGO de la crate, que es donde importa.
+//! `tokio::spawn` and `spawn_blocking` do not inherit the span of whoever
+//! calls them, and what the launched task logs comes out without its `rpc`
+//! nor its `task`. The gate is `crate::blocking::{spawn, spawn_blocking}`.
+//! `spawn_blocking` is also blocked by clippy (`clippy.toml`); `tokio::spawn`
+//! cannot be, because the integration tests use it heavily and the lint
+//! cannot tell them apart. This blocks it in the crate's CODE, which is where
+//! it matters.
 
 use std::path::{Path, PathBuf};
 
-/// Los `.rs` de `src/`, recursivamente.
-fn fuentes(dir: &Path, out: &mut Vec<PathBuf>) {
-    for e in std::fs::read_dir(dir).expect("src legible") {
-        let p = e.expect("entrada legible").path();
+/// The `.rs` files under `src/`, recursively.
+fn sources(dir: &Path, out: &mut Vec<PathBuf>) {
+    for e in std::fs::read_dir(dir).expect("src readable") {
+        let p = e.expect("readable entry").path();
         if p.is_dir() {
-            fuentes(&p, out);
+            sources(&p, out);
         } else if p.extension().is_some_and(|x| x == "rs") {
             out.push(p);
         }
     }
 }
 
-/// Lo de un fichero ANTES de su primer módulo de tests: lo que se compila en
-/// el binario de verdad.
-fn codigo(texto: &str) -> &str {
-    texto.find("#[cfg(test)]").map_or(texto, |i| &texto[..i])
+/// A file's content BEFORE its first test module: what actually compiles into
+/// the real binary.
+fn code(text: &str) -> &str {
+    text.find("#[cfg(test)]").map_or(text, |i| &text[..i])
 }
 
 #[test]
-fn nadie_lanza_una_tarea_sin_su_span() {
-    // Solo las dos puertas. Lo que no debe heredar el span va por
-    // `spawn_raiz`, con su porqué escrito donde se llama.
-    const PERMITIDOS: &[&str] = &["src/blocking.rs"];
-    let raiz = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut ficheros = Vec::new();
-    fuentes(&raiz.join("src"), &mut ficheros);
-    let mut mal = Vec::new();
-    for f in ficheros {
+fn nobody_launches_a_task_without_its_span() {
+    // Only the two gates. What must not inherit the span goes through
+    // `spawn_raiz`, with its reason written where it is called.
+    const ALLOWED: &[&str] = &["src/blocking.rs"];
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    sources(&root.join("src"), &mut files);
+    let mut bad = Vec::new();
+    for f in files {
         let rel = f
-            .strip_prefix(raiz)
-            .expect("dentro de la crate")
+            .strip_prefix(root)
+            .expect("inside the crate")
             .to_string_lossy()
             .replace('\\', "/");
-        if PERMITIDOS.contains(&rel.as_str()) {
+        if ALLOWED.contains(&rel.as_str()) {
             continue;
         }
-        let texto = std::fs::read_to_string(&f).expect("fuente legible");
-        for (n, linea) in codigo(&texto).lines().enumerate() {
-            if linea.contains("tokio::spawn(") || linea.contains("tokio::task::spawn(") {
-                mal.push(format!("{rel}:{}", n + 1));
+        let text = std::fs::read_to_string(&f).expect("readable source");
+        for (n, line) in code(&text).lines().enumerate() {
+            if line.contains("tokio::spawn(") || line.contains("tokio::task::spawn(") {
+                bad.push(format!("{rel}:{}", n + 1));
             }
         }
     }
     assert!(
-        mal.is_empty(),
-        "lanzan una tarea sin su span; usa `crate::blocking::spawn`: {mal:#?}"
+        bad.is_empty(),
+        "they launch a task without its span; use `crate::blocking::spawn`: {bad:#?}"
     );
 }

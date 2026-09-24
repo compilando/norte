@@ -1,24 +1,24 @@
-//! El árbol de ramas del panel lateral.
+//! The branch tree in the side panel.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `Estado`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
 impl Estado {
-    /// Tope de ramas hijas de UNA rama.
+    /// Cap on child branches of ONE branch.
     ///
-    /// Un directorio con cien mil subdirectorios no se pinta: se recorta, y lo
-    /// que se ve es «hasta aquí». Sin tope, una sola rama abierta convierte
-    /// cada foto del host en un mensaje de megabytes.
+    /// A directory with a hundred thousand subdirectories is not painted: it
+    /// is clamped, and what is shown is "up to here". Without a cap, a single
+    /// open branch turns every host snapshot into a message of megabytes.
     pub(super) const MAX_RAMAS: usize = 2000;
 
-    /// El hueco del árbol, si la disposición coloca uno.
+    /// The tree's slot, if the layout places one.
     pub(super) fn hueco_de_ramas(&self) -> Option<SlotId> {
         self.arbol
             .slot_ids()
@@ -26,10 +26,10 @@ impl Estado {
             .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == "tree"))
     }
 
-    /// Ancla el árbol donde esté MIRANDO el listado enfocado.
+    /// Anchors the tree wherever the focused listing is LOOKING.
     pub(super) fn sembrar_ramas(&mut self) {
-        // Cerca y no EN el directorio: colgado de él, un directorio sin
-        // subcarpetas era un árbol de una fila (captura del 2026-09-21).
+        // Near, not AT, the directory: hung right off it, a directory with no
+        // subfolders was a one-row tree (captured 2026-09-21).
         let dir = self.hueco().pane.dir().clone();
         self.ramas
             .get_or_insert_with(norte_frontend::tree::Tree::default)
@@ -37,26 +37,28 @@ impl Estado {
         self.gen_ramas += 1;
     }
 
-    /// El árbol sigue al listado ACTIVO: revela su directorio y pide lo que
-    /// falte para pintarlo.
+    /// The tree follows the ACTIVE listing: reveals its directory and
+    /// requests whatever is missing to paint it.
     ///
-    /// Se llama desde el embudo por el que pasa TODO listado que aterriza
-    /// ([`Estado::aterrizar_listado`]) y desde el cambio de foco, que son los
-    /// dos momentos en que «dónde está mirando el panel» cambia. Ponerlo en
-    /// cada gesto que provoca un `cd` —el ratón, la paleta, el menú, el
-    /// rastro, el propio árbol— sería la lista que un día se queda corta.
+    /// It is called from the funnel every listing that lands passes through
+    /// ([`Estado::aterrizar_listado`]) and from the focus change, which are
+    /// the two moments when "where the panel is looking" changes. Putting it
+    /// in every gesture that triggers a `cd` — the mouse, the palette, the
+    /// menu, the trail, the tree itself — would be the list that falls short
+    /// one day.
     ///
-    /// Solo el ACTIVO. Un listado del otro lado que termina de cargar no es
-    /// dónde está trabajando el lector, y mover el árbol por él lo dejaría
-    /// apuntando a un panel que nadie está mirando.
+    /// Only the ACTIVE one. A listing on the other side that finishes
+    /// loading is not where the reader is working, and moving the tree for
+    /// it would leave it pointing at a panel nobody is looking at.
     ///
-    /// Y revela, no re-ancla ([`norte_frontend::tree::Tree::follow`]): lo que
-    /// el lector abrió a mano sigue abierto.
+    /// And it reveals, it does not re-anchor
+    /// ([`norte_frontend::tree::Tree::follow`]): what the reader opened by
+    /// hand stays open.
     pub(super) fn seguir_ramas(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> bool {
         if self.hueco_de_ramas().is_none() || slot != self.activo() {
             return false;
@@ -64,35 +66,37 @@ impl Estado {
         let Some(dir) = self.huecos.get(&slot).map(|h| h.pane.dir().clone()) else {
             return false;
         };
-        let movio = self
+        let moved = self
             .ramas
             .get_or_insert_with(norte_frontend::tree::Tree::default)
             .follow(&dir);
-        if !movio {
-            // El listado no se ha movido de sitio —un refresco, un click— así
-            // que el árbol tampoco. Subir la generación aquí invalidaba todo
-            // índice pintado y convertía un click en vuelo sobre una rama en
-            // un rechazo por generación, sin que nada hubiera cambiado.
+        if !moved {
+            // The listing has not moved — a refresh, a click — so neither
+            // does the tree. Bumping the generation here would have
+            // invalidated every painted index and turned a click in flight
+            // on a branch into a generation rejection, with nothing having
+            // changed.
             return false;
         }
-        // Las filas se han movido —hay ancestros desplegados que antes no
-        // estaban—, así que todo índice pintado hasta ahora nombra otra rama.
+        // The rows have moved — there are expanded ancestors that were not
+        // there before — so every index painted until now names a different
+        // branch.
         self.gen_ramas += 1;
-        self.pedir_ramas(backend, buzon);
+        self.pedir_ramas(backend, mailbox);
         true
     }
 
-    /// Pide la siguiente rama que haga falta, y UNA por vuelta.
+    /// Requests the next branch that is needed, ONE per round.
     ///
-    /// Perezoso por la misma razón que el listado local no trae tamaños: un
-    /// árbol que se leyera entero al abrirse tardaría minutos en un `$HOME`
-    /// grande y horas contra un remoto. Una rama por vuelta acota además lo
-    /// que un directorio enorme o un servidor lento pueden trabar: la
-    /// siguiente pide la siguiente.
+    /// Lazy for the same reason the local listing does not bring sizes: a
+    /// tree that read itself whole on opening would take minutes on a large
+    /// `$HOME` and hours against a remote. One branch per round also bounds
+    /// what a huge directory or a slow server can jam up: the next one
+    /// requests the one after.
     pub(super) fn pedir_ramas(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) {
         if self.hueco_de_ramas().is_none() {
             return;
@@ -105,104 +109,107 @@ impl Estado {
             return;
         };
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            // Sin atributos: el árbol enseña nombres de directorio y nada más,
-            // y pedir tamaños o permisos por rama sería pagarlos por cada
-            // carpeta que alguien despliega.
-            let hijos = match backend.list(dir.clone(), Vec::new()).await {
+            // No attributes: the tree shows directory names and nothing
+            // else, and requesting sizes or permissions per branch would be
+            // paying for them on every folder someone expands.
+            let children = match backend.list(dir.clone(), Vec::new()).await {
                 Ok((stream, _)) => Some(Self::ramas_del_listado(stream).await),
-                // Una rama que no se deja leer: la decide el modelo
-                // compartido (`Tree::branch_unreadable`).
+                // A branch that cannot be read: the shared model decides
+                // (`Tree::branch_unreadable`).
                 Err(_) => None,
             };
-            let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::RamasDeArbol(dir, hijos))))
+            let _ = mailbox
+                .send(Mensaje::Fondo(Box::new(Fondo::RamasDeArbol(dir, children))))
                 .await;
         });
     }
 
-    /// Los subdirectorios de un listado, en el orden del panel de al lado.
+    /// The subdirectories of a listing, in the same order as the panel next
+    /// to it.
     pub(super) async fn ramas_del_listado(mut stream: norte_client::EntryStream) -> Vec<VPath> {
         use futures::StreamExt as _;
-        let mut entradas = Vec::new();
-        while entradas.len() < Self::MAX_RAMAS {
+        let mut entries = Vec::new();
+        while entries.len() < Self::MAX_RAMAS {
             match stream.next().await {
                 Some(Ok(e)) => {
                     if e.kind == norte_proto::EntryKind::Dir {
-                        entradas.push(e);
+                        entries.push(e);
                     }
                 }
-                // Un error a mitad de rama deja lo que se leyó: media rama
-                // enseña menos de lo que hay, pero no enseña nada FALSO, y la
-                // alternativa es tirar el trabajo de un directorio enorme por
-                // su última entrada.
+                // An error mid-branch keeps what was read: half a branch
+                // shows less than there is, but it never shows anything
+                // FALSE, and the alternative is throwing away the work on a
+                // huge directory for its last entry.
                 Some(Err(_)) | None => break,
             }
         }
-        // El MISMO comparador que el listado de al lado: dos columnas que
-        // enseñan lo mismo en distinto orden se leen como si dijeran cosas
-        // distintas.
-        norte_frontend::sort_entries(&mut entradas);
-        entradas.into_iter().map(|e| e.path).collect()
+        // The SAME comparator as the listing next to it: two columns that
+        // show the same thing in a different order read as if they said
+        // different things.
+        norte_frontend::sort_entries(&mut entries);
+        entries.into_iter().map(|e| e.path).collect()
     }
 
-    /// Llegaron los hijos de una rama.
+    /// A branch's children arrived.
     ///
-    /// Y se pide la siguiente aquí mismo: es lo que encadena el recorrido
-    /// perezoso sin un reloj de por medio.
+    /// And the next one is requested right here: that is what chains the
+    /// lazy walk without a clock in between.
     pub(super) fn aplicar_ramas(
         &mut self,
         dir: VPath,
-        hijos: Option<Vec<VPath>>,
+        children: Option<Vec<VPath>>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        // Solo si el árbol EXISTE en esta disposición: una respuesta rezagada
-        // de un panel ya cerrado no resucita su estado ni manda una foto.
+        // Only if the tree EXISTS in this layout: a late response for a panel
+        // that is already closed does not resurrect its state nor send a
+        // snapshot.
         self.hueco_de_ramas()?;
-        let arbol = self.ramas.as_mut()?;
-        match hijos {
-            Some(h) => arbol.insert_children(dir, h),
-            None => arbol.branch_unreadable(dir),
+        let tree = self.ramas.as_mut()?;
+        match children {
+            Some(h) => tree.insert_children(dir, h),
+            None => tree.branch_unreadable(dir),
         }
-        // Las filas nuevas se insertan EN MEDIO: todo índice pintado hasta
-        // ahora nombra otra rama.
+        // The new rows are inserted IN THE MIDDLE: every index painted until
+        // now names a different branch.
         self.gen_ramas += 1;
-        self.pedir_ramas(backend, buzon);
+        self.pedir_ramas(backend, mailbox);
         let snap = self.snapshot();
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
     }
 
-    /// El árbol, proyectado.
+    /// The tree, projected.
     ///
-    /// Sin estado se proyecta VACÍO en vez de no proyectarse: un hueco que la
-    /// disposición coloca y el host no pinta desaparecería de la pantalla, y
-    /// preservar lo que hay es la regla de la sesión (ADR 0059).
+    /// With no state it projects EMPTY instead of not projecting at all: a
+    /// slot the layout places and the host does not paint would vanish from
+    /// the screen, and preserving what is there is the session's rule (ADR
+    /// 0059).
     pub(super) fn arbol_de_ramas(&self, id: u32) -> crate::dto::TreeSlotView {
-        let vacio = norte_frontend::tree::Tree::default();
-        let arbol = self.ramas.as_ref().unwrap_or(&vacio);
-        let filas = arbol.rows();
-        let raiz = arbol.root().cloned();
-        let rows = filas
+        let empty = norte_frontend::tree::Tree::default();
+        let tree = self.ramas.as_ref().unwrap_or(&empty);
+        let rows_in = tree.rows();
+        let root = tree.root().cloned();
+        let rows = rows_in
             .iter()
             .map(|r| {
-                // La raíz lleva su ruta entera: «`/`» a secas, o el nombre de
-                // la última carpeta, no dicen desde dónde cuelga esto.
-                let (pintable, hostil) = if raiz.as_ref() == Some(&r.path) {
+                // The root carries its whole path: a bare "`/`", or the name
+                // of the last folder, do not say where this hangs from.
+                let (displayable, hostile) = if root.as_ref() == Some(&r.path) {
                     norte_frontend::path_display(&r.path)
                 } else {
-                    // Sin nombre solo la raíz de un provider, y esa ya se fue
-                    // por la otra rama: aun así se pinta la ruta entera en vez
-                    // de quedarse en blanco.
+                    // Without a name only a provider's root, and that one
+                    // already went through the other branch: even so, the
+                    // whole path is painted instead of staying blank.
                     r.path.file_name().map_or_else(
                         || norte_frontend::path_display(&r.path),
                         |n| norte_frontend::display_name(n.as_bytes()),
                     )
                 };
                 crate::dto::TreeRowView {
-                    label: clamp_display(pintable),
-                    hostile: hostil,
+                    label: clamp_display(displayable),
+                    hostile,
                     depth: u32::try_from(r.depth).unwrap_or(u32::MAX),
                     expanded: r.expanded,
                     children: r.children,
@@ -212,57 +219,59 @@ impl Estado {
         crate::dto::TreeSlotView {
             slot_id: id,
             rows,
-            cursor: arbol.cursor() as u64,
+            cursor: tree.cursor() as u64,
             generation: self.gen_ramas,
         }
     }
 
-    /// Un click en una rama: la elige, y según el gesto navega o la pliega.
+    /// A click on a branch: selects it, and depending on the gesture,
+    /// navigates or collapses it.
     pub(super) fn tocar_rama(
         &mut self,
         row: u32,
         generation: u64,
-        navegar: bool,
+        navigate: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if generation != self.gen_ramas {
-            // Lo pulsado y lo que hay ahora no son el mismo árbol: los hijos
-            // de una rama aterrizan EN MEDIO. Rechazar es lo único correcto —
-            // seguir habría navegado a otra carpeta.
+            // What was clicked and what is there now are not the same tree:
+            // a branch's children land IN THE MIDDLE. Rejecting is the only
+            // correct thing — going ahead would have navigated to a
+            // different folder.
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
-        let Some(arbol) = self.ramas.as_mut() else {
+        let Some(tree) = self.ramas.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        if row as usize >= arbol.rows().len() {
+        if row as usize >= tree.rows().len() {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
-        arbol.set_cursor(row as usize);
-        if !navegar {
-            arbol.toggle();
+        tree.set_cursor(row as usize);
+        if !navigate {
+            tree.toggle();
             self.gen_ramas += 1;
-            self.pedir_ramas(backend, buzon);
+            self.pedir_ramas(backend, mailbox);
             let snap = self.snapshot();
             return (
                 self.aplicada(),
                 vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
             );
         }
-        // Desplegar Y navegar: quien pulsa sobre una rama quiere ver qué hay
-        // dentro, y verlo en el listado es la respuesta completa.
-        arbol.expand();
-        let Some(destino) = arbol.selected() else {
+        // Expand AND navigate: whoever clicks a branch wants to see what is
+        // inside, and seeing it in the listing is the complete answer.
+        tree.expand();
+        let Some(destination) = tree.selected() else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
         self.gen_ramas += 1;
-        self.pedir_ramas(backend, buzon);
-        // Al listado ENFOCADO, por el mismo camino que cualquier otra
-        // navegación: es lo que hace que tener el árbol abierto no cambie a
-        // dónde van las operaciones.
+        self.pedir_ramas(backend, mailbox);
+        // To the FOCUSED listing, through the same path as any other
+        // navigation: that is what makes having the tree open not change
+        // where operations go.
         (
             self.aplicada(),
-            self.navegar(&destino, Trail::Record, backend, buzon),
+            self.navegar(&destination, Trail::Record, backend, mailbox),
         )
     }
 }

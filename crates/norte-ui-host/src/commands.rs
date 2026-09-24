@@ -1,37 +1,38 @@
-//! Qué comandos sabe ejecutar este host, y qué hace con los que no.
+//! What commands this host knows how to run, and what it does with the ones
+//! it does not.
 //!
-//! La lista importa por dos motivos. Uno: es lo que el keymap efectivo
-//! necesita para decidir si una tecla ligada puede ejecutarse AQUÍ
-//! (`Availability::NotHere` es «este frontend no lo implementa», y sin la
-//! lista no se puede distinguir de «norte no lo ha construido»). Y dos: es
-//! la única declaración honesta de hasta dónde llega el host, en vez de un
-//! `match` que se traga en silencio lo que no reconoce.
+//! The list matters for two reasons. One: it is what the effective keymap
+//! needs to decide whether a bound key can run HERE (`Availability::NotHere`
+//! is "this frontend does not implement it", and without the list there is
+//! no way to tell that apart from "norte has not built it"). And two: it is
+//! the only honest declaration of how far the host reaches, instead of a
+//! `match` that silently swallows what it does not recognize.
 
-/// Hasta dónde llega un frontend: si puede MUTAR o solo mirar.
+/// How far a frontend reaches: whether it can MUTATE or only look.
 ///
-/// No es una amputación del host —el host sabe borrar y crear, y sus tests lo
-/// prueban— sino una decisión de ARRANQUE de quien lo monta. La ventana
-/// gráfica arranca en solo lectura hasta que la fase 5 le dé el camino seguro
-/// (el gate de salida de la fase 4 lo exige), y hasta entonces una tecla
-/// atada a `pane.delete` en el preset se responde en vez de ejecutarse: que
-/// la tecla exista no es permiso.
+/// It is not an amputation of the host — the host knows how to delete and
+/// create, and its tests prove it — but a STARTUP decision made by whoever
+/// mounts it. The graphical window starts read-only until phase 5 gives it
+/// the safe path (phase 4's exit gate requires it), and until then a key
+/// bound to `pane.delete` in the preset is answered instead of executed:
+/// the key existing is not permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Efectos {
-    /// Solo mirar: navegar, marcar, ordenar, ver. Nada que escriba, y
-    /// tampoco aprobar que escriba un agente.
+    /// Only look: navigate, mark, sort, view. Nothing that writes, and no
+    /// approving an agent's write either.
     SoloLectura,
-    /// Todo lo que el host implementa.
+    /// Everything the host implements.
     Completo,
 }
 
-/// Los comandos que el host ejecuta en cada modo.
+/// The commands the host runs in each mode.
 ///
-/// La lista de solo lectura es la de siempre MENOS lo que no es inerte: lo
-/// que escribe, borra, lanza un programa ajeno, lee contenido entero o manda
-/// datos fuera del proceso. Ese juicio NO se hace aquí: es el `effect` que el
-/// catálogo declara en cada fila, sin valor por defecto (ADR 0126). Antes era
-/// una lista propia, `MUTAN`, y olvidarse de ella al añadir un comando que
-/// escribe dejaba a la ventana de «solo mirar» ejecutándolo.
+/// The read-only list is the usual one MINUS what is not inert: what
+/// writes, deletes, launches a foreign program, reads whole content or sends
+/// data out of the process. That judgment is NOT made here: it is the
+/// `effect` the catalogue declares on each row, with no default value (ADR
+/// 0126). It used to be its own list, `MUTAN`, and forgetting to update it
+/// when adding a command that writes left the "look only" window running it.
 #[must_use]
 pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
     match efectos {
@@ -44,18 +45,19 @@ pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
     }
 }
 
-/// Si el catálogo declara `command` inerte. Un nombre que el catálogo no
-/// conoce NO lo es: no saber qué hace no autoriza a ejecutarlo.
+/// Whether the catalogue declares `command` inert. A name the catalogue
+/// does not know is NOT one: not knowing what it does does not authorize
+/// running it.
 fn inerte(command: &str) -> bool {
     norte_frontend::keymap::catalogue::effect(command)
         .is_some_and(norte_frontend::keymap::Effect::is_inert)
 }
 
-/// Los comandos que el host ejecuta HOY.
+/// The commands the host runs TODAY.
 ///
-/// Crece con cada tarea de la fase 2. Todo lo demás del catálogo resuelve a
-/// [`norte_frontend::keymap::Availability::NotHere`] y se DICE en la barra,
-/// que es exactamente lo que hace el TUI con los suyos.
+/// Grows with each task of phase 2. Everything else in the catalogue
+/// resolves to [`norte_frontend::keymap::Availability::NotHere`] and is
+/// STATED in the bar, exactly what the TUI does with its own.
 pub const IMPLEMENTADOS: &[&str] = &[
     "cursor.up",
     "cursor.down",
@@ -136,9 +138,9 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.copy-path",
     "app.theme",
     "app.menu",
-    // Salir por la tecla, como en el terminal: la ventana la tenía como
-    // «la cierra el gestor de ventanas», y `F10`, `q` y «Salir» del menú no
-    // hacían nada. Va por el mismo camino que el botón de cerrar.
+    // Quit via the key, like in the terminal: the window used to treat it
+    // as "the window manager closes it", and `F10`, `q` and "Quit" in the
+    // menu did nothing. It goes through the same path as the close button.
     "app.quit",
     "profile.pick",
     "profile.save-as",
@@ -166,9 +168,10 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "pane.semantic-search",
     "pane.compare-dirs",
     "pane.sync-dirs",
-    // #290 fase A: los gestos de panel que el TUI tenía y la ventana no.
-    // Ninguno escribe ni saca datos del proceso, así que el catálogo los
-    // declara inertes: re-listar es lo mismo que ya hace navegar.
+    // #290 phase A: the pane gestures the TUI had and the window did not.
+    // None of them writes or sends data out of the process, so the
+    // catalogue declares them inert: re-listing is the same thing
+    // navigating already does.
     "pane.sort-name",
     "pane.sort-ext",
     "pane.sort-size",
@@ -207,32 +210,32 @@ pub const IMPLEMENTADOS: &[&str] = &[
     "task.dismiss",
 ];
 
-/// Los comandos de la pantalla del VISOR que el host ejecuta.
+/// The commands of the VIEWER screen that the host runs.
 ///
-/// Lista aparte porque es otra pantalla, y su keymap efectivo se construye
-/// con `Screen::Viewer`: un comando que no esté aquí resuelve a
-/// [`norte_frontend::keymap::Availability::NotHere`] y se DICE, igual que en
-/// el listado.
-/// Los verbos de DIÁLOGO que este host atiende.
+/// A separate list because it is another screen, and its effective keymap
+/// is built with `Screen::Viewer`: a command not here resolves to
+/// [`norte_frontend::keymap::Availability::NotHere`] and is STATED, same as
+/// in the listing.
+/// The DIALOG verbs this host handles.
 ///
-/// Cuatro y no los veintidós del catálogo: los diálogos de esta ventana son
-/// preguntas con dos respuestas —confirmar/cancelar, aprobar/denegar—, y los
-/// demás verbos (`dialog.overwrite`, `dialog.sort`, `dialog.pane`…) nombran
-/// respuestas de diálogos que aquí no existen. Un preset puede atarlos: la
-/// tecla dirá que aquí no, con la misma frase que cualquier otro comando que
-/// esta ventana no hace.
+/// Four, not the catalogue's twenty-two: this window's dialogs are
+/// questions with two answers — confirm/cancel, approve/deny — and the
+/// other verbs (`dialog.overwrite`, `dialog.sort`, `dialog.pane`…) name
+/// answers to dialogs that do not exist here. A preset can bind them: the
+/// key will say no, here, with the same phrase as any other command this
+/// window does not do.
 pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
     "dialog.confirm",
     "dialog.cancel",
     "dialog.approve",
     "dialog.deny",
-    // Las cuatro salidas de una colisión (#287). Cada una nombra SU
-    // respuesta: «confirmar» no dice cuál de las cuatro.
+    // The four ways out of a collision (#287). Each names ITS answer:
+    // "confirm" does not say which of the four.
     "dialog.overwrite",
     "dialog.skip",
     "dialog.rename",
     "dialog.newer",
-    // Andar por una lista modal, y sus dos extremos (`dialog.top`/`bottom`).
+    // Walking a modal list, and its two ends (`dialog.top`/`bottom`).
     "dialog.up",
     "dialog.down",
     "dialog.page-up",
@@ -241,35 +244,36 @@ pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
     "dialog.bottom",
     "dialog.section-prev",
     "dialog.section-next",
-    // El selector de columnas y el gestor de extensiones.
+    // The column selector and the extension manager.
     "dialog.toggle-enabled",
     "dialog.move-up",
     "dialog.move-down",
     "dialog.sort",
     "dialog.cycle-format",
     "dialog.add",
-    // `dialog.remove` estuvo APLAZADO (#287) con un motivo que era cierto:
-    // quitar una fila solo significa algo sobre una lista que se pueda
-    // EDITAR, y la única de esta ventana —los ajustes— es de solo lectura.
-    // Desde #309 hay una que sí: los favoritos. Y hasta que este nombre entró
-    // aquí, atarlo en el preset no hacía nada — el keymap efectivo lo filtra
-    // por esta lista, así que la tecla existía y no llegaba a ningún sitio.
+    // `dialog.remove` was DEFERRED (#287) for a reason that was true: removing
+    // a row only means something for a list that can be EDITED, and the only
+    // one in this window — settings — is read-only. Since #309 there is one
+    // that can: favorites. And until this name entered here, binding it in
+    // the preset did nothing — the effective keymap filters by this list, so
+    // the key existed and went nowhere.
     "dialog.remove",
-    // Cambiar de lado (comparar, ayuda), volver (ayuda) y filtrar (ayuda).
+    // Switching sides (compare, help), going back (help) and filtering
+    // (help).
     "dialog.pane",
     "dialog.back",
     "dialog.filter",
-    // Las listas de historia (spec 2026-09-15 D2): abrir en el otro hueco, y
-    // vaciar la historia o los populares.
+    // The history lists (spec 2026-09-15 D2): open in the other slot, and
+    // clear the history or the popular ones.
     "dialog.confirm-other",
     "dialog.clear",
 ];
 
-/// Los comandos del VISOR que este host implementa.
+/// The VIEWER's commands this host implements.
 ///
-/// Lista aparte porque el visor es otra PANTALLA: con él abierto las teclas
-/// son suyas, y mezclarlas con las del listado sería un contexto de entrada
-/// que no existe en ningún preset.
+/// A separate list because the viewer is another SCREEN: with it open the
+/// keys are its own, and mixing them with the listing's would be an input
+/// context that does not exist in any preset.
 pub const IMPLEMENTADOS_VISOR: &[&str] = &[
     "viewer.close",
     "viewer.up",
@@ -290,17 +294,18 @@ pub const IMPLEMENTADOS_VISOR: &[&str] = &[
     "viewer.prev",
 ];
 
-/// Todo lo que el host implementa, en las dos pantallas.
+/// Everything the host implements, across both screens.
 ///
-/// Es lo que se le pasa a `Effective::build_for` en AMBAS: el keymap efectivo
-/// necesita saber qué existe para poder distinguir «este frontend no lo hace»
-/// de «norte no lo tiene», y esa pregunta no es por pantalla.
+/// It is what gets passed to `Effective::build_for` in BOTH: the effective
+/// keymap needs to know what exists to be able to tell "this frontend does
+/// not do it" apart from "norte does not have it", and that question is not
+/// per screen.
 #[must_use]
 pub fn todos() -> Vec<&'static str> {
     todos_con(Efectos::Completo)
 }
 
-/// Igual, con el modo de efectos dicho.
+/// Same, with the effects mode stated.
 #[must_use]
 pub fn todos_con(efectos: Efectos) -> Vec<&'static str> {
     let mut v = implementados(efectos);
@@ -308,49 +313,50 @@ pub fn todos_con(efectos: Efectos) -> Vec<&'static str> {
     v
 }
 
-/// Lo que un comando del VISOR le pide.
+/// What a VIEWER command asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EfectoVisor {
-    /// Cierra el visor.
+    /// Closes the viewer.
     Cerrar,
-    /// Desplaza tantas líneas (negativo hacia arriba).
+    /// Scrolls this many lines (negative is upward).
     Linea(i64),
-    /// Desplaza tantas PÁGINAS (negativo hacia arriba).
+    /// Scrolls this many PAGES (negative is upward).
     Pagina(i64),
-    /// Desplaza tantas COLUMNAS (negativo hacia la izquierda).
+    /// Scrolls this many COLUMNS (negative is toward the left).
     ///
-    /// El visor no envuelve: sin esto, la cola de una línea más ancha que la
-    /// ventana no estaba en ninguna parte.
+    /// The viewer does not wrap: without this, the tail of a line wider
+    /// than the window was nowhere to be found.
     Columna(i64),
-    /// Al principio o al final.
+    /// To the beginning or the end.
     Extremo {
-        /// `true` = al final.
+        /// `true` = to the end.
         al_final: bool,
     },
-    /// Alterna el hexadecimal.
+    /// Toggles hexadecimal.
     Hex,
-    /// Recarga con el siguiente encoding del ciclo.
+    /// Reloads with the next encoding in the cycle.
     Encoding,
-    /// Vuelve a la detección automática.
+    /// Goes back to automatic detection.
     EncodingAuto,
-    /// Mueve el zoom de la imagen un peldaño (spec 2026-09-20).
+    /// Moves the image's zoom one notch (spec 2026-09-20).
     Zoom {
-        /// `true` = acercar.
+        /// `true` = zoom in.
         acercar: bool,
     },
-    /// Devuelve la imagen a AJUSTADA.
+    /// Returns the image to FIT.
     ZoomAjustar,
-    /// Abre la hermana siguiente (o anterior) de la misma clase, sin salir.
+    /// Opens the next (or previous) sibling of the same class, without
+    /// exiting.
     Hermana {
-        /// `true` = la siguiente.
+        /// `true` = the next one.
         adelante: bool,
     },
 }
 
-/// Traduce un comando de la pantalla del visor a su efecto.
+/// Translates a viewer-screen command into its effect.
 ///
-/// `None` = el host no lo implementa; quien llama lo convierte en un
-/// `Unavailable` que el usuario ve.
+/// `None` = the host does not implement it; the caller turns it into an
+/// `Unavailable` the user sees.
 #[must_use]
 pub fn efecto_visor_de(command: &str, veces: u32) -> Option<EfectoVisor> {
     let n = i64::from(veces.max(1).min(u32::from(u16::MAX)));
@@ -376,441 +382,455 @@ pub fn efecto_visor_de(command: &str, veces: u32) -> Option<EfectoVisor> {
     })
 }
 
-/// Lo que un comando le pide al hueco con el foco.
+/// What a command asks of the focused slot.
 ///
-/// Es el vocabulario INTERNO del host: el renderer nunca lo ve. Existe para
-/// que el resolver y el ratón acaben en el mismo sitio — un gesto y una
-/// tecla que significan lo mismo tienen que hacer lo mismo.
+/// It is the host's INTERNAL vocabulary: the renderer never sees it. It
+/// exists so the resolver and the mouse end up in the same place — a gesture
+/// and a key that mean the same thing have to do the same thing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Efecto {
-    /// Mueve el cursor tantas filas (negativo hacia arriba).
+    /// Moves the cursor this many rows (negative is upward).
     Cursor(i64),
-    /// Mueve el cursor tantas PÁGINAS (negativo hacia arriba). Cuántas filas
-    /// son lo decide el hueco con la ventana que el renderer le dijo.
+    /// Moves the cursor this many PAGES (negative is upward). How many rows
+    /// that is is decided by the slot, with the window the renderer told it.
     Pagina(i64),
-    /// Cursor al principio o al final del listado.
+    /// Cursor to the start or the end of the listing.
     Extremo {
-        /// `true` = al final.
+        /// `true` = to the end.
         al_final: bool,
     },
-    /// Entra en lo que haya bajo el cursor.
+    /// Enters whatever is under the cursor.
     Entrar,
-    /// Sube al directorio padre.
+    /// Goes up to the parent directory.
     Subir,
-    /// Rastro de navegación.
+    /// Navigation trail.
     Rastro {
-        /// `true` = atrás.
+        /// `true` = back.
         atras: bool,
     },
-    /// Marca o desmarca la fila del cursor.
+    /// Marks or unmarks the cursor's row.
     Marcar,
-    /// Marca o desmarca la fila del cursor y SUBE (`shift+↑`).
+    /// Marks or unmarks the cursor's row and MOVES UP (`shift+↑`).
     MarcarSubiendo,
-    /// Marca (o desmarca) el tramo de una página y se mueve allí.
+    /// Marks (or unmarks) a page's span and moves there.
     MarcarPagina {
-        /// `true` = hacia abajo.
+        /// `true` = downward.
         abajo: bool,
     },
-    /// Marca del cursor a un extremo y DESMARCA el otro lado
-    /// (`shift+Inicio`/`shift+Fin` de Krusader).
+    /// Marks from the cursor to one end and UNMARKS the other side
+    /// (Krusader's `shift+Home`/`shift+End`).
     MarcarHastaElBorde {
-        /// `true` = hacia arriba.
+        /// `true` = upward.
         arriba: bool,
     },
-    /// Quita todas las marcas.
+    /// Clears all marks.
     DesmarcarTodo,
-    /// Mueve el foco al siguiente hueco enfocable (o al anterior).
+    /// Moves focus to the next focusable slot (or the previous one).
     ///
-    /// Con dos paneles es el cambio de siempre; con más, sigue el ORDEN de
-    /// tabulación que resuelve la capa compartida, que ya se salta lo que no
-    /// se ve y lo que no se enfoca.
+    /// With two panes it is the usual switch; with more, it follows the
+    /// tab ORDER the shared layer resolves, which already skips what is not
+    /// visible and what cannot be focused.
     Foco {
-        /// `true` = hacia atrás.
+        /// `true` = backward.
         atras: bool,
-        /// `true` = solo paran los LISTADOS; los paneles laterales se saltan.
+        /// `true` = only LISTINGS stop; side panels are skipped.
         ///
-        /// Es la diferencia entre `pane.switch` y `layout.focus-next`: el
-        /// primero es «el otro panel» de cualquier gestor ortodoxo y el
-        /// segundo el recorrido de la pantalla entera. Un solo anillo para
-        /// los dos obligaba a dar cinco pulsaciones para volver al listado
-        /// de al lado con la barra de sitios, el árbol y el visor abiertos.
+        /// It is the difference between `pane.switch` and
+        /// `layout.focus-next`: the first is "the other pane" of any
+        /// orthodox manager and the second is the whole screen's traversal.
+        /// A single ring for both forced five presses to get back to the
+        /// listing next door with the places bar, the tree and the viewer
+        /// open.
         solo_listados: bool,
     },
-    /// Designa OTRO hueco como destino de la siguiente operación.
+    /// Designates ANOTHER slot as the destination of the next operation.
     Destino,
-    /// Cambia el tamaño del hueco con el foco. Negativo lo encoge.
+    /// Resizes the focused slot. Negative shrinks it.
     Tamano(i64),
-    /// Iguala el peso de los hermanos del hueco con el foco.
+    /// Equalizes the weight of the focused slot's siblings.
     Igualar,
-    /// Gira el reparto del hueco con el foco (ADR 0138).
+    /// Rotates the focused slot's split (ADR 0138).
     Girar,
-    /// Abre el selector de disposiciones.
+    /// Opens the layout picker.
     Disposiciones,
-    /// Abre el selector de columnas.
+    /// Opens the column picker.
     Columnas,
-    /// Abre la paleta de comandos.
+    /// Opens the command palette.
     Paleta,
-    /// Abre «ir a cualquier sitio» (#357).
+    /// Opens "go to anywhere" (#357).
     IrA,
-    /// Abre los ajustes: se leen, se giran y se escriben.
+    /// Opens settings: they are read, cycled and written.
     Ajustes,
-    /// Abre el gestor de extensiones, en solo lectura.
+    /// Opens the extension manager, read-only.
     Extensiones,
-    /// Las sesiones de agente vistas, y el deshacer de una entera.
+    /// The agent sessions viewed, and undoing a whole one.
     Agentes,
-    /// Abre otra PESTAÑA junto al hueco enfocado.
+    /// Opens another TAB next to the focused slot.
     PestanaNueva,
-    /// Cierra la pestaña enfocada. Sin grupo, no hace nada.
+    /// Closes the focused tab. Without a group, does nothing.
     CerrarPestana,
-    /// Pasa a la pestaña siguiente —o anterior—, ciclando.
+    /// Moves to the next — or previous — tab, cycling.
     CiclarPestana {
-        /// Hacia atrás.
+        /// Backward.
         atras: bool,
     },
-    /// Mueve la pestaña enfocada dentro de su grupo.
+    /// Moves the focused tab within its group.
     MoverPestana {
-        /// Hacia la derecha.
+        /// To the right.
         derecha: bool,
     },
-    /// Va a la pestaña `n` (base 1) del grupo enfocado.
+    /// Goes to tab `n` (1-based) of the focused group.
     IrAPestana {
-        /// Cuál, empezando por 1.
+        /// Which one, starting at 1.
         n: usize,
     },
-    /// Parte el hueco enfocado y pone otro LISTADO al lado.
+    /// Splits the focused slot and puts another LISTING next to it.
     Partir {
-        /// Uno encima de otro en vez de uno al lado del otro.
+        /// One above the other instead of one beside the other.
         vertical: bool,
     },
-    /// Cierra el hueco enfocado.
+    /// Closes the focused slot.
     CerrarHueco,
-    /// Abre el panel de TERMINAL, o lo pone delante y le da el foco (#362).
+    /// Opens the TERMINAL panel, or brings it to front and gives it focus
+    /// (#362).
     ///
-    /// **No lo cierra nunca**, y ahí diverge de [`Self::AlternarHueco`] a
-    /// propósito: dentro hay un shell del lector, con lo que tuviera a medias.
-    /// Cerrarlo lo mata, y eso no puede ser lo que hace la misma tecla con la
-    /// que se entra. Para cerrarlo está `layout.close-slot`, que se llama como
-    /// lo que hace.
+    /// **It never closes it**, and that is a deliberate divergence from
+    /// [`Self::AlternarHueco`]: inside there is a shell belonging to the
+    /// reader, with whatever it had half-done. Closing it would kill it, and
+    /// that cannot be what the same key that enters it does. To close it
+    /// there is `layout.close-slot`, named for what it does.
     AbrirTerminal,
-    /// Abre —o cierra— el hueco auxiliar de este kind.
+    /// Opens — or closes — the auxiliary slot of this kind.
     AlternarHueco {
-        /// `places`, `processes`, `metadata` o `tree`: los que esta ventana sabe
-        /// PINTAR. Abrir uno que solo se pintaría en gris no es abrirlo.
+        /// `places`, `processes`, `metadata` or `tree`: the ones this window
+        /// knows how to PAINT. Opening one that would only paint gray is not
+        /// opening it.
         kind: &'static str,
     },
-    /// Mueve la fila elegida del TABLERO, sin tener que enfocarlo.
+    /// Moves the BOARD's selected row, without needing to focus it.
     TaskVecina {
-        /// Hacia arriba.
+        /// Upward.
         atras: bool,
     },
-    /// Quita del tablero la fila elegida, si ya terminó.
+    /// Removes the selected row from the board, if it already finished.
     DescartarTask,
-    /// Marca TODAS las filas del panel activo.
+    /// Marks ALL rows of the active pane.
     MarcarTodo,
-    /// Invierte las marcas del panel activo.
+    /// Inverts the active pane's marks.
     InvertirMarcas,
-    /// Marca —o desmarca— las de la MISMA extensión que la del cursor (#313).
+    /// Marks — or unmarks — the ones with the SAME extension as the cursor's
+    /// (#313).
     MarcarExtension {
-        /// `true` añade marcas, `false` las quita.
+        /// `true` adds marks, `false` removes them.
         marcar: bool,
     },
-    /// Marca las entradas de una CLASE: carpetas o ficheros (#313).
+    /// Marks entries of a CLASS: directories or files (#313).
     MarcarClase {
-        /// `true` marca carpetas, `false` ficheros.
+        /// `true` marks directories, `false` files.
         dirs: bool,
     },
-    /// Devuelve la selección anterior al último gesto en bloque (#313).
+    /// Restores the selection prior to the last block gesture (#313).
     RestaurarMarcas,
-    /// Cambia los PERMISOS POSIX de lo marcado (#314): pide el modo en octal.
+    /// Changes the POSIX PERMISSIONS of what is marked (#314): asks for the
+    /// mode in octal.
     Permisos,
-    /// Calcula las sumas de lo marcado, o COMPRUEBA el fichero de sumas bajo
-    /// el cursor (#311).
+    /// Computes checksums of what is marked, or VERIFIES the checksum file
+    /// under the cursor (#311).
     Sumas {
-        /// `true` comprueba contra un fichero de sumas; `false` calcula.
+        /// `true` verifies against a checksum file; `false` computes.
         verificar: bool,
     },
-    /// Marca —o desmarca— por PATRÓN: abre el prompt del glob.
+    /// Marks — or unmarks — by PATTERN: opens the glob prompt.
     MarcarPatron {
-        /// `true` añade marcas, `false` las quita.
+        /// `true` adds marks, `false` removes them.
         marcar: bool,
     },
-    /// Copia al portapapeles las rutas de lo marcado (o de lo señalado).
+    /// Copies the paths of what is marked (or of what is selected) to the
+    /// clipboard.
     CopiarRuta,
-    /// Abre lo señalado con la aplicación que el escritorio elija.
+    /// Opens what is selected with the application the desktop picks.
     AbrirExterno,
-    /// Edita lo señalado con el editor que `[ui] editor` nombre; sin él, lo
-    /// mismo que [`Efecto::AbrirExterno`].
+    /// Edits what is selected with the editor `[ui] editor` names; without
+    /// one, the same as [`Efecto::AbrirExterno`].
     EditarExterno,
-    /// Compara DOS ficheros (#312) con el programa de `[ui] diff` —o
-    /// `diff -u`—, lanzado por quien hospeda: suelto si abre ventana,
-    /// esperándolo y capturando su salida si no.
+    /// Compares TWO files (#312) with the program from `[ui] diff` — or
+    /// `diff -u` — launched by the host process: detached if it opens a
+    /// window, waited on and its output captured if not.
     CompararFicheros,
-    /// Abre un terminal sentado en el directorio del panel activo.
+    /// Opens a terminal sitting in the active pane's directory.
     Terminal,
-    /// Entrega la pantalla a la TERMINAL y cierra esta ventana (fase 9).
+    /// Hands the screen off to the TERMINAL and closes this window (phase
+    /// 9).
     ///
-    /// No es inerte (ADR 0126) y no escribe un fichero: lo que escribe es la
-    /// SESIÓN, y además la suelta y cierra la ventana. Una ventana de solo
-    /// mirar no hace ninguna de las tres.
+    /// Not inert (ADR 0126) and does not write a file: what it writes is the
+    /// SESSION, and it also releases it and closes the window. A look-only
+    /// window does none of the three.
     Relevo,
-    /// Enseña el tema activo por dentro.
+    /// Shows the active theme from the inside.
     Tema,
-    /// Despliega la barra de menús. Ni añade capacidades ni las quita:
-    /// ofrece las mismas órdenes del catálogo, ordenadas por tema, para
-    /// quien no sabe el nombre de lo que busca.
+    /// Unfolds the menu bar. Neither adds capabilities nor removes them: it
+    /// offers the same catalogue commands, sorted by topic, for whoever
+    /// does not know the name of what they are looking for.
     Menu,
-    /// Pide cerrar la ventana: el mismo camino que el botón de cerrar, con
-    /// la misma pregunta de `[ui] confirm_quit`.
+    /// Asks to close the window: the same path as the close button, with
+    /// the same `[ui] confirm_quit` question.
     Salir,
-    /// Abre el selector de PERFILES (ADR 0079).
+    /// Opens the PROFILE picker (ADR 0079).
     PerfilElegir,
-    /// Guardar el espacio de trabajo de AHORA como un perfil (#318).
+    /// Saves the CURRENT workspace as a profile (#318).
     PerfilGuardarComo,
-    /// Salta al perfil siguiente o al anterior, sin abrir nada.
+    /// Jumps to the next or previous profile, without opening anything.
     PerfilVecino {
-        /// Hacia el anterior.
+        /// Toward the previous one.
         atras: bool,
     },
-    /// Abre el selector de volúmenes del host.
+    /// Opens the host's volume picker.
     Volumenes,
-    /// Abre la ayuda. Sobre la página del CONTEXTO donde está el lector —
-    /// un diálogo abierto, el visor, el listado— y no siempre sobre el
-    /// índice: quien pulsa F1 mirando una pregunta quiere esa respuesta.
+    /// Opens help. On the page for the CONTEXT the reader is in — an open
+    /// dialog, the viewer, the listing — and not always on the index:
+    /// whoever presses F1 while looking at a question wants that answer.
     Ayuda,
-    /// Abre el visor sobre la entrada bajo el cursor.
+    /// Opens the viewer on the entry under the cursor.
     Ver,
-    /// Abre el buscador incremental del listado.
+    /// Opens the listing's incremental search.
     BuscarRapido,
-    /// Pide el PLAN de sincronizar el panel activo sobre el destino.
+    /// Asks for the PLAN to sync the active pane onto the destination.
     ///
-    /// El plan NO escribe: dice qué haría. Aun así no es inerte, porque
-    /// es la puerta de una escritura y una ventana que se declara de solo
-    /// mirar no la abre.
+    /// The plan does NOT write: it says what it would do. Still not inert,
+    /// because it is the door to a write and a window that declares itself
+    /// look-only does not open it.
     Sincronizar,
-    /// Compara los dos paneles y abre el panel de diferencias.
+    /// Compares the two panes and opens the differences pane.
     ///
-    /// NO muta: camina los dos árboles y contesta. Es una tarea larga y
-    /// cancelable, y cancelarla es su único freno.
+    /// Does NOT mutate: it walks both trees and answers. It is a long,
+    /// cancellable task, and cancelling it is its only brake.
     Comparar,
-    /// Empaqueta lo MARCADO en un contenedor nuevo (#132).
+    /// Packs what is MARKED into a new container (#132).
     ///
-    /// No es inerte (ADR 0126): escribe un fichero. El nombre se teclea, y de él
-    /// sale el FORMATO — un nombre sin extensión conocida se rehúsa en vez de
-    /// empaquetar en algo que nadie pidió.
+    /// Not inert (ADR 0126): it writes a file. The name is typed, and the
+    /// FORMAT comes from it — a name with no known extension is refused
+    /// instead of packing into something nobody asked for.
     Empaquetar,
-    /// Copia el INTERIOR del contenedor bajo el cursor al panel destino
-    /// (#132).
+    /// Copies the container's INSIDE under the cursor to the destination
+    /// pane (#132).
     ///
-    /// No lleva método propio y no le hace falta: el motor de copia acepta el
-    /// interior de un archivo como origen, así que desempaquetar es la copia
-    /// que el lector podría haber hecho a mano — con su journal, su undo, su
-    /// política de colisiones y su cancelación.
+    /// It carries no method of its own and needs none: the copy engine
+    /// accepts an archive's inside as a source, so unpacking is the copy the
+    /// reader could have done by hand — with its journal, its undo, its
+    /// collision policy and its cancellation.
     Desempaquetar,
-    /// Comprueba el contenedor bajo el cursor (#132).
+    /// Checks the container under the cursor (#132).
     ///
-    /// Es inerte (ADR 0126): lee el archivo entero y contesta si está sano,
-    /// sin escribir nada. Es la misma categoría que comparar.
+    /// Inert (ADR 0126): it reads the whole archive and answers whether it
+    /// is sound, without writing anything. Same category as comparing.
     ComprobarArchivo,
-    /// El selector de conexiones configuradas (#264).
+    /// The configured-connections picker (#264).
     ///
-    /// Es inerte (ADR 0126): listar no abre nada. Elegir una NAVEGA, y navegar
-    /// es lo que establece la sesión — con el mismo gate que cualquier otro
-    /// listado, y su TOFU si hace falta.
+    /// Inert (ADR 0126): listing opens nothing. Choosing one NAVIGATES, and
+    /// navigating is what establishes the session — with the same gate as
+    /// any other listing, and its TOFU if needed.
     Conexiones,
-    /// Cierra la sesión del panel activo y lo saca de ahí (#140).
+    /// Closes the active pane's session and takes it out of there (#140).
     ///
-    /// Es inerte (ADR 0126): soltar una sesión no escribe un byte en ningún
-    /// sitio. Lo que sí hace es dejar el panel mirando algo que ya no se puede
-    /// leer, y por eso navega a continuación.
+    /// Inert (ADR 0126): releasing a session does not write a single byte
+    /// anywhere. What it does do is leave the pane looking at something it
+    /// can no longer read, which is why it navigates afterward.
     Desconectar,
-    /// Parte el fichero bajo el cursor en trozos del tamaño que se teclee
-    /// (#132). No es inerte (ADR 0126): escribe los trozos.
+    /// Splits the file under the cursor into chunks of the typed size
+    /// (#132). Not inert (ADR 0126): it writes the chunks.
     ///
-    /// `PartirFichero` y no `Partir` a secas: [`Efecto::Partir`] es partir un
-    /// HUECO de la disposición, que no tiene nada que ver.
+    /// `PartirFichero` and not plain `Partir`: [`Efecto::Partir`] is
+    /// splitting a layout SLOT, which has nothing to do with this.
     PartirFichero,
-    /// Junta los trozos a partir del `.001` bajo el cursor (#132). También
-    /// escribe, así que tampoco es inerte.
+    /// Joins the chunks starting from the `.001` under the cursor (#132).
+    /// Also writes, so it is not inert either.
     Juntar,
-    /// Cuenta lo que ocupa lo MARCADO —o lo que hay bajo el cursor— (#139).
+    /// Counts how much space what is MARKED — or what is under the cursor —
+    /// takes up (#139).
     ///
-    /// Es inerte por lo mismo que [`Efecto::Comparar`]: camina un
-    /// árbol y contesta, sin escribir ni sacar nada del proceso que listar no
-    /// sacara ya. Es larga y cancelable, y el tablero la enseña como
-    /// `dir-size`.
+    /// Inert for the same reason as [`Efecto::Comparar`]: it walks a tree
+    /// and answers, without writing or sending out of the process anything
+    /// listing did not already send. It is long and cancellable, and the
+    /// board shows it as `dir-size`.
     TamanoDeDirectorio,
-    /// Pide una búsqueda SEMÁNTICA contra el índice: abre el prompt de la
-    /// consulta.
+    /// Asks for a SEMANTIC search against the index: opens the query prompt.
     ///
-    /// No es inerte (ADR 0126) y no escribe un byte: la consulta SALE del proceso
-    /// hacia el proveedor de IA configurado, igual que el contenido de un
-    /// directorio en [`Efecto::RenameIa`].
+    /// Not inert (ADR 0126) and does not write a byte: the query LEAVES the
+    /// process toward the configured AI provider, same as a directory's
+    /// contents in [`Efecto::RenameIa`].
     BuscarSemantica,
-    /// Abre el prompt de buscar por el subárbol.
+    /// Opens the subtree search prompt.
     Buscar,
-    /// Abre el prompt de crear directorio.
+    /// Opens the create-directory prompt.
     CrearDirectorio,
-    /// Abre el prompt de crear un fichero VACÍO y editarlo (#290).
+    /// Opens the prompt to create an EMPTY file and edit it (#290).
     ///
-    /// No es inerte (ADR 0126): crea un nodo en el disco, con su entrada de journal
-    /// y su deshacer, exactamente como crear un directorio.
+    /// Not inert (ADR 0126): it creates a node on disk, with its journal
+    /// entry and its undo, exactly like creating a directory.
     CrearFichero,
-    /// Pide borrar lo marcado (o lo que haya bajo el cursor). NO borra: abre
-    /// la confirmación, que es por donde pasan TODAS las vías —tecla, menú,
-    /// gesto—, porque una operación destructiva con dos puertas acaba
-    /// teniendo una sin cerrojo.
+    /// Asks to delete what is marked (or whatever is under the cursor). Does
+    /// NOT delete: it opens the confirmation, which is where ALL paths pass
+    /// through — key, menu, gesture — because a destructive operation with
+    /// two doors ends up with one unlocked.
     Borrar {
-        /// Permanente, sin papelera.
+        /// Permanent, no trash.
         permanente: bool,
     },
-    /// Pide copiar o mover lo marcado (o lo que haya bajo el cursor) al hueco
-    /// DESTINO. NO transfiere: abre la confirmación, por el mismo motivo que
-    /// [`Efecto::Borrar`] —y aquí además la confirmación es lo único que
-    /// enseña A DÓNDE va, que en una ventana con tres listados no es
-    /// evidente.
+    /// Asks to copy or move what is marked (or whatever is under the
+    /// cursor) to the DESTINATION slot. Does NOT transfer: it opens the
+    /// confirmation, for the same reason as [`Efecto::Borrar`] — and here
+    /// the confirmation is also the only thing that shows WHERE it goes,
+    /// which in a window with three listings is not obvious.
     Transferir {
-        /// `true` = mover; `false` = copiar. El wire son dos métodos
-        /// distintos, así que esto no elige una opción: elige el verbo.
+        /// `true` = move; `false` = copy. On the wire these are two
+        /// different methods, so this does not pick an option: it picks the
+        /// verb.
         mover: bool,
     },
-    /// Pide un plan de renombrado para el directorio ENTERO. Abre el prompt
-    /// de la instrucción; el plan llega después y se revisa antes de nada.
+    /// Asks for a rename plan for the WHOLE directory. Opens the
+    /// instruction prompt; the plan arrives afterward and is reviewed
+    /// before anything else.
     RenameIa,
-    /// Pide un plan de ORGANIZAR para el directorio entero (fase 8). No abre
-    /// prompt: lo que se pide es «mira este directorio y propón una forma»,
-    /// así que el plan llega solo y se revisa como un árbol antes de nada.
+    /// Asks for an ORGANIZE plan for the whole directory (phase 8). Opens
+    /// no prompt: what is asked is "look at this directory and propose a
+    /// shape", so the plan arrives on its own and is reviewed as a tree
+    /// before anything else.
     Organizar,
-    /// Renombrar en lote por PLANTILLA (#310): abre el prompt de la
-    /// plantilla, y el plan —determinista, sin modelo— entra por la MISMA
-    /// revisión que el de la IA.
+    /// Batch rename by TEMPLATE (#310): opens the template prompt, and the
+    /// plan — deterministic, no model — goes through the SAME review as the
+    /// AI's.
     RenameLote,
-    /// Pide parar una task del tablero.
+    /// Asks to stop a task on the board.
     ///
-    /// Sobrevive a [`Efectos::SoloLectura`] **solo para las tasks propias**, y
-    /// la distinción no es formalismo: parar una copia SÍ toca el disco —el
-    /// destino se limpia o queda un `.norte-partial`, que es la regla del
-    /// proyecto—, así que una ventana montada sin efectos no puede abortar la
-    /// transferencia de OTRO cliente y dejarle un parcial. Sus propias tasks
-    /// son otra cosa: si pudo lanzarlas, puede pararlas.
+    /// Survives [`Efectos::SoloLectura`] **only for its own tasks**, and the
+    /// distinction is not formalism: stopping a copy DOES touch disk — the
+    /// destination gets cleaned up or a `.norte-partial` is left, which is
+    /// the project's rule — so a window mounted with no effects cannot abort
+    /// ANOTHER client's transfer and leave it a partial. Its own tasks are a
+    /// different matter: if it could launch them, it can stop them.
     CancelarTask,
-    /// Pausa la tarea elegida, o la reanuda si ya está pausada (ADR 0147).
-    /// La misma elección que [`Self::CancelarTask`], y la misma regla para
-    /// las de OTRO cliente en una ventana sin efectos.
+    /// Pauses the selected task, or resumes it if already paused (ADR
+    /// 0147). The same choice as [`Self::CancelarTask`], and the same rule
+    /// for ANOTHER client's tasks in a window with no effects.
     PausarTask,
-    /// Repite la transferencia fallida más reciente con sus mismas opciones
-    /// (ADR 0148). Muta, así que una ventana sin efectos la rehúsa.
+    /// Retries the most recent failed transfer with the same options (ADR
+    /// 0148). Mutates, so a window with no effects refuses it.
     ReintentarTask,
-    /// Manda a la cola en serie las transferencias que se lancen a partir de
-    /// ahora, o deja de hacerlo (ADR 0149). No toca lo ya encolado.
+    /// Sends transfers launched from now on to the serial queue, or stops
+    /// doing so (ADR 0149). Does not touch what is already queued.
     AlternarCola,
-    /// Sube (`arriba`) o baja en la cola la tarea señalada, si aún no empezó.
+    /// Moves the selected task up (`arriba`) or down the queue, if it has
+    /// not started yet.
     MoverEnCola {
-        /// Hacia el principio de la cola.
+        /// Toward the front of the queue.
         arriba: bool,
     },
-    /// Ordena el listado enfocado por esta columna.
+    /// Sorts the focused listing by this column.
     ///
-    /// La misma semántica que un click en la cabecera: la columna activa
-    /// invierte, una nueva ordena ascendente. Quien lo decide es
-    /// `SortSpec::after_click`, no una segunda tabla de aquí.
+    /// The same semantics as a click on the header: the active column
+    /// reverses, a new one sorts ascending. `SortSpec::after_click` is what
+    /// decides it, not a second table here.
     ///
-    /// La CLAVE de una columna de orden, no la columna: por aquí solo llegan
-    /// las teclas de orden (`pane.sort-name`, `-size`…), que son siempre
-    /// built-ins. Ordenar por un atributo entra por el clic en su cabecera
-    /// (`ordenar_por`), así que meter aquí el `SortColumn` entero —que dejó de
-    /// ser `Copy` al poder llevar un id (ADR 0144)— le quitaría `Copy` a todo
-    /// `Efecto` por un caso que por este camino no llega nunca.
+    /// The KEY of a sort column, not the column itself: only sort keys
+    /// arrive here (`pane.sort-name`, `-size`…), which are always built-ins.
+    /// Sorting by an attribute enters through a click on its header
+    /// (`ordenar_por`), so putting the whole `SortColumn` here — which
+    /// stopped being `Copy` once it could carry an id (ADR 0144) — would
+    /// strip `Copy` from all of `Efecto` for a case that never arrives
+    /// through this path.
     Ordenar(norte_config::SortColumnKey),
-    /// Vuelve a pedir el listado de los huecos que se ven.
+    /// Asks again for the listing of the slots that are visible.
     ///
-    /// De TODOS, no solo del enfocado: un cambio externo raramente respeta
-    /// el foco, que es por lo que el TUI refresca los dos paneles.
+    /// For ALL of them, not just the focused one: an external change rarely
+    /// respects focus, which is why the TUI refreshes both panes.
     Refrescar,
-    /// Aparta o devuelve los ficheros ocultos del panel activo.
+    /// Hides or restores the active pane's hidden files.
     ///
-    /// Presentación-solo (#107): el provider no re-lista.
+    /// Presentation-only (#107): the provider does not re-list.
     AlternarOcultos,
-    /// Cicla la reinterpretación de los nombres que no son UTF-8 (#57).
+    /// Cycles the reinterpretation of names that are not UTF-8 (#57).
     ///
-    /// Display-only, regla 1: los bytes no se tocan.
+    /// Display-only, rule 1: the bytes are not touched.
     CiclarEncoding,
-    /// La ubicación del hueco ACTIVO viaja al hueco DESTINO.
+    /// The ACTIVE slot's location travels to the DESTINATION slot.
     Espejo,
-    /// Enciende o apaga la navegación SINCRONIZADA: mientras está puesta,
-    /// cada navegación del hueco activo la repite el destino.
+    /// Turns SYNCED navigation on or off: while it is on, every navigation
+    /// of the active slot is repeated by the destination.
     ///
-    /// No navega por sí mismo, y por eso no está en el grupo de gestos de
-    /// panel de al lado: lo único que hace es mover un interruptor.
+    /// Does not navigate on its own, which is why it is not in the pane
+    /// gesture group next to it: all it does is flip a switch.
     EspejoPermanente,
-    /// Como [`Efecto::Espejo`], pero lo que viaja es el OBJETIVO DEL CURSOR:
-    /// la carpeta bajo él si lo es, y si no la ubicación del hueco activo
-    /// (`Ctrl+←`/`Ctrl+→` de Krusader). Qué directorio es eso lo decide
-    /// `PaneState::target_dir`, uno solo para los dos frontends (ADR 0077).
+    /// Like [`Efecto::Espejo`], but what travels is the CURSOR'S TARGET: the
+    /// folder under it if it is one, and if not the active slot's location
+    /// (Krusader's `Ctrl+←`/`Ctrl+→`). Which directory that is is decided by
+    /// `PaneState::target_dir`, one shared by both frontends (ADR 0077).
     EspejoObjetivo,
-    /// La ubicación del hueco DESTINO viaja al ACTIVO: el espejo al revés.
+    /// The DESTINATION slot's location travels to the ACTIVE one: the
+    /// mirror in reverse.
     Traer,
-    /// Los dos huecos —activo y destino— cambian de sitio.
+    /// The two slots — active and destination — swap places.
     ///
-    /// No toca disco: los dos listados ya existían.
+    /// Does not touch disk: both listings already existed.
     Intercambiar,
-    /// Abre la lista del rastro de navegación del hueco activo.
+    /// Opens the active slot's navigation-trail list.
     Historial,
-    /// Abre la lista de favoritos de la configuración.
+    /// Opens the configuration's favorites list.
     Hotlist,
-    /// Abre los directorios POPULARES de la sesión (spec 2026-09-15 D6).
+    /// Opens the session's POPULAR directories (spec 2026-09-15 D6).
     Populares,
-    /// Abre la historia de un LADO de la pantalla (D7), resuelto por la
-    /// geometría del reparto como en [`Efecto::VolumenesDeLado`].
+    /// Opens the history of one SIDE of the screen (D7), resolved by the
+    /// split's geometry as in [`Efecto::VolumenesDeLado`].
     HistorialDeLado {
-        /// El de más a la derecha en vez del de más a la izquierda.
+        /// The rightmost one instead of the leftmost.
         derecha: bool,
     },
-    /// Vuelve al punto de salto del hueco activo (D5).
+    /// Returns to the active slot's jump point (D5).
     SaltoAtras,
-    /// Fija el punto de salto en el directorio del hueco activo (D5).
+    /// Sets the jump point at the active slot's directory (D5).
     FijarSalto,
-    /// Abre el selector de volúmenes para un LADO de la pantalla.
+    /// Opens the volume picker for one SIDE of the screen.
     ///
-    /// Un lado, no el foco: es lo que hacen `Alt+F1`/`Alt+F2` de Total
-    /// Commander, y lo que el TUI hace con sus `panes[0]`/`panes[1]`. Aquí
-    /// el lado lo decide la GEOMETRÍA del reparto, que es lo único que en
-    /// un árbol de huecos significa «izquierda».
+    /// A side, not the focus: it is what Total Commander's
+    /// `Alt+F1`/`Alt+F2` do, and what the TUI does with its
+    /// `panes[0]`/`panes[1]`. Here the side is decided by the split's
+    /// GEOMETRY, the only thing that means "left" in a tree of slots.
     VolumenesDeLado {
-        /// El de más a la derecha en vez del de más a la izquierda.
+        /// The rightmost one instead of the leftmost.
         derecha: bool,
     },
-    /// Pide renombrar la entrada bajo el cursor. NO renombra: abre el nombre
-    /// para editarlo.
+    /// Asks to rename the entry under the cursor. Does NOT rename: it opens
+    /// the name for editing.
     ///
-    /// Por el WIRE es un movimiento al mismo directorio, y aun así es un
-    /// efecto propio: lo que pregunta es otra cosa (un nombre, no un sitio),
-    /// lo que rehúsa es otra cosa (una selección múltiple, no un destino que
-    /// falta) y lo que siembra el campo tiene una regla que ninguna otra
-    /// superficie tiene — el nombre SIN TOCAR viaja como bytes.
+    /// On the WIRE it is a move to the same directory, and it is still its
+    /// own effect: what it asks is a different thing (a name, not a place),
+    /// what it refuses is a different thing (a multi-selection, not a
+    /// missing destination) and what seeds the field has a rule no other
+    /// surface has — the UNTOUCHED name travels as bytes.
     Renombrar,
 }
 
-/// Traduce un comando del catálogo al efecto que el host aplica.
+/// Translates a catalogue command into the effect the host applies.
 ///
-/// `None` = el host no lo implementa. No es un descarte silencioso: quien
-/// llama lo convierte en un `Unavailable` que el usuario ve.
+/// `None` = the host does not implement it. Not a silent discard: the
+/// caller turns it into an `Unavailable` the user sees.
 #[must_use]
-// Una TABLA: un brazo por comando del catálogo, y cada brazo es un nombre.
-// Larga por número de comandos, no por lógica — partirla en dos mitades
-// arbitrarias solo escondería la mitad, y lo que hace legible una tabla es
-// verla entera. Mismo criterio que el reparto de mensajes del actor.
+// A TABLE: one arm per catalogue command, and each arm is a name. Long
+// because of the number of commands, not logic — splitting it into two
+// arbitrary halves would only hide the other half, and what makes a table
+// readable is seeing it whole. Same criterion as the actor's message
+// dispatch.
 #[expect(
     clippy::too_many_lines,
-    reason = "tabla comando→efecto: legible entera, como el reparto de mensajes del actor"
+    reason = "command→effect table: readable whole, like the actor's message dispatch"
 )]
 pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
     let n = i64::from(veces.max(1).min(u32::from(u16::MAX)));
     Some(match command {
         "cursor.up" => Efecto::Cursor(-n),
         "cursor.down" => Efecto::Cursor(n),
-        // Una página son las filas VISIBLES, y cuántas son lo sabe el hueco
-        // (el renderer se lo dijo con `SetVisibleRange`): por eso viaja como
-        // páginas y no como filas.
+        // A page is the VISIBLE rows, and how many that is is known by the
+        // slot (the renderer told it via `SetVisibleRange`): that is why it
+        // travels as pages and not as rows.
         "cursor.page-up" => Efecto::Pagina(-n),
         "cursor.page-down" => Efecto::Pagina(n),
         "cursor.top" => Efecto::Extremo { al_final: false },
@@ -837,11 +857,11 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "mark.toggle-page-up" => Efecto::MarcarPagina { abajo: false },
         "mark.to-top" => Efecto::MarcarHastaElBorde { arriba: true },
         "mark.to-bottom" => Efecto::MarcarHastaElBorde { arriba: false },
-        // `pane.switch` es «el otro panel»: cicla los LISTADOS, todos los que
-        // haya, y ninguno más. `layout.focus-*` es el recorrido de la pantalla
-        // entera, laterales incluidos. Compartían brazo, y eso hacía que con
-        // el árbol y el visor abiertos el tabulador diera cinco paradas para
-        // volver al listado de al lado.
+        // `pane.switch` is "the other pane": it cycles the LISTINGS, all of
+        // them there are, and nothing else. `layout.focus-*` is the whole
+        // screen's traversal, side panels included. They used to share an
+        // arm, and that meant that with the tree and the viewer open, tab
+        // took five stops to get back to the listing next door.
         "pane.switch" => Efecto::Foco {
             atras: false,
             solo_listados: true,
@@ -869,13 +889,13 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "layout.terminal" => Efecto::AbrirTerminal,
         "layout.disk-map" => Efecto::AlternarHueco { kind: "disk-map" },
         "layout.timeline" => Efecto::AlternarHueco { kind: "timeline" },
-        // El último de los siete de la ADR 0058 (#291): el visor acoplado.
+        // The last of the seven from ADR 0058 (#291): the docked viewer.
         "layout.preview" => Efecto::AlternarHueco { kind: "viewer" },
         "pane.tree" => Efecto::AlternarHueco { kind: "tree" },
-        // `pane.properties` cae aquí a propósito: las propiedades de esta
-        // ventana SON la hoja de atributos, que ya enseña nombre, clase,
-        // tamaño y fecha de lo señalado. Lo hace de otra forma, igual que
-        // ordena pulsando la cabecera.
+        // `pane.properties` falls here on purpose: this window's properties
+        // ARE the attribute sheet, which already shows name, class, size and
+        // date of what is selected. It does it a different way, same as
+        // sorting by clicking the header.
         "layout.metadata" | "pane.properties" => Efecto::AlternarHueco { kind: "metadata" },
         "pane.tab-new" => Efecto::PestanaNueva,
         "pane.tab-close" => Efecto::CerrarPestana,
@@ -892,10 +912,10 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.tab-goto-7" => Efecto::IrAPestana { n: 7 },
         "pane.tab-goto-8" => Efecto::IrAPestana { n: 8 },
         "pane.tab-goto-9" => Efecto::IrAPestana { n: 9 },
-        // El «menú de orden» ES el diálogo de columnas: ahí están la columna,
-        // la dirección y `dirs_first`. Una segunda pantalla para lo mismo
-        // sería otra que mantener y otra que aprender, y es la misma decisión
-        // que tomó el TUI.
+        // The "sort menu" IS the columns dialog: the column, the direction
+        // and `dirs_first` are all there. A second screen for the same
+        // thing would be one more to maintain and one more to learn, and it
+        // is the same decision the TUI made.
         "pane.columns" | "pane.sort-menu" => Efecto::Columnas,
         "app.palette" => Efecto::Paleta,
         "app.goto" => Efecto::IrA,
@@ -905,15 +925,15 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "app.extensions" => Efecto::Extensiones,
         "app.agents" => Efecto::Agentes,
         "pane.copy-path" => Efecto::CopiarRuta,
-        // F4 lanza el editor que `[ui] editor` nombre, y si no hay ninguno
-        // cae en `pane.open` — o sea en `openers.toml` y, en último término,
-        // en la aplicación del ESCRITORIO.
+        // F4 launches the editor `[ui] editor` names, and if there is none
+        // it falls back to `pane.open` — i.e. to `openers.toml` and,
+        // ultimately, to the DESKTOP's application.
         //
-        // Lo que sigue fuera es `$EDITOR` (#290), y sigue siendo deliberado:
-        // el TUI lo lanza porque ya está dentro de un terminal, y esta
-        // ventana no tiene uno donde ponerlo. `[ui] editor` es otra cosa —un
-        // programa que el lector nombra, y que puede ser gráfico— y su clave
-        // hermana `[ui] diff` ya la honra esta ventana.
+        // What stays out is `$EDITOR` (#290), and that remains deliberate:
+        // the TUI launches it because it is already inside a terminal, and
+        // this window has none to put it in. `[ui] editor` is a different
+        // thing — a program the reader names, which can be graphical — and
+        // this window already honors its sibling key `[ui] diff`.
         "pane.open" => Efecto::AbrirExterno,
         "pane.edit" => Efecto::EditarExterno,
         "pane.compare-files" => Efecto::CompararFicheros,
@@ -953,8 +973,8 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.split-file" => Efecto::PartirFichero,
         "pane.combine-files" => Efecto::Juntar,
         "pane.sync-dirs" => Efecto::Sincronizar,
-        // #138: la misma semántica que un click en la cabecera, y sobre el
-        // hueco con el FOCO — el orden es de un listado, como el cursor.
+        // #138: the same semantics as a click on the header, and on the
+        // FOCUSED slot — the sort belongs to a listing, like the cursor.
         "pane.sort-name" => Efecto::Ordenar(norte_config::SortColumnKey::Name),
         "pane.sort-ext" => Efecto::Ordenar(norte_config::SortColumnKey::Extension),
         "pane.sort-size" => Efecto::Ordenar(norte_config::SortColumnKey::Size),
@@ -974,17 +994,17 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         "pane.history-right" => Efecto::HistorialDeLado { derecha: true },
         "pane.select-drive-left" => Efecto::VolumenesDeLado { derecha: false },
         "pane.select-drive-right" => Efecto::VolumenesDeLado { derecha: true },
-        otro => return efecto_del_tablero(otro),
+        otro => return board_effect(otro),
     })
 }
 
-/// La cola de [`efecto_de`]: lo que actúa sobre el TABLERO de tasks.
+/// The tail of [`efecto_de`]: what acts on the task BOARD.
 ///
-/// Vive aparte porque el `match` de una sola función se pasa del tope de
-/// líneas, y este es el corte natural: todo lo de arriba actúa sobre un
-/// listado o sobre lo que se enseña encima de él; esto, sobre las tareas en
-/// marcha, que no son ni una cosa ni la otra.
-fn efecto_del_tablero(command: &str) -> Option<Efecto> {
+/// Lives apart because a single function's `match` goes over the line cap,
+/// and this is the natural cut: everything above acts on a listing or on
+/// what is shown above it; this, on tasks in progress, which are neither one
+/// nor the other.
+fn board_effect(command: &str) -> Option<Efecto> {
     Some(match command {
         "task.next" => Efecto::TaskVecina { atras: false },
         "task.prev" => Efecto::TaskVecina { atras: true },
@@ -1003,62 +1023,63 @@ fn efecto_del_tablero(command: &str) -> Option<Efecto> {
 mod tests {
     use super::*;
 
-    /// Todo lo que se declara implementado tiene efecto, y al revés. Sin
-    /// esto, la lista y el `match` se separan y `Availability` empieza a
-    /// mentir.
+    /// Everything declared implemented has an effect, and vice versa.
+    /// Without this, the list and the `match` drift apart and `Availability`
+    /// starts lying.
     #[test]
-    fn la_lista_y_los_efectos_no_pueden_separarse() {
+    fn the_list_and_the_effects_cannot_come_apart() {
         for c in IMPLEMENTADOS {
             assert!(
                 efecto_de(c, 1).is_some(),
-                "{c} está en la lista y no tiene efecto"
+                "{c} is in the list and has no effect"
             );
         }
     }
 
-    /// Lo mismo para la pantalla del visor.
+    /// Same for the viewer screen.
     #[test]
-    fn la_lista_del_visor_y_sus_efectos_no_pueden_separarse() {
+    fn the_viewer_list_and_its_effects_cannot_come_apart() {
         for c in IMPLEMENTADOS_VISOR {
             assert!(
                 efecto_visor_de(c, 1).is_some(),
-                "{c} está en la lista del visor y no tiene efecto"
+                "{c} is in the viewer list and has no effect"
             );
         }
     }
 
-    /// Y las dos listas son disjuntas: un comando en las dos significaría que
-    /// una tecla hace dos cosas distintas según la pantalla sin que nadie lo
-    /// declare.
+    /// And the two lists are disjoint: a command in both would mean a key
+    /// does two different things depending on the screen with nobody
+    /// declaring it.
     #[test]
-    fn las_dos_pantallas_no_comparten_comandos() {
+    fn the_two_screens_share_no_commands() {
         for c in IMPLEMENTADOS_VISOR {
             assert!(
                 !IMPLEMENTADOS.contains(c),
-                "{c} está declarado en las dos pantallas"
+                "{c} is declared on both screens"
             );
         }
     }
 
-    /// Y todo lo declarado existe en el catálogo compartido: un comando
-    /// inventado aquí no lo ligaría ningún preset.
+    /// And everything declared exists in the shared catalogue: a command
+    /// invented here would not be bound by any preset.
     #[test]
-    fn todo_lo_declarado_esta_en_el_catalogo() {
+    fn everything_declared_is_in_the_catalogue() {
         for c in todos() {
             assert!(
                 norte_frontend::keymap::CATALOGUE
                     .iter()
                     .any(|d| d.name == c),
-                "{c} no está en el catálogo compartido"
+                "{c} is not in the shared catalogue"
             );
         }
     }
 
-    /// Solo lectura quita EXACTAMENTE lo que el catálogo no llama inerte, y
-    /// son los veinticuatro que la lista `MUTAN` enumeraba a mano antes de
-    /// ADR 0126: derivarlos no podía cambiar qué hace la ventana.
+    /// Read-only removes EXACTLY what the catalogue does not call inert,
+    /// and those are the twenty-four the `MUTAN` list used to enumerate by
+    /// hand before ADR 0126: deriving them could not change what the window
+    /// does.
     #[test]
-    fn solo_lectura_quita_lo_que_no_es_inerte() {
+    fn read_only_removes_what_is_not_inert() {
         let solo_lectura = implementados(Efectos::SoloLectura);
         let mut quitados: Vec<&str> = IMPLEMENTADOS
             .iter()
@@ -1071,10 +1092,10 @@ mod tests {
             [
                 "app.handoff",
                 "app.terminal",
-                // #362: abre un SHELL, así que en solo lectura se va como sus
-                // dos vecinos de arriba. Un panel de terminal en una ventana
-                // que promete no escribir sería la puerta de atrás más ancha
-                // posible: dentro se puede teclear cualquier cosa.
+                // #362: opens a SHELL, so in read-only it goes the way of
+                // its two neighbors above. A terminal panel in a window
+                // that promises not to write would be the widest possible
+                // back door: anything can be typed inside it.
                 "layout.terminal",
                 "pane.ai-rename",
                 "pane.checksum",
@@ -1101,34 +1122,35 @@ mod tests {
             ]
         );
         for c in &solo_lectura {
-            assert!(inerte(c), "{c} sobrevive a solo lectura sin ser inerte");
+            assert!(inerte(c), "{c} survives read-only without being inert");
         }
     }
 
-    /// El visor y los diálogos no se filtran en solo lectura: sus listas se
-    /// sirven enteras. Eso sólo es correcto mientras TODO lo que tienen sea
-    /// inerte, y este test lo exige — un `viewer.edit` que lanzara un editor
-    /// se colaría, si no, en la ventana que prometió sólo mirar (ADR 0126).
+    /// The viewer and the dialogs are not filtered in read-only: their lists
+    /// are served whole. That is only correct as long as EVERYTHING they
+    /// have is inert, and this test requires it — a `viewer.edit` that
+    /// launched an editor would otherwise slip into the window that
+    /// promised to only look (ADR 0126).
     #[test]
-    fn el_visor_y_los_dialogos_solo_tienen_comandos_inertes() {
+    fn the_viewer_and_the_dialogs_only_have_inert_commands() {
         for c in IMPLEMENTADOS_VISOR.iter().chain(IMPLEMENTADOS_DIALOGO) {
             assert!(
                 inerte(c),
-                "{c} no es inerte y su lista no se filtra en solo lectura"
+                "{c} is not inert and its list is not filtered in read-only"
             );
         }
     }
 
-    /// Un nombre que el catálogo no conoce no es inerte.
+    /// A name the catalogue does not know is not inert.
     #[test]
-    fn lo_desconocido_no_es_inerte() {
-        assert!(!inerte("pane.no-existe-jamas"));
+    fn the_unknown_is_not_inert() {
+        assert!(!inerte("pane.does-not-exist-ever"));
         assert!(inerte("cursor.down"));
     }
 
-    /// El contador multiplica lo que se puede repetir.
+    /// The counter multiplies whatever can be repeated.
     #[test]
-    fn el_contador_multiplica() {
+    fn the_counter_multiplies() {
         assert_eq!(efecto_de("cursor.down", 3), Some(Efecto::Cursor(3)));
         assert_eq!(efecto_de("cursor.up", 3), Some(Efecto::Cursor(-3)));
         assert_eq!(efecto_de("cursor.page-down", 2), Some(Efecto::Pagina(2)));

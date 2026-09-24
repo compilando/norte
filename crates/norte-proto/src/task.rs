@@ -1,6 +1,6 @@
-//! Tipos de Task: toda operación larga es una Task con id, estado y progreso
-//! (regla dura 3 de `CLAUDE.md`). La notificación `task.progress` viaja
-//! coalescida (≤30 Hz) — el coalescido es del emisor, no del tipo.
+//! Task types: every long-running operation is a Task with an id, a state and
+//! progress (CLAUDE.md hard rule 3). The `task.progress` notification travels
+//! coalesced (≤30 Hz) — the coalescing is the emitter's, not the type's.
 
 use std::fmt;
 
@@ -8,9 +8,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Error, VPath};
 
-/// Identificador de una Task, único por proceso core.
+/// Identifier of a Task, unique per core process.
 ///
-/// Wire: número JSON transparente.
+/// Wire: a transparent JSON number.
 ///
 /// ```
 /// use norte_proto::TaskId;
@@ -23,13 +23,13 @@ use crate::{Error, VPath};
 pub struct TaskId(u64);
 
 impl TaskId {
-    /// Construye desde el contador del scheduler.
+    /// Builds it from the scheduler's counter.
     #[must_use]
     pub fn new(id: u64) -> Self {
         Self(id)
     }
 
-    /// El valor numérico.
+    /// The numeric value.
     #[must_use]
     pub fn get(self) -> u64 {
         self.0
@@ -42,207 +42,205 @@ impl fmt::Display for TaskId {
     }
 }
 
-/// Clase de operación que ejecuta una Task (M0: las tres mutaciones del VFS).
+/// Class of operation a Task runs (M0: the three VFS mutations).
 ///
-/// `#[non_exhaustive]` (#126): antes de esto, cada variante nueva rompía la
-/// API de Rust para quien hiciera match exhaustivo fuera de este crate — por
-/// eso `Mkdir`, `Embed` y `RenameBatch` tocaron los dos frontends en su propio
-/// commit. Es una propiedad SOLO de la API de Rust: invisible en JSON, no
-/// mueve el wire, no toca `#[serde(other)]` ni pide bump de versión de
-/// protocolo. El coste es simétrico al beneficio: un `match` externo ahora
-/// necesita un brazo `_`, así que el compilador deja de señalar dónde un kind
-/// nuevo necesita etiqueta — cada `_` debe hacer lo mismo que ya hace el
-/// brazo de [`TaskKind::Unknown`] en ese mismo match, no inventar un
-/// comportamiento nuevo.
+/// `#[non_exhaustive]` (#126): before this, every new variant broke the Rust
+/// API for whoever matched exhaustively outside this crate — that is why
+/// `Mkdir`, `Embed` and `RenameBatch` touched both frontends in their own
+/// commit. It is a property ONLY of the Rust API: invisible in JSON, it does
+/// not move the wire, does not touch `#[serde(other)]`, and does not require a
+/// protocol version bump. The cost is symmetric with the benefit: an external
+/// `match` now needs a `_` arm, so the compiler stops pointing out where a new
+/// kind needs a label — every `_` must do the same thing
+/// [`TaskKind::Unknown`]'s arm already does in that same match, not invent new
+/// behavior.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
-    /// Copia (posiblemente recursiva, posiblemente cross-provider).
+    /// Copy (possibly recursive, possibly cross-provider).
     Copy,
-    /// Movimiento (rename atómico o copy+delete).
+    /// Move (atomic rename or copy+delete).
     Move,
-    /// Borrado (recursivo post-order).
+    /// Delete (post-order recursive).
     Delete,
-    /// Undo de sesión: deshace mutaciones previas en LIFO (M3-2).
+    /// Session undo: undoes previous mutations LIFO (M3-2).
     ///
-    /// OJO (compat): esta variante entra en 0.10.0. Un cliente 0.9.x (N-1) NO la
-    /// conoce y su parse de `TaskKind` FALLA al recibirla — el `serde(other)` de
-    /// abajo protege a ESTE proto (0.10+) frente a kinds de 0.11+, no
-    /// retroactivamente al 0.9. En M3-2 el undo no se expone por RPC (no llega a
-    /// clientes), así que la rotura es latente; M3-4 debe gatear la emisión de
-    /// kinds nuevos por versión negociada (o asumir descarte silencioso en
-    /// broadcast y proteger el resync de `task.list`).
+    /// NOTE (compat): this variant entered in 0.10.0. A 0.9.x (N-1) client
+    /// does NOT know it and its `TaskKind` parse FAILS on receiving it — the
+    /// `serde(other)` below protects THIS proto (0.10+) against 0.11+ kinds,
+    /// not retroactively against 0.9. In M3-2 the undo is not exposed over
+    /// RPC (it never reaches clients), so the break is latent; M3-4 must gate
+    /// the emission of new kinds by negotiated version (or assume silent
+    /// discard on broadcast and protect `task.list`'s resync).
     Undo,
-    /// Búsqueda viva por nombre y/o contenido bajo un subtree (`fs.search`,
-    /// M4 live search). Lectura pura (regla 4 no aplica): sin journal.
+    /// Live search by name and/or content under a subtree (`fs.search`, M4
+    /// live search). Pure read (rule 4 does not apply): no journal.
     ///
-    /// OJO (compat): esta variante entra en 0.18.0. A diferencia del borde
-    /// 0.9→0.10 de [`TaskKind::Undo`] (donde el `serde(other)` de abajo
-    /// TODAVÍA no existía), un cliente 0.17.x (N-1) YA tiene ese fallback
-    /// (desde 0.10) — recibirla la degrada a [`TaskKind::Unknown`] sin
-    /// fallar el parse. Sin gating de emisión necesario para este borde.
+    /// NOTE (compat): this variant entered in 0.18.0. Unlike the 0.9→0.10
+    /// edge of [`TaskKind::Undo`] (where the `serde(other)` below did NOT yet
+    /// exist), a 0.17.x (N-1) client ALREADY has that fallback (since 0.10) —
+    /// receiving it degrades it to [`TaskKind::Unknown`] without failing the
+    /// parse. No emission gating needed for this edge.
     Search,
-    /// Creación de un directorio (`fs.mkdir`, #104). Mutación: pasa por el
-    /// journal como `Created` con su undo (regla 4). Entra en 0.31.0; un
-    /// cliente N-1 (0.30.x) la degrada a [`TaskKind::Unknown`] vía el
-    /// `serde(other)`, mismo caso que `Search`/`Index`.
+    /// Creating a directory (`fs.mkdir`, #104). Mutation: goes through the
+    /// journal as `Created` with its undo (rule 4). Entered in 0.31.0; an N-1
+    /// client (0.30.x) degrades it to [`TaskKind::Unknown`] via
+    /// `serde(other)`, same case as `Search`/`Index`.
     Mkdir,
-    /// Creación de un fichero VACÍO (`fs.create`, #290). Lo mismo que
-    /// [`TaskKind::Mkdir`] con la otra clase de nodo: mutación, journal
-    /// `Created` con su undo. Entra en 0.57.0; un cliente N-1 (0.56.x) la
-    /// degrada a [`TaskKind::Unknown`] vía el `serde(other)`.
+    /// Creating an EMPTY file (`fs.create`, #290). The same as
+    /// [`TaskKind::Mkdir`] with the other node class: mutation, journal
+    /// `Created` with its undo. Entered in 0.57.0; an N-1 client (0.56.x)
+    /// degrades it to [`TaskKind::Unknown`] via `serde(other)`.
     Create,
-    /// Construcción/actualización del índice de búsqueda de un subtree
-    /// (`index.build`, M4). Entra en 0.25.0; un cliente N-1 (0.24.x) la degrada a
-    /// [`TaskKind::Unknown`] vía el `serde(other)`.
+    /// Building/updating the search index of a subtree (`index.build`, M4).
+    /// Entered in 0.25.0; an N-1 client (0.24.x) degrades it to
+    /// [`TaskKind::Unknown`] via `serde(other)`.
     Index,
-    /// `index.embed` (0.33.0): generación de embeddings del índice semántico.
-    /// Un cliente N-1 (0.32.x) la degrada a [`TaskKind::Unknown`] por su
+    /// `index.embed` (0.33.0): generating embeddings for the semantic index.
+    /// An N-1 client (0.32.x) degrades it to [`TaskKind::Unknown`] via its
     /// `serde(other)`.
     Embed,
-    /// Un lote de renames dentro de UN directorio ejecutado como UNA
-    /// transacción con UNA unidad deshacible del journal (`fs.rename_batch`,
-    /// 0.36.0). El progreso es `i/n` PASOS, no bytes. Un cliente N-1 (0.35.x)
-    /// la degrada a [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual
-    /// que `Search`/`Index`/`Embed`.
+    /// A batch of renames within ONE directory executed as ONE transaction
+    /// with ONE undoable journal unit (`fs.rename_batch`, 0.36.0). Progress is
+    /// `i/n` STEPS, not bytes. An N-1 client (0.35.x) degrades it to
+    /// [`TaskKind::Unknown`] via the `serde(other)` below, same as
+    /// `Search`/`Index`/`Embed`.
     RenameBatch,
-    /// Comparación de DOS árboles de directorios
+    /// Comparing TWO directory trees
     /// (`fs.compare`/[`FS_COMPARE`](crate::methods::FS_COMPARE), 0.39.0, ADR
-    /// 0048). Lectura pura (regla 4 no aplica): sin journal, sin undo, no
-    /// escribe un byte. El progreso cuenta PAREJAS emitidas, no bytes: con el
-    /// rung de hash apagado la comparación no lee contenido alguno, así que una
-    /// barra de bytes pintaría cero para siempre — mismo caso que
-    /// [`TaskKind::RenameBatch`].
+    /// 0048). Pure read (rule 4 does not apply): no journal, no undo, writes
+    /// not a byte. Progress counts PAIRS emitted, not bytes: with the hash
+    /// rung off the comparison reads no content at all, so a byte bar would
+    /// forever paint zero — same case as [`TaskKind::RenameBatch`].
     ///
-    /// Entra CON el método, en su mismo bump, y no después: el `task_id` de un
-    /// lote de [`COMPARE_ROWS`](crate::methods::COMPARE_ROWS) correlaciona con
-    /// una Task que el cliente tiene que poder clasificar en `task.list`. Un
-    /// cliente N-1 (0.38.x) la degrada a [`TaskKind::Unknown`] por el
-    /// `serde(other)` de abajo, igual que `Search`/`Index`/`Embed`/
-    /// `RenameBatch`.
+    /// Entered WITH the method, in its own bump, and not after: the `task_id`
+    /// of a [`COMPARE_ROWS`](crate::methods::COMPARE_ROWS) batch correlates
+    /// with a Task the client has to be able to classify in `task.list`. An
+    /// N-1 client (0.38.x) degrades it to [`TaskKind::Unknown`] via the
+    /// `serde(other)` below, same as `Search`/`Index`/`Embed`/`RenameBatch`.
     Compare,
-    /// Cuánto ocupa un árbol de directorios
+    /// How much space a directory tree takes up
     /// (`fs.dir_size`/[`FS_DIR_SIZE`](crate::methods::FS_DIR_SIZE), 0.49.0,
-    /// #139). Lectura pura (regla 4 no aplica): sin journal, sin undo, ni un
-    /// byte escrito.
+    /// #139). Pure read (rule 4 does not apply): no journal, no undo, not a
+    /// byte written.
     ///
-    /// El progreso de ésta SÍ cuenta bytes, al revés que
-    /// [`TaskKind::Compare`]: los bytes son justo lo que se está preguntando.
-    /// Lo que no lleva son totales —`bytes_total` y `entries_total` van a
-    /// `None` hasta el final— porque el total es el resultado, y una barra
-    /// hacia un número inventado es peor que ninguna barra.
+    /// This one's progress DOES count bytes, unlike [`TaskKind::Compare`]:
+    /// the bytes are exactly what is being asked. What it does not carry are
+    /// totals — `bytes_total` and `entries_total` stay `None` until the end —
+    /// because the total IS the result, and a bar toward a made-up number is
+    /// worse than no bar at all.
     ///
-    /// Entra CON el método. Un cliente N-1 (0.48.x) la degrada a
-    /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
+    /// Entered WITH the method. An N-1 client (0.48.x) degrades it to
+    /// [`TaskKind::Unknown`] via the `serde(other)` below, same as
     /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`.
     DirSize,
-    /// El digest del contenido de un lote de ficheros
+    /// The content digest of a batch of files
     /// (`fs.checksum`/[`FS_CHECKSUM`](crate::methods::FS_CHECKSUM), 0.59.0,
-    /// #311). Lectura pura (regla 4 no aplica): sin journal, sin undo, ni un
-    /// byte escrito.
+    /// #311). Pure read (rule 4 does not apply): no journal, no undo, not a
+    /// byte written.
     ///
-    /// El progreso cuenta bytes y entradas, y aquí SÍ hay totales desde el
-    /// principio: se sabe cuántas rutas se pidieron. Lo que no cabe en el
-    /// progreso son los digests, y por eso el método tiene informe
+    /// Progress counts bytes and entries, and here there ARE totals from the
+    /// start: how many paths were requested is known. What does not fit in
+    /// progress are the digests, and that is why the method has a report
     /// ([`FS_CHECKSUM_REPORT`](crate::methods::FS_CHECKSUM_REPORT)).
     ///
-    /// Entra CON el método. Un cliente N-1 (0.58.x) la degrada a
-    /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
+    /// Entered WITH the method. An N-1 client (0.58.x) degrades it to
+    /// [`TaskKind::Unknown`] via the `serde(other)` below, same as
     /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`/`DirSize`.
     Checksum,
-    /// Qué ocupa CADA HIJO de un directorio (`fs.dir_usage`, 0.75.0, fase 4
-    /// del programa 2026-09-15). Lectura pura, como `DirSize`: sin journal y
-    /// sin undo.
+    /// What EACH CHILD of a directory takes up (`fs.dir_usage`, 0.75.0, phase
+    /// 4 of the 2026-09-15 program). Pure read, like `DirSize`: no journal
+    /// and no undo.
     ///
-    /// Aparte de [`TaskKind::DirSize`] y no un parámetro suyo: aquel contesta
-    /// UN número sobre una selección —«¿cabe esto en el destino?»— y su total
-    /// viaja en el progreso; este contesta una LISTA, que no cabe ahí y se
-    /// recoge con `fs.dir_usage_report`. Dos preguntas distintas, dos clases
-    /// que el lector distingue en `task.list`.
+    /// Separate from [`TaskKind::DirSize`] and not a parameter of it: that
+    /// one answers ONE number about a selection — "does this fit at the
+    /// destination?" — and its total travels in the progress; this one
+    /// answers a LIST, which does not fit there and is collected with
+    /// `fs.dir_usage_report`. Two different questions, two classes the reader
+    /// tells apart in `task.list`.
     ///
-    /// Entra CON el método. Un cliente N-1 (0.74.x) la degrada a
-    /// [`TaskKind::Unknown`] por el `serde(other)` de abajo, igual que
+    /// Entered WITH the method. An N-1 client (0.74.x) degrades it to
+    /// [`TaskKind::Unknown`] via the `serde(other)` below, same as
     /// `Search`/`Index`/`Embed`/`RenameBatch`/`Compare`/`DirSize`/`Checksum`.
     DirUsage,
-    /// Cambio de permisos POSIX de un lote de rutas
+    /// Changing POSIX permissions of a batch of paths
     /// (`fs.set_mode`/[`FS_SET_MODE`](crate::methods::FS_SET_MODE), 0.60.0,
-    /// #314). MUTA: journal con reversa y gate de política (regla 4).
+    /// #314). MUTATES: journal with a reverse and a policy gate (rule 4).
     ///
-    /// El progreso cuenta ENTRADAS y no bytes: un `chmod` no mueve ninguno, y
-    /// una barra de bytes aquí se quedaría en cero para siempre. El total se
-    /// sabe desde el principio, porque son las rutas que se mandaron.
+    /// Progress counts ENTRIES, not bytes: a `chmod` moves none, and a byte
+    /// bar here would stay at zero forever. The total is known from the
+    /// start, since it is the paths that were sent.
     ///
-    /// Entra CON el método, y un cliente N-1 (0.59.x) la degrada a
-    /// [`TaskKind::Unknown`] por el `serde(other)` de abajo.
+    /// Entered WITH the method, and an N-1 client (0.59.x) degrades it to
+    /// [`TaskKind::Unknown`] via the `serde(other)` below.
     SetMode,
-    /// Fabricar un archivo
+    /// Building an archive
     /// (`archive.pack`/[`ARCHIVE_PACK`](crate::methods::ARCHIVE_PACK), 0.50.0,
-    /// #132). MUTA: journal como UNA creación, y deshacerlo es borrar el
-    /// archivo.
+    /// #132). MUTATES: journal as ONE creation, and undoing it is deleting the
+    /// archive.
     ///
-    /// Entra CON el método, y los cuatro de este bump se degradan igual: un
-    /// cliente N-1 (0.49.x) los convierte en [`TaskKind::Unknown`] por el
-    /// `serde(other)` de abajo, como `Search`/`Index`/`Embed`/`RenameBatch`/
-    /// `Compare`/`DirSize` antes que ellos.
+    /// Entered WITH the method, and the four of this bump degrade the same
+    /// way: an N-1 client (0.49.x) turns them into [`TaskKind::Unknown`] via
+    /// the `serde(other)` below, like `Search`/`Index`/`Embed`/`RenameBatch`/
+    /// `Compare`/`DirSize` before them.
     ///
-    /// El progreso cuenta bytes LEÍDOS del origen y entradas empaquetadas; los
-    /// bytes escritos no se pueden saber por adelantado —el compresor decide—
-    /// y prometer un total que va a fallar es peor que no darlo.
+    /// Progress counts bytes READ from the source and entries packed; the
+    /// bytes written cannot be known ahead of time — the compressor
+    /// decides — and promising a total that will be wrong is worse than not
+    /// giving one.
     Pack,
-    /// Comprobar un archivo
+    /// Testing an archive
     /// (`archive.test`/[`ARCHIVE_TEST`](crate::methods::ARCHIVE_TEST), 0.50.0,
-    /// #132). Lectura pura: sin journal.
+    /// #132). Pure read: no journal.
     TestArchive,
-    /// Partir un fichero en trozos
+    /// Splitting a file into chunks
     /// (`file.split`/[`FILE_SPLIT`](crate::methods::FILE_SPLIT), 0.50.0,
-    /// #132). MUTA: una creación por trozo.
+    /// #132). MUTATES: one creation per chunk.
     Split,
-    /// Juntar los trozos
+    /// Joining chunks back together
     /// (`file.combine`/[`FILE_COMBINE`](crate::methods::FILE_COMBINE), 0.50.0,
-    /// #132). MUTA: una creación.
+    /// #132). MUTATES: one creation.
     Combine,
-    /// Planificación de una sincronización de un sentido
+    /// Planning a one-way synchronization
     /// (`sync.plan`/[`SYNC_PLAN`](crate::methods::SYNC_PLAN), 0.40.0, ADR
-    /// 0049). Lectura pura (regla 4 no aplica): planificar no escribe un byte
-    /// — lo que escribe es [`TaskKind::Sync`]. El progreso cuenta PASOS
-    /// emitidos, no bytes, por el mismo motivo que
-    /// [`TaskKind::Compare`]: es la comparación de debajo con una decisión por
-    /// fila, y con el rung de hash apagado no se lee contenido alguno.
+    /// 0049). Pure read (rule 4 does not apply): planning writes not a byte —
+    /// what writes is [`TaskKind::Sync`]. Progress counts STEPS emitted, not
+    /// bytes, for the same reason as [`TaskKind::Compare`]: it is the
+    /// comparison underneath with a decision per row, and with the hash rung
+    /// off it reads no content at all.
     ///
-    /// Entra CON el método, en su mismo bump, y por la misma razón que
-    /// `Compare`: el `task_id` de un lote de
-    /// [`SYNC_STEPS`](crate::methods::SYNC_STEPS) correlaciona con una Task que
-    /// el cliente tiene que poder clasificar en `task.list`. Un cliente N-1
-    /// (0.39.x) la degrada a [`TaskKind::Unknown`] por el `serde(other)` de
-    /// abajo.
+    /// Entered WITH the method, in its own bump, and for the same reason as
+    /// `Compare`: the `task_id` of a [`SYNC_STEPS`](crate::methods::SYNC_STEPS)
+    /// batch correlates with a Task the client has to be able to classify in
+    /// `task.list`. An N-1 client (0.39.x) degrades it to
+    /// [`TaskKind::Unknown`] via the `serde(other)` below.
     SyncPlan,
-    /// Ejecución de un plan de sincronización APROBADO
+    /// Executing an APPROVED synchronization plan
     /// (`sync.apply`/[`SYNC_APPLY`](crate::methods::SYNC_APPLY), 0.40.0, ADR
-    /// 0049): copias, sobrescrituras y borrados como UNA unidad deshacible del
-    /// journal (regla 4). A diferencia de [`TaskKind::SyncPlan`] su progreso sí
-    /// tiene bytes que contar. Un cliente N-1 (0.39.x) la degrada a
-    /// [`TaskKind::Unknown`].
+    /// 0049): copies, overwrites and deletes as ONE undoable journal unit
+    /// (rule 4). Unlike [`TaskKind::SyncPlan`] its progress does have bytes to
+    /// count. An N-1 client (0.39.x) degrades it to [`TaskKind::Unknown`].
     Sync,
-    /// Clase desconocida: un daemon N+1 (0.11+) envió un kind que ESTE proto no
-    /// conoce → se acepta como genérica en vez de fallar el parse (forward-compat
-    /// desde 0.10, como [`TaskState::Unknown`]). No cubre el borde hacia atrás
-    /// 0.9→0.10 (ver `Undo`); SÍ cubre 0.17→0.18 (ver `Search`, ya nacida
-    /// dentro de la ventana de este fallback).
+    /// Unknown class: an N+1 daemon (0.11+) sent a kind THIS proto does not
+    /// know → accepted as generic instead of failing the parse
+    /// (forward-compat since 0.10, like [`TaskState::Unknown`]). Does not
+    /// cover the 0.9→0.10 backward edge (see `Undo`); DOES cover 0.17→0.18
+    /// (see `Search`, already born inside this fallback's window).
     ///
-    /// `TaskKind::Index` (0.25.0, `index.build`) es el mismo caso que `Search`:
-    /// un cliente 0.24.x lo degrada aquí sin fallar.
+    /// `TaskKind::Index` (0.25.0, `index.build`) is the same case as `Search`:
+    /// a 0.24.x client degrades it here without failing.
     #[serde(other)]
     Unknown,
 }
 
-/// Estado del ciclo de vida de una Task.
+/// State of a Task's lifecycle.
 ///
-/// Wire: objeto tagged `{"kind": "...", …}` — mismo convenio que [`Error`].
-/// Tolerancia N/N-1 (ADR 0004): un estado desconocido deserializa a
-/// [`TaskState::Unknown`], que se trata como NO terminal (conservador:
-/// el cliente sigue escuchando `task.progress` hasta un estado que entienda).
+/// Wire: a tagged object `{"kind": "...", …}` — the same convention as
+/// [`Error`]. N/N-1 tolerance (ADR 0004): an unknown state deserializes to
+/// [`TaskState::Unknown`], treated as NOT terminal (conservative: the client
+/// keeps listening to `task.progress` until a state it understands arrives).
 ///
 /// ```
 /// use norte_proto::TaskState;
@@ -255,34 +253,34 @@ pub enum TaskKind {
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum TaskState {
-    /// Encolada, aún sin hueco en el scheduler.
+    /// Queued, no slot in the scheduler yet.
     Pending,
-    /// Ejecutándose.
+    /// Running.
     Running,
-    /// Pausada (spec §11: `task.pause`). M0 no la emite; queda reservada ya
-    /// para que estrenarla no rompa a clientes N-1.
+    /// Paused (spec §11: `task.pause`). M0 does not emit it; already reserved
+    /// so introducing it later does not break N-1 clients.
     Paused,
-    /// Terminó bien.
+    /// Finished successfully.
     Completed,
-    /// Cancelada limpiamente (destino limpio o `.norte-partial`, spec §5).
+    /// Cleanly cancelled (clean destination or `.norte-partial`, spec §5).
     Cancelled,
-    /// Falló; el error dice por qué (un panic capturado llega como
-    /// [`Error::Internal`] con `panic: true`).
+    /// Failed; the error says why (a caught panic arrives as
+    /// [`Error::Internal`] with `panic: true`).
     Failed {
-        /// Causa del fallo.
+        /// Cause of the failure.
         error: Error,
     },
-    /// Estado de un protocolo más nuevo (fallback de deserialización).
-    /// El core JAMÁS lo emite.
+    /// State of a newer protocol (deserialization fallback). The core NEVER
+    /// emits it.
     #[doc(hidden)]
     #[serde(other)]
     Unknown,
 }
 
 impl TaskState {
-    /// `true` si la Task ya no va a cambiar de estado. [`TaskState::Unknown`]
-    /// cuenta como no-terminal: ante un estado que no entiende, el cliente
-    /// sigue escuchando.
+    /// `true` if the Task will not change state anymore.
+    /// [`TaskState::Unknown`] counts as non-terminal: faced with a state it
+    /// does not understand, the client keeps listening.
     #[must_use]
     pub fn is_terminal(&self) -> bool {
         matches!(
@@ -292,11 +290,11 @@ impl TaskState {
     }
 }
 
-/// Snapshot de progreso de una Task (payload de la notificación `task.progress`).
+/// Progress snapshot of a Task (payload of the `task.progress` notification).
 ///
-/// Totales `None` = aún desconocidos (walk en curso), jamás un 0 fingido.
-/// El emisor coalesce; el último snapshot de una Task siempre lleva estado
-/// terminal y totales finales.
+/// Totals `None` = still unknown (walk in progress), never a fabricated 0.
+/// The emitter coalesces; a Task's last snapshot always carries a terminal
+/// state and final totals.
 ///
 /// ```
 /// use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
@@ -309,8 +307,8 @@ impl TaskState {
 ///     entries_done: 0,
 ///     entries_total: Some(2),
 ///     current: None,
-///     // `None` = esta task no cuenta ilegibles; `Some(0)` sería «los cuenta
-///     // y no hubo». Ver el campo.
+///     // `None` = this task does not count unreadables; `Some(0)` would be
+///     // "it counts them and there were none". See the field.
 ///     unreadable: None,
 ///     unvisited: None,
 /// };
@@ -320,65 +318,66 @@ impl TaskState {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskProgress {
-    /// Task a la que pertenece el snapshot.
+    /// Task the snapshot belongs to.
     pub task_id: TaskId,
-    /// Clase de operación (un frontend pinta "copiando…" sin estado propio).
+    /// Class of operation (a frontend paints "copying…" with no state of its
+    /// own).
     pub kind: TaskKind,
-    /// Estado en el momento del snapshot.
+    /// State at the moment of the snapshot.
     pub state: TaskState,
-    /// Bytes ya procesados.
+    /// Bytes already processed.
     pub bytes_done: u64,
-    /// Bytes totales estimados; `None` mientras el walk no termina.
+    /// Estimated total bytes; `None` while the walk has not finished.
     #[serde(default)]
     pub bytes_total: Option<u64>,
-    /// Entradas (archivos/dirs) ya procesadas.
+    /// Entries (files/dirs) already processed.
     pub entries_done: u64,
-    /// Entradas totales estimadas; `None` mientras el walk no termina.
+    /// Estimated total entries; `None` while the walk has not finished.
     #[serde(default)]
     pub entries_total: Option<u64>,
-    /// Entrada en curso (para pintar "copiando X…"); puede faltar.
+    /// Entry in progress (to paint "copying X…"); may be missing.
     #[serde(default)]
     pub current: Option<VPath>,
-    /// Subárboles o entradas que la task NO pudo leer (0.53.0, #251).
+    /// Subtrees or entries the task could NOT read (0.53.0, #251).
     ///
-    /// `None` = **quien lo emite no cuenta esto**, y `Some(0)` = lo cuenta y
-    /// no hubo ninguno. La distinción no es cosmética y es la misma regla que
-    /// [`crate::methods::Volume::total_bytes`] escribe para su caso: un cero
-    /// que hace de desconocido se lee como una respuesta, y aquí la respuesta
-    /// que fabricaría es la peligrosa. Un daemon 0.52 no emite el campo; si
-    /// esto fuera `u64`, un cliente 0.53 leería `0` y pintaría un total
-    /// «seguro» que no lo es.
+    /// `None` = **whoever emits this does not count it**, and `Some(0)` = it
+    /// counts it and there were none. The distinction is not cosmetic and is
+    /// the same rule [`crate::methods::Volume::total_bytes`] states for its
+    /// case: a zero standing in for unknown reads as an answer, and here the
+    /// answer it would fabricate is the dangerous one. A 0.52 daemon does not
+    /// emit the field; if this were `u64`, a 0.53 client would read `0` and
+    /// paint a "safe" total that is not.
     ///
-    /// Lo que lo hace necesario es `fs.dir_size`: contaba los subárboles
-    /// ilegibles en un contador LOCAL, emitía un `tracing::info!` y nada más,
-    /// así que un árbol del que la mitad daba `EACCES` reportaba `Completed`
-    /// con un total confiado y equivocado — y el método existe para contestar
-    /// «¿cabe esto en el destino?», donde un número silenciosamente pequeño
-    /// es la dirección peligrosa.
+    /// What makes it necessary is `fs.dir_size`: it counted unreadable
+    /// subtrees in a LOCAL counter, emitted a `tracing::info!` and nothing
+    /// else, so a tree half of which gave `EACCES` reported `Completed` with
+    /// a confident, wrong total — and the method exists to answer "does this
+    /// fit at the destination?", where a silently small number is the
+    /// dangerous direction.
     ///
-    /// Con esto, un cliente pinta «al menos X» en vez de «X». Es el gemelo
-    /// del `confidence` que `fs.compare` le da a cada fila, y por el mismo
-    /// motivo: un recuento sin él no puede decir que es una cota inferior.
+    /// With this, a client paints "at least X" instead of "X". It is the twin
+    /// of the `confidence` `fs.compare` gives each row, and for the same
+    /// reason: a count without it cannot say it is a lower bound.
     ///
-    /// Se omite cuando es `None`, que es el valor de toda task que no cuenta
-    /// ilegibles — o sea casi todas, y un `task.progress` viaja muchas veces
-    /// por segundo y por task.
+    /// Omitted when it is `None`, which is the value for every task that does
+    /// not count unreadables — i.e. almost all of them, and a `task.progress`
+    /// travels many times per second and per task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unreadable: Option<u64>,
-    /// Nodos que la task NO llegó a visitar porque el recorrido topó con su
-    /// tope (0.62.0, #315).
+    /// Nodes the task did NOT get to visit because the walk hit its cap
+    /// (0.62.0, #315).
     ///
-    /// Aparte de [`Self::unreadable`] y no sumado a él, aunque las dos cosas
-    /// signifiquen «esto no se hizo»: un ilegible es un permiso o un fichero
-    /// que se movió —cosas que el lector arregla— y esto es norte diciendo que
-    /// el árbol es más grande de lo que va a recorrer de una vez. Mezclarlos
-    /// hacía que un `set_mode` recursivo sobre un árbol enorme dijera «40 000
-    /// no se pudieron cambiar (un enlace, o no es tuyo)», que no es lo que
-    /// pasó, y `unreadable` lleva su propio contrato desde 0.53: un contador
-    /// que significara dos cosas según la task no lo podría leer nadie.
+    /// Separate from [`Self::unreadable`] and not added to it, even though
+    /// both mean "this did not happen": an unreadable is a permission or a
+    /// file that moved — things the reader can fix — and this is norte saying
+    /// the tree is bigger than it is going to walk in one go. Mixing them
+    /// made a recursive `set_mode` over a huge tree say "40,000 could not be
+    /// changed (a link, or not yours)", which is not what happened, and
+    /// `unreadable` has carried its own contract since 0.53: a counter that
+    /// meant two things depending on the task would be unreadable to anyone.
     ///
-    /// Se omite cuando es `None`, que es el valor de toda task que no recorre
-    /// árboles con tope.
+    /// Omitted when it is `None`, which is the value for every task that does
+    /// not walk trees with a cap.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub unvisited: Option<u64>,
 }

@@ -1,13 +1,13 @@
-//! El host contra un daemon DE VERDAD.
+//! The host against a REAL daemon.
 //!
-//! Los demás tests usan un backend de tabla, que es lo que los hace
-//! deterministas. Este hace lo contrario a propósito: levanta un daemon real
-//! sobre un socket temporal, conecta el SDK y comprueba que lo que el host
-//! proyecta sale de un JSON-RPC que ha ido y ha vuelto — listado inicial,
-//! navegación, y la sesión escrita al cerrar.
+//! The other tests use a table backend, which is what makes them
+//! deterministic. This one does the opposite on purpose: it brings up a real
+//! daemon over a temporary socket, connects the SDK, and checks that what the
+//! host projects comes out of a JSON-RPC round trip — initial listing,
+//! navigation, and the session written on close.
 //!
-//! Sin pantalla y sin Node: el host es útil a un test headless antes de que
-//! exista renderer alguno, que era la condición de la fase 2.
+//! No screen and no Node: the host is useful to a headless test before any
+//! renderer exists, which was phase 2's condition.
 
 #![cfg(unix)]
 
@@ -27,36 +27,36 @@ use norte_ui_host::{UiHost, UiHostOptions, UiSubscription, Update, ViewSnapshot}
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire de test")
+    VPath::parse(wire).expect("test wire")
 }
 
-struct DaemonDePrueba {
+struct TestDaemon {
     socket: std::path::PathBuf,
-    /// El provider de memoria que hay DETRÁS del daemon, para que un test
-    /// pueda sembrar algo más que el arbolito de arranque.
+    /// The memory provider BEHIND the daemon, so a test can seed more than
+    /// the little startup tree.
     mem: Arc<MemProvider>,
     _run: tokio::task::JoinHandle<Result<(), norte_core::daemon::DaemonError>>,
     _dir: tempfile::TempDir,
 }
 
-async fn escribe(mem: &MemProvider, wire: &str, contenido: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
-    sink.write(Bytes::copy_from_slice(contenido))
+async fn write(mem: &MemProvider, wire: &str, content: &[u8]) {
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
+    sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
-/// Un daemon sobre un provider en memoria con un arbolito dentro.
-async fn daemon() -> DaemonDePrueba {
+/// A daemon over an in-memory provider with a little tree inside.
+async fn daemon() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let mem = Arc::new(MemProvider::new());
     mem.mkdir(&vp("mem:///casa")).await.expect("mkdir casa");
     mem.mkdir(&vp("mem:///casa/docs"))
         .await
         .expect("mkdir docs");
-    escribe(&mem, "mem:///casa/notas.txt", b"hola").await;
-    escribe(&mem, "mem:///casa/docs/a.md", b"# a").await;
+    write(&mem, "mem:///casa/notas.txt", b"hola").await;
+    write(&mem, "mem:///casa/docs/a.md", b"# a").await;
 
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
@@ -73,7 +73,7 @@ async fn daemon() -> DaemonDePrueba {
     )
     .await
     .expect("bind");
-    DaemonDePrueba {
+    TestDaemon {
         socket,
         mem,
         _run: tokio::spawn(d.run()),
@@ -81,7 +81,7 @@ async fn daemon() -> DaemonDePrueba {
     }
 }
 
-async fn host_contra(d: &DaemonDePrueba) -> (UiHost, ViewSnapshot) {
+async fn host_against(d: &TestDaemon) -> (UiHost, ViewSnapshot) {
     let backend = RemoteBackend::connect(
         d.socket.clone(),
         None,
@@ -91,7 +91,7 @@ async fn host_contra(d: &DaemonDePrueba) -> (UiHost, ViewSnapshot) {
         },
     )
     .await
-    .expect("conecta");
+    .expect("connects");
     UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
         initial_dir: vp("mem:///casa"),
@@ -103,9 +103,9 @@ async fn host_contra(d: &DaemonDePrueba) -> (UiHost, ViewSnapshot) {
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        // La fila `..` apagada: estos tests razonan sobre índices de
-        // listado, y una fila más al principio los desplazaría todos sin
-        // decir nada de lo que prueban.
+        // The `..` row turned off: these tests reason about listing indices,
+        // and one more row at the start would shift them all without saying
+        // anything about what they test.
         settings: {
             let mut cfg = norte_ui_host::ajustes_por_defecto();
             cfg.common.ui_parent_entry = Some(false);
@@ -120,159 +120,160 @@ async fn host_contra(d: &DaemonDePrueba) -> (UiHost, ViewSnapshot) {
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-fn listado(snap: &ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
+fn listing(snap: &ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
     let SlotView::Browser(b) = snap
         .slots
         .iter()
         .find(|s| matches!(s, SlotView::Browser(_)))
-        .expect("hay listado")
+        .expect("there is a listing")
     else {
-        unreachable!("filtrado arriba")
+        unreachable!("filtered above")
     };
     b
 }
 
-async fn siguiente_foto(sub: &mut UiSubscription) -> ViewSnapshot {
+async fn next_snapshot(sub: &mut UiSubscription) -> ViewSnapshot {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(Duration::from_secs(5), sub.recv())
+        let next = tokio::time::timeout(Duration::from_secs(5), sub.recv())
             .await
-            .expect("una foto antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("a snapshot before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Snapshot(s) = m.payload
         {
             return *s;
         }
     }
-    panic!("no llegó ninguna foto");
+    panic!("no snapshot ever arrived");
 }
 
-/// El listado inicial viene del daemon, ordenado por la capa compartida.
+/// The initial listing comes from the daemon, sorted by the shared layer.
 #[tokio::test]
-async fn el_listado_inicial_llega_del_daemon() {
+async fn the_initial_listing_arrives_from_the_daemon() {
     let d = daemon().await;
-    let (_h, snap) = host_contra(&d).await;
-    let b = listado(&snap);
-    let nombres: Vec<&str> = b.rows.iter().map(|r| r.display_name.as_str()).collect();
-    assert_eq!(nombres, vec!["docs", "notas.txt"], "directorios primero");
+    let (_h, snap) = host_against(&d).await;
+    let b = listing(&snap);
+    let names: Vec<&str> = b.rows.iter().map(|r| r.display_name.as_str()).collect();
+    assert_eq!(names, vec!["docs", "notas.txt"], "directories first");
     assert!(b.path_display.ends_with("/casa"));
 }
 
-/// Navegar de verdad: entrar en un directorio y volver, contra el daemon.
+/// Really navigating: entering a directory and going back, against the
+/// daemon.
 #[tokio::test]
-async fn navegar_contra_el_daemon() {
+async fn navigating_against_the_daemon() {
     let d = daemon().await;
-    let (h, snap) = host_contra(&d).await;
-    let docs = listado(&snap)
+    let (h, snap) = host_against(&d).await;
+    let docs = listing(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("docs está")
+        .expect("docs is there")
         .key;
-    let epoca = listado(&snap).generation;
+    let generation = listing(&snap).generation;
     let mut sub = h.subscribe();
 
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
-        generation: epoca,
+        generation,
     })
     .await
-    .expect("host vivo");
-    let dentro = siguiente_foto(&mut sub).await;
-    assert!(listado(&dentro).path_display.ends_with("/casa/docs"));
-    assert_eq!(listado(&dentro).rows.len(), 1);
+    .expect("host alive");
+    let inside = next_snapshot(&mut sub).await;
+    assert!(listing(&inside).path_display.ends_with("/casa/docs"));
+    assert_eq!(listing(&inside).rows.len(), 1);
 
     h.dispatch(UiAction::History {
         slot_id: 1,
         back: true,
     })
     .await
-    .expect("host vivo");
-    let fuera = siguiente_foto(&mut sub).await;
-    assert!(listado(&fuera).path_display.ends_with("/casa"));
+    .expect("host alive");
+    let outside = next_snapshot(&mut sub).await;
+    assert!(listing(&outside).path_display.ends_with("/casa"));
 }
 
-/// La sesión se escribe al cerrar, y el daemon la devuelve en la siguiente
-/// vida del host: es la prueba de que el documento cruza el wire entero.
+/// The session is written on close, and the daemon returns it in the host's
+/// next life: it is proof that the document crosses the whole wire.
 #[tokio::test]
-async fn la_sesion_sobrevive_al_cierre() {
+async fn the_session_survives_closing() {
     let d = daemon().await;
-    let (h, snap) = host_contra(&d).await;
-    let docs = listado(&snap)
+    let (h, snap) = host_against(&d).await;
+    let docs = listing(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("docs está")
+        .expect("docs is there")
         .key;
-    let epoca = listado(&snap).generation;
+    let generation = listing(&snap).generation;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
-        generation: epoca,
+        generation,
     })
     .await
-    .expect("host vivo");
-    siguiente_foto(&mut sub).await;
-    let informe = h.shutdown().await.expect("apaga");
-    assert!(!informe.incomplete, "la dueña escribió");
+    .expect("host alive");
+    next_snapshot(&mut sub).await;
+    let report = h.shutdown().await.expect("shuts down");
+    assert!(!report.incomplete, "the owner wrote");
 
-    // Otra vida del host, contra el MISMO daemon.
-    let (_h2, otra) = host_contra(&d).await;
+    // Another life of the host, against the SAME daemon.
+    let (_h2, another) = host_against(&d).await;
     assert!(
-        listado(&otra).path_display.ends_with("/casa/docs"),
-        "arranca donde lo dejó la vida anterior: {}",
-        listado(&otra).path_display
+        listing(&another).path_display.ends_with("/casa/docs"),
+        "starts where the previous life left it: {}",
+        listing(&another).path_display
     );
 }
 
-/// Las columnas configuradas llegan CON su valor.
+/// Configured columns arrive WITH their value.
 ///
-/// El spike de Tauri las enseñó vacías contra un daemon de verdad, y el
-/// backend de tabla no lo veía: sus entradas se construyen a mano y siempre
-/// traen tamaño. Lo que cruza el wire es otra cosa.
+/// The Tauri spike showed them empty against a real daemon, and the table
+/// backend did not catch it: its entries are built by hand and always carry
+/// a size. What crosses the wire is a different thing.
 #[tokio::test]
-async fn las_celdas_traen_valor_contra_el_daemon() {
+async fn cells_carry_a_value_against_the_daemon() {
     let d = daemon().await;
-    let (_h, snap) = host_contra(&d).await;
-    let b = listado(&snap);
-    let fichero = b
+    let (_h, snap) = host_against(&d).await;
+    let b = listing(&snap);
+    let file = b
         .rows
         .iter()
         .find(|r| r.display_name == "notas.txt")
-        .expect("el fichero está");
-    let size = fichero
+        .expect("the file is there");
+    let size = file
         .cells
         .iter()
         .find(|c| c.column == "size")
-        .expect("la columna size está configurada");
+        .expect("the size column is configured");
     assert!(
         size.text.is_some(),
-        "un fichero con tamaño trae su celda: {:?}",
-        fichero.cells
+        "a file with a size carries its cell: {:?}",
+        file.cells
     );
 }
 
-/// Lo que lanza OTRO cliente del mismo daemon aparece en este tablero, dicho
-/// como ajeno, y esta ventana puede pararlo.
+/// What ANOTHER client of the same daemon launches shows up on this board,
+/// marked as foreign, and this window can stop it.
 ///
-/// Es la prueba que el backend de tabla no puede dar: ahí las tasks ajenas
-/// las empuja el test por un canal que él mismo abre. Aquí la task nace en
-/// otra conexión, el daemon la difunde, y el SDK decide que es ajena — que es
-/// el camino que de verdad recorre una copia lanzada desde el TUI mientras la
-/// ventana está abierta.
+/// This is the proof the table backend cannot give: there, foreign tasks are
+/// pushed by the test itself through a channel it opens. Here the task is
+/// born on another connection, the daemon broadcasts it, and the SDK decides
+/// it is foreign — which is the path a copy launched from the TUI while the
+/// window is open really travels.
 #[tokio::test]
-async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
+async fn another_clients_task_is_visible_and_can_be_stopped() {
     let d = daemon().await;
-    let (h, _snap) = host_contra(&d).await;
+    let (h, _snap) = host_against(&d).await;
     let mut sub = h.subscribe();
 
-    // El «otro frontend»: otra conexión humana al mismo daemon.
-    let otro = RemoteBackend::connect(
+    // The "other frontend": another human connection to the same daemon.
+    let other = RemoteBackend::connect(
         d.socket.clone(),
         None,
         ClientInfo {
@@ -281,12 +282,13 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
         },
     )
     .await
-    .expect("conecta");
-    // La copia tiene que seguir VIVA cuando su primer progreso se difunde:
-    // el SDK no anuncia como ajena una task que ya llegó terminal —no habría
-    // a qué suscribirse—, así que una copia instantánea contra un provider
-    // en memoria no probaría nada. El provider se frena a propósito.
-    escribe(
+    .expect("connects");
+    // The copy has to still be ALIVE when its first progress is broadcast:
+    // the SDK does not announce a task that already arrived terminal as
+    // foreign — there would be nothing to subscribe to — so an instant copy
+    // against an in-memory provider would prove nothing. The provider is
+    // slowed down on purpose.
+    write(
         &d.mem,
         "mem:///casa/grande.bin",
         &vec![7u8; 4 * 1024 * 1024],
@@ -295,7 +297,7 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
     d.mem
         .faults()
         .set_latency_per_op(Some(Duration::from_millis(30)));
-    let task = otro
+    let task = other
         .transfer(
             norte_client::Transfer::Copy,
             &vp("mem:///casa/grande.bin"),
@@ -303,16 +305,16 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
             norte_client::TransferOptions::default(),
         )
         .await
-        .expect("encola la copia");
+        .expect("queues the copy");
 
-    // El tablero de ESTA ventana la enseña, y dice que no es suya.
-    let mut vista = None;
+    // THIS window's board shows it, and says it is not its own.
+    let mut seen = None;
     for _ in 0..40 {
-        let siguiente = tokio::time::timeout(Duration::from_secs(5), sub.recv())
+        let next = tokio::time::timeout(Duration::from_secs(5), sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        let tasks = match siguiente {
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        let tasks = match next {
             Update::Message(m) => match m.payload {
                 UiUpdate::Snapshot(s) => s.tasks.clone(),
                 UiUpdate::Patch(p) => p
@@ -328,41 +330,43 @@ async fn una_task_de_otro_cliente_se_ve_y_se_puede_parar() {
             Update::Lagged => Vec::new(),
         };
         if let Some(t) = tasks.iter().find(|t| t.task_id == task.id().get()) {
-            vista = Some(t.clone());
+            seen = Some(t.clone());
             break;
         }
     }
-    let vista = vista.expect("la task del otro cliente llegó al tablero");
-    assert!(vista.foreign, "y el tablero dice que es ajena: {vista:?}");
+    let seen = seen.expect("the other client's task reached the board");
+    assert!(seen.foreign, "and the board says it is foreign: {seen:?}");
 
-    // Y se puede cancelar desde aquí: es la misma sesión, así que pararla es
-    // legítimo — y el tablero que la enseña sin poder tocarla sería una
-    // ventana mirando arder.
+    // And it can be cancelled from here: it is the same session, so stopping
+    // it is legitimate — and a board that shows it without being able to
+    // touch it would be a window watching it burn.
     let ack = h
         .dispatch(UiAction::CancelTask {
-            task_id: vista.task_id,
+            task_id: seen.task_id,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, norte_ui_host::bridge::ActionAck::Applied { .. }),
         "{ack:?}"
     );
 }
 
-/// #270 — `norte_ui_host::backend::transferir` manda
-/// `TransferOptions { on_collision, ..Default::default() }`, o sea
-/// `SymlinkPolicy::Preserve` y `ResumePolicy::Off`. Que esos dos lleguen así
-/// lo AFIRMABA un comentario y nada más: el doble de test del host implementa
-/// `HostBackend` directamente y no pasa por este impl.
+/// #270 — `norte_ui_host::backend::transferir` sends
+/// `TransferOptions { on_collision, ..Default::default() }`, i.e.
+/// `SymlinkPolicy::Preserve` and `ResumePolicy::Off`. That these two arrive
+/// that way was ASSERTED by a comment and nothing else: the host's test
+/// double implements `HostBackend` directly and does not go through this
+/// impl.
 ///
-/// `Preserve` es lo que impide que una copia DEREFERENCIE un symlink hostil
-/// del origen, así que se comprueba por su efecto y no por serialización: el
-/// enlace sigue siendo un enlace del otro lado, con su target intacto. Si el
-/// default se cayera del camino, el destino sería un fichero con el contenido
-/// del target — que es exactamente la fuga que `Preserve` existe para evitar.
+/// `Preserve` is what stops a copy from DEREFERENCING a hostile symlink from
+/// the source, so it is checked by its effect and not by serialization: the
+/// link is still a link on the other side, with its target intact. If the
+/// default fell off the path, the destination would be a file with the
+/// target's content — which is exactly the leak `Preserve` exists to
+/// prevent.
 #[tokio::test]
-async fn una_copia_del_host_preserva_los_symlinks_del_origen() {
+async fn a_host_copy_preserves_the_sources_symlinks() {
     use norte_proto::CollisionPolicy;
     use norte_ui_host::backend::HostBackend;
 
@@ -371,7 +375,7 @@ async fn una_copia_del_host_preserva_los_symlinks_del_origen() {
         .mkdir(&vp("mem:///casa/src"))
         .await
         .expect("mkdir src");
-    escribe(&d.mem, "mem:///casa/src/real.txt", b"secreto").await;
+    write(&d.mem, "mem:///casa/src/real.txt", b"secreto").await;
     d.mem
         .symlink(
             &vp("mem:///casa/src/enlace"),
@@ -390,7 +394,7 @@ async fn una_copia_del_host_preserva_los_symlinks_del_origen() {
         },
     )
     .await
-    .expect("conecta");
+    .expect("connects");
 
     let task = backend
         .copy(
@@ -400,28 +404,29 @@ async fn una_copia_del_host_preserva_los_symlinks_del_origen() {
             false,
         )
         .await
-        .expect("encola la copia");
-    let mut progreso = task.progress;
+        .expect("queues the copy");
+    let mut progress = task.progress;
     loop {
-        let estado = progreso.borrow_and_update().state.clone();
-        if estado.is_terminal() {
-            assert_eq!(estado, norte_proto::TaskState::Completed, "{estado:?}");
+        let state = progress.borrow_and_update().state.clone();
+        if state.is_terminal() {
+            assert_eq!(state, norte_proto::TaskState::Completed, "{state:?}");
             break;
         }
-        tokio::time::timeout(Duration::from_secs(10), progreso.changed())
+        tokio::time::timeout(Duration::from_secs(10), progress.changed())
             .await
-            .expect("la copia termina antes del plazo")
-            .expect("el canal de progreso sigue vivo");
+            .expect("the copy finishes before the deadline")
+            .expect("the progress channel is still alive");
     }
 
-    let copiado = d
+    let copied = d
         .mem
         .stat(&vp("mem:///casa/dst/enlace"))
         .await
-        .expect("el enlace llegó al destino");
+        .expect("the link reached the destination");
     assert_eq!(
-        copiado.kind,
+        copied.kind,
         norte_proto::EntryKind::Symlink,
-        "la copia DEREFERENCIÓ el enlace: `SymlinkPolicy::Preserve` no llegó al wire"
+        "the copy DEREFERENCED the link: `SymlinkPolicy::Preserve` did not \
+         reach the wire"
     );
 }

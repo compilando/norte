@@ -1,13 +1,12 @@
-//! Filas de la command palette (`Ctrl+P`/vim `:`, H1 T4, spec-promised):
-//! mismo criterio que `help::build` (F1) — se construyen del keymap
-//! EFECTIVO y del catálogo Fluent `help-cmd-*`, jamás de una lista a mano.
+//! Rows of the command palette (`Ctrl+P`/vim `:`, H1 T4, spec-promised): same
+//! criterion as `help::build` (F1) — built from the EFFECTIVE keymap and the
+//! `help-cmd-*` Fluent catalogue, never from a hand-written list.
 //!
-//! [`Row`]/[`plugin_rows`]/[`rows_for_context`]/[`first_chord`] viven en
-//! `norte-frontend` (G3c hoist, mismo patrón que [`crate::settings`]) — este
-//! módulo los re-exporta para compatibilidad de fuente y añade
-//! [`build_rows`], que SÍ es específico del TUI (depende de
-//! [`crate::keymap::COMMANDS`]/[`crate::keymap::help_id`], distintos de los
-//! de la GUI).
+//! [`Row`]/[`plugin_rows`]/[`rows_for_context`]/[`first_chord`] live in
+//! `norte-frontend` (G3c hoist, same pattern as [`crate::settings`]) — this
+//! module re-exports them for source compatibility and adds [`build_rows`],
+//! which IS TUI-specific (it depends on [`crate::keymap::COMMANDS`]/
+//! [`crate::keymap::help_id`], different from the GUI's).
 
 pub use norte_frontend::palette::{
     PLUGIN_DESCRIPTION_WIRE_CAP, Row, first_chord, plugin_rows, rows_for_context,
@@ -16,14 +15,14 @@ use norte_i18n::t;
 
 use crate::keymap::{COMMANDS, Effective, help_id};
 
-/// Construye las filas de TODOS los comandos de [`COMMANDS`] (browse +
-/// viewer comparten el mismo catálogo, ADR 0006): la descripción sale de
-/// `help-cmd-*` (la MISMA fuente que F1 — la suite de i18n ya obliga a que
-/// exista, `todo_comando_tiene_ayuda_traducida`), el chord es la PRIMERA
-/// tecla en precedencia real del efectivo `browse`, o si el comando no
-/// vive ahí (es `viewer.*`) la del efectivo `viewer`; sin ninguna, `"—"`
-/// (comando válido pero sin tecla en ESTE preset+capas — la palette sigue
-/// siendo la única vía para lanzarlo).
+/// Builds the rows for ALL commands in [`COMMANDS`] (browse + viewer share
+/// the same catalogue, ADR 0006): the description comes from `help-cmd-*`
+/// (the SAME source as F1 — the i18n suite already requires it to exist,
+/// `todo_comando_tiene_ayuda_traducida`), the chord is the FIRST key by real
+/// precedence in the effective `browse`, or, if the command does not live
+/// there (it is `viewer.*`), the effective `viewer`'s; with none, `"—"` (a
+/// valid command with no key in THIS preset+layers — the palette remains the
+/// only way to launch it).
 #[must_use]
 pub fn build_rows(browse: &Effective, viewer: &Effective) -> Vec<Row> {
     COMMANDS
@@ -38,7 +37,7 @@ pub fn build_rows(browse: &Effective, viewer: &Effective) -> Vec<Row> {
                 text: cmd.to_owned(),
                 desc,
                 chord,
-                // Vocabulario de este proyecto: no hay nada que enmascarar.
+                // This project's vocabulary: there is nothing to mask.
                 hostile: false,
             }
         })
@@ -61,37 +60,36 @@ mod tests {
     }
 
     #[test]
-    fn build_rows_una_fila_por_comando_con_chord_de_browse() {
-        // Este test afirma los strings del corpus INGLÉS. Sin fijar el idioma
-        // resolvía por entorno (`LANG`), así que era verde en CI y rojo en
-        // cualquier máquina con `LANG=es_*` — la misma línea que el resto de
-        // los tests de render de este crate ya llevaba.
+    fn build_rows_one_row_per_command_with_browse_chord() {
+        // This test asserts the ENGLISH corpus strings. Without pinning the
+        // language it resolved by environment (`LANG`), so it was green in CI
+        // and red on any machine with `LANG=es_*` — the same line the rest of
+        // this crate's render tests already carried.
         let _ = norte_i18n::force(norte_i18n::Lang::En);
         let (browse, viewer) = orthodox_effs();
         let rows = build_rows(&browse, &viewer);
-        assert_eq!(rows.len(), COMMANDS.len(), "una fila por comando, sin más");
+        assert_eq!(rows.len(), COMMANDS.len(), "one row per command, no more");
         let quit = rows.iter().find(|r| r.key == "app.quit").unwrap();
-        assert_eq!(quit.key, quit.text, "built-in: key == text (confiable)");
+        assert_eq!(quit.key, quit.text, "built-in: key == text (reliable)");
         assert_eq!(quit.desc, "quit norte");
-        // Ligado en [global]: q/f10/ctrl+c — la PRIMERA en precedencia.
+        // Bound in [global]: q/f10/ctrl+c — the FIRST by precedence.
         assert_ne!(quit.chord, "—");
     }
 
     #[test]
-    fn build_rows_cae_a_viewer_si_no_esta_en_browse() {
+    fn build_rows_falls_back_to_viewer_if_not_in_browse() {
         let (browse, viewer) = orthodox_effs();
         let rows = build_rows(&browse, &viewer);
         let close = rows.iter().find(|r| r.key == "viewer.close").unwrap();
-        assert_ne!(close.chord, "—", "viewer.close vive en Screen::Viewer");
+        assert_ne!(close.chord, "—", "viewer.close lives in Screen::Viewer");
     }
 
-    /// Encoding audit H1: mismo defecto que `dialog_hints` pero en la
-    /// columna chord de la command palette (`build_rows`/`first_chord`) — un
-    /// chord hostil de una capa de usuario/proyecto rebindeado a un comando
-    /// de browse (`pane.copy`, siempre presente en `COMMANDS`) no debe
-    /// pintarse crudo.
+    /// Encoding audit H1: the same defect as `dialog_hints` but in the
+    /// command palette's chord column (`build_rows`/`first_chord`) — a
+    /// hostile chord from a user/project layer rebound to a browse command
+    /// (`pane.copy`, always present in `COMMANDS`) must not be painted raw.
     #[test]
-    fn build_rows_enmascara_chords_hostiles_en_la_columna_chord() {
+    fn build_rows_masks_hostile_chords_in_the_chord_column() {
         let (_, preset) = presets()
             .into_iter()
             .find(|(n, _)| *n == "orthodox")
@@ -107,53 +105,53 @@ mod tests {
             );
             let layer = crate::keymap::parse_keymap(&layer_src).unwrap();
             let browse = Effective::build_for(&preset, &[layer], COMMANDS, Screen::Browse)
-                .unwrap_or_else(|e| panic!("[{}] keymap efectivo: {e}", hazard.id));
+                .unwrap_or_else(|e| panic!("[{}] effective keymap: {e}", hazard.id));
             let rows = build_rows(&browse, &viewer_empty);
             let copy = rows
                 .iter()
                 .find(|r| r.key == "pane.copy")
-                .unwrap_or_else(|| panic!("[{}] fila pane.copy", hazard.id));
+                .unwrap_or_else(|| panic!("[{}] pane.copy row", hazard.id));
             assert!(
                 !copy.chord.chars().any(norte_encoding::is_terminal_hazard),
-                "[{}] hazard crudo en la columna chord: {:?}",
+                "[{}] raw hazard in the chord column: {:?}",
                 hazard.id,
                 copy.chord
             );
             assert!(
                 copy.chord.contains('\u{FFFD}'),
-                "[{}] el hazard debe enmascararse a U+FFFD: {:?}",
+                "[{}] the hazard must be masked to U+FFFD: {:?}",
                 hazard.id,
                 copy.chord
             );
         }
     }
 
-    /// MINOR-6 (H1 close): abierta desde BROWSE (`viewer_open = false`), la
-    /// palette oculta `viewer.*` — despacharla sin `app.viewer` sería un
-    /// no-op silencioso.
+    /// MINOR-6 (H1 close): opened from BROWSE (`viewer_open = false`), the
+    /// palette hides `viewer.*` — dispatching one without `app.viewer` would
+    /// be a silent no-op.
     #[test]
-    fn rows_for_context_oculta_viewer_desde_browse() {
+    fn rows_for_context_hides_viewer_from_browse() {
         let (browse, viewer) = orthodox_effs();
         let rows = build_rows(&browse, &viewer);
         let filtered = rows_for_context(&rows, false);
         assert!(
             filtered.iter().all(|r| !r.key.starts_with("viewer.")),
-            "ninguna fila viewer.* debería sobrevivir al filtrado desde browse"
+            "no viewer.* row should survive filtering from browse"
         );
         assert!(
             filtered.iter().any(|r| r.key.starts_with("pane.")),
-            "las filas pane.* siguen presentes"
+            "pane.* rows remain present"
         );
         assert!(
             filtered.len() < rows.len(),
-            "el filtrado debe quitar AL MENOS las filas viewer.*"
+            "filtering must remove AT LEAST the viewer.* rows"
         );
     }
 
-    /// Abierta DESDE el viewer (`viewer_open = true`), la palette conserva
-    /// TODO — incluidas las filas `pane.*`.
+    /// Opened FROM the viewer (`viewer_open = true`), the palette keeps
+    /// EVERYTHING — including `pane.*` rows.
     #[test]
-    fn rows_for_context_mantiene_todo_desde_el_viewer() {
+    fn rows_for_context_keeps_everything_from_the_viewer() {
         let (browse, viewer) = orthodox_effs();
         let rows = build_rows(&browse, &viewer);
         assert_eq!(rows_for_context(&rows, true), rows);

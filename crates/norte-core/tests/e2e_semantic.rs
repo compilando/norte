@@ -1,8 +1,8 @@
-//! E2E M4-IA-2: corpus pequeño → index.build → index.embed → `search_semantic`
-//! devuelve el fichero relevante; un nombre hostil sobrevive byte-exacto.
+//! E2E M4-IA-2: small corpus → index.build → index.embed → `search_semantic`
+//! returns the relevant file; a hostile name survives byte-exact.
 //!
-//! In-process (estilo `e2e_m3.rs`): `MemProvider` + `Index::open_memory` +
-//! `FakeEmbed` determinista — el criterio de salida de la spec sin red ni disco.
+//! In-process (in the style of `e2e_m3.rs`): `MemProvider` + `Index::open_memory` +
+//! a deterministic `FakeEmbed` — the spec's exit criterion, with no network or disk.
 
 use std::sync::Arc;
 
@@ -15,19 +15,19 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, path: &VPath, content: &[u8]) {
-    let mut sink = mem.write(path).await.expect("write abre");
+    let mut sink = mem.write(path).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
         .expect("chunk");
     sink.commit().await.expect("commit");
 }
 
-/// Config `[ai]` habilitada con un único proveedor (→ `embed_provider_config`
-/// lo resuelve como "el único").
+/// `[ai]` config enabled with a single provider (→ `embed_provider_config`
+/// resolves it as "the only one").
 fn ai_cfg() -> AiConfig {
     AiConfig {
         enabled: true,
@@ -41,7 +41,7 @@ fn ai_cfg() -> AiConfig {
     }
 }
 
-/// Engine con índice in-memory + `FakeEmbed` inyectado + `[ai]` habilitada.
+/// Engine with an in-memory index + an injected `FakeEmbed` + `[ai]` enabled.
 async fn setup() -> (Engine, Arc<MemProvider>) {
     let index = norte_index::Index::open_memory().await.expect("index");
     let engine = Engine::new().with_index(Arc::new(index));
@@ -57,14 +57,14 @@ async fn setup() -> (Engine, Arc<MemProvider>) {
 async fn semantic_e2e_small_corpus() {
     let (engine, mem) = setup().await;
 
-    // Corpus: 3 textos con contenidos distintos + 1 nombre HOSTIL no-UTF8
-    // (bytes 0xFF 0xFE del corpus canónico) con extensión .txt para pasar la
-    // heurística de texto del embed.
-    write_file(&mem, &vp("mem:///informe.txt"), b"informe anual 2024").await;
-    write_file(&mem, &vp("mem:///receta.txt"), b"receta de cocina").await;
-    write_file(&mem, &vp("mem:///notas.txt"), b"notas de reuni\xc3\xb3n").await;
-    let hostile = vp("mem:///informe-a%FF%FE.txt");
-    write_file(&mem, &hostile, b"contenido secreto hostil").await;
+    // Corpus: 3 texts with different content + 1 non-UTF-8 HOSTILE name
+    // (bytes 0xFF 0xFE from the canonical corpus) with a .txt extension to pass
+    // the embed's text heuristic.
+    write_file(&mem, &vp("mem:///report.txt"), b"annual report 2024").await;
+    write_file(&mem, &vp("mem:///recipe.txt"), b"cooking recipe").await;
+    write_file(&mem, &vp("mem:///notes.txt"), b"meeting notes").await;
+    let hostile = vp("mem:///report-a%FF%FE.txt");
+    write_file(&mem, &hostile, b"hostile secret content").await;
 
     // index.build → Completed.
     let (h, report) = engine
@@ -73,7 +73,7 @@ async fn semantic_e2e_small_corpus() {
         .expect("index_build_as");
     assert_eq!(h.join().await, TaskState::Completed);
     let r = report.lock().unwrap().expect("report");
-    assert_eq!(r.indexed, 4, "los 4 ficheros del corpus");
+    assert_eq!(r.indexed, 4, "the corpus's 4 files");
 
     // index.embed → Completed.
     let h = engine
@@ -82,61 +82,61 @@ async fn semantic_e2e_small_corpus() {
         .expect("index_embed_as");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    // Query == contenido exacto del fichero hostil ⇒ FakeEmbed determinista ⇒
-    // vector idéntico ⇒ top-1 es el hostil, y su path vuelve BYTE-EXACTO.
+    // Query == the hostile file's exact content ⇒ deterministic FakeEmbed ⇒
+    // identical vector ⇒ top-1 is the hostile one, and its path comes back BYTE-EXACT.
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido secreto hostil", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "hostile secret content", 10)
         .await
-        .expect("search hostil");
-    assert!(!hits.is_empty(), "hay embeddings, tiene que haber hits");
-    assert_eq!(hits[0].0, hostile, "top-1 es el path hostil, byte-exacto");
+        .expect("search hostile");
+    assert!(!hits.is_empty(), "there are embeddings, there must be hits");
+    assert_eq!(hits[0].0, hostile, "top-1 is the hostile path, byte-exact");
     assert_eq!(
         hits[0].0.file_name().expect("file_name").as_bytes(),
-        b"informe-a\xff\xfe.txt",
-        "los bytes no-UTF8 sobreviven el round-trip completo"
+        b"report-a\xff\xfe.txt",
+        "the non-UTF-8 bytes survive the full round trip"
     );
-    assert!((hits[0].1 - 1.0).abs() < 1e-5, "score top-1: {}", hits[0].1);
-    // Los 4 vectores existen: el hostil no desplazó a nadie ni fue saltado.
-    assert_eq!(hits.len(), 4, "los 4 .txt embebidos, hostil incluido");
+    assert!((hits[0].1 - 1.0).abs() < 1e-5, "top-1 score: {}", hits[0].1);
+    // All 4 vectors exist: the hostile one did not displace anyone or get skipped.
+    assert_eq!(hits.len(), 4, "all 4 .txt files embedded, hostile included");
     assert!(hits.iter().all(|(_, s)| s.is_finite()));
     assert!(
         hits.windows(2).all(|w| w[0].1 >= w[1].1),
-        "orden descendente"
+        "descending order"
     );
 
-    // k=1 ⇒ exactamente 1 hit.
+    // k=1 ⇒ exactly 1 hit.
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido secreto hostil", 1)
+        .index_search_semantic(Some(&vp("mem:///")), "hostile secret content", 1)
         .await
         .expect("search k=1");
-    assert_eq!(hits.len(), 1, "k=1 ⇒ exactamente 1 hit");
+    assert_eq!(hits.len(), 1, "k=1 ⇒ exactly 1 hit");
     assert_eq!(hits[0].0, hostile);
 
-    // Relevancia más allá de un único fichero: otro contenido distinto trae SU
-    // fichero en top-1.
+    // Relevance beyond a single file: different content brings back ITS
+    // file at top-1.
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "receta de cocina", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "cooking recipe", 10)
         .await
-        .expect("search receta");
-    assert_eq!(hits[0].0, vp("mem:///receta.txt"), "top-1 es la receta");
+        .expect("search recipe");
+    assert_eq!(hits[0].0, vp("mem:///recipe.txt"), "top-1 is the recipe");
 }
 
-/// **Una denegación se aplica hacia ATRÁS** (#122).
+/// **A denial applies BACKWARD** (#122).
 ///
-/// El filtro de `denied_prefixes` decide qué se LEE, así que protege lo que
-/// todavía no se ha embebido. Un fichero embebido ANTES de que el usuario lo
-/// denegara dejaba su vector guardado para siempre —y un vector es invertible
-/// a una aproximación del texto—, así que la única forma de honrar una
-/// denegación nueva era borrar `index.db` entero.
+/// The `denied_prefixes` filter decides what gets READ, so it protects what
+/// has not been embedded yet. A file embedded BEFORE the user denied it kept
+/// its vector stored forever — and a vector is invertible to an approximation
+/// of the text — so the only way to honor a new denial was to delete the whole
+/// `index.db`.
 ///
-/// Se comprueba contra la BÚSQUEDA y no contra la tabla: lo que le importa al
-/// usuario es que el fichero denegado deje de contestar.
+/// This is checked against the SEARCH, not the table: what matters to the
+/// user is that the denied file stops answering.
 #[tokio::test]
-async fn denegar_despues_de_embeber_olvida_el_vector() {
+async fn denying_after_embedding_forgets_the_vector() {
     let (engine, mem) = setup().await;
-    write_file(&mem, &vp("mem:///publico.txt"), b"informe anual 2024").await;
-    mem.mkdir(&vp("mem:///privado")).await.expect("privado");
-    write_file(&mem, &vp("mem:///privado/diario.txt"), b"contenido intimo").await;
+    write_file(&mem, &vp("mem:///public.txt"), b"annual report 2024").await;
+    mem.mkdir(&vp("mem:///private")).await.expect("private");
+    write_file(&mem, &vp("mem:///private/diary.txt"), b"intimate content").await;
 
     let (h, _) = engine
         .index_build_as(vp("mem:///"), Actor::User)
@@ -149,38 +149,38 @@ async fn denegar_despues_de_embeber_olvida_el_vector() {
         .expect("embed");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    // Con los dos embebidos, el privado contesta a su propio contenido.
+    // With both embedded, the private one answers to its own content.
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido intimo", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "intimate content", 10)
         .await
         .expect("search");
-    assert_eq!(hits[0].0, vp("mem:///privado/diario.txt"));
+    assert_eq!(hits[0].0, vp("mem:///private/diary.txt"));
 
-    // El usuario lo deniega DESPUÉS.
+    // The user denies it AFTERWARD.
     engine.set_ai_config(AiConfig {
-        denied_prefixes: vec![vp("mem:///privado")],
+        denied_prefixes: vec![vp("mem:///private")],
         ..ai_cfg()
     });
     let h = engine
         .index_embed_as(vp("mem:///"), Actor::User)
         .await
-        .expect("embed tras denegar");
+        .expect("embed after denying");
     assert_eq!(h.join().await, TaskState::Completed);
 
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "contenido intimo", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "intimate content", 10)
         .await
-        .expect("search tras denegar");
+        .expect("search after denying");
     assert!(
         hits.iter()
-            .all(|(p, _)| p != &vp("mem:///privado/diario.txt")),
-        "el vector del fichero denegado sigue contestando: {hits:?}"
+            .all(|(p, _)| p != &vp("mem:///private/diary.txt")),
+        "the denied file's vector still answers: {hits:?}"
     );
-    // Y lo permitido NO se lo lleva por delante: purgar de más sería tirar el
-    // índice a la primera denegación.
+    // And what is allowed is NOT swept away too: over-purging would mean
+    // throwing away the index at the first denial.
     let hits = engine
-        .index_search_semantic(Some(&vp("mem:///")), "informe anual 2024", 10)
+        .index_search_semantic(Some(&vp("mem:///")), "annual report 2024", 10)
         .await
-        .expect("search publico");
-    assert_eq!(hits[0].0, vp("mem:///publico.txt"));
+        .expect("search public");
+    assert_eq!(hits[0].0, vp("mem:///public.txt"));
 }

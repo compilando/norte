@@ -621,7 +621,7 @@ mod tests {
     const INSENSITIVE: NameCaps = NameCaps {
         fold: FoldMode::Simple,
     };
-    /// ext4/f2fs con el directorio en `+F`: el pliegue EXPANDE (#145).
+    /// ext4/f2fs with the directory in `+F`: the fold EXPANDS (#145).
     const FULL_FOLD: NameCaps = NameCaps {
         fold: FoldMode::Full,
     };
@@ -633,31 +633,31 @@ mod tests {
     /// this closes for the full one.
     #[test]
     fn a_full_folding_directory_sees_the_collision_a_simple_fold_misses() {
-        // Del corpus canónico, no a mano: son los dos nombres que #145 dejo
-        // puestos como pareja conocida (`straße.txt` / `strasse.txt`).
+        // From the canonical corpus, not by hand: they're the two names #145
+        // left in place as a known pair (`straße.txt` / `strasse.txt`).
         let fixture = |id: &str| {
             norte_testkit::corpus::hostile_names()
                 .into_iter()
                 .find(|n| n.id == id)
-                .unwrap_or_else(|| panic!("fixture {id} en el corpus"))
+                .unwrap_or_else(|| panic!("fixture {id} in the corpus"))
                 .bytes
         };
         let zett = fixture("ext4_full_fold_es_zett");
         let ss = fixture("ext4_full_fold_ss");
-        let listing = vec![name(b"otro.txt"), ss];
-        let batch = vec![(name(b"otro.txt"), zett)];
+        let listing = vec![name(b"other.txt"), ss];
+        let batch = vec![(name(b"other.txt"), zett)];
 
         let full = plan_batch(&batch, &listing, FULL_FOLD);
         assert!(
             !full.executable(),
-            "en +F el destino YA existe con otra grafía"
+            "under +F the destination ALREADY exists under a different spelling"
         );
         assert_eq!(full.collisions[0].kind, CollisionKind::External);
 
         let simple = plan_batch(&batch, &listing, INSENSITIVE);
         assert!(
             simple.executable(),
-            "y donde se pliega simple son dos nombres, como siempre"
+            "and where folding is simple these are two names, as always"
         );
     }
 

@@ -1,34 +1,35 @@
-//! Qué hace la VENTANA con cada clave de configuración (ADR 0097, decisión 2).
+//! What the WINDOW does with each configuration key (ADR 0097, decision 2).
 //!
-//! El terminal ya tenía este guarda —`App::desde_config`, en
-//! `norte-tui/src/app/profile.rs`, destructura `CommonConfig` sin `..`— y la
-//! ventana no. Seis de los hallazgos de la auditoría de paridad de
-//! 2026-09-05 son claves que habrían tenido que clasificarse aquí y que en su
-//! lugar se quedaron sin leer sin que nadie lo notara, entre ellas
-//! `openers.toml`, que es una feature documentada entera.
+//! The terminal already had this guard — `App::desde_config`, in
+//! `norte-tui/src/app/profile.rs`, destructures `CommonConfig` with no `..`
+//! — and the window did not. Six of the findings from the 2026-09-05 parity
+//! audit are keys that should have been classified here and instead went
+//! unread without anyone noticing, among them `openers.toml`, which is a
+//! whole documented feature.
 //!
-//! **Sin `..` a propósito.** Un campo nuevo hace que esto no COMPILE, que es
-//! más fuerte que un assert: obliga a decidir qué hace la ventana con la
-//! clave justo cuando alguien la está añadiendo, en vez de dejar que «no la
-//! lee nadie» y «la lee al arrancar» sean indistinguibles.
+//! **No `..`, on purpose.** A new field makes this fail to COMPILE, which is
+//! stronger than an assert: it forces a decision on what the window does
+//! with the key right when someone is adding it, instead of letting "nobody
+//! reads it" and "it is read at startup" be indistinguishable.
 //!
-//! Vive en `norte-ui-host` y no en `norte-gui-tauri` para que lo corra el
-//! gate de siempre (`just t` / `just ci-fast`): una clave nueva se añade en
-//! `norte-config`, que no toca la ventana, así que un guarda que solo corriera
-//! en `gui-ci` se enteraría tarde. Algunas de las claves las lee la cáscara
-//! (`norte-gui-tauri/src/startup.rs`) y no el host; se dice en cada grupo.
+//! Lives in `norte-ui-host` and not in `norte-gui-tauri` so the usual gate
+//! runs it (`just t` / `just ci-fast`): a new key is added in `norte-config`,
+//! which does not touch the window, so a guard that only ran in `gui-ci`
+//! would find out late. Some of the keys are read by the shell
+//! (`norte-gui-tauri/src/startup.rs`) and not the host; each group says so.
 //!
-//! **Esto NO afirma que lo clasificado esté bien.** Dice que está decidido.
-//! Las que hoy están decididas como «no la lee» son deuda con nombre, y el
-//! plan `docs/superpowers/plans/2026-09-05-paridad-tui-ventana.md` las lista.
+//! **This does NOT assert that what is classified is right.** It says it has
+//! been decided. The ones decided today as "nobody reads it" are named debt,
+//! and the plan `docs/superpowers/plans/2026-09-05-paridad-tui-ventana.md`
+//! lists them.
 
-/// Toda clave de `CommonConfig` está clasificada por lo que hace la ventana.
+/// Every `CommonConfig` key is classified by what the window does with it.
 #[test]
-fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
-    let c = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("config vacía");
+fn every_config_key_is_classified_for_the_window() {
+    let c = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("empty config");
     let norte_config::CommonConfig {
-        // ─── La cáscara las lee al arrancar y viajan en `UiHostOptions`.
-        //     `norte-gui-tauri/src/startup.rs`.
+        // ─── The shell reads these at startup and they travel in
+        //     `UiHostOptions`. `norte-gui-tauri/src/startup.rs`.
         preset: _,
         ui_lang: _,
         ui_layout: _,
@@ -41,13 +42,13 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         daemon:
             norte_config::DaemonSettings {
                 socket: _,
-                // De la TERMINAL: la ventana SIEMPRE habla con un daemon
-                // (ADR 0066, D10), así que no hay modo que elegir.
+                // From the TERMINAL: the window ALWAYS talks to a daemon
+                // (ADR 0066, D10), so there is no mode to choose.
                 mode: _,
             },
 
-        // ─── El host las lee de `self.config`, en caliente respecto a su
-        //     propio estado (un hueco nuevo las relee).
+        // ─── The host reads these from `self.config`, live against its own
+        //     state (a new slot re-reads them).
         quick_search: _,
         ui_show_hidden: _,
         ui_parent_entry: _,
@@ -57,57 +58,60 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
         hotlist: _,
         ui_diff: _,
         ui_diff_detached: _,
-        // El cromo (spec 2026-09-10): la barra de teclas, el estilo de la
-        // barra de paneles, el pie del panel, el formato de fecha, la
-        // caducidad de los avisos y los botones de diálogo. Cada foto los lee.
+        // The chrome (spec 2026-09-10): the key bar, the panel bar's style,
+        // the panel's footer, the date format, notice expiry and the dialog
+        // buttons. Every snapshot reads them.
         ui_chrome: _,
-        // Los elementos de plugin de la barra (ADR 0137): cada foto los lee
-        // (`elementos_de_estado`) y cada tanda de un listado pide sus
-        // columnas (`columns::plugin_requests`).
+        // The bar's plugin items (ADR 0137): every snapshot reads them
+        // (`elementos_de_estado`) and every listing round asks for their
+        // columns (`columns::plugin_requests`).
         ui_status_plugins: _,
 
-        // ─── La lee la cáscara al ARRANCAR con el resolutor compartido, así
-        //     que acepta un preset o la ruta a un `.toml` (ADR 0020).
+        // ─── Read by the shell at STARTUP with the shared resolver, so it
+        //     accepts a preset or the path to a `.toml` (ADR 0020).
         //
-        //     Sigue habiendo media deuda, y con nombre: al CAMBIAR DE PERFIL
-        //     el host aplica solo presets (`aplicar_tema`), porque resolver
-        //     una ruta pide leer un fichero y eso corre dentro del actor
-        //     (regla 2). Plan, fase 3.
+        //     There is still half a debt, and it has a name: on PROFILE
+        //     CHANGE the host only applies presets (`aplicar_tema`), because
+        //     resolving a path requires reading a file and that runs inside
+        //     the actor (rule 2). Plan, phase 3.
         ui_theme: _,
-        //     Las variantes por esquema del escritorio (spec 2026-09-11, V6):
-        //     la cáscara las resuelve al arrancar y viajan en el catálogo ya
-        //     como variables; el renderer elige por `prefers-color-scheme`.
+        //     The desktop-scheme variants (spec 2026-09-11, V6): the shell
+        //     resolves them at startup and they travel in the catalogue
+        //     already as variables; the renderer picks by
+        //     `prefers-color-scheme`.
         ui_theme_light: _,
         ui_theme_dark: _,
 
-        // ─── El host las lee para lanzar un programa: `openers.toml` manda en
-        //     `pane.open` y `[ui] editor` en `pane.edit`, con el manejador del
-        //     escritorio como último recurso en los dos.
+        // ─── The host reads these to launch a program: `openers.toml`
+        //     rules `pane.open` and `[ui] editor` rules `pane.edit`, with the
+        //     desktop handler as the last resort in both.
         //
-        //     Lo que sigue FUERA es `$EDITOR`, y es deliberado (#290): es un
-        //     editor de terminal y esta ventana no tiene uno donde ponerlo.
+        //     What is left OUT is `$EDITOR`, and it is deliberate (#290): it
+        //     is a terminal editor and this window has no terminal to put it
+        //     in.
         ui_editor: _,
         ui_editor_detached: _,
 
-        // ─── El host la lee al pedir cerrar (`UiAction::RequestQuit`): la
-        //     decisión de si preguntar es la compartida
-        //     (`settings::quit_needs_confirm`), y «queda trabajo» aquí es que
-        //     haya alguna task viva.
+        // ─── The host reads this when asked to quit
+        //     (`UiAction::RequestQuit`): the decision on whether to ask is
+        //     shared (`settings::quit_needs_confirm`), and "work is pending"
+        //     here means some task is still alive.
         ui_confirm_quit: _,
 
-        // ─── De la TERMINAL, y con motivo.
+        // ─── From the TERMINAL, and for a reason.
         //
-        //     `ui_mouse`: activar el ratón es una decisión de un emulador de
-        //     terminal; una ventana lo tiene siempre. (`daemon.mode` también
-        //     es de aquí; está arriba, con el resto de `daemon`.)
+        //     `ui_mouse`: turning the mouse on is a terminal emulator's
+        //     decision; a window always has one. (`daemon.mode` is also from
+        //     here; it is above, with the rest of `daemon`.)
         ui_mouse: _,
-        //     `ui_alt_menu`: el Alt solo lo tiene SIEMPRE una ventana; la
-        //     clave existe porque en un terminal cuesta un protocolo de
-        //     teclado que se come las tildes de tecla muerta.
+        //     `ui_alt_menu`: a window ALWAYS has Alt on its own; the key
+        //     exists because in a terminal it costs a keyboard protocol that
+        //     eats a dead key's accents.
         ui_alt_menu: _,
 
-        // ─── Del DAEMON: las aplica el proceso que sirve, no el que pinta.
-        //     Llegan por el socket ya en efecto.
+        // ─── From the DAEMON: applied by the process that serves, not the
+        //     one that paints. They arrive over the socket already in
+        //     effect.
         archive:
             norte_config::ArchiveSettings {
                 max_entries: _,
@@ -117,35 +121,35 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
             },
         ai: _,
 
-        // ─── Del CATÁLOGO de arranque, no de la foto: las cuatro cruzan en
-        //     `HostCatalog::appearance` y el renderer las enchufa como
-        //     variables CSS. El tamaño mueve también la rejilla —esta ventana
-        //     se reparte en celdas— y `reduce_motion` solo puede AÑADIR la
-        //     petición del escritorio, nunca contradecirla (spec §17).
+        // ─── From the startup CATALOGUE, not the snapshot: all four cross
+        //     over in `HostCatalog::appearance` and the renderer plugs them
+        //     in as CSS variables. The size also moves the grid — this
+        //     window is laid out in cells — and `reduce_motion` can only ADD
+        //     to the desktop's request, never contradict it (spec §17).
         //
-        //     Una terminal no elige su fuente ni anima nada, así que en el
-        //     terminal siguen sin aplicar y eso está dicho en su lista de
-        //     exclusión.
+        //     A terminal does not choose its font nor animate anything, so
+        //     in the terminal these still go unapplied and that is stated in
+        //     its exclusion list.
         ui_font: _,
         ui_mono_font: _,
         ui_font_size: _,
         ui_reduce_motion: _,
 
-        // ─── Se lee en el ARRANQUE y en el cambio de perfil, no en la foto:
-        //     `Estado::siembra_de_perfil` coloca el hueco del que la sesión no
-        //     sabe nada, una vez (ADR 0098).
+        // ─── Read at STARTUP and on profile change, not in the snapshot:
+        //     `Estado::siembra_de_perfil` fills in the slot the session
+        //     knows nothing about, once (ADR 0098).
         profile_start: _,
 
-        // ─── Diagnóstico de la CARGA, no ajustes.
+        // ─── LOAD diagnostics, not settings.
         //
-        //     `project_warnings` y `profile_warnings` se enseñan los dos, y
-        //     por el mismo camino: el conteo a la barra desde
-        //     `aviso_de_arranque` y cada motivo al registro. El de perfil
-        //     además se repite en cada cambio de perfil.
-        //     `sources` es para el vigilante de config, que la ventana no
-        //     tiene: su vista de «dónde vive esto» se construye de `capas`.
-        //     `profile_title` lo relee el selector de perfiles del fichero,
-        //     no de este campo.
+        //     `project_warnings` and `profile_warnings` are both shown, and
+        //     by the same path: the count to the bar from
+        //     `aviso_de_arranque` and each reason to the log. The profile one
+        //     is also repeated on every profile change.
+        //     `sources` is for the config watcher, which the window does not
+        //     have: its "where does this live" view is built from `capas`.
+        //     `profile_title` is re-read by the file's profile picker, not
+        //     from this field.
         sources: _,
         project_warnings: _,
         profile_warnings: _,
@@ -153,36 +157,36 @@ fn toda_clave_de_config_esta_clasificada_para_la_ventana() {
     } = c;
 }
 
-/// Y lo que NO es `CommonConfig` también.
+/// And what is NOT `CommonConfig`, too.
 ///
-/// El guarda de arriba destructuraba solo los escalares, y `openers.toml`
-/// —una feature documentada entera— no es uno: vive en `FrontendConfig`. O
-/// sea que el propio guarda tenía el hueco por el que se había colado la cosa
-/// que vino a vigilar. Aquí se cierra.
+/// The guard above only destructured the scalars, and `openers.toml` — a
+/// whole documented feature — is not one: it lives in `FrontendConfig`. In
+/// other words the guard itself had the gap the thing it came to watch for
+/// had slipped through. Closed here.
 #[test]
-fn todo_campo_de_frontend_config_esta_clasificado_para_la_ventana() {
+fn every_frontend_config_field_is_classified_for_the_window() {
     let cfg = norte_ui_host::ajustes_por_defecto();
     let norte_frontend::config::FrontendConfig {
-        // Los escalares, con su propio guarda arriba.
+        // The scalars, with their own guard above.
         common: _,
 
-        // ─── Las lee la cáscara al arrancar (`startup.rs::keymaps`) y viajan
-        //     fusionadas en `UiHostOptions`; el editor de atajos las vuelve a
-        //     mirar para saber en qué capa escribe.
+        // ─── Read by the shell at startup (`startup.rs::keymaps`) and they
+        //     travel merged in `UiHostOptions`; the shortcut editor looks at
+        //     them again to know which layer to write to.
         keymap_layers: _,
         keymap_layer_kinds: _,
         keymap_layer_dirs: _,
 
-        // ─── El host la lee: `pane.open` resuelve por mimetype antes de caer
-        //     en el manejador del escritorio.
+        // ─── The host reads it: `pane.open` resolves by mimetype before
+        //     falling back to the desktop handler.
         openers: _,
 
-        // ─── El host la lee: `pane.quick-search` arranca en el modo que
-        //     diga la clave, como en el terminal.
+        // ─── The host reads it: `pane.quick-search` starts in whichever
+        //     mode the key says, same as the terminal.
         quick_search_mode: _,
 
-        // ─── El host la lee: el selector de tema, el asistente y la pantalla
-        //     de ajustes ofrecen los temas del usuario, igual que el terminal.
+        // ─── The host reads it: the theme picker, the wizard and the
+        //     settings screen offer the user's themes, same as the terminal.
         user_themes: _,
     } = cfg;
 }

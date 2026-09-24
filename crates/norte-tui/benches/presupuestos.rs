@@ -1,12 +1,12 @@
-//! Benchmarks de los presupuestos de la spec §12 (fase 10):
-//! - arranque frío (config + keymaps + listado + primer draw) < 50 ms
-//! - listado de 100k entradas hasta primer render < 200 ms
-//! - hook Lua de statusbar (M4 Lua T9): cacheada ≈ nada (< 1 µs), no
-//!   cacheada con script trivial < 1 ms (el presupuesto DURO es por
-//!   instrucciones: 50k, `lua/statusbar.rs`)
+//! Benchmarks for the spec §12 budgets (phase 10):
+//! - cold start (config + keymaps + listing + first draw) < 50 ms
+//! - listing of 100k entries up to first render < 200 ms
+//! - Lua statusbar hook (M4 Lua T9): cached ≈ nothing (< 1 µs), uncached
+//!   with a trivial script < 1 ms (the HARD budget is by instructions:
+//!   50k, `lua/statusbar.rs`)
 //!
-//! `just bench` los corre; criterion imprime medias — compara contra el
-//! presupuesto a ojo (gates duros de tiempo en CI = flakiness).
+//! `just bench` runs them; criterion prints averages — compare against the
+//! budget by eye (hard time gates in CI = flakiness).
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -23,10 +23,11 @@ use norte_vfs_local::LocalProvider;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
-/// Drena el listado ENTERO (vara de regresión del coste total). #54: NO
-/// ordena aquí — `Pane::new` (vía `PaneState::new`) normaliza internamente;
-/// ordenar aquí también sería trabajo duplicado y falsearía el bench.
-fn listar(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Entry> {
+/// Drains the ENTIRE listing (total-cost regression yardstick). #54: does
+/// NOT sort here — `Pane::new` (via `PaneState::new`) normalizes
+/// internally; sorting here too would be duplicated work and would
+/// misrepresent the bench.
+fn list_all(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Entry> {
     use futures::StreamExt;
     rt.block_on(async {
         let mut stream = engine.list(dir).await.expect("list");
@@ -38,10 +39,10 @@ fn listar(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Ent
     })
 }
 
-/// PRIMERA página (hasta 100): el camino real del primer render con
-/// paginación (ADR 0017). No drena las 100k — es lo que #27 mide de verdad.
-/// #54: NO ordena aquí, mismo motivo que [`listar`].
-fn primera_pagina(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Entry> {
+/// FIRST page (up to 100): the real path of the first render with
+/// pagination (ADR 0017). Does not drain the 100k — this is what #27
+/// actually measures. #54: does NOT sort here, same reason as [`list_all`].
+fn first_page(rt: &tokio::runtime::Runtime, engine: &Engine, dir: &VPath) -> Vec<Entry> {
     use futures::StreamExt;
     rt.block_on(async {
         let mut stream = engine.list(dir).await.expect("list");
@@ -62,8 +63,8 @@ fn draw_once(app: &App) {
     black_box(terminal.backend().to_string().len());
 }
 
-/// Arranque frío en-proceso: todo lo que pasa entre `main()` y el primer
-/// frame (menos el exec del binario y la init del runtime, ~1-2 ms).
+/// In-process cold start: everything that happens between `main()` and the
+/// first frame (minus the binary's exec and runtime init, ~1-2 ms).
 fn bench_cold_start(c: &mut Criterion) {
     let dir = tempfile::tempdir().expect("tempdir");
     for i in 0..100 {
@@ -74,7 +75,7 @@ fn bench_cold_start(c: &mut Criterion) {
         .enable_all()
         .build()
         .expect("runtime");
-    c.bench_function("cold_start_hasta_primer_frame", |b| {
+    c.bench_function("cold_start_to_first_frame", |b| {
         b.iter(|| {
             let cfg = load(&Layers { dirs: vec![] }).expect("config");
             let presets = presets();
@@ -90,7 +91,7 @@ fn bench_cold_start(c: &mut Criterion) {
             let engine = Engine::new();
             engine.register_provider(Arc::new(LocalProvider::rooted(dir.path())));
             let root = LocalProvider::root();
-            let entries = listar(&rt, &engine, &root);
+            let entries = list_all(&rt, &engine, &root);
             let app = App::new(
                 Pane::new(root.clone(), entries.clone()),
                 Pane::new(root.clone(), entries),
@@ -100,12 +101,12 @@ fn bench_cold_start(c: &mut Criterion) {
     });
 }
 
-/// 100k entradas: listado por el engine + sort NFC + primer render.
+/// 100k entries: engine listing + NFC sort + first render.
 fn bench_list_100k(c: &mut Criterion) {
     let dir = tempfile::tempdir().expect("tempdir");
-    eprintln!("creando 100k archivos (una vez)…");
+    eprintln!("creating 100k files (once)…");
     for i in 0..100_000u32 {
-        std::fs::File::create(dir.path().join(format!("archivo-{i:06}.dat"))).expect("create");
+        std::fs::File::create(dir.path().join(format!("file-{i:06}.dat"))).expect("create");
     }
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(2)
@@ -115,25 +116,25 @@ fn bench_list_100k(c: &mut Criterion) {
     let engine = Engine::new();
     engine.register_provider(Arc::new(LocalProvider::rooted(dir.path())));
     let root = LocalProvider::root();
-    let mut group = c.benchmark_group("listado");
+    let mut group = c.benchmark_group("listing");
     group.sample_size(10);
-    // El criterio de #27: primer render con la PRIMERA página (paginación,
-    // ADR 0017). Presupuesto spec §12 <200 ms (esperado ~1-3 ms: no espera a
-    // las 100k); de paso verifica el <16 ms de spec §11.
-    group.bench_function("cien_mil_hasta_primer_render", |b| {
+    // #27's criterion: first render with the FIRST page (pagination, ADR
+    // 0017). Spec §12 budget <200 ms (expected ~1-3 ms: does not wait for
+    // the 100k); along the way it also verifies spec §11's <16 ms.
+    group.bench_function("hundred_k_to_first_render", |b| {
         b.iter(|| {
-            let entries = primera_pagina(&rt, &engine, &root);
+            let entries = first_page(&rt, &engine, &root);
             let mut pane = Pane::new(root.clone(), entries);
-            pane.set_loading(true); // el resto se rellenaría en background
+            pane.set_loading(true); // the rest would be filled in in the background
             let app = App::new(pane, Pane::new(root.clone(), Vec::new()));
             draw_once(&app);
         });
     });
-    // Vara de regresión del coste TOTAL (drenar+sort las 100k): la métrica de
-    // la issue diferida de los statx de vfs-local (d_type/size lazy).
-    group.bench_function("cien_mil_drenado_completo", |b| {
+    // TOTAL-cost regression yardstick (drain+sort the 100k): the metric for
+    // vfs-local's deferred statx issue (lazy d_type/size).
+    group.bench_function("hundred_k_full_drain", |b| {
         b.iter(|| {
-            let entries = listar(&rt, &engine, &root);
+            let entries = list_all(&rt, &engine, &root);
             let app = App::new(
                 Pane::new(root.clone(), entries),
                 Pane::new(root.clone(), Vec::new()),
@@ -144,17 +145,19 @@ fn bench_list_100k(c: &mut Criterion) {
     group.finish();
 }
 
-/// #54: coste TOTAL del camino extend por lotes (lo que el bench de drenado
-/// no captura: ahí se ordena UNA vez al final; el fill real re-ordenaba en
-/// cada lote). 100k entries sintéticas en lotes de 4096 → ~24 extends.
-/// PURO CPU (sin FS ni engine): mide solo `PaneState::extend`.
+/// #54: TOTAL cost of the batched extend path (what the drain bench does
+/// not capture: there it sorts ONCE at the end; the real fill used to
+/// re-sort on every batch). 100k synthetic entries in batches of 4096 →
+/// ~24 extends. PURE CPU (no FS, no engine): measures only
+/// `PaneState::extend`.
 fn bench_fill_100k(c: &mut Criterion) {
     let dir = VPath::parse("mem:///bench").expect("wire");
     let all: Vec<Entry> = (0..100_000)
         .map(|i| Entry {
             attrs: std::collections::BTreeMap::new(),
-            // Mezcla dirs/files y nombres desordenados (peor caso del merge
-            // que el orden de llegada del FS, ya semi-ordenado).
+            // Mixes dirs/files and shuffled names (a worse case for the
+            // merge than the FS's arrival order, which is already
+            // semi-sorted).
             path: VPath::parse(&format!("mem:///bench/f{:06}", (i * 7919) % 100_000))
                 .expect("wire"),
             kind: if i % 8 == 0 {
@@ -168,7 +171,7 @@ fn bench_fill_100k(c: &mut Criterion) {
         .collect();
     let mut group = c.benchmark_group("fill");
     group.sample_size(10);
-    group.bench_function("cien_mil_extend_por_lotes", |b| {
+    group.bench_function("hundred_k_extend_in_batches", |b| {
         b.iter(|| {
             let mut pane = PaneState::new(dir.clone(), Vec::new());
             for chunk in all.chunks(4096) {
@@ -180,35 +183,34 @@ fn bench_fill_100k(c: &mut Criterion) {
     group.finish();
 }
 
-/// Hook Lua de statusbar (M4 Lua): la llamada CACHEADA (mismo `StatusInput`)
-/// se dispara en cada vuelta de render y debe ser despreciable; la NO
-/// cacheada (snapshot cambiado) reinvoca el script bajo su presupuesto de
-/// instrucciones.
+/// Lua statusbar hook (M4 Lua): the CACHED call (same `StatusInput`) fires
+/// on every render pass and must be negligible; the UNCACHED one (changed
+/// snapshot) re-invokes the script under its instruction budget.
 fn bench_lua_statusbar(c: &mut Criterion) {
     use norte_tui::lua::{Layer, LuaHost, StatusInput};
 
     let host = LuaHost::new().expect("lua");
     host.eval_layer(
-        b"norte.ui.statusbar(function(s) return s.entries .. ' entradas en ' .. s.cwd end)",
+        b"norte.ui.statusbar(function(s) return s.entries .. ' entries in ' .. s.cwd end)",
         Layer::User,
     )
-    .expect("hook de statusbar");
+    .expect("statusbar hook");
     let input = StatusInput {
-        cwd: b"mem:///un/dir".to_vec(),
+        cwd: b"mem:///a/dir".to_vec(),
         selected: 3,
         selected_bytes: 4096,
         entries: 1234,
         tasks: 0,
     };
-    assert!(host.statusbar(&input).is_some(), "el hook responde");
+    assert!(host.statusbar(&input).is_some(), "the hook responds");
 
-    c.bench_function("lua_statusbar_cacheada", |b| {
+    c.bench_function("lua_statusbar_cached", |b| {
         b.iter(|| black_box(host.statusbar(black_box(&input))));
     });
     let mut n = 0usize;
-    c.bench_function("lua_statusbar_no_cacheada", |b| {
+    c.bench_function("lua_statusbar_uncached", |b| {
         b.iter(|| {
-            // Snapshot distinto en cada vuelta: bust del cache, reinvoca.
+            // A different snapshot on every pass: busts the cache, re-invokes.
             n += 1;
             let mut i = input.clone();
             i.selected = n;

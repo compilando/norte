@@ -1,7 +1,7 @@
-//! `Engine::close_connection` (#140): desconectar SUELTA la sesión.
+//! `Engine::close_connection` (#140): disconnecting DROPS the session.
 //!
-//! Sin esto, «desconectar» solo movía el panel a otro sitio y el socket seguía
-//! abierto hasta que la sesión venciera sola.
+//! Without this, "disconnect" only moved the pane elsewhere while the socket
+//! stayed open until the session expired on its own.
 
 use std::sync::Arc;
 
@@ -11,31 +11,31 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-/// Un provider de PROCESO —registrado por su scheme entero, como el local— no
-/// es una sesión: no hay nada que soltar, y contestar que sí sería mentir sobre
-/// algo que sigue exactamente igual.
+/// A PROCESS provider — registered under its whole scheme, like the local one —
+/// is not a session: there is nothing to drop, and answering yes would be
+/// lying about something that stays exactly the same.
 #[tokio::test]
-async fn un_provider_de_proceso_no_se_cierra() {
+async fn a_process_provider_does_not_close() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     assert!(
-        !engine.close_connection(&vp("mem:///casa")),
-        "no había sesión que cerrar"
+        !engine.close_connection(&vp("mem:///home")),
+        "there was no session to close"
     );
-    // Y sigue sirviendo: cerrar lo que no era una sesión no puede dejar el
-    // scheme inservible.
-    mem.mkdir(&vp("mem:///casa")).await.expect("mkdir");
-    assert!(engine.stat(&vp("mem:///casa")).await.is_ok());
+    // And it still serves: closing something that was not a session must not
+    // leave the scheme unusable.
+    mem.mkdir(&vp("mem:///home")).await.expect("mkdir");
+    assert!(engine.stat(&vp("mem:///home")).await.is_ok());
 }
 
-/// Cerrar lo que no está es `false` y no un error: quien desconecta quiere
-/// quedarse sin conexión, y ya lo está.
+/// Closing what is not there is `false`, not an error: whoever disconnects
+/// wants to end up without a connection, and already is.
 #[tokio::test]
-async fn cerrar_lo_que_no_hay_no_es_un_error() {
+async fn closing_what_is_not_there_is_not_an_error() {
     let engine = Engine::new();
-    assert!(!engine.close_connection(&vp("sftp://host/casa")));
+    assert!(!engine.close_connection(&vp("sftp://host/home")));
 }

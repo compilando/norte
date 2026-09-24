@@ -1,31 +1,32 @@
-//! Un hueco que SIGUE al cursor tiene un camino propio hasta el renderer.
+//! A slot that FOLLOWS the cursor has its own path to the renderer.
 //!
-//! F1.3 del plan de paridad, y la decisión 2 de la ADR 0097: la ventana habla
-//! por PARCHES, así que lo que no cabe en un parche se queda como estaba hasta
-//! que algo provoque una foto entera. Para un panel que describe lo que el
-//! cursor señala eso no es un retraso: es un panel que MIENTE, porque enseña
-//! los atributos de un fichero mientras el listado resalta otro.
+//! F1.3 of the parity plan, and decision 2 of ADR 0097: the window speaks in
+//! PATCHES, so whatever does not fit in a patch stays as it was until
+//! something triggers a whole snapshot. For a panel that describes what the
+//! cursor points at, that is not a delay: it is a panel that LIES, because it
+//! shows one file's attributes while the listing highlights another.
 //!
-//! Ya pasó dos veces. El visor acoplado (#291) y la hoja de atributos viajaban
-//! «de gorra» en la foto que provocaba otro panel, así que una disposición con
-//! hoja y sin visor la dejaba congelada en lo que hubiera al arrancar. La
-//! reparación fue la misma en los dos casos —una SONDA después de cada mensaje
-//! del actor, que es lo más parecido a un frame que tiene un host que solo
-//! habla cuando algo cambia—, y este fichero es el guarda para que el tercer
-//! panel que siga al cursor no repita el viaje.
+//! It has already happened twice. The docked viewer (#291) and the
+//! attributes sheet used to travel "for free" in the snapshot another panel
+//! triggered, so a layout with the sheet and no viewer left it frozen on
+//! whatever was there at startup. The fix was the same in both cases — a
+//! PROBE after every message from the actor, which is the closest thing to a
+//! frame a host that only speaks when something changes has — and this file
+//! is the guard so a third panel that follows the cursor does not repeat the
+//! trip.
 //!
-//! **Lo que se mide es el producto, no una lista.** Para cada panel que la
-//! barra ofrece: se abre, se mueve el cursor del listado, y se mira si la
-//! vista de ESE hueco cambió. Si cambió, el cambio tiene que haber llegado
-//! solo. Un panel nuevo entra en la comprobación sin tocar este fichero,
-//! porque la enumeración sale de la barra de paneles.
+//! **What is measured is the product, not a list.** For every panel the bar
+//! offers: it is opened, the listing's cursor is moved, and it is checked
+//! whether THAT slot's view changed. If it changed, the change had to have
+//! arrived on its own. A new panel joins the check without touching this
+//! file, because the enumeration comes from the panel bar.
 //!
-//! Los dos tests se reparten las dos averías, y hace falta el par. Con la
-//! sonda de la hoja QUITADA del bucle del actor —el contenido se calcula y no
-//! se manda— falla el primero: cambia y no viajó. Con la sonda del visor
-//! muerta del todo —no se calcula— falla el SEGUNDO, porque entonces no
-//! cambia nada y el panel deja de parecer que sigue al cursor. Comprobado
-//! saboteando cada una por separado.
+//! The two tests split the two failures, and the pair is needed. With the
+//! sheet's probe REMOVED from the actor's loop — the content is computed but
+//! not sent — the first one fails: it changes and did not travel. With the
+//! viewer's probe dead altogether — it is not computed — the SECOND one
+//! fails, because then nothing changes and the panel stops looking like it
+//! follows the cursor. Verified by sabotaging each one separately.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -38,99 +39,101 @@ use norte_ui_host::{UiHost, UiHostOptions, UiSubscription, Update, ViewSnapshot}
 mod backend_falso;
 use backend_falso::arbol_de_prueba;
 
-/// Los paneles que NO siguen al cursor del listado, y por qué no.
+/// The panels that do NOT follow the listing's cursor, and why not.
 ///
-/// Estar aquí es una AFIRMACIÓN comprobada, no una exención: el test falla
-/// también al revés, si uno de éstos resulta que sí cambia al mover el cursor.
-/// El motivo importa porque «no sigue» y «sigue y se quedó congelado» se ven
-/// igual en pantalla el día que alguien lo rompa.
-/// Kinds cuyo botón SÍ está en la barra —viene del registro compartido— pero
-/// que esta ventana todavía no pinta, con la issue que lo cierra.
+/// Being here is a CHECKED ASSERTION, not an exemption: the test also fails
+/// the other way, if one of these turns out to change when the cursor moves.
+/// The reason matters because "does not follow" and "follows and got frozen"
+/// look the same on screen the day someone breaks it.
+/// Kinds whose button IS in the bar — it comes from the shared registry —
+/// but that this window does not yet paint, with the issue that closes it.
 ///
-/// Estar aquí NO es una exención permanente: el gate de paridad
-/// (`paridad.rs`, `APLAZADOS`) lleva la misma issue, así que implementarlo
-/// obliga a quitarlo de los dos sitios. Se salta este barrido porque su
-/// premisa —pulsar el botón abre un hueco— sólo vale para lo que la ventana
-/// sabe pintar; contra un kind que no tiene, el host contesta «no
-/// implementado», que es la respuesta correcta y no un fallo.
-const SIN_VENTANA: &[(&str, u32)] = &[("timeline", 359)];
+/// Being here is NOT a permanent exemption: the parity gate (`paridad.rs`,
+/// `APLAZADOS`) carries the same issue, so implementing it means removing it
+/// from both places. It is skipped by this sweep because its premise —
+/// pressing the button opens a slot — only holds for what the window knows
+/// how to paint; against a kind it does not have, the host answers "not
+/// implemented", which is the correct response and not a failure.
+const NO_WINDOW: &[(&str, u32)] = &[("timeline", 359)];
 
-/// Kinds que este ARNÉS no puede sondear, y por qué.
+/// Kinds this HARNESS cannot probe, and why.
 ///
-/// Distinto de [`SIN_VENTANA`] y la diferencia importa: aquéllos son trabajo
-/// que falta, con su issue. Éstos la ventana los hace perfectamente — lo que
-/// no da el arnés es la precondición.
-const SIN_SONDA: &[(&str, &str)] = &[(
+/// Different from [`NO_WINDOW`], and the difference matters: those are
+/// missing work, with their issue. These the window handles perfectly — what
+/// the harness lacks is the precondition.
+const NO_PROBE: &[(&str, &str)] = &[(
     "terminal",
-    "un shell se sienta en un directorio del sistema de ficheros, y los \
-     paneles de este arnés son `mem:///`. El panel se NIEGA a abrirse ahí, \
-     que es la conducta correcta y la misma que `app.terminal`: sondearlo \
-     pediría un backend con rutas locales de verdad",
+    "a shell sits in a filesystem directory, and this harness's panels are \
+     `mem:///`. The panel REFUSES to open there, which is the correct \
+     behavior and the same as `app.terminal`: probing it would require a \
+     backend with real local paths",
 )];
 
-const NO_SIGUEN: &[(&str, &str)] = &[
+const DO_NOT_FOLLOW: &[(&str, &str)] = &[
     (
         "places",
-        "enseña volúmenes y favoritos, que son del host y no de la fila",
+        "shows volumes and favorites, which belong to the host and not the row",
     ),
     (
         "processes",
-        "tiene su PROPIO cursor sobre las tasks; el del listado no le dice nada",
+        "has its OWN cursor over the tasks; the listing's says nothing to it",
     ),
-    ("log", "enseña lo que este proceso registra, no una entrada"),
+    ("log", "shows what this process logs, not an entry"),
     (
         "tree",
-        "sigue al DIRECTORIO, que sólo cambia con un `cd`, no con una fila",
+        "follows the DIRECTORY, which only changes with a `cd`, not a row",
     ),
     (
         "disk-map",
-        "describe el DIRECTORIO que se está mirando, no la fila: mover el \
-         cursor no cambia de qué está hecho lo que hay alrededor",
+        "describes the DIRECTORY being looked at, not the row: moving the \
+         cursor does not change what is around it",
     ),
 ];
 
-/// A dónde se lleva el cursor: un FICHERO de verdad.
+/// Where the cursor is moved to: a REAL file.
 ///
-/// No vale «una fila más abajo». El cursor nace sobre `..` y debajo hay otro
-/// directorio, y el visor acoplado enseña la misma nota para los dos —«esto no
-/// se lee»—, así que ese movimiento lo dejaría igual y el panel saldría como
-/// que no sigue al cursor. Un verde por no haber preguntado.
-const FICHERO: &str = "notas.txt";
+/// "One row down" does not work. The cursor is born on `..` and below it is
+/// another directory, and the docked viewer shows the same note for both —
+/// "this cannot be read" — so that move would leave it the same and the
+/// panel would come out as not following the cursor. A green from not
+/// having asked.
+const FILE: &str = "notas.txt";
 
-/// Cuántas filas hay del cursor a la fila que se llama así.
-fn hasta(snap: &ViewSnapshot, nombre: &str) -> i64 {
+/// How many rows there are from the cursor to the row with this name.
+fn rows_to(snap: &ViewSnapshot, name: &str) -> i64 {
     let SlotView::Browser(b) = snap
         .slots
         .iter()
         .find(|s| matches!(s, SlotView::Browser(_)))
-        .expect("hay listado")
+        .expect("there is a listing")
     else {
-        unreachable!("filtrado arriba")
+        unreachable!("filtered above")
     };
     let cursor = b.cursor.map_or(0, |k| usize::try_from(k.0).unwrap_or(0));
-    let destino = b
+    let target = b
         .rows
         .iter()
-        .position(|r| r.display_name == nombre)
-        .unwrap_or_else(|| panic!("`{nombre}` no está en el listado"));
-    i64::try_from(destino).unwrap_or(0) - i64::try_from(cursor).unwrap_or(0)
+        .position(|r| r.display_name == name)
+        .unwrap_or_else(|| panic!("`{name}` is not in the listing"));
+    i64::try_from(target).unwrap_or(0) - i64::try_from(cursor).unwrap_or(0)
 }
 
-/// Lo que se observó de un panel al mover el cursor debajo.
+/// What was observed of a panel when the cursor moved under it.
 #[derive(Debug)]
-struct Observacion {
-    /// ¿Su vista es distinta después de mover el cursor?
-    cambia: bool,
-    /// ¿Llegó ese cambio SOLO, sin que el renderer pidiera nada?
-    viaja: bool,
+struct Observation {
+    /// Is its view different after moving the cursor?
+    changes: bool,
+    /// Did that change arrive ON ITS OWN, without the renderer requesting
+    /// anything?
+    travels: bool,
 }
 
-/// La vista del hueco de `kind` en una foto, si está.
+/// A `kind` slot's view in a snapshot, if present.
 ///
-/// El mapa kind → variante es la única parte escrita a mano, y no se puede
-/// derivar: el wire llama `preview` a lo que la disposición llama `viewer`,
-/// que es justo el tipo de sinónimo que un `match` exhaustivo no ve.
-fn vista_de(snap: &ViewSnapshot, kind: &str) -> Option<SlotView> {
+/// The kind → variant map is the only hand-written part, and it cannot be
+/// derived: the wire calls `preview` what the layout calls `viewer`, which is
+/// exactly the kind of synonym an exhaustive `match` cannot see.
+fn view_of(snap: &ViewSnapshot, kind: &str) -> Option<SlotView> {
     snap.slots
         .iter()
         .find(|s| match (kind, s) {
@@ -149,68 +152,72 @@ fn vista_de(snap: &ViewSnapshot, kind: &str) -> Option<SlotView> {
         .cloned()
 }
 
-/// Vacía la cola de lo que haya pendiente, sin esperar a nada.
+/// Drains whatever is pending, without waiting on anything.
 ///
-/// Solo para ponerse al día tras abrir un panel o mover el foco: aquí no se
-/// decide nada, así que un mensaje que llegue tarde no rompe el test — lo verá
-/// la espera de después.
-async fn vacia(sub: &mut UiSubscription) {
-    while let Ok(recibido) = tokio::time::timeout(Duration::from_millis(50), sub.recv()).await {
-        let _ = recibido.expect("el host sigue vivo");
+/// Only to catch up after opening a panel or moving focus: nothing is
+/// decided here, so a message that arrives late does not break the test —
+/// the wait afterward will see it.
+async fn drain(sub: &mut UiSubscription) {
+    while let Ok(received) = tokio::time::timeout(Duration::from_millis(50), sub.recv()).await {
+        let _ = received.expect("the host is still alive");
     }
 }
 
-/// Espera a que llegue SOLA una foto en la que la vista de `kind` ya no es
-/// `antes`, o `None` si en todo el plazo no llega ninguna.
+/// Waits for a snapshot to arrive ON ITS OWN in which `kind`'s view is no
+/// longer `before`, or `None` if none arrives within the whole deadline.
 ///
-/// Un plazo de silencio no vale para esto. «No ha llegado nada en 150 ms» y
-/// «este panel no sigue al cursor» se ven igual, y bajo la carga del gate una
-/// sonda que lee un fichero tarda más que eso: el test se pondría rojo
-/// diciendo «panel congelado» por una carrera perdida, que es exactamente la
-/// clase de rojo intermitente que este repositorio trata como un bug.
+/// A silence deadline does not work for this. "Nothing arrived in 150 ms"
+/// and "this panel does not follow the cursor" look the same, and under the
+/// gate's load a probe that reads a file takes longer than that: the test
+/// would turn red saying "frozen panel" over a lost race, which is exactly
+/// the kind of intermittent red this repository treats as a bug.
 ///
-/// Así el camino verde es inmediato —la foto ya está esperando— y el plazo
-/// largo solo se gasta en los paneles que de verdad no cambian, donde su
-/// respuesta es la correcta.
-async fn espera_cambio(sub: &mut UiSubscription, kind: &str, antes: &SlotView) -> Option<SlotView> {
-    let hasta = tokio::time::Instant::now() + Duration::from_secs(3);
+/// This way the green path is immediate — the snapshot is already waiting —
+/// and the long deadline is only spent on the panels that really do not
+/// change, where their response is the correct one.
+async fn wait_for_change(
+    sub: &mut UiSubscription,
+    kind: &str,
+    before: &SlotView,
+) -> Option<SlotView> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
-        let queda = hasta.saturating_duration_since(tokio::time::Instant::now());
-        if queda.is_zero() {
+        let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if left.is_zero() {
             return None;
         }
-        let Ok(recibido) = tokio::time::timeout(queda, sub.recv()).await else {
+        let Ok(received) = tokio::time::timeout(left, sub.recv()).await else {
             return None;
         };
-        if let Update::Message(m) = recibido.expect("el host sigue vivo")
+        if let Update::Message(m) = received.expect("the host is still alive")
             && let UiUpdate::Snapshot(s) = m.payload
-            && let Some(ahora) = vista_de(&s, kind)
-            && &ahora != antes
+            && let Some(now) = view_of(&s, kind)
+            && &now != before
         {
-            return Some(ahora);
+            return Some(now);
         }
     }
 }
 
-/// Pide una foto entera y espera a que llegue.
-async fn pide_foto(host: &UiHost, sub: &mut UiSubscription) -> ViewSnapshot {
-    host.dispatch(UiAction::Resync).await.expect("host vivo");
+/// Requests a whole snapshot and waits for it to arrive.
+async fn request_snapshot(host: &UiHost, sub: &mut UiSubscription) -> ViewSnapshot {
+    host.dispatch(UiAction::Resync).await.expect("host alive");
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(Duration::from_millis(500), sub.recv())
+        let next = tokio::time::timeout(Duration::from_millis(500), sub.recv())
             .await
-            .expect("una foto, no un cuelgue")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("a snapshot, not a hang")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Snapshot(s) = m.payload
         {
             return *s;
         }
     }
-    panic!("no llegó ninguna foto");
+    panic!("no snapshot ever arrived");
 }
 
-/// Arranca un host con el listado solo, sobre el árbol de prueba.
-async fn arranca() -> (UiHost, ViewSnapshot) {
+/// Starts a host with just the listing, over the test tree.
+async fn start() -> (UiHost, ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend: Arc::new(arbol_de_prueba()),
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
@@ -232,114 +239,121 @@ async fn arranca() -> (UiHost, ViewSnapshot) {
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// La observación de un kind, EN CAJA.
+/// A kind's observation, BOXED.
 ///
-/// El futuro de un `async fn` viaja entero en cada `await`, y este monta un
-/// host y guarda dos fotos: al crecer el snapshot pasó de los 16 KB que
-/// clippy tolera. La caja va aquí, en la raíz, y no en los dos bucles que lo
-/// llaman.
-fn observa(kind: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Observacion> + '_>> {
-    Box::pin(observa_inner(kind))
+/// An `async fn`'s future travels whole across every `await`, and this one
+/// builds a host and keeps two snapshots: as the snapshot grew it went past
+/// the 16 KB clippy tolerates. The box goes here, at the root, and not in the
+/// two loops that call it.
+fn observe(kind: &str) -> std::pin::Pin<Box<dyn std::future::Future<Output = Observation> + '_>> {
+    Box::pin(observe_inner(kind))
 }
 
-/// Abre el panel de `kind`, mueve el cursor del listado, y mira qué pasó.
-async fn observa_inner(kind: &str) -> Observacion {
-    let (host, primera) = arranca().await;
+/// Opens `kind`'s panel, moves the listing's cursor, and looks at what
+/// happened.
+async fn observe_inner(kind: &str) -> Observation {
+    let (host, first) = start().await;
     let mut sub = host.subscribe();
 
-    // La barra de paneles es la enumeración: un click vuelve como el ÍNDICE
-    // en su lista, que es lo único que el renderer puede nombrar.
-    let boton = primera
+    // The panel bar is the enumeration: a click comes back as the INDEX in
+    // its list, which is the only thing the renderer can name.
+    let button = first
         .panel_bar
         .buttons
         .iter()
         .position(|b| b.kind == kind)
-        .unwrap_or_else(|| panic!("`{kind}` no está en la barra de paneles"));
+        .unwrap_or_else(|| panic!("`{kind}` is not in the panel bar"));
     host.dispatch(UiAction::PanelBarActivate {
-        button: u32::try_from(boton).expect("cabe"),
+        button: u32::try_from(button).expect("fits"),
     })
     .await
-    .expect("host vivo");
-    vacia(&mut sub).await;
+    .expect("host alive");
+    drain(&mut sub).await;
 
-    // El foco vuelve al listado: abrir un panel que se enfoca se lo lleva, y
-    // `MoveCursor` sobre un hueco que no es el activo se contesta `Stale` —
-    // o sea que sin esto el cursor no se movería y TODOS los paneles saldrían
-    // «no sigue», que es un verde que no prueba nada.
+    // Focus returns to the listing: opening a panel that takes focus grabs
+    // it, and `MoveCursor` on a slot that is not active gets answered
+    // `Stale` — so without this the cursor would not move and ALL panels
+    // would come out "does not follow", which is a green that proves
+    // nothing.
     host.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
-    vacia(&mut sub).await;
+        .expect("host alive");
+    drain(&mut sub).await;
 
-    let foto = pide_foto(&host, &mut sub).await;
-    let delta = hasta(&foto, FICHERO);
-    let antes = vista_de(&foto, kind).unwrap_or_else(|| panic!("`{kind}` no se abrió"));
+    let snap = request_snapshot(&host, &mut sub).await;
+    let delta = rows_to(&snap, FILE);
+    let before = view_of(&snap, kind).unwrap_or_else(|| panic!("`{kind}` did not open"));
 
     host.dispatch(UiAction::MoveCursor { slot_id: 1, delta })
         .await
-        .expect("host vivo");
+        .expect("host alive");
 
-    // Primero, la pregunta que de verdad se hace: ¿llegó SOLO un cambio de
-    // este panel? Si llegó, ya está contestado todo y no hay plazo que gastar.
-    if espera_cambio(&mut sub, kind, &antes).await.is_some() {
-        return Observacion {
-            cambia: true,
-            viaja: true,
+    // First, the question that actually matters: did a change from THIS
+    // panel arrive ON ITS OWN? If it did, everything is already answered and
+    // there is no deadline to spend.
+    if wait_for_change(&mut sub, kind, &before).await.is_some() {
+        return Observation {
+            changes: true,
+            travels: true,
         };
     }
 
-    // No llegó nada. Ahora se distingue el panel que no sigue al cursor —lo
-    // correcto— del panel congelado: se PIDE la foto y se mira si su vista era
-    // otra todo este rato.
-    let despues = pide_foto(&host, &mut sub).await;
-    let despues = vista_de(&despues, kind).unwrap_or_else(|| panic!("`{kind}` sigue abierto"));
-    Observacion {
-        cambia: antes != despues,
-        viaja: false,
+    // Nothing arrived. Now the panel that does not follow the cursor — the
+    // correct behavior — is told apart from the frozen panel: the snapshot
+    // is REQUESTED and it is checked whether its view was different all
+    // along.
+    let after = request_snapshot(&host, &mut sub).await;
+    let after = view_of(&after, kind).unwrap_or_else(|| panic!("`{kind}` is no longer open"));
+    Observation {
+        changes: before != after,
+        travels: false,
     }
 }
 
-/// El guarda: si la vista de un panel depende del cursor, el cambio llega solo.
+/// The guard: if a panel's view depends on the cursor, the change arrives on
+/// its own.
 ///
-/// Lo que falla aquí es un panel congelado, y se lee tal cual: «cambia al
-/// mover el cursor y el cambio no llegó solo».
+/// What fails here is a frozen panel, and it reads as such: "changes when
+/// the cursor moves and the change did not arrive on its own".
 #[tokio::test(flavor = "multi_thread")]
-async fn cada_hueco_que_sigue_al_cursor_tiene_sonda() {
-    let (host, primera) = arranca().await;
-    let kinds: Vec<String> = primera
+async fn every_slot_that_follows_the_cursor_has_a_probe() {
+    let (host, first) = start().await;
+    let kinds: Vec<String> = first
         .panel_bar
         .buttons
         .iter()
         .map(|b| b.kind.clone())
         .collect();
     drop(host);
-    assert!(!kinds.is_empty(), "la barra de paneles no ofrece nada");
+    assert!(!kinds.is_empty(), "the panel bar offers nothing");
 
     for kind in &kinds {
-        if SIN_VENTANA.iter().any(|(k, _)| k == kind) || SIN_SONDA.iter().any(|(k, _)| k == kind) {
+        if NO_WINDOW.iter().any(|(k, _)| k == kind) || NO_PROBE.iter().any(|(k, _)| k == kind) {
             continue;
         }
-        let o = observa(kind).await;
-        if o.cambia {
+        let o = observe(kind).await;
+        if o.changes {
             assert!(
-                o.viaja,
-                "`{kind}` cambia al mover el cursor y el cambio NO llegó solo: \
-                 se queda congelado hasta que otra cosa provoque una foto entera"
+                o.travels,
+                "`{kind}` changes when the cursor moves and the change did NOT \
+                 arrive on its own: it stays frozen until something else \
+                 triggers a whole snapshot"
             );
         }
     }
 }
 
-/// Y al revés: la lista de los que no siguen es una afirmación, no una
-/// exención. Un panel que empiece a seguir al cursor sin decirlo aquí falla,
-/// aunque tenga sonda — porque entonces el motivo escrito es falso.
+/// And the other way around: the list of the ones that do not follow is an
+/// assertion, not an exemption. A panel that starts following the cursor
+/// without saying so here fails, even with a probe — because then the
+/// written reason is false.
 #[tokio::test(flavor = "multi_thread")]
-async fn la_lista_de_los_que_no_siguen_esta_al_dia() {
-    let (host, primera) = arranca().await;
-    let kinds: Vec<String> = primera
+async fn the_list_of_non_followers_is_up_to_date() {
+    let (host, first) = start().await;
+    let kinds: Vec<String> = first
         .panel_bar
         .buttons
         .iter()
@@ -348,21 +362,21 @@ async fn la_lista_de_los_que_no_siguen_esta_al_dia() {
     drop(host);
 
     for kind in &kinds {
-        if SIN_VENTANA.iter().any(|(k, _)| k == kind) || SIN_SONDA.iter().any(|(k, _)| k == kind) {
+        if NO_WINDOW.iter().any(|(k, _)| k == kind) || NO_PROBE.iter().any(|(k, _)| k == kind) {
             continue;
         }
-        let declarado = NO_SIGUEN.iter().find(|(k, _)| k == kind);
-        let o = observa(kind).await;
-        match declarado {
-            Some((_, motivo)) => assert!(
-                !o.cambia,
-                "`{kind}` está declarado como que no sigue al cursor ({motivo}), \
-                 pero su vista cambió al moverlo"
+        let declared = DO_NOT_FOLLOW.iter().find(|(k, _)| k == kind);
+        let o = observe(kind).await;
+        match declared {
+            Some((_, reason)) => assert!(
+                !o.changes,
+                "`{kind}` is declared as not following the cursor ({reason}), \
+                 but its view changed when it moved"
             ),
             None => assert!(
-                o.cambia,
-                "`{kind}` no está en NO_SIGUEN, así que debería seguir al cursor, \
-                 y su vista no se movió"
+                o.changes,
+                "`{kind}` is not in DO_NOT_FOLLOW, so it should follow the \
+                 cursor, and its view did not move"
             ),
         }
     }

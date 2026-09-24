@@ -1,6 +1,6 @@
-//! Frontend TUI de norte (fase 3 M1): dual-pane ortodoxo sobre el core
-//! embebido. SIN lógica de negocio (regla 7): listar/copiar/mover viven en
-//! `norte-core`; aquí solo estado de UI y render.
+//! norte's TUI frontend (phase 3 M1): an orthodox dual-pane over the embedded
+//! core. NO business logic (rule 7): list/copy/move live in `norte-core`;
+//! here there is only UI state and rendering.
 #![forbid(unsafe_code)]
 
 pub mod alt_menu;
@@ -45,10 +45,10 @@ pub mod session_push;
 pub mod settings;
 pub mod shortcuts_editor;
 pub mod splash;
-/// El subshell persistente es POSIX: pty, `cd` y los ganchos de prompt lo son
-/// (#142, ADR 0084). En Windows `app.toggle-panels` declina, que es la verdad
-/// — y sin este `cfg` el crate ni siquiera compilaba ahí, porque la traducción
-/// de rutas a bytes es `std::os::unix`.
+/// The persistent subshell is POSIX: the pty, `cd`, and the prompt hooks all
+/// are (#142, ADR 0084). On Windows `app.toggle-panels` declines, which is
+/// the truth — and without this `cfg` the crate would not even compile there,
+/// because the path-to-bytes translation is `std::os::unix`.
 #[cfg(unix)]
 pub mod subshell;
 pub mod suspend;
@@ -58,10 +58,10 @@ pub mod theme;
 pub mod timeline;
 pub mod trail;
 pub mod wizard;
-/// El panel de árbol vive en `norte-frontend` desde que la ventana también lo
-/// pinta: es estado de presentación, y dos copias del mismo modelo se separan
-/// (ADR 0066 D14). Se reexporta para no reescribir `crate::tree::` en veinte
-/// sitios.
+/// The tree pane lives in `norte-frontend` since the window also renders it:
+/// it is presentation state, and two copies of the same model drift apart
+/// (ADR 0066 D14). Re-exported so `crate::tree::` need not be rewritten in
+/// twenty places.
 pub use norte_frontend::tree;
 pub mod tty;
 pub mod turn;

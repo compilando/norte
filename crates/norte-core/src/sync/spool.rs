@@ -1,102 +1,105 @@
-//! El **spool**: el plan aprobado, retenido en un fichero (ADR 0049).
+//! The **spool**: the approved plan, retained in a file (ADR 0049).
 //!
-//! `sync.apply` no lleva más que un `plan_hash` —no hay un segundo parámetro
-//! por el que pudiera llegar otra intención—, así que lo que se ejecuta es lo
-//! que se aprobó por la FORMA del wire y no por una comprobación que alguien
-//! pueda olvidar. Para que eso funcione el daemon tiene que RETENER el plan, y
-//! esto es dónde lo retiene.
+//! `sync.apply` carries nothing more than a `plan_hash` —there's no second
+//! parameter another intent could arrive through—, so what runs is what was
+//! approved by the wire's SHAPE and not by a check someone could forget. For
+//! that to work the daemon has to RETAIN the plan, and this is where it
+//! retains it.
 //!
-//! # Un fichero por plan, y su nombre es la llave
-//! `<state_dir>/sync-spools/<conn_id>-<plan_hash>.jsonl`. El id de la conexión
-//! va **en el nombre**, así que «nadie aplica un plan que no produjo» es una
-//! propiedad de la BÚSQUEDA: [`Spool::open`] compone el nombre con el `conn_id`
-//! de quien pregunta, y una conexión no puede nombrar el fichero de otra
-//! aunque conozca su hash. Ni el `conn_id` (un `u64` en decimal) ni el
-//! `plan_hash` ([`PlanHash`] valida 64 hex minúscula al deserializar) pueden
-//! contener un separador de rutas: el nombre es seguro por construcción, no
-//! por saneado.
+//! # One file per plan, and its name is the key
+//! `<state_dir>/sync-spools/<conn_id>-<plan_hash>.jsonl`. The connection id
+//! goes **in the name**, so "nobody applies a plan they didn't produce" is a
+//! property of the LOOKUP: [`Spool::open`] composes the name with the
+//! `conn_id` of whoever is asking, and one connection cannot name another's
+//! file even knowing its hash. Neither `conn_id` (a decimal `u64`) nor
+//! `plan_hash` ([`PlanHash`] validates 64 lowercase hex on deserializing)
+//! can contain a path separator: the name is safe by construction, not by
+//! sanitizing.
 //!
-//! # El nombre no basta, y aquí está lo que lo acompaña
-//! Un nombre no es un secreto: quien pueda LISTAR el directorio lo lee, y quien
-//! pueda ESCRIBIR en él puede fabricar un fichero con ese nombre. El
-//! `plan_hash` tampoco ayuda solo, porque [`PlanHasher`] no lleva clave: quien
-//! escriba un plan cualquiera puede calcular su digest y ponérselo de nombre.
-//! Sin nada más, un fichero colocado en el directorio sería un plan aprobado
-//! que nadie aprobó — con el diálogo de aprobación saltado entero.
+//! # The name isn't enough, and here's what goes with it
+//! A name isn't a secret: whoever can LIST the directory reads it, and
+//! whoever can WRITE to it can forge a file under that name. `plan_hash`
+//! doesn't help alone either, because [`PlanHasher`] carries no key: whoever
+//! writes any plan can compute its digest and use it as the name. With
+//! nothing more, a file dropped into the directory would be an approved
+//! plan nobody approved — with the whole approval dialog skipped.
 //!
-//! Así que el nombre va acompañado de dos cosas:
+//! So the name comes with two things:
 //!
-//! 1. **Un registro EN MEMORIA de lo que este proceso emitió.**
-//!    [`SpoolWriter::finish`] apunta el `(conn_id, plan_hash)` en el
-//!    [`Spool`], y [`Spool::open`] lo exige antes de tocar el disco. Un fichero
-//!    que este daemon no escribió no se abre aunque esté ahí, se llame como se
-//!    llame — y un plan de un ARRANQUE anterior tampoco, que es lo que cierra
-//!    del todo el reciclado de `conn_id` (empiezan por cero en cada arranque).
-//! 2. **El digest se RECALCULA al abrir.** El resumen del fichero dice un hash,
-//!    pero eso es el fichero hablando de sí mismo; [`Spool::open`] vuelve a
-//!    hashear los pasos con la semilla de la cabecera y compara. Editar un
-//!    `kind` o una `rel` de un plan ya aprobado deja de colar.
+//! 1. **An IN-MEMORY record of what this process emitted.**
+//!    [`SpoolWriter::finish`] notes the `(conn_id, plan_hash)` in the
+//!    [`Spool`], and [`Spool::open`] requires it before touching disk. A
+//!    file this daemon didn't write doesn't open even if it's there, no
+//!    matter what it's called — and neither does a plan from a PREVIOUS
+//!    startup, which is what fully closes off `conn_id` recycling (they
+//!    start from zero on every startup).
+//! 2. **The digest gets RECOMPUTED on open.** The file's summary states a
+//!    hash, but that's the file talking about itself; [`Spool::open`]
+//!    re-hashes the steps with the header's seed and compares. Editing a
+//!    `kind` or a `rel` of an already-approved plan stops working.
 //!
-//! Y ese mismo registro en memoria es lo que hace el plan de **un solo uso**:
-//! `open` se lo LLEVA. Dos `sync.apply` del mismo hash a la vez ejecutarían el
-//! plan dos veces contra el mismo destino, con dos `batch_id` distintos y un
-//! undo que ya no describe ningún estado por el que se haya pasado.
+//! And that same in-memory record is what makes the plan **single-use**:
+//! `open` TAKES it away. Two `sync.apply`s of the same hash at once would
+//! run the plan twice against the same destination, with two different
+//! `batch_id`s and an undo that no longer describes any state it went
+//! through.
 //!
-//! Lo que esto NO defiende: quien pueda escribir en el directorio corre con el
-//! uid del daemon, y con ese uid puede reescribir `policy.toml`. La integridad
-//! del spool es la del directorio de estado y ni un gramo más.
+//! What this does NOT defend against: whoever can write to the directory
+//! runs with the daemon's uid, and with that uid can rewrite `policy.toml`.
+//! The spool's integrity is the state directory's, not one gram more.
 //!
-//! # Qué hay dentro, y qué no
-//! Una línea JSON por registro:
+//! # What's inside, and what isn't
+//! One JSON line per record:
 //!
-//! | línea | registro |
+//! | line | record |
 //! | --- | --- |
-//! | primera | [`SpoolHeader`]: las dos raíces, el modo y las opciones de comparación con las que se planificó |
-//! | intermedias | un [`SyncStep`] cada una, en orden de plan |
-//! | última | [`SpoolSummary`]: el hash, los contadores, los bloqueos y `executable` |
+//! | first | [`SpoolHeader`]: the two roots, the mode and the compare options it was planned with |
+//! | middle | a [`SyncStep`] each, in plan order |
+//! | last | [`SpoolSummary`]: the hash, the counters, the blockers and `executable` |
 //!
-//! **Jamás contenido.** Rutas, tamaños y veredictos: exactamente lo que el
-//! humano vio en el diálogo de aprobación. Un fichero que autoriza escrituras
-//! no puede ser además el dato.
+//! **Never content.** Paths, sizes and verdicts: exactly what the human saw
+//! in the approval dialog. A file that authorizes writes cannot also be the
+//! data.
 //!
-//! Escribir y leer son en STREAMING —el buffer de escritura tiene tope y la
-//! lectura va por trozos—, así que un plan de medio millón de pasos cuesta lo
-//! mismo en memoria que uno de tres.
+//! Writing and reading are STREAMING —the write buffer has a cap and
+//! reading goes in chunks—, so a half-million-step plan costs the same in
+//! memory as a three-step one.
 //!
-//! # Cuatro formas de morir
-//! 1. **Aplicado** — [`Spool::remove`], que la Task de `sync.apply` llama al
-//!    terminar, en cualquier estado. **Sin llamador todavía: lo cablea la tarea
-//!    9.** El derecho a aplicar, en cambio, se consume en [`Spool::open`], así
-//!    que un plan no se puede ejecutar dos veces ni aunque el fichero siga ahí.
-//! 2. **TTL** — [`SYNC_PLAN_TTL_MS`] contra el mtime, comprobado en cada
-//!    [`Spool::open`], que además BORRA el caducado según lo encuentra.
-//! 3. **Conexión cerrada** — [`Spool::drop_connection`], desde el desmontaje de
-//!    la conexión en el daemon (tarea 8).
-//! 4. **Arranque del daemon** — [`Spool::sweep`], porque un cierre violento
-//!    deja ficheros detrás y nadie más los va a recoger. Se cablea en
-//!    `norte-cli`, junto al journal.
+//! # Four ways to die
+//! 1. **Applied** — [`Spool::remove`], which the `sync.apply` Task calls on
+//!    finishing, in any state. **No caller yet: task 9 wires it up.** The
+//!    right to apply, on the other hand, is consumed in [`Spool::open`], so
+//!    a plan cannot be executed twice even if the file is still there.
+//! 2. **TTL** — [`SYNC_PLAN_TTL_MS`] against the mtime, checked on every
+//!    [`Spool::open`], which also DELETES the expired one as it finds it.
+//! 3. **Connection closed** — [`Spool::drop_connection`], from the
+//!    connection's teardown in the daemon (task 8).
+//! 4. **Daemon startup** — [`Spool::sweep`], because a violent shutdown
+//!    leaves files behind and nobody else is going to collect them. Wired
+//!    up in `norte-cli`, alongside the journal.
 //!
-//! Y una quinta que no es una muerte sino un no-nacimiento: un plan que no
-//! llega a [`SpoolWriter::finish`] no existe. Se escribe con nombre `.part` y
-//! solo el `rename` final le da el nombre por el que se puede abrir, así que un
-//! plan cancelado o un daemon que se muere a mitad **no dejan nada que parezca
-//! aprobable**. El registro terminador no sobra por eso: el `rename` es atómico
-//! respecto al *directorio*, pero no promete que los datos estén en disco tras
-//! un corte de corriente, y un fichero truncado con el nombre bueno se detecta
-//! porque su última línea no es el terminador.
+//! And a fifth that isn't a death but a non-birth: a plan that never
+//! reaches [`SpoolWriter::finish`] doesn't exist. It's written under a
+//! `.part` name and only the final `rename` gives it the name it can be
+//! opened by, so a cancelled plan or a daemon that dies halfway **leave
+//! nothing that looks approvable**. The terminator record isn't redundant
+//! for that reason: `rename` is atomic with respect to the *directory*, but
+//! doesn't promise the data is on disk after a power cut, and a file
+//! truncated under the right name is detected because its last line isn't
+//! the terminator.
 //!
-//! Un [`SpoolReader`] SOBREVIVE a las cuatro: se queda con el descriptor
-//! abierto, así que en unix un borrado por debajo no le corta la lectura, y el
-//! TTL no se vuelve a mirar a mitad de una ejecución. Es deliberado — lo que
-//! protege al destino mientras se aplica es el `stat` de revalidación por paso
-//! (ADR 0049), no el TTL, y abortar a mitad dejaría un lote del journal abierto
-//! a cambio de nada.
+//! A [`SpoolReader`] SURVIVES all four: it keeps the descriptor open, so on
+//! unix a delete underneath it doesn't cut off its reading, and the TTL
+//! isn't checked again mid-execution. That's deliberate — what protects the
+//! destination while applying is the per-step revalidation `stat` (ADR
+//! 0049), not the TTL, and aborting halfway would leave a journal batch
+//! open for nothing.
 //!
-//! # Permisos
-//! El directorio se crea `0o700` y cada fichero `0o600` **de nacimiento** (unix),
-//! con `mode` en la propia llamada de creación. Hacer `chmod` después deja una
-//! ventana en la que el plan es legible por todo el mundo, y esa ventana es el
-//! bug entero.
+//! # Permissions
+//! The directory is created `0o700` and each file `0o600` **at birth**
+//! (unix), with `mode` in the creation call itself. `chmod`ing afterward
+//! leaves a window where the plan is world-readable, and that window is the
+//! entire bug.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, BufRead, BufReader, ErrorKind, Read, Seek, SeekFrom, Write};
@@ -114,84 +117,87 @@ use norte_proto::methods::{
 use norte_sync::{DestWitness, PlanHasher, PlanItem, SyncOptions};
 use serde::{Deserialize, Serialize};
 
-/// El subdirectorio del estado del daemon donde viven los spools. Hermano de
-/// `journal.db` y `policy.toml`.
+/// The daemon state's subdirectory where spools live. Sibling of
+/// `journal.db` and `policy.toml`.
 pub const SPOOL_DIR_NAME: &str = "sync-spools";
 
-/// Versión del FORMATO del fichero. No es una promesa de compatibilidad: un
-/// spool lo escribe y lo lee el mismo binario dentro de la ventana del TTL, así
-/// que un número distinto significa «este fichero es de otro norte» y el plan
-/// se declara rancio ([`SpoolError::Malformed`]), no se migra.
+/// The file's FORMAT version. Not a compatibility promise: a spool is
+/// written and read by the same binary within the TTL window, so a
+/// different number means "this file is from another norte" and the plan
+/// is declared stale ([`SpoolError::Malformed`]), not migrated.
 ///
-/// Va por 2 desde que el registro de un paso es un [`SpoolStep`] y no un
-/// [`SyncStep`] pelado (el testigo del destino que el ejecutor revalida). Un
-/// fichero de la forma anterior ya fallaría al deserializar —`deny_unknown_fields`
-/// y un campo obligatorio nuevo—, así que el número no es lo que protege: es lo
-/// que hace que el fallo diga la verdad en el log.
+/// It's at 2 since a step's record became a [`SpoolStep`] and not a bare
+/// [`SyncStep`] (the destination witness the executor revalidates). A file
+/// of the previous shape would already fail to deserialize —
+/// `deny_unknown_fields` and a new mandatory field—, so the number isn't
+/// what protects it: it's what makes the failure tell the truth in the log.
 pub const SPOOL_FORMAT: u32 = 2;
 
-/// Tope de UN registro. El terminador es el grande: hasta
-/// [`SYNC_MAX_BLOCKERS_REPORTED`] bloqueos con su `rel`. Existe para que un
-/// fichero corrupto (o de otro programa) no pueda pedir memoria sin límite.
+/// Cap on ONE record. The terminator is the big one: up to
+/// [`SYNC_MAX_BLOCKERS_REPORTED`] blockers with their `rel`. Exists so a
+/// corrupt file (or one from another program) cannot demand unbounded
+/// memory.
 const SPOOL_MAX_RECORD: usize = 8 << 20;
 
-/// Cuánto se acumula en memoria antes de bajar al disco. Un `write` por paso
-/// serían medio millón de `spawn_blocking`.
+/// How much accumulates in memory before going down to disk. One `write`
+/// per step would be half a million `spawn_blocking`s.
 const WRITE_BUFFER_BYTES: usize = 64 * 1024;
 
-/// Cuánto lee UN `spawn_blocking` de la lectura, por el mismo motivo.
+/// How much ONE `spawn_blocking` reads on a read, for the same reason.
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 
-/// Qué le pasó al plan retenido.
+/// What happened to the retained plan.
 ///
-/// [`SpoolError::NotFound`], [`SpoolError::Expired`] y
-/// [`SpoolError::Malformed`] son la MISMA respuesta de cara al cliente —
-/// `Error::PlanStale`, ver [`SpoolError::is_stale`]— porque las tres dicen «no
-/// hay un plan vivo con ese hash». Solo [`SpoolError::Io`] es un fallo del
-/// daemon.
+/// [`SpoolError::NotFound`], [`SpoolError::Expired`] and
+/// [`SpoolError::Malformed`] are the SAME answer facing the client —
+/// `Error::PlanStale`, see [`SpoolError::is_stale`]— because all three say
+/// "there's no live plan with that hash". Only [`SpoolError::Io`] is a
+/// daemon failure.
 ///
-/// El texto de `Malformed` es para el LOG del daemon y no para el wire: se
-/// queda aquí y `PlanStale` no lleva nada. Hoy solo trae desplazamientos de
-/// serde, pero está a un refactor de traer un trozo de ruta.
+/// `Malformed`'s text is for the daemon's LOG and not the wire: it stays
+/// here and `PlanStale` carries nothing. Today it only brings serde
+/// offsets, but it's one refactor away from bringing a path fragment.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SpoolError {
-    /// No hay ningún plan retenido con ese hash para esa conexión. Incluye el
-    /// caso «lo produjo otra conexión»: el nombre del fichero no coincide.
-    #[error("no hay plan retenido con ese hash para esta conexión")]
+    /// There's no plan retained with that hash for that connection.
+    /// Includes the "another connection produced it" case: the filename
+    /// doesn't match.
+    #[error("no plan retained with that hash for this connection")]
     NotFound,
-    /// Lo hubo y se pasó de [`SYNC_PLAN_TTL_MS`]. Ya está borrado.
-    #[error("el plan retenido caducó")]
+    /// There was one and it passed [`SYNC_PLAN_TTL_MS`]. It's already deleted.
+    #[error("the retained plan expired")]
     Expired,
-    /// El fichero está ahí y no se puede leer como un plan: truncado, de otra
-    /// versión del formato, manipulado (el digest recalculado no cuadra), o
-    /// escrito por un binario que no conocía un campo que hoy es obligatorio.
+    /// The file is there and cannot be read as a plan: truncated, from
+    /// another format version, tampered with (the recomputed digest
+    /// doesn't match), or written by a binary that didn't know a field
+    /// that's mandatory today.
     ///
-    /// Es DELIBERADO que esto no sea recuperable. Los contadores nuevos de
-    /// [`SyncCounts`] no llevan `serde(default)`: un spool de un binario viejo
-    /// falla al deserializar en vez de leer un cero silencioso, porque un
-    /// diálogo que aprobó «340 ficheros sin medir» y una ejecución que cree que
-    /// no hay ninguno no son el mismo acto.
-    #[error("el spool no se puede leer como un plan: {0}")]
+    /// It's DELIBERATE that this isn't recoverable. [`SyncCounts`]'s new
+    /// counters carry no `serde(default)`: a spool from an old binary fails
+    /// to deserialize instead of reading a silent zero, because a dialog
+    /// that approved "340 unmeasured files" and an execution that believes
+    /// there are none aren't the same act.
+    #[error("the spool cannot be read as a plan: {0}")]
     Malformed(String),
-    /// El flujo del plan no llegó a su fin —cancelación, o un fallo del
-    /// planificador— y por tanto no hay plan que retener. El `.part` ya está
-    /// borrado.
-    #[error("el plan se interrumpió antes de terminar")]
+    /// The plan's stream never reached its end —cancellation, or a planner
+    /// failure— and therefore there's no plan to retain. The `.part` is
+    /// already deleted.
+    #[error("the plan was interrupted before finishing")]
     Interrupted,
-    /// I/O de verdad sobre el spool.
-    #[error("I/O sobre el spool: {0}")]
+    /// Real I/O over the spool.
+    #[error("I/O over the spool: {0}")]
     Io(#[from] io::Error),
 }
 
 impl SpoolError {
-    /// ¿Es de las que significan «no hay plan vivo»?
+    /// Is it one of the ones that mean "no live plan"?
     ///
-    /// Quien sirve `sync.apply` traduce `true` a
-    /// [`Error::PlanStale`](norte_proto::Error::PlanStale) y `false` a un fallo
-    /// interno. Un fichero ilegible es un plan rancio, **no una Task muerta**:
-    /// el cliente puede volver a planificar, que es exactamente lo que la
-    /// respuesta le está diciendo.
+    /// Whoever serves `sync.apply` translates `true` to
+    /// [`Error::PlanStale`](norte_proto::Error::PlanStale) and `false` to an
+    /// internal failure. An unreadable file is a stale plan, **not a dead
+    /// Task**: the client can plan again, which is exactly what the answer
+    /// is telling it.
     #[must_use]
     pub fn is_stale(&self) -> bool {
         matches!(
@@ -201,57 +207,58 @@ impl SpoolError {
     }
 }
 
-/// La primera línea: con qué se planificó.
+/// The first line: what it was planned with.
 ///
-/// El ejecutor la necesita entera. `sync.apply` no lleva las raíces —lleva el
-/// hash y nada más—, así que si no estuvieran aquí no estarían en ningún sitio.
+/// The executor needs it whole. `sync.apply` carries no roots —it carries
+/// the hash and nothing else—, so if they weren't here they wouldn't be
+/// anywhere.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpoolHeader {
-    /// [`SPOOL_FORMAT`] cuando se escribió.
+    /// [`SPOOL_FORMAT`] when it was written.
     pub format: u32,
-    /// La conexión que planificó. Redundante con el nombre del fichero, y ahí
-    /// está la gracia: [`Spool::open`] comprueba que coinciden, así que un
-    /// fichero renombrado a mano no se abre.
+    /// The connection that planned it. Redundant with the filename, and
+    /// that's the point: [`Spool::open`] checks that they match, so a file
+    /// renamed by hand doesn't open.
     pub conn_id: u64,
-    /// Las raíces, el modo, `on_unknown`, el lado del origen y los dos
-    /// booleanos de capacidades del destino.
+    /// The roots, the mode, `on_unknown`, the source side and the
+    /// destination's two capability booleans.
     pub options: SyncOptions,
-    /// Con qué criterios se comparó. **No** viven en [`SyncOptions`] y entran
-    /// igualmente en el `plan_hash`: un plan hecho con `hash` encendido no es
-    /// el mismo que uno hecho solo con tamaño aunque los pasos salgan iguales,
-    /// porque se aprobó otra cosa.
+    /// What criteria it was compared with. They do **not** live in
+    /// [`SyncOptions`] and still enter the `plan_hash`: a plan made with
+    /// `hash` on isn't the same as one made with size only even if the
+    /// steps come out equal, because something else was approved.
     pub compare: SyncCompareOptions,
 }
 
-/// La última línea: a cuánto sumó el plan.
+/// The last line: what the plan added up to.
 ///
-/// Es lo que [`SpoolWriter::finish`] devuelve y lo que [`Spool::open`] lee sin
-/// recorrer los pasos, para que el ejecutor pueda rehusar un plan no ejecutable
-/// **antes** del primer paso.
+/// It's what [`SpoolWriter::finish`] returns and what [`Spool::open`] reads
+/// without walking the steps, so the executor can refuse a non-executable
+/// plan **before** the first step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpoolSummary {
-    /// La huella de lo que se aprobó, y la mitad de la llave del fichero.
+    /// The fingerprint of what was approved, and half the file's key.
     pub plan_hash: PlanHash,
-    /// Los contadores del plan entero.
+    /// The whole plan's counters.
     pub counts: SyncCounts,
-    /// Los bloqueos, recortados a [`SYNC_MAX_BLOCKERS_REPORTED`]. Es la
-    /// explicación; quien decide es `executable`.
+    /// The blockers, trimmed to [`SYNC_MAX_BLOCKERS_REPORTED`]. It's the
+    /// explanation; `executable` is what decides.
     pub blockers: Vec<SyncBlocker>,
-    /// Cuántos hubo de verdad. Sin tope: el de
-    /// [`SyncBlockerKind::TypeMismatchDir`](norte_proto::methods::SyncBlockerKind::TypeMismatchDir)
-    /// crece con el árbol.
+    /// How many there really were. No cap:
+    /// [`SyncBlockerKind::TypeMismatchDir`](norte_proto::methods::SyncBlockerKind::TypeMismatchDir)'s
+    /// grows with the tree.
     pub blockers_total: u64,
-    /// `true` cuando el plan se puede ejecutar tal cual, o sea cuando no hubo
-    /// NINGÚN bloqueo. Lo calcula [`SpoolWriter::finish`] y nadie más: es el
-    /// campo normativo de `sync.plan_done` y quien lo derive por su cuenta
-    /// tarde o temprano lo derivará distinto.
+    /// `true` when the plan can be executed as-is, i.e. when there was NO
+    /// blocker at all. Computed by [`SpoolWriter::finish`] and nobody else:
+    /// it's `sync.plan_done`'s normative field, and whoever derives it on
+    /// their own will sooner or later derive it differently.
     pub executable: bool,
 }
 
-/// Un registro del fichero. Etiquetado ADYACENTEMENTE (`{"r":…,"v":…}`) para
-/// que la etiqueta no pueda chocar nunca con un campo del tipo que envuelve.
+/// A record from the file. ADJACENTLY tagged (`{"r":…,"v":…}`) so the tag
+/// can never collide with a field of the type it wraps.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "r", content = "v", deny_unknown_fields)]
 enum Record {
@@ -263,131 +270,137 @@ enum Record {
     End(SpoolSummary),
 }
 
-/// UN paso retenido: lo que viaja por el wire, más lo que solo el ejecutor
-/// necesita.
+/// ONE retained step: what travels over the wire, plus what only the
+/// executor needs.
 ///
-/// El segundo campo es la razón de que este tipo exista en vez de guardar el
-/// [`SyncStep`] pelado. El ejecutor tiene que revalidar el destino ANTES de
-/// destruirlo —hasta diez minutos separan la aprobación de la aplicación— y en
-/// `SyncStep` no hay con qué: su `size` son los bytes que el paso MUEVE, o sea
-/// los del origen, y ningún campo describe el estado previo del destino. Sin
-/// esto, el `stat` de revalidación no tendría contra qué comparar y sería
-/// decorativo.
+/// The second field is why this type exists instead of storing the bare
+/// [`SyncStep`]. The executor has to revalidate the destination BEFORE
+/// destroying it —up to ten minutes separate approval from application—
+/// and there's nothing in `SyncStep` to do it with: its `size` is the bytes
+/// the step MOVES, i.e. the source's, and no field describes the
+/// destination's prior state. Without this, the revalidation `stat` would
+/// have nothing to compare against and would be decorative.
 ///
-/// Va en el spool y no en el wire porque nadie del otro lado lo necesita, y
-/// porque publicarlo sería mandarle al cliente una segunda descripción del árbol
-/// de destino con sus tamaños y sus fechas.
+/// It's in the spool and not on the wire because nobody on the other side
+/// needs it, and because publishing it would mean sending the client a
+/// second description of the destination tree with its sizes and dates.
 ///
-/// # El `plan_hash` NO cubre este campo
-/// El digest resume el PLAN —lo que un humano aprobó— y el testigo es de dónde
-/// salió esa conclusión, no la conclusión; meterlo dentro haría que dos planes
-/// idénticos sobre un árbol que nadie tocó difirieran porque una fecha se movió.
-/// La consecuencia hay que conocerla: [`Spool::open`] recalcula el digest sobre
-/// los pasos y comprueba los contadores, así que autentica el PASO y no el
-/// registro entero. Lo que cierra el hueco no es el digest sino el ejecutor:
-/// rehúsa todo paso destructivo que llegue sin testigo, así que borrarlo no
-/// desactiva la revalidación, la convierte en un conflicto.
+/// # `plan_hash` does NOT cover this field
+/// The digest summarizes the PLAN —what a human approved— and the witness
+/// is where that conclusion came from, not the conclusion; putting it
+/// inside would make two identical plans over an untouched tree differ
+/// because a date moved. The consequence has to be known: [`Spool::open`]
+/// recomputes the digest over the steps and checks the counters, so it
+/// authenticates the STEP and not the whole record. What closes the gap
+/// isn't the digest but the executor: it refuses any destructive step that
+/// arrives with no witness, so deleting it doesn't disable revalidation, it
+/// turns it into a conflict.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SpoolStep {
-    /// El paso aprobado.
+    /// The approved step.
     pub step: SyncStep,
-    /// Lo que la comparación vio en el destino, para las dos clases que lo van a
-    /// destruir. Ausente en las demás.
+    /// What the comparison saw on the destination, for the two classes
+    /// that are going to destroy it. Absent for the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dest: Option<DestWitness>,
 }
 
-/// El directorio de spools de un daemon, y el registro de lo que emitió.
+/// A daemon's spool directory, and the record of what it emitted.
 ///
-/// Se construye con el directorio de estado —el mismo de `journal.db`, o sea
-/// [`crate::connect::config_dir`]— y cuelga [`SPOOL_DIR_NAME`] de él.
+/// Built with the state directory —the same one `journal.db` uses, i.e.
+/// [`crate::connect::config_dir`]— and hangs [`SPOOL_DIR_NAME`] off it.
 ///
-/// # Uno por daemon, clonado, jamás construido dos veces
-/// El registro de planes emitidos vive DETRÁS de un [`Arc`], así que un clon
-/// comparte el mismo. Eso hace que dos handles del mismo daemon se vean, y
-/// —igual de importante— que dos PROCESOS no se vean: un `Spool::new` nuevo
-/// nace con el registro vacío y no puede abrir nada que él no haya escrito.
+/// # One per daemon, cloned, never built twice
+/// The record of emitted plans lives BEHIND an [`Arc`], so a clone shares
+/// the same one. That's what makes two handles of the same daemon see each
+/// other, and —just as important— what makes two PROCESSES not see each
+/// other: a fresh `Spool::new` is born with an empty record and cannot open
+/// anything it didn't write itself.
 ///
-/// De ahí la regla, y no es negociable: **el daemon construye UN `Spool` y lo
-/// clona**. Un segundo `Spool::new` sobre el mismo directorio no es otro handle
-/// del mismo spool, es un spool que no reconoce ni un plan — y si alguien lo usa
-/// para planificar, sus planes serán los únicos que pueda aplicar.
+/// Hence the rule, and it isn't negotiable: **the daemon builds ONE `Spool`
+/// and clones it**. A second `Spool::new` over the same directory isn't
+/// another handle of the same spool, it's a spool that doesn't recognize a
+/// single plan — and if someone uses it to plan, its plans will be the only
+/// ones it can apply.
 ///
-/// El efecto secundario es bueno: dos procesos que compartan el directorio de
-/// estado no se pueden aplicar los planes el uno al otro, ni siquiera con el
-/// mismo `conn_id`. Eso importa ahora más que antes: desde #167 el motor
-/// embebido SÍ abre el journal cuando el lock está libre, así que «un solo
-/// proceso sobre este directorio de estado» dejó de ser lo único que separa a
-/// dos spools.
+/// The side effect is a good one: two processes sharing the state directory
+/// cannot apply each other's plans, not even with the same `conn_id`. That
+/// matters more now than before: since #167 the embedded engine DOES open
+/// the journal when the lock is free, so "a single process over this state
+/// directory" stopped being the only thing separating two spools.
 #[derive(Debug, Clone)]
 pub struct Spool {
     dir: PathBuf,
-    /// Todo lo que este PROCESO sabe de sus planes, bajo un solo lock: sin él,
-    /// «¿está viva la conexión?» y «¿se apunta el plan?» serían dos decisiones
-    /// con un hueco en medio, que es exactamente donde caben las carreras que
-    /// [`Registry`] existe para cerrar.
+    /// Everything this PROCESS knows about its plans, under a single lock:
+    /// without it, "is the connection alive?" and "is the plan noted?"
+    /// would be two decisions with a gap in between, which is exactly where
+    /// the races [`Registry`] exists to close would fit.
     reg: Arc<Mutex<Registry>>,
 }
 
-/// Lo que este proceso sabe de sus propios planes. Todo junto y bajo un lock.
+/// What this process knows about its own plans. All together and under a lock.
 #[derive(Debug, Default)]
 struct Registry {
-    /// Los `(conn_id, plan_hash)` que ESTE proceso emitió y todavía nadie
-    /// aplicó. Es a la vez la prueba de emisión y el derecho de un solo uso.
+    /// The `(conn_id, plan_hash)`s THIS process emitted and nobody has
+    /// applied yet. It's both the proof of emission and the single-use
+    /// right.
     issued: HashSet<(u64, PlanHash)>,
-    /// Los que alguien está aplicando AHORA: [`Spool::open`] se llevó el
-    /// derecho y [`Spool::remove`] todavía no ha pasado.
+    /// The ones someone is applying RIGHT NOW: [`Spool::open`] took the
+    /// right and [`Spool::remove`] hasn't happened yet.
     ///
-    /// Existe porque replanificar el mismo árbol con las mismas opciones da el
-    /// MISMO hash, y sin esto [`SpoolWriter::finish`] volvería a acuñar un
-    /// derecho que un `open` acababa de consumir: dos ejecuciones del mismo plan
-    /// contra el mismo destino, con dos lotes del journal y un undo que ya no
-    /// describe ningún estado por el que se haya pasado.
+    /// Exists because re-planning the same tree with the same options gives
+    /// the SAME hash, and without this [`SpoolWriter::finish`] would mint
+    /// again a right an `open` had just consumed: two executions of the
+    /// same plan against the same destination, with two journal batches and
+    /// an undo that no longer describes any state it went through.
     applying: HashSet<(u64, PlanHash)>,
-    /// Cuántos planes tiene EN VUELO cada conexión (writers abiertos). Es lo que
-    /// acota `dead`: solo se recuerda a una conexión muerta mientras alguno de
-    /// sus planes siga escribiéndose.
+    /// How many plans each connection has IN FLIGHT (open writers). It's
+    /// what bounds `dead`: a dead connection is only remembered while some
+    /// of its plans are still being written.
     planning: HashMap<u64, usize>,
-    /// Conexiones que se cerraron y a las que, por tanto, ya no se les puede
-    /// retener un plan.
+    /// Connections that closed and for which, therefore, a plan can no
+    /// longer be retained.
     ///
-    /// Sin esto, un plan que termina después del desmontaje de su conexión
-    /// renombra su fichero y se apunta como emitido DESPUÉS de que la única
-    /// muerte que le tocaba —«conexión cerrada»— ya haya pasado: queda un plan
-    /// retenido que nadie puede aplicar y que nadie va a recoger. Y el caso no
-    /// necesita ninguna carrera para darse: un plan que no emite NI UN paso
-    /// (dos árboles idénticos) nunca toca el canal, así que jamás se entera de
-    /// que su dueño se fue.
+    /// Without this, a plan that finishes after its connection's teardown
+    /// renames its file and notes itself as emitted AFTER the one death
+    /// that applied to it —"connection closed"— has already happened: a
+    /// retained plan is left that nobody can apply and nobody is going to
+    /// collect. And the case needs no race at all to happen: a plan that
+    /// emits NOT ONE step (two identical trees) never touches the channel,
+    /// so it never finds out its owner left.
     ///
-    /// **Se apunta aunque no hubiera un plan a medias**, y ésa fue la
-    /// corrección: antes la lápida solo se ponía si la conexión tenía ya un
-    /// writer abierto, de modo que un `sync.plan` que abría el suyo un
-    /// instante DESPUÉS del desmontaje no se enteraba de nada y retenía su
-    /// plan para siempre. Salía como un rojo intermitente —el orden de las dos
-    /// cosas no está fijado— y un rojo intermitente aquí es un bug, no ruido.
+    /// **It's noted even if there was no plan halfway through**, and that
+    /// was the fix: before, the tombstone was only set if the connection
+    /// already had an open writer, so a `sync.plan` that opened its own an
+    /// instant AFTER the teardown found out nothing and retained its plan
+    /// forever. It showed up as an intermittent red —the order of the two
+    /// things isn't fixed— and an intermittent red here is a bug, not
+    /// noise.
     ///
-    /// Lo que la acota ya no es «tener un plan en vuelo» sino [`TOPE_DIFUNTAS`]:
-    /// al llegar a él se barren las que no tienen ningún writer abierto, que
-    /// son las que ya no pueden servir para nada. Ver [`Spool::forget_issued`].
+    /// What bounds it is no longer "having a plan in flight" but
+    /// [`DEAD_CAP`]: on reaching it, the ones with no open writer are
+    /// swept, since those can no longer serve any purpose. See
+    /// [`Spool::forget_issued`].
     dead: HashSet<u64>,
 }
 
-/// Cuántas conexiones difuntas se recuerdan antes de barrer las inútiles.
+/// How many dead connections are remembered before sweeping the useless ones.
 ///
-/// Una lápida solo sirve mientras pueda llegar el `finish` de un plan de esa
-/// conexión, y eso es la vida de una tarea de planificación: milisegundos. El
-/// número es holgado a propósito —recordar de más no rompe nada y recordar de
-/// menos sí— y lo que compra es que el conjunto no crezca con el contador de
-/// conexiones de un daemon que lleva días levantado.
-const TOPE_DIFUNTAS: usize = 1024;
+/// A tombstone is only good while that connection's plan `finish` can still
+/// arrive, and that's a planning task's lifespan: milliseconds. The number
+/// is generous on purpose —remembering too many breaks nothing and
+/// remembering too few does— and what it buys is that the set doesn't grow
+/// with the connection counter of a daemon that's been up for days.
+const DEAD_CAP: usize = 1024;
 
 impl Spool {
-    /// Ancla el spool bajo `state_dir`. No toca el disco: el directorio se crea
-    /// en el primer [`Spool::create`].
+    /// Anchors the spool under `state_dir`. Doesn't touch disk: the
+    /// directory is created on the first [`Spool::create`].
     ///
-    /// Ver la nota del tipo: esto se llama UNA vez por daemon y el handle se
-    /// clona. Llamarlo dos veces crea dos registros de emisión que no se ven.
+    /// See the type's note: this is called ONCE per daemon and the handle
+    /// is cloned. Calling it twice creates two emission records that don't
+    /// see each other.
     #[must_use]
     pub fn new(state_dir: impl AsRef<Path>) -> Self {
         Self {
@@ -396,18 +409,18 @@ impl Spool {
         }
     }
 
-    /// El registro, o `None` si el lock está envenenado. Un lock roto se trata
-    /// como «no sé nada»: fail-closed en todos los usos de abajo.
+    /// The registry, or `None` if the lock is poisoned. A broken lock is
+    /// treated as "I know nothing": fail-closed in every use below.
     fn reg(&self) -> Option<std::sync::MutexGuard<'_, Registry>> {
         self.reg.lock().ok()
     }
 
-    /// Apunta un plan como emitido, salvo que ya no proceda. Lo llama
-    /// [`SpoolWriter::finish`] DESPUÉS del rename y bajo el mismo lock que mira
-    /// las dos razones para no hacerlo, que es lo que lo hace atómico frente a
-    /// un cierre de conexión o un `open` simultáneos.
+    /// Notes a plan as emitted, unless it no longer applies. Called by
+    /// [`SpoolWriter::finish`] AFTER the rename and under the same lock that
+    /// checks the two reasons not to, which is what makes it atomic against
+    /// a simultaneous connection close or `open`.
     ///
-    /// `false` = no se apuntó, y el fichero recién renombrado hay que quitarlo.
+    /// `false` = it wasn't noted, and the just-renamed file has to be removed.
     fn record_issued(&self, conn_id: u64, hash: &PlanHash) -> bool {
         let Some(mut reg) = self.reg() else {
             return false;
@@ -419,8 +432,9 @@ impl Spool {
         true
     }
 
-    /// Se LLEVA el derecho a aplicar `hash` y lo pasa a «aplicándose». `false`
-    /// si no lo había: o no lo emitió este proceso, o alguien ya lo aplicó.
+    /// TAKES the right to apply `hash` and moves it to "applying". `false`
+    /// if it wasn't there: either this process never emitted it, or someone
+    /// already applied it.
     fn claim_issued(&self, conn_id: u64, hash: &PlanHash) -> bool {
         let Some(mut reg) = self.reg() else {
             return false;
@@ -433,10 +447,11 @@ impl Spool {
         true
     }
 
-    /// Olvida los planes de una conexión (o todos, con `None`).
+    /// Forgets a connection's plans (or all of them, with `None`).
     ///
-    /// Con `Some`, marca además la conexión como MUERTA: ningún plan suyo,
-    /// esté a medias o todavía sin empezar, puede acabar en un plan aprobable.
+    /// With `Some`, it also marks the connection as DEAD: none of its
+    /// plans, whether halfway or not yet started, can end up as an
+    /// approvable plan.
     fn forget_issued(&self, conn_id: Option<u64>) {
         let Some(mut reg) = self.reg() else {
             return;
@@ -449,60 +464,62 @@ impl Spool {
         };
         reg.issued.retain(|(c, _)| *c != id);
         reg.applying.retain(|(c, _)| *c != id);
-        // Antes de apuntar, barrer lo que ya no puede servir: una lápida sin
-        // writer abierto solo vale mientras pueda llegar el `finish` de un
-        // plan que arrancó a la vez que el desmontaje, y eso dura lo que dura
-        // una tarea. Sin este barrido el conjunto crecería con el contador de
-        // conexiones de un daemon que lleva días levantado.
-        if reg.dead.len() >= TOPE_DIFUNTAS {
-            let vivas: Vec<u64> = reg.planning.keys().copied().collect();
-            reg.dead.retain(|c| vivas.contains(c));
+        // Before noting it, sweep whatever can no longer serve any purpose:
+        // a tombstone with no open writer is only good while the `finish`
+        // of a plan that started right as the teardown happened can still
+        // arrive, and that lasts as long as a task does. Without this sweep
+        // the set would grow with the connection counter of a daemon that's
+        // been up for days.
+        if reg.dead.len() >= DEAD_CAP {
+            let alive: Vec<u64> = reg.planning.keys().copied().collect();
+            reg.dead.retain(|c| alive.contains(c));
         }
         reg.dead.insert(id);
     }
 
-    /// Suelta la marca de «aplicándose» SIN tocar el disco y sin `await`:
-    /// abandona el plan `hash` de `conn_id`.
+    /// Releases the "applying" mark WITHOUT touching disk and with no
+    /// `await`: abandons `conn_id`'s plan `hash`.
     ///
-    /// Es la salida de emergencia de un `sync.apply` cuyo despacho se DROPEA
-    /// antes de llegar a crear la Task — hoy, un `rpc.cancel` mientras el gate
-    /// de policy está suspendido en un `ask`. Ese camino no puede llamar a
-    /// [`Spool::remove`] (es `async`, y un `Drop` no puede esperar), y si no
-    /// soltara la marca el hash se quedaría «aplicándose» para el resto de la
-    /// vida de la conexión: ni aplicable ni replanificable.
+    /// This is the emergency exit for a `sync.apply` whose dispatch gets
+    /// DROPPED before it gets to create the Task — today, an `rpc.cancel`
+    /// while the policy gate is suspended on an `ask`. That path cannot
+    /// call [`Spool::remove`] (it's `async`, and a `Drop` cannot wait), and
+    /// if it didn't release the mark the hash would stay "applying" for the
+    /// rest of the connection's life: neither applicable nor re-plannable.
     ///
-    /// Igual que las salidas de error de [`Spool::open`], suelta de `applying` y
-    /// **no** devuelve a `issued`: el plan no vuelve a ser aplicable —nadie sabe
-    /// si el gate llegó a aprobar— pero el mismo árbol vuelve a ser
-    /// replanificable, que es lo que el usuario necesita. El fichero se queda
-    /// para el TTL, para el barrido de arranque o para el cierre de la conexión.
+    /// Same as [`Spool::open`]'s error exits, it releases from `applying`
+    /// and does **not** return it to `issued`: the plan doesn't become
+    /// applicable again —nobody knows if the gate got to approve it— but
+    /// the same tree becomes re-plannable again, which is what the user
+    /// needs. The file stays for the TTL, for the startup sweep, or for the
+    /// connection's close.
     pub(crate) fn abandon(&self, conn_id: u64, hash: &PlanHash) {
         self.release_applying(conn_id, hash);
     }
 
-    /// Suelta la marca de «aplicándose». Lo llama [`Spool::remove`], que es lo
-    /// que la Task de `sync.apply` invoca al terminar en cualquier estado.
+    /// Releases the "applying" mark. Called by [`Spool::remove`], which is
+    /// what the `sync.apply` Task invokes on finishing in any state.
     fn release_applying(&self, conn_id: u64, hash: &PlanHash) {
         if let Some(mut reg) = self.reg() {
             reg.applying.remove(&(conn_id, hash.clone()));
         }
     }
 
-    /// ¿Se cerró la conexión de este plan mientras se escribía?
+    /// Was this plan's connection closed while it was being written?
     fn is_dead(&self, conn_id: u64) -> bool {
         self.reg().is_some_and(|reg| reg.dead.contains(&conn_id))
     }
 
-    /// Apunta un writer abierto para `conn_id`.
+    /// Notes an open writer for `conn_id`.
     fn open_writer(&self, conn_id: u64) {
         if let Some(mut reg) = self.reg() {
             *reg.planning.entry(conn_id).or_insert(0) += 1;
         }
     }
 
-    /// Cierra un writer. Con el último de una conexión se olvida también su
-    /// lápida: `dead` no crece con el contador de conexiones, solo con las que
-    /// tienen un plan a medias justo cuando se caen.
+    /// Closes a writer. With a connection's last one, its tombstone is also
+    /// forgotten: `dead` doesn't grow with the connection counter, only
+    /// with the ones that have a plan halfway through right when they fall.
     fn close_writer(&self, conn_id: u64) {
         let Some(mut reg) = self.reg() else {
             return;
@@ -516,11 +533,11 @@ impl Spool {
         }
     }
 
-    /// Cuántos planes RETENIDOS (emitidos y sin aplicar) tiene una conexión.
+    /// How many RETAINED plans (issued and unapplied) a connection has.
     ///
-    /// Lo consulta el daemon antes de aceptar otro `sync.plan`: un plan retenido
-    /// es un fichero en disco con el listado de dos árboles, y nada más que el
-    /// cierre de la conexión lo recoge mientras siga viva.
+    /// Queried by the daemon before accepting another `sync.plan`: a
+    /// retained plan is a file on disk with the listing of two trees, and
+    /// nothing but the connection's close collects it while it's alive.
     #[must_use]
     pub fn retained_for(&self, conn_id: u64) -> usize {
         self.reg().map_or(0, |reg| {
@@ -528,35 +545,35 @@ impl Spool {
         })
     }
 
-    /// El directorio, para quien lo quiera loguear.
+    /// The directory, for whoever wants to log it.
     #[must_use]
     pub fn dir(&self) -> &Path {
         &self.dir
     }
 
-    /// Abre un plan NUEVO para `conn_id`.
+    /// Opens a NEW plan for `conn_id`.
     ///
-    /// El fichero nace con nombre `.part` porque el `plan_hash` —la otra mitad
-    /// de su nombre— todavía no existe: se calcula en streaming sobre los
-    /// elementos del plan y no se sabe hasta que el flujo termina. Solo
-    /// [`SpoolWriter::finish`] le pone el nombre bueno.
+    /// The file is born under a `.part` name because `plan_hash` —the other
+    /// half of its name— doesn't exist yet: it's computed in streaming
+    /// fashion over the plan's elements and isn't known until the stream
+    /// ends. Only [`SpoolWriter::finish`] gives it its real name.
     ///
-    /// # El TTL se cobra AQUÍ, y no hay ningún otro sitio donde se cobre
-    /// [`SYNC_PLAN_TTL_MS`] se comprueba en [`Spool::open`], pero un plan que
-    /// nadie abre no se abre nunca: sin esto, «el TTL» no sería una de las
-    /// cuatro muertes sino una comprobación que solo corre cuando ya no hace
-    /// falta. Así que cada plan nuevo barre primero los `.jsonl` vencidos, que
-    /// acota lo retenido a lo planificado en los últimos diez minutos sin
-    /// necesidad de un hilo con temporizador.
+    /// # The TTL is charged HERE, and nowhere else is it charged
+    /// [`SYNC_PLAN_TTL_MS`] is checked in [`Spool::open`], but a plan nobody
+    /// opens never gets opened: without this, "the TTL" wouldn't be one of
+    /// the four deaths but a check that only runs when it's no longer
+    /// needed. So every new plan first sweeps the expired `.jsonl`s, which
+    /// bounds what's retained to what was planned in the last ten minutes
+    /// with no need for a timer thread.
     ///
-    /// Un `.part` NO se toca por antigüedad: un plan sobre un árbol de red
-    /// tarda horas legítimamente, y su fichero lleva su mtime original. De los
-    /// `.part` huérfanos se encargan el `Drop` del writer y el barrido de
-    /// arranque.
+    /// A `.part` is NOT touched for its age: a plan over a network tree
+    /// legitimately takes hours, and its file carries its original mtime.
+    /// Orphaned `.part`s are handled by the writer's `Drop` and the startup
+    /// sweep.
     ///
     /// # Errors
-    /// [`SpoolError::Io`] si el directorio de estado no se puede crear o el
-    /// fichero no se puede abrir.
+    /// [`SpoolError::Io`] if the state directory cannot be created or the
+    /// file cannot be opened.
     #[tracing::instrument(skip_all, fields(conn_id = conn_id))]
     pub async fn create(
         &self,
@@ -573,7 +590,7 @@ impl Spool {
         let hasher = PlanHasher::new(options, compare);
         let mut line = encode(&Record::Head(header))?;
         let dir = self.dir.clone();
-        // Regla 2: `std::fs` es bloqueante y esto es un contexto async.
+        // Rule 2: `std::fs` is blocking, and this is an async context.
         let (file, part) = crate::blocking::spawn_blocking(move || {
             ensure_dir(&dir)?;
             reap_expired(&dir);
@@ -599,41 +616,45 @@ impl Spool {
         })
     }
 
-    /// Abre —y CONSUME— el plan `hash` de la conexión `conn_id`.
+    /// Opens —and CONSUMES— plan `hash` of connection `conn_id`.
     ///
-    /// Comprueba, en este orden:
+    /// Checks, in this order:
     ///
-    /// 1. Que este proceso emitió ese plan para esa conexión y que nadie se lo
-    ///    ha llevado ya. Es lo primero a propósito: un plan que no emitimos no
-    ///    merece ni que se le mire el `stat`. **El derecho se consume aquí**, así
-    ///    que dos `sync.apply` del mismo hash no pueden ejecutarse a la vez —
-    ///    ejecutarían el plan dos veces contra el mismo destino, con dos lotes
-    ///    del journal y un undo que ya no describe ningún estado real. El
-    ///    segundo recibe [`SpoolError::NotFound`], o sea `PlanStale`, que es la
-    ///    respuesta verdadera.
-    /// 2. Que el fichero existe ([`SpoolError::NotFound`]).
-    /// 3. Que no ha caducado; si ha caducado lo BORRA y devuelve
-    ///    [`SpoolError::Expired`]. El TTL se mide sobre el `fstat` del
-    ///    descriptor ya abierto, no sobre la ruta: entre mirar la ruta y abrirla
-    ///    cabe otro fichero. Y el borrado comprueba que la ruta sigue nombrando
-    ///    ESE inodo, porque replanificar el mismo árbol produce el mismo hash y
-    ///    borrar por nombre se llevaría por delante el plan recién aprobado.
-    /// 4. Que la última línea es el terminador y que cabecera y terminador dicen
-    ///    la misma conexión y el mismo hash que el nombre.
-    /// 5. Que el digest **recalculado** sobre los pasos coincide con el nombre.
-    ///    Cuesta una lectura secuencial más del fichero, que al lado de ejecutar
-    ///    el plan no se nota, y es lo que convierte «se ejecuta lo aprobado» en
-    ///    una propiedad en vez de una declaración del propio fichero.
+    /// 1. That this process emitted that plan for that connection and
+    ///    nobody has taken it already. This is first on purpose: a plan we
+    ///    didn't emit doesn't even deserve to have its `stat` looked at.
+    ///    **The right is consumed here**, so two `sync.apply`s of the same
+    ///    hash cannot run at once — they would run the plan twice against
+    ///    the same destination, with two journal batches and an undo that
+    ///    no longer describes any real state. The second one receives
+    ///    [`SpoolError::NotFound`], i.e. `PlanStale`, which is the true
+    ///    answer.
+    /// 2. That the file exists ([`SpoolError::NotFound`]).
+    /// 3. That it hasn't expired; if it has, it's DELETED and
+    ///    [`SpoolError::Expired`] is returned. The TTL is measured over the
+    ///    already-open descriptor's `fstat`, not the path: another file
+    ///    could fit between looking at the path and opening it. And the
+    ///    delete checks the path still names THAT inode, because
+    ///    re-planning the same tree produces the same hash and deleting by
+    ///    name would take down the just-approved plan.
+    /// 4. That the last line is the terminator and that the header and the
+    ///    terminator agree on the same connection and the same hash as the
+    ///    name.
+    /// 5. That the digest **recomputed** over the steps matches the name.
+    ///    Costs one more sequential read of the file, which is negligible
+    ///    next to executing the plan, and it's what turns "what's approved
+    ///    is what runs" into a property instead of a declaration by the
+    ///    file itself.
     ///
-    /// Un plan con bloqueos no se puede recalcular —la lista guardada está
-    /// recortada a [`SYNC_MAX_BLOCKERS_REPORTED`] y el digest los cubre todos—,
-    /// pero tampoco se puede ejecutar: se exige el invariante
-    /// `executable == (blockers_total == 0)`, así que todo plan EJECUTABLE pasa
-    /// por la comprobación del punto 5.
+    /// A plan with blockers cannot be recomputed —the stored list is
+    /// trimmed to [`SYNC_MAX_BLOCKERS_REPORTED`] and the digest covers all
+    /// of them—, but it can't be executed either: the invariant
+    /// `executable == (blockers_total == 0)` is required, so every
+    /// EXECUTABLE plan goes through point 5's check.
     ///
     /// # Errors
-    /// Ver [`SpoolError`]. Las tres primeras variantes significan lo mismo de
-    /// cara al cliente ([`SpoolError::is_stale`]).
+    /// See [`SpoolError`]. The first three variants mean the same thing
+    /// facing the client ([`SpoolError::is_stale`]).
     #[tracing::instrument(skip_all, fields(conn_id = conn_id, plan_hash = hash.as_str()))]
     pub async fn open(&self, conn_id: u64, hash: &PlanHash) -> Result<SpoolReader, SpoolError> {
         if !self.claim_issued(conn_id, hash) {
@@ -644,25 +665,26 @@ impl Spool {
         let opened = crate::blocking::spawn_blocking(move || open_blocking(&path, conn_id, &want))
             .await
             .map_err(joined);
-        // El derecho se COBRÓ arriba, y a partir de aquí hay cuatro formas de
-        // fallar (caducado, ya no está, manipulado, I/O). Si no se devuelve, ese
-        // hash se queda «aplicándose» para siempre: replanificar el mismo árbol
-        // con las mismas opciones da el MISMO digest, `finish` se lo encuentra
-        // ocupado y borra el plan que acaba de escribir — el usuario no puede ni
-        // aplicar ni replanificar, y lo único que ve es un error interno.
+        // The right was CHARGED above, and from here on there are four ways
+        // to fail (expired, no longer there, tampered with, I/O). If it
+        // isn't returned, that hash stays "applying" forever: re-planning
+        // the same tree with the same options gives the SAME digest,
+        // `finish` finds it busy and deletes the plan it just wrote — the
+        // user can neither apply nor re-plan, and all they see is an
+        // internal error.
         //
-        // Se suelta de `applying` y NO se devuelve a `issued`: un plan caducado o
-        // manipulado no vuelve a ser aplicable, solo vuelve a ser
-        // replanificable.
+        // Released from `applying` and NOT returned to `issued`: an
+        // expired or tampered-with plan doesn't become applicable again,
+        // only re-plannable again.
         let opened = match opened {
             Ok(Ok(opened)) => opened,
             Ok(Err(e)) => {
                 self.release_applying(conn_id, hash);
                 if let SpoolError::Malformed(why) = &e {
-                    // Un fichero que escribimos nosotros hace minutos y que ya
-                    // no se deja leer es la señal de que alguien lo ha tocado.
-                    // El cliente solo verá `PlanStale`.
-                    tracing::warn!(conn = conn_id, why, "spool ilegible");
+                    // A file we wrote ourselves minutes ago that no longer
+                    // lets itself be read is the sign that someone touched
+                    // it. The client will only see `PlanStale`.
+                    tracing::warn!(conn = conn_id, why, "unreadable spool");
                 }
                 return Err(e);
             }
@@ -679,18 +701,19 @@ impl Spool {
         })
     }
 
-    /// Borra el plan `hash` de `conn_id`, lo haya o no. Es lo que llama la Task
-    /// de `sync.apply` al terminar, en cualquier estado (tarea 9).
+    /// Deletes plan `hash` of `conn_id`, whether it exists or not. This is
+    /// what the `sync.apply` Task calls on finishing, in any state (task 9).
     ///
-    /// **Hay que llamarlo**, y no solo por higiene de disco: mientras no se
-    /// llame, el plan sigue contando como «aplicándose» y replanificar ese mismo
-    /// árbol con las mismas opciones —que da el mismo digest— se rehúsa. Es el
-    /// lado seguro del intercambio (antes que acuñar dos veces el derecho a
-    /// escribir el mismo destino), pero es un fallo visible para el usuario.
+    /// **It has to be called**, and not just for disk hygiene: as long as
+    /// it isn't, the plan keeps counting as "applying" and re-planning that
+    /// same tree with the same options —which gives the same digest— is
+    /// refused. That's the safe side of the trade-off (rather than minting
+    /// the right to write the same destination twice), but it's a
+    /// user-visible failure.
     ///
     /// # Errors
-    /// [`SpoolError::Io`] solo si el borrado falla por algo que no sea «no
-    /// estaba».
+    /// [`SpoolError::Io`] only if the delete fails for something other than
+    /// "wasn't there".
     #[tracing::instrument(skip_all, fields(conn_id = conn_id, plan_hash = hash.as_str()))]
     pub async fn remove(&self, conn_id: u64, hash: &PlanHash) -> Result<(), SpoolError> {
         self.claim_issued(conn_id, hash);
@@ -705,16 +728,16 @@ impl Spool {
         .map_err(joined)?
     }
 
-    /// Borra TODOS los planes de una conexión, terminados o a medias. Se llama
-    /// cuando la conexión se cae: un plan sin dueño no lo puede aplicar nadie.
-    /// Lo llama el desmontaje de la conexión en el daemon.
+    /// Deletes ALL of a connection's plans, finished or halfway. Called
+    /// when the connection drops: nobody can apply a plan with no owner.
+    /// Called by the connection's teardown in the daemon.
     ///
     /// # Errors
-    /// [`SpoolError::Io`] si el directorio no se puede listar. Un fichero que no
-    /// se puede borrar NO aborta el barrido, pero sale en
-    /// [`SweepReport::failed`]: el derecho a aplicarlo ya se ha olvidado en
-    /// memoria de todos modos, así que lo que queda es basura en disco y no un
-    /// plan vivo.
+    /// [`SpoolError::Io`] if the directory cannot be listed. A file that
+    /// cannot be deleted does NOT abort the sweep, but comes out in
+    /// [`SweepReport::failed`]: the right to apply it has already been
+    /// forgotten in memory either way, so what's left is garbage on disk
+    /// and not a live plan.
     #[tracing::instrument(skip_all, fields(conn_id = conn_id))]
     pub async fn drop_connection(&self, conn_id: u64) -> Result<SweepReport, SpoolError> {
         self.forget_issued(Some(conn_id));
@@ -727,32 +750,32 @@ impl Spool {
         .map_err(joined)?
     }
 
-    /// Barre el directorio ENTERO. Se llama al arrancar el daemon, junto al
+    /// Sweeps the WHOLE directory. Called on daemon startup, alongside the
     /// journal.
     ///
-    /// Se lleva todos los spools, no solo los caducados, y esa es la parte
-    /// importante: al arrancar no hay ninguna conexión viva, así que **todo
-    /// spool que exista es de una conexión muerta** y no lo puede aplicar
-    /// nadie. Además los `conn_id` vuelven a empezar por cero en cada arranque,
-    /// así que dejar uno fresco sería dejar un fichero que autoriza escrituras
-    /// a nombre de un id que el daemon está a punto de repartir otra vez.
+    /// Takes every spool, not just the expired ones, and that's the
+    /// important part: at startup there's no live connection at all, so
+    /// **every spool that exists belongs to a dead connection** and nobody
+    /// can apply it. Also, `conn_id`s start over from zero on every
+    /// startup, so leaving a fresh one would leave a file authorizing
+    /// writes under an id the daemon is about to hand out again.
     ///
-    /// **No es de lo que depende esa seguridad**, y conviene tenerlo claro: lo
-    /// que impide aplicar un plan de un arranque anterior es que el registro de
-    /// planes emitidos vive en memoria y nace vacío, así que un barrido que
-    /// falle deja basura en disco —y las rutas de dos árboles legibles por quien
-    /// pueda leer el directorio de estado— pero no un plan aplicable. Por eso
-    /// [`SweepReport::failed`] se avisa y no aborta el arranque: un daemon que
-    /// se niega a arrancar por un fichero que no se deja borrar es peor fallo
-    /// que el que evita.
+    /// **That safety does NOT depend on this**, and it's worth being clear
+    /// about: what prevents applying a plan from a previous startup is that
+    /// the emitted-plans record lives in memory and is born empty, so a
+    /// sweep that fails leaves garbage on disk —and the paths of two trees,
+    /// readable by whoever can read the state directory— but not an
+    /// applicable plan. That's why [`SweepReport::failed`] warns and
+    /// doesn't abort startup: a daemon that refuses to start over a file
+    /// that won't delete is a worse failure than the one it avoids.
     ///
-    /// Con un solo daemon por directorio de estado —lo que el journal ya impone
-    /// con su lock exclusivo sobre `journal.db` (ADR 0024)— tampoco se lleva por
-    /// delante el spool de nadie vivo.
+    /// With a single daemon per state directory —which the journal already
+    /// enforces with its exclusive lock over `journal.db` (ADR 0024)— it
+    /// also never takes down a live connection's spool.
     ///
     /// # Errors
-    /// [`SpoolError::Io`] si el directorio existe y no se puede listar. Que no
-    /// exista no es un error: es lo normal en el primer arranque.
+    /// [`SpoolError::Io`] if the directory exists and cannot be listed.
+    /// Not existing isn't an error: that's normal on first startup.
     #[tracing::instrument(skip_all)]
     pub async fn sweep(&self) -> Result<SweepReport, SpoolError> {
         self.forget_issued(None);
@@ -763,72 +786,75 @@ impl Spool {
     }
 }
 
-/// Qué se llevó un barrido, y qué se le resistió.
+/// What a sweep took, and what resisted it.
 ///
-/// `failed` existe porque un contador de borrados a secas MIENTE: un `Ok(2)`
-/// con tres ficheros todavía en disco es indistinguible de un barrido limpio, y
-/// el sitio donde eso ocurre —un `remove_file` que falla— es justo donde nadie
-/// mira.
+/// `failed` exists because a bare delete counter LIES: an `Ok(2)` with
+/// three files still on disk is indistinguishable from a clean sweep, and
+/// the place where that happens —a `remove_file` that fails— is exactly
+/// where nobody looks.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SweepReport {
-    /// Ficheros borrados.
+    /// Files deleted.
     pub removed: usize,
-    /// Ficheros que estaban y no se dejaron borrar.
+    /// Files that were there and refused to be deleted.
     pub failed: usize,
 }
 
 impl SweepReport {
-    /// ¿Se llevó todo lo que encontró?
+    /// Did it take everything it found?
     #[must_use]
     pub fn is_clean(&self) -> bool {
         self.failed == 0
     }
 }
 
-/// Escribe un plan mientras se planifica.
+/// Writes a plan while it's being planned.
 ///
-/// Traga [`PlanItem`], que es lo que produce `norte_sync::plan`, y hace tres
-/// cosas con cada uno **a la vez**: lo hashea, lo cuenta y (si es un paso) lo
-/// escribe. Que sea el mismo sitio no es comodidad: el `plan_hash` tiene que
-/// resumir EXACTAMENTE los elementos que el humano ve, o sea los de después del
-/// `include` de la petición, y con un solo embudo no hay forma de hashear una
-/// secuencia y enseñar otra.
+/// Swallows [`PlanItem`], which is what `norte_sync::plan` produces, and
+/// does three things with each one **at once**: hashes it, counts it, and
+/// (if it's a step) writes it. Being the same place isn't convenience: the
+/// `plan_hash` has to summarize EXACTLY the elements the human sees, i.e.
+/// the ones after the request's `include`, and with a single funnel there's
+/// no way to hash one sequence and show another.
 ///
-/// Quien lo usa debe empujar aquí los MISMOS elementos que manda al cliente por
-/// `sync.steps`, y en el mismo orden.
+/// Whoever uses this must push here the SAME elements it sends the client
+/// over `sync.steps`, in the same order.
 ///
-/// # Solo se cierra un flujo que TERMINÓ, y por eso hay que decirlo
-/// [`SpoolWriter::finish`] exige un [`PlanOutcome`]. No es ceremonia: el digest
-/// parcial de un plan cortado a la mitad es indistinguible del de un plan
-/// completo más corto, así que cerrar uno cancelado produce un `plan_hash`
-/// perfectamente válido para un plan que dice sincronizar un árbol que se
-/// recorrió un tercio. El humano aprueba «412 ficheros», se copian 412, y los
-/// 400 000 que faltaban no se copian nunca sin que nada lo diga.
+/// # Only a stream that FINISHED gets closed, and that's why it has to be stated
+/// [`SpoolWriter::finish`] requires a [`PlanOutcome`]. It isn't ceremony:
+/// the partial digest of a plan cut in half is indistinguishable from a
+/// shorter complete plan's, so closing a cancelled one produces a
+/// perfectly valid `plan_hash` for a plan that claims to sync a tree that
+/// was only a third walked. The human approves "412 files", 412 get
+/// copied, and the 400,000 that were missing never get copied with nothing
+/// saying so.
 ///
-/// El bucle que lo destruye es este, y es el que sale solo:
+/// The loop that destroys it is this one, and it's the one that exits on
+/// its own:
 ///
 /// ```ignore
 /// while let Some(Ok(item)) = items.next().await { w.push(&item).await?; }
-/// let s = w.finish(PlanOutcome::Ended).await?;   // MENTIRA si hubo un Err
+/// let s = w.finish(PlanOutcome::Ended).await?;   // A LIE if there was an Err
 /// ```
 ///
-/// `Some(Err(_))` sale por el mismo sitio que `None`. Solo el brazo `None` puede
-/// pasar [`PlanOutcome::Ended`]; el de error pasa
-/// [`PlanOutcome::Interrupted`], que borra el `.part` y no devuelve hash
-/// ninguno.
+/// `Some(Err(_))` exits through the same place as `None`. Only the `None`
+/// arm can pass [`PlanOutcome::Ended`]; the error one passes
+/// [`PlanOutcome::Interrupted`], which deletes the `.part` and returns no
+/// hash at all.
 #[derive(Debug)]
 pub struct SpoolWriter {
-    /// El spool que lo creó: `finish` apunta ahí el plan como emitido, que es
-    /// lo que después deja que se abra.
+    /// The spool that created it: `finish` notes the plan there as emitted,
+    /// which is what later lets it be opened.
     spool: Spool,
     part: PathBuf,
     conn_id: u64,
-    /// `None` solo mientras un `spawn_blocking` lo tiene prestado, y después de
+    /// `None` only while a `spawn_blocking` has borrowed it, and after
     /// [`SpoolWriter::finish`].
     file: Option<std::fs::File>,
     buf: Vec<u8>,
-    /// `Option` por lo mismo que `file`: `SpoolWriter` implementa `Drop`, así
-    /// que no se puede sacar un campo de él sin dejar algo en su sitio.
+    /// `Option` for the same reason as `file`: `SpoolWriter` implements
+    /// `Drop`, so a field cannot be taken out of it without leaving
+    /// something in its place.
     hasher: Option<PlanHasher>,
     counts: SyncCounts,
     blockers: Vec<SyncBlocker>,
@@ -836,31 +862,33 @@ pub struct SpoolWriter {
     finished: bool,
 }
 
-/// Cómo terminó el flujo del plan. Lo exige [`SpoolWriter::finish`] para que
-/// nadie pueda cerrar un plan a medias sin haberlo escrito.
+/// How the plan's stream ended. Required by [`SpoolWriter::finish`] so
+/// nobody can close a half-written plan without having written it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanOutcome {
-    /// El flujo devolvió `None`: el plan está entero. **Solo desde ese brazo.**
+    /// The stream returned `None`: the plan is whole. **Only from that arm.**
     Ended,
-    /// El flujo se cortó — cancelación, o un [`norte_sync::SyncError`]. El spool
-    /// se borra y no hay hash.
+    /// The stream was cut off — cancellation, or a
+    /// [`norte_sync::SyncError`]. The spool is deleted and there's no hash.
     Interrupted,
 }
 
 impl SpoolWriter {
-    /// Traga un elemento del plan.
+    /// Swallows one plan element.
     ///
-    /// Un paso se hashea, se cuenta y se escribe. Un bloqueo se hashea y se
-    /// cuenta —todos, sin tope, porque el hash tiene que distinguir dos planes
-    /// que difieren en el bloqueo 257— pero solo los primeros
-    /// [`SYNC_MAX_BLOCKERS_REPORTED`] se guardan para poder nombrarlos.
+    /// A step gets hashed, counted and written. A blocker gets hashed and
+    /// counted —all of them, no cap, because the hash has to distinguish
+    /// two plans that differ in blocker 257— but only the first
+    /// [`SYNC_MAX_BLOCKERS_REPORTED`] are stored so they can be named.
     ///
     /// # Errors
-    /// [`SpoolError::Io`] si la escritura falla. Un error aquí deja el plan sin
-    /// terminar, que es lo mismo que no haberlo hecho.
+    /// [`SpoolError::Io`] if the write fails. An error here leaves the plan
+    /// unfinished, which is the same as never having made it.
     pub async fn push(&mut self, item: &PlanItem) -> Result<(), SpoolError> {
         let Some(hasher) = self.hasher.as_mut() else {
-            return Err(SpoolError::Malformed("el spool ya está cerrado".to_owned()));
+            return Err(SpoolError::Malformed(
+                "the spool is already closed".to_owned(),
+            ));
         };
         hasher.item(item);
         match item {
@@ -885,45 +913,47 @@ impl SpoolWriter {
         Ok(())
     }
 
-    /// Cierra el plan: escribe el terminador, le pone al fichero su nombre
-    /// definitivo (`<conn_id>-<plan_hash>.jsonl`) y lo apunta como emitido.
+    /// Closes the plan: writes the terminator, gives the file its final
+    /// name (`<conn_id>-<plan_hash>.jsonl`) and notes it as emitted.
     ///
-    /// Hasta ese `rename` el plan no tiene el nombre por el que se busca, y
-    /// hasta ese apunte no hay derecho a aplicarlo: las dos cosas juntas son lo
-    /// que hace que un plan cancelado —o un daemon que se muere a mitad— no deje
-    /// nada aprobable.
+    /// Until that `rename` the plan has no name to be looked up by, and
+    /// until that note there's no right to apply it: the two together are
+    /// what makes a cancelled plan —or a daemon dying halfway— leave
+    /// nothing approvable.
     ///
-    /// `outcome` no es decoración: ver la nota del tipo. Con
-    /// [`PlanOutcome::Interrupted`] esto borra el `.part` y devuelve
-    /// [`SpoolError::Interrupted`] sin escribir terminador ninguno.
+    /// `outcome` isn't decoration: see the type's note. With
+    /// [`PlanOutcome::Interrupted`] this deletes the `.part` and returns
+    /// [`SpoolError::Interrupted`] with no terminator written at all.
     ///
-    /// Si el futuro se suelta EN el `rename`, la tarea bloqueante puede
-    /// completarlo igual y dejar un spool con nombre bueno cuyo hash el llamante
-    /// nunca supo. Nadie lo puede aplicar —no llegó a apuntarse como emitido— y
-    /// se lo lleva el barrido.
+    /// If the future is dropped DURING the `rename`, the blocking task can
+    /// still complete it and leave a spool under the right name whose hash
+    /// the caller never learned. Nobody can apply it —it never got noted as
+    /// emitted— and the sweep takes it.
     ///
-    /// # Otras dos formas de NO cerrar, además de `outcome`
-    /// Las dos devuelven [`SpoolError::Interrupted`], y las dos son cosas que
-    /// pasaron mientras el plan se escribía y que quien lo escribe no puede ver:
+    /// # Two other ways to NOT close, besides `outcome`
+    /// Both return [`SpoolError::Interrupted`], and both are things that
+    /// happened while the plan was being written that whoever writes it
+    /// cannot see:
     ///
-    /// - **Su conexión se cerró.** El desmontaje se llevó los planes de esa
-    ///   conexión, así que uno que se apuntase DESPUÉS quedaría retenido sin
-    ///   dueño y sin nadie que lo recoja. No hace falta ninguna carrera para
-    ///   llegar aquí: un plan sobre dos árboles idénticos no emite ni un paso, no
-    ///   toca el canal y por tanto jamás se entera de que su dueño se fue.
-    /// - **Un `open` se llevó el derecho de ESE hash.** Replanificar el mismo
-    ///   árbol con las mismas opciones da el mismo digest; volver a acuñar el
-    ///   derecho mientras alguien lo aplica es autorizar una segunda ejecución
-    ///   del mismo plan contra el mismo destino, con dos lotes del journal.
+    /// - **Its connection closed.** The teardown took that connection's
+    ///   plans, so one that got noted AFTER would be left retained with no
+    ///   owner and nobody to collect it. No race is needed to get here: a
+    ///   plan over two identical trees emits not a single step, never
+    ///   touches the channel and therefore never finds out its owner left.
+    /// - **An `open` took THAT hash's right.** Re-planning the same tree
+    ///   with the same options gives the same digest; minting the right
+    ///   again while someone is applying it would authorize a second
+    ///   execution of the same plan against the same destination, with two
+    ///   journal batches.
     ///
-    /// La comprobación buena es la de DESPUÉS del rename, que se hace bajo el
-    /// mismo lock que la decisión de apuntar el plan como emitido; la de
-    /// antes solo ahorra el trabajo.
+    /// The real check is the one AFTER the rename, done under the same lock
+    /// as the decision to note the plan as emitted; the one before only
+    /// saves the work.
     ///
     /// # Errors
-    /// [`SpoolError::Interrupted`] si `outcome` lo dice, si la conexión murió o
-    /// si el plan se está aplicando, y [`SpoolError::Io`] si la escritura o el
-    /// `rename` fallan.
+    /// [`SpoolError::Interrupted`] if `outcome` says so, if the connection
+    /// died or if the plan is being applied, and [`SpoolError::Io`] if the
+    /// write or the `rename` fail.
     #[tracing::instrument(skip_all, fields(conn_id = self.conn_id, ?outcome))]
     pub async fn finish(mut self, outcome: PlanOutcome) -> Result<SpoolSummary, SpoolError> {
         if outcome == PlanOutcome::Interrupted || self.spool.is_dead(self.conn_id) {
@@ -931,7 +961,9 @@ impl SpoolWriter {
             return Err(SpoolError::Interrupted);
         }
         let Some(hasher) = self.hasher.take() else {
-            return Err(SpoolError::Malformed("el spool ya está cerrado".to_owned()));
+            return Err(SpoolError::Malformed(
+                "the spool is already closed".to_owned(),
+            ));
         };
         let summary = SpoolSummary {
             plan_hash: hasher.finish(),
@@ -952,18 +984,18 @@ impl SpoolWriter {
             .join(file_name(self.conn_id, &summary.plan_hash));
         let landed = target.clone();
         crate::blocking::spawn_blocking(move || {
-            // Cerrar ANTES del rename: en Windows un fichero abierto no se
-            // renombra, y en unix no cuesta nada.
+            // Close BEFORE the rename: on Windows an open file doesn't
+            // rename, and on unix it costs nothing.
             drop(file);
             std::fs::rename(&part, &target)
         })
         .await
         .map_err(joined)??;
         self.finished = true;
-        // DESPUÉS del rename: apuntar un plan cuyo fichero no llegó a tener su
-        // nombre sería prometer un `open` que después no encuentra nada. Y bajo
-        // el lock, que es lo que decide si todavía procede — ver la nota de
-        // arriba sobre las otras dos formas de no cerrar.
+        // AFTER the rename: noting a plan whose file never got its name
+        // would promise an `open` that later finds nothing. And under the
+        // lock, which is what decides whether it still applies — see the
+        // note above about the other two ways of not closing.
         if !self.spool.record_issued(self.conn_id, &summary.plan_hash) {
             crate::blocking::spawn_blocking(move || {
                 let _ = std::fs::remove_file(&landed);
@@ -975,19 +1007,19 @@ impl SpoolWriter {
         Ok(summary)
     }
 
-    /// Tira el plan a medio escribir, sin devolver nada. Es
-    /// `finish(PlanOutcome::Interrupted)` sin el error, para quien ya sabe que
-    /// no va a haber plan.
+    /// Throws away the half-written plan, returning nothing. It's
+    /// `finish(PlanOutcome::Interrupted)` with no error, for whoever
+    /// already knows there won't be a plan.
     ///
-    /// No falla: un borrado que no se puede hacer lo recoge el barrido de
-    /// arranque, y el fichero no tiene el nombre por el que se busca de todos
-    /// modos.
+    /// Doesn't fail: a delete that can't be done is picked up by the
+    /// startup sweep, and the file doesn't have the name it would be
+    /// looked up by anyway.
     pub async fn abandon(mut self) {
         self.abandon_inner().await;
     }
 
-    /// El cuerpo de [`SpoolWriter::abandon`], por `&mut` para que
-    /// [`SpoolWriter::finish`] lo pueda usar en el camino interrumpido.
+    /// [`SpoolWriter::abandon`]'s body, by `&mut` so
+    /// [`SpoolWriter::finish`] can use it on the interrupted path.
     async fn abandon_inner(&mut self) {
         let file = self.file.take();
         let part = self.part.clone();
@@ -1000,16 +1032,17 @@ impl SpoolWriter {
         .await;
     }
 
-    /// Baja el buffer al disco. El `File` viaja al hilo bloqueante y vuelve.
+    /// Flushes the buffer to disk. The `File` travels to the blocking
+    /// thread and comes back.
     async fn flush(&mut self) -> Result<(), SpoolError> {
         if self.buf.is_empty() {
             return Ok(());
         }
         let mut file = self.file.take().ok_or_else(|| {
-            // `Malformed` y no `Io`: significa que este writer ya no puede
-            // producir un plan, que de cara al cliente es un plan rancio
-            // ([`SpoolError::is_stale`]) y no un fallo del daemon.
-            SpoolError::Malformed("el spool ya está cerrado".to_owned())
+            // `Malformed` and not `Io`: means this writer can no longer
+            // produce a plan, which facing the client is a stale plan
+            // ([`SpoolError::is_stale`]) and not a daemon failure.
+            SpoolError::Malformed("the spool is already closed".to_owned())
         })?;
         let chunk = std::mem::take(&mut self.buf);
         let (file, mut chunk, res) = crate::blocking::spawn_blocking(move || {
@@ -1019,7 +1052,7 @@ impl SpoolWriter {
         .await
         .map_err(joined)?;
         self.file = Some(file);
-        // Se recupera la capacidad: el buffer se reusa plan entero.
+        // Capacity is recovered: the buffer is reused for the whole plan.
         chunk.clear();
         self.buf = chunk;
         res.map_err(SpoolError::Io)
@@ -1028,31 +1061,33 @@ impl SpoolWriter {
 
 impl Drop for SpoolWriter {
     fn drop(&mut self) {
-        // SIEMPRE, cerrase como se cerrase: es el contador que acota la lápida
-        // de una conexión muerta a las que de verdad tienen un plan a medias.
+        // ALWAYS, however it closed: this is the counter that bounds a dead
+        // connection's tombstone to the ones that really have a plan
+        // halfway through.
         self.spool.close_writer(self.conn_id);
         if self.finished {
             return;
         }
-        // Un plan sin terminar no es abrible —el `.part` no tiene el nombre por
-        // el que se busca y nunca se apuntó como emitido—, así que esto es
-        // higiene y no una garantía: quien la da es el barrido de arranque.
+        // An unfinished plan cannot be opened —the `.part` doesn't have the
+        // name it would be looked up by and was never noted as emitted—, so
+        // this is hygiene and not a guarantee: the startup sweep is what
+        // gives that.
         //
-        // Un `unlink` SÍNCRONO, a sabiendas de la regla 2. La alternativa era
-        // `Handle::spawn_blocking`, que entra en pánico cuando el runtime ya
-        // está apagándose (y `try_current` sigue devolviendo `Ok` en esa
-        // ventana, porque el drop ocurre dentro del contexto): un pánico en un
-        // `Drop` durante un desenrollado aborta el proceso. Cambiar un abort
-        // por un `unlink` que no puede bloquear de forma apreciable es el
-        // intercambio correcto.
+        // A SYNCHRONOUS `unlink`, knowingly against rule 2. The alternative
+        // was `Handle::spawn_blocking`, which panics when the runtime is
+        // already shutting down (and `try_current` still returns `Ok` in
+        // that window, because the drop happens inside the context): a
+        // panic in a `Drop` during unwinding aborts the process. Trading an
+        // abort for an `unlink` that cannot block appreciably is the right
+        // trade.
         let part = std::mem::take(&mut self.part);
         drop(self.file.take());
         let _ = std::fs::remove_file(&part);
     }
 }
 
-/// Un plan retenido, ya validado: la cabecera y el resumen están leídos y los
-/// pasos se piden en streaming.
+/// A retained, already validated plan: the header and summary are read and
+/// the steps are requested in streaming.
 #[derive(Debug)]
 pub struct SpoolReader {
     file: std::fs::File,
@@ -1061,38 +1096,38 @@ pub struct SpoolReader {
 }
 
 impl SpoolReader {
-    /// Con qué se planificó. El ejecutor saca de aquí las dos raíces.
+    /// What it was planned with. The executor gets the two roots from here.
     #[must_use]
     pub fn header(&self) -> &SpoolHeader {
         &self.header
     }
 
-    /// A cuánto sumó. Se lee sin recorrer un solo paso, así que un plan no
-    /// ejecutable se rehúsa antes de empezar.
+    /// What it added up to. Read without walking a single step, so a
+    /// non-executable plan is refused before starting.
     #[must_use]
     pub fn summary(&self) -> &SpoolSummary {
         &self.summary
     }
 
-    /// Los pasos, en orden de plan.
+    /// The steps, in plan order.
     ///
-    /// El orden es el del walk (pre-orden), así que un `CreateDir` precede a
-    /// toda copia dentro de él: **no se ordena**, se ejecuta como viene.
+    /// The order is the walk's (pre-order), so a `CreateDir` precedes every
+    /// copy inside it: **nothing gets sorted**, it runs as it comes.
     ///
-    /// El flujo está FUSIONADO: pedirle otro elemento después del final
-    /// devuelve `None` en vez de entrar en pánico, así que un `select!` con un
-    /// tick de progreso encima es legal.
+    /// The stream is FUSED: asking it for one more element after the end
+    /// returns `None` instead of panicking, so a `select!` with a progress
+    /// tick on top is legal.
     ///
-    /// Termina en el registro terminador, y exige que después no haya NADA: si
-    /// hubiera un segundo terminador, [`Spool::open`] habría leído el último y
-    /// esto ejecutaría hasta el primero — el resumen aprobado y el plan
-    /// ejecutado serían dos cosas distintas. Si el fichero se acaba antes
-    /// —alguien lo truncó después de abrirlo— sale un [`SpoolError::Malformed`]
-    /// y no un plan a medias.
+    /// Ends at the terminator record, and requires NOTHING after it: if
+    /// there were a second terminator, [`Spool::open`] would have validated
+    /// the last one and this would execute up to the first — the approved
+    /// summary and the executed plan would be two different things. If the
+    /// file ends before that —someone truncated it after opening it— a
+    /// [`SpoolError::Malformed`] comes out, not a half plan.
     ///
-    /// El error puede llegar A MITAD, con pasos ya ejecutados: quien lo consuma
-    /// necesita su lote del journal cerrado y deshacible en ese punto, no solo
-    /// en el de cancelación.
+    /// The error can arrive HALFWAY, with steps already executed: whoever
+    /// consumes it needs its journal batch closed and undoable at that
+    /// point, not only at the cancellation one.
     #[must_use]
     pub fn steps(self) -> impl FusedStream<Item = Result<SpoolStep, SpoolError>> {
         struct State {
@@ -1122,26 +1157,27 @@ impl SpoolReader {
                         let n = read_capped_line(&mut reader, &mut line)?;
                         if n == 0 {
                             return Err(SpoolError::Malformed(
-                                "el spool se acaba sin su terminador".to_owned(),
+                                "the spool ends with no terminator".to_owned(),
                             ));
                         }
                         read += n;
                         match decode(&line)? {
                             Record::Step(step) => batch.push(validated_step(step)?),
                             Record::End(_) => {
-                                // Nada después del terminador. Con dos, `open`
-                                // valida el último y esto ejecuta hasta el
-                                // primero: dos planes en un fichero.
+                                // Nothing after the terminator. With two,
+                                // `open` validates the last one and this
+                                // would execute up to the first: two plans
+                                // in one file.
                                 if read_capped_line(&mut reader, &mut line)? != 0 {
                                     return Err(SpoolError::Malformed(
-                                        "hay registros después del terminador".to_owned(),
+                                        "there are records after the terminator".to_owned(),
                                     ));
                                 }
                                 break true;
                             }
                             Record::Head(_) => {
                                 return Err(SpoolError::Malformed(
-                                    "una cabecera en mitad del spool".to_owned(),
+                                    "a header in the middle of the spool".to_owned(),
                                 ));
                             }
                         }
@@ -1160,43 +1196,43 @@ impl SpoolReader {
     }
 }
 
-// ---------------------------------------------------------------- bloqueante
+// ------------------------------------------------------------------ blocking
 
-/// Un paso leído del disco, comprobado.
+/// A step read from disk, checked.
 ///
-/// En el WIRE, `SyncStepKind` degrada a `Unknown` y un paso mal formado no mata
-/// un lote de 256 (ADR 0049) — ahí la compatibilidad hacia delante vale más. En
-/// un fichero que escribió ESTE binario hace minutos no hay compatibilidad que
-/// defender: una clase que no reconocemos o una forma que no se sostiene solo
-/// pueden ser corrupción o manipulación, y un paso así estaría a punto de
-/// autorizar una escritura.
+/// On the WIRE, `SyncStepKind` degrades to `Unknown` and a malformed step
+/// doesn't kill a batch of 256 (ADR 0049) — there, forward compatibility is
+/// worth more. In a file THIS binary wrote minutes ago there's no
+/// compatibility to defend: a class we don't recognize or a shape that
+/// doesn't hold up can only be corruption or tampering, and a step like
+/// that would be about to authorize a write.
 ///
-/// `shape_is_consistent` es gratis aquí y es la regla 4 comprobada donde se
-/// puede: un `Overwrite` que dice deshacerse borrando haría que el journal
-/// apuntase una reversa falsa.
+/// `shape_is_consistent` is free here and is rule 4 checked wherever
+/// possible: an `Overwrite` that claims to undo by deleting would make the
+/// journal note a false reversal.
 fn validated_step(record: SpoolStep) -> Result<SpoolStep, SpoolError> {
     if record.step.kind == norte_proto::methods::SyncStepKind::Unknown {
         return Err(SpoolError::Malformed(
-            "un paso de clase desconocida en un spool que escribimos nosotros".to_owned(),
+            "an unknown-class step in a spool we wrote ourselves".to_owned(),
         ));
     }
     if !record.step.shape_is_consistent() {
         return Err(SpoolError::Malformed(
-            "un paso cuya clase, reversa y motivo no concuerdan".to_owned(),
+            "a step whose class, reversal and reason don't agree".to_owned(),
         ));
     }
     Ok(record)
 }
 
-/// Crea el directorio con permisos de dueño y nada más.
+/// Creates the directory with owner-only permissions and nothing else.
 fn ensure_dir(dir: &Path) -> Result<(), SpoolError> {
     let mut builder = std::fs::DirBuilder::new();
     #[cfg(unix)]
     {
         use std::os::unix::fs::DirBuilderExt as _;
-        // `recursive` + `mode` también para el directorio de estado, que es lo
-        // que hace `Journal::open` con el suyo: crearlo con el umask lo dejaría
-        // en 0755 según quién llegue primero.
+        // `recursive` + `mode` for the state directory too, which is what
+        // `Journal::open` does with its own: creating it with the umask
+        // would leave it at 0755 depending on who gets there first.
         builder.mode(0o700);
     }
     if let Some(parent) = dir.parent() {
@@ -1214,14 +1250,14 @@ fn ensure_dir(dir: &Path) -> Result<(), SpoolError> {
         Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
         Err(e) => return Err(e.into()),
     }
-    // Ya existía. Que sea un directorio de verdad y no un enlace a otro sitio,
-    // y que sus permisos sigan siendo los que decimos que son: un spool en un
-    // directorio legible por todos es un plan legible por todos.
+    // It already existed. Make sure it's a real directory and not a link
+    // elsewhere, and that its permissions are still what we say they are: a
+    // spool in a world-readable directory is a world-readable plan.
     let meta = std::fs::symlink_metadata(dir)?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err(SpoolError::Io(io::Error::new(
             ErrorKind::InvalidInput,
-            "el directorio de spools no es un directorio",
+            "the spools directory is not a directory",
         )));
     }
     #[cfg(unix)]
@@ -1234,11 +1270,11 @@ fn ensure_dir(dir: &Path) -> Result<(), SpoolError> {
     Ok(())
 }
 
-/// Contador de planes de este proceso. Con el pid delante, basta para que dos
-/// planes en vuelo de la misma conexión no se peleen por el nombre.
+/// This process's plan counter. With the pid in front, it's enough that two
+/// in-flight plans of the same connection don't fight over the name.
 static NEXT_PART: AtomicU64 = AtomicU64::new(0);
 
-/// Abre el `.part`, `0o600` de nacimiento.
+/// Opens the `.part`, `0o600` at birth.
 fn create_part(dir: &Path, conn_id: u64) -> Result<(std::fs::File, PathBuf), SpoolError> {
     let pid = std::process::id();
     for _ in 0..8 {
@@ -1249,27 +1285,27 @@ fn create_part(dir: &Path, conn_id: u64) -> Result<(std::fs::File, PathBuf), Spo
         #[cfg(unix)]
         {
             use std::os::unix::fs::OpenOptionsExt as _;
-            // `mode` en la LLAMADA, no un `chmod` después: entre crear y
-            // cambiar los permisos hay una ventana en la que el plan es legible
-            // por cualquiera, y esa ventana es el bug entero.
+            // `mode` in the CALL, not a `chmod` afterward: between creating
+            // and changing permissions there's a window where the plan is
+            // readable by anyone, and that window is the entire bug.
             opts.mode(0o600);
         }
         match opts.open(&path) {
             Ok(file) => return Ok((file, path)),
-            // `create_new` es también la garantía de que jamás escribimos
-            // dentro de un fichero que ya estaba: se reintenta con otro nombre.
+            // `create_new` is also the guarantee that we never write inside
+            // a file that was already there: retried under another name.
             Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
             Err(e) => return Err(e.into()),
         }
     }
     Err(SpoolError::Io(io::Error::new(
         ErrorKind::AlreadyExists,
-        "no hay nombre libre para el spool",
+        "no free name for the spool",
     )))
 }
 
-/// El nombre por el que se busca un plan. Ni el `conn_id` ni el hash pueden
-/// llevar un separador de rutas, así que no hay nada que sanear.
+/// The name a plan is looked up by. Neither `conn_id` nor the hash can
+/// carry a path separator, so there's nothing to sanitize.
 fn file_name(conn_id: u64, hash: &PlanHash) -> String {
     format!("{conn_id}-{}.jsonl", hash.as_str())
 }
@@ -1284,8 +1320,8 @@ fn open_blocking(
         Err(e) if e.kind() == ErrorKind::NotFound => return Err(SpoolError::NotFound),
         Err(e) => return Err(e.into()),
     };
-    // `fstat` del descriptor abierto, no `stat` de la ruta: entre mirar la ruta
-    // y abrirla cabe otro fichero.
+    // `fstat` of the open descriptor, not `stat` of the path: another file
+    // could fit between looking at the path and opening it.
     let meta = file.metadata()?;
     if !meta.is_file() {
         return Err(SpoolError::NotFound);
@@ -1296,12 +1332,12 @@ fn open_blocking(
         return Err(SpoolError::Expired);
     }
 
-    // La ÚLTIMA línea primero: sin terminador el fichero no es un plan, y así
-    // no se recorre entero para descubrirlo.
+    // The LAST line first: with no terminator the file isn't a plan, and
+    // this way the whole thing isn't walked to find that out.
     let tail = read_last_line(&mut file, meta.len())?;
     let Record::End(summary) = decode(&tail)? else {
         return Err(SpoolError::Malformed(
-            "la última línea del spool no es su terminador".to_owned(),
+            "the spool's last line is not its terminator".to_owned(),
         ));
     };
 
@@ -1310,35 +1346,35 @@ fn open_blocking(
     let mut line = Vec::new();
     let head_len = read_capped_line(&mut reader, &mut line)?;
     if head_len == 0 {
-        return Err(SpoolError::Malformed("spool vacío".to_owned()));
+        return Err(SpoolError::Malformed("empty spool".to_owned()));
     }
     let Record::Head(header) = decode(&line)? else {
         return Err(SpoolError::Malformed(
-            "la primera línea del spool no es su cabecera".to_owned(),
+            "the spool's first line is not its header".to_owned(),
         ));
     };
 
-    // El nombre del fichero dice una conexión y un hash; el CONTENIDO tiene que
-    // decir los mismos. Un fichero renombrado a mano no se abre.
+    // The filename states a connection and a hash; the CONTENT has to state
+    // the same ones. A file renamed by hand doesn't open.
     if header.format != SPOOL_FORMAT {
         return Err(SpoolError::Malformed(format!(
-            "formato de spool {} (este binario escribe {SPOOL_FORMAT})",
+            "spool format {} (this binary writes {SPOOL_FORMAT})",
             header.format
         )));
     }
     if header.conn_id != conn_id || &summary.plan_hash != want {
         return Err(SpoolError::Malformed(
-            "el spool no dice la conexión y el hash de su nombre".to_owned(),
+            "the spool does not state its name's connection and hash".to_owned(),
         ));
     }
-    // El invariante de `SyncPlanDone`, comprobado aquí porque es lo que decide
-    // si el punto siguiente se puede hacer: un plan sin bloqueos es ejecutable y
-    // se le recalcula el digest; uno con bloqueos no es ninguna de las dos
-    // cosas. Sin esto, un fichero podría declararse ejecutable Y traer
-    // bloqueos, y colarse por el hueco sin que nadie le recalcule nada.
+    // `SyncPlanDone`'s invariant, checked here because it decides whether
+    // the next point can be done: a plan with no blockers is executable and
+    // has its digest recomputed; one with blockers is neither. Without
+    // this, a file could declare itself executable AND carry blockers, and
+    // slip through the gap with nobody recomputing anything for it.
     if summary.executable != (summary.blockers_total == 0) {
         return Err(SpoolError::Malformed(
-            "`executable` no concuerda con el número de bloqueos".to_owned(),
+            "`executable` does not agree with the number of blockers".to_owned(),
         ));
     }
 
@@ -1350,22 +1386,22 @@ fn open_blocking(
     Ok((file, header, summary))
 }
 
-/// Recalcula el `plan_hash` y los CONTADORES sobre los pasos del fichero, y los
-/// compara con lo que el fichero dice de sí mismo.
+/// Recomputes `plan_hash` and the COUNTERS over the file's steps, and
+/// compares them against what the file says about itself.
 ///
-/// El resumen guardado dice un hash, pero eso es el fichero hablando de sí
-/// mismo: [`PlanHasher`] no lleva clave, así que quien pueda escribir en el
-/// directorio puede escribir un plan cualquiera Y su digest. Lo que hace que el
-/// nombre valga algo es el registro en memoria de [`Spool`]; lo que hace que el
-/// CONTENIDO valga algo es esto. Sin ello, editar un `kind` de un plan que el
-/// humano ya aprobó no lo detecta nadie.
+/// The stored summary states a hash, but that's the file talking about
+/// itself: [`PlanHasher`] carries no key, so whoever can write to the
+/// directory can write any plan AND its digest. What makes the name worth
+/// something is [`Spool`]'s in-memory record; what makes the CONTENT worth
+/// something is this. Without it, nobody detects editing a `kind` of a plan
+/// the human already approved.
 ///
-/// Cuesta una lectura secuencial más. Al lado de ejecutar el plan —una operación
-/// de provider por paso— es ruido.
+/// Costs one more sequential read. Next to executing the plan —one
+/// provider operation per step— it's noise.
 ///
-/// Solo se llama sobre planes sin bloqueos: la lista guardada está recortada a
-/// [`SYNC_MAX_BLOCKERS_REPORTED`] y el digest los cubre TODOS, así que uno con
-/// bloqueos no se puede recalcular. Tampoco se puede ejecutar.
+/// Only called over plans with no blockers: the stored list is trimmed to
+/// [`SYNC_MAX_BLOCKERS_REPORTED`] and the digest covers ALL of them, so one
+/// with blockers cannot be recomputed. It cannot be executed either.
 fn verify_digest(
     file: &mut std::fs::File,
     head_len: usize,
@@ -1381,77 +1417,81 @@ fn verify_digest(
     loop {
         if read_capped_line(&mut reader, &mut line)? == 0 {
             return Err(SpoolError::Malformed(
-                "el spool se acaba sin su terminador".to_owned(),
+                "the spool ends with no terminator".to_owned(),
             ));
         }
         match decode(&line)? {
             Record::Step(record) => {
                 let record = validated_step(record)?;
-                // Los contadores se REHACEN, no se creen. Son lo que el ejecutor
-                // mira para decidir qué puertas de policy pide (`Mkdir` si el
-                // plan crea directorios, `Delete` si sobrescribe o borra), y
-                // viven en el terminador, que el digest NO cubre: sin esto, un
-                // fichero con los pasos intactos y `overwrite: 0` pasaría la
-                // verificación y se ejecutaría sin que nadie preguntara por el
-                // borrado.
+                // The counters are REBUILT, not trusted. They're what the
+                // executor looks at to decide which policy gates to ask for
+                // (`Mkdir` if the plan creates directories, `Delete` if it
+                // overwrites or deletes), and they live in the terminator,
+                // which the digest does NOT cover: without this, a file
+                // with the steps intact and `overwrite: 0` would pass
+                // verification and run with nobody asking about the
+                // delete.
                 counts.add(&record.step);
                 hasher.step(&record.step);
             }
             Record::End(_) => {
-                // Nada después del terminador, y se comprueba AQUÍ y no solo en
-                // `steps()`: con dos terminadores IGUALES el digest cuadra —
-                // `read_last_line` leyó el segundo y esto paró en el primero—,
-                // así que sin esto el fichero se abriría y reventaría a mitad de
-                // la ejecución en vez de antes de empezar.
+                // Nothing after the terminator, and it's checked HERE and
+                // not only in `steps()`: with two IDENTICAL terminators the
+                // digest matches —`read_last_line` read the second and this
+                // stopped at the first—, so without this the file would
+                // open and blow up mid-execution instead of before
+                // starting.
                 if read_capped_line(&mut reader, &mut line)? != 0 {
                     return Err(SpoolError::Malformed(
-                        "hay registros después del terminador".to_owned(),
+                        "there are records after the terminator".to_owned(),
                     ));
                 }
                 break;
             }
             Record::Head(_) => {
                 return Err(SpoolError::Malformed(
-                    "una cabecera en mitad del spool".to_owned(),
+                    "a header in the middle of the spool".to_owned(),
                 ));
             }
         }
     }
     if &hasher.finish() != want {
         return Err(SpoolError::Malformed(
-            "el digest recalculado no es el del nombre: el spool se ha tocado".to_owned(),
+            "the recomputed digest is not the one in the name: the spool was tampered with"
+                .to_owned(),
         ));
     }
     if counts != summary.counts {
         return Err(SpoolError::Malformed(
-            "los contadores del terminador no son los de los pasos".to_owned(),
+            "the terminator's counters are not the steps'".to_owned(),
         ));
     }
     Ok(())
 }
 
-/// Borra `path` solo si sigue nombrando el inodo que se miró.
+/// Deletes `path` only if it still names the inode that was looked at.
 ///
-/// Replanificar el mismo árbol con las mismas opciones produce el MISMO hash, y
-/// `finish` renombra encima. Sin esta comprobación, un `open` que llega tarde
-/// con el descriptor del fichero viejo borraría por nombre el plan recién
-/// aprobado, y el humano recibiría «tu plan caducó» sobre uno de hace segundos.
+/// Re-planning the same tree with the same options produces the SAME hash,
+/// and `finish` renames over it. Without this check, a late-arriving `open`
+/// with the old file's descriptor would delete by name the just-approved
+/// plan, and the human would get "your plan expired" over one from seconds
+/// ago.
 fn remove_if_same_inode(path: &Path, opened: &std::fs::Metadata) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt as _;
         match std::fs::symlink_metadata(path) {
             Ok(now) if now.dev() == opened.dev() && now.ino() == opened.ino() => {}
-            // Ya no está, o ya es otro fichero: en los dos casos no es nuestro.
+            // No longer there, or already another file: in both cases, not ours.
             _ => return,
         }
     }
     let _ = std::fs::remove_file(path);
 }
 
-/// ¿Se pasó del TTL? Un mtime en el FUTURO cuenta como fresco: un reloj que
-/// anda hacia atrás no es motivo para tirar un plan que alguien está mirando, y
-/// el techo lo pone igualmente el barrido de arranque.
+/// Did it pass the TTL? A mtime in the FUTURE counts as fresh: a clock
+/// running backward isn't a reason to throw out a plan someone is looking
+/// at, and the ceiling is set just the same by the startup sweep.
 fn expired(meta: &std::fs::Metadata) -> bool {
     let Ok(modified) = meta.modified() else {
         return false;
@@ -1461,22 +1501,22 @@ fn expired(meta: &std::fs::Metadata) -> bool {
         .is_ok_and(|age| age > Duration::from_millis(SYNC_PLAN_TTL_MS))
 }
 
-/// La última línea completa, leyendo hacia atrás por ventanas.
+/// The last complete line, reading backward in windows.
 ///
-/// El techo es [`SPOOL_MAX_RECORD`] **más dos**: para encontrar una línea de N
-/// bytes de contenido hace falta ver su propio fin de línea y el de la anterior,
-/// así que un techo de N justos rechazaría un terminador que `read_capped_line`
-/// sí acepta — y `encode` sí escribe.
+/// The ceiling is [`SPOOL_MAX_RECORD`] **plus two**: to find a line of N
+/// content bytes you need to see its own line ending and the previous
+/// one's, so a ceiling of exactly N would reject a terminator that
+/// `read_capped_line` DOES accept — and `encode` DOES write.
 fn read_last_line(file: &mut std::fs::File, len: u64) -> Result<Vec<u8>, SpoolError> {
     if len == 0 {
-        return Err(SpoolError::Malformed("spool vacío".to_owned()));
+        return Err(SpoolError::Malformed("empty spool".to_owned()));
     }
     let ceiling = SPOOL_MAX_RECORD as u64 + 2;
     let mut window: u64 = 8 * 1024;
     loop {
         let start = len.saturating_sub(window);
         let take = usize::try_from(len - start)
-            .map_err(|_| SpoolError::Malformed("spool inabarcable".to_owned()))?;
+            .map_err(|_| SpoolError::Malformed("unmanageable spool".to_owned()))?;
         file.seek(SeekFrom::Start(start))?;
         let mut buf = vec![0u8; take];
         file.read_exact(&mut buf).map_err(truncated)?;
@@ -1489,25 +1529,25 @@ fn read_last_line(file: &mut std::fs::File, len: u64) -> Result<Vec<u8>, SpoolEr
         }
         if window >= ceiling {
             return Err(SpoolError::Malformed(
-                "el último registro del spool pasa del tope".to_owned(),
+                "the spool's last record exceeds the cap".to_owned(),
             ));
         }
         window = (window * 2).min(ceiling);
     }
 }
 
-/// Un fichero que se acorta bajo nuestros pies es un spool roto —o sea un plan
-/// rancio—, no un fallo de I/O del daemon: `is_stale` distingue las dos cosas y
-/// el cliente merece la primera respuesta.
+/// A file that shrinks under our feet is a broken spool —i.e. a stale
+/// plan—, not a daemon I/O failure: `is_stale` tells the two apart and the
+/// client deserves the first answer.
 fn truncated(e: io::Error) -> SpoolError {
     if e.kind() == ErrorKind::UnexpectedEof {
-        SpoolError::Malformed("el spool se ha truncado mientras se leía".to_owned())
+        SpoolError::Malformed("the spool was truncated while being read".to_owned())
     } else {
         SpoolError::Io(e)
     }
 }
 
-/// Lee UNA línea con tope. `Ok(0)` es fin de fichero.
+/// Reads ONE capped line. `Ok(0)` is end of file.
 fn read_capped_line(reader: &mut impl BufRead, out: &mut Vec<u8>) -> Result<usize, SpoolError> {
     out.clear();
     let n = reader
@@ -1520,23 +1560,24 @@ fn read_capped_line(reader: &mut impl BufRead, out: &mut Vec<u8>) -> Result<usiz
     }
     if out.last() != Some(&b'\n') {
         return Err(SpoolError::Malformed(
-            "un registro sin fin de línea: spool truncado, o el registro pasa del tope".to_owned(),
+            "a record with no line ending: truncated spool, or the record exceeds the cap"
+                .to_owned(),
         ));
     }
     out.pop();
     Ok(n)
 }
 
-/// Borra los ficheros del directorio que cumplan `pred`, sobre los BYTES del
-/// nombre (regla 1: un nombre de fichero no es una `String`).
+/// Deletes the directory's files matching `pred`, over the name's BYTES
+/// (rule 1: a filename isn't a `String`).
 ///
-/// Un borrado que falla NO aborta el barrido y NO se calla: va a
-/// [`SweepReport::failed`], porque un contador de borrados a secas no distingue
-/// «no había nada» de «no se pudo con nada».
+/// A delete that fails does NOT abort the sweep and is NOT silent: it goes
+/// to [`SweepReport::failed`], because a bare delete counter doesn't tell
+/// "there was nothing" apart from "couldn't with anything".
 fn remove_matching(dir: &Path, pred: impl Fn(&[u8]) -> bool) -> Result<SweepReport, SpoolError> {
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
-        // Que no exista es lo normal en el primer arranque.
+        // Not existing is normal on first startup.
         Err(e) if e.kind() == ErrorKind::NotFound => return Ok(SweepReport::default()),
         Err(e) => return Err(e.into()),
     };
@@ -1553,28 +1594,29 @@ fn remove_matching(dir: &Path, pred: impl Fn(&[u8]) -> bool) -> Result<SweepRepo
             Err(e) => {
                 report.failed += 1;
                 tracing::warn!(path = %entry.path().display(), error = %e,
-                    "no se pudo borrar un spool");
+                    "could not delete a spool");
             }
         }
     }
     Ok(report)
 }
 
-/// Se lleva los planes CERRADOS que se pasaron de [`SYNC_PLAN_TTL_MS`].
+/// Takes the CLOSED plans that passed [`SYNC_PLAN_TTL_MS`].
 ///
-/// Lo llama [`Spool::create`], y ese es el único reloj que el TTL tiene: la
-/// comprobación de [`Spool::open`] solo alcanza a los planes que alguien abre, y
-/// un plan que nadie abre es justamente el que sobra. Sin esto, un cliente que
-/// planifica en bucle variando `include` —cada selección da otro digest, o sea
-/// otro fichero— llena el directorio de estado, que es donde vive `journal.db`.
+/// Called by [`Spool::create`], and that's the only clock the TTL has:
+/// [`Spool::open`]'s check only reaches plans someone opens, and a plan
+/// nobody opens is exactly the one that's excess. Without this, a client
+/// that plans in a loop varying `include` —each selection gives a different
+/// digest, i.e. a different file— fills up the state directory, which is
+/// where `journal.db` lives.
 ///
-/// **Solo `.jsonl`.** Un `.part` es un plan EN CURSO y puede tardar horas
-/// legítimamente sobre un árbol de red; de los huérfanos se encargan el `Drop`
-/// del writer y el barrido de arranque.
+/// **Only `.jsonl`.** A `.part` is a plan IN PROGRESS and can legitimately
+/// take hours over a network tree; orphaned ones are handled by the
+/// writer's `Drop` and the startup sweep.
 ///
-/// No devuelve nada y no falla hacia arriba: es mantenimiento oportunista, y que
-/// un fichero se resista no es motivo para no dejar planificar. El registro en
-/// memoria sigue siendo lo que decide qué es aplicable.
+/// Returns nothing and doesn't fail upward: it's opportunistic maintenance,
+/// and a file resisting isn't a reason to stop letting planning happen. The
+/// in-memory record is still what decides what's applicable.
 fn reap_expired(dir: &Path) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -1589,9 +1631,9 @@ fn reap_expired(dir: &Path) {
     }
 }
 
-/// Los bytes de un nombre de fichero. En unix son los de verdad; fuera, lo que
-/// se pueda — los nombres de spool son ASCII por construcción (dígitos, `-` y
-/// hex minúscula), así que ninguno se pierde.
+/// A filename's bytes. On unix they're the real ones; elsewhere, whatever
+/// can be had — spool names are ASCII by construction (digits, `-` and
+/// lowercase hex), so none get lost.
 fn name_bytes(name: &std::ffi::OsStr) -> &[u8] {
     #[cfg(unix)]
     {
@@ -1604,20 +1646,20 @@ fn name_bytes(name: &std::ffi::OsStr) -> &[u8] {
     }
 }
 
-/// Un registro serializado, con su fin de línea.
+/// A serialized record, with its line ending.
 ///
-/// El tope se comprueba AQUÍ y no solo al leer. Un terminador con 256 bloqueos
-/// de `rel` muy largos puede pasarse de [`SPOOL_MAX_RECORD`], y si se escribe,
-/// `finish` devuelve un hash y un `executable: true` para un plan que ningún
-/// `open` posterior podrá volver a leer: el cliente aprobaría un plan que
-/// responde «rancio» para siempre. Fallar al escribirlo pone el error donde se
-/// puede ver.
+/// The cap is checked HERE and not only on reading. A terminator with 256
+/// very long `rel` blockers can exceed [`SPOOL_MAX_RECORD`], and if it gets
+/// written, `finish` returns a hash and an `executable: true` for a plan no
+/// later `open` will ever be able to read again: the client would approve a
+/// plan that answers "stale" forever. Failing to write it puts the error
+/// where it can be seen.
 fn encode(record: &Record) -> Result<Vec<u8>, SpoolError> {
     let mut line = serde_json::to_vec(record)
-        .map_err(|e| SpoolError::Malformed(format!("no se pudo serializar el registro: {e}")))?;
+        .map_err(|e| SpoolError::Malformed(format!("could not serialize the record: {e}")))?;
     if line.len() > SPOOL_MAX_RECORD {
         return Err(SpoolError::Malformed(format!(
-            "un registro de {} bytes pasa del tope de {SPOOL_MAX_RECORD}",
+            "a {}-byte record exceeds the {SPOOL_MAX_RECORD}-byte cap",
             line.len()
         )));
     }
@@ -1629,7 +1671,7 @@ fn decode(line: &[u8]) -> Result<Record, SpoolError> {
     serde_json::from_slice(line).map_err(|e| SpoolError::Malformed(e.to_string()))
 }
 
-/// Un `spawn_blocking` que no vuelve es un fallo del runtime, no del plan.
+/// A `spawn_blocking` that never returns is a runtime failure, not the plan's.
 fn joined(e: tokio::task::JoinError) -> SpoolError {
     SpoolError::Io(io::Error::other(e))
 }
@@ -1648,8 +1690,8 @@ mod tests {
 
     fn opts() -> SyncOptions {
         SyncOptions {
-            source_root: VPath::parse("mem:///origen").expect("path"),
-            dest_root: VPath::parse("mem:///destino").expect("path"),
+            source_root: VPath::parse("mem:///source").expect("path"),
+            dest_root: VPath::parse("mem:///dest").expect("path"),
             mode: SyncMode::Update,
             on_unknown: OnUnknown::Copy,
             source_side: Side::Left,
@@ -1681,9 +1723,9 @@ mod tests {
         }
     }
 
-    /// Un plan de mesa con las cuatro formas que el ejecutor tiene que
-    /// distinguir: una copia, un directorio, una sobrescritura irreversible y
-    /// un salto. Con un nombre no UTF-8 dentro, que es lo que la regla 1 pide.
+    /// A tabletop plan with the four shapes the executor has to
+    /// distinguish: a copy, a directory, an irreversible overwrite and a
+    /// skip. With a non-UTF-8 name inside, which is what rule 1 asks for.
     fn steps_fixture() -> Vec<SyncStep> {
         vec![
             SyncStep {
@@ -1723,7 +1765,7 @@ mod tests {
         ]
     }
 
-    /// Escribe un plan entero y devuelve su hash.
+    /// Writes a whole plan and returns its hash.
     async fn write_plan(spool: &Spool, conn_id: u64, steps: &[SyncStep]) -> PlanHash {
         let mut w = spool
             .create(conn_id, &opts(), &compare_opts())
@@ -1752,13 +1794,12 @@ mod tests {
         v
     }
 
-    /// Envejece el mtime de un fichero. `std::fs::FileTimes` en vez de una
-    /// dependencia nueva.
+    /// Ages a file's mtime. `std::fs::FileTimes` instead of a new dependency.
     fn age(path: &Path, ms: u64) {
         let f = std::fs::OpenOptions::new()
             .write(true)
             .open(path)
-            .expect("abrir para envejecer");
+            .expect("open to age it");
         let when = SystemTime::now() - Duration::from_millis(ms);
         f.set_times(std::fs::FileTimes::new().set_modified(when))
             .expect("set_times");
@@ -1791,7 +1832,7 @@ mod tests {
         assert_eq!(
             read,
             steps_fixture(),
-            "byte a byte, el nombre hostil incluido"
+            "byte for byte, hostile name included"
         );
     }
 
@@ -1802,15 +1843,16 @@ mod tests {
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         assert!(
             matches!(spool.open(2, &hash).await, Err(SpoolError::NotFound)),
-            "nadie aplica un plan que no produjo, ni conociendo su hash"
+            "nobody applies a plan they didn't produce, not even knowing its hash"
         );
-        assert!(spool.open(1, &hash).await.is_ok(), "el dueño sí");
+        assert!(spool.open(1, &hash).await.is_ok(), "the owner does");
     }
 
     #[tokio::test]
     async fn a_spool_renamed_into_another_connection_still_does_not_open() {
-        // Dos barreras, y la de memoria salta primero: este proceso no emitió
-        // ningún plan para la conexión 2, así que ni se mira el disco.
+        // Two barriers, and the memory one trips first: this process never
+        // emitted any plan for connection 2, so the disk isn't even looked
+        // at.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
@@ -1819,15 +1861,16 @@ mod tests {
             spool.dir().join(file_name(2, &hash)),
         )
         .expect("rename");
-        let e = spool.open(2, &hash).await.expect_err("rehusado");
+        let e = spool.open(2, &hash).await.expect_err("refused");
         assert!(matches!(e, SpoolError::NotFound));
         assert!(e.is_stale());
     }
 
     #[test]
     fn the_second_barrier_is_the_file_itself_saying_another_connection() {
-        // Y si la de memoria no estuviera: la cabecera lleva el `conn_id` y el
-        // terminador el hash, y `open` los compara con los del NOMBRE.
+        // And if the memory one weren't there: the header carries `conn_id`
+        // and the terminator the hash, and `open` compares them against the
+        // NAME's.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -1841,84 +1884,84 @@ mod tests {
         )
         .expect("rename");
         let e =
-            open_blocking(&spool.dir().join(file_name(2, &hash)), 2, &hash).expect_err("rehusado");
+            open_blocking(&spool.dir().join(file_name(2, &hash)), 2, &hash).expect_err("refused");
         assert!(matches!(e, SpoolError::Malformed(_)), "{e:?}");
     }
 
     #[tokio::test]
     async fn a_plan_this_process_did_not_issue_cannot_be_opened() {
-        // La forja: `PlanHasher` no lleva clave, así que quien pueda escribir en
-        // el directorio puede escribir un plan Y calcular su digest. Lo que lo
-        // impide es que este proceso no lo emitió.
+        // The forgery: `PlanHasher` carries no key, so whoever can write to
+        // the directory can write a plan AND compute its digest. What
+        // prevents it is that this process never emitted it.
         let dir = tempfile::tempdir().expect("tmp");
-        let escritor = Spool::new(dir.path());
-        let hash = write_plan(&escritor, 1, &steps_fixture()).await;
+        let writer = Spool::new(dir.path());
+        let hash = write_plan(&writer, 1, &steps_fixture()).await;
         assert!(
-            escritor.open(1, &hash).await.is_ok(),
-            "el que lo emitió, sí"
+            writer.open(1, &hash).await.is_ok(),
+            "whoever emitted it, yes"
         );
 
-        // Otro proceso (otro `Spool`) sobre el MISMO directorio: el fichero está
-        // ahí, con su nombre correcto y su digest correcto.
-        let ajeno = Spool::new(dir.path());
+        // Another process (another `Spool`) over the SAME directory: the
+        // file is there, with its correct name and its correct digest.
+        let stranger = Spool::new(dir.path());
         assert!(
-            spool_files(&ajeno).len() == 1,
-            "el fichero sigue en el disco"
+            spool_files(&stranger).len() == 1,
+            "the file is still on disk"
         );
         assert!(matches!(
-            ajeno.open(1, &hash).await,
+            stranger.open(1, &hash).await,
             Err(SpoolError::NotFound)
         ));
     }
 
     #[tokio::test]
     async fn a_plan_can_only_be_applied_once() {
-        // Dos `sync.apply` del mismo hash ejecutarían el plan dos veces contra
-        // el mismo destino, con dos lotes del journal.
+        // Two `sync.apply`s of the same hash would run the plan twice
+        // against the same destination, with two journal batches.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         assert!(spool.open(1, &hash).await.is_ok());
         assert!(
             matches!(spool.open(1, &hash).await, Err(SpoolError::NotFound)),
-            "el derecho a aplicar se consume al abrir"
+            "the right to apply is consumed on opening"
         );
     }
 
     #[tokio::test]
     async fn a_tampered_step_is_caught_by_the_recomputed_digest() {
-        // El resumen dice un hash, pero eso es el fichero hablando de sí mismo.
+        // The summary states a hash, but that's the file talking about itself.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         let path = spool.dir().join(file_name(1, &hash));
-        let text = std::fs::read_to_string(&path).expect("leer");
-        // Una copia pasa a ser una sobrescritura: mismo tamaño de fichero,
-        // resumen intacto, otra cosa completamente distinta sobre el destino.
-        let tocado = text.replacen("\"kind\":\"copy\"", "\"kind\":\"overwrite\"", 1);
-        assert_ne!(tocado, text, "había un paso que tocar");
-        std::fs::write(&path, tocado).expect("escribir");
+        let text = std::fs::read_to_string(&path).expect("read");
+        // A copy becomes an overwrite: same file size, summary intact,
+        // something completely different over the destination.
+        let touched = text.replacen("\"kind\":\"copy\"", "\"kind\":\"overwrite\"", 1);
+        assert_ne!(touched, text, "there was a step to touch");
+        std::fs::write(&path, touched).expect("write");
 
-        let e = spool.open(1, &hash).await.expect_err("rehusado");
+        let e = spool.open(1, &hash).await.expect_err("refused");
         assert!(matches!(e, SpoolError::Malformed(_)), "{e:?}");
         assert!(e.is_stale());
     }
 
     #[tokio::test]
     async fn a_step_of_an_unknown_kind_on_disk_is_refused_not_degraded() {
-        // En el wire, una clase desconocida degrada para no matar un lote de
-        // 256. En un fichero que escribimos nosotros hace minutos no hay
-        // compatibilidad que defender: solo puede ser corrupción.
+        // On the wire, an unknown class degrades so as not to kill a batch
+        // of 256. In a file we wrote ourselves minutes ago there's no
+        // compatibility to defend: it can only be corruption.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         let path = spool.dir().join(file_name(1, &hash));
-        let text = std::fs::read_to_string(&path).expect("leer");
+        let text = std::fs::read_to_string(&path).expect("read");
         std::fs::write(
             &path,
             text.replacen("\"kind\":\"copy\"", "\"kind\":\"teleport\"", 1),
         )
-        .expect("escribir");
+        .expect("write");
         assert!(matches!(
             spool.open(1, &hash).await,
             Err(SpoolError::Malformed(_))
@@ -1927,47 +1970,49 @@ mod tests {
 
     #[tokio::test]
     async fn records_after_the_terminator_are_refused() {
-        // Con dos terminadores, `open` valida el ÚLTIMO y `steps()` pararía en
-        // el primero: el resumen aprobado y el plan ejecutado serían dos cosas.
+        // With two terminators, `open` validates the LAST one and
+        // `steps()` would stop at the first: the approved summary and the
+        // executed plan would be two different things.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         let path = spool.dir().join(file_name(1, &hash));
-        let mut text = std::fs::read_to_string(&path).expect("leer");
-        let terminador = text.lines().last().expect("terminador").to_owned();
-        text.push_str(&terminador);
+        let mut text = std::fs::read_to_string(&path).expect("read");
+        let terminator = text.lines().last().expect("terminator").to_owned();
+        text.push_str(&terminator);
         text.push('\n');
-        std::fs::write(&path, text).expect("escribir");
+        std::fs::write(&path, text).expect("write");
 
-        // Y se rehúsa al ABRIR, no a mitad de la ejecución: con dos
-        // terminadores iguales el digest cuadraría, así que la comprobación no
-        // puede ser solo la del digest.
-        let e = spool.open(1, &hash).await.expect_err("rehusado");
+        // And it's refused on OPENING, not mid-execution: with two identical
+        // terminators the digest would match, so the check cannot be the
+        // digest one alone.
+        let e = spool.open(1, &hash).await.expect_err("refused");
         assert!(matches!(e, SpoolError::Malformed(_)), "{e:?}");
         assert!(e.is_stale());
     }
 
     #[tokio::test]
     async fn a_second_different_terminator_cannot_swap_the_summary() {
-        // El caso con dientes: `open` valida el ÚLTIMO terminador y `steps()`
-        // pararía en el primero. El digest recalculado lo caza porque solo cubre
-        // los pasos de antes del primero.
+        // The case with teeth: `open` validates the LAST terminator and
+        // `steps()` would stop at the first. The recomputed digest catches
+        // it because it only covers the steps before the first one.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
-        let otro = write_plan(&spool, 2, &[copy_step(9, "otro.txt", 1)]).await;
+        let other = write_plan(&spool, 2, &[copy_step(9, "other.txt", 1)]).await;
         let path = spool.dir().join(file_name(1, &hash));
 
-        let mio = std::fs::read_to_string(&path).expect("leer");
-        let ajeno = std::fs::read_to_string(spool.dir().join(file_name(2, &otro))).expect("leer");
-        let cabeza: Vec<&str> = ajeno.lines().collect();
-        let mut cosido: Vec<&str> = mio.lines().collect();
-        cosido.push(cabeza.last().expect("terminador ajeno"));
-        std::fs::write(&path, cosido.join("\n") + "\n").expect("escribir");
+        let mine = std::fs::read_to_string(&path).expect("read");
+        let stranger =
+            std::fs::read_to_string(spool.dir().join(file_name(2, &other))).expect("read");
+        let head: Vec<&str> = stranger.lines().collect();
+        let mut stitched: Vec<&str> = mine.lines().collect();
+        stitched.push(head.last().expect("stranger's terminator"));
+        std::fs::write(&path, stitched.join("\n") + "\n").expect("write");
 
-        // El nombre sigue siendo el del plan aprobado, pero la última línea ya
-        // no lo es: ni el hash del nombre cuadra con el terminador nuevo.
-        let e = spool.open(1, &hash).await.expect_err("rehusado");
+        // The name is still the approved plan's, but the last line no
+        // longer is: not even the name's hash matches the new terminator.
+        let e = spool.open(1, &hash).await.expect_err("refused");
         assert!(matches!(e, SpoolError::Malformed(_)), "{e:?}");
     }
 
@@ -1977,16 +2022,17 @@ mod tests {
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         let path = spool.dir().join(file_name(1, &hash));
-        let text = std::fs::read_to_string(&path).expect("leer");
-        // Se retoca contra `SPOOL_FORMAT` y no contra un número literal: el
-        // formato sube cada vez que el registro de un paso cambia de forma, y
-        // este test es sobre CUALQUIER otra versión, no sobre la siguiente.
-        let mio = format!("\"format\":{SPOOL_FORMAT}");
-        let ajeno = format!("\"format\":{}", SPOOL_FORMAT + 1);
-        std::fs::write(&path, text.replacen(&mio, &ajeno, 1)).expect("escribir");
-        let e = spool.open(1, &hash).await.expect_err("rehusado");
+        let text = std::fs::read_to_string(&path).expect("read");
+        // Patched against `SPOOL_FORMAT` and not a literal number: the
+        // format goes up every time a step's record changes shape, and
+        // this test is about ANY other version, not specifically the next
+        // one.
+        let mine = format!("\"format\":{SPOOL_FORMAT}");
+        let other = format!("\"format\":{}", SPOOL_FORMAT + 1);
+        std::fs::write(&path, text.replacen(&mine, &other, 1)).expect("write");
+        let e = spool.open(1, &hash).await.expect_err("refused");
         assert!(matches!(e, SpoolError::Malformed(_)), "{e:?}");
-        assert!(e.is_stale(), "otra versión del formato es un plan rancio");
+        assert!(e.is_stale(), "another format version is a stale plan");
     }
 
     #[tokio::test]
@@ -1995,11 +2041,11 @@ mod tests {
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         let path = spool.dir().join(file_name(1, &hash));
-        let text = std::fs::read_to_string(&path).expect("leer");
-        let cabecera = text.lines().next().expect("cabecera").to_owned();
-        let mut lineas: Vec<&str> = text.lines().collect();
-        lineas.insert(2, &cabecera);
-        std::fs::write(&path, lineas.join("\n") + "\n").expect("escribir");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let header = text.lines().next().expect("header").to_owned();
+        let mut lines: Vec<&str> = text.lines().collect();
+        lines.insert(2, &header);
+        std::fs::write(&path, lines.join("\n") + "\n").expect("write");
         assert!(matches!(
             spool.open(1, &hash).await,
             Err(SpoolError::Malformed(_))
@@ -2008,9 +2054,9 @@ mod tests {
 
     #[tokio::test]
     async fn an_interrupted_plan_leaves_nothing_and_yields_no_hash() {
-        // El bucle que se lleva un `Some(Err(_))` por delante cerraría un plan
-        // a un tercio con un hash perfectamente válido. Por eso `finish` exige
-        // decir cómo terminó el flujo.
+        // The loop that lets a `Some(Err(_))` through would close a plan
+        // that's only a third done with a perfectly valid hash. That's why
+        // `finish` requires stating how the stream ended.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let mut w = spool
@@ -2029,7 +2075,7 @@ mod tests {
             w.finish(PlanOutcome::Interrupted).await,
             Err(SpoolError::Interrupted)
         ));
-        assert!(spool_files(&spool).is_empty(), "ni el .part");
+        assert!(spool_files(&spool).is_empty(), "not even the .part");
     }
 
     #[tokio::test]
@@ -2048,14 +2094,14 @@ mod tests {
             .await
             .expect("push");
         }
-        assert!(spool_files(&spool).is_empty(), "el Drop se lo lleva");
+        assert!(spool_files(&spool).is_empty(), "Drop takes it");
     }
 
     #[test]
     fn dropping_a_writer_outside_a_runtime_also_removes_its_part() {
-        // El `Drop` borra SÍNCRONAMENTE a propósito: `Handle::spawn_blocking`
-        // entra en pánico si el runtime se está apagando, y un pánico en un
-        // `Drop` durante un desenrollado aborta el proceso.
+        // `Drop` deletes SYNCHRONOUSLY on purpose: `Handle::spawn_blocking`
+        // panics if the runtime is shutting down, and a panic in a `Drop`
+        // during unwinding aborts the process.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -2065,8 +2111,8 @@ mod tests {
         let w = rt
             .block_on(spool.create(1, &opts(), &compare_opts()))
             .expect("create");
-        assert_eq!(spool_files(&spool).len(), 1, "el .part está");
-        drop(rt); // el runtime se va ANTES que el writer
+        assert_eq!(spool_files(&spool).len(), 1, "the .part is there");
+        drop(rt); // the runtime leaves BEFORE the writer
         drop(w);
         assert!(spool_files(&spool).is_empty());
     }
@@ -2078,8 +2124,8 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         write_plan(&spool, 1, &steps_fixture()).await;
-        // Un directorio sin permiso de escritura: el fichero está y no se deja
-        // desenlazar.
+        // A directory with no write permission: the file is there and
+        // won't unlink.
         std::fs::set_permissions(spool.dir(), std::fs::Permissions::from_mode(0o500))
             .expect("chmod");
         let report = spool.sweep().await.expect("sweep");
@@ -2088,56 +2134,56 @@ mod tests {
         assert_eq!(
             (report.removed, report.failed),
             (0, 1),
-            "un contador de borrados a secas habría dicho 0 y parecido limpio"
+            "a bare delete counter would have said 0 and looked clean"
         );
         assert!(!report.is_clean());
     }
 
-    // ------------------------------------------------- la lectura hacia atrás
+    // ------------------------------------------------------ the backward read
 
-    /// Escribe `lineas` en un fichero temporal y devuelve su última línea según
+    /// Writes `lines` to a temp file and returns its last line according to
     /// [`read_last_line`].
-    fn last_line_of(lineas: &[String]) -> Result<Vec<u8>, SpoolError> {
+    fn last_line_of(lines: &[String]) -> Result<Vec<u8>, SpoolError> {
         let dir = tempfile::tempdir().expect("tmp");
         let path = dir.path().join("f");
-        let mut cuerpo = String::new();
-        for l in lineas {
-            cuerpo.push_str(l);
-            cuerpo.push('\n');
+        let mut body = String::new();
+        for l in lines {
+            body.push_str(l);
+            body.push('\n');
         }
-        std::fs::write(&path, &cuerpo).expect("escribir");
-        let mut f = std::fs::File::open(&path).expect("abrir");
+        std::fs::write(&path, &body).expect("write");
+        let mut f = std::fs::File::open(&path).expect("open");
         let len = f.metadata().expect("meta").len();
         read_last_line(&mut f, len)
     }
 
     #[test]
     fn the_backwards_read_finds_the_last_line_whatever_its_size() {
-        // La ventana empieza en 8 KiB y se dobla. Estos casos la obligan a
-        // doblar una vez, dos, y ninguna.
-        for tam in [1usize, 4 * 1024, 12 * 1024, 20 * 1024] {
-            let ultima = "z".repeat(tam);
-            let leidas = last_line_of(&["a".to_owned(), "bb".to_owned(), ultima.clone()])
-                .expect("última línea");
-            assert_eq!(leidas, ultima.as_bytes(), "con una última línea de {tam} B");
+        // The window starts at 8 KiB and doubles. These cases force it to
+        // double once, twice, and not at all.
+        for size in [1usize, 4 * 1024, 12 * 1024, 20 * 1024] {
+            let last = "z".repeat(size);
+            let read =
+                last_line_of(&["a".to_owned(), "bb".to_owned(), last.clone()]).expect("last line");
+            assert_eq!(read, last.as_bytes(), "with a last line of {size} B");
         }
     }
 
     #[test]
     fn the_backwards_read_handles_a_single_line_and_a_boundary() {
-        // Un fichero de una sola línea: no hay salto anterior que encontrar.
-        let sola = "solo".to_owned();
+        // A single-line file: there's no earlier newline to find.
+        let only = "only".to_owned();
         assert_eq!(
-            last_line_of(std::slice::from_ref(&sola)).expect("línea"),
-            sola.as_bytes()
+            last_line_of(std::slice::from_ref(&only)).expect("line"),
+            only.as_bytes()
         );
-        // Y una última línea que empieza JUSTO en el borde de la primera
-        // ventana: 8 KiB de contenido previo + su salto.
-        let previa = "p".repeat(8 * 1024 - 1);
-        let ultima = "u".repeat(16);
+        // And a last line that starts RIGHT at the first window's edge: 8
+        // KiB of prior content + its newline.
+        let prior = "p".repeat(8 * 1024 - 1);
+        let last = "u".repeat(16);
         assert_eq!(
-            last_line_of(&[previa, ultima.clone()]).expect("línea"),
-            ultima.as_bytes()
+            last_line_of(&[prior, last.clone()]).expect("line"),
+            last.as_bytes()
         );
     }
 
@@ -2145,11 +2191,11 @@ mod tests {
     fn a_last_record_over_the_cap_is_malformed_not_an_oom() {
         let dir = tempfile::tempdir().expect("tmp");
         let path = dir.path().join("f");
-        let mut cuerpo = vec![b'a', b'\n'];
-        cuerpo.extend(std::iter::repeat_n(b'z', SPOOL_MAX_RECORD + 8));
-        cuerpo.push(b'\n');
-        std::fs::write(&path, &cuerpo).expect("escribir");
-        let mut f = std::fs::File::open(&path).expect("abrir");
+        let mut body = vec![b'a', b'\n'];
+        body.extend(std::iter::repeat_n(b'z', SPOOL_MAX_RECORD + 8));
+        body.push(b'\n');
+        std::fs::write(&path, &body).expect("write");
+        let mut f = std::fs::File::open(&path).expect("open");
         let len = f.metadata().expect("meta").len();
         assert!(matches!(
             read_last_line(&mut f, len),
@@ -2159,29 +2205,29 @@ mod tests {
 
     #[test]
     fn a_record_the_reader_could_never_accept_fails_when_it_is_written() {
-        // Un terminador con bloqueos de `rel` enormes se pasa del tope. Si se
-        // escribiera, `finish` daría un hash para un plan que ningún `open`
-        // podría volver a leer: rancio para siempre, sin recuperación.
-        let enorme: Vec<SyncBlocker> = (0..SYNC_MAX_BLOCKERS_REPORTED)
+        // A terminator with huge `rel` blockers exceeds the cap. If it were
+        // written, `finish` would give a hash for a plan no `open` could
+        // ever read again: stale forever, with no recovery.
+        let huge: Vec<SyncBlocker> = (0..SYNC_MAX_BLOCKERS_REPORTED)
             .map(|i| SyncBlocker {
                 rel: rel(&format!("{}{i}", "x".repeat(60_000))),
                 kind: SyncBlockerKind::TypeMismatchDir,
                 side: Some(Side::Right),
             })
             .collect();
-        let gordo = Record::End(SpoolSummary {
+        let fat = Record::End(SpoolSummary {
             plan_hash: PlanHash::parse(&"a".repeat(64)).expect("hash"),
             counts: SyncCounts::default(),
-            blockers: enorme,
+            blockers: huge,
             blockers_total: SYNC_MAX_BLOCKERS_REPORTED as u64,
             executable: false,
         });
-        assert!(matches!(encode(&gordo), Err(SpoolError::Malformed(_))));
+        assert!(matches!(encode(&fat), Err(SpoolError::Malformed(_))));
     }
 
     #[tokio::test]
     async fn an_unfinished_spool_cannot_be_opened() {
-        // Un daemon que se muere a mitad no deja nada que parezca aprobable.
+        // A daemon that dies halfway leaves nothing that looks approvable.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let hasher = PlanHasher::new(&opts(), &compare_opts());
@@ -2196,9 +2242,9 @@ mod tests {
         })
         .await
         .expect("push");
-        std::mem::forget(w); // como un `kill -9`: ni `finish` ni `Drop`.
+        std::mem::forget(w); // like a `kill -9`: neither `finish` nor `Drop`.
 
-        // El hash que ese plan HABRÍA tenido: ni con él se abre.
+        // The hash that plan WOULD HAVE had: it doesn't open even with it.
         let mut h = hasher;
         h.step(&step);
         let hash = h.finish();
@@ -2223,7 +2269,7 @@ mod tests {
         .await
         .expect("push");
         w.abandon().await;
-        assert!(spool_files(&spool).is_empty(), "ni siquiera el .part");
+        assert!(spool_files(&spool).is_empty(), "not even the .part");
     }
 
     #[tokio::test]
@@ -2239,7 +2285,7 @@ mod tests {
         ));
         assert!(
             spool_files(&spool).is_empty(),
-            "open borra el caducado según lo encuentra"
+            "open deletes the expired one as it finds it"
         );
     }
 
@@ -2257,9 +2303,9 @@ mod tests {
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let a = write_plan(&spool, 1, &steps_fixture()).await;
-        let b = write_plan(&spool, 2, &[copy_step(1, "otro.txt", 3)]).await;
-        // Y un `.part` de la misma conexión, que también es suyo.
-        let _abierto = spool
+        let b = write_plan(&spool, 2, &[copy_step(1, "other.txt", 3)]).await;
+        // And a `.part` from the same connection, which is also theirs.
+        let _open = spool
             .create(1, &opts(), &compare_opts())
             .await
             .expect("create");
@@ -2272,39 +2318,37 @@ mod tests {
 
     #[tokio::test]
     async fn dropping_connection_1_does_not_touch_connection_12() {
-        // `"1-"` no es prefijo de `"12-…"`, y conviene que siga sin serlo.
+        // `"1-"` is not a prefix of `"12-…"`, and it's worth keeping it that way.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
-        let uno = write_plan(&spool, 1, &steps_fixture()).await;
-        let doce = write_plan(&spool, 12, &steps_fixture()).await;
+        let one = write_plan(&spool, 1, &steps_fixture()).await;
+        let twelve = write_plan(&spool, 12, &steps_fixture()).await;
         assert_eq!(spool.drop_connection(1).await.expect("drop").removed, 1);
         assert!(matches!(
-            spool.open(1, &uno).await,
+            spool.open(1, &one).await,
             Err(SpoolError::NotFound)
         ));
-        assert!(spool.open(12, &doce).await.is_ok());
+        assert!(spool.open(12, &twelve).await.is_ok());
     }
 
     #[tokio::test]
     async fn the_startup_sweep_collects_everything_a_crash_left_behind() {
-        // Fresco o caducado da igual: al arrancar no hay ninguna conexión viva,
-        // así que TODO spool que exista es de una conexión muerta — y los
-        // `conn_id` vuelven a empezar por cero, así que dejar uno fresco sería
-        // dejarlo a nombre de un id que el daemon está a punto de repartir.
+        // Fresh or expired makes no difference: at startup there's no live
+        // connection at all, so EVERY spool that exists belongs to a dead
+        // connection — and `conn_id`s start over from zero, so leaving a
+        // fresh one would leave it under the name of an id the daemon is
+        // about to hand out.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
-        let viejo = write_plan(&spool, 1, &steps_fixture()).await;
-        let fresco = write_plan(&spool, 2, &steps_fixture()).await;
-        age(
-            &spool.dir().join(file_name(1, &viejo)),
-            SYNC_PLAN_TTL_MS + 1,
-        );
+        let old = write_plan(&spool, 1, &steps_fixture()).await;
+        let fresh = write_plan(&spool, 2, &steps_fixture()).await;
+        age(&spool.dir().join(file_name(1, &old)), SYNC_PLAN_TTL_MS + 1);
 
         let report = spool.sweep().await.expect("sweep");
         assert_eq!((report.removed, report.failed), (2, 0));
         assert!(report.is_clean());
         assert!(matches!(
-            spool.open(2, &fresco).await,
+            spool.open(2, &fresh).await,
             Err(SpoolError::NotFound)
         ));
         assert!(spool_files(&spool).is_empty());
@@ -2327,7 +2371,7 @@ mod tests {
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         spool.remove(1, &hash).await.expect("remove");
-        spool.remove(1, &hash).await.expect("remove otra vez");
+        spool.remove(1, &hash).await.expect("remove again");
         assert!(matches!(
             spool.open(1, &hash).await,
             Err(SpoolError::NotFound)
@@ -2336,8 +2380,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_plan_bigger_than_the_write_buffer_round_trips() {
-        // Cruza el flush de 64 KiB en escritura y el trozo de 64 KiB en lectura
-        // varias veces: es donde un plan de medio millón de pasos vive.
+        // Crosses the 64 KiB write flush and the 64 KiB read chunk several
+        // times: this is where a half-million-step plan lives.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let steps: Vec<SyncStep> = (0..4_000)
@@ -2364,7 +2408,7 @@ mod tests {
         let mut s = Box::pin(spool.open(1, &hash).await.expect("open").steps());
         assert!(s.next().await.is_some());
         assert!(s.next().await.is_none());
-        assert!(s.next().await.is_none(), "un select! con tick es legal");
+        assert!(s.next().await.is_none(), "a select! with a tick is legal");
     }
 
     #[tokio::test]
@@ -2391,11 +2435,7 @@ mod tests {
         assert_eq!(summary.blockers_total, total as u64);
 
         let reader = spool.open(1, &summary.plan_hash).await.expect("open");
-        assert_eq!(
-            reader.summary(),
-            &summary,
-            "lo que se lee es lo que se cerró"
-        );
+        assert_eq!(reader.summary(), &summary, "what's read is what was closed");
         assert!(
             reader
                 .steps()
@@ -2408,8 +2448,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_stored_hash_is_the_hash_of_the_items_that_were_spooled() {
-        // El embudo es uno solo: no se puede hashear una secuencia y guardar
-        // otra. Aquí se comprueba contra el hasher desnudo.
+        // There's only one funnel: one sequence cannot be hashed and
+        // another one stored. Checked here against the bare hasher.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let items: Vec<PlanItem> = steps_fixture()
@@ -2435,16 +2475,16 @@ mod tests {
 
     #[tokio::test]
     async fn a_plan_hashed_with_other_compare_options_is_another_plan() {
-        // Lo que la tarea 6 dejó dicho: `hash` encendido no es lo mismo que
-        // solo tamaño aunque los pasos salgan iguales. Por eso las opciones de
-        // comparación van en la cabecera y en la semilla del hash.
+        // What task 6 established: `hash` on isn't the same as size only
+        // even if the steps come out equal. That's why the compare options
+        // go into the header and the hash's seed.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let a = write_plan(&spool, 1, &steps_fixture()).await;
 
-        let mut otras = compare_opts();
-        otras.mtime_tolerance_ms = 5_000;
-        let mut w = spool.create(1, &opts(), &otras).await.expect("create");
+        let mut other = compare_opts();
+        other.mtime_tolerance_ms = 5_000;
+        let mut w = spool.create(1, &opts(), &other).await.expect("create");
         for s in steps_fixture() {
             w.push(&PlanItem::Step {
                 step: s,
@@ -2458,26 +2498,26 @@ mod tests {
             .await
             .expect("finish")
             .plan_hash;
-        assert_ne!(a, b, "mismos pasos, otra pregunta, otro plan");
+        assert_ne!(a, b, "same steps, another question, another plan");
     }
 
     #[tokio::test]
     async fn a_spool_from_a_binary_that_did_not_know_a_counter_is_stale_not_fatal() {
-        // Los contadores nuevos NO llevan `serde(default)` a propósito: un cero
-        // silencioso convertiría «340 ficheros sin medir» en «ninguno». La
-        // respuesta correcta es «plan rancio», no una Task muerta.
+        // The new counters deliberately carry NO `serde(default)`: a silent
+        // zero would turn "340 unmeasured files" into "none". The correct
+        // answer is "stale plan", not a dead Task.
         let dir = tempfile::tempdir().expect("tmp");
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         let path = spool.dir().join(file_name(1, &hash));
-        let text = std::fs::read_to_string(&path).expect("leer");
-        let mutilado = text.replace(",\"unmeasured_steps\":0", "");
-        assert_ne!(mutilado, text, "el contador estaba donde se cree");
-        std::fs::write(&path, mutilado).expect("escribir");
+        let text = std::fs::read_to_string(&path).expect("read");
+        let mutilated = text.replace(",\"unmeasured_steps\":0", "");
+        assert_ne!(mutilated, text, "the counter was where it's believed to be");
+        std::fs::write(&path, mutilated).expect("write");
 
-        let e = spool.open(1, &hash).await.expect_err("no se lee");
+        let e = spool.open(1, &hash).await.expect_err("doesn't read");
         assert!(matches!(e, SpoolError::Malformed(_)));
-        assert!(e.is_stale(), "se responde PlanStale, no un fallo interno");
+        assert!(e.is_stale(), "answers PlanStale, not an internal failure");
     }
 
     #[tokio::test]
@@ -2486,15 +2526,15 @@ mod tests {
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
         let path = spool.dir().join(file_name(1, &hash));
-        let text = std::fs::read_to_string(&path).expect("leer");
-        let mut sin_final = String::new();
+        let text = std::fs::read_to_string(&path).expect("read");
+        let mut no_ending = String::new();
         for l in text.lines().take(text.lines().count() - 1) {
-            sin_final.push_str(l);
-            sin_final.push('\n');
+            no_ending.push_str(l);
+            no_ending.push('\n');
         }
-        std::fs::write(&path, sin_final).expect("escribir");
+        std::fs::write(&path, no_ending).expect("write");
 
-        let e = spool.open(1, &hash).await.expect_err("no se lee");
+        let e = spool.open(1, &hash).await.expect_err("doesn't read");
         assert!(e.is_stale());
     }
 
@@ -2529,7 +2569,7 @@ mod tests {
                 .mode()
                 & 0o777,
             0o700,
-            "se aprieta ANTES de crear el primer fichero dentro"
+            "it's tightened BEFORE the first file inside is created"
         );
     }
 
@@ -2537,15 +2577,15 @@ mod tests {
     #[tokio::test]
     async fn a_spool_directory_that_is_a_symlink_is_refused() {
         let dir = tempfile::tempdir().expect("tmp");
-        let otro = tempfile::tempdir().expect("tmp2");
+        let other = tempfile::tempdir().expect("tmp2");
         let spool = Spool::new(dir.path());
-        std::os::unix::fs::symlink(otro.path(), spool.dir()).expect("symlink");
+        std::os::unix::fs::symlink(other.path(), spool.dir()).expect("symlink");
         assert!(spool.create(1, &opts(), &compare_opts()).await.is_err());
     }
 
-    /// El único test que no puede ser una tautología: hace pasar una
-    /// comparación DE VERDAD por el planificador y por el spool, y busca en los
-    /// bytes del fichero el contenido de los ficheros comparados.
+    /// The one test that cannot be a tautology: it runs a REAL comparison
+    /// through the planner and the spool, and searches the file's bytes for
+    /// the content of the compared files.
     #[tokio::test]
     async fn a_spool_holds_no_content_only_paths_and_verdicts() {
         use futures::StreamExt as _;
@@ -2553,11 +2593,11 @@ mod tests {
         use norte_vfs::Provider as _;
         use tokio_util::sync::CancellationToken;
 
-        const SECRETO: &[u8] = b"clave-de-la-caja-fuerte-4815162342";
+        const SECRET: &[u8] = b"safe-combination-4815162342";
 
         async fn seed(mem: &norte_testkit::MemProvider, name: &[u8], content: &[u8]) {
             let at = norte_testkit::MemProvider::root()
-                .join(norte_proto::Segment::new(name).expect("segmento"));
+                .join(norte_proto::Segment::new(name).expect("segment"));
             let mut sink = mem.write(&at).await.expect("write");
             sink.write(bytes::Bytes::copy_from_slice(content))
                 .await
@@ -2565,28 +2605,28 @@ mod tests {
             sink.commit().await.expect("commit");
         }
 
-        let origen = norte_testkit::MemProvider::new();
-        let destino = norte_testkit::MemProvider::new();
-        seed(&origen, b"secretos.txt", SECRETO).await;
-        seed(&destino, b"secretos.txt", b"otra cosa distinta").await;
-        seed(&origen, b"solo-aqui.txt", SECRETO).await;
+        let source = norte_testkit::MemProvider::new();
+        let dest = norte_testkit::MemProvider::new();
+        seed(&source, b"secrets.txt", SECRET).await;
+        seed(&dest, b"secrets.txt", b"something else entirely").await;
+        seed(&source, b"only-here.txt", SECRET).await;
 
-        let raiz = norte_testkit::MemProvider::root();
+        let root = norte_testkit::MemProvider::root();
         let sides =
-            norte_compare::Sides::from_capabilities(origen.capabilities(), destino.capabilities());
+            norte_compare::Sides::from_capabilities(source.capabilities(), dest.capabilities());
         let rows = compare(
-            &origen,
-            &raiz,
-            &destino,
-            &raiz,
+            &source,
+            &root,
+            &dest,
+            &root,
             CompareOptions::cheap(),
             sides,
             Vec::new(),
             CancellationToken::new(),
         );
         let plan_opts = SyncOptions {
-            source_root: raiz.clone(),
-            dest_root: raiz,
+            source_root: root.clone(),
+            dest_root: root,
             ..opts()
         };
 
@@ -2603,34 +2643,35 @@ mod tests {
         let summary = w.finish(PlanOutcome::Ended).await.expect("finish");
         assert!(
             summary.counts.copy + summary.counts.overwrite >= 2,
-            "hubo plan"
+            "there was a plan"
         );
 
         let bytes = std::fs::read(spool.dir().join(file_name(1, &summary.plan_hash)))
-            .expect("leer el spool");
+            .expect("read the spool");
         assert!(
-            !bytes.windows(SECRETO.len()).any(|w| w == SECRETO),
-            "un fichero que autoriza escrituras no puede ser además el dato"
+            !bytes.windows(SECRET.len()).any(|w| w == SECRET),
+            "a file that authorizes writes cannot also be the data"
         );
-        // Y la otra mitad, que es la que impide que esto sea una tautología: lo
-        // que SÍ tiene que estar, está — o sea, la búsqueda de arriba habría
-        // encontrado el secreto si hubiera estado.
+        // And the other half, the one that keeps this from being a tautology:
+        // what SHOULD be there, is — i.e. the search above would have found
+        // the secret had it been there.
         assert!(
             bytes
-                .windows(b"solo-aqui.txt".len())
-                .any(|w| w == b"solo-aqui.txt"),
-            "las rutas sí viajan: el buscador de arriba funciona"
+                .windows(b"only-here.txt".len())
+                .any(|w| w == b"only-here.txt"),
+            "the paths DO travel: the search above works"
         );
     }
 
-    // ------------------------------------- lo que NO se deja cerrar (tarea 8)
+    // ------------------------------------- what does NOT let itself close (task 8)
 
     #[tokio::test]
-    async fn un_plan_cuya_conexion_se_cerro_no_llega_a_ser_aprobable() {
-        // El caso NO necesita ninguna carrera: un plan sobre dos árboles
-        // idénticos no emite un solo paso, así que jamás toca su canal y jamás
-        // se entera de que su dueño se fue. Si `finish` lo cerrase igual,
-        // quedaría un plan retenido después de la única muerte que le tocaba.
+    async fn a_plan_whose_connection_closed_never_becomes_approvable() {
+        // The case does NOT need any race: a plan over two identical trees
+        // does not emit a single step, so it never touches its channel and
+        // never finds out its owner is gone. If `finish` closed it anyway, a
+        // plan would stay retained after the only death that was ever coming
+        // for it.
         let dir = tempfile::tempdir().expect("tempdir");
         let spool = Spool::new(dir.path());
         let w = spool
@@ -2643,20 +2684,20 @@ mod tests {
         let e = w
             .finish(PlanOutcome::Ended)
             .await
-            .expect_err("su dueño ya no está");
-        assert!(matches!(e, SpoolError::Interrupted), "fue {e:?}");
+            .expect_err("its owner is gone");
+        assert!(matches!(e, SpoolError::Interrupted), "was {e:?}");
         assert!(
             spool_files(&spool).is_empty(),
-            "no puede quedar nada, ni `.part` ni `.jsonl`"
+            "nothing can be left, neither `.part` nor `.jsonl`"
         );
     }
 
     #[tokio::test]
-    async fn la_lapida_de_una_conexion_muerta_no_sobrevive_a_sus_planes() {
-        // En cuanto el último writer de esa conexión se cierra, la marca se
-        // va: ya no puede llegar ningún `finish` suyo, así que no hay nada que
-        // recordar. Es lo que mantiene el conjunto pequeño en el caso normal,
-        // y `TOPE_DIFUNTAS` es el suelo para el caso en que no lo sea.
+    async fn a_dead_connections_tombstone_does_not_outlive_its_plans() {
+        // The moment that connection's last writer closes, the mark goes
+        // away: no `finish` of its can arrive anymore, so there is nothing
+        // left to remember. That is what keeps the set small in the normal
+        // case, and `DEAD_CAP` is the floor for when it isn't.
         let dir = tempfile::tempdir().expect("tempdir");
         let spool = Spool::new(dir.path());
         let w = spool
@@ -2668,60 +2709,60 @@ mod tests {
         w.abandon().await;
         assert!(
             !spool.is_dead(7),
-            "sin planes en vuelo no hay nada que marcar"
+            "with no plans in flight there is nothing to mark"
         );
     }
 
-    /// **Un plan que EMPIEZA después del desmontaje tampoco queda retenido.**
+    /// **A plan that STARTS after the unmount is not retained either.**
     ///
-    /// Antes, la lápida solo se ponía si la conexión ya tenía un writer
-    /// abierto. Un `sync.plan` que abría el suyo un instante después del
-    /// desmontaje no se enteraba de nada, terminaba tan tranquilo y dejaba un
-    /// plan retenido de una conexión que ya no existe: nadie puede aplicarlo y
-    /// nadie lo va a recoger.
+    /// Before, the tombstone was only set if the connection already had an
+    /// open writer. A `sync.plan` that opened its own an instant after the
+    /// unmount never found out anything, finished quite calmly, and left
+    /// behind a retained plan for a connection that no longer exists: nobody
+    /// can apply it and nobody is going to collect it.
     ///
-    /// Salía como un rojo intermitente en
-    /// `engine_sync_plan::un_plan_de_cero_pasos_cuyo_dueno_se_fue_no_queda_retenido`,
-    /// porque el orden de las dos cosas no está fijado — y aquí un rojo
-    /// intermitente es un bug, no ruido. Este test fija el orden malo.
+    /// It surfaced as an intermittent red in
+    /// `engine_sync_plan::a_zero_step_plan_whose_owner_left_is_not_retained`,
+    /// because the order of the two things is not fixed — and here an
+    /// intermittent red is a bug, not noise. This test pins the bad order.
     #[tokio::test]
-    async fn un_plan_que_arranca_tras_el_desmontaje_no_queda_retenido() {
+    async fn a_plan_that_starts_after_the_unmount_is_not_retained() {
         let dir = tempfile::tempdir().expect("tempdir");
         let spool = Spool::new(dir.path());
-        // El desmontaje va PRIMERO, sin ningún plan en vuelo.
+        // The unmount goes FIRST, with no plan in flight.
         spool.drop_connection(9).await.expect("drop");
-        // Y el plan arranca después, como si la tarea hubiera perdido la
-        // carrera por un pelo.
+        // And the plan starts afterwards, as if the task had lost the race
+        // by a hair.
         let w = spool
             .create(9, &opts(), &compare_opts())
             .await
             .expect("create");
-        // Se NIEGA, igual que uno que estaba a medias cuando cayó su dueño:
-        // un plan sin dueño no es un plan a medio hacer, es un plan que no
-        // puede aplicar nadie.
+        // It is DENIED, just like one that was half-done when its owner
+        // died: a plan with no owner isn't a half-finished plan, it's a plan
+        // nobody can apply.
         let e = w
             .finish(PlanOutcome::Ended)
             .await
-            .expect_err("su dueño ya no está");
-        assert!(matches!(e, SpoolError::Interrupted), "fue {e:?}");
-        assert_eq!(spool.retained_for(9), 0, "y no queda retenido nada suyo");
+            .expect_err("its owner is gone");
+        assert!(matches!(e, SpoolError::Interrupted), "was {e:?}");
+        assert_eq!(spool.retained_for(9), 0, "and nothing of its is retained");
         assert!(
             spool_files(&spool).is_empty(),
-            "y no queda fichero suyo en disco"
+            "and no file of its is left on disk"
         );
     }
 
     #[tokio::test]
-    async fn replanificar_lo_que_se_esta_aplicando_no_vuelve_a_acunar_el_derecho() {
-        // Replanificar el mismo árbol con las mismas opciones da el MISMO hash.
-        // Sin esto, `finish` volvería a apuntar un derecho que un `open` acababa
-        // de consumir: dos ejecuciones del mismo plan contra el mismo destino,
-        // con dos lotes del journal y un undo que ya no describe ningún estado
-        // por el que se haya pasado.
+    async fn replanning_what_is_being_applied_does_not_re_mint_the_claim() {
+        // Replanning the same tree with the same options gives the SAME
+        // hash. Without this, `finish` would point at a claim an `open` had
+        // just consumed: two runs of the same plan against the same
+        // destination, with two journal batches and an undo that no longer
+        // describes any state that was ever actually passed through.
         let dir = tempfile::tempdir().expect("tempdir");
         let spool = Spool::new(dir.path());
         let hash = write_plan(&spool, 1, &steps_fixture()).await;
-        let _reader = spool.open(1, &hash).await.expect("se aplica");
+        let _reader = spool.open(1, &hash).await.expect("it's being applied");
 
         let mut w = spool
             .create(1, &opts(), &compare_opts())
@@ -2738,36 +2779,36 @@ mod tests {
         let e = w
             .finish(PlanOutcome::Ended)
             .await
-            .expect_err("ese plan se está aplicando");
-        assert!(matches!(e, SpoolError::Interrupted), "fue {e:?}");
-        assert!(!spool.claim_issued(1, &hash), "el derecho no volvió");
+            .expect_err("that plan is being applied");
+        assert!(matches!(e, SpoolError::Interrupted), "was {e:?}");
+        assert!(!spool.claim_issued(1, &hash), "the claim did not come back");
 
-        // Y en cuanto la aplicación termina y llama a `remove`, se puede volver
-        // a planificar con normalidad.
+        // And the moment the application finishes and calls `remove`,
+        // planning can resume as normal.
         spool.remove(1, &hash).await.expect("remove");
-        let otra = write_plan(&spool, 1, &steps_fixture()).await;
-        assert_eq!(otra, hash);
-        assert!(spool.open(1, &otra).await.is_ok());
+        let another = write_plan(&spool, 1, &steps_fixture()).await;
+        assert_eq!(another, hash);
+        assert!(spool.open(1, &another).await.is_ok());
     }
 
     #[tokio::test]
-    async fn planificar_barre_los_planes_vencidos() {
-        // El TTL solo se comprobaba dentro de `open`, y un plan que nadie abre
-        // no se abre nunca: sin este barrido, «diez minutos» no era una de las
-        // cuatro muertes sino una comprobación que corría cuando ya no hacía
-        // falta.
+    async fn planning_sweeps_expired_plans() {
+        // The TTL used to be checked only inside `open`, and a plan nobody
+        // opens never gets opened: without this sweep, "ten minutes" wasn't
+        // one of the four deaths but a check that ran when it no longer
+        // mattered.
         let dir = tempfile::tempdir().expect("tempdir");
         let spool = Spool::new(dir.path());
-        let viejo = write_plan(&spool, 1, &steps_fixture()).await;
-        let path = spool.dir().join(file_name(1, &viejo));
+        let old = write_plan(&spool, 1, &steps_fixture()).await;
+        let path = spool.dir().join(file_name(1, &old));
         age(&path, SYNC_PLAN_TTL_MS + 60_000);
 
-        // Un plan NUEVO de otra conexión: barre al pasar.
+        // A NEW plan from another connection: sweeps in passing.
         let mut w = spool
             .create(2, &opts(), &compare_opts())
             .await
             .expect("create");
-        assert!(!path.exists(), "el vencido se fue al planificar");
+        assert!(!path.exists(), "the expired one left while planning");
         w.push(&PlanItem::Step {
             step: copy_step(1, "a.txt", 1),
             dest: None,
@@ -2778,23 +2819,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn un_plan_en_curso_no_lo_barre_su_propia_antiguedad() {
-        // Un `.part` es un plan EN CURSO: sobre un árbol de red puede tardar
-        // horas legítimamente, y su mtime es el de cuando empezó.
+    async fn a_plan_in_progress_is_not_swept_by_its_own_age() {
+        // A `.part` is a plan IN PROGRESS: over a network tree it can
+        // legitimately take hours, and its mtime is that of when it started.
         let dir = tempfile::tempdir().expect("tempdir");
         let spool = Spool::new(dir.path());
         let mut w = spool
             .create(1, &opts(), &compare_opts())
             .await
             .expect("create");
-        let part = spool_files(&spool).first().cloned().expect("hay .part");
+        let part = spool_files(&spool)
+            .first()
+            .cloned()
+            .expect("there is a .part");
         age(&part, SYNC_PLAN_TTL_MS + 60_000);
 
         let w2 = spool
             .create(2, &opts(), &compare_opts())
             .await
             .expect("create");
-        assert!(part.exists(), "un plan en curso no es un plan vencido");
+        assert!(part.exists(), "a plan in progress is not an expired plan");
         w2.abandon().await;
         w.push(&PlanItem::Step {
             step: copy_step(1, "a.txt", 1),

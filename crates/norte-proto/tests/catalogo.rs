@@ -1,115 +1,117 @@
-//! El catálogo del protocolo NO se queda atrás (ADR 0089).
+//! The protocol catalogue does NOT fall behind (ADR 0089).
 //!
-//! Un método nuevo se toca en muchos sitios. Ninguno sobra, y el reparto plano
-//! del daemon es deliberado. Lo que faltaba era que **olvidar uno se notara**.
+//! A new method is touched in many places. None of them is superfluous, and
+//! the daemon's flat dispatch is deliberate. What was missing was that
+//! **forgetting one would be noticed**.
 //!
-//! Este fichero cierra la primera puerta: una constante de método que no esté
-//! en el catálogo pone el gate en rojo. Las demás superficies —el reparto del
-//! daemon, el cliente remoto— las comprueba `norte-core/tests/catalogo_rpc.rs`,
-//! que es donde se las puede leer.
+//! This file closes the first door: a method constant that is not in the
+//! catalogue turns the gate red. The other surfaces — the daemon's dispatch,
+//! the remote client — are checked by `norte-core/tests/catalogo_rpc.rs`,
+//! which is where they can be read.
 //!
-//! Se lee el CÓDIGO y no una lista escrita a mano, por el mismo motivo por el
-//! que lo hace el barrido de claves del host: una lista se separa del código en
-//! la primera superficie nueva.
+//! The CODE is read, not a hand-written list, for the same reason the host
+//! key sweep does it: a list drifts from the code at the first new surface.
 
 use norte_proto::catalog::{CATALOGO, Kind};
 
-/// Constantes que NO son métodos de wire, con el motivo por el que se saltan.
-const NO_SON_METODOS: &[&str] = &[
-    // La versión del protocolo, que es un número y no una llamada.
+/// Constants that are NOT wire methods, with the reason they are skipped.
+const NOT_METHODS: &[&str] = &[
+    // The protocol version, which is a number and not a call.
     "PROTOCOL_VERSION",
 ];
 
-/// Las constantes de método declaradas en `methods.rs`: `NOMBRE` → `wire`.
-fn constantes_declaradas() -> Vec<(String, String)> {
-    let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/methods.rs");
-    let texto =
-        std::fs::read_to_string(&ruta).unwrap_or_else(|e| panic!("se lee {}: {e}", ruta.display()));
+/// The method constants declared in `methods.rs`: `NAME` → `wire`.
+fn declared_constants() -> Vec<(String, String)> {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/methods.rs");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", path.display()));
     let mut out = Vec::new();
-    for linea in texto.lines() {
-        let l = linea.trim();
-        let Some(resto) = l.strip_prefix("pub const ") else {
+    for line in text.lines() {
+        let l = line.trim();
+        let Some(rest) = l.strip_prefix("pub const ") else {
             continue;
         };
-        let Some((nombre, valor)) = resto.split_once(": &str = ") else {
+        let Some((name, value)) = rest.split_once(": &str = ") else {
             continue;
         };
-        let valor = valor.trim().trim_end_matches(';').trim_matches('"');
-        out.push((nombre.to_owned(), valor.to_owned()));
+        let value = value.trim().trim_end_matches(';').trim_matches('"');
+        out.push((name.to_owned(), value.to_owned()));
     }
     assert!(
         out.len() > 60,
-        "el barrido tiene que ver el protocolo entero, y ve {}",
+        "the sweep has to see the whole protocol, and it sees {}",
         out.len()
     );
     out
 }
 
-/// **Toda constante de método está en el catálogo.**
+/// **Every method constant is in the catalogue.**
 ///
-/// Es la que convierte el catálogo en algo que no se puede olvidar: añadir
-/// `pub const FS_LOQUESEA` y no registrarlo deja este test en rojo, con el
-/// nombre delante.
+/// This is the one that turns the catalogue into something that cannot be
+/// forgotten: adding `pub const FS_WHATEVER` and not registering it leaves
+/// this test red, with the name in front.
 #[test]
-fn ninguna_constante_se_queda_fuera_del_catalogo() {
-    let catalogados: std::collections::BTreeSet<&str> = CATALOGO.iter().map(|m| m.name).collect();
-    let mut faltan = Vec::new();
-    for (nombre, wire) in constantes_declaradas() {
-        if NO_SON_METODOS.contains(&nombre.as_str()) {
+fn no_constant_is_left_out_of_the_catalogue() {
+    let catalogued: std::collections::BTreeSet<&str> = CATALOGO.iter().map(|m| m.name).collect();
+    let mut missing = Vec::new();
+    for (name, wire) in declared_constants() {
+        if NOT_METHODS.contains(&name.as_str()) {
             continue;
         }
-        if !catalogados.contains(wire.as_str()) {
-            faltan.push(format!("{nombre} (\"{wire}\")"));
+        if !catalogued.contains(wire.as_str()) {
+            missing.push(format!("{name} (\"{wire}\")"));
         }
     }
     assert!(
-        faltan.is_empty(),
-        "métodos sin registrar en `catalog.rs`: {}.\n\
-         Un método que no está en el catálogo no lo comprueba nadie: ni que el \
-         daemon lo reparta, ni que el cliente lo sepa pedir, ni que su tipo \
-         esté en el schema.",
-        faltan.join(", ")
+        missing.is_empty(),
+        "methods not registered in `catalog.rs`: {}.\n\
+         A method that is not in the catalogue is checked by nobody: not that \
+         the daemon dispatches it, not that the client knows how to request it, \
+         not that its type is in the schema.",
+        missing.join(", ")
     );
 }
 
-/// Y al revés: el catálogo no nombra métodos que no existen.
+/// And the other way around: the catalogue does not name methods that do not
+/// exist.
 ///
-/// Sin esto, borrar una constante dejaría una entrada fantasma que los demás
-/// tests darían por buena — y el gate seguiría verde sobre un método que ya no
-/// está. (El compilador caza el nombre de la CONSTANTE; esto caza el de wire.)
+/// Without this, deleting a constant would leave a ghost entry that the other
+/// tests would accept — and the gate would stay green over a method that is
+/// no longer there. (The compiler catches the CONSTANT's name; this catches
+/// the wire one.)
 #[test]
-fn el_catalogo_no_nombra_lo_que_no_existe() {
-    let declarados: std::collections::BTreeSet<String> = constantes_declaradas()
+fn the_catalogue_does_not_name_what_does_not_exist() {
+    let declared: std::collections::BTreeSet<String> = declared_constants()
         .into_iter()
         .map(|(_, wire)| wire)
         .collect();
     for m in CATALOGO {
         assert!(
-            declarados.contains(m.name),
-            "el catálogo nombra `{}`, que ya no se declara en methods.rs",
+            declared.contains(m.name),
+            "the catalogue names `{}`, which is no longer declared in methods.rs",
             m.name
         );
     }
 }
 
-/// **El catálogo tiene GOLDEN, así que borrar o renombrar un método se ve.**
+/// **The catalogue has a GOLDEN, so deleting or renaming a method shows up.**
 ///
-/// Hoy nada protegía los nombres de wire. `docs/schema/proto.schema.json`
-/// publica TIPOS, no métodos, y el único golden con nombres de método
-/// (`tests/golden/types/envelope.json`) contiene cuatro. Borrar
-/// `fs.rename_batch` —una rotura de wire de manual— no ponía nada en rojo más
-/// allá de la compilación de sus llamantes.
+/// Until now nothing protected wire names. `docs/schema/proto.schema.json`
+/// publishes TYPES, not methods, and the only golden with method names
+/// (`tests/golden/types/envelope.json`) contains four. Deleting
+/// `fs.rename_batch` — a textbook wire break — turned nothing red beyond the
+/// compilation of its callers.
 ///
-/// El catálogo es ahora la única lista completa, y sin instantánea tampoco
-/// protegería: el test de arriba solo comprueba que no nombre lo que ya no
-/// existe, o sea que ACOMPAÑA al borrado en vez de resistirse a él. Esto lo
-/// resiste: cualquier alta, baja o cambio de forma sale como un diff que el
-/// revisor ve.
+/// The catalogue is now the one complete list, and without a snapshot it
+/// would not protect either: the test above only checks that it does not name
+/// what no longer exists, i.e. it FOLLOWS the deletion instead of resisting
+/// it. This one resists it: any addition, removal or shape change comes out
+/// as a diff the reviewer sees.
 ///
-/// Se regenera con `NORTE_UPDATE_GOLDEN=1`, como los demás.
+/// Regenerated with `NORTE_UPDATE_GOLDEN=1`, like the others.
 #[test]
-fn el_catalogo_tiene_golden() {
-    let mut lineas: Vec<String> = CATALOGO
+fn the_catalogue_has_a_golden() {
+    let mut lines: Vec<String> = CATALOGO
         .iter()
         .map(|m| {
             format!(
@@ -119,47 +121,47 @@ fn el_catalogo_tiene_golden() {
                 m.shape,
                 m.params_ty,
                 m.result_ty,
-                // Por dónde entrega un `Stream`: es parte de lo que el
-                // catálogo afirma, así que cambiarlo tiene que salir en el
-                // diff igual que cambiar la forma.
+                // Where a `Stream` delivers through: it is part of what the
+                // catalogue asserts, so changing it has to show up in the
+                // diff just like changing the shape.
                 m.stream_notifs.join(",")
             )
         })
         .collect();
-    lineas.sort();
-    let actual = format!("{}\n", lineas.join("\n"));
+    lines.sort();
+    let actual = format!("{}\n", lines.join("\n"));
 
-    let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/catalogo.tsv");
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/catalogo.tsv");
     if std::env::var_os("NORTE_UPDATE_GOLDEN").is_some() {
-        std::fs::create_dir_all(ruta.parent().expect("tiene padre")).expect("se crea el dir");
-        std::fs::write(&ruta, &actual).expect("se escribe el golden");
+        std::fs::create_dir_all(path.parent().expect("has a parent")).expect("dir is created");
+        std::fs::write(&path, &actual).expect("golden is written");
         return;
     }
-    let esperado = std::fs::read_to_string(&ruta).unwrap_or_else(|e| {
+    let expected = std::fs::read_to_string(&path).unwrap_or_else(|e| {
         panic!(
-            "no está el golden {} ({e}). Genéralo con NORTE_UPDATE_GOLDEN=1",
-            ruta.display()
+            "golden {} is missing ({e}). Generate it with NORTE_UPDATE_GOLDEN=1",
+            path.display()
         )
     });
     assert_eq!(
-        actual, esperado,
-        "el catálogo del protocolo cambió. Si es a propósito, regenera con \
-         NORTE_UPDATE_GOLDEN=1 y que el diff se REVISE: un método que \
-         desaparece o cambia de forma es una rotura de wire."
+        actual, expected,
+        "the protocol catalogue changed. If it is on purpose, regenerate with \
+         NORTE_UPDATE_GOLDEN=1 and get the diff REVIEWED: a method that \
+         disappears or changes shape is a wire break."
     );
 }
 
-/// El catálogo cubre el protocolo entero, no una muestra.
+/// The catalogue covers the whole protocol, not a sample.
 #[test]
-fn el_catalogo_no_esta_a_medias() {
-    let peticiones = CATALOGO.iter().filter(|m| m.kind == Kind::Request).count();
-    let notificaciones = CATALOGO
+fn the_catalogue_is_not_half_done() {
+    let requests = CATALOGO.iter().filter(|m| m.kind == Kind::Request).count();
+    let notifications = CATALOGO
         .iter()
         .filter(|m| m.kind == Kind::Notification)
         .count();
-    assert!(peticiones > 55, "peticiones catalogadas: {peticiones}");
+    assert!(requests > 55, "catalogued requests: {requests}");
     assert!(
-        notificaciones >= 8,
-        "notificaciones catalogadas: {notificaciones}"
+        notifications >= 8,
+        "catalogued notifications: {notifications}"
     );
 }

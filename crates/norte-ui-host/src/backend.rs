@@ -1,9 +1,9 @@
-//! Lo que el host le pide al mundo, en la forma MÁS pequeña que le sirve.
+//! What the host asks of the world, in the SMALLEST form that serves it.
 //!
-//! No es una segunda fachada del SDK: es la lista corta de cosas que el
-//! controlador necesita, y existe por una razón concreta —que sus tests sean
-//! deterministas sin daemon—. Todo lo demás se le pide al
-//! [`norte_client::RemoteBackend`] directamente.
+//! This is not a second facade over the SDK: it is the short list of things
+//! the controller needs, and it exists for one concrete reason — so its
+//! tests can be deterministic without a daemon. Everything else is asked
+//! directly of [`norte_client::RemoteBackend`].
 
 use std::sync::Arc;
 
@@ -15,57 +15,58 @@ use norte_proto::{
 };
 use tokio::sync::watch;
 
-/// Una Task en marcha, en la forma mínima que el host necesita: su id, su
-/// progreso y cómo pedirle que pare.
+/// A Task in flight, in the minimal form the host needs: its id, its
+/// progress and how to ask it to stop.
 ///
-/// No es el `RemoteTask` del SDK a propósito. El host solo necesita estas
-/// tres cosas, y pedirlas así es lo que permite que un test las fabrique sin
-/// daemon —que es donde se comprueban las reglas que de verdad importan: que
-/// un estado terminal no se pierda y que cancelar sea idempotente—.
+/// Deliberately not the SDK's `RemoteTask`. The host only needs these three
+/// things, and asking for them this way is what lets a test fabricate them
+/// without a daemon — which is where the rules that actually matter get
+/// checked: that a terminal state is never lost and that cancelling is
+/// idempotent.
 pub struct HostTask {
-    /// Id de la task en el daemon.
+    /// Id of the task in the daemon.
     pub id: TaskId,
-    /// Snapshots vivos del progreso.
+    /// Live snapshots of the progress.
     pub progress: watch::Receiver<TaskProgress>,
-    /// Pide la cancelación cooperativa. Llamarla dos veces no es un error:
-    /// cancelar es idempotente por contrato.
+    /// Requests cooperative cancellation. Calling it twice is not an error:
+    /// cancelling is idempotent by contract.
     pub cancel: Arc<dyn Fn() + Send + Sync>,
-    /// Pausa (`true`) o reanuda (`false`) la task (ADR 0147), o `None` si esta
-    /// task no se puede pausar desde aquí. Devuelve `Unsupported` contra un
-    /// daemon que no sabe pausar, para que la ventana lo diga.
+    /// Pauses (`true`) or resumes (`false`) the task (ADR 0147), or `None` if
+    /// this task cannot be paused from here. Returns `Unsupported` against a
+    /// daemon that does not know how to pause, so the window can say so.
     pub pause: Option<Pausa>,
-    /// Sube (`true`) o baja la task en la cola en serie (ADR 0149), o `None`
-    /// si no se puede desde aquí.
+    /// Raises (`true`) or lowers the task in the serial queue (ADR 0149), or
+    /// `None` if it cannot be done from here.
     pub cola: Option<Pausa>,
-    /// La lanzó OTRO cliente de la misma sesión. Se pinta igual y se puede
-    /// cancelar igual —es la misma sesión—, pero el tablero lo dice: una
-    /// operación que uno no ha pedido y no se distingue de las suyas es una
-    /// sorpresa.
+    /// It was launched by ANOTHER client of the same session. It is painted
+    /// the same and can be cancelled the same — it is the same session — but
+    /// the board says so: an operation nobody here asked for, and
+    /// indistinguishable from one's own, is a surprise.
     pub foreign: bool,
 }
 
-/// Cómo pausar o reanudar una [`HostTask`] (ADR 0147).
+/// How to pause or resume a [`HostTask`] (ADR 0147).
 pub type Pausa = Arc<dyn Fn(bool) -> BoxFuture<'static, Result<(), Error>> + Send + Sync>;
 
-/// La pausa de una task del daemon, por su asa del SDK.
-fn cola_remota(c: norte_client::RemoteTaskCanceller) -> Pausa {
-    Arc::new(move |arriba| {
+/// The pause handle of a daemon task, over the SDK's handle.
+fn remote_queue_move(c: norte_client::RemoteTaskCanceller) -> Pausa {
+    Arc::new(move |up| {
         let c = c.clone();
-        Box::pin(async move { c.mover_en_cola(arriba).await })
+        Box::pin(async move { c.mover_en_cola(up).await })
     })
 }
 
-fn pausa_remota(c: norte_client::RemoteTaskCanceller) -> Pausa {
-    Arc::new(move |pausar| {
+fn remote_pause(c: norte_client::RemoteTaskCanceller) -> Pausa {
+    Arc::new(move |pause| {
         let c = c.clone();
-        Box::pin(async move { c.set_paused(pausar).await })
+        Box::pin(async move { c.set_paused(pause).await })
     })
 }
 
 impl std::fmt::Debug for HostTask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // A mano porque una función no es `Debug`, y `finish_non_exhaustive`
-        // lo DICE en vez de dar a entender que la task son dos campos.
+        // By hand because a function is not `Debug`, and `finish_non_exhaustive`
+        // SAYS so instead of implying that the task is just two fields.
         f.debug_struct("HostTask")
             .field("id", &self.id)
             .field("progress", &self.progress.borrow().state)
@@ -73,187 +74,194 @@ impl std::fmt::Debug for HostTask {
     }
 }
 
-/// Lo que el controlador necesita saber pedir.
+/// What the controller needs to know how to ask for.
 ///
-/// Objeto-seguro a propósito (futuros en caja): el host guarda un
-/// `Arc<dyn HostBackend>` y un test mete el suyo sin genéricos que se
-/// propaguen por toda la API.
+/// Object-safe on purpose (boxed futures): the host keeps an
+/// `Arc<dyn HostBackend>` and a test drops its own in without generics that
+/// propagate through the whole API.
 pub trait HostBackend: Send + Sync + 'static {
-    /// El listado de un directorio, como STREAM.
+    /// A directory's listing, as a STREAM.
     ///
-    /// Paginado y no completo: un directorio de medio millón de entradas no
-    /// puede viajar entero antes de pintar la primera fila. El host toma la
-    /// primera página, pinta, y sigue drenando el resto por detrás
-    /// ([`crate::controller`] lo extiende con `PaneState::extend`, el mismo
-    /// camino que el TUI).
+    /// Paginated, not complete: a directory of half a million entries cannot
+    /// travel whole before the first row is painted. The host takes the
+    /// first page, paints it, and keeps draining the rest behind the scenes
+    /// ([`crate::controller`] extends it with `PaneState::extend`, the same
+    /// path the TUI takes).
     ///
-    /// `attrs` son los ids de atributo que las columnas configuradas piden:
-    /// un provider solo manda lo que se le pide, así que pedir de menos deja
-    /// una columna en blanco para siempre.
-    /// Lista un directorio, y dice CUÁNTAS entradas se saltó.
+    /// `attrs` are the attribute ids the configured columns ask for: a
+    /// provider only sends what it is asked for, so asking for less leaves
+    /// a column blank forever.
+    /// Lists a directory, and says HOW MANY entries it skipped.
     ///
-    /// La cuenta viaja con el listado y no aparte porque describe A ESE
-    /// listado: un provider que se salta entradas —sin permiso para
-    /// statearlas, por encima de un tope suyo— devuelve menos filas de las
-    /// que hay, y sin decirlo la pantalla miente por omisión. `None` = el
-    /// provider no lleva la cuenta, que NO es lo mismo que cero.
+    /// The count travels with the listing and not separately because it
+    /// describes THAT listing: a provider that skips entries — without
+    /// permission to stat them, past a cap of its own — returns fewer rows
+    /// than there are, and without saying so the screen lies by omission.
+    /// `None` = the provider does not keep count, which is NOT the same as
+    /// zero.
     fn list(
         &self,
         dir: VPath,
         attrs: Vec<String>,
     ) -> BoxFuture<'static, Result<(EntryStream, Option<u64>), Error>>;
 
-    /// Las capacidades de UNA UBICACIÓN (#215): las contesta el mount, no el
-    /// provider, así que un pincho FAT bajo un `/home` sensible a la caja no
-    /// hereda la respuesta de `/home`.
+    /// The capabilities of ONE LOCATION (#215): the mount answers them, not
+    /// the provider, so a FAT thumb drive mounted under a case-sensitive
+    /// `/home` does not inherit `/home`'s answer.
     ///
-    /// Lo que la ventana hace con ellas es plegar nombres como los plegaría el
-    /// destino (#268): dos marcas que en un ext4 son `README.txt` y
-    /// `readme.txt` son UN nombre en NTFS o APFS, y encolarlas las dos deja
-    /// que una gane de forma no determinista mientras la otra falla sin
-    /// explicación.
+    /// What the window does with them is fold names the way the destination
+    /// would fold them (#268): two marks that on an ext4 are `README.txt`
+    /// and `readme.txt` are ONE name on NTFS or APFS, and queuing both lets
+    /// one win non-deterministically while the other fails without
+    /// explanation.
     fn capabilities(&self, path: VPath) -> BoxFuture<'static, Result<Capabilities, Error>>;
 
-    /// Crea UN directorio. Devuelve la Task ya encolada.
+    /// Creates ONE directory. Returns the Task already queued.
     fn mkdir(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Crea un fichero VACÍO, como Task (#290).
+    /// Creates an EMPTY file, as a Task (#290).
     ///
-    /// Falla si el destino existe: crear es una afirmación sobre un nombre
-    /// libre, y un método que trunca en silencio es una pérdida de datos con
-    /// nombre inocente.
+    /// Fails if the destination exists: creating is an assertion about a
+    /// free name, and a method that silently truncates is data loss with an
+    /// innocent name.
     fn create_file(&self, path: VPath) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Calcula el sha256 del CONTENIDO de un lote, como Task (#311).
+    /// Computes the sha256 of a batch's CONTENT, as a Task (#311).
     ///
-    /// Los digests NO vuelven aquí: no caben en el desenlace de una Task ni en
-    /// su progreso. Se recogen con [`Self::checksum_report`] cuando termina.
+    /// The digests do NOT come back here: they do not fit in a Task's
+    /// outcome nor in its progress. They are collected with
+    /// [`Self::checksum_report`] when it finishes.
     fn checksum(
         &self,
         params: norte_proto::methods::FsChecksumParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Los digests que calculó esa Task (#311).
+    /// The digests that Task computed (#311).
     ///
-    /// Solo es DEFINITIVO con la Task `Completed` y `pending == 0`: uno de una
-    /// Task cancelada está a medias, y compararlo contra un fichero de sumas
-    /// acusaría a ficheros que nadie llegó a leer.
+    /// Only DEFINITIVE with the Task `Completed` and `pending == 0`: one
+    /// from a cancelled Task is half-done, and comparing it against a
+    /// checksum file would accuse files nobody ever got to read.
     fn checksum_report(
         &self,
         task: norte_proto::TaskId,
     ) -> BoxFuture<'static, Result<norte_proto::methods::FsChecksumReportResult, Error>>;
 
-    /// De qué está hecho un directorio, hijo a hijo, como Task (fase 4).
+    /// What a directory is made of, child by child, as a Task (phase 4).
     ///
-    /// Los hijos NO vuelven aquí: una lista no cabe en el desenlace de una
-    /// Task ni en su progreso. Se recogen con [`Self::dir_usage_report`].
+    /// The children do NOT come back here: a list does not fit in a Task's
+    /// outcome nor in its progress. They are collected with
+    /// [`Self::dir_usage_report`].
     fn dir_usage(
         &self,
         params: norte_proto::methods::FsDirUsageParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// El mapa que lleva medido esa Task (fase 4).
+    /// The map that Task has measured so far (phase 4).
     ///
-    /// Es un SNAPSHOT: parcial mientras corre —que es lo que hace útil pedirlo,
-    /// porque un mapa se va pintando— y definitivo cuando la Task es terminal.
-    /// Quien lo aterrice tiene que mirar el estado: uno de una Task cancelada
-    /// está a medias, y pintarlo como completo convierte un directorio enorme
-    /// en uno pequeño.
+    /// It is a SNAPSHOT: partial while it runs — which is what makes asking
+    /// for it useful, because a map gets painted as it goes — and
+    /// definitive once the Task is terminal. Whoever lands it has to look at
+    /// the state: one from a cancelled Task is half-done, and painting it as
+    /// complete turns a huge directory into a small one.
     fn dir_usage_report(
         &self,
         task: norte_proto::TaskId,
     ) -> BoxFuture<'static, Result<norte_proto::methods::FsDirUsageReportResult, Error>>;
 
-    /// Cambia los PERMISOS POSIX de un lote, como Task (#314).
+    /// Changes the POSIX PERMISSIONS of a batch, as a Task (#314).
     ///
-    /// Muta: el core la registra en el journal con su reversa —el modo
-    /// anterior— y la pasa por la política. Una ubicación sin permisos POSIX
-    /// responde `Unsupported` sin cambiar nada.
+    /// Mutates: the core records it in the journal with its reverse — the
+    /// previous mode — and passes it through policy. A location without
+    /// POSIX permissions responds `Unsupported` without changing anything.
     fn set_mode(
         &self,
         params: norte_proto::methods::FsSetModeParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Los datos de UNA entrada.
+    /// The data of ONE entry.
     ///
-    /// Un listado puede venir PEREZOSO —el provider local devuelve `size` y
-    /// `mtime` a `None` y los rellena quien los necesite (#52)—, así que sin
-    /// esto las columnas de tamaño y fecha se quedan en blanco para siempre
-    /// sobre `file://`, que es la vista por defecto. El TUI ya sondea su
-    /// ventana visible; este es el mismo camino para el host.
+    /// A listing can come LAZY — the local provider returns `size` and
+    /// `mtime` as `None` and whoever needs them fills them in (#52) — so
+    /// without this, the size and date columns stay blank forever over
+    /// `file://`, which is the default view. The TUI already probes its
+    /// visible window; this is the same path for the host.
     fn stat(&self, path: VPath, attrs: Vec<String>) -> BoxFuture<'static, Result<Entry, Error>>;
 
-    /// Lee un TROZO de un fichero.
+    /// Reads a CHUNK of a file.
     ///
-    /// Acotado siempre: el visor enseña una cabecera, no el fichero entero
-    /// (el resto no se lee), y quien llama decide el presupuesto.
+    /// Always bounded: the viewer shows a header, not the whole file (the
+    /// rest is never read), and whoever calls it decides the budget.
     fn read(
         &self,
         path: VPath,
         range: Option<norte_proto::ByteRange>,
     ) -> BoxFuture<'static, Result<Vec<u8>, Error>>;
 
-    /// El catálogo de atributos de una localización.
+    /// The attribute catalog of a location.
     ///
-    /// Sin él, una columna `attr:` no sabe si lo que trae es un tamaño, una
-    /// fecha o un modo, y se pinta como el número crudo que es: el catálogo
-    /// es lo que convierte `33188` en `-rw-r--r--`.
+    /// Without it, an `attr:` column does not know whether what it carries
+    /// is a size, a date or a mode, and it gets painted as the raw number it
+    /// is: the catalog is what turns `33188` into `-rw-r--r--`.
     fn attr_catalog(&self, dir: VPath) -> BoxFuture<'static, Result<AttrCatalog, Error>>;
 
-    /// El canal de aprobaciones de policy pendientes: cada op de agente bajo
-    /// regla `ask` que el daemon difunde, y que espera una respuesta humana.
+    /// The channel of pending policy approvals: every agent op under an
+    /// `ask` rule that the daemon broadcasts, and that waits for a human
+    /// answer.
     fn take_approvals(
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::PolicyApprovalRequired>>;
 
-    /// Responde a una aprobación. `approve = false` deniega.
+    /// Answers an approval. `approve = false` denies it.
     fn policy_decide(
         &self,
         approval_id: u64,
         approve: bool,
     ) -> BoxFuture<'static, Result<(), Error>>;
 
-    /// La sesión de UI y si ESTA conexión es su dueña (ADR 0059).
+    /// The UI session, and whether THIS connection owns it (ADR 0059).
     ///
-    /// El core la guarda y la versiona pero no la lee: el documento es de los
-    /// frontends, y por eso viaja como JSON opaco.
+    /// The core keeps it and versions it but does not read it: the document
+    /// belongs to the frontends, which is why it travels as opaque JSON.
     fn session_get(&self) -> BoxFuture<'static, Result<(methods::Session, bool), Error>>;
 
-    /// El registro del DAEMON desde `cursor`, como mucho `max` líneas (#328).
+    /// The DAEMON's log from `cursor`, at most `max` lines (#328).
     ///
-    /// `cursor: None` pide «lo que haya», que es lo que manda un panel al
-    /// abrirse, y NO es lo mismo que `Some(0)`: contra un anillo que ya ha
-    /// dado la vuelta, un cero reportaría un `lost` falso en el primer sondeo.
+    /// `cursor: None` asks for "whatever there is", which is what a panel
+    /// sends when it opens, and is NOT the same as `Some(0)`: against a ring
+    /// that has already wrapped, a zero would report a false `lost` on the
+    /// first poll.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] cuando el otro extremo no tiene registro que
-    /// servir. El caso alcanzable no es un daemon MÁS VIEJO —un cliente 0.65
-    /// nunca completa el `initialize` contra uno 0.64— sino uno de la misma
-    /// versión compilado sin la feature `logging`. No hay comparación de
-    /// versiones en ningún lado: la respuesta al método es la única señal.
+    /// [`Error::Unsupported`] when the other end has no log to serve. The
+    /// reachable case is not an OLDER daemon — a 0.65 client never completes
+    /// `initialize` against a 0.64 one — but one of the same version built
+    /// without the `logging` feature. There is no version comparison
+    /// anywhere: the response to the method is the only signal.
     fn log_tail(
         &self,
         cursor: Option<u64>,
         max: u32,
     ) -> BoxFuture<'static, Result<methods::LogTailResult, Error>>;
 
-    /// Sube el nivel que el anillo del daemon guarda, y devuelve el que de
-    /// verdad quedó puesto (#328).
+    /// Raises the level the daemon's ring keeps, and returns the one that
+    /// actually ended up set (#328).
     ///
-    /// El nivel es GLOBAL al daemon y solo SUBE: pedir menos verbosidad no es
-    /// un error y no baja nada, contesta el que ya había. Por eso lo aplica él
-    /// y no el cliente — la cota que impide que ahí dentro aparezca una
-    /// contraseña vive en el proceso que tiene el anillo.
+    /// The level is GLOBAL to the daemon and only EVER RISES: asking for
+    /// less verbosity is not an error and lowers nothing, it answers with
+    /// whatever was already set. That is why the daemon applies it and not
+    /// the client — the cap that keeps a password from showing up in there
+    /// lives in the process that holds the ring.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] igual que [`Self::log_tail`]; un nivel fuera del
-    /// vocabulario es `InvalidParams`, que es otra pregunta.
+    /// [`Error::Unsupported`] same as [`Self::log_tail`]; a level outside
+    /// the vocabulary is `InvalidParams`, which is a different question.
     fn log_level(&self, level: String) -> BoxFuture<'static, Result<String, Error>>;
 
-    /// Escribe la sesión sobre la revisión que se leyó. Devuelve la nueva.
+    /// Writes the session over the revision that was read. Returns the new
+    /// one.
     ///
-    /// Un `Conflict` significa que otra ventana escribió en medio: se relee,
-    /// jamás se pisa.
+    /// A `Conflict` means another window wrote in between: it is re-read,
+    /// never overwritten.
     fn session_put(
         &self,
         version: u32,
@@ -261,75 +269,81 @@ pub trait HostBackend: Send + Sync + 'static {
         body: serde_json::Value,
     ) -> BoxFuture<'static, Result<u64, Error>>;
 
-    /// Suelta la propiedad de la sesión (fase 9): devuelve si ERA la dueña.
+    /// Releases ownership of the session (phase 9): returns whether it WAS
+    /// the owner.
     ///
-    /// `false` no es un error sino un hecho —«no eras tú»— y quien releva lo
-    /// necesita: sin él lanzaría la terminal a reclamar una sesión que sigue
-    /// ocupada, y el lector se quedaría mirando un listado que no es el suyo.
+    /// `false` is not an error but a fact — "it wasn't you" — and whoever is
+    /// taking over needs it: without it, the terminal would launch to
+    /// reclaim a session that is still busy, and the reader would be left
+    /// staring at a listing that is not theirs.
     fn session_release(&self) -> BoxFuture<'static, Result<bool, Error>>;
 
-    /// El canal de eventos de conexión (perdida y restaurada), si esta
-    /// conexión lo tiene y nadie lo ha tomado ya.
+    /// The connection events channel (lost and restored), if this
+    /// connection has one and nobody has taken it yet.
     fn take_conn_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<ConnEvent>>;
 
-    /// El canal de tasks AJENAS: las que otro cliente de la misma sesión
-    /// lanzó y este observa.
+    /// The channel of FOREIGN tasks: the ones another client of the same
+    /// session launched and this one observes.
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>>;
 
-    /// El canal de avisos `connection.degraded` (#44): una sesión de un
-    /// provider que viaja SIN cifrar.
+    /// The `connection.degraded` notice channel (#44): a provider session
+    /// that travels UNENCRYPTED.
     ///
-    /// No habla del daemon —eso es [`Self::take_conn_events`]— sino de la
-    /// conexión que un provider abrió por debajo, y es un hecho de
-    /// SEGURIDAD: mientras no se diga, el listado de un FTP en claro se lee
-    /// igual que el de un SFTP.
+    /// It is not about the daemon — that is [`Self::take_conn_events`] — but
+    /// about the connection a provider opened underneath, and it is a
+    /// SECURITY fact: until it is said, a plaintext FTP listing reads the
+    /// same as an SFTP one.
     fn take_degraded(
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionDegraded>>;
 
-    /// El canal de fallos `connection.failed` (#322): POR QUÉ una conexión NO
-    /// se pudo abrir.
+    /// The `connection.failed` notice channel (#322): WHY a connection
+    /// could NOT be opened.
     ///
-    /// Aparte de [`Self::take_degraded`] porque son dos hechos distintos —una
-    /// sesión abierta que viaja mal, y una que no llegó a abrirse—, y
-    /// mezclarlos hace que uno se pinte como el otro. Sin esto, el fallo llega
-    /// como la CATEGORÍA del error (casi siempre `PermissionDenied`), que no
-    /// distingue un secreto vacío de una clave equivocada.
+    /// Separate from [`Self::take_degraded`] because they are two different
+    /// facts — a session that opened but travels badly, and one that never
+    /// got to open — and mixing them makes one get painted as the other.
+    /// Without this, the failure arrives as the error's CATEGORY (almost
+    /// always `PermissionDenied`), which does not distinguish an empty
+    /// secret from a wrong key.
     fn take_failed(
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::ConnectionFailed>>;
 
-    /// El canal de avisos `plugin.notice` (0.69.0, ADR 0100): lo que un
-    /// plugin `hook` quiso decirle al humano sobre una mutación que el
-    /// journal ya registró, o que el daemon apagó los hooks de un plugin.
+    /// The `plugin.notice` notice channel (0.69.0, ADR 0100): what a plugin
+    /// `hook` wanted to tell the human about a mutation the journal already
+    /// recorded, or that the daemon turned off a plugin's hooks.
     ///
-    /// Aparte de los dos de arriba porque habla de otra cosa: ni de una
-    /// sesión ni de una conexión, sino de un fichero que ya cambió. Es un
-    /// aviso efímero atribuido a un tercero, jamás un banner.
+    /// Separate from the two above because it speaks of something else:
+    /// neither a session nor a connection, but a file that already changed.
+    /// It is an ephemeral notice attributed to a third party, never a
+    /// banner.
     fn take_plugin_notices(
         &self,
     ) -> Option<tokio::sync::mpsc::UnboundedReceiver<methods::PluginNotice>>;
 
-    /// Borra UNA entrada: a la papelera o permanente. Devuelve la Task ya
-    /// encolada — el desenlace llega por su progreso, no por esta llamada.
+    /// Deletes ONE entry: to the trash or permanently. Returns the Task
+    /// already queued — the outcome arrives through its progress, not
+    /// through this call.
     ///
-    /// Una por entrada y no un lote porque el método del wire es así; un
-    /// borrado de varias marcas son varias Tasks, y el tablero las enseña
-    /// todas.
+    /// One per entry and not a batch because the wire method is that way; a
+    /// deletion of several marks is several Tasks, and the board shows them
+    /// all.
     fn delete(&self, path: VPath, mode: DeleteMode) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Copia UNA entrada a un destino EXACTO. Devuelve la Task ya encolada.
+    /// Copies ONE entry to an EXACT destination. Returns the Task already
+    /// queued.
     ///
-    /// `to` es la ruta final, no el directorio: quien llama ya compuso el
-    /// nombre. El core solo inventa un nombre libre con
-    /// [`norte_proto::CollisionPolicy::RenameAuto`], y con el resto de
-    /// políticas jamás lo hace — así que un `to` que sea un directorio
-    /// copiaría DENTRO de él sin decirlo, y eso no es lo que este método
-    /// promete.
+    /// `to` is the final path, not the directory: whoever calls it already
+    /// composed the name. The core only invents a free name with
+    /// [`norte_proto::CollisionPolicy::RenameAuto`], and with every other
+    /// policy it never does — so a `to` that is a directory would copy
+    /// INSIDE it without saying so, and that is not what this method
+    /// promises.
     ///
-    /// Una por entrada y no un lote, por el mismo motivo que
-    /// [`Self::delete`]: el método del wire es así, y un lote de marcas son
-    /// varias Tasks que el tablero enseña todas.
+    /// One per entry and not a batch, for the same reason as
+    /// [`Self::delete`]: the wire method is that way, and a batch of marks
+    /// is several Tasks that the board shows all of.
     fn copy(
         &self,
         from: VPath,
@@ -338,108 +352,115 @@ pub trait HostBackend: Send + Sync + 'static {
         queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Empaqueta `sources` dentro de un contenedor nuevo, como Task (#132).
+    /// Packs `sources` inside a new container, as a Task (#132).
     ///
-    /// El FORMATO viaja explícito y sale del nombre que se tecleó: empaquetar
-    /// en uno que el usuario no pidió es peor que rehusar, así que quien llama
-    /// resuelve el nombre ANTES y un nombre sin extensión conocida no llega
-    /// aquí.
+    /// The FORMAT travels explicit and comes from the name that was typed:
+    /// packing into one the user did not ask for is worse than refusing, so
+    /// whoever calls it resolves the name FIRST and a name without a known
+    /// extension never reaches here.
     fn pack(
         &self,
         params: methods::ArchivePackParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Comprueba un contenedor, como Task (#132).
+    /// Checks a container, as a Task (#132).
     ///
-    /// No muta nada: lee el archivo entero y contesta si está sano. Su
-    /// resultado, como el de un recuento, viaja en el progreso terminal.
+    /// Mutates nothing: it reads the whole archive and answers whether it is
+    /// sound. Its result, like a count's, travels in the terminal progress.
     fn test_archive(
         &self,
         params: methods::ArchiveTestParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Las conexiones NOMBRADAS que el daemon tiene configuradas (#264).
+    /// The NAMED connections the daemon has configured (#264).
     ///
-    /// Se pregunta en vez de leer `connections.toml`: leerlo metería la pila
-    /// de red entera en un binario que solo quiere pintar nombres, y el daemon
-    /// ya la tiene porque es quien abre las sesiones.
+    /// Asked for instead of reading `connections.toml`: reading it would
+    /// drag the whole network stack into a binary that only wants to paint
+    /// names, and the daemon already has it because it is the one that opens
+    /// the sessions.
     ///
-    /// No conecta. Devuelve a dónde se PODRÍA ir; ir es navegar a esa URL.
+    /// Does not connect. Returns where it COULD go; going is navigating to
+    /// that URL.
     ///
-    /// El resultado ENTERO, con las entradas que el daemon no supo leer
-    /// (#365): sin ellas, el selector no puede decir por qué falta una
-    /// conexión que el lector sabe que escribió.
+    /// The WHOLE result, including the entries the daemon could not read
+    /// (#365): without them, the picker cannot say why a connection the
+    /// reader knows they wrote is missing.
     fn connections(&self) -> BoxFuture<'static, Result<methods::ConnectionListResult, Error>>;
 
-    /// Cierra la SESIÓN de una conexión, nombrada por cualquiera de sus rutas
-    /// (#140).
+    /// Closes the SESSION of a connection, named by any of its paths (#140).
     ///
-    /// El core la tiene cacheada por `scheme://authority`, así que quien llama
-    /// manda el sitio donde está el panel y no tiene que saber cómo se llavea
-    /// una sesión por dentro.
+    /// The core keeps it cached by `scheme://authority`, so whoever calls it
+    /// sends the place where the pane is and does not need to know how a
+    /// session is keyed internally.
     ///
-    /// `false` = no había ninguna abierta. No es un fallo, y decir «cerrada»
-    /// cuando no se cerró nada enseña a no fiarse del mensaje.
+    /// `false` = there was none open. Not a failure, and saying "closed"
+    /// when nothing was closed teaches you not to trust the message.
     fn close_connection(&self, path: VPath) -> BoxFuture<'static, Result<bool, Error>>;
 
-    /// Entrega el secreto que una conexión pidió (#325/#327).
+    /// Delivers the secret a connection asked for (#325/#327).
     ///
-    /// `conn` es el nombre de `connections.toml` que vino en el
-    /// `Error::SecretNeeded`, no algo que el servidor remoto haya dicho.
+    /// `conn` is the name from `connections.toml` that came in the
+    /// `Error::SecretNeeded`, not something the remote server said.
     ///
-    /// `secret` viaja en claro porque el core lo necesita en claro para
-    /// autenticar; lo que este frontend puede prometer es que su copia se pisa
-    /// con ceros al soltarla (`norte_frontend::secret::TypedSecret`) y que
-    /// nunca llega a la capa de pintado. De las copias de más allá de aquí
-    /// —los params, el frame, el `Value` del daemon— habla el ADR 0015.
+    /// `secret` travels in the clear because the core needs it in the clear
+    /// to authenticate; what this frontend can promise is that its copy is
+    /// overwritten with zeros when dropped
+    /// (`norte_frontend::secret::TypedSecret`) and that it never reaches the
+    /// painting layer. ADR 0015 covers the copies beyond this point — the
+    /// params, the frame, the daemon's `Value`.
     ///
-    /// Un core que se NIEGUE a guardarlo llega como error y no como `Ok`: el
-    /// SDK ya traduce ese `stored: false`. Tratarlo como éxito dejaría al
-    /// usuario reintentando una navegación que nunca va a tener el secreto.
+    /// A core that REFUSES to store it arrives as an error and not as `Ok`:
+    /// the SDK already translates that `stored: false`. Treating it as
+    /// success would leave the user retrying a navigation that will never
+    /// get the secret.
     fn provide_secret(&self, conn: String, secret: String)
     -> BoxFuture<'static, Result<(), Error>>;
 
-    /// Parte un fichero en trozos de `part_bytes`, como Task (#132).
+    /// Splits a file into `part_bytes` chunks, as a Task (#132).
     fn split_file(
         &self,
         params: methods::FileSplitParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Junta los trozos a partir del PRIMERO, como Task (#132).
+    /// Joins the chunks starting from the FIRST one, as a Task (#132).
     ///
-    /// Solo desde el `.001`: el core busca hacia delante, así que empezar por
-    /// otro uniría media cosa. Quien llama ya lo comprobó.
+    /// Only from the `.001`: the core searches forward, so starting from
+    /// another one would join half a thing. Whoever calls it already
+    /// checked this.
     fn combine_files(
         &self,
         params: methods::FileCombineParams,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Cuenta lo que ocupan `paths` — bytes y entradas — como Task (#139).
+    /// Counts what `paths` take up — bytes and entries — as a Task (#139).
     ///
-    /// Es de las pocas Tasks cuyo RESULTADO **es** su progreso: no publica
-    /// nada, no muta nada, y lo que quien la lanzó quiere saber viaja en el
-    /// progreso terminal. Por eso devuelve la Task y no un total.
+    /// One of the few Tasks whose RESULT **is** its progress: it publishes
+    /// nothing, mutates nothing, and what whoever launched it wants to know
+    /// travels in the terminal progress. That is why it returns the Task and
+    /// not a total.
     ///
-    /// Un lote de verdad y no una Task por ruta, al revés que
-    /// [`Self::delete`] y [`Self::copy`]: el método del wire toma una lista,
-    /// y contar dos árboles por separado obligaría a quien pregunta a sumar
-    /// —y a sumar también los saltados, que no se suman igual—.
+    /// A real batch and not one Task per path, unlike [`Self::delete`] and
+    /// [`Self::copy`]: the wire method takes a list, and counting two trees
+    /// separately would force whoever asks to add them up — and add up the
+    /// skipped ones too, which do not add the same way.
     fn dir_size(&self, paths: Vec<VPath>) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Le pide al modelo un plan de renombrado para un DIRECTORIO.
+    /// Asks the model for a rename plan for a DIRECTORY.
     ///
-    /// NO muta nada: lo que vuelve es una propuesta que hay que revisar,
-    /// comprobar contra el core y aprobar. Respuesta DIRECTA y no Task
-    /// (ADR 0042): abandonar la espera corta el dispatch en el daemon.
+    /// Mutates NOTHING: what comes back is a proposal that has to be
+    /// reviewed, checked against the core and approved. A DIRECT response
+    /// and not a Task (ADR 0042): abandoning the wait cuts the dispatch off
+    /// in the daemon.
     ///
-    /// Lo que vuelve es de un MODELO, o sea lo menos confiable que hay en
-    /// todo el sistema: quien llama lo valida entero antes de enseñarlo
-    /// (`norte_frontend::validate_ai_plan`), y una sola pareja inválida tumba
-    /// el lote — jamás se aplica «lo que valga» de un plan adulterado.
+    /// What comes back is from a MODEL, i.e. the least trustworthy thing in
+    /// the whole system: whoever calls it validates it whole before showing
+    /// it (`norte_frontend::validate_ai_plan`), and a single invalid pair
+    /// brings down the whole batch — a tampered plan is never applied
+    /// "as far as it's good for".
     ///
-    /// `names` son los basenames MARCADOS (#121). Vacío = el directorio
-    /// entero: pedir un plan sobre cinco ficheros no puede mandar los mil del
-    /// directorio al proveedor.
+    /// `names` are the MARKED basenames (#121). Empty = the whole directory:
+    /// asking for a plan over five files cannot send the provider the
+    /// thousand others in the directory.
     fn ai_rename_plan(
         &self,
         dir: VPath,
@@ -447,9 +468,9 @@ pub trait HostBackend: Send + Sync + 'static {
         names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>>;
 
-    /// El plan que PROPONE un plugin `renamer` (C3, ADR 0095): el mismo
-    /// resultado que [`Self::ai_rename_plan`], por otro productor, y con la
-    /// misma disciplina al volver — se valida entero antes de enseñarlo.
+    /// The plan a `renamer` plugin PROPOSES (C3, ADR 0095): the same result
+    /// as [`Self::ai_rename_plan`], from a different producer, and with the
+    /// same discipline on the way back — validated whole before showing it.
     fn plugin_rename_plan(
         &self,
         plugin_id: String,
@@ -458,10 +479,10 @@ pub trait HostBackend: Send + Sync + 'static {
         names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiRenamePlanResult, Error>>;
 
-    /// El plan de ORGANIZAR que propone un modelo (fase 8): el mismo trato
-    /// que renombrar con una libertad más —el destino puede llevar
-    /// carpetas—, y por eso su token viaja CON el plan: no hay un segundo
-    /// viaje que comprobar.
+    /// The ORGANIZE plan a model proposes (phase 8): the same deal as
+    /// renaming with one more freedom — the destination can carry
+    /// folders — which is why its token travels WITH the plan: there is no
+    /// second trip to check.
     fn ai_organize_plan(
         &self,
         dir: VPath,
@@ -469,12 +490,14 @@ pub trait HostBackend: Send + Sync + 'static {
         names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>>;
 
-    /// El mismo plan, propuesto por un plugin del kind `organizer` (fase 8).
-    /// Mismo reparto que el `renamer`: el plugin propone y el core ejecuta.
+    /// The same plan, proposed by a plugin of kind `organizer` (phase 8).
+    /// Same split as the `renamer`: the plugin proposes and the core
+    /// executes.
     ///
-    /// **`names` es el operando, y vacío significa vacío**, no «todo»: un
-    /// plugin no lista directorios (regla 9), así que lo que no le den no
-    /// existe para él y contesta que no mueve nada.
+    /// **`names` is the operand, and empty means empty**, not "everything":
+    /// a plugin does not list directories (rule 9), so whatever is not
+    /// given to it does not exist for it, and it answers that it moves
+    /// nothing.
     fn plugin_organize_plan(
         &self,
         plugin_id: String,
@@ -483,9 +506,9 @@ pub trait HostBackend: Send + Sync + 'static {
         names: Vec<String>,
     ) -> BoxFuture<'static, Result<methods::AiOrganizePlanResult, Error>>;
 
-    /// Aplica un plan de organizar ya revisado (fase 8): crea las carpetas
-    /// que falten y mueve, TODO bajo un solo `batch_id`, así que se deshace
-    /// como una unidad.
+    /// Applies an already-reviewed organize plan (phase 8): creates the
+    /// missing folders and moves, ALL under a single `batch_id`, so it is
+    /// undone as one unit.
     fn organize(
         &self,
         dir: VPath,
@@ -493,23 +516,24 @@ pub trait HostBackend: Send + Sync + 'static {
         plan_hash: methods::PlanHash,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// El plan REVISABLE de un lote de renombrados dentro de `dir`.
+    /// The REVIEWABLE plan for a batch of renames inside `dir`.
     ///
-    /// Tampoco muta: lo que se manda es INTENCIÓN —parejas de nombres base—
-    /// y lo que vuelve es el veredicto del core (si es aplicable, por qué
-    /// no, cuántos pasos son maquinaria) más el `plan_hash` que hay que
-    /// devolver para ejecutar EXACTAMENTE lo que se enseñó.
+    /// Also mutates nothing: what is sent is INTENT — pairs of base
+    /// names — and what comes back is the core's verdict (whether it is
+    /// applicable, why not, how many steps are machinery) plus the
+    /// `plan_hash` that has to be returned to execute EXACTLY what was
+    /// shown.
     fn rename_batch_plan(
         &self,
         dir: VPath,
         pairs: Vec<methods::RenamePair>,
     ) -> BoxFuture<'static, Result<methods::FsRenameBatchPlanResult, Error>>;
 
-    /// Ejecuta el lote: UNA Task para todas las parejas, un solo deshacer.
+    /// Executes the batch: ONE Task for all the pairs, a single undo.
     ///
-    /// Se manda la MISMA intención que produjo el `plan_hash`; el ORDEN de
-    /// los pasos y los temporales que rompen un ciclo los decide el core y
-    /// jamás cruzan el wire.
+    /// The SAME intent that produced the `plan_hash` is sent; the ORDER of
+    /// the steps and the temporaries that break a cycle are decided by the
+    /// core and never cross the wire.
     fn rename_batch(
         &self,
         dir: VPath,
@@ -517,89 +541,93 @@ pub trait HostBackend: Send + Sync + 'static {
         plan_hash: methods::PlanHash,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// El informe de un lote ya terminado.
+    /// The report of an already-finished batch.
     ///
-    /// Lo pide el controlador en cuanto una task de clase `rename-batch`
-    /// llega a un estado terminal, y lo enseña en la fila del tablero (y
-    /// delante, si el lote dejó algo a medias).
+    /// The controller asks for it as soon as a `rename-batch`-class task
+    /// reaches a terminal state, and shows it in the board row (and up
+    /// front, if the batch left something half-done).
     ///
-    /// Es la ÚNICA señal de que un lote dejó el directorio a medias, así que
-    /// no se degrada en silencio: un daemon que no conozca el método
-    /// contesta [`Error::Unsupported`], que quien llama distingue de un fallo
-    /// de verdad.
+    /// It is the ONLY signal that a batch left the directory half-done, so
+    /// it does not degrade silently: a daemon that does not know the method
+    /// answers [`Error::Unsupported`], which whoever calls it distinguishes
+    /// from a real failure.
     fn rename_batch_report(
         &self,
         task_id: TaskId,
     ) -> BoxFuture<'static, Result<methods::FsRenameBatchReportResult, Error>>;
 
-    /// El informe de una Task de UNDO ya terminada (`policy.undo_report`).
+    /// The report of an already-finished UNDO Task (`policy.undo_report`).
     ///
-    /// Mismo papel que [`Self::rename_batch_report`] y por el mismo motivo:
-    /// el desenlace de la Task dice si el undo corrió, y lo que NO volvió
-    /// —una entrada irreversible, un bloqueo a mitad del LIFO, una unidad que
-    /// la policy denegó— lo cuenta solo el informe.
+    /// Same role as [`Self::rename_batch_report`] and for the same reason:
+    /// the Task's outcome says whether the undo ran, and what did NOT come
+    /// back — an irreversible entry, a lock midway through the LIFO, a unit
+    /// policy denied — is told only by the report.
     fn undo_report(
         &self,
         task_id: TaskId,
     ) -> BoxFuture<'static, Result<methods::PolicyUndoReportResult, Error>>;
 
-    /// El informe de un `archive.pack` (#250): qué guardó ese empaquetado que
-    /// no sobrevive a salir de aquí.
+    /// The report of an `archive.pack` (#250): what that packing kept that
+    /// does not survive leaving here.
     ///
-    /// El tercero de la misma familia, y el que más lejos lleva su motivo: los
-    /// otros dos cuentan lo que salió MAL, y este cuenta algo que salió BIEN y
-    /// aun así hay que decir — un `a\b.txt` guardado, que en 7-Zip y en el
-    /// Explorador es un `b.txt` dentro de una carpeta `a`.
+    /// The third of the same family, and the one that takes its reasoning
+    /// furthest: the other two report what went WRONG, and this one reports
+    /// something that went RIGHT and still has to be said — an `a\b.txt`
+    /// stored, which in 7-Zip and in Explorer is a `b.txt` inside an `a`
+    /// folder.
     fn archive_pack_report(
         &self,
         task_id: TaskId,
     ) -> BoxFuture<'static, Result<methods::ArchivePackReportResult, Error>>;
 
-    /// Deshace lo que una sesión de AGENTE hizo, entero, en orden inverso.
+    /// Undoes everything an AGENT session did, whole, in reverse order.
     ///
-    /// La sesión es una clave OPACA: viene del daemon (en la petición de
-    /// aprobación que el agente disparó) y vuelve tal cual. No se compone ni
-    /// se recorta — se pinta enmascarada, pero lo que viaja es lo que llegó.
+    /// The session is an OPAQUE key: it comes from the daemon (in the
+    /// approval request the agent triggered) and comes back as is. It is
+    /// neither composed nor trimmed — it is painted masked, but what
+    /// travels is what arrived.
     ///
-    /// Devuelve una Task: es una operación larga con su propio informe
-    /// (`undo_report`), y lo que no volvió —irreversible, denegado, un LIFO
-    /// que paró a mitad— se dice ahí y no en el desenlace de la Task.
+    /// Returns a Task: it is a long operation with its own report
+    /// (`undo_report`), and what did not come back — irreversible, denied, a
+    /// LIFO that stopped partway — is said there, not in the Task's outcome.
     fn undo_session(&self, session: String) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Una página del journal hacia atrás (`journal.list`, fase 7), para la
-    /// línea de tiempo (#359). `before_seq` es el cursor de la página
-    /// anterior; `None` pide la más nueva.
+    /// A page of the journal going backward (`journal.list`, phase 7), for
+    /// the timeline (#359). `before_seq` is the cursor of the previous page;
+    /// `None` asks for the newest one.
     ///
-    /// Un daemon sin journal —o que no conoce el método— contesta
-    /// `Unsupported`, y eso se DICE: un panel vacío se lee como «no has hecho
-    /// nada».
+    /// A daemon without a journal — or that does not know the method —
+    /// answers `Unsupported`, and that IS said: an empty panel reads as "you
+    /// have done nothing".
     fn journal_list(
         &self,
         before_seq: Option<i64>,
         limit: u32,
     ) -> BoxFuture<'static, Result<methods::JournalListResult, Error>>;
 
-    /// Deshace lo del HUMANO posterior a `seq` (`journal.undo_after`, fase 7).
-    /// La entrada señalada se queda.
+    /// Undoes the HUMAN's work after `seq` (`journal.undo_after`, phase 7).
+    /// The flagged entry stays.
     ///
-    /// Es el mismo undo que [`Self::undo_session`] con otro criterio de
-    /// selección: una Task, con su progreso, su cancelación y su informe.
+    /// The same undo as [`Self::undo_session`] with a different selection
+    /// criterion: a Task, with its progress, its cancellation and its
+    /// report.
     ///
-    /// `upto_seq` es el techo (0.80.0): lo más nuevo que el humano vio
-    /// contado. Nada por encima se deshace.
+    /// `upto_seq` is the ceiling (0.80.0): the newest thing the human saw
+    /// counted. Nothing above it is undone.
     fn undo_after(
         &self,
         seq: i64,
         upto_seq: Option<i64>,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// Mueve UNA entrada a un destino EXACTO. Mismas reglas que
+    /// Moves ONE entry to an EXACT destination. Same rules as
     /// [`Self::copy`].
     ///
-    /// Método aparte y no un `bool` porque son dos verbos distintos en el
-    /// wire (`fs.copy` y `fs.move`), dos `TaskKind` distintos en el tablero y
-    /// dos entradas de journal distintas. Un parámetro que elige entre
-    /// ambos es un sitio donde una copia se convierte en un movimiento.
+    /// A separate method and not a `bool` because they are two different
+    /// verbs on the wire (`fs.copy` and `fs.move`), two different
+    /// `TaskKind`s on the board, and two different journal entries. A
+    /// parameter that picks between the two is a place where a copy turns
+    /// into a move.
     fn move_(
         &self,
         from: VPath,
@@ -608,53 +636,55 @@ pub trait HostBackend: Send + Sync + 'static {
         queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// El catálogo de plugins descubiertos, con su estado aprobado/activo.
+    /// The catalog of discovered plugins, with their approved/enabled
+    /// state.
     ///
-    /// Lo pide la AYUDA, para saber qué extensiones tienen página y cuáles
-    /// están encendidas. Un fallo aquí no es un fallo de la ayuda: se pinta
-    /// sin páginas de extensión, porque la documentación es cosmética y
-    /// jamás tumba nada.
+    /// HELP asks for it, to know which extensions have a page and which are
+    /// turned on. A failure here is not a help failure: it paints without
+    /// extension pages, because the documentation is cosmetic and never
+    /// brings anything down.
     fn plugin_list(&self) -> BoxFuture<'static, Result<methods::PluginListResult, Error>>;
 
-    /// El `help.md` de UN plugin, bajo demanda.
+    /// A plugin's `help.md`, on demand.
     ///
-    /// `id` es una CLAVE DE BÚSQUEDA contra el catálogo, jamás un trozo de
-    /// ruta: quien la manda tiene que haberla validado
-    /// ([`norte_proto::methods::is_valid_plugin_id`]), y el daemon la resuelve
-    /// contra lo que descubrió.
+    /// `id` is a SEARCH KEY against the catalog, never a piece of a path:
+    /// whoever sends it must have validated it
+    /// ([`norte_proto::methods::is_valid_plugin_id`]), and the daemon
+    /// resolves it against what it discovered.
     ///
-    /// El markdown que vuelve NO está enmascarado: es texto de tercero y se
-    /// PARSEA antes de pintarse (`norte_help::parse_untrusted`), nunca se
-    /// vuelca crudo.
+    /// The markdown that comes back is NOT masked: it is third-party text
+    /// and it is PARSED before being painted (`norte_help::parse_untrusted`),
+    /// never dumped raw.
     fn plugin_help(
         &self,
         id: String,
     ) -> BoxFuture<'static, Result<methods::PluginHelpResult, Error>>;
 
-    /// El esquema `[config]` de UN plugin con sus valores EFECTIVOS.
+    /// A plugin's `[config]` schema with its EFFECTIVE values.
     ///
-    /// Las dos cosas en un viaje porque el wire las manda juntas a propósito
-    /// (ADR 0037): pintar unos ajustes necesita el tipo y el valor, y pedirlos
-    /// por separado es una segunda ida y vuelta para nada.
+    /// Both things in one trip because the wire sends them together on
+    /// purpose (ADR 0037): painting settings needs the type and the value,
+    /// and asking for them separately is a second round trip for nothing.
     ///
-    /// Un id desconocido contesta con CERO claves, jamás un error: el mismo
-    /// criterio indulgente que `plugin.list` con un catálogo vacío.
+    /// An unknown id answers with ZERO keys, never an error: the same
+    /// lenient criterion as `plugin.list` with an empty catalog.
     fn plugin_config(
         &self,
         id: String,
     ) -> BoxFuture<'static, Result<methods::PluginGetConfigResult, Error>>;
 
-    /// Aprueba o REVOCA las capabilities de un plugin.
+    /// Approves or REVOKES a plugin's capabilities.
     ///
-    /// Es LA decisión de seguridad del sistema de extensiones: lo que separa
-    /// «este código está en tu disco» de «este código puede leer tus
-    /// ficheros». Quien la llame tiene que haberla pedido a un humano —esta
-    /// puerta no pregunta— y el core es quien la persiste.
+    /// It is THE security decision of the extension system: what separates
+    /// "this code is on your disk" from "this code can read your files".
+    /// Whoever calls it must have asked a human — this door does not ask —
+    /// and the core is the one that persists it.
     ///
-    /// Revocar no es lo mismo que apagar: apagar deja las capabilities
-    /// aprobadas para la próxima vez, revocar las retira.
-    /// `expected_digest` es el ancla que la ventana ENSEÑÓ (#282): el core
-    /// rehúsa si ya no casa, de modo que lo que se concede sea lo que se leyó.
+    /// Revoking is not the same as turning off: turning off leaves the
+    /// capabilities approved for next time, revoking withdraws them.
+    /// `expected_digest` is the anchor the window SHOWED (#282): the core
+    /// refuses if it no longer matches, so that what is granted is what was
+    /// read.
     fn plugin_set_approval(
         &self,
         id: String,
@@ -662,24 +692,25 @@ pub trait HostBackend: Send + Sync + 'static {
         expected_digest: Option<String>,
     ) -> BoxFuture<'static, Result<(), Error>>;
 
-    /// Enciende o apaga un plugin YA aprobado.
+    /// Turns an ALREADY approved plugin on or off.
     fn plugin_set_enabled(
         &self,
         id: String,
         enabled: bool,
     ) -> BoxFuture<'static, Result<(), Error>>;
 
-    /// Desinstala un plugin (ADR 0104): borra sus ficheros y retira su
-    /// consentimiento. Devuelve si lo tenía. Quien la llame tiene que haberlo
-    /// preguntado a un humano — esta puerta no pregunta, y no tiene vuelta.
+    /// Uninstalls a plugin (ADR 0104): deletes its files and withdraws its
+    /// consent. Returns whether it had any. Whoever calls it must have asked
+    /// a human — this door does not ask, and there is no going back.
     fn plugin_uninstall(&self, id: String) -> BoxFuture<'static, Result<bool, Error>>;
 
-    /// Fija UNA clave `[config.<key>]` de un plugin.
+    /// Sets ONE `[config.<key>]` key of a plugin.
     ///
-    /// `value` viaja como String SIEMPRE, en la codificación canónica del
-    /// wire (`bool` → `"true"`/`"false"`, `int` → decimal). El daemon la
-    /// valida contra el ESQUEMA antes de persistirla: la validación de este
-    /// lado es para no mandar lo que ya se sabe malo, jamás lo que permite.
+    /// `value` ALWAYS travels as a String, in the wire's canonical encoding
+    /// (`bool` → `"true"`/`"false"`, `int` → decimal). The daemon validates
+    /// it against the SCHEMA before persisting it: the validation on this
+    /// side is to avoid sending what is already known to be bad, never to
+    /// grant what it allows.
     fn plugin_set_config(
         &self,
         id: String,
@@ -687,15 +718,15 @@ pub trait HostBackend: Send + Sync + 'static {
         value: String,
     ) -> BoxFuture<'static, Result<(), Error>>;
 
-    /// Ejecuta UN comando de un plugin y devuelve su salida.
+    /// Runs ONE plugin command and returns its output.
     ///
-    /// La autorización es del SERVIDOR: `plugin.run_command` resuelve el
-    /// comando contra el catálogo y exige aprobado + activo por su cuenta.
-    /// Lo que una comprobación de este lado compra es coherencia con lo que
-    /// el lector está mirando, nunca el permiso.
+    /// Authorization belongs to the SERVER: `plugin.run_command` resolves
+    /// the command against the catalog and requires approved + enabled on
+    /// its own account. What a check on this side buys is coherence with
+    /// what the reader is looking at, never the permission.
     ///
-    /// La salida es texto de TERCERO: se enmascara y se acota antes de
-    /// pintarse, como cualquier otra cosa que escriba un plugin.
+    /// The output is THIRD-PARTY text: it is masked and bounded before being
+    /// painted, like anything else a plugin writes.
     fn plugin_run_command(
         &self,
         id: String,
@@ -703,57 +734,59 @@ pub trait HostBackend: Send + Sync + 'static {
         arg: String,
     ) -> BoxFuture<'static, Result<String, Error>>;
 
-    /// La PREVIEW con estilo del primer plugin `previewer` que aplique.
+    /// The styled PREVIEW from the first `previewer` plugin that applies.
     ///
-    /// `None` = ninguno aplicó, que no es un error: el visor cae entonces a
-    /// leer los bytes él mismo. Un previewer roto tampoco lo es — un plugin
-    /// no puede dejar un fichero sin poder mirarse.
+    /// `None` = none applied, which is not an error: the viewer then falls
+    /// back to reading the bytes itself. A broken previewer is not one
+    /// either — a plugin cannot leave a file unable to be looked at.
     ///
-    /// Devuelve LÍNEAS DE SPANS y no HTML ni bytes: el plugin describe y el
-    /// host pinta (ADR 0037). El `role` de cada span viene del vocabulario
-    /// CERRADO de `norte-theme`, así que un plugin no elige su color, y el
-    /// texto es suyo, o sea NO confiable: se enmascara antes de pintarse.
+    /// Returns LINES OF SPANS, not HTML or bytes: the plugin describes and
+    /// the host paints (ADR 0037). Each span's `role` comes from
+    /// `norte-theme`'s CLOSED vocabulary, so a plugin does not choose its
+    /// color, and the text is its own, i.e. NOT trustworthy: it is masked
+    /// before being painted.
     fn plugin_preview_styled(
         &self,
         path: VPath,
         columns: Option<u32>,
     ) -> BoxFuture<'static, Result<Option<methods::PluginPreviewStyled>, Error>>;
 
-    /// La MINIATURA de un fichero por un plugin (ADR 0107): una imagen ya
-    /// verificada por el plugin-host, o `None` si ningún plugin consentido
-    /// casa o el que casa no supo. Cosmética y fail-soft como la preview:
-    /// sin miniatura, el visor se queda con lo que tenía.
+    /// A file's THUMBNAIL from a plugin (ADR 0107): an already-verified
+    /// image from the plugin-host, or `None` if no consented plugin matches
+    /// or the one that matches did not know how. Cosmetic and fail-soft like
+    /// the preview: without a thumbnail, the viewer keeps what it had.
     fn plugin_thumbnail(
         &self,
         path: VPath,
         max_edge: u32,
     ) -> BoxFuture<'static, Result<Option<methods::PluginThumbnail>, Error>>;
 
-    /// Las DECORACIONES que los plugins ponen sobre un lote de rutas.
+    /// The DECORATIONS plugins put over a batch of paths.
     ///
-    /// Cosmético y fail-soft por contrato: sin decoradores consentidos, con
-    /// el catálogo caído o con la RPC rota, la respuesta es «ninguna» y el
-    /// listado se pinta igual. Una insignia que no llega no puede tumbar una
-    /// pantalla.
+    /// Cosmetic and fail-soft by contract: without consented decorators,
+    /// with the catalog down or with the RPC broken, the answer is "none"
+    /// and the listing paints the same. A badge that does not arrive cannot
+    /// bring down a screen.
     ///
-    /// El lote es la VENTANA VISIBLE, no el directorio: cada llamada levanta
-    /// una instancia de wasm por plugin (#224 midió 167 ms por página de 20
-    /// sobre 2000 entradas), así que pedirlas para lo que no se ve es pagar
-    /// ese precio por nada.
+    /// The batch is the VISIBLE WINDOW, not the directory: each call spins
+    /// up a wasm instance per plugin (#224 measured 167 ms per page of 20
+    /// over 2000 entries), so asking for them for what is not visible is
+    /// paying that price for nothing.
     fn plugin_decorate(
         &self,
         paths: Vec<VPath>,
         kinds: Vec<norte_proto::EntryKind>,
     ) -> BoxFuture<'static, Result<Vec<methods::PluginDecorations>, Error>>;
 
-    /// Los valores de UNA columna aportada por un plugin, para un lote.
+    /// The values of ONE column a plugin contributes, for a batch.
     ///
-    /// La forma «sin datos» es un vector de `None` del TAMAÑO de `paths`, no
-    /// un vector vacío: el contrato es posicional y quien lo consume espera
-    /// siempre una celda por ruta, también cuando la columna no aplica.
+    /// The "no data" shape is a vector of `None` the SIZE of `paths`, not an
+    /// empty vector: the contract is positional and whoever consumes it
+    /// always expects one cell per path, even when the column does not
+    /// apply.
     ///
-    /// Fail-soft igual que [`Self::plugin_decorate`]: una columna que falla
-    /// se queda en blanco, jamás convierte el listado en un error.
+    /// Fail-soft the same as [`Self::plugin_decorate`]: a column that fails
+    /// stays blank, it never turns the listing into an error.
     fn plugin_column_values(
         &self,
         plugin: String,
@@ -761,29 +794,30 @@ pub trait HostBackend: Send + Sync + 'static {
         paths: Vec<VPath>,
     ) -> BoxFuture<'static, Result<Vec<Option<String>>, Error>>;
 
-    /// El marco que un plugin pinta para su panel (0.74.0, fase 3).
+    /// The frame a plugin paints for its panel (0.74.0, phase 3).
     ///
-    /// `None` cuando ningún plugin consentido pinta ese panel, que es el mismo
-    /// caso que un daemon más viejo sin el método: en los dos el hueco se
-    /// queda con lo que tuviera. Fail-soft como todo lo que decora.
+    /// `None` when no consented plugin paints that panel, which is the same
+    /// case as an older daemon without the method: in both, the slot keeps
+    /// whatever it had. Fail-soft like everything that decorates.
     fn plugin_panel_render(
         &self,
         params: methods::PluginPanelRenderParams,
     ) -> BoxFuture<'static, Result<Option<methods::PanelFrame>, Error>>;
 
-    /// Los volúmenes del HOST: discos, montajes de red, medios extraíbles.
+    /// The HOST's volumes: disks, network mounts, removable media.
     ///
-    /// No es una llamada de provider y por eso no vive en la familia `fs.*`:
-    /// la tabla de montaje es del host, y el daemon solo la contesta a una
-    /// conexión de humano — un agente bajo scope no la necesita.
+    /// Not a provider call, which is why it does not live in the `fs.*`
+    /// family: the mount table belongs to the host, and the daemon only
+    /// answers it to a human connection — an agent under scope does not need
+    /// it.
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>>;
 
-    /// Pide un PLAN de sincronización: su Task y el canal de eventos.
+    /// Asks for a sync PLAN: its Task and the events channel.
     ///
-    /// El plan NO escribe un byte: dice qué haría. Lo que escribe es
-    /// `sync.apply` —que este trait todavía no expone, y esa ausencia ES la
-    /// frontera de la fase A— y solo contra el `plan_hash` que este plan
-    /// cerró.
+    /// The plan writes NOT A BYTE: it says what it would do. What writes is
+    /// `sync.apply` — which this trait does not expose yet, and that absence
+    /// IS phase A's boundary — and only against the `plan_hash` this plan
+    /// closed with.
     fn sync_plan(
         &self,
         params: methods::SyncPlanParams,
@@ -798,39 +832,42 @@ pub trait HostBackend: Send + Sync + 'static {
         >,
     >;
 
-    /// APLICA un plan ya revisado, por su `plan_hash`.
+    /// APPLIES an already-reviewed plan, by its `plan_hash`.
     ///
-    /// El hash es un token de FRESCURA, no de aprobación: es público y
-    /// determinista, así que lo que garantiza es que se ejecuta el plan que
-    /// el re-plan produce AHORA y que un hash aprobado para un directorio no
-    /// vale contra otro. Quién puede canjearlo lo decide la policy del core.
+    /// The hash is a FRESHNESS token, not an approval one: it is public and
+    /// deterministic, so what it guarantees is that the plan the re-plan
+    /// produces NOW is what gets executed, and that a hash approved for one
+    /// directory is not valid against another. Who can redeem it is decided
+    /// by the core's policy.
     ///
-    /// Esto ESCRIBE: es la única llamada de esta superficie que lo hace.
+    /// This WRITES: it is the only call on this surface that does.
     fn sync_apply(
         &self,
         plan_hash: methods::PlanHash,
     ) -> BoxFuture<'static, Result<HostTask, Error>>;
 
-    /// El informe de una sincronización ya terminada.
+    /// The report of an already-finished sync.
     ///
-    /// Mismo papel que el informe de un lote de renombrado: el desenlace de
-    /// la Task dice si corrió, y lo que NO se hizo —los pasos que fallaron,
-    /// lo que quedó sin deshacer— lo cuenta solo el informe.
+    /// Same role as a rename batch's report: the Task's outcome says
+    /// whether it ran, and what was NOT done — the steps that failed, what
+    /// was left un-undone — is told only by the report.
     fn sync_report(
         &self,
         task_id: TaskId,
     ) -> BoxFuture<'static, Result<methods::SyncReportResult, Error>>;
 
-    /// Compara dos árboles y devuelve su Task Y el canal de LOTES de filas.
+    /// Compares two trees and returns its Task AND the channel of BATCHES of
+    /// rows.
     ///
-    /// Los dos juntos por lo mismo que en [`Self::search`]: la comparación es
-    /// una tarea larga cuyo desenlace va por el progreso y cuyas filas van por
-    /// el canal, y quedarse con uno solo es no poder pararla o no ver nada.
+    /// Both together for the same reason as in [`Self::search`]: the
+    /// comparison is a long task whose outcome goes through the progress and
+    /// whose rows go through the channel, and keeping only one means either
+    /// not being able to stop it or not seeing anything.
     ///
-    /// Cancelarla es el ÚNICO freno: el motor emite una fila por nombre
-    /// emparejado de todo el árbol y no hay tope —un tope convertiría «¿son
-    /// iguales estos dos árboles?» en una respuesta a medias, que es lo único
-    /// que esta pregunta no admite—.
+    /// Cancelling it is the ONLY brake: the engine emits one row per matched
+    /// name across the whole tree and there is no cap — a cap would turn
+    /// "are these two trees the same?" into a half answer, which is the one
+    /// thing this question does not allow.
     fn compare(
         &self,
         params: methods::FsCompareParams,
@@ -845,27 +882,29 @@ pub trait HostBackend: Send + Sync + 'static {
         >,
     >;
 
-    /// Búsqueda SEMÁNTICA contra el índice (`index.search_semantic`).
+    /// SEMANTIC search against the index (`index.search_semantic`).
     ///
-    /// Respuesta directa y no una Task: el core embebe la consulta y barre el
-    /// índice, y lo que vuelve es la lista entera, mejor primero.
+    /// A direct response, not a Task: the core embeds the query and sweeps
+    /// the index, and what comes back is the whole list, best first.
     ///
-    /// **Sale del proceso**: la consulta va al proveedor de IA configurado.
-    /// El daemon solo la atiende a una conexión de humano, y exige que el
-    /// índice esté construido y embebido — sin filas contesta `NotFound`, que
-    /// es una respuesta que hay que saber leer y no un fallo cualquiera.
+    /// **Leaves the process**: the query goes to the configured AI provider.
+    /// The daemon only serves it to a human connection, and requires the
+    /// index to be built and embedded — with no rows it answers `NotFound`,
+    /// which is an answer you have to know how to read, not just any
+    /// failure.
     fn semantic_search(
         &self,
         query: String,
         k: u32,
     ) -> BoxFuture<'static, Result<Vec<methods::SemanticHit>, Error>>;
 
-    /// Lanza una búsqueda por el subárbol y devuelve su Task Y el canal por
-    /// el que llegan los LOTES de resultados.
+    /// Launches a search over the subtree and returns its Task AND the
+    /// channel BATCHES of results arrive on.
     ///
-    /// Los dos juntos porque son una sola cosa: una búsqueda es una tarea
-    /// larga cuyo desenlace va por el progreso y cuyos hallazgos van por el
-    /// canal. Quedarse con uno solo es no poder cancelarla, o no ver nada.
+    /// Both together because they are one thing: a search is a long task
+    /// whose outcome goes through the progress and whose findings go through
+    /// the channel. Keeping only one means either not being able to cancel
+    /// it, or not seeing anything.
     fn search(
         &self,
         params: methods::FsSearchParams,
@@ -875,7 +914,7 @@ pub trait HostBackend: Send + Sync + 'static {
     >;
 }
 
-/// El backend de verdad: el SDK.
+/// The real backend: the SDK.
 impl HostBackend for norte_client::RemoteBackend {
     fn list(
         &self,
@@ -933,13 +972,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.checksum(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -961,13 +1000,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.dir_usage(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -989,13 +1028,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.set_mode(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1006,13 +1045,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.mkdir(&path).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1023,13 +1062,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.create_file(&path).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1092,20 +1131,20 @@ impl HostBackend for norte_client::RemoteBackend {
     }
 
     fn take_foreign_tasks(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<HostTask>> {
-        let mut origen = norte_client::RemoteBackend::take_foreign_tasks(self)?;
+        let mut source = norte_client::RemoteBackend::take_foreign_tasks(self)?;
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        // Un canal no se mapea en el sitio: el puente es una task de reenvío
-        // que muere con el canal que la alimenta.
+        // A channel is not mapped in place: the bridge is a forwarding task
+        // that dies with the channel that feeds it.
         tokio::spawn(async move {
-            while let Some(t) = origen.recv().await {
+            while let Some(t) = source.recv().await {
                 let canceller = t.canceller();
-                let pausador = canceller.clone();
+                let pause_handle = canceller.clone();
                 let task = HostTask {
                     id: t.id(),
                     progress: t.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
-                    pause: Some(pausa_remota(pausador.clone())),
-                    cola: Some(cola_remota(pausador)),
+                    pause: Some(remote_pause(pause_handle.clone())),
+                    cola: Some(remote_queue_move(pause_handle)),
                     foreign: true,
                 };
                 if tx.send(task).is_err() {
@@ -1218,9 +1257,9 @@ impl HostBackend for norte_client::RemoteBackend {
         k: u32,
     ) -> BoxFuture<'static, Result<Vec<methods::SemanticHit>, Error>> {
         let backend = self.clone();
-        // Sin `root`: el índice entero, igual que el TUI. Acotar por el
-        // directorio del panel prometería un alcance que el índice puede no
-        // tener — se construye por raíces, no por lo que se está mirando.
+        // Without `root`: the whole index, same as the TUI. Bounding by the
+        // pane's directory would promise a scope the index may not have —
+        // it is built by roots, not by what is being looked at.
         Box::pin(async move { backend.index_search_semantic(None, &query, k).await })
     }
 
@@ -1239,12 +1278,12 @@ impl HostBackend for norte_client::RemoteBackend {
         params: methods::PluginPanelRenderParams,
     ) -> BoxFuture<'static, Result<Option<methods::PanelFrame>, Error>> {
         let backend = self.clone();
-        // El método INHERENTE del `RemoteBackend`, que gana a este del trait
-        // por tener el mismo nombre y la misma firma. Sus vecinos se
-        // distinguen solos porque toman referencias; este no, así que si
-        // alguien renombra o borra el inherente, esta línea pasa a llamarse a
-        // sí misma —compila, y revienta la pila del actor en la primera
-        // llamada—.
+        // The `RemoteBackend`'s INHERENT method, which wins over this
+        // trait's one by having the same name and the same signature. Its
+        // neighbors tell themselves apart on their own because they take
+        // references; this one does not, so if someone renames or deletes
+        // the inherent one, this line starts calling itself — it compiles,
+        // and blows up the actor's stack on the first call.
         Box::pin(
             async move { norte_client::RemoteBackend::plugin_panel_render(&backend, params).await },
         )
@@ -1261,14 +1300,14 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let (task, rx) = backend.search(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok((
                 HostTask {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
-                    pause: Some(pausa_remota(pausador.clone())),
-                    cola: Some(cola_remota(pausador)),
+                    pause: Some(remote_pause(pause_handle.clone())),
+                    cola: Some(remote_queue_move(pause_handle)),
                     foreign: false,
                 },
                 rx,
@@ -1293,14 +1332,14 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let (task, rx) = backend.sync_plan(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok((
                 HostTask {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
-                    pause: Some(pausa_remota(pausador.clone())),
-                    cola: Some(cola_remota(pausador)),
+                    pause: Some(remote_pause(pause_handle.clone())),
+                    cola: Some(remote_queue_move(pause_handle)),
                     foreign: false,
                 },
                 rx,
@@ -1316,13 +1355,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.sync_apply(&plan_hash).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1353,14 +1392,14 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let (task, rx) = backend.compare(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok((
                 HostTask {
                     id: task.id(),
                     progress: task.progress(),
                     cancel: Arc::new(move || canceller.cancel()),
-                    pause: Some(pausa_remota(pausador.clone())),
-                    cola: Some(cola_remota(pausador)),
+                    pause: Some(remote_pause(pause_handle.clone())),
+                    cola: Some(remote_queue_move(pause_handle)),
                     foreign: false,
                 },
                 rx,
@@ -1370,8 +1409,8 @@ impl HostBackend for norte_client::RemoteBackend {
 
     fn volumes(&self) -> BoxFuture<'static, Result<Vec<methods::Volume>, Error>> {
         let backend = self.clone();
-        // Sin los pseudo-sistemas: `proc`, `sysfs` y compañía llenan la lista
-        // de sitios a los que nadie quiere ir.
+        // Without the pseudo-filesystems: `proc`, `sysfs` and friends fill
+        // the list with places nobody wants to go.
         Box::pin(async move { backend.volumes(false).await })
     }
 
@@ -1380,13 +1419,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.delete(&path, mode).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1399,7 +1438,7 @@ impl HostBackend for norte_client::RemoteBackend {
         on_collision: CollisionPolicy,
         queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
-        transferir(self, Verbo::Copiar, from, to, on_collision, queued)
+        transfer_op(self, Verb::Copy, from, to, on_collision, queued)
     }
 
     fn pack(
@@ -1410,13 +1449,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.pack(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1430,13 +1469,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.test_archive(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1469,13 +1508,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.split_file(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1489,13 +1528,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.combine_files(params).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1506,13 +1545,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.dir_size(methods::FsDirSizeParams { paths }).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1578,13 +1617,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.organize(&dir, &moves, &plan_hash).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1609,13 +1648,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.rename_batch(&dir, &pairs, &plan_hash).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1634,13 +1673,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.undo_session(&session).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1672,13 +1711,13 @@ impl HostBackend for norte_client::RemoteBackend {
         Box::pin(async move {
             let task = backend.undo_after(seq, upto_seq).await?;
             let canceller = task.canceller();
-            let pausador = canceller.clone();
+            let pause_handle = canceller.clone();
             Ok(HostTask {
                 id: task.id(),
                 progress: task.progress(),
                 cancel: Arc::new(move || canceller.cancel()),
-                pause: Some(pausa_remota(pausador.clone())),
-                cola: Some(cola_remota(pausador)),
+                pause: Some(remote_pause(pause_handle.clone())),
+                cola: Some(remote_queue_move(pause_handle)),
                 foreign: false,
             })
         })
@@ -1699,75 +1738,75 @@ impl HostBackend for norte_client::RemoteBackend {
         on_collision: CollisionPolicy,
         queued: bool,
     ) -> BoxFuture<'static, Result<HostTask, Error>> {
-        transferir(self, Verbo::Mover, from, to, on_collision, queued)
+        transfer_op(self, Verb::Move, from, to, on_collision, queued)
     }
 }
 
-/// Copiar o mover: los dos verbos de una transferencia.
+/// Copy or move: the two verbs of a transfer.
 ///
-/// Un enum y no el nombre del método como cadena. La diferencia importa
-/// porque el destino del `else` no es un error visible: es la otra
-/// operación, la que además BORRA el origen.
+/// An enum and not the method name as a string. The difference matters
+/// because the `else` branch's destination is not a visible error: it is the
+/// other operation, the one that also DELETES the source.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Verbo {
+enum Verb {
     /// `fs.copy`.
-    Copiar,
+    Copy,
     /// `fs.move`.
-    Mover,
+    Move,
 }
 
-/// El cuerpo COMPARTIDO de copiar y mover sobre el SDK.
+/// The SHARED body of copying and moving over the SDK.
 ///
-/// Uno solo porque las dos llamadas se diferencian en el nombre del método y
-/// en nada más: el resto —opciones por defecto, envoltura de la Task, el
-/// cancelador— tiene que ser idéntico, y dos copias del mismo bloque es el
-/// sitio donde `fs.move` se queda sin la política de colisión que `fs.copy`
-/// sí manda.
-fn transferir(
+/// Just one because the two calls differ only in the method name and
+/// nothing else: the rest — default options, wrapping the Task, the
+/// canceller — has to be identical, and two copies of the same block is the
+/// place where `fs.move` ends up missing the collision policy `fs.copy` does
+/// send.
+fn transfer_op(
     backend: &norte_client::RemoteBackend,
-    verbo: Verbo,
+    verb: Verb,
     from: VPath,
     to: VPath,
     on_collision: CollisionPolicy,
     queued: bool,
 ) -> BoxFuture<'static, Result<HostTask, Error>> {
     let backend = backend.clone();
-    // El SDK sigue tomando el método como CADENA, y su cuerpo es
-    // `if method == FS_COPY { copiar } else { mover }`: cualquier cosa que no
-    // sea exactamente la constante de copiar se convierte en un movimiento.
-    // Aquí no puede pasar porque lo que entra es un enum de dos variantes, y
-    // desde #270 el SDK también toma un enum: el `else` que convertía
-    // cualquier método desconocido en un movimiento ya no existe.
-    let metodo = match verbo {
-        Verbo::Copiar => norte_client::Transfer::Copy,
-        Verbo::Mover => norte_client::Transfer::Move,
+    // The SDK still takes the method as a STRING, and its body is
+    // `if method == FS_COPY { copy } else { move }`: anything that is not
+    // exactly the copy constant turns into a move.
+    // It cannot happen here because what comes in is a two-variant enum, and
+    // since #270 the SDK also takes an enum: the `else` that turned any
+    // unknown method into a move no longer exists.
+    let method = match verb {
+        Verb::Copy => norte_client::Transfer::Copy,
+        Verb::Move => norte_client::Transfer::Move,
     };
     Box::pin(async move {
         let task = backend
             .transfer(
-                metodo,
+                method,
                 &from,
                 &to,
                 norte_client::TransferOptions {
                     on_collision,
                     queued,
-                    // El resto, el default del wire: preservar symlinks y no
-                    // reanudar. Reanudar es una decisión del usuario (ADR
-                    // 0012) y esta ventana todavía no tiene dónde tomarla,
-                    // así que se manda lo que el daemon entiende por «no se
-                    // pidió» en vez de elegir por él.
+                    // The rest is the wire default: preserve symlinks and do
+                    // not resume. Resuming is a user decision (ADR 0012) and
+                    // this window has nowhere to make it yet, so it sends
+                    // what the daemon understands as "not requested" instead
+                    // of choosing for the user.
                     ..norte_client::TransferOptions::default()
                 },
             )
             .await?;
         let canceller = task.canceller();
-        let pausador = canceller.clone();
+        let pause_handle = canceller.clone();
         Ok(HostTask {
             id: task.id(),
             progress: task.progress(),
             cancel: Arc::new(move || canceller.cancel()),
-            pause: Some(pausa_remota(pausador.clone())),
-            cola: Some(cola_remota(pausador)),
+            pause: Some(remote_pause(pause_handle.clone())),
+            cola: Some(remote_queue_move(pause_handle)),
             foreign: false,
         })
     })

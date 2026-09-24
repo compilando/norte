@@ -1,16 +1,16 @@
-//! Recortar y medir texto para la celda en la que cabe.
+//! Truncating and measuring text for the cell it has to fit.
 //!
-//! Nada de aquí sabe de `App` ni de ratatui salvo `Span`: son las funciones que
-//! deciden dónde entra la elipsis, cuántas celdas ocupa un glifo y qué badge
-//! lleva delante un nombre hostil.
+//! Nothing here knows about `App` or ratatui except `Span`: these are the
+//! functions that decide where the ellipsis lands, how many cells a glyph
+//! occupies, and what badge goes in front of a hostile name.
 
 use super::HOSTILE_BADGE;
 use ratatui::text::Span;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Prefijo de `s` que cabe en `max` CELDAS (review MN2/MN3): recorte
-/// consciente de ancho — un char de doble celda jamás desborda el
-/// presupuesto (el recorte por `chars()` sí lo hacía).
+/// Prefix of `s` that fits in `max` CELLS (review MN2/MN3): width-aware
+/// truncation — a double-cell char never overruns the budget (truncating by
+/// `chars()` did).
 pub(crate) fn take_width(s: &str, max: usize) -> String {
     let mut out = String::new();
     let mut used = 0usize;
@@ -54,7 +54,7 @@ pub(crate) fn right_ellipsis(s: &str, max: usize) -> String {
 ///
 /// [`crate::hints::dialog_hints`] joins the groups with a single space and
 /// every group starts with `[`, so the boundary is the ` [` join and NOT any
-/// space: a label is prose and carries spaces of its own (`otro panel`).
+/// space: a label is prose and carries spaces of its own (`the other pane`).
 pub(crate) fn hint_groups(hint: &str) -> Vec<&str> {
     let mut groups = Vec::new();
     let mut start = 0usize;
@@ -112,7 +112,7 @@ pub fn fit_hint_groups(hint: &str, max: usize) -> String {
     out
 }
 
-/// El texto con su badge de nombre hostil delante, si lo lleva.
+/// The text with its hostile-name badge in front, if it carries one.
 pub(crate) fn with_badge(text: &str, hostile: bool) -> String {
     if hostile {
         format!("{HOSTILE_BADGE} {text}")
@@ -121,25 +121,26 @@ pub(crate) fn with_badge(text: &str, hostile: bool) -> String {
     }
 }
 
-/// Una fila de dos campos en `width` celdas: `left` a la izquierda, `right`
-/// pegado a la derecha.
+/// A two-field row in `width` cells: `left` on the left, `right` flush to
+/// the right.
 ///
-/// El campo de la derecha NUNCA se recorta, y esa es la regla que importa: es
-/// un TAMAÑO, y un `38.2 GiB` recortado por la cabeza pinta `8.2 GiB`, que no
-/// es una etiqueta rota sino un número FALSO. Si no cabe entero, se cae el
-/// campo derecho y queda solo el nombre.
+/// The right field is NEVER truncated, and that is the rule that matters: it
+/// is a SIZE, and a `38.2 GiB` truncated at the head paints `8.2 GiB`, which
+/// is not a broken label but a FALSE number. If it does not fit whole, the
+/// right field is dropped and only the name is left.
 pub(crate) fn two_fields(
     left: &str,
     right: &str,
     width: usize,
     truncate: fn(&str, usize) -> String,
 ) -> String {
-    /// Celdas por debajo de las cuales el nombre deja de identificar nada.
+    /// Cells below which the name stops identifying anything.
     const FLOOR: usize = 6;
     let d = norte_frontend::cells(right);
-    // Aire a los dos lados del par, MÁS una celda de separación entre los dos
-    // campos: sin ella un nombre que llena su sitio deja el `…` pegado al
-    // número (`/home/os…1P`), que se lee como un dato y no como un recorte.
+    // Room on both sides of the pair, PLUS one separator cell between the
+    // two fields: without it a name that fills its spot leaves the `…`
+    // glued to the number (`/home/os…1P`), which reads as data and not as a
+    // truncation.
     if d + 3 + FLOOR >= width {
         return truncate(&format!(" {left}"), width);
     }
@@ -149,17 +150,18 @@ pub(crate) fn two_fields(
     format!("{i}{}{right} ", " ".repeat(slot))
 }
 
-/// Recorte por el MEDIO, para lo que se identifica por su cola: una ruta.
+/// Truncation through the MIDDLE, for what is identified by its tail: a
+/// path.
 pub(crate) fn middle(text: &str, width: usize) -> String {
     norte_frontend::middle_ellipsis(text, width)
 }
 
-/// Recorta por la COLA a `width` celdas, marcando con `…`.
+/// Truncates by the TAIL to `width` cells, marking with `…`.
 ///
-/// Por la cola y no por el medio ([`norte_frontend::middle_ellipsis`]) porque
-/// aquí lo que identifica la fila está al principio: el nombre de un favorito
-/// y el de una sección. La elipsis media existe para rutas, donde lo que
-/// identifica es el final.
+/// By the tail and not the middle ([`norte_frontend::middle_ellipsis`])
+/// because here what identifies the row is at the start: a favorite's name,
+/// a section's. Middle ellipsis exists for paths, where what identifies is
+/// the end.
 pub(crate) fn head(text: &str, width: usize) -> String {
     if norte_frontend::cells(text) <= width {
         return text.to_owned();
@@ -178,16 +180,16 @@ pub(crate) fn head(text: &str, width: usize) -> String {
     out
 }
 
-/// Ancho del modal por CONTENIDO (H1 T3 follow-up): los pies GENERADOS
-/// pueden superar las 60 col históricas — p. ej. colisión: `[esc] … [w] más
-/// nuevo` — y truncarlos escondería teclas reales. Techo = ancho del frame
-/// menos margen; suelo = las 60 históricas. MINOR-1 (H1 close): se mide en
-/// Recorta una fila de spans a `max` CELDAS, cortando por la derecha y
-/// respetando fronteras de carácter.
+/// Modal width by CONTENT (H1 T3 follow-up): GENERATED footers can exceed
+/// the historic 60 cols — e.g. collision: `[esc] … [w] newer` — and
+/// truncating them would hide real keys. Ceiling = frame width minus margin;
+/// floor = the historic 60. MINOR-1 (H1 close): measured in
+/// Truncates a row of spans to `max` CELLS, cutting on the right and
+/// respecting character boundaries.
 ///
-/// El último span que no cabe entero se corta por caracteres (jamás por
-/// bytes): partir un carácter ancho por la mitad pinta media celda basura, y
-/// partirlo por bytes ni siquiera es UTF-8.
+/// The last span that does not fit whole is cut by characters (never by
+/// bytes): splitting a wide character in half paints half a garbage cell,
+/// and splitting by bytes is not even UTF-8.
 pub(crate) fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'static>> {
     let mut out: Vec<Span<'static>> = Vec::new();
     let mut left = max;
@@ -211,12 +213,13 @@ pub(crate) fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'st
             acc += cw;
             text.push(c);
         }
-        // Cortar por carácter no basta: un ZWJ o un selector de variación
-        // miden CERO, así que caben siempre y el trozo puede acabar en un
-        // juntador que se compone con lo que se pinte a continuación —
-        // `emoji_zwj_family` recortado a tres celdas dejaba la familia unida
-        // al carácter siguiente (#246 m1). `middle_ellipsis` arregló el
-        // espejo de esto drenando por delante; aquí se drena por detrás.
+        // Cutting by character is not enough: a ZWJ or a variation selector
+        // measures ZERO, so it always fits and the chunk can end on a
+        // joiner that composes with whatever is painted right after it —
+        // `emoji_zwj_family` truncated to three cells left the family
+        // joined to the next character (#246 m1). `middle_ellipsis` fixed
+        // the mirror of this by draining from the front; here it drains
+        // from the back.
         while text
             .chars()
             .next_back()
@@ -232,31 +235,32 @@ pub(crate) fn clamp_spans(spans: Vec<Span<'static>>, max: usize) -> Vec<Span<'st
     out
 }
 
-/// La COLA de `s`, con `…` delante cuando algo se quedó fuera.
+/// The TAIL of `s`, with `…` in front when something was left out.
 ///
-/// En CELDAS de terminal, no en chars. Contaba chars, y para eso lo que este
-/// presupuesto protege —que el campo quepa en su caja— es la medida
-/// equivocada: cincuenta chars de CJK son CIEN celdas, así que un nombre
-/// japonés desbordaba igual y se llevaba por delante el cursor del final. Lo
-/// destapó la foto del modal de transferencia, que hasta hoy no existía.
+/// In terminal CELLS, not chars. It used to count chars, and for what this
+/// budget protects — that the field fits in its box — that is the wrong
+/// measure: fifty CJK chars are ONE HUNDRED cells, so a Japanese name
+/// overflowed just the same and dragged the end's cursor along with it.
+/// Uncovered by the transfer modal's screenshot, which did not exist until
+/// today.
 ///
-/// El corte se delega en [`norte_frontend::skip_cells`], que no parte un
-/// carácter ancho por la mitad y deja su hueco en blanco: sin eso, la cola
-/// podía empezar con media celda y correr la línea entera.
+/// The cut is delegated to [`norte_frontend::skip_cells`], which does not
+/// split a wide character in half and leaves its slot blank: without that,
+/// the tail could start with half a cell and shift the whole line.
 pub(crate) fn tail_window(s: &str, max: usize) -> String {
     let total = norte_frontend::cells(s);
     if total <= max {
         return s.to_owned();
     }
-    // Una celda se la queda el `…`.
-    let cabe = max.saturating_sub(1);
-    let tail = norte_frontend::skip_cells(s, total.saturating_sub(cabe));
+    // One cell goes to the `…`.
+    let fits = max.saturating_sub(1);
+    let tail = norte_frontend::skip_cells(s, total.saturating_sub(fits));
     format!("…{tail}")
 }
 
-/// Prefija el badge hostil FUERA de la traducción (audit MINOR-5: el
-/// mecanismo del badge no puede depender de que cada locale conserve un
-/// `{ $badge }` — concatenación Rust-side, translation-proof).
+/// Prefixes the hostile badge OUTSIDE the translation (audit MINOR-5: the
+/// badge mechanism cannot depend on every locale keeping a `{ $badge }` —
+/// Rust-side concatenation, translation-proof).
 pub(crate) fn badge_prefixed(hostile: bool, line: String) -> String {
     if hostile {
         format!("{HOSTILE_BADGE}{line}")
@@ -274,21 +278,21 @@ pub(crate) fn clamp_chars(s: &str, max: usize) -> String {
     out
 }
 
-/// Cuántas filas ocupa `text` envuelto a `width` columnas.
+/// How many rows `text` occupies wrapped to `width` columns.
 ///
-/// Cuenta CELDAS, no bytes ni `char`s: medir en bytes reservaría de más y en
-/// `char`s de menos — y de menos es lo que corta la frase que dice que esto no
-/// se puede deshacer.
+/// Counts CELLS, not bytes or `char`s: measuring in bytes would reserve too
+/// much and in `char`s too little — and too little is what truncates the
+/// sentence that says this cannot be undone.
 pub(crate) fn wrapped_rows(text: &str, width: u16) -> u16 {
     if width == 0 {
         return 1;
     }
     let cells = u16::try_from(text.width()).unwrap_or(u16::MAX);
     let exact = cells.div_ceil(width).max(1);
-    // Una fila de holgura en cuanto la frase envuelve: `Wrap` parte por
-    // PALABRAS, así que `ceil(cells / width)` es una cota INFERIOR y quedarse
-    // en ella recorta la última línea — que es la que dice que esto no se puede
-    // deshacer. El tope de `sync_layout` acota lo que la holgura puede costar.
+    // One row of slack as soon as the sentence wraps: `Wrap` splits by
+    // WORDS, so `ceil(cells / width)` is a LOWER bound and stopping there
+    // truncates the last line — which is the one that says this cannot be
+    // undone. `sync_layout`'s cap bounds what the slack can cost.
     if cells > width {
         exact.saturating_add(1)
     } else {
@@ -301,88 +305,89 @@ mod ellipsis_tests {
     use norte_frontend::middle_ellipsis;
     use unicode_width::UnicodeWidthStr;
 
-    /// Una cadena que ya cabe en `max` celdas vuelve intacta.
+    /// A string that already fits in `max` cells comes back untouched.
     #[test]
-    fn cabe_intacta() {
+    fn fits_intact() {
         assert_eq!(middle_ellipsis("file:///d/a.txt", 46), "file:///d/a.txt");
     }
 
-    /// ASCII que desborda: comportamiento idéntico al anterior (celdas==chars),
-    /// cabeza + `…` + cola, sin exceder `max`.
+    /// ASCII that overflows: identical behavior to the above (cells==chars),
+    /// head + `…` + tail, without exceeding `max`.
     #[test]
-    fn ascii_conserva_cabeza_y_cola() {
+    fn ascii_keeps_head_and_tail() {
         let s = "file:///muy/larga/ruta/hacia/un/archivo/final.txt";
         let out = middle_ellipsis(s, 20);
         assert!(out.contains('…'));
-        assert!(out.starts_with("file:"), "conserva el scheme (cabeza)");
-        let tail = out.rsplit_once('…').expect("hay elipsis").1;
+        assert!(out.starts_with("file:"), "keeps the scheme (head)");
+        let tail = out.rsplit_once('…').expect("there is an ellipsis").1;
         assert!(
             !tail.is_empty() && s.ends_with(tail),
-            "la cola es un sufijo REAL del original: {out:?}"
+            "the tail is a REAL suffix of the original: {out:?}"
         );
-        assert!(out.width() <= 20, "no excede el ancho: {out:?}");
+        assert!(out.width() <= 20, "does not exceed the width: {out:?}");
     }
 
-    /// CJK (cada char = 2 celdas): NUNCA excede `max` celdas y CONSERVA la
-    /// cola —el bug #79 la perdía porque presupuestaba por chars—.
+    /// CJK (each char = 2 cells): NEVER exceeds `max` cells and KEEPS the
+    /// tail — bug #79 lost it because it budgeted by chars.
     #[test]
-    fn cjk_no_excede_y_conserva_cola() {
-        let s = "日本語".repeat(20); // 60 chars, 120 celdas
+    fn cjk_stays_bounded_and_keeps_tail() {
+        let s = "日本語".repeat(20); // 60 chars, 120 cells
         let out = middle_ellipsis(&s, 21);
-        assert!(out.width() <= 21, "ancho {} > 21 en {out:?}", out.width());
+        assert!(out.width() <= 21, "width {} > 21 in {out:?}", out.width());
         assert!(out.contains('…'));
-        assert!(out.ends_with('語'), "la cola sobrevive: {out:?}");
-        assert!(out.starts_with('日'), "la cabeza sobrevive: {out:?}");
+        assert!(out.ends_with('語'), "the tail survives: {out:?}");
+        assert!(out.starts_with('日'), "the head survives: {out:?}");
     }
 
-    /// Emoji ancho (2 celdas): tampoco desborda.
+    /// Wide emoji (2 cells): does not overflow either.
     #[test]
-    fn emoji_no_excede() {
+    fn emoji_does_not_overflow() {
         let s = "a😀b😀c😀d😀e😀f😀g";
         let out = middle_ellipsis(s, 9);
-        assert!(out.width() <= 9, "ancho {} en {out:?}", out.width());
+        assert!(out.width() <= 9, "width {} in {out:?}", out.width());
         assert!(out.contains('…'));
     }
 
-    /// `max` menor que un solo char ancho: no se parte la celda → solo `…`.
+    /// `max` smaller than a single wide char: the cell is not split → just
+    /// `…`.
     #[test]
-    fn max_menor_que_un_char_ancho() {
+    fn max_smaller_than_a_wide_char() {
         let out = middle_ellipsis("日本", 1);
         assert_eq!(out, "…");
         assert!(out.width() <= 1);
     }
 
-    /// P1 encoding audit F2 (LOW): un flood de combining marks (ancho CERO
-    /// cada uno) desborda el caminante por celdas SIN nunca tocar su
-    /// presupuesto — el early-return de ancho, o el propio caminante,
-    /// podían devolver/procesar el string ENTERO sin acotar, con `max`
-    /// celdas satisfecho pero el tamaño real sin tope. `nfd_e_acute` del
-    /// corpus (`e` + combining acute) es el par base+combining canónico —
-    /// aquí se inunda a 100 000× para ejercer el backstop por CUENTA de
-    /// chars, no solo por ancho.
+    /// P1 encoding audit F2 (LOW): a flood of combining marks (ZERO width
+    /// each) overflows the cell-based walker WITHOUT ever touching its
+    /// budget — the width early-return, or the walker itself, could
+    /// return/process the ENTIRE string unbounded, with `max` cells
+    /// satisfied but the real size uncapped. The corpus's `nfd_e_acute`
+    /// (`e` + combining acute) is the canonical base+combining pair — here
+    /// it is flooded 100,000x to exercise the backstop by char COUNT, not
+    /// just by width.
     #[test]
-    fn flood_de_combining_marks_no_desborda() {
+    fn flood_of_combining_marks_does_not_overflow() {
         let fixture = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "nfd_e_acute")
-            .expect("fixture del corpus");
-        let text = String::from_utf8(fixture.bytes).expect("nfd_e_acute es UTF-8 válido");
+            .expect("corpus fixture");
+        let text = String::from_utf8(fixture.bytes).expect("nfd_e_acute is valid UTF-8");
         let (base, combining) = text.split_at(1); // "e" + "\u{0301}"
         let flood: String = std::iter::once(base)
             .chain(std::iter::repeat_n(combining, 100_000))
             .collect();
-        assert_eq!(flood.width(), 1, "control: el flood entero pesa 1 celda");
+        assert_eq!(flood.width(), 1, "control: the whole flood weighs 1 cell");
         let out = middle_ellipsis(&flood, 10);
-        // Cota: el backstop pre-recorta a `char_cap = 4*max` chars, pero el
-        // caminante de cabeza Y el de cola operan cada uno sobre TODO ese
-        // precorte (no sobre mitades separadas) — con ancho cero ninguno
-        // frena por presupuesto, así que cada uno puede consumirlo entero.
-        // Bounded (2*char_cap + 1), no perfecto — lo que pide F2 (LOW) es
-        // dejar de ser ILIMITADO, no una cota ajustada.
+        // Bound: the backstop pre-truncates to `char_cap = 4*max` chars, but
+        // both the head AND tail walkers each operate over the WHOLE
+        // pre-cut (not over separate halves) — with zero width neither one
+        // stops on budget, so each can consume it whole. Bounded
+        // (2*char_cap + 1), not exact — what F2 (LOW) asks for is to stop
+        // being UNBOUNDED, not a tight bound.
         let bound = 2 * (10 * 4) + 1;
         assert!(
             out.chars().count() <= bound,
-            "el backstop de cuenta de chars no acotó la salida: {} chars (cota {bound})",
+            "the char-count backstop did not bound the output: {} chars (bound {bound})",
             out.chars().count()
         );
     }
@@ -401,42 +406,43 @@ mod clamp_spans_tests {
             .collect()
     }
 
-    /// Lo que cabe entero pasa entero, y lo que no se corta por CELDAS.
+    /// What fits whole passes whole, and what does not is cut by CELLS.
     #[test]
-    fn recorta_por_celdas_y_no_por_bytes() {
+    fn truncates_by_cells_not_bytes() {
         assert_eq!(truncate("abcdef", 10), "abcdef");
         assert_eq!(truncate("abcdef", 3), "abc");
-        // CJK: dos celdas por carácter, así que en tres celdas cabe uno.
+        // CJK: two cells per character, so one fits in three cells.
         assert_eq!(truncate("日本語", 3), "日");
         assert!(truncate("日本語", 3).width() <= 3);
     }
 
-    /// Un juntador mide CERO, así que cabía siempre y el trozo acababa en él:
-    /// lo que se pintara detrás se componía con la familia recortada (#246
-    /// m1). `middle_ellipsis` drena por delante; esto drena por detrás.
+    /// A joiner measures ZERO, so it always fit and the chunk used to end
+    /// on it: whatever was painted after would compose with the truncated
+    /// family (#246 m1). `middle_ellipsis` drains from the front; this
+    /// drains from the back.
     #[test]
-    fn no_termina_en_un_juntador() {
+    fn does_not_end_on_a_joiner() {
         let family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}";
         for max in 0..=8 {
             let output = truncate(family, max);
             assert!(
                 !output.ends_with('\u{200D}'),
-                "a {max} celdas quedó un ZWJ al final: {output:?}"
+                "at {max} cells a trailing ZWJ was left: {output:?}"
             );
         }
     }
 
-    /// Un `max` de cero no pinta nada, y nunca pánico.
+    /// A `max` of zero paints nothing, and never panics.
     #[test]
-    fn cero_celdas_no_pinta_nada() {
-        assert_eq!(truncate("hola", 0), "");
+    fn zero_cells_paints_nothing() {
+        assert_eq!(truncate("hello", 0), "");
         assert_eq!(truncate("", 5), "");
     }
 
-    /// Los spans que caben se conservan como SPANS, con su estilo: el
-    /// recorte no puede fundir en uno lo que el badge hostil separa.
+    /// Spans that fit are kept as SPANS, with their style: truncation
+    /// cannot merge into one what the hostile badge keeps separate.
     #[test]
-    fn conserva_los_spans_que_caben() {
+    fn keeps_the_spans_that_fit() {
         let spans = vec![
             Span::raw("ab".to_owned()),
             Span::raw("cd".to_owned()),

@@ -1,20 +1,21 @@
-//! La Task de `fs.compare` (C6): envuelve el motor de `norte-compare` en el
-//! framework de tasks del core y convierte su flujo de filas en LOTES
-//! acotados y coalescidos ([`CompareRowsBatch`]).
+//! The `fs.compare` Task (C6): wraps the `norte-compare` engine in the
+//! core's task framework and converts its row stream into capped, coalesced
+//! BATCHES ([`CompareRowsBatch`]).
 //!
-//! Aquí no se decide nada sobre la comparación: los veredictos, las
-//! confianzas y los errores-como-fila son del motor. Lo que este módulo
-//! aporta es lo que el motor deliberadamente no sabe — la cancelación de la
-//! Task, el progreso, y que un millón de filas no puede convertirse en un
-//! millón de frames.
+//! Nothing about the comparison is decided here: the verdicts, the
+//! confidences and the errors-as-rows belong to the engine. What this
+//! module contributes is what the engine deliberately doesn't know — the
+//! Task's cancellation, its progress, and that a million rows can't become
+//! a million frames.
 //!
-//! **Regla dura 4 NO aplica**: comparar no muta nada, no escribe un byte y no
-//! tiene undo posible, así que no hay entrada de journal que crear. Está dicho
-//! aquí para que una revisión posterior no pida una que no significaría nada.
+//! **Hard rule 4 does NOT apply**: comparing mutates nothing, writes no
+//! byte and has no possible undo, so there is no journal entry to create.
+//! Stated here so a later review doesn't ask for one that wouldn't mean
+//! anything.
 //!
-//! El coalescing es el mismo que el de `fs.search` (`search.rs`), y a
-//! propósito: dos contratos de lote distintos para dos feeds idénticos serían
-//! dos cosas que mantener sincronizadas a mano.
+//! The coalescing is the same as `fs.search`'s (`search.rs`), on purpose:
+//! two different batch contracts for two identical feeds would be two
+//! things to keep in sync by hand.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,11 +29,12 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-/// Flush por tiempo del lote de filas: el mismo intervalo (y el mismo motivo)
-/// que el de `fs.search` — el panel gotea en vivo aunque el lote no se llene.
+/// Time-based flush for the row batch: the same interval (and the same
+/// reason) as `fs.search`'s — the panel drips live even if the batch
+/// doesn't fill up.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Lote en construcción.
+/// Batch under construction.
 struct Batch {
     task_id: TaskId,
     rows: Vec<CompareRow>,
@@ -54,7 +56,7 @@ impl Batch {
         self.rows.len()
     }
 
-    /// Extrae el lote acumulado, dejando el buffer vacío.
+    /// Extracts the accumulated batch, leaving the buffer empty.
     fn take(&mut self) -> CompareRowsBatch {
         CompareRowsBatch {
             task_id: self.task_id,
@@ -63,38 +65,38 @@ impl Batch {
     }
 }
 
-/// Desenlace de un [`flush`] (calca el de `search.rs`).
+/// Outcome of a [`flush`] (mirrors `search.rs`'s).
 enum FlushOutcome {
-    /// Enviado (o nada que enviar): sigue la comparación. Lleva CUÁNTAS filas
-    /// salieron, que es lo que cuenta el progreso — un lote que no llegó a
-    /// enviarse no puede aparecer en `entries_done`.
+    /// Sent (or nothing to send): the comparison continues. Carries HOW MANY
+    /// rows went out, which is what progress counts — a batch that never
+    /// got sent cannot show up in `entries_done`.
     Continue(u64),
-    /// El receptor murió (el dueño se fue): termina limpio.
+    /// The receiver died (the owner left): ends cleanly.
     ReceiverGone,
-    /// Cancelado mientras el `send` estaba bloqueado por backpressure:
-    /// termina como `Cancelled` (regla dura 3).
+    /// Cancelled while `send` was blocked on backpressure: ends as
+    /// `Cancelled` (hard rule 3).
     Cancelled,
 }
 
-/// Cómo empareja la PAREJA de lados, calculado por QUIEN CONOCE LAS DOS
-/// RAÍCES — `norte_compare::compare` ya no lo calcula sola (#153, ADR 0051):
-/// antes lo hacía internamente, en el primer listado, contra
-/// `Provider::capabilities()` sin path — un mismo `LocalProvider` sirviendo
-/// `/home` (ext4) y `/mnt/usb` (exFAT) contestaba la MISMA respuesta para los
-/// dos, y las colisiones de plegado del segundo mount se perdían en silencio.
+/// How the PAIR of sides is matched, computed by WHOEVER KNOWS BOTH ROOTS —
+/// `norte_compare::compare` no longer computes it alone (#153, ADR 0051):
+/// it used to do it internally, on the first listing, against
+/// `Provider::capabilities()` with no path — the same `LocalProvider` serving
+/// `/home` (ext4) and `/mnt/usb` (exFAT) answered the SAME response for
+/// both, and the second mount's folding collisions got lost silently.
 ///
-/// Desde ADR 0054 se le pregunta a CADA RAÍZ (`Provider::capabilities_at`), que
-/// es lo que cierra #153: la respuesta ya no es del provider sino del
-/// directorio, y en `file://` sale de una escalera de solo lectura que también
-/// sabe reconocer un ext4/f2fs en `+F` (#145). El `stat` previo que forzaba el
-/// sondeo perezoso sobra: `capabilities_at` ES una operación async y sondea
-/// ella misma.
+/// Since ADR 0054 EACH ROOT is asked (`Provider::capabilities_at`), which is
+/// what closes #153: the answer is no longer the provider's but the
+/// directory's, and on `file://` it comes from a read-only staircase that
+/// also knows how to recognize an ext4/f2fs in `+F` (#145). The prior `stat`
+/// that forced lazy probing is no longer needed: `capabilities_at` IS an
+/// async operation and probes on its own.
 ///
-/// Una raíz que no existe hace fallar aquí su `capabilities_at`, y entonces se
-/// responde lo que el provider DECLARA en vez de propagar el error: la raíz
-/// sigue fallando su propio `list` dentro del motor, con su fila de error, que
-/// es donde el usuario tiene que verlo. Fallar aquí convertiría una fila de
-/// error en una comparación que no arranca.
+/// A root that doesn't exist makes its `capabilities_at` fail here, and then
+/// what's answered is what the provider DECLARES instead of propagating the
+/// error: the root still fails its own `list` inside the engine, with its
+/// error row, which is where the user has to see it. Failing here would
+/// turn an error row into a comparison that never starts.
 pub(crate) async fn probed_sides(
     left: &dyn Provider,
     left_root: &VPath,
@@ -111,14 +113,15 @@ pub(crate) async fn probed_sides(
     )
 }
 
-/// Las capabilities de una raíz, o las que el provider declare si no supo
-/// responder — **diciéndolo**.
+/// A root's capabilities, or whatever the provider declares if it couldn't
+/// answer — **saying so**.
 ///
-/// La degradación importa y por eso no va en `trace!`: el default de un Linux
-/// es `CASE_SENSITIVE`, o sea «no pliegues nada», así que una raíz que deja de
-/// responder a mitad convierte una comparación en una que no reporta
-/// colisiones de caja. ADR 0054 dice que donde la garantía no está se DICE, y
-/// una línea de TRACE no la dice: en producción no se ve.
+/// The degradation matters, and that's why it doesn't go in `trace!`: a
+/// Linux default is `CASE_SENSITIVE`, i.e. "fold nothing", so a root that
+/// stops answering partway through turns a comparison into one that fails
+/// to report case collisions. ADR 0054 says that where the guarantee isn't
+/// there, it must be SAID, and a TRACE line doesn't say it: it's invisible
+/// in production.
 pub(crate) fn degradada(
     resultado: Result<norte_proto::Capabilities, Error>,
     provider: &dyn Provider,
@@ -130,16 +133,16 @@ pub(crate) fn degradada(
             tracing::warn!(
                 error = %e,
                 root = %root.display_lossy(),
-                "no se pudieron sondear las capabilities de esta raíz: se usa lo que el provider declara"
+                "could not probe this root's capabilities: using what the provider declares"
             );
             provider.capabilities()
         }
     }
 }
 
-/// Envía el lote pendiente (si lo hay). Un `send` bloqueado por backpressure
-/// (canal lleno + receptor lento) NO ignora la cancelación: se hace `select`
-/// contra el token.
+/// Sends the pending batch (if any). A `send` blocked on backpressure (full
+/// channel + slow receiver) does NOT ignore cancellation: it's raced with a
+/// `select` against the token.
 async fn flush(
     tx: &mpsc::Sender<CompareRowsBatch>,
     batch: &mut Batch,
@@ -160,35 +163,37 @@ async fn flush(
     }
 }
 
-/// Cuerpo de la Task: drena el flujo de [`norte_compare::compare`] y emite
-/// lotes por `tx`. Lectura pura: sin journal, sin mutaciones.
+/// The Task's body: drains [`norte_compare::compare`]'s stream and emits
+/// batches over `tx`. Pure read: no journal, no mutations.
 ///
-/// - **Los providers entran por valor** y el flujo se construye AQUÍ DENTRO:
-///   `CompareStream<'a>` toma prestados los DOS providers, así que el
-///   préstamo tiene que nacer dentro del `async` que lo consume, no fuera.
-/// - **Cancelación** (regla dura 3): el motor comprueba el token por
-///   directorio y por chunk hasheado, y el `flush` lo comprueba también
-///   mientras espera sitio en el canal. El único `Err` del flujo es
-///   [`CompareError::Cancelled`] y significa exactamente eso: la Task acaba
-///   `Cancelled`, no `Failed`. Todo fallo REAL —un directorio ilegible, uno
-///   desmesurado, una lectura rota a mitad de hash— es una FILA.
-/// - **Progreso**: `entries_done` cuenta las filas ENVIADAS, y se incrementa
-///   al confirmarse el `flush`, no al acumular la fila en el lote. Es contrato
-///   (C1): sin un `max_hits` contra el que contar, es la única señal con la
-///   que un cliente detecta que se le perdió una notificación `compare.rows`,
-///   así que contar filas que se quedaron en un lote descartado (por
-///   cancelación, o porque el receptor desapareció) le haría denunciar una
-///   pérdida que no hubo. `bytes_done` se queda a cero — con el rung de hash
-///   apagado no se lee un byte, y una barra de bytes que pinta cero para
-///   siempre miente más que no estar. `current` tampoco se toca: llevaría un
-///   `VPath` del árbol comparado a un broadcast que ven todos los humanos
-///   conectados, y el gate de esta Task es por RAÍZ.
-/// - **Coalescing**: las filas se acumulan hasta [`COMPARE_ROWS_MAX_BATCH`] o
-///   se drenan cada [`FLUSH_INTERVAL`], lo que ocurra antes.
+/// - **The providers come in by value** and the stream is built RIGHT HERE
+///   INSIDE: `CompareStream<'a>` borrows BOTH providers, so the borrow has
+///   to be born inside the `async` that consumes it, not outside.
+/// - **Cancellation** (hard rule 3): the engine checks the token per
+///   directory and per hashed chunk, and `flush` checks it too while
+///   waiting for room in the channel. The stream's ONLY `Err` is
+///   [`CompareError::Cancelled`] and it means exactly that: the Task ends
+///   `Cancelled`, not `Failed`. Every REAL failure —an unreadable
+///   directory, an oversized one, a read that breaks mid-hash— is a ROW.
+/// - **Progress**: `entries_done` counts SENT rows, and it's incremented
+///   when the `flush` is confirmed, not when the row is accumulated into
+///   the batch. This is contract (C1): with no `max_hits` to count against,
+///   it's the only signal a client has for detecting that it missed a
+///   `compare.rows` notification, so counting rows that stayed in a
+///   discarded batch (due to cancellation, or because the receiver
+///   vanished) would make it report a loss that never happened.
+///   `bytes_done` stays at zero — with the hash rung off, not a byte is
+///   read, and a byte bar that forever paints zero lies more than not
+///   existing. `current` isn't touched either: it would carry a `VPath`
+///   from the compared tree into a broadcast every connected human sees,
+///   and this Task's gate is per ROOT.
+/// - **Coalescing**: rows accumulate up to [`COMPARE_ROWS_MAX_BATCH`] or
+///   get drained every [`FLUSH_INTERVAL`], whichever happens first.
 ///
 /// # Errors
-/// [`Error::Cancelled`] si se canceló. Nada más: la comparación no tiene otro
-/// final prematuro, y no hay nada que limpiar porque no escribió nada.
+/// [`Error::Cancelled`] if cancelled. Nothing else: the comparison has no
+/// other premature ending, and there's nothing to clean up because it wrote
+/// nothing.
 pub async fn run_compare(
     left: Arc<dyn Provider>,
     left_root: VPath,
@@ -203,12 +208,12 @@ pub async fn run_compare(
     let mut last_flush = Instant::now();
 
     let sides = probed_sides(left.as_ref(), &left_root, right.as_ref(), &right_root).await;
-    // Lo que este ACTOR no puede recorrer (#209): el gate de lectura del
-    // daemon mira las dos RAÍCES, así que comparar `$HOME` contra otra cosa es
-    // legítimo y arrastraba el directorio de estado del daemon con ello —
-    // `journal.db`, los spools de sync y, con el rung de hash encendido, un
-    // oráculo de igualdad sobre sus bytes. Es la mitad que #165 dejó abierta,
-    // y sale del MISMO sitio que las exclusiones del walk de `fs.search`.
+    // What this ACTOR cannot walk (#209): the daemon's read gate looks at
+    // BOTH roots, so comparing `$HOME` against something else is legitimate
+    // and used to drag the daemon's state directory along with it —
+    // `journal.db`, the sync spools and, with the hash rung on, an equality
+    // oracle over their bytes. It's the half #165 left open, and it comes
+    // from the SAME place as `fs.search`'s walk exclusions.
     let excluded = crate::policy::walk_exclusions(&ctx.actor);
     let mut stream = norte_compare::compare(
         left.as_ref(),
@@ -224,16 +229,16 @@ pub async fn run_compare(
     while let Some(item) = stream.next().await {
         match item {
             Ok(row) => batch.rows.push(row),
-            // El ÚNICO error del flujo. Se emite una vez y el flujo termina;
-            // lo acumulado se descarta (el receptor ya no lo necesita: la
-            // comparación no llegó a contestar).
+            // The stream's ONLY error. It's emitted once and the stream
+            // ends; whatever accumulated is discarded (the receiver no
+            // longer needs it: the comparison never got to answer).
             Err(CompareError::Cancelled) => return Err(Error::Cancelled),
-            // `CompareError` es `#[non_exhaustive]`: una variante futura NO es
-            // una cancelación y no puede tratarse como tal — una Task que dice
-            // `Cancelled` cuando en realidad falló miente sobre lo que pasó, y
-            // un plan de sincronización que lea esas filas se lo creería.
+            // `CompareError` is `#[non_exhaustive]`: a future variant is NOT
+            // a cancellation and cannot be treated as one — a Task that says
+            // `Cancelled` when it actually failed lies about what happened,
+            // and a sync plan reading those rows would believe it.
             Err(other) => {
-                tracing::error!(error = %other, "fs.compare: final inesperado del motor");
+                tracing::error!(error = %other, "fs.compare: unexpected end from the engine");
                 return Err(Error::Internal { panic: false });
             }
         }
@@ -243,11 +248,12 @@ pub async fn run_compare(
                     ctx.progress.update(|p| p.entries_done += rows);
                     last_flush = Instant::now();
                 }
-                // El receptor desapareció a mitad: la comparación NO terminó,
-                // y decir `Completed` haría que quien compara filas recibidas
-                // contra `entries_done` diera por buena una respuesta a
-                // medias. `Cancelled` es lo que de verdad pasó (lo pidiera
-                // quien lo pidiera), y no hay nada que limpiar.
+                // The receiver vanished partway through: the comparison did
+                // NOT finish, and saying `Completed` would make whoever
+                // compares received rows against `entries_done` accept a
+                // half-finished answer as good. `Cancelled` is what really
+                // happened (whoever asked for it), and there's nothing to
+                // clean up.
                 FlushOutcome::ReceiverGone | FlushOutcome::Cancelled => {
                     return Err(Error::Cancelled);
                 }

@@ -1,16 +1,17 @@
-//! `spawn_blocking` que conserva el span (ADR 0127).
+//! `spawn_blocking` that preserves the span (ADR 0127).
 //!
-//! `tokio::task::spawn_blocking` NO hereda el span actual: lo que se registra
-//! dentro del cierre sale sin padre, sin el `task_id` ni el `rpc` que lo
-//! lanzaron, y es justo ahí donde está la E/S. Este ayudante captura el span
-//! en el hilo que llama y lo entra en el hilo bloqueante. `clippy.toml` del
-//! crate prohíbe la llamada directa para que el agujero no vuelva.
+//! `tokio::task::spawn_blocking` does NOT inherit the current span: whatever
+//! gets logged inside the closure comes out with no parent, without the
+//! `task_id` or the `rpc` that launched it — and that is exactly where the
+//! I/O is. This helper captures the span on the calling thread and enters it
+//! on the blocking thread. The crate's `clippy.toml` forbids the direct call
+//! so the hole doesn't come back.
 
-/// Como [`tokio::task::spawn_blocking`], pero el cierre corre dentro del span
-/// que estaba activo al llamar.
+/// Like [`tokio::task::spawn_blocking`], but the closure runs inside the span
+/// that was active when it was called.
 #[allow(
     clippy::disallowed_methods,
-    reason = "el único sitio que puede llamarla: aquí se le añade el span"
+    reason = "the one place allowed to call it: the span is added right here"
 )]
 pub(crate) fn spawn_blocking<F, R>(f: F) -> tokio::task::JoinHandle<R>
 where
@@ -21,14 +22,15 @@ where
     tokio::task::spawn_blocking(move || span.in_scope(f))
 }
 
-/// Como [`tokio::spawn`], pero el future corre dentro del span que estaba
-/// activo al lanzarlo (ADR 0127).
+/// Like [`tokio::spawn`], but the future runs inside the span that was
+/// active when it was launched (ADR 0127).
 ///
-/// Sin esto, lo que registra una tarea lanzada desde una petición sale sin su
-/// `rpc`. Cuando no hay span activo adjunta el vacío, que no cambia nada.
-/// Lo que NO debe heredar el span de quien la lanza va por [`spawn_raiz`].
-/// Un test de fuente (`tests/spans_en_spawn.rs`) impide llamar a
-/// `tokio::spawn` a pelo fuera de este módulo.
+/// Without this, whatever a task launched from a request logs comes out
+/// without its `rpc`. When there is no active span it attaches the empty
+/// one, which changes nothing. What must NOT inherit the span of whoever
+/// launches it goes through [`spawn_raiz`]. A source test
+/// (`tests/spans_en_spawn.rs`) blocks calling bare `tokio::spawn` outside
+/// this module.
 pub(crate) fn spawn<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: std::future::Future + Send + 'static,
@@ -38,16 +40,16 @@ where
     tokio::spawn(fut.instrument(tracing::Span::current()))
 }
 
-/// Como [`tokio::spawn`], SIN el span de quien la lanza: la tarea es la raíz
-/// de lo suyo, a propósito.
+/// Like [`tokio::spawn`], WITHOUT the span of whoever launches it: the task
+/// is the root of its own, on purpose.
 ///
-/// Dos sitios, y los dos tienen su porqué escrito donde se llama: una
-/// CONEXIÓN del daemon (cada `rpc` es raíz, ADR 0127; heredando, todas las
-/// peticiones de meses colgarían de `run`, el span de la vida entera del
-/// daemon) y el CORREDOR del scheduler (no corre necesariamente el job que
-/// lo lanzó, y cada job trae su span). Un nombre distinto para que la
-/// decisión se vea en el sitio, y no una llamada a pelo que parezca un
-/// olvido.
+/// Two call sites, and both have their reason written where they call it: a
+/// daemon CONNECTION (each `rpc` is a root, ADR 0127; if it inherited, months
+/// of requests would hang off `run`, the span for the daemon's entire life)
+/// and the scheduler's RUNNER (it does not necessarily run the job that
+/// launched it, and each job brings its own span). A different name so the
+/// decision shows at the call site, instead of a bare call that looks like
+/// an oversight.
 pub(crate) fn spawn_raiz<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: std::future::Future + Send + 'static,
@@ -65,61 +67,61 @@ mod tests {
     use tracing_subscriber::layer::{Context, SubscriberExt as _};
     use tracing_subscriber::registry::LookupSpan;
 
-    /// Por cada evento, los nombres de sus spans de fuera a dentro.
+    /// For each event, the names of its spans from outside in.
     #[derive(Clone, Default)]
-    struct Padres(Arc<Mutex<Vec<Vec<String>>>>);
+    struct Parents(Arc<Mutex<Vec<Vec<String>>>>);
 
-    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Padres {
+    impl<S: Subscriber + for<'a> LookupSpan<'a>> Layer<S> for Parents {
         fn on_event(&self, event: &tracing::Event<'_>, ctx: Context<'_, S>) {
-            let cadena = ctx
+            let chain = ctx
                 .event_scope(event)
                 .map(|scope| scope.from_root().map(|s| s.name().to_owned()).collect())
                 .unwrap_or_default();
-            self.0.lock().expect("padres").push(cadena);
+            self.0.lock().expect("parents").push(chain);
         }
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn un_evento_del_hilo_bloqueante_cuelga_de_su_tarea() {
-        let padres = Padres::default();
-        let subscriber = tracing_subscriber::registry().with(padres.clone());
+    async fn an_event_from_the_blocking_thread_hangs_off_its_task() {
+        let parents = Parents::default();
+        let subscriber = tracing_subscriber::registry().with(parents.clone());
         let dispatch = tracing::Dispatch::new(subscriber);
 
-        // El hilo bloqueante no hereda el subscriber por defecto del hilo
-        // del test; `with_default` alrededor del cierre sí se lo da, y lo que
-        // queda por probar es exactamente el span.
+        // The blocking thread does not inherit the test thread's default
+        // subscriber; `with_default` around the closure does give it one,
+        // and what's left to prove is exactly the span.
         let d = dispatch.clone();
         let _guard = tracing::dispatcher::set_default(&dispatch);
         let span = tracing::info_span!("task", task_id = 7);
         let fut = {
             let _e = span.enter();
             super::spawn_blocking(move || {
-                tracing::dispatcher::with_default(&d, || tracing::info!("dentro"));
+                tracing::dispatcher::with_default(&d, || tracing::info!("inside"));
             })
         };
-        fut.await.expect("el cierre vuelve");
+        fut.await.expect("the closure returns");
 
-        let vistos = padres.0.lock().expect("padres").clone();
-        assert_eq!(vistos, vec![vec!["task".to_owned()]], "{vistos:?}");
+        let seen = parents.0.lock().expect("parents").clone();
+        assert_eq!(seen, vec![vec!["task".to_owned()]], "{seen:?}");
     }
 
-    /// Lo mismo para una tarea `async` lanzada con [`super::spawn`]: su evento
-    /// cuelga del span que estaba activo al lanzarla.
+    /// The same for an `async` task launched with [`super::spawn`]: its
+    /// event hangs off the span that was active when it was launched.
     #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
-    async fn un_evento_de_una_tarea_lanzada_cuelga_de_su_tarea() {
-        let padres = Padres::default();
-        let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(padres.clone()));
+    async fn an_event_from_a_launched_task_hangs_off_its_task() {
+        let parents = Parents::default();
+        let dispatch = tracing::Dispatch::new(tracing_subscriber::registry().with(parents.clone()));
         let _guard = tracing::dispatcher::set_default(&dispatch);
         let span = tracing::info_span!("task", task_id = 8);
         let d = dispatch.clone();
         let h = {
             let _e = span.enter();
             super::spawn(async move {
-                tracing::dispatcher::with_default(&d, || tracing::info!("dentro"));
+                tracing::dispatcher::with_default(&d, || tracing::info!("inside"));
             })
         };
-        h.await.expect("la tarea vuelve");
-        let vistos = padres.0.lock().expect("padres").clone();
-        assert_eq!(vistos, vec![vec!["task".to_owned()]], "{vistos:?}");
+        h.await.expect("the task returns");
+        let seen = parents.0.lock().expect("parents").clone();
+        assert_eq!(seen, vec![vec!["task".to_owned()]], "{seen:?}");
     }
 }

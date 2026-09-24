@@ -1,18 +1,18 @@
-//! Las propiedades del transductor y del `plan_hash`, sobre árboles y planes
-//! que nadie escribió a mano.
+//! The transducer's and the `plan_hash`'s properties, over trees and plans
+//! nobody wrote by hand.
 //!
-//! Las pruebas de mesa de `plan.rs` y `hash.rs` fijan CASOS; esto fija lo que
-//! tiene que valer para CUALQUIER flujo: un árbol idéntico no planifica nada,
-//! `Update` no borra jamás, ningún `rel` sale de un sitio que las filas no
-//! nombraron, lo irreversible es exactamente lo destructivo sin papelera, el
-//! blanco de un paso es el fichero que EXISTE en el destino, y dos planes
-//! distintos no comparten huella.
+//! `plan.rs`'s and `hash.rs`'s table tests pin CASES; this pins what has to
+//! hold for ANY flow: an identical tree plans nothing, `Update` never
+//! deletes, no `rel` comes from a place the rows did not name, irreversible
+//! is exactly what is destructive with no trash, a step's target is the file
+//! that EXISTS at the destination, and two different plans do not share a
+//! fingerprint.
 //!
-//! Los nombres salen del corpus feo y, sobre todo, en PAREJAS que se deletrean
-//! distinto —`café` NFC contra `café` NFD, `README` contra `readme`—: es ahí
-//! donde el emparejamiento de la comparación pliega y donde vive el issue #152,
-//! así que un corpus que solo varíe los nombres ENTRE filas no toca la parte
-//! peligrosa.
+//! Names come from the ugly corpus and, above all, in PAIRS spelled
+//! differently — an NFC `café` against an NFD `café`, `README` against
+//! `readme` — since that is where the comparison's pairing folds and where
+//! issue #152 lives, so a corpus that only varies names BETWEEN rows never
+//! touches the dangerous part.
 
 use std::collections::BTreeSet;
 
@@ -42,22 +42,22 @@ fn dest_root() -> VPath {
     vpath("file:///destino")
 }
 
-/// El cableado de un plan, que es lo que las filas NO traen.
+/// A plan's wiring, which is what the rows do NOT carry.
 #[derive(Debug, Clone, Copy)]
 struct Wiring {
     mode: SyncMode,
     on_unknown: OnUnknown,
     source_side: Side,
     trash: bool,
-    /// ¿Y esa papelera nombra lo que entierra? Una que no lo hace vuelve
-    /// IRREVERSIBLE todo el plan, no solo lo destructivo.
+    /// And does that trash name what it buries? One that does not turns the
+    /// WHOLE plan IRREVERSIBLE, not just the destructive part.
     trash_restorable: bool,
     writable: bool,
 }
 
 impl Wiring {
-    /// ¿Es el lado DERECHO de las filas el origen? Decide dónde cuelga cada
-    /// entrada que se genere.
+    /// Is the RIGHT side of the rows the source? Decides where each
+    /// generated entry hangs off.
     fn source_right(self) -> bool {
         self.source_side == Side::Right
     }
@@ -94,8 +94,8 @@ fn opts_mirror() -> SyncOptions {
     }
 }
 
-/// Cableados COMPLETOS: los dos modos, las dos políticas de confianza, los dos
-/// lados de origen, con y sin papelera, con y sin escritura.
+/// COMPLETE wirings: both modes, both confidence policies, both source sides,
+/// with and without a trash, with and without write access.
 fn wiring() -> impl Strategy<Value = Wiring> {
     (
         prop_oneof![Just(SyncMode::Update), Just(SyncMode::Mirror)],
@@ -117,7 +117,7 @@ fn wiring() -> impl Strategy<Value = Wiring> {
         )
 }
 
-/// Una ruta bajo `root`, segmento a segmento y por sus BYTES.
+/// A path under `root`, segment by segment and by its BYTES.
 fn under(root: &VPath, segments: &[Vec<u8>]) -> VPath {
     segments.iter().fold(root.clone(), |acc, segment| {
         acc.join(Segment::new(segment.clone()).expect("segment"))
@@ -134,9 +134,9 @@ fn entry(root: &VPath, segments: &[Vec<u8>], kind: EntryKind, size: Option<u64>)
     }
 }
 
-/// Cómo deletrea el DESTINO un nombre del origen cuando la clave de
-/// emparejamiento los pliega a uno: NFC contra NFD, y las dos cajas de un mismo
-/// nombre. Lo demás se deletrea igual en los dos lados.
+/// How the DESTINATION spells a source name when the pairing key folds them
+/// into one: NFC against NFD, and the two cases of the same name. Everything
+/// else is spelled the same on both sides.
 fn twin_of(name: &[u8]) -> Vec<u8> {
     match name {
         b"README" => b"readme".to_vec(),
@@ -149,8 +149,8 @@ fn twin_path(segments: &[Vec<u8>]) -> Vec<Vec<u8>> {
     segments.iter().map(|s| twin_of(s)).collect()
 }
 
-/// Un nombre del corpus feo: los dos que tienen gemelo en el destino, un nombre
-/// que no es UTF-8 y dos corrientes.
+/// A name from the ugly corpus: the two that have a twin at the destination,
+/// a name that is not UTF-8, and two ordinary ones.
 fn name() -> impl Strategy<Value = Vec<u8>> {
     prop_oneof![
         Just(b"a.txt".to_vec()),
@@ -161,10 +161,10 @@ fn name() -> impl Strategy<Value = Vec<u8>> {
     ]
 }
 
-/// De una a TRES componentes: siempre al menos una, porque una ruta que fuera la
-/// raíz misma es otro contrato (`SyncError::RootIsNotAStep`) y lo fijan las
-/// pruebas de mesa. Tres es lo que hace falta para que la traducción por
-/// ancestro tenga dos niveles que recorrer.
+/// From one to THREE components: always at least one, because a path that
+/// was the root itself is a different contract (`SyncError::RootIsNotAStep`)
+/// and the table tests pin it. Three is what is needed for the by-ancestor
+/// translation to have two levels to walk.
 fn segments() -> impl Strategy<Value = Vec<Vec<u8>>> {
     prop::collection::vec(name(), 1..4)
 }
@@ -195,7 +195,7 @@ fn confidence() -> impl Strategy<Value = CompareConfidence> {
     ]
 }
 
-/// Todos los veredictos, el que un daemon N+1 podría mandar incluido.
+/// Every verdict, including the one an N+1 daemon could send.
 fn verdict() -> impl Strategy<Value = CompareVerdict> {
     prop_oneof![
         Just(CompareVerdict::Same),
@@ -224,9 +224,10 @@ fn side() -> impl Strategy<Value = Option<Side>> {
     prop_oneof![Just(None), Just(Some(Side::Left)), Just(Some(Side::Right))]
 }
 
-/// Una fila cualquiera, con la entrada del ORIGEN colgando de `source_root` y la
-/// del DESTINO de `dest_root` —el lado en el que caen lo decide el cableado— y
-/// con la ortografía del destino plegada cuando el nombre tiene gemelo.
+/// Any row, with the SOURCE entry hanging off `source_root` and the
+/// DESTINATION's off `dest_root` — which side each falls on is decided by the
+/// wiring — and with the destination's spelling folded when the name has a
+/// twin.
 fn any_row(source_right: bool) -> impl Strategy<Value = CompareRow> {
     (
         segments(),
@@ -286,7 +287,7 @@ fn any_row(source_right: bool) -> impl Strategy<Value = CompareRow> {
         )
 }
 
-/// Un cableado y un flujo de filas coherente con él.
+/// A wiring and a row flow consistent with it.
 fn scenario() -> impl Strategy<Value = (Wiring, Vec<CompareRow>)> {
     wiring().prop_flat_map(|w| {
         (
@@ -296,8 +297,8 @@ fn scenario() -> impl Strategy<Value = (Wiring, Vec<CompareRow>)> {
     })
 }
 
-/// Filas que dicen todas «iguales, y con certeza»: el árbol comparado consigo
-/// mismo, con la misma ortografía en los dos lados.
+/// Rows that all say "equal, and with certainty": the tree compared against
+/// itself, with the same spelling on both sides.
 fn same_rows_strategy(source_right: bool) -> impl Strategy<Value = Vec<CompareRow>> {
     let row = (segments(), kind(), criterion(), 0u64..1_000_000).prop_map(
         move |(segs, kind, criterion, size)| {
@@ -325,14 +326,14 @@ fn same_rows_strategy(source_right: bool) -> impl Strategy<Value = Vec<CompareRo
     prop::collection::vec(row, 0..8)
 }
 
-/// Un cableado y un árbol idéntico a sí mismo, coherentes entre ellos.
+/// A wiring and a tree identical to itself, consistent with each other.
 fn same_scenario() -> impl Strategy<Value = (Wiring, Vec<CompareRow>)> {
     wiring().prop_flat_map(|w| (Just(w), same_rows_strategy(w.source_right())))
 }
 
-/// Filas EMPAREJADAS —las dos entradas siempre— con la ortografía del destino
-/// plegada. Son las que ejercitan `dest_rel`: sin pareja no hay segunda
-/// ortografía que leer.
+/// PAIRED rows — both entries, always — with the destination's spelling
+/// folded. These are the ones that exercise `dest_rel`: with no pair there is
+/// no second spelling to read.
 fn paired_rows_strategy() -> impl Strategy<Value = Vec<CompareRow>> {
     let row = (
         segments(),
@@ -372,9 +373,9 @@ fn paired_rows_strategy() -> impl Strategy<Value = Vec<CompareRow>> {
     prop::collection::vec(row, 0..8)
 }
 
-/// Una carpeta EMPAREJADA que los dos lados deletrean distinto, y dentro un
-/// fichero que solo está en el origen: el corazón del issue #152, en el orden en
-/// que el walk lo produce (el padre antes que el hijo).
+/// A PAIRED folder the two sides spell differently, and inside it a file only
+/// on the source: the heart of issue #152, in the order the walk produces it
+/// (the parent before the child).
 fn folder_then_child() -> impl Strategy<Value = (Vec<u8>, Vec<u8>, Vec<CompareRow>)> {
     (name(), name()).prop_map(|(folder, leaf)| {
         let dest_folder = twin_of(&folder);
@@ -431,7 +432,7 @@ fn run(rows: Vec<CompareRow>, opts: SyncOptions) -> Vec<PlanItem> {
         .collect::<Vec<_>>(),
     )
     .into_iter()
-    .map(|item| item.expect("las filas cuelgan de sus raíces: no hay error que dar"))
+    .map(|item| item.expect("rows hang off their roots: there is no error to give"))
     .collect()
 }
 
@@ -455,7 +456,7 @@ fn blockers(items: &[PlanItem]) -> Vec<SyncBlocker> {
         .collect()
 }
 
-/// La ruta que sale de pegarle `rel` a `root`, en su forma wire.
+/// The path that comes out of pasting `rel` onto `root`, in its wire form.
 fn joined(root: &VPath, rel: &RelPath) -> String {
     let segments: Vec<Vec<u8>> = rel
         .segments()
@@ -465,7 +466,7 @@ fn joined(root: &VPath, rel: &RelPath) -> String {
     under(root, &segments).to_wire()
 }
 
-/// Todas las rutas que las filas de entrada NOMBRARON, en forma wire.
+/// Every path the input rows NAMED, in wire form.
 fn reported(rows: &[CompareRow]) -> BTreeSet<String> {
     rows.iter()
         .flat_map(|row| row.left.iter().chain(row.right.iter()))
@@ -473,13 +474,13 @@ fn reported(rows: &[CompareRow]) -> BTreeSet<String> {
         .collect()
 }
 
-/// El blanco de un paso en el destino: `dest_root + dest_rel.unwrap_or(rel)`, o
-/// sea lo que el ejecutor va a abrir.
+/// A step's target at the destination: `dest_root + dest_rel.unwrap_or(rel)`,
+/// i.e. what the executor is going to open.
 fn target(step: &SyncStep) -> String {
     joined(&dest_root(), step.dest_rel.as_ref().unwrap_or(&step.rel))
 }
 
-// ---------- el `plan_hash` ----------
+// ---------- the `plan_hash` ----------
 
 fn rel(wire: &str) -> RelPath {
     RelPath::parse_wire(wire).expect("rel")
@@ -493,7 +494,7 @@ fn hash_of(items: &[PlanItem]) -> norte_proto::methods::PlanHash {
     hasher.finish()
 }
 
-/// Los mismos elementos con el `id` a cero: lo que el hash SÍ debe distinguir.
+/// The same elements with `id` zeroed: what the hash MUST distinguish.
 fn without_ids(items: &[PlanItem]) -> Vec<PlanItem> {
     items
         .iter()
@@ -510,9 +511,9 @@ fn without_ids(items: &[PlanItem]) -> Vec<PlanItem> {
         .collect()
 }
 
-/// Elementos elegidos para que colisionen si el framing es flojo: los mismos
-/// bytes repartidos de otra forma entre `rel` y `dest_rel`, una `rel` raíz, un
-/// `Skip` y un bloqueo en el mismo sitio, y prefijos unos de otros.
+/// Elements chosen to collide if the framing is loose: the same bytes split
+/// differently between `rel` and `dest_rel`, a root `rel`, a `Skip` and a
+/// blocker at the same spot, and prefixes of one another.
 fn candidate_item() -> impl Strategy<Value = PlanItem> {
     let step = |kind, rel_wire: &'static str, dest: Option<&'static str>, size| {
         let (reversal, reason) = match kind {
@@ -595,18 +596,18 @@ fn candidate_plan() -> impl Strategy<Value = Vec<PlanItem>> {
 }
 
 proptest! {
-    /// El plan de A contra A está vacío, sea cual sea el cableado. Es la
-    /// propiedad que hace que sincronizar un árbol de un millón de ficheros que
-    /// ya está sincronizado cueste cero pasos y no un millón de `Skip`.
+    /// The plan of A against A is empty, whatever the wiring. This is the
+    /// property that makes synchronizing an already-synchronized million-file
+    /// tree cost zero steps and not a million `Skip`s.
     #[test]
     fn an_identical_tree_plans_nothing((w, rows) in same_scenario()) {
-        // Un destino de solo lectura sí produce algo —su bloqueo—, y eso lo fija
-        // otra prueba: aquí lo que se mira es el árbol.
+        // A read-only destination DOES produce something — its blocker — and
+        // another test pins that: here what is being looked at is the tree.
         let opts = SyncOptions { dest_writable: true, ..opts_of(w) };
         prop_assert!(run(rows, opts).is_empty());
     }
 
-    /// `Update` no borra. Es la propiedad por la que el modo existe.
+    /// `Update` deletes nothing. This is the property the mode exists for.
     #[test]
     fn update_never_deletes((w, rows) in scenario()) {
         let opts = SyncOptions { mode: SyncMode::Update, ..opts_of(w) };
@@ -615,16 +616,16 @@ proptest! {
         }
     }
 
-    /// Ningún `rel` se escapa de las raíces, y la versión FUERTE de eso: el
-    /// plan no INVENTA rutas. Pegado a una de las dos raíces, todo `rel` de un
-    /// paso nombra algo que las filas de entrada trajeron —el tipo ya impide el
-    /// `..`, lo que esto comprueba es que no se pierde ni se gana un byte— y
-    /// ninguno que ACTÚE nombra la raíz misma, que sería el árbol entero.
+    /// No `rel` escapes the roots, and the STRONG version of that: the plan
+    /// does not INVENT paths. Pasted onto either of the two roots, every
+    /// step's `rel` names something the input rows carried — the type already
+    /// forbids `..`, what this checks is that no byte is lost or gained — and
+    /// none that ACTS names the root itself, which would be the whole tree.
     ///
-    /// `dest_rel` queda fuera a propósito: cuando se compone con la ortografía
-    /// recordada de una carpeta (issue #152), nombra una ruta del destino que
-    /// NINGUNA fila trajo —la del fichero nuevo dentro de la carpeta que los dos
-    /// lados deletrean distinto— y eso es justo lo que tiene que hacer.
+    /// `dest_rel` is left out on purpose: when it is composed with a folder's
+    /// remembered spelling (issue #152), it names a destination path NO row
+    /// carried — the new file's, inside the folder the two sides spell
+    /// differently — and that is exactly what it has to do.
     #[test]
     fn rel_never_escapes((w, rows) in scenario()) {
         let paths = reported(&rows);
@@ -633,45 +634,45 @@ proptest! {
             let from_dest = joined(&dest_root(), &step.rel);
             prop_assert!(
                 paths.contains(&from_source) || paths.contains(&from_dest),
-                "el paso nombra una ruta que ninguna fila trajo: {from_source} / {from_dest}",
+                "the step names a path no row carried: {from_source} / {from_dest}",
             );
             if step.kind != SyncStepKind::Skip {
                 prop_assert!(!step.rel.is_root(),
-                    "un paso que actúa sobre la raíz actúa sobre el árbol entero");
+                    "a step that acts on the root acts on the whole tree");
             }
         }
     }
 
-    /// `Irreversible` aparece si y solo si el paso no puede volver, en las dos
-    /// formas que eso tiene: destruir algo sin papelera donde ponerlo, o
-    /// cualquier paso contra una papelera que no NOMBRA lo que entierra (sin
-    /// `reversal_ref` el undo no acierta ni desenterrando ni borrando, #65). Y
-    /// va SIEMPRE con su motivo (regla dura 4).
+    /// `Irreversible` appears if and only if the step cannot come back, in
+    /// its two shapes: destroying something with no trash to put it in, or
+    /// any step against a trash that does NOT NAME what it buries (with no
+    /// `reversal_ref` the undo gets it wrong whether unearthing or deleting,
+    /// #65). And it ALWAYS comes with its reason (hard rule 4).
     #[test]
     fn irreversible_iff_the_step_cannot_come_back((w, rows) in scenario()) {
         let opts = opts_of(w);
         let trash = opts.dest_has_trash;
-        let muda = trash && !opts.dest_trash_restorable;
+        let mute = trash && !opts.dest_trash_restorable;
         for step in steps(&run(rows, opts)) {
             let destructive =
                 matches!(step.kind, SyncStepKind::Overwrite | SyncStepKind::DeleteTree);
-            let actua = destructive
+            let acts = destructive
                 || matches!(step.kind, SyncStepKind::CreateDir | SyncStepKind::Copy);
             let irreversible = step.reversal == Some(StepReversal::Irreversible);
             prop_assert_eq!(
                 irreversible,
-                (destructive && !trash) || (actua && muda),
+                (destructive && !trash) || (acts && mute),
                 "{:?}",
                 step
             );
             prop_assert!(!irreversible || step.reason.is_some(),
-                "un paso irreversible debe su motivo");
+                "an irreversible step owes its reason");
         }
     }
 
-    /// La forma de cada BLOQUEO se sostiene sola. Los pasos ya los afirma un
-    /// `debug_assert` dentro del transductor; los bloqueos no los afirma nadie,
-    /// y `TypeMismatchDir` sin lado no tiene frase que pintar.
+    /// Every BLOCKER's shape holds on its own. Steps are already asserted by
+    /// a `debug_assert` inside the transducer; blockers are asserted by
+    /// nobody, and a sideless `TypeMismatchDir` has no phrase to paint.
     #[test]
     fn every_blocker_is_shaped_consistently((w, rows) in scenario()) {
         for blocker in blockers(&run(rows, opts_of(w))) {
@@ -679,11 +680,12 @@ proptest! {
         }
     }
 
-    /// **El blanco de un paso es el fichero que EXISTE en el destino.** Con la
-    /// pareja delante —que es cuando se puede saber—, `dest_root +
-    /// dest_rel.unwrap_or(rel)` es exactamente la ruta de la entrada del
-    /// destino, byte a byte: sobre ext4 eso es la diferencia entre sobrescribir
-    /// el `café` que hay y crear un segundo al lado (issue #152).
+    /// **A step's target is the file that EXISTS at the destination.** With
+    /// the pair in front — which is when it can be known — `dest_root +
+    /// dest_rel.unwrap_or(rel)` is exactly the destination entry's path, byte
+    /// for byte: on ext4 that is the difference between overwriting the
+    /// `café` that is there and creating a second one alongside it (issue
+    /// #152).
     #[test]
     fn a_paired_step_targets_the_entry_that_exists(rows in paired_rows_strategy(), mirror in any::<bool>()) {
         let opts = if mirror { opts_mirror() } else { opts_update() };
@@ -694,12 +696,12 @@ proptest! {
             .collect();
         for step in steps(&run(rows, opts)) {
             prop_assert!(destinations.contains(&target(&step)),
-                "el paso escribiría en una ruta que en el destino no existe: {}", target(&step));
+                "the step would write to a path that does not exist at the destination: {}", target(&step));
         }
     }
 
-    /// Y lo que solo está en el ORIGEN hereda la ortografía de su carpeta: la
-    /// otra mitad del #152, la que no se lee de la fila sino que se recuerda.
+    /// And what is only on the SOURCE inherits its folder's spelling: the
+    /// other half of #152, the one not read from the row but remembered.
     #[test]
     fn a_child_of_a_folded_folder_lands_inside_it((folder, leaf, rows) in folder_then_child()) {
         let items = run(rows, opts_update());
@@ -717,13 +719,13 @@ proptest! {
         prop_assert_eq!(target(&steps[0]), expected);
     }
 
-    /// **La pregunta que un hasher no puede contestar a mano: dos planes
-    /// distintos, ¿dos huellas distintas?** Los candidatos están elegidos para
-    /// colisionar si el framing es flojo (los mismos bytes repartidos de otra
-    /// forma, una `rel` raíz contra un `dest_rel` ausente, un `Skip` y un bloqueo
-    /// en el mismo sitio, prefijos unos de otros). La igualdad va en las DOS
-    /// direcciones: distintos ⟹ huellas distintas, e iguales-salvo-`id` ⟹ misma
-    /// huella, que es lo que pinea que `id` sea lo ÚNICO que se queda fuera.
+    /// **The question a hasher cannot answer by hand: two different plans,
+    /// two different fingerprints?** The candidates are chosen to collide if
+    /// the framing is loose (the same bytes split differently, a root `rel`
+    /// against an absent `dest_rel`, a `Skip` and a blocker at the same spot,
+    /// prefixes of one another). Equality goes in BOTH directions: different
+    /// ⟹ different fingerprints, and equal-except-`id` ⟹ same fingerprint,
+    /// which is what pins `id` as the ONLY thing left out.
     #[test]
     fn the_digest_separates_any_two_different_plans(a in candidate_plan(), b in candidate_plan()) {
         prop_assert_eq!(hash_of(&a) == hash_of(&b), without_ids(&a) == without_ids(&b),

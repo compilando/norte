@@ -1,38 +1,38 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Los ajustes se ESCRIBEN desde la ventana.
+// Settings get WRITTEN from the window.
 //
-// Hasta aquí F11 era una vitrina: enseñaba el registro compartido y decía que
-// no escribía. La máquina de edición es la misma que la del terminal
-// (`norte_frontend::settings::SettingsState`), y lo que estos tests fijan es
-// el cableado de la ventana alrededor de ella: girar con Enter, pedir un
-// valor en un diálogo, escribir en la capa que toca y aplicar en caliente.
+// Until now F11 was a showcase: it displayed the shared registry and said it
+// did not write. The editing machine is the same as the terminal's
+// (`norte_frontend::settings::SettingsState`), and what these tests pin down
+// is the window's wiring around it: cycling with Enter, prompting for a
+// value in a dialog, writing to the right layer and applying it live.
 // ---------------------------------------------------------------------------
 
-/// La posición de una entrada del registro en la lista PLANA de los ajustes.
+/// A registry entry's position in the FLAT list of settings.
 ///
-/// Cuenta a través de TODAS las secciones, en su orden: desde que hay siete,
-/// el índice dentro de una sección ya no es el de la lista entera.
+/// It counts across ALL sections, in their order: since there are seven, the
+/// index within a section is no longer the whole list's.
 fn fila_de(a: &norte_ui_host::dto::SettingsView, id: &str) -> u32 {
-    let mut plana = 0usize;
+    let mut flat = 0usize;
     for s in &a.sections {
         match s {
             norte_ui_host::dto::SettingsSectionView::Settings { rows, .. } => {
                 for r in rows {
                     if r.id == id {
-                        return u32::try_from(plana).expect("cabe");
+                        return u32::try_from(flat).expect("fits");
                     }
-                    plana += 1;
+                    flat += 1;
                 }
             }
-            norte_ui_host::dto::SettingsSectionView::Paths { rows, .. } => plana += rows.len(),
+            norte_ui_host::dto::SettingsSectionView::Paths { rows, .. } => flat += rows.len(),
         }
     }
-    panic!("la entrada {id} está en el registro")
+    panic!("entry {id} is in the registry")
 }
 
-/// El valor que la vista de ajustes enseña para una entrada.
+/// The value the settings view shows for an entry.
 fn valor_de(a: &norte_ui_host::dto::SettingsView, id: &str) -> String {
     a.sections
         .iter()
@@ -42,232 +42,235 @@ fn valor_de(a: &norte_ui_host::dto::SettingsView, id: &str) -> String {
             }
             norte_ui_host::dto::SettingsSectionView::Paths { .. } => None,
         })
-        .unwrap_or_else(|| panic!("la entrada {id} está en la vista"))
+        .unwrap_or_else(|| panic!("entry {id} is in the view"))
 }
 
-/// Abre los ajustes y pone el cursor sobre `id`.
+/// Opens settings and puts the cursor on `id`.
 async fn ajustes_sobre(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
     id: &str,
 ) -> norte_ui_host::dto::SettingsView {
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    let a = siguiente_ajustes(sub).await.expect("abren");
-    let fila = fila_de(&a, id);
-    h.dispatch(UiAction::SettingsSelectRow { row: fila })
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    let a = siguiente_ajustes(sub).await.expect("opens");
+    let row = fila_de(&a, id);
+    h.dispatch(UiAction::SettingsSelectRow { row })
         .await
-        .expect("host vivo");
-    let a = siguiente_ajustes(sub).await.expect("siguen abiertos");
-    assert_eq!(a.cursor, u64::from(fila), "el cursor está sobre {id}");
+        .expect("host alive");
+    let a = siguiente_ajustes(sub).await.expect("still open");
+    assert_eq!(a.cursor, u64::from(row), "the cursor is on {id}");
     a
 }
 
-/// Lo que hay en el `norte.toml` de la capa del usuario, si ya existe.
-fn toml_de(raiz: &std::path::Path) -> Option<String> {
-    std::fs::read_to_string(raiz.join("norte.toml")).ok()
+/// What is in the user layer's `norte.toml`, if it already exists.
+fn toml_de(root: &std::path::Path) -> Option<String> {
+    std::fs::read_to_string(root.join("norte.toml")).ok()
 }
 
-/// Con el buscador puesto, el cursor apunta a la fila que SE VE.
+/// With the search box set, the cursor points to the row that IS VISIBLE.
 ///
-/// El cursor de esta ventana era plano sobre `filas ++ rutas`, y eso solo
-/// valía porque no filtraba: había un `debug_assert` diciendo exactamente
-/// eso. Con filtro, la tercera fila de la pantalla no es la tercera del
-/// registro, y un Enter activaría otra cosa.
+/// This window's cursor used to be flat over `rows ++ paths`, and that only
+/// worked because it did not filter: there was a `debug_assert` saying
+/// exactly that. With a filter, the screen's third row is not the
+/// registry's third one, and an Enter would activate something else.
 #[tokio::test]
-async fn con_filtro_el_cursor_apunta_a_la_fila_que_se_ve() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn with_a_filter_the_cursor_points_to_the_visible_row() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("abren");
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("opens");
     let total = a.total;
-    assert_eq!(a.shown, total, "sin filtro se ven todos");
+    assert_eq!(a.shown, total, "with no filter, all are seen");
 
     h.dispatch(UiAction::SettingsQuery {
         text: "show-hidden".to_owned(),
     })
     .await
-    .expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    .expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("still open");
     assert!(
         a.shown < total,
-        "el filtro tapa filas: {} de {total}",
+        "the filter hides rows: {} of {total}",
         a.shown
     );
     assert_eq!(
         fila_de(&a, "ui.show-hidden"),
         0,
-        "la fila que queda es la primera de la lista"
+        "the row that is left is the list's first"
     );
-    // Y el índice sigue listando las secciones que el filtro vació.
+    // And the index still lists the sections the filter emptied.
     assert!(
         a.index.iter().any(|s| s.visible == 0),
-        "una sección vacía sigue en el índice: {:?}",
+        "an empty section stays in the index: {:?}",
         a.index
     );
 }
 
-/// Con filtro puesto, el diálogo pregunta por el ajuste QUE SE VE.
+/// With a filter set, the dialog asks about the setting THAT IS VISIBLE.
 ///
-/// El nombre salía de `rows()[fila]` con `fila` contando VISIBLES: filtrando
-/// a «Abrir con», Enter sobre la primera fila abría la edición del editor y
-/// el diálogo decía «Tema». El lector creía cambiar el tema y reescribía su
-/// línea de órdenes.
+/// The name used to come from `rows()[row]` with `row` counting VISIBLE
+/// ones: filtering to "Open with", Enter on the first row opened the
+/// editor's edit box and the dialog said "Theme". The reader thought they
+/// were changing the theme and rewrote their command line.
 #[tokio::test]
-async fn con_filtro_el_dialogo_pregunta_por_el_ajuste_correcto() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn with_a_filter_the_dialog_asks_about_the_right_setting() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    siguiente_ajustes(&mut sub).await.expect("abren");
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    siguiente_ajustes(&mut sub).await.expect("opens");
     h.dispatch(UiAction::SettingsQuery {
         text: "@section:open-with".to_owned(),
     })
     .await
-    .expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
-    // La primera fila visible es `ui.editor`, una de texto.
+    .expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("still open");
+    // The first visible row is `ui.editor`, a text one.
     assert_eq!(fila_de(&a, "ui.editor"), 0);
     h.dispatch(UiAction::SettingsSelectRow { row: 0 })
         .await
-        .expect("host vivo");
-    siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+        .expect("host alive");
+    siguiente_ajustes(&mut sub).await.expect("still open");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
 
-    let cuerpo = foto_hasta(&h, &mut sub, "el diálogo dice de qué ajuste habla", |s| {
-        s.dialogs
-            .first()
-            .and_then(|d| d.body.first().map(|t| t.text.clone()))
-    })
+    let body = foto_hasta(
+        &h,
+        &mut sub,
+        "the dialog says which setting it is about",
+        |s| {
+            s.dialogs
+                .first()
+                .and_then(|d| d.body.first().map(|t| t.text.clone()))
+        },
+    )
     .await;
-    let nombre_editor = norte_i18n::t_in(norte_i18n::Lang::Es, "setting-ui-editor-name");
+    let editor_name = norte_i18n::t_in(norte_i18n::Lang::Es, "setting-ui-editor-name");
     assert_eq!(
-        cuerpo, nombre_editor,
-        "el diálogo tiene que nombrar el ajuste que se activó"
+        body, editor_name,
+        "the dialog has to name the setting that was activated"
     );
 }
 
-/// `tab` cambia de lado, y con el teclado en el índice las flechas recorren
-/// SECCIONES en vez de filas — como la barra lateral de la ayuda.
+/// `tab` switches sides, and with the keyboard on the index the arrows move
+/// through SECTIONS instead of rows — like help's side bar.
 #[tokio::test]
-async fn tab_pasa_el_teclado_al_indice_y_las_flechas_cambian_de_seccion() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn tab_moves_the_keyboard_to_the_index_and_arrows_switch_section() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("abren");
-    assert_eq!(a.focus, "list", "el teclado empieza en la lista");
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("opens");
+    assert_eq!(a.focus, "list", "the keyboard starts on the list");
 
-    h.dispatch(tecla("Tab")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    h.dispatch(tecla("Tab")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("still open");
     assert_eq!(a.focus, "index");
 
-    // Abajo: la sección siguiente, y el cursor a su primera fila.
-    h.dispatch(tecla("Down")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    // Down: the next section, and the cursor to its first row.
+    h.dispatch(tecla("Down")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("still open");
     assert_eq!(
         a.cursor,
         u64::from(fila_de(&a, "ui.menu-bar")),
-        "«Paneles y listado» empieza en su PRIMERA fila, la barra de menú"
+        "\"Panes and listing\" starts on its FIRST row, the menu bar"
     );
 
-    // Y de vuelta: las flechas mueven filas otra vez.
-    h.dispatch(tecla("Tab")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    // And back: the arrows move rows again.
+    h.dispatch(tecla("Tab")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("still open");
     assert_eq!(a.focus, "list");
-    let antes = a.cursor;
-    h.dispatch(tecla("Down")).await.expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
-    assert_eq!(a.cursor, antes + 1);
+    let before = a.cursor;
+    h.dispatch(tecla("Down")).await.expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("still open");
+    assert_eq!(a.cursor, before + 1);
 }
 
-/// Un click en el índice lleva el cursor a esa sección.
+/// A click on the index takes the cursor to that section.
 #[tokio::test]
-async fn saltar_a_una_seccion_pone_el_cursor_en_su_primera_fila() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn jumping_to_a_section_puts_the_cursor_on_its_first_row() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F11")).await.expect("host vivo");
-    siguiente_ajustes(&mut sub).await.expect("abren");
+    h.dispatch(tecla("F11")).await.expect("host alive");
+    siguiente_ajustes(&mut sub).await.expect("opens");
 
     h.dispatch(UiAction::SettingsJumpSection {
         section: "open-with".to_owned(),
     })
     .await
-    .expect("host vivo");
-    let a = siguiente_ajustes(&mut sub).await.expect("siguen abiertos");
+    .expect("host alive");
+    let a = siguiente_ajustes(&mut sub).await.expect("still open");
     assert_eq!(
         a.cursor,
         u64::from(fila_de(&a, "ui.editor")),
-        "«Abrir con» empieza en el editor"
+        "\"Open with\" starts on the editor"
     );
 }
 
-/// Restablecer quita la clave, y si OTRA capa la fija se dice: el valor no
-/// vuelve al de fábrica, y callarlo mandaría al lector a buscar un bug.
+/// Resetting removes the key, and if ANOTHER layer sets it, it says so: the
+/// value does not go back to the factory one, and staying silent about it
+/// would send the reader hunting for a bug.
 #[tokio::test]
-async fn restablecer_con_otra_capa_por_debajo_lo_dice() {
-    let sistema = tempfile::tempdir().expect("temp");
-    let usuario = tempfile::tempdir().expect("temp");
-    // El sistema fija el tema; el usuario lo tapa con otro.
+async fn resetting_with_another_layer_underneath_says_so() {
+    let system = tempfile::tempdir().expect("temp");
+    let user = tempfile::tempdir().expect("temp");
+    // The system sets the theme; the user covers it with another.
+    std::fs::write(system.path().join("norte.toml"), "[ui]\ntheme = \"nord\"\n")
+        .expect("write system");
     std::fs::write(
-        sistema.path().join("norte.toml"),
-        "[ui]\ntheme = \"nord\"\n",
-    )
-    .expect("escribir sistema");
-    std::fs::write(
-        usuario.path().join("norte.toml"),
+        user.path().join("norte.toml"),
         "[ui]\ntheme = \"tokyonight\"\n",
     )
-    .expect("escribir usuario");
-    let (h, _snap) = host_con_capas_apiladas(sistema.path(), usuario.path()).await;
+    .expect("write user");
+    let (h, _snap) = host_con_capas_apiladas(system.path(), user.path()).await;
     let mut sub = h.subscribe();
     let a = ajustes_sobre(&h, &mut sub, "ui.theme").await;
-    let fila = fila_de(&a, "ui.theme");
+    let row = fila_de(&a, "ui.theme");
 
-    h.dispatch(UiAction::SettingsReset { row: fila })
+    h.dispatch(UiAction::SettingsReset { row })
         .await
-        .expect("host vivo");
+        .expect("host alive");
 
-    // La clave del usuario se va...
-    let escrito = foto_hasta(&h, &mut sub, "theme quitado del usuario", |_| {
-        std::fs::read_to_string(usuario.path().join("norte.toml"))
+    // The user's key goes away...
+    let written = foto_hasta(&h, &mut sub, "theme removed from the user's", |_| {
+        std::fs::read_to_string(user.path().join("norte.toml"))
             .ok()
             .filter(|s| !s.contains("tokyonight"))
     })
     .await;
-    assert!(escrito.contains("[ui]"), "la sección se queda: {escrito}");
-    // ...y el aviso dice que otra capa lo sigue fijando.
-    let dicho = foto_hasta(&h, &mut sub, "lo dice", |s| {
+    assert!(written.contains("[ui]"), "the section stays: {written}");
+    // ...and the notice says another layer still sets it.
+    let said = foto_hasta(&h, &mut sub, "it says so", |s| {
         s.status
             .message
             .clone()
             .filter(|m| m.contains("otra capa") || m.contains("another layer"))
     })
     .await;
-    assert!(!dicho.is_empty());
+    assert!(!said.is_empty());
 }
 
-/// Enter sobre un booleano lo gira, lo escribe en `norte.toml` y la fila
-/// enseña el valor nuevo sin cerrar nada.
+/// Enter on a boolean cycles it, writes it to `norte.toml`, and the row shows
+/// the new value without closing anything.
 #[tokio::test]
-async fn girar_un_ajuste_con_enter_lo_escribe_y_refresca_la_fila() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn cycling_a_setting_with_enter_writes_it_and_refreshes_the_row() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
     let a = ajustes_sobre(&h, &mut sub, "ui.show-hidden").await;
     assert_eq!(valor_de(&a, "ui.show-hidden"), "false");
 
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
 
-    // La escritura vuelve por `spawn_blocking`: se mira el FICHERO dando
-    // vueltas al actor, no durmiendo un plazo.
-    let escrito = foto_hasta(&h, &mut sub, "show_hidden escrito", |_| {
-        toml_de(raiz.path()).filter(|s| s.contains("show_hidden = true"))
+    // The write comes back through `spawn_blocking`: the FILE is checked by
+    // polling the actor, not by sleeping a fixed time.
+    let written = foto_hasta(&h, &mut sub, "show_hidden written", |_| {
+        toml_de(root.path()).filter(|s| s.contains("show_hidden = true"))
     })
     .await;
-    assert!(escrito.contains("[ui]"), "en su sección: {escrito}");
-    let a = foto_hasta(&h, &mut sub, "la fila enseña el valor nuevo", |s| {
+    assert!(written.contains("[ui]"), "in its section: {written}");
+    let a = foto_hasta(&h, &mut sub, "the row shows the new value", |s| {
         s.settings
             .clone()
             .filter(|a| valor_de(a, "ui.show-hidden") == "true")
@@ -276,27 +279,27 @@ async fn girar_un_ajuste_con_enter_lo_escribe_y_refresca_la_fila() {
     assert_eq!(
         a.cursor,
         u64::from(fila_de(&a, "ui.show-hidden")),
-        "el cursor no se mueve"
+        "the cursor does not move"
     );
 }
 
-/// Una entrada de TEXTO no se gira: pide el valor en el diálogo de un campo,
-/// prellenado con el actual, y confirmar lo escribe.
+/// A TEXT entry does not cycle: it asks for the value in a field's dialog,
+/// prefilled with the current one, and confirming writes it.
 #[tokio::test]
-async fn un_ajuste_de_texto_pide_el_valor_en_un_dialogo_y_confirmar_lo_escribe() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn a_text_setting_asks_for_the_value_in_a_dialog_and_confirming_writes_it() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
     ajustes_sobre(&h, &mut sub, "ui.font").await;
 
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     let d = siguientes_dialogos(&mut sub).await;
-    assert_eq!(d.len(), 1, "un diálogo, el del valor");
+    assert_eq!(d.len(), 1, "one dialog, the value's");
     assert_eq!(d[0].title_key, "modal-setting-edit");
     assert_eq!(
         d[0].input.as_deref(),
         Some(""),
-        "prellenado con el valor actual, que está vacío"
+        "prefilled with the current value, which is empty"
     );
 
     h.dispatch(UiAction::DialogInput {
@@ -304,7 +307,7 @@ async fn un_ajuste_de_texto_pide_el_valor_en_un_dialogo_y_confirmar_lo_escribe()
         text: "Fira Code".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let ack = h
         .dispatch(UiAction::Dialog {
             id: d[0].id,
@@ -312,18 +315,18 @@ async fn un_ajuste_de_texto_pide_el_valor_en_un_dialogo_y_confirmar_lo_escribe()
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
-        "un valor válido se acepta: {ack:?}"
+        "a valid value is accepted: {ack:?}"
     );
 
-    let escrito = foto_hasta(&h, &mut sub, "font escrito", |_| {
-        toml_de(raiz.path()).filter(|s| s.contains("font = \"Fira Code\""))
+    let written = foto_hasta(&h, &mut sub, "font written", |_| {
+        toml_de(root.path()).filter(|s| s.contains("font = \"Fira Code\""))
     })
     .await;
-    assert!(escrito.contains("[ui]"), "en su sección: {escrito}");
-    foto_hasta(&h, &mut sub, "la fila enseña el valor nuevo", |s| {
+    assert!(written.contains("[ui]"), "in its section: {written}");
+    foto_hasta(&h, &mut sub, "the row shows the new value", |s| {
         s.settings
             .clone()
             .filter(|a| valor_de(a, "ui.font") == "Fira Code")
@@ -331,15 +334,15 @@ async fn un_ajuste_de_texto_pide_el_valor_en_un_dialogo_y_confirmar_lo_escribe()
     .await;
 }
 
-/// Un entero fuera de rango se RECHAZA con el motivo, y no toca el fichero.
+/// An out-of-range integer is REJECTED with the reason, and touches no file.
 #[tokio::test]
-async fn un_entero_fuera_de_rango_no_se_escribe_y_se_dice() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn an_out_of_range_integer_is_not_written_and_says_so() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
     ajustes_sobre(&h, &mut sub, "ui.font-size").await;
 
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     let d = siguientes_dialogos(&mut sub).await;
     assert_eq!(d[0].title_key, "modal-setting-edit");
     h.dispatch(UiAction::DialogInput {
@@ -347,7 +350,7 @@ async fn un_entero_fuera_de_rango_no_se_escribe_y_se_dice() {
         text: "99".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let ack = h
         .dispatch(UiAction::Dialog {
             id: d[0].id,
@@ -355,117 +358,118 @@ async fn un_entero_fuera_de_rango_no_se_escribe_y_se_dice() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Unavailable {
             reason_key: "msg-settings-invalid-range".to_owned()
         },
-        "se rechaza como tal, no como aplicado"
+        "it is rejected as such, not as applied"
     );
     asentar().await;
     assert!(
-        toml_de(raiz.path()).is_none_or(|s| !s.contains("font_size")),
-        "nada se escribió: {:?}",
-        toml_de(raiz.path())
+        toml_de(root.path()).is_none_or(|s| !s.contains("font_size")),
+        "nothing was written: {:?}",
+        toml_de(root.path())
     );
 }
 
-/// Sin capa de usuario no hay dónde escribir, y se dice en vez de callar.
+/// With no user layer there is nowhere to write, and it says so instead of
+/// staying silent.
 #[tokio::test]
-async fn sin_capa_de_usuario_no_se_escribe_y_se_dice() {
+async fn with_no_user_layer_it_does_not_write_and_says_so() {
     let (h, _snap) = host(vec!["a.txt"]).await;
     let mut sub = h.subscribe();
     ajustes_sobre(&h, &mut sub, "ui.show-hidden").await;
 
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     assert_eq!(siguiente_aviso(&mut sub).await, "host-no-config-dir");
 }
 
-/// Girar el tema desde los ajustes lo escribe Y lo aplica: la ventana recarga
-/// su configuración por el mismo camino que un cambio de perfil, así que el
-/// tema nuevo llega a quien hospeda sin reiniciar.
+/// Cycling the theme from settings writes it AND applies it: the window
+/// reloads its configuration through the same path as a profile change, so
+/// the new theme reaches whoever hosts it without a restart.
 #[tokio::test]
-async fn girar_el_tema_desde_los_ajustes_lo_aplica_en_caliente() {
+async fn cycling_the_theme_from_settings_applies_it_live() {
     use norte_ui_host::dto::NativeEffect;
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     let a = ajustes_sobre(&h, &mut sub, "ui.theme").await;
-    let antes = valor_de(&a, "ui.theme");
+    let before = valor_de(&a, "ui.theme");
 
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
 
-    let efecto = tokio::time::timeout(std::time::Duration::from_secs(5), nativos.recv())
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(5), native.recv())
         .await
-        .expect("sale el aviso de tema")
-        .expect("canal vivo");
-    let NativeEffect::ThemeChanged { name } = efecto else {
-        panic!("el efecto es el del tema: {efecto:?}")
+        .expect("the theme notice comes out")
+        .expect("channel alive");
+    let NativeEffect::ThemeChanged { name } = effect else {
+        panic!("the effect is the theme's: {effect:?}")
     };
-    assert_ne!(name, antes, "el siguiente de la lista, no el mismo");
-    let escrito = foto_hasta(&h, &mut sub, "theme escrito", |_| {
-        toml_de(raiz.path()).filter(|s| s.contains(&format!("theme = \"{name}\"")))
+    assert_ne!(name, before, "the next one in the list, not the same one");
+    let written = foto_hasta(&h, &mut sub, "theme written", |_| {
+        toml_de(root.path()).filter(|s| s.contains(&format!("theme = \"{name}\"")))
     })
     .await;
-    assert!(escrito.contains("[ui]"), "en su sección: {escrito}");
+    assert!(written.contains("[ui]"), "in its section: {written}");
 }
 
-/// Con un perfil puesto DESDE EL SELECTOR, el ajuste se escribe en el
-/// perfil, no en la capa del usuario.
+/// With a profile set FROM THE PICKER, the setting is written to the
+/// profile, not to the user layer.
 ///
-/// Lo encontró la revisión: las capas del arranque solo llevan el perfil si
-/// se arrancó con `--profile`, y `dir_de_escritura` miraba solo ahí. Escrito
-/// en la capa del usuario, el perfil lo tapaba en la relectura y la barra
-/// decía «guardado» sobre un valor sin efecto.
+/// The review found it: the startup layers only carry the profile if it was
+/// started with `--profile`, and `dir_de_escritura` only looked there.
+/// Written to the user layer, the profile would cover it on re-read and the
+/// bar would say "saved" over a value with no effect.
 #[tokio::test]
-async fn con_un_perfil_puesto_el_ajuste_se_escribe_en_el_perfil() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let fotos = raiz.path().join("profiles").join("fotos");
-    std::fs::create_dir_all(&fotos).expect("mkdir");
+async fn with_a_profile_set_the_setting_is_written_to_the_profile() {
+    let root = tempfile::tempdir().expect("temp");
+    let photos = root.path().join("profiles").join("fotos");
+    std::fs::create_dir_all(&photos).expect("mkdir");
     std::fs::write(
-        fotos.join("norte.toml"),
+        photos.join("norte.toml"),
         "[profile]\ntitle = \"Fotos\"\n\n[ui]\nshow_hidden = false\n",
     )
-    .expect("escribir");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+    .expect("write");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "profile.pick").await;
-    foto_hasta(&h, &mut sub, "el selector de perfiles con su lista", |s| {
+    foto_hasta(&h, &mut sub, "the profile picker with its list", |s| {
         s.profiles
             .as_ref()
             .filter(|p| !p.rows.is_empty())
             .map(|_| ())
     })
     .await;
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
-    foto_hasta(&h, &mut sub, "el perfil puesto", |s| {
+    h.dispatch(tecla("Enter")).await.expect("host alive");
+    foto_hasta(&h, &mut sub, "the profile set", |s| {
         s.profiles.is_none().then_some(())
     })
     .await;
 
     ajustes_sobre(&h, &mut sub, "ui.show-hidden").await;
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
 
-    let escrito = foto_hasta(&h, &mut sub, "show_hidden escrito en el perfil", |_| {
-        std::fs::read_to_string(fotos.join("norte.toml"))
+    let written = foto_hasta(&h, &mut sub, "show_hidden written to the profile", |_| {
+        std::fs::read_to_string(photos.join("norte.toml"))
             .ok()
             .filter(|s| s.contains("show_hidden = true"))
     })
     .await;
     assert!(
-        escrito.contains("title = \"Fotos\""),
-        "el resto del perfil sigue: {escrito}"
+        written.contains("title = \"Fotos\""),
+        "the rest of the profile stays: {written}"
     );
     assert!(
-        toml_de(raiz.path()).is_none_or(|s| !s.contains("show_hidden")),
-        "y la capa del usuario no se toca: {:?}",
-        toml_de(raiz.path())
+        toml_de(root.path()).is_none_or(|s| !s.contains("show_hidden")),
+        "and the user layer is untouched: {:?}",
+        toml_de(root.path())
     );
-    // Y la fila lo dice tras releer: el perfil ya no lo tapa.
-    foto_hasta(&h, &mut sub, "la fila enseña el valor del perfil", |s| {
+    // And the row says so after re-reading: the profile no longer covers it.
+    foto_hasta(&h, &mut sub, "the row shows the profile's value", |s| {
         s.settings
             .clone()
             .filter(|a| valor_de(a, "ui.show-hidden") == "true")
@@ -473,15 +477,15 @@ async fn con_un_perfil_puesto_el_ajuste_se_escribe_en_el_perfil() {
     .await;
 }
 
-/// Con el prompt del valor abierto, un doble clic no escribe ni apila otro
-/// prompt: el ratón respeta el diálogo igual que el teclado.
+/// With the value prompt open, a double click writes nothing nor stacks
+/// another prompt: the mouse honors the dialog just like the keyboard.
 #[tokio::test]
-async fn con_el_prompt_abierto_el_doble_clic_no_hace_nada() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn with_the_prompt_open_a_double_click_does_nothing() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
     let a = ajustes_sobre(&h, &mut sub, "ui.font").await;
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     let d = siguientes_dialogos(&mut sub).await;
     assert_eq!(d.len(), 1);
 
@@ -490,26 +494,26 @@ async fn con_el_prompt_abierto_el_doble_clic_no_hace_nada() {
             row: fila_de(&a, "ui.show-hidden"),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Stale { .. }),
-        "con un diálogo delante el clic es obsoleto: {ack:?}"
+        "with a dialog in front, the click is stale: {ack:?}"
     );
     asentar().await;
     assert!(
-        toml_de(raiz.path()).is_none(),
-        "nada se escribió: {:?}",
-        toml_de(raiz.path())
+        toml_de(root.path()).is_none(),
+        "nothing was written: {:?}",
+        toml_de(root.path())
     );
-    let foto = foto_hasta(&h, &mut sub, "una foto", |s| Some(s.dialogs.len())).await;
-    assert_eq!(foto, 1, "sigue UN diálogo, el del valor");
+    let snap = foto_hasta(&h, &mut sub, "a snapshot", |s| Some(s.dialogs.len())).await;
+    assert_eq!(snap, 1, "still ONE dialog, the value's");
 }
 
-/// El doble clic sobre una fila hace lo que Enter: girarla.
+/// A double click on a row does what Enter does: cycle it.
 #[tokio::test]
-async fn un_doble_clic_activa_la_fila_como_enter() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn a_double_click_activates_the_row_like_enter() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_con_capas(root.path()).await;
     let mut sub = h.subscribe();
     let a = ajustes_sobre(&h, &mut sub, "ui.show-hidden").await;
 
@@ -517,10 +521,10 @@ async fn un_doble_clic_activa_la_fila_como_enter() {
         row: fila_de(&a, "ui.show-hidden"),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    foto_hasta(&h, &mut sub, "show_hidden escrito por el ratón", |_| {
-        toml_de(raiz.path()).filter(|s| s.contains("show_hidden = true"))
+    foto_hasta(&h, &mut sub, "show_hidden written by the mouse", |_| {
+        toml_de(root.path()).filter(|s| s.contains("show_hidden = true"))
     })
     .await;
 }

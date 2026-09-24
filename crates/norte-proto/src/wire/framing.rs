@@ -1,66 +1,67 @@
-//! Framing NDJSON (ADR 0011): un mensaje JSON por línea `\n`, límite de
-//! frame anti-DoS. Sin I/O — el transporte alimenta bytes y drena frames;
-//! por eso es fuzzeable sin sockets (spec §12).
+//! NDJSON framing (ADR 0011): one JSON message per `\n`-terminated line, with
+//! an anti-DoS frame cap. No I/O — the transport feeds bytes and drains
+//! frames; that is why it is fuzzable without sockets (spec §12).
 
-/// Tamaño máximo de un frame (16 MiB). Un frame que lo supere sin `\n` es
-/// [`FrameOversized`]: el peer está roto o es hostil — se cierra.
+/// Maximum frame size (16 MiB). A frame that exceeds it without a `\n` is
+/// [`FrameOversized`]: the peer is broken or hostile — it gets closed.
 pub const MAX_FRAME_BYTES: usize = 16 * 1024 * 1024;
 
-/// El buffer superó [`MAX_FRAME_BYTES`] sin cerrar frame.
+/// The buffer went over [`MAX_FRAME_BYTES`] without closing a frame.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("frame de más de {MAX_FRAME_BYTES} bytes sin terminar")]
+#[error("frame over {MAX_FRAME_BYTES} bytes without terminating")]
 pub struct FrameOversized;
 
-/// Decoder incremental de NDJSON: acumula bytes de la red y entrega frames
-/// completos (sin el `\n`; un `\r` final se recorta por tolerancia).
-/// Las líneas vacías se descartan en silencio (keepalive barato).
+/// Incremental NDJSON decoder: accumulates bytes from the network and
+/// delivers complete frames (without the `\n`; a trailing `\r` is trimmed for
+/// tolerance). Empty lines are silently dropped (cheap keepalive).
 ///
 /// ```
 /// use norte_proto::wire::FrameDecoder;
 /// let mut d = FrameDecoder::new();
 /// d.push(b"{\"a\":1}\n{\"b\"").unwrap();
 /// assert_eq!(d.next_frame(), Some(b"{\"a\":1}".to_vec()));
-/// assert_eq!(d.next_frame(), None); // el segundo aún no cerró
+/// assert_eq!(d.next_frame(), None); // the second one hasn't closed yet
 /// d.push(b":2}\r\n").unwrap();
 /// assert_eq!(d.next_frame(), Some(b"{\"b\":2}".to_vec()));
 /// ```
 #[derive(Debug, Default)]
 pub struct FrameDecoder {
     buf: Vec<u8>,
-    /// Desde dónde no hemos visto `\n` (evita re-escanear en cada push).
+    /// From where we have not seen a `\n` yet (avoids rescanning on every
+    /// push).
     scanned: usize,
-    /// `\n` recibidos y aún no drenados: el chequeo de oversized es O(1)
-    /// por push (sin re-escanear el buffer entero — hallazgo del
-    /// security-reviewer).
+    /// `\n`s received and not yet drained: the oversized check is O(1) per
+    /// push (no rescanning the whole buffer — a security-reviewer finding).
     pending_newlines: usize,
 }
 
 impl FrameDecoder {
-    /// Decoder vacío.
+    /// Empty decoder.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Alimenta bytes recibidos.
+    /// Feeds received bytes.
     ///
     /// # Errors
-    /// [`FrameOversized`] si el frame en curso supera [`MAX_FRAME_BYTES`]
-    /// sin cerrar — el caller debe cortar la conexión.
+    /// [`FrameOversized`] if the frame in progress exceeds
+    /// [`MAX_FRAME_BYTES`] without closing — the caller must cut the
+    /// connection.
     pub fn push(&mut self, bytes: &[u8]) -> Result<(), FrameOversized> {
         self.pending_newlines += bytes
             .iter()
             .fold(0usize, |acc, &b| acc + usize::from(b == b'\n'));
         self.buf.extend_from_slice(bytes);
-        // El límite aplica al FRAME en curso: si hay un `\n` pendiente de
-        // drenar, todavía no es oversized.
+        // The cap applies to the frame IN PROGRESS: if there is a `\n`
+        // pending to drain, it is not oversized yet.
         if self.buf.len() > MAX_FRAME_BYTES && self.pending_newlines == 0 {
             return Err(FrameOversized);
         }
         Ok(())
     }
 
-    /// Extrae el siguiente frame completo, si lo hay. Nunca bloquea.
+    /// Extracts the next complete frame, if there is one. Never blocks.
     pub fn next_frame(&mut self) -> Option<Vec<u8>> {
         loop {
             let nl = self.buf[self.scanned..]
@@ -74,22 +75,22 @@ impl FrameDecoder {
             let mut frame: Vec<u8> = self.buf.drain(..=nl).collect();
             self.scanned = 0;
             self.pending_newlines = self.pending_newlines.saturating_sub(1);
-            frame.pop(); // el `\n`
-            // Recorta TODOS los `\r` de framing, no solo uno: un peer que
-            // emite `\r\r\n` (o CRLF repetido) no debe dejar un `\r` colgando
-            // que reviente el parse JSON (hallazgo del fuzz de framing).
+            frame.pop(); // the `\n`
+            // Trims ALL trailing `\r`s, not just one: a peer emitting
+            // `\r\r\n` (or repeated CRLF) must not leave a dangling `\r` that
+            // breaks the JSON parse (a framing fuzz finding).
             while frame.last() == Some(&b'\r') {
                 frame.pop();
             }
             if frame.is_empty() {
-                continue; // línea vacía = keepalive, se descarta
+                continue; // empty line = keepalive, dropped
             }
             return Some(frame);
         }
     }
 }
 
-/// Codifica un mensaje como frame NDJSON (JSON compacto + `\n`).
+/// Encodes a message as an NDJSON frame (compact JSON + `\n`).
 ///
 /// ```
 /// use norte_proto::wire::encode_frame;
@@ -98,8 +99,8 @@ impl FrameDecoder {
 /// ```
 ///
 /// # Errors
-/// Los de `serde_json` (un tipo del protocolo siempre serializa; esto solo
-/// falla con payloads `Value` patológicos del caller).
+/// Whatever `serde_json` returns (a protocol type always serializes; this
+/// only fails with pathological caller `Value` payloads).
 pub fn encode_frame<T: serde::Serialize>(msg: &T) -> Result<Vec<u8>, serde_json::Error> {
     let mut out = serde_json::to_vec(msg)?;
     out.push(b'\n');

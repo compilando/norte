@@ -1,165 +1,175 @@
-//! Los gestos de panel: espejar, traer, intercambiar, ir y volver.
+//! Panel gestures: mirror, pull, swap, jump and back.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `Estado`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
 impl Estado {
-    /// Los tres gestos de panel de la ADR 0058: espejo, traer e intercambiar.
+    /// The three panel gestures from ADR 0058: mirror, pull, and swap.
     ///
-    /// Los tres necesitan el OTRO hueco, y el otro hueco lo dice el rol
-    /// compartido —el mismo del que sale el destino de una copia—, nunca «el
-    /// de al lado»: con tres listados, adivinar es mandar el panel de alguien
-    /// a un sitio que no eligió.
-    /// Enciende o apaga la navegación SINCRONIZADA, y lo dice.
+    /// All three need the OTHER slot, and the other slot is decided by the
+    /// shared role — the same one a copy's destination comes from — never "the
+    /// one next to it": with three listings, guessing is sending someone's
+    /// panel somewhere they did not choose.
+    // TODO(translation): review — this paragraph documents the three panel
+    /// gestures, but the item right after it is
+    /// `alternar_espejo_permanente`'s own doc, about the sync-navigation
+    /// toggle; it looks like a stale fragment left by an earlier edit.
+    /// Turns SYNCHRONIZED navigation on or off, and says so.
     ///
-    /// No navega: encenderla no mueve el otro hueco a donde ya estás. Lo que
-    /// hace es que la SIGUIENTE navegación la repitan los dos — alinearlos
-    /// ahora mismo ya tiene su gesto, que es `pane.mirror`.
+    /// It does not navigate: turning it on does not move the other slot to
+    /// where you already are. What it does is make the NEXT navigation be
+    /// repeated by both — aligning them right now already has its own
+    /// gesture, which is `pane.mirror`.
     pub(super) fn alternar_espejo_permanente(
         &mut self,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.espejo_permanente = !self.espejo_permanente;
-        let clave = if self.espejo_permanente {
+        let key = if self.espejo_permanente {
             "msg-sync-nav-on"
         } else {
             "msg-sync-nav-off"
         };
-        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
-        let cambio = ViewChange::Status(self.status.clone());
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
+        let change = ViewChange::Status(self.status.clone());
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
     pub(super) fn gesto_de_panel(
         &mut self,
         efecto: Efecto,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let otro = match self.hueco_destino() {
+        let other = match self.hueco_destino() {
             Ok(id) => id,
-            Err(clave) => {
+            Err(key) => {
                 return (
                     ActionAck::Unavailable {
-                        reason_key: clave.to_owned(),
+                        reason_key: key.to_owned(),
                     },
                     Vec::new(),
                 );
             }
         };
-        let activo = self.activo();
+        let active = self.activo();
         match efecto {
-            // Lo que viaja es A DÓNDE VA el panel de origen, no lo que
-            // enseña: durante una navegación `pane.dir()` responde todavía
-            // por el directorio que se abandona, y espejar eso mandaría al
-            // otro panel al sitio del que el lector acaba de salir.
+            // What travels is WHERE the source panel is GOING, not what it is
+            // showing: during a navigation `pane.dir()` still answers with
+            // the directory being left, and mirroring that would send the
+            // other panel to the place the reader just left.
             Efecto::Espejo | Efecto::EspejoObjetivo | Efecto::Traer => {
-                let (origen, llega) = if matches!(efecto, Efecto::Traer) {
-                    (otro, activo)
+                let (source, arrives) = if matches!(efecto, Efecto::Traer) {
+                    (other, active)
                 } else {
-                    (activo, otro)
+                    (active, other)
                 };
-                let Some(destino) = self.destino_del_gesto(efecto, origen) else {
+                let Some(target) = self.destino_del_gesto(efecto, source) else {
                     return (Self::obsoleta(StaleAction::Generation), Vec::new());
                 };
-                if self.dir_en_curso(llega).as_ref() == Some(&destino) {
-                    // Los dos ya están ahí. Un cd redundante RE-LISTA el
-                    // panel que llega: `set_listing` le borra las marcas y
-                    // una navegación —a diferencia de un refresco— no las
-                    // restaura, además de deslizarle el listado bajo el
-                    // cursor. Todo eso a cambio de nada, porque ya enseña lo
-                    // que se le pide. El TUI lo rehúsa por lo mismo
+                if self.dir_en_curso(arrives).as_ref() == Some(&target) {
+                    // Both are already there. A redundant cd RE-LISTS the
+                    // arriving panel: `set_listing` erases its marks and a
+                    // navigation — unlike a refresh — does not restore them,
+                    // on top of sliding its listing under the cursor. All of
+                    // that for nothing, because it already shows what is
+                    // being asked. The TUI refuses for the same reason
                     // (`gestures::mirror_plan`).
                     return (self.aplicada(), Vec::new());
                 }
                 (
                     self.aplicada(),
-                    self.navegar_hueco(llega, &destino, Trail::Record, backend, buzon),
+                    self.navegar_hueco(arrives, &target, Trail::Record, backend, mailbox),
                 )
             }
-            Efecto::Intercambiar => self.intercambiar_huecos(activo, otro, backend, buzon),
-            // El `match` de arriba no manda aquí nada más.
+            Efecto::Intercambiar => self.intercambiar_huecos(active, other, backend, mailbox),
+            // The `match` above sends nothing else here.
             _ => Self::no_muta(),
         }
     }
 
-    /// La ubicación que VIAJA en un gesto de panel, leída del hueco `origen`.
+    /// The location that TRAVELS in a panel gesture, read from slot `source`.
     ///
-    /// Para espejo y traer es [`Self::dir_en_curso`]. Para
-    /// [`Efecto::EspejoObjetivo`] es la carpeta bajo el cursor si lo es
-    /// (`PaneState::target_dir`, la misma respuesta que da el TUI) — salvo con
-    /// una navegación EN VUELO, donde el cursor sigue siendo el del listado
-    /// que se abandona y lo que vale es a dónde va el hueco.
-    pub(super) fn destino_del_gesto(&self, efecto: Efecto, origen: u32) -> Option<VPath> {
-        let hueco = self.huecos.get(&origen)?;
-        if matches!(efecto, Efecto::EspejoObjetivo) && hueco.dir_pedido.is_none() {
-            return Some(hueco.pane.target_dir().clone());
+    /// For mirror and pull it is [`Self::dir_en_curso`]. For
+    /// [`Efecto::EspejoObjetivo`] it is the folder under the cursor if it is
+    /// one (`PaneState::target_dir`, the same answer the TUI gives) — except
+    /// with a navigation IN FLIGHT, where the cursor is still the abandoned
+    /// listing's and what matters is where the slot is going.
+    pub(super) fn destino_del_gesto(&self, efecto: Efecto, source: u32) -> Option<VPath> {
+        let slot = self.huecos.get(&source)?;
+        if matches!(efecto, Efecto::EspejoObjetivo) && slot.dir_pedido.is_none() {
+            return Some(slot.pane.target_dir().clone());
         }
-        self.dir_en_curso(origen)
+        self.dir_en_curso(source)
     }
 
-    /// A dónde va un hueco: el directorio pedido si hay una navegación en
-    /// vuelo, y si no el que enseña.
+    /// Where a slot is going: the requested directory if a navigation is in
+    /// flight, and the one it shows if not.
     ///
-    /// `None` solo si el hueco no existe, que para quien llama es una
-    /// pantalla que cambió por debajo.
+    /// `None` only if the slot does not exist, which for the caller is a
+    /// screen that changed underneath.
     pub(super) fn dir_en_curso(&self, slot: u32) -> Option<VPath> {
         let h = self.huecos.get(&slot)?;
         Some(h.dir_pedido.clone().unwrap_or_else(|| h.pane.dir().clone()))
     }
 
-    /// Los dos listados cambian de sitio. NO toca disco.
+    /// The two listings change places. It does NOT touch disk.
     ///
-    /// Lo que se intercambia es el CONTENIDO del hueco —listado, cursor,
-    /// marcas, rastro y orden—, porque partirlo más sería inventar reglas
-    /// sobre qué se queda dónde. El foco no se mueve: quien lo tenía sigue
-    /// teniéndolo, y ahora enseña lo otro, que es lo que el gesto significa.
+    /// What is swapped is the slot's CONTENT — listing, cursor, marks, trail
+    /// and sort order —, because splitting it further would be inventing
+    /// rules about what stays where. Focus does not move: whoever had it
+    /// keeps it, and now it shows the other one, which is what the gesture
+    /// means.
     ///
-    /// Lo único que NO viaja es la ventana de pintado (`primera_visible` y
-    /// `visibles`): esa es geometría del SLOT, no del listado.
+    /// The only thing that does NOT travel is the paint window
+    /// (`primera_visible` and `visibles`): that is the SLOT's geometry, not
+    /// the listing's.
     ///
-    /// Lo que estaba EN VUELO es la parte que no se ve. Una respuesta viaja
-    /// etiquetada con su hueco, así que tras el intercambio llegaría al hueco
-    /// equivocado y se descartaría por testigo: el panel se quedaría cargando
-    /// para siempre. Se vuelve a pedir, apuntando a donde iba. Lo mismo con
-    /// el sondeo y la decoración, que casan por RUTA y por eso no pintarían
-    /// nada raro, pero dejarían la memoria de «ya se pidió» sobre un listado
-    /// que ya no está ahí — o sea columnas de tamaño en blanco para siempre.
+    /// What was IN FLIGHT is the part that is not visible. A response travels
+    /// tagged with its slot, so after the swap it would arrive at the wrong
+    /// slot and get discarded by token: the panel would be left loading
+    /// forever. It is requested again, pointing at where it was going. Same
+    /// with probing and decoration, which match by PATH and so would not
+    /// paint anything wrong, but would leave the "already requested" memory
+    /// over a listing that is no longer there — i.e. blank size columns
+    /// forever.
     pub(super) fn intercambiar_huecos(
         &mut self,
         a: u32,
         b: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if !self.huecos.contains_key(&a) || !self.huecos.contains_key(&b) {
-            // Uno de los dos desapareció entre el rol y aquí. Se comprueba
-            // ANTES de sacar ninguno: los dos `remove` de una tupla se
-            // evalúan los dos antes de casar el patrón, así que salir por el
-            // camino de error con uno ya extraído lo DROPEA — «se deshace lo
-            // hecho» no deshacía nada.
+            // One of the two disappeared between the role and here. It is
+            // checked BEFORE taking either one out: a tuple's two `remove`
+            // calls both evaluate before the pattern is matched, so leaving
+            // through the error path with one already taken out DROPS it —
+            // "what was done is undone" undid nothing.
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
-        let (Some(mut ha), Some(mut hb)) = (self.huecos.remove(&a), self.huecos.remove(&b)) else {
+        let (Some(mut slot_a), Some(mut slot_b)) = (self.huecos.remove(&a), self.huecos.remove(&b))
+        else {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
-        // La ventana de pintado se queda en SU slot. `primera_visible` y
-        // `visibles` no describen el listado: los pone el renderer con
-        // `set_visible_range`, y su `scrollTop` es suyo — un intercambio no
-        // lo mueve ni dispara un evento de scroll que lo recalcule. Si
-        // viajaran con el hueco, cada panel pintaría filas de una banda que
-        // el lector no tiene delante y los DOS se verían vacíos, sin nada
-        // que lo corrigiera salvo arrastrar la barra a mano.
-        std::mem::swap(&mut ha.primera_visible, &mut hb.primera_visible);
-        std::mem::swap(&mut ha.visibles, &mut hb.visibles);
-        self.huecos.insert(a, hb);
-        self.huecos.insert(b, ha);
+        // The paint window stays in ITS slot. `primera_visible` and
+        // `visibles` do not describe the listing: the renderer sets them with
+        // `set_visible_range`, and its `scrollTop` is its own — a swap does
+        // not move it nor fire a scroll event that would recompute it. If
+        // they travelled with the slot, each panel would paint rows from a
+        // band the reader does not have in front of them, and BOTH would look
+        // empty, with nothing to fix it short of dragging the scrollbar by
+        // hand.
+        std::mem::swap(&mut slot_a.primera_visible, &mut slot_b.primera_visible);
+        std::mem::swap(&mut slot_a.visibles, &mut slot_b.visibles);
+        self.huecos.insert(a, slot_b);
+        self.huecos.insert(b, slot_a);
         for slot in [a, b] {
             if let Some(h) = self.huecos.get_mut(&slot) {
                 h.cancelar_sondeo
@@ -170,10 +180,10 @@ impl Estado {
                 h.olvidar_adornos();
                 h.adornando = false;
             }
-            self.reanudar_peticion(slot, backend, buzon);
+            self.reanudar_peticion(slot, backend, mailbox);
         }
-        // Cambian las dos mitades de la pantalla a la vez —filas, cabeceras,
-        // ruta, cursor y estado—, así que viaja una FOTO y no seis parches.
+        // Both halves of the screen change at once — rows, headers, path,
+        // cursor and state — so a SNAPSHOT travels and not six patches.
         let snap = self.snapshot();
         (
             self.aplicada(),
@@ -181,38 +191,38 @@ impl Estado {
         )
     }
 
-    /// Vuelve a pedir lo que este hueco tenía en vuelo, con testigo nuevo.
+    /// Requests again whatever this slot had in flight, with a new token.
     ///
-    /// «En vuelo» son DOS cosas, y mirar solo la primera dejaba pasar el caso
-    /// común. `en_vuelo` se limpia en cuanto aterriza la primera página,
-    /// mientras `drenando` sigue trayendo el resto del stream: en un
-    /// directorio de más de `FIRST_PAGE` entradas —o sea casi cualquiera— hay
-    /// una ventana en la que solo vive el drenaje. Los lotes que siguieran
-    /// llegando se descartarían por testigo (no se cruzan de hueco, eso está
-    /// bien), y el listado se quedaría congelado en las cien primeras
-    /// entradas, en `Ready`, sin decir nada: marcar todo actuaría sobre ese
-    /// trozo.
+    /// "In flight" is TWO things, and looking at only the first let the
+    /// common case slip through. `en_vuelo` clears as soon as the first page
+    /// lands, while `drenando` keeps bringing the rest of the stream: in a
+    /// directory with more than `FIRST_PAGE` entries — i.e. almost any of
+    /// them — there is a window where only the drain is alive. Batches that
+    /// kept arriving would be discarded by token (they do not cross slots,
+    /// that part is fine), and the listing would be left frozen at the first
+    /// hundred entries, in `Ready`, saying nothing: marking everything would
+    /// act on that chunk.
     ///
-    /// Los dos casos se repiden distinto:
+    /// The two cases are re-requested differently:
     ///
-    /// - **Navegación**: conserva el DESTINO de la petición vieja, no el
-    ///   directorio del que salía.
-    /// - **Solo drenaje**: la primera página ya está en pantalla, así que
-    ///   esto es un REFRESCO de lo que el lector mira — cursor y marcas
-    ///   vuelven, con la misma disciplina que [`Self::refrescar`].
+    /// - **Navigation**: keeps the old request's TARGET, not the directory it
+    ///   was leaving.
+    /// - **Drain only**: the first page is already on screen, so this is a
+    ///   REFRESH of what the reader is looking at — cursor and marks come
+    ///   back, with the same discipline as [`Self::refrescar`].
     ///
-    /// Sin ninguna de las dos no hace nada, y no gasta testigo.
+    /// With neither of the two it does nothing, and spends no token.
     pub(super) fn reanudar_peticion(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) {
         let Some(h) = self.huecos.get(&slot) else {
             return;
         };
-        let navegando = h.en_vuelo.is_some();
-        if !navegando && h.drenando.is_none() {
+        let navigating = h.en_vuelo.is_some();
+        if !navigating && h.drenando.is_none() {
             return;
         }
         self.token += 1;
@@ -220,19 +230,20 @@ impl Estado {
         let Some(h) = self.huecos.get_mut(&slot) else {
             return;
         };
-        let dir = if navegando {
+        let dir = if navigating {
             h.dir_pedido.clone().unwrap_or_else(|| h.pane.dir().clone())
         } else {
-            // El hueco YA está en su directorio: lo que faltaba era el resto.
+            // The slot is ALREADY in its directory: what was missing was the
+            // rest.
             h.pane.dir().clone()
         };
-        if !navegando {
+        if !navigating {
             if let Some(sel) = h.pane.selected().map(|e| e.path.clone()) {
                 h.pane.set_pending_focus(sel);
             }
             h.pane.remember_cursor();
-            // `marked_paths` cae al cursor sin marcas, y restaurar ESO sería
-            // una marca que nadie hizo.
+            // `marked_paths` falls back to the cursor with no marks, and
+            // restoring THAT would be a mark nobody made.
             h.marcas_a_restaurar = if h.pane.marks_len() > 0 {
                 h.pane.marked_paths()
             } else {
@@ -241,26 +252,25 @@ impl Estado {
         }
         h.en_vuelo = Some(token);
         h.drenando = Some(token);
-        // CON el destino cuando lo hay. Esta función documenta tres líneas
-        // más arriba que conserva el destino de la petición vieja, y luego lo
-        // tiraba: intercambiar dos paneles mientras uno navega degradaba
-        // «yendo a X» a «cargando…» sobre un cuerpo que sigue enseñando el
-        // directorio ANTERIOR — la mezcla ilegible que esto existe para
-        // evitar.
-        let enc = h.pane.name_encoding();
-        h.estado = Self::cargando_hacia(navegando.then_some(&dir), enc);
-        self.pedir_listado(slot, &dir, token, backend, buzon);
+        // WITH the target when there is one. This function documents three
+        // lines up that it keeps the old request's target, and then it used
+        // to throw it away: swapping two panels while one navigates degraded
+        // "going to X" to "loading…" over a body that still shows the
+        // PREVIOUS directory — the unreadable mix this exists to avoid.
+        let encoding = h.pane.name_encoding();
+        h.estado = Self::cargando_hacia(navigating.then_some(&dir), encoding);
+        self.pedir_listado(slot, &dir, token, backend, mailbox);
     }
 
-    /// Abre la historia del hueco activo.
+    /// Opens the active slot's history.
     pub(super) fn abrir_historial(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slot = self.activo();
         self.abrir_lista_de_historia(slot, "picker-history-title", false, None, None)
     }
 
-    /// Abre la historia de un LADO de la pantalla (spec 2026-09-15 D7): lo
-    /// elegido navega ESE hueco aunque el foco esté en el otro. Qué es un lado
-    /// lo dice la geometría del reparto, como en los volúmenes.
+    /// Opens a SIDE of the screen's history (spec 2026-09-15 D7): what is
+    /// chosen navigates THAT slot even if focus is on the other one. What a
+    /// side is, is decided by the layout's geometry, like with volumes.
     pub(super) fn abrir_historial_de_lado(
         &mut self,
         derecha: bool,
@@ -273,41 +283,41 @@ impl Estado {
                 Vec::new(),
             );
         };
-        let titulo = if derecha {
+        let title = if derecha {
             "picker-history-title-right"
         } else {
             "picker-history-title-left"
         };
-        self.abrir_lista_de_historia(slot, titulo, false, None, None)
+        self.abrir_lista_de_historia(slot, title, false, None, None)
     }
 
-    /// Abre los populares de la sesión (D6), navegando el hueco activo.
+    /// Opens the session's popular list (D6), navigating the active slot.
     pub(super) fn abrir_populares(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slot = self.activo();
         self.abrir_lista_de_historia(slot, "picker-popular-title", true, None, None)
     }
 
-    /// Abre —o rehace, con `cursor`— una lista de historia sobre `slot`.
+    /// Opens — or rebuilds, with `cursor` — a history list over `slot`.
     ///
-    /// Las filas son las COMPARTIDAS (`norte_frontend::history`): qué recuerda
-    /// un panel, en qué orden y con qué marca no puede depender de quién lo
-    /// pinta. El tope de `[ui] history_size` se aplica aquí y al navegar, que
-    /// son los dos sitios donde la historia se lee o crece.
+    /// The rows are the SHARED ones (`norte_frontend::history`): what a panel
+    /// remembers, in what order and with what mark cannot depend on who
+    /// paints it. The `[ui] history_size` cap is applied here and while
+    /// navigating, which are the two places where history is read or grows.
     fn abrir_lista_de_historia(
         &mut self,
         slot: u32,
-        titulo: &'static str,
-        populares: bool,
+        title: &'static str,
+        popular: bool,
         cursor: Option<usize>,
-        filtro: Option<String>,
+        filter: Option<String>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let tope = self.config.common.ui_chrome.history_size();
+        let cap = self.config.common.ui_chrome.history_size();
         let Some(hueco) = self.huecos.get_mut(&slot) else {
-            // El hueco se fue con la lista puesta: se cierra, como cuando pasa
-            // lo mismo al elegir. Dejarla abierta ofrecía filas de un panel que
-            // ya no existe.
-            let cerrar = self.selector.take().is_some();
-            let envios = if cerrar {
+            // The slot left with the list open: it closes, like when the same
+            // thing happens on choosing. Leaving it open offered rows from a
+            // panel that no longer exists.
+            let closed = self.selector.take().is_some();
+            let outgoing = if closed {
                 vec![self.parche(vec![ViewChange::Picker { picker: None }])]
             } else {
                 Vec::new()
@@ -316,83 +326,83 @@ impl Estado {
                 ActionAck::Unavailable {
                     reason_key: "host-no-other-slot".to_owned(),
                 },
-                envios,
+                outgoing,
             );
         };
-        hueco.historial.set_capacity(tope);
-        let actual = hueco.pane.dir().clone();
-        // La historia se pinta con la reinterpretación de SU panel, como el
-        // terminal y como la barra de rutas (#98/F4: una lista es superficie de
-        // decisión). Los populares con ninguna: son de toda la sesión, y aplicar
-        // el encoding de un panel a rutas de otro sería inventar mojibake.
-        let enc = if populares {
+        hueco.historial.set_capacity(cap);
+        let current = hueco.pane.dir().clone();
+        // History is painted with ITS panel's reinterpretation, like the
+        // terminal and the path bar (#98/F4: a list is a decision surface).
+        // The popular list gets none: it belongs to the whole session, and
+        // applying one panel's encoding to another's paths would be
+        // inventing mojibake.
+        let encoding = if popular {
             None
         } else {
             hueco.pane.name_encoding()
         };
-        let texto = filtro.as_deref().unwrap_or("");
-        let filas = if populares {
-            norte_frontend::history::popular_rows(&self.popular, &actual, texto)
+        let query_text = filter.as_deref().unwrap_or("");
+        let rows = if popular {
+            norte_frontend::history::popular_rows(&self.popular, &current, query_text)
         } else {
-            norte_frontend::history::history_rows(&hueco.historial, &actual, texto, enc)
+            norte_frontend::history::history_rows(&hueco.historial, &current, query_text, encoding)
         };
         let mut selector = crate::pickers::Selector::historia(
             slot,
-            &filas,
-            |p| norte_frontend::path_display_with(p, enc),
+            &rows,
+            |p| norte_frontend::path_display_with(p, encoding),
             self.lang,
-            titulo,
-            populares,
-            filtro,
+            title,
+            popular,
+            filter,
         );
         if let Some(c) = cursor {
-            selector.senalar(c.min(filas.len().saturating_sub(1)));
+            selector.senalar(c.min(rows.len().saturating_sub(1)));
         }
         self.selector = Some(selector);
         self.gen_selector += 1;
-        let cambio = ViewChange::Picker {
+        let change = ViewChange::Picker {
             picker: self.vista_selector(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// `dialog.remove` sobre una lista de historia (D2): la fila del cursor
-    /// sale del rastro del hueco —o de los populares— y la lista se rehace sin
-    /// perder el sitio.
+    /// `dialog.remove` over a history list (D2): the cursor's row leaves the
+    /// slot's trail — or the popular list — and the list is rebuilt without
+    /// losing its place.
     pub(super) fn quitar_de_historia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(s) = self.selector.as_ref() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let (slot, titulo, populares, cursor) =
-            (s.slot(), s.titulo(), s.es_populares(), s.cursor());
-        let filtro = s.filtro().map(str::to_owned);
-        let Some(destino) = s.elegir() else {
+        let (slot, title, popular, cursor) = (s.slot(), s.titulo(), s.es_populares(), s.cursor());
+        let filter = s.filtro().map(str::to_owned);
+        let Some(target) = s.elegir() else {
             return (self.aplicada(), Vec::new());
         };
-        if populares {
-            self.popular.remove(&destino);
+        if popular {
+            self.popular.remove(&target);
         } else if let Some(h) = self.huecos.get_mut(&slot) {
-            // La fila «aquí» no se quita: la lista la pone siempre, así que
-            // quitarla no la quitaría de la pantalla, y `History::remove` sí
-            // podaría del rastro el directorio actual y su punto de salto sin
-            // que se viera (rust-reviewer, fase 1).
-            if *h.pane.dir() == destino {
+            // The "here" row is not removed: the list always puts it there,
+            // so removing it would not remove it from the screen, and
+            // `History::remove` WOULD prune the current directory and its
+            // jump point from the trail without it showing (rust-reviewer,
+            // phase 1).
+            if *h.pane.dir() == target {
                 return (self.aplicada(), Vec::new());
             }
-            h.historial.remove(&destino);
+            h.historial.remove(&target);
         }
-        self.abrir_lista_de_historia(slot, titulo, populares, Some(cursor), filtro)
+        self.abrir_lista_de_historia(slot, title, popular, Some(cursor), filter)
     }
 
-    /// `dialog.clear` sobre una lista de historia (D2). Sin confirmación, como
-    /// en el terminal: es memoria de navegación, no ficheros, y el aviso lo
-    /// dice.
+    /// `dialog.clear` over a history list (D2). No confirmation, like in the
+    /// terminal: it is navigation memory, not files, and the notice says so.
     pub(super) fn vaciar_historia(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(s) = self.selector.as_ref() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let (slot, titulo, populares) = (s.slot(), s.titulo(), s.es_populares());
-        let clave = if populares {
+        let (slot, title, popular) = (s.slot(), s.titulo(), s.es_populares());
+        let key = if popular {
             self.popular.clear();
             "msg-popular-cleared"
         } else {
@@ -401,44 +411,45 @@ impl Estado {
             }
             "msg-history-cleared"
         };
-        let (ack, mut envios) =
-            self.abrir_lista_de_historia(slot, titulo, populares, Some(0), None);
-        envios.extend(self.decir(clave));
-        (ack, envios)
+        let (ack, mut outgoing) = self.abrir_lista_de_historia(slot, title, popular, Some(0), None);
+        outgoing.extend(self.decir(key));
+        (ack, outgoing)
     }
 
-    /// `dialog.confirm-other` (D2): lo elegido va al OTRO hueco y el foco se
-    /// queda donde está. El otro de una lista del foco es el destino; el de una
-    /// lista de un lado que no tiene el foco, el foco.
+    /// `dialog.confirm-other` (D2): what is chosen goes to the OTHER slot and
+    /// focus stays where it is. The other one for a list with focus is the
+    /// target; for a list on a side that does not have focus, it is the
+    /// focused one.
     pub(super) fn elegir_del_selector_en_otro(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(s) = self.selector.as_ref() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let (desde, destino, hay_fila) = (s.slot(), s.elegir(), s.hay_fila());
-        let otro = if desde == self.activo() {
+        let (from, target, has_row) = (s.slot(), s.elegir(), s.hay_fila());
+        let other = if from == self.activo() {
             self.hueco_destino()
         } else {
             Ok(self.activo())
         };
-        let otro = match otro {
-            Ok(otro) => otro,
-            Err(clave) => {
+        let other = match other {
+            Ok(other) => other,
+            Err(key) => {
                 return (
                     ActionAck::Unavailable {
-                        reason_key: clave.to_owned(),
+                        reason_key: key.to_owned(),
                     },
                     Vec::new(),
                 );
             }
         };
-        let Some(destino) = destino else {
-            // Hay fila y no lleva a ninguna parte: un favorito cuya ruta no
-            // parsea. Se DICE, igual que al elegirlo en su sitio.
-            if hay_fila {
+        let Some(target) = target else {
+            // There is a row and it leads nowhere: a favorite whose path does
+            // not parse. It is SAID, same as when choosing it in its own
+            // place.
+            if has_row {
                 return (
                     ActionAck::Unavailable {
                         reason_key: "hotlist-invalid".to_owned(),
@@ -449,72 +460,72 @@ impl Estado {
             return (self.aplicada(), Vec::new());
         };
         self.selector = None;
-        let cierre = self.parche(vec![ViewChange::Picker { picker: None }]);
-        let mut envios = vec![cierre];
-        envios.extend(self.navegar_hueco(otro, &destino, Trail::Record, backend, buzon));
-        (self.aplicada(), envios)
+        let closing = self.parche(vec![ViewChange::Picker { picker: None }]);
+        let mut outgoing = vec![closing];
+        outgoing.extend(self.navegar_hueco(other, &target, Trail::Record, backend, mailbox));
+        (self.aplicada(), outgoing)
     }
 
-    /// `nav.jump-back` (D5): una navegación NORMAL al punto de salto del hueco
-    /// activo. Entra en el rastro, así que `nav.back` deshace el salto.
+    /// `nav.jump-back` (D5): a NORMAL navigation to the active slot's jump
+    /// point. It enters the trail, so `nav.back` undoes the jump.
     pub(super) fn saltar_al_punto(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match norte_frontend::history::jump_target(&self.hueco().historial) {
-            Ok(destino) => {
-                let envios = self.navegar(&destino, Trail::Record, backend, buzon);
-                (self.aplicada(), envios)
+            Ok(target) => {
+                let outgoing = self.navegar(&target, Trail::Record, backend, mailbox);
+                (self.aplicada(), outgoing)
             }
-            Err(clave) => (
+            Err(key) => (
                 ActionAck::Unavailable {
-                    reason_key: clave.to_owned(),
+                    reason_key: key.to_owned(),
                 },
                 Vec::new(),
             ),
         }
     }
 
-    /// `nav.set-jump-point` (D5): marca el directorio del hueco activo.
+    /// `nav.set-jump-point` (D5): marks the active slot's directory.
     pub(super) fn fijar_punto_de_salto(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.hueco().pane.dir().clone();
         self.hueco_mut().historial.set_jump(dir);
-        let envios = self.decir("msg-nav-jump-point-set");
-        (self.aplicada(), envios)
+        let outgoing = self.decir("msg-nav-jump-point-set");
+        (self.aplicada(), outgoing)
     }
 
-    /// Las teclas de TEXTO mientras se filtra una lista de historia (spec
-    /// 2026-09-15 D2), con la regla del terminal: imprimibles y borrar
-    /// escriben, `Esc` quita el filtro, y lo demás sigue yendo al keymap.
-    /// `None` si la tecla no era del filtro, o no se está filtrando.
+    /// TEXT keys while filtering a history list (spec 2026-09-15 D2), with the
+    /// terminal's rule: printables and backspace type, `Esc` removes the
+    /// filter, and everything else keeps going to the keymap. `None` if the
+    /// key was not the filter's, or nothing is being filtered.
     pub(super) fn tecla_de_filtro(
         &mut self,
         k: &crate::keys::KeyInput,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
-        let mut filtro = self.selector.as_ref()?.filtro()?.to_owned();
+        let mut filter = self.selector.as_ref()?.filtro()?.to_owned();
         match k.key.as_str() {
             "Escape" | "esc" => return Some(self.filtrar_historia(None)),
             "Backspace" | "backspace" => {
-                filtro.pop();
+                filter.pop();
             }
-            otra => {
-                // Una tecla de TEXTO es un punto de código, como en la paleta.
-                let mut chars = otra.chars();
+            other => {
+                // A TEXT key is a code point, like in the palette.
+                let mut chars = other.chars();
                 match (chars.next(), chars.next()) {
-                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => filtro.push(c),
+                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => filter.push(c),
                     _ => return None,
                 }
             }
         }
-        Some(self.filtrar_historia(Some(filtro)))
+        Some(self.filtrar_historia(Some(filter)))
     }
 
-    /// Rehace la lista de historia abierta con otro filtro; `None` lo quita.
-    /// El cursor vuelve al principio: la lista es otra.
+    /// Rebuilds the open history list with a different filter; `None` removes
+    /// it. The cursor goes back to the start: it is a different list.
     pub(super) fn filtrar_historia(
         &mut self,
-        filtro: Option<String>,
+        filter: Option<String>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(s) = self.selector.as_ref() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
@@ -522,17 +533,17 @@ impl Estado {
         if !s.es_historia() {
             return (self.aplicada(), Vec::new());
         }
-        let (slot, titulo, populares) = (s.slot(), s.titulo(), s.es_populares());
-        self.abrir_lista_de_historia(slot, titulo, populares, None, filtro)
+        let (slot, title, popular) = (s.slot(), s.titulo(), s.es_populares());
+        self.abrir_lista_de_historia(slot, title, popular, None, filter)
     }
 
-    /// Abre los favoritos de la configuración con la que arrancó la ventana.
+    /// Opens the favorites from the configuration the window started with.
     ///
-    /// Los mismos que alimentan la barra lateral, y de la misma fuente: dos
-    /// listas de favoritos que se leen distinto serían dos configuraciones.
+    /// The same ones that feed the side bar, and from the same source: two
+    /// favorites lists read differently would be two configurations.
     pub(super) fn abrir_hotlist(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slot = self.activo();
-        let favoritos: Vec<(String, Result<VPath, String>)> = self
+        let favorites: Vec<(String, Result<VPath, String>)> = self
             .config
             .common
             .hotlist
@@ -540,12 +551,12 @@ impl Estado {
             .map(|h| (h.name.clone(), h.target.clone()))
             .collect();
         self.selector = Some(crate::pickers::Selector::hotlist(
-            slot, &favoritos, self.lang,
+            slot, &favorites, self.lang,
         ));
         self.gen_selector += 1;
-        let cambio = ViewChange::Picker {
+        let change = ViewChange::Picker {
             picker: self.vista_selector(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 }

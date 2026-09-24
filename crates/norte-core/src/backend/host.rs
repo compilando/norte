@@ -1,19 +1,19 @@
-//! El área de host de [`Backend`](super::Backend): GC de staging huérfano,
-//! volúmenes del host, y el registro del daemon (`log.tail`/`log.level`).
+//! [`Backend`](super::Backend)'s host area: GC of orphaned staging, host
+//! volumes, and the daemon's log (`log.tail`/`log.level`).
 
 use norte_proto::{Error, VPath};
 
 use super::{Backend, volume_to_proto};
 
 impl Backend {
-    /// GC de staging `.norte-partial` huérfano bajo `dir` (#11, ADR 0012):
-    /// operación PUNTUAL, no una Task ni una mutación del journal. Devuelve
-    /// cuántos barrió.
+    /// GC of orphaned `.norte-partial` staging under `dir` (#11, ADR 0012):
+    /// a ONE-OFF operation, not a Task nor a journal mutation. Returns how
+    /// many it swept.
     ///
     /// # Errors
-    /// En `Remote` es [`Error::Unsupported`]: no existe (aún) un método de
-    /// wire para el GC — exponerlo exige un cambio de protocolo, diferido
-    /// hasta que haya demanda. En `Embedded`, los del provider.
+    /// On `Remote` it's [`Error::Unsupported`]: there is (yet) no wire
+    /// method for the GC — exposing it needs a protocol change, deferred
+    /// until there's demand. On `Embedded`, the provider's own.
     pub async fn gc_partials(
         &self,
         dir: &VPath,
@@ -26,23 +26,23 @@ impl Backend {
         }
     }
 
-    /// Volúmenes del host (`host.volumes`, 0.37.0, #131): mount point, tipo
-    /// de filesystem, kind y espacio libre/total. `include_pseudo` es el
-    /// toggle "mostrar todo" del picker (diseño §E de
+    /// Host volumes (`host.volumes`, 0.37.0, #131): mount point, filesystem
+    /// type, kind and free/total space. `include_pseudo` is the picker's
+    /// "show everything" toggle (design §E of
     /// `2026-08-10-volumes-design.md`).
     ///
-    /// Embebido: llama a [`crate::volumes::enumerate`] directamente — un
-    /// volumen es del HOST, no de un provider, así que no hay engine que
-    /// consultar (diseño §A). SIN gate de actor: un core embebido no tiene
-    /// conexión ni daemon, así que quien lo llama YA es el humano sentado
-    /// delante — no hay superficie remota que sandboxear.
+    /// Embedded: calls [`crate::volumes::enumerate`] directly — a volume
+    /// belongs to the HOST, not to a provider, so there's no engine to
+    /// consult (design §A). NO actor gate: an embedded core has no
+    /// connection or daemon, so whoever calls it is ALREADY the human
+    /// sitting in front of it — there is no remote surface to sandbox.
     ///
-    /// Remoto: `host.volumes` contra el daemon, que SÍ gatea por actor de
-    /// conexión (diseño §C) — una conexión de agente ve
+    /// Remote: `host.volumes` against the daemon, which DOES gate by
+    /// connection actor (design §C) — an agent connection sees
     /// [`Error::PolicyDenied`].
     ///
     /// # Errors
-    /// Taxonomía del protocolo; con el daemon caído,
+    /// Protocol taxonomy; with the daemon down,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn volumes(
         &self,
@@ -60,25 +60,27 @@ impl Backend {
         }
     }
 
-    /// El registro del DAEMON desde `cursor` (`log.tail`, 0.65.0, #328,
-    /// ADR 0092).
+    /// The DAEMON's log from `cursor` (`log.tail`, 0.65.0, #328, ADR 0092).
     ///
-    /// `cursor: None` es «dame lo que haya» y NO es lo mismo que cero: contra
-    /// un anillo que ya dio la vuelta, un cero reportaría un `lost` falso en
-    /// la primera vuelta. Después se encadena el `next` que llegó.
+    /// `cursor: None` means "give me whatever there is" and is NOT the same
+    /// as zero: against a ring that has already wrapped, a zero would
+    /// falsely report `lost` on the first pass. After that the returned
+    /// `next` is chained.
     ///
     /// # Errors
-    /// Taxonomía del protocolo. En `Embedded` es siempre
-    /// [`Error::Unsupported`], y eso NO es una carencia: el anillo del core
-    /// embebido está en ESTE proceso, así que ya es el que el frontend lee —
-    /// no hay una segunda fuente que ofrecer. En `Remote`, un daemon de la
-    /// misma versión compilado sin la feature `logging` contesta lo mismo, y
-    /// esa respuesta no puede cambiar mientras ese daemon viva.
+    /// Protocol taxonomy. On `Embedded` it's always
+    /// [`Error::Unsupported`], and that is NOT a shortcoming: the embedded
+    /// core's ring is in THIS process, so it's already what the frontend
+    /// reads — there's no second source to offer. On `Remote`, a
+    /// same-version daemon compiled without the `logging` feature answers
+    /// the same thing, and that answer cannot change while that daemon
+    /// lives.
     ///
-    /// Las dos respuestas se escriben igual y **no significan lo mismo**, así
-    /// que quien pinta un panel decide con [`Self::is_remote`] antes de
-    /// preguntar: sin daemon no hay nada de lo que informar, y una frase sobre
-    /// «este daemon» donde no hay ninguno es peor que el silencio.
+    /// The two answers are written the same and **do not mean the same
+    /// thing**, so whoever paints a panel decides with [`Self::is_remote`]
+    /// before asking: with no daemon there's nothing to report on, and a
+    /// sentence about "this daemon" where there is none is worse than
+    /// silence.
     ///
     /// ```
     /// use norte_core::{Engine, backend::Backend};
@@ -103,16 +105,16 @@ impl Backend {
         }
     }
 
-    /// Sube el nivel que el anillo del daemon captura (`log.level`, 0.65.0,
-    /// #328) y devuelve el que de verdad quedó puesto.
+    /// Raises the level the daemon's ring captures (`log.level`, 0.65.0,
+    /// #328) and returns what actually ended up set.
     ///
-    /// Su anillo es SUYO: es global a todos sus clientes y nunca baja, así
-    /// que lo pedido y lo puesto no tienen por qué coincidir — de ahí que
-    /// esto devuelva un nivel en vez de un `()`.
+    /// Its ring is ITS OWN: it's global to all its clients and never goes
+    /// down, so what was requested and what got set need not match — hence
+    /// this returns a level instead of a `()`.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; [`Error::Unsupported`] en `Embedded` y contra
-    /// un daemon sin registro que servir (ver [`Self::log_tail`]).
+    /// Protocol taxonomy; [`Error::Unsupported`] on `Embedded` and against a
+    /// daemon with no log to serve (see [`Self::log_tail`]).
     ///
     /// ```
     /// use norte_core::{Engine, backend::Backend};

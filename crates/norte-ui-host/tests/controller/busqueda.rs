@@ -1,19 +1,19 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Buscar por el subárbol (tarea 6.1).
+// Searching the subtree (task 6.1).
 // ---------------------------------------------------------------------------
 
-/// Espera la siguiente actualización con la búsqueda.
+/// Waits for the next update with the search.
 pub(super) async fn siguiente_busqueda(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::SearchView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -23,16 +23,16 @@ pub(super) async fn siguiente_busqueda(
             }
         }
     }
-    panic!("no llegó ninguna actualización con búsqueda");
+    panic!("no update with a search ever arrived");
 }
 
-/// Un árbol con hallazgos preparados para un patrón.
-pub(super) fn arbol_con_hallazgos(patron: &str, rutas: &[&str]) -> Arc<Falso> {
+/// A tree with hits prepared for a pattern.
+pub(super) fn arbol_con_hallazgos(pattern: &str, paths: &[&str]) -> Arc<Falso> {
     let base = arbol();
     let mut f = Falso {
         hallazgos: [(
-            patron.to_owned(),
-            rutas
+            pattern.to_owned(),
+            paths
                 .iter()
                 .map(|r| norte_proto::VPath::parse(r).expect("vpath"))
                 .collect(),
@@ -45,155 +45,160 @@ pub(super) fn arbol_con_hallazgos(patron: &str, rutas: &[&str]) -> Arc<Falso> {
     Arc::new(f)
 }
 
-/// Buscar abre su prompt, lanza la Task y los hallazgos llegan en lotes: la
-/// vista se abre YA, diciendo que corre, y se llena después.
+/// Searching opens its prompt, launches the Task and hits arrive in batches:
+/// the view opens ALREADY saying it is running, and fills up afterward.
 #[tokio::test]
-async fn buscar_abre_su_vista_y_los_hallazgos_llegan_en_lotes() {
+async fn searching_opens_its_view_and_hits_arrive_in_batches() {
     let backend = arbol_con_hallazgos("*.txt", &["mem:///casa/notas.txt", "mem:///casa/docs"]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    // El prompt pide el patrón.
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    // The prompt asks for the pattern.
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt de buscar pide un patrón");
+        .expect("the search prompt asks for a pattern");
     h.dispatch(UiAction::DialogField {
-        id: dialogo.id,
+        id: dialog.id,
         field: "name".to_owned(),
         value: norte_ui_host::action::DialogFieldValue::Text {
             text: "*.txt".to_owned(),
         },
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
-        id: dialogo.id,
+        id: dialog.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let primera = siguiente_busqueda(&mut sub).await.expect("la vista abre");
-    assert_eq!(primera.query, "*.txt");
+    let first = siguiente_busqueda(&mut sub).await.expect("the view opens");
+    assert_eq!(first.query, "*.txt");
     assert!(
-        primera.running,
-        "se abre YA y diciendo que corre: esperar al primer lote es una \
-         ventana que no reacciona a una tecla que sí hizo algo"
+        first.running,
+        "it opens ALREADY saying it is running: waiting for the first \
+         batch is a window that does not react to a key that did do something"
     );
 
-    let mut con_filas = None;
+    let mut with_rows = None;
     for _ in 0..20 {
         let Some(v) = siguiente_busqueda(&mut sub).await else {
             continue;
         };
         if !v.rows.is_empty() {
-            con_filas = Some(v);
+            with_rows = Some(v);
             break;
         }
     }
-    let v = con_filas.expect("los hallazgos llegan");
+    let v = with_rows.expect("hits arrive");
     assert_eq!(v.rows.len(), 2);
     assert_eq!(v.rows[0].name, "notas.txt");
     assert!(
         !v.rows[0].parent.is_empty(),
-        "y dónde está: {:?}",
+        "and where it is: {:?}",
         v.rows[0]
     );
     assert!(
         !v.status.is_empty() && !v.status.starts_with("search-status"),
-        "la frase de estado viene traducida: {:?}",
+        "the status phrase comes translated: {:?}",
         v.status
     );
     assert_eq!(
         backend.busquedas.lock().expect("mutex").as_slice(),
         &["*.txt".to_owned()],
-        "y el patrón llegó al wire tal cual"
+        "and the pattern reached the wire as-is"
     );
 }
 
-/// Cero omitidas NO es un aviso, y las que hay se leen como aviso.
+/// Zero skipped is NOT a warning, and any that there are read as a warning.
 ///
-/// La ventana usaba una clave propia —«se saltaron N entradas», sin la marca
-/// que la hace leerse como aviso— y la pintaba TAMBIÉN con N igual a cero: o
-/// sea que anunciaba un listado incompleto que estaba completo, gastando la
-/// única señal que hay para cuando de verdad falta algo.
+/// The window used to use its own key — "N entries were skipped", with no
+/// mark that makes it read as a warning — and painted it EVEN with N equal
+/// to zero: i.e. it announced an incomplete listing that was complete,
+/// spending the only signal there is for when something is really missing.
 #[tokio::test]
-async fn el_aviso_de_omitidas_calla_con_cero_y_va_marcado_con_mas() {
-    for (omitidas, espera_aviso) in [(None, false), (Some(0), false), (Some(2), true)] {
+async fn the_skipped_notice_stays_silent_at_zero_and_is_marked_above_it() {
+    for (skipped, expects_notice) in [(None, false), (Some(0), false), (Some(2), true)] {
         let mut f = Falso::default();
         f.arbol.clone_from(&arbol().arbol);
-        f.omitidas = omitidas;
+        f.omitidas = skipped;
         let (_h, snap) = host_arbol(Arc::new(f)).await;
-        let nota = &listado_de(&snap, 1).skipped_note;
+        let note = &listado_de(&snap, 1).skipped_note;
 
         assert_eq!(
-            !nota.is_empty(),
-            espera_aviso,
-            "con {omitidas:?} omitidas la nota fue {nota:?}"
+            !note.is_empty(),
+            expects_notice,
+            "with {skipped:?} skipped the note was {note:?}"
         );
-        if espera_aviso {
+        if expects_notice {
             assert!(
-                nota.contains('⚠'),
-                "un aviso sin marca se lee como un contador: {nota:?}"
+                note.contains('⚠'),
+                "a warning with no mark reads as a plain counter: {note:?}"
             );
-            assert!(nota.contains('2'), "{nota:?}");
+            assert!(note.contains('2'), "{note:?}");
         }
     }
 }
 
-/// Y la cabecera dice las otras tres cosas que solo decía el terminal.
+/// And the header says the other three things only the terminal used to say.
 ///
-/// Las tres bajo la misma regla: un listado que enseña menos de lo que hay
-/// —o que no enseña lo que hay— jamás es silencioso. La de los NOMBRES es la
-/// que más costaba: la ventana transcribía con otra codificación y no lo
-/// decía en ninguna parte salvo el mensaje del toggle, que se lleva la
-/// siguiente tecla.
+/// All three under the same rule: a listing that shows less than there is —
+/// or does not show what there is — is never silent. The NAMES one was the
+/// most costly: the window transcribed with another encoding and said so
+/// nowhere except the toggle's message, which the next key carries away.
 #[tokio::test]
-async fn la_cabecera_dice_que_los_nombres_se_reinterpretan_y_cuanto_hay_marcado() {
+async fn the_header_says_names_are_reinterpreted_and_how_much_is_marked() {
     let (h, snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
-    let antes = listado_de(&snap, 1);
-    assert_eq!(antes.names_note, "", "sin reinterpretar no dice nada");
-    assert_eq!(antes.marked_note, "", "quien no marca no gana ruido");
+    let before = listado_de(&snap, 1);
+    assert_eq!(
+        before.names_note, "",
+        "with nothing reinterpreted it says nothing"
+    );
+    assert_eq!(
+        before.marked_note, "",
+        "whoever marks nothing gains no noise"
+    );
 
     ejecutar_por_paleta(&h, &mut sub, "pane.names-encoding").await;
-    let con_nombres = foto_hasta(&h, &mut sub, "la cabecera con la codificación", |s| {
+    let with_names = foto_hasta(&h, &mut sub, "the header with the encoding", |s| {
         let b = listado_de(s, 1);
         (!b.names_note.is_empty()).then(|| b.names_note.clone())
     })
     .await;
     assert!(
-        !con_nombres.contains("status-names"),
-        "traducida, no la clave: {con_nombres}"
+        !with_names.contains("status-names"),
+        "translated, not the key: {with_names}"
     );
 
     marca_todo(&h, &mut sub, 1).await;
-    let marcado = foto_hasta(&h, &mut sub, "la cabecera con lo marcado", |s| {
+    let marked = foto_hasta(&h, &mut sub, "the header with what is marked", |s| {
         let b = listado_de(s, 1);
         (!b.marked_note.is_empty()).then(|| b.marked_note.clone())
     })
     .await;
     assert!(
-        !marcado.contains("status-marked"),
-        "traducida, no la clave: {marcado}"
+        !marked.contains("status-marked"),
+        "translated, not the key: {marked}"
     );
 }
 
-/// Una búsqueda que FALLÓ no se lee como una que terminó sin hallazgos.
+/// A search that FAILED does not read as one that finished with no hits.
 ///
-/// El host marcaba cualquier estado terminal como «ya no está viva» y pintaba
-/// `search-status-done`, así que una búsqueda que se rompió al segundo
-/// directorio y otra que recorrió el árbol entero decían lo mismo: «0
-/// hallazgos». Eso no es una imprecisión de la interfaz — es una afirmación
-/// falsa sobre el disco, y quien la lee deja de buscar.
+/// The host used to mark any terminal state as "no longer alive" and paint
+/// `search-status-done`, so a search that broke on the second directory and
+/// another that walked the whole tree said the same thing: "0 hits". That is
+/// not an interface imprecision — it is a false claim about the disk, and
+/// whoever reads it stops searching.
 #[tokio::test]
-async fn una_busqueda_que_fallo_lo_dice_y_no_finge_cero_hallazgos() {
+async fn a_failed_search_says_so_and_does_not_fake_zero_hits() {
     let mut f = Falso::default();
     f.arbol.clone_from(&arbol().arbol);
     f.desenlace_de_busqueda = Some(norte_proto::TaskState::Failed {
@@ -203,37 +208,35 @@ async fn una_busqueda_que_fallo_lo_dice_y_no_finge_cero_hallazgos() {
     let mut sub = h.subscribe();
 
     let _ = buscar(&h, &mut sub, "*.txt").await;
-    let vista = foto_hasta(&h, &mut sub, "la búsqueda con su desenlace", |s| {
+    let view = foto_hasta(&h, &mut sub, "the search with its outcome", |s| {
         s.search.clone().filter(|b| !b.running)
     })
     .await;
 
-    let cero_hallazgos =
-        norte_i18n::ta_in(norte_i18n::Lang::Es, "search-status-done", &[("n", "0")]);
+    let zero_hits = norte_i18n::ta_in(norte_i18n::Lang::Es, "search-status-done", &[("n", "0")]);
     assert_ne!(
-        vista.status, cero_hallazgos,
-        "una búsqueda rota NO es una búsqueda sin resultados"
+        view.status, zero_hits,
+        "a broken search is NOT a search with no results"
     );
     assert!(
-        vista
-            .status
+        view.status
             .contains(&norte_frontend::error::error_category_in(
                 norte_i18n::Lang::Es,
                 &norte_proto::Error::PermissionDenied
             )),
-        "y dice POR QUÉ se rompió: {}",
-        vista.status
+        "and it says WHY it broke: {}",
+        view.status
     );
 }
 
-/// Y una que ni llegó a ENCOLARSE deja de decir que busca.
+/// And one that did not even get to be QUEUED stops saying it is searching.
 ///
-/// El otro camino, y el que no tenía test: ahí no hay Task, así que no hay
-/// progreso que traiga el desenlace. La vista se quedaba en «buscando…» para
-/// siempre mientras el error pasaba por la barra y se lo llevaba la siguiente
-/// tecla.
+/// The other path, and the one with no test: there is no Task there, so
+/// there is no progress to carry the outcome. The view used to stay at
+/// "searching…" forever while the error went through the bar and the next
+/// key carried it away.
 #[tokio::test]
-async fn una_busqueda_que_ni_se_encola_deja_de_decir_que_busca() {
+async fn a_search_that_never_gets_queued_stops_saying_it_is_searching() {
     let mut f = Falso::default();
     f.arbol.clone_from(&arbol().arbol);
     f.error_de_busqueda = Some(norte_proto::Error::ProviderUnavailable { retryable: false });
@@ -241,27 +244,26 @@ async fn una_busqueda_que_ni_se_encola_deja_de_decir_que_busca() {
     let mut sub = h.subscribe();
 
     let _ = buscar(&h, &mut sub, "*.txt").await;
-    let vista = foto_hasta(&h, &mut sub, "la búsqueda que no arrancó", |s| {
+    let view = foto_hasta(&h, &mut sub, "the search that never started", |s| {
         s.search.clone().filter(|b| !b.running)
     })
     .await;
 
     assert!(
-        vista
-            .status
+        view.status
             .contains(&norte_frontend::error::error_category_in(
                 norte_i18n::Lang::Es,
                 &norte_proto::Error::ProviderUnavailable { retryable: false }
             )),
-        "dice por qué no arrancó, y de forma persistente: {}",
-        vista.status
+        "it says why it never started, and persistently: {}",
+        view.status
     );
 }
 
-/// Y una que CANCELÓ el lector tampoco: lo encontrado vale, lo que falta no
-/// se llegó a mirar.
+/// And one the reader CANCELLED does not either: what was found holds, what
+/// is missing was never looked at.
 #[tokio::test]
-async fn una_busqueda_cancelada_no_se_lee_como_terminada() {
+async fn a_cancelled_search_does_not_read_as_finished() {
     let mut f = Falso::default();
     f.arbol.clone_from(&arbol().arbol);
     f.desenlace_de_busqueda = Some(norte_proto::TaskState::Cancelled);
@@ -269,224 +271,225 @@ async fn una_busqueda_cancelada_no_se_lee_como_terminada() {
     let mut sub = h.subscribe();
 
     let _ = buscar(&h, &mut sub, "*.txt").await;
-    let vista = foto_hasta(&h, &mut sub, "la búsqueda cancelada", |s| {
+    let view = foto_hasta(&h, &mut sub, "the cancelled search", |s| {
         s.search.clone().filter(|b| !b.running)
     })
     .await;
 
     assert_eq!(
-        vista.status,
+        view.status,
         norte_i18n::ta_in(
             norte_i18n::Lang::Es,
             "search-status-cancelled",
-            &[("n", &vista.rows.len().to_string())]
+            &[("n", &view.rows.len().to_string())]
         ),
-        "cancelada tiene su propia frase, y la del terminal"
+        "cancelled has its own phrase, distinct from the terminal one"
     );
 }
 
-/// Lanza la búsqueda `patron` por el prompt y devuelve su primera vista.
+/// Launches the `pattern` search through the prompt and returns its first
+/// view.
 pub(super) async fn buscar(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
-    patron: &str,
+    pattern: &str,
 ) -> norte_ui_host::dto::SearchView {
     por_la_paleta(h, sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(sub).await;
-    // El de buscar es un FORMULARIO desde el puente 91: se localiza por sus
-    // campos, no por el `input` de un diálogo de una sola caja —que es lo que
-    // sigue siendo el de la búsqueda semántica.
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(sub).await;
+    // Search's is a FORM since bridge 91: it is located by its fields, not by
+    // a single-box dialog's `input` — which is still what semantic search's
+    // is.
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt de buscar pide un patrón");
+        .expect("the search prompt asks for a pattern");
     h.dispatch(UiAction::DialogField {
-        id: dialogo.id,
+        id: dialog.id,
         field: "name".to_owned(),
         value: norte_ui_host::action::DialogFieldValue::Text {
-            text: patron.to_owned(),
+            text: pattern.to_owned(),
         },
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
-        id: dialogo.id,
+        id: dialog.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    siguiente_busqueda(sub).await.expect("la vista abre")
+    .expect("host alive");
+    siguiente_busqueda(sub).await.expect("the view opens")
 }
 
-/// Cerrar una búsqueda SIN hallazgos cancela igual.
+/// Closing a search with NO hits still cancels it.
 ///
-/// La búsqueda se nombraba con el primer lote, y el core NO manda lotes
-/// vacíos (`norte-core/src/search.rs`: `if batch.is_empty() { return
-/// FlushOutcome::Continue }`). Así que sobre un árbol sin coincidencias el id
-/// no llegaba nunca, `esc` no tenía a quién cancelar y el daemon seguía
-/// caminando el subárbol entero para una superficie ya cerrada. La
-/// cancelación existía y era inalcanzable: la regla 3 rota por el lado de la
-/// UI.
+/// The search used to be named by its first batch, and the core does NOT
+/// send empty batches (`norte-core/src/search.rs`: `if batch.is_empty() {
+/// return FlushOutcome::Continue }`). So over a tree with no matches the id
+/// never arrived, `esc` had nothing to cancel, and the daemon kept walking
+/// the whole subtree for a surface already closed. Cancellation existed and
+/// was unreachable: rule 3 broken from the UI side.
 #[tokio::test]
-async fn cerrar_una_busqueda_sin_hallazgos_la_cancela() {
+async fn closing_a_search_with_no_hits_cancels_it_anyway() {
     let backend = arbol_con_hallazgos("*.txt", &["mem:///casa/notas.txt"]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     let v = buscar(&h, &mut sub, "*.zzz").await;
     assert_eq!(v.query, "*.zzz");
-    assert!(v.rows.is_empty(), "no hay nada que encontrar");
+    assert!(v.rows.is_empty(), "there is nothing to find");
 
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     assert!(
         siguiente_foto(&mut sub).await.search.is_none(),
-        "la vista se cierra"
+        "the view closes"
     );
     assert_eq!(
         backend.cancelaciones.load(Ordering::SeqCst),
         1,
-        "y la Task se cancela AUNQUE no haya llegado ni un lote: es lo único \
-         que para al daemon"
+        "and the Task gets cancelled EVEN THOUGH not one batch arrived: it \
+         is the only thing that stops the daemon"
     );
 }
 
-/// Un lote rezagado de la búsqueda ANTERIOR no llena la lista de la nueva.
+/// A stray batch from the PREVIOUS search does not fill the new one's list.
 ///
-/// El reenviador de la búsqueda vieja no se aborta —su `tokio::spawn` no
-/// guarda handle— así que puede seguir escupiendo lotes después del `esc`.
-/// Con la búsqueda nombrándose por el primer lote, el primero que llegara la
-/// bautizaba: los hallazgos de la ANTERIOR llenaban la lista rotulada con la
-/// consulta NUEVA, y `enter` navegaba a un fichero que casaba el patrón viejo.
+/// The old search's forwarder is not aborted — its `tokio::spawn` keeps no
+/// handle — so it can keep spitting out batches after `esc`. With the search
+/// being named by its first batch, whichever arrived first christened it:
+/// the PREVIOUS search's hits filled the list labelled with the NEW query,
+/// and `enter` navigated to a file matching the old pattern.
 #[tokio::test]
-async fn un_lote_de_la_busqueda_anterior_no_llena_la_nueva() {
+async fn a_batch_from_the_previous_search_does_not_fill_the_new_one() {
     let backend = arbol_con_hallazgos("*.txt", &["mem:///casa/notas.txt"]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    // La primera encuentra algo; se cierra antes de mirarlo.
+    // The first finds something; it is closed before looking at it.
     let _ = buscar(&h, &mut sub, "*.txt").await;
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
+    h.dispatch(tecla("Escape")).await.expect("host alive");
 
-    // La segunda no encuentra nada.
+    // The second finds nothing.
     let v = buscar(&h, &mut sub, "*.zzz").await;
     assert_eq!(v.query, "*.zzz");
 
-    // Y sigue sin encontrar nada por mucho que se drene el buzón: lo que
-    // quede de la primera no es suyo.
+    // And it keeps finding nothing no matter how much the mailbox is
+    // drained: whatever is left of the first is not its own.
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let Some(s) = foto.search else { continue };
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let Some(s) = snap.search else { continue };
         assert!(
             s.rows.is_empty(),
-            "un lote de `*.txt` no puede aparecer bajo `*.zzz`: {:?}",
+            "a `*.txt` batch cannot show up under `*.zzz`: {:?}",
             s.rows
         );
     }
 }
 
-/// Un diálogo modal se queda el teclado.
+/// A modal dialog keeps the keyboard.
 ///
-/// `tecla_de_un_overlay` enrutaba nueve superficies y NO el diálogo, que es
-/// la única con `aria-modal` de verdad, así que las teclas caían al listado
-/// de DEBAJO: con el prompt de un nombre abierto, `Backspace` navegaba al
-/// padre y `Enter` entraba en el directorio bajo el cursor en vez de
-/// confirmar. Es la superficie donde se aprueban los bytes de un nombre de
-/// fichero, y la que en fase 5 preguntará antes de borrar.
+/// `tecla_de_un_overlay` routed nine surfaces and NOT the dialog, which is
+/// the only one with a real `aria-modal`, so keys fell to the listing
+/// UNDERNEATH: with a name prompt open, `Backspace` navigated to the parent
+/// and `Enter` entered the directory under the cursor instead of confirming.
+/// It is the surface where a file name's bytes get approved, and the one
+/// that in phase 5 will ask before deleting.
 #[tokio::test]
-async fn un_dialogo_se_queda_el_teclado() {
+async fn a_dialog_keeps_the_keyboard() {
     let backend = arbol_con_hallazgos("*.txt", &["mem:///casa/notas.txt"]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    // El cursor se pone sobre un DIRECTORIO, que es lo que `Enter` abriría.
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let antes = siguiente_foto(&mut sub).await;
-    let SlotView::Browser(b0) = &antes.slots[0] else {
-        panic!("el primer hueco es un listado");
+    // The cursor is put on a DIRECTORY, which is what `Enter` would open.
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let before = siguiente_foto(&mut sub).await;
+    let SlotView::Browser(b0) = &before.slots[0] else {
+        panic!("the first slot is a listing");
     };
-    let donde = b0.path_display.clone();
+    let where_ = b0.path_display.clone();
 
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt pide un patrón")
+        .expect("the prompt asks for a pattern")
         .clone();
 
-    // Las teclas de navegación NO llegan al listado de debajo.
+    // Navigation keys do NOT reach the listing underneath.
     for k in ["Backspace", "ArrowDown", "Home"] {
-        h.dispatch(tecla(k)).await.expect("host vivo");
+        h.dispatch(tecla(k)).await.expect("host alive");
     }
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let durante = siguiente_foto(&mut sub).await;
-    let SlotView::Browser(b1) = &durante.slots[0] else {
-        panic!("el primer hueco es un listado");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let during = siguiente_foto(&mut sub).await;
+    let SlotView::Browser(b1) = &during.slots[0] else {
+        panic!("the first slot is a listing");
     };
     assert_eq!(
-        b1.path_display, donde,
-        "el panel de debajo no se ha movido: el modal se queda las teclas"
+        b1.path_display, where_,
+        "the panel underneath has not moved: the modal keeps the keys"
     );
     assert!(
-        durante.dialogs.iter().any(|d| d.id == dialogo.id),
-        "y el diálogo sigue abierto"
+        during.dialogs.iter().any(|d| d.id == dialog.id),
+        "and the dialog is still open"
     );
 
-    // `Enter` CONFIRMA el diálogo, no abre el directorio bajo el cursor.
+    // `Enter` CONFIRMS the dialog, it does not open the directory under the
+    // cursor.
     h.dispatch(UiAction::DialogField {
-        id: dialogo.id,
+        id: dialog.id,
         field: "name".to_owned(),
         value: norte_ui_host::action::DialogFieldValue::Text {
             text: "*.txt".to_owned(),
         },
     })
     .await
-    .expect("host vivo");
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    .expect("host alive");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     let v = siguiente_busqueda(&mut sub)
         .await
-        .expect("confirmar con el teclado lanza la búsqueda");
+        .expect("confirming with the keyboard launches the search");
     assert_eq!(v.query, "*.txt");
 }
 
-/// `Escape` cancela el diálogo, y solo el diálogo.
+/// `Escape` cancels the topmost dialog, and only the dialog.
 #[tokio::test]
-async fn escape_cancela_el_dialogo_de_arriba() {
+async fn escape_cancels_the_topmost_dialog() {
     let backend = arbol_con_hallazgos("*.txt", &[]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     assert!(
         siguiente_foto(&mut sub)
             .await
             .dialogs
             .iter()
             .any(|d| !d.fields.is_empty()),
-        "el prompt abre"
+        "the prompt opens"
     );
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.dialogs.is_empty(), "y `esc` lo cierra");
+    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.dialogs.is_empty(), "and `esc` closes it");
     assert!(
-        foto.search.is_none(),
-        "sin lanzar nada: cancelar es cancelar"
+        snap.search.is_none(),
+        "with nothing launched: cancelling is cancelling"
     );
 }
 
-/// Ir a un resultado navega a su DIRECTORIO y deja el cursor encima, sin
-/// reconstruir ninguna ruta.
+/// Going to a result navigates to its DIRECTORY and leaves the cursor on top
+/// of it, with no path reconstruction.
 #[tokio::test]
-async fn ir_a_un_resultado_navega_y_deja_el_cursor_encima() {
+async fn going_to_a_result_navigates_and_leaves_the_cursor_on_it() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"docs".to_vec(), true)]);
     f.pon(
@@ -503,29 +506,29 @@ async fn ir_a_un_resultado_navega_y_deja_el_cursor_encima() {
     let mut sub = h.subscribe();
 
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt está");
+        .expect("the prompt is there");
     h.dispatch(UiAction::DialogField {
-        id: dialogo.id,
+        id: dialog.id,
         field: "name".to_owned(),
         value: norte_ui_host::action::DialogFieldValue::Text {
             text: "hallado*".to_owned(),
         },
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
-        id: dialogo.id,
+        id: dialog.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     for _ in 0..20 {
         let Some(v) = siguiente_busqueda(&mut sub).await else {
             continue;
@@ -537,88 +540,89 @@ async fn ir_a_un_resultado_navega_y_deja_el_cursor_encima() {
 
     h.dispatch(UiAction::SearchActivateRow { row: 0 })
         .await
-        .expect("host vivo");
-    let mut llego = false;
+        .expect("host alive");
+    let mut arrived = false;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        if listado(&foto).path_display.contains("docs") {
-            assert!(foto.search.is_none(), "la búsqueda se cierra al ir");
-            let bajo_cursor = listado(&foto)
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        if listado(&snap).path_display.contains("docs") {
+            assert!(snap.search.is_none(), "the search closes on going");
+            let under_cursor = listado(&snap)
                 .rows
                 .iter()
-                .find(|r| Some(r.key) == listado(&foto).cursor)
+                .find(|r| Some(r.key) == listado(&snap).cursor)
                 .map(|r| r.display_name.clone());
             assert_eq!(
-                bajo_cursor.as_deref(),
+                under_cursor.as_deref(),
                 Some("hallado.md"),
-                "y el cursor queda ENCIMA del hallazgo, casado byte a byte"
+                "and the cursor ends up ON the hit, matched byte for byte"
             );
-            llego = true;
+            arrived = true;
             break;
         }
     }
-    assert!(llego, "el panel navegó al directorio del hallazgo");
+    assert!(arrived, "the panel navigated to the hit's directory");
 }
 
-/// Un patrón vacío no lanza nada y lo dice: casaría el árbol entero.
+/// An empty pattern launches nothing and says so: it would match the whole
+/// tree.
 #[tokio::test]
-async fn un_patron_vacio_no_lanza_nada() {
+async fn an_empty_pattern_launches_nothing() {
     let backend = arbol_con_hallazgos("*", &[]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt está");
+        .expect("the prompt is there");
     h.dispatch(UiAction::Dialog {
-        id: dialogo.id,
+        id: dialog.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let despues = siguiente_foto(&mut sub).await;
-    assert!(despues.search.is_none(), "no se abrió ninguna búsqueda");
+    .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let after = siguiente_foto(&mut sub).await;
+    assert!(after.search.is_none(), "no search was opened");
     assert!(
         backend.busquedas.lock().expect("mutex").is_empty(),
-        "y nada llegó al wire"
+        "and nothing reached the wire"
     );
 }
 
-/// **Los filtros de la ventana llegan al wire** (puente 91).
+/// **The window's filters reach the wire** (bridge 91).
 ///
-/// Era el hueco: el terminal ofrecía siete campos y cuatro interruptores desde
-/// el protocolo 0.81.0 y esta ventana mandaba un glob de nombre y nada más. Un
-/// filtro que no se aplica no se ve como una función que falta — se ve como
-/// una búsqueda que encontró más cosas.
+/// This was the gap: the terminal has offered seven fields and four switches
+/// since protocol 0.81.0 and this window sent a name glob and nothing else.
+/// A filter that does not apply does not look like a missing feature — it
+/// looks like a search that found more things.
 ///
-/// Se comprueba contra lo que LLEGÓ AL WIRE y no contra la vista: lo que hay
-/// que demostrar es que el formulario se convierte en parámetros, no que se
-/// pinte bonito.
+/// Checked against what REACHED THE WIRE and not against the view: what has
+/// to be shown is that the form turns into parameters, not that it paints
+/// nicely.
 #[tokio::test]
-async fn los_filtros_del_formulario_llegan_al_wire() {
-    use norte_ui_host::action::DialogFieldValue as Valor;
+async fn the_forms_filters_reach_the_wire() {
+    use norte_ui_host::action::DialogFieldValue as Value;
 
     let backend = arbol_con_hallazgos("*", &[]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt de buscar es un formulario");
+        .expect("the search prompt is a form");
 
-    // Los siete campos y los cinco controles, con sus ids estables.
-    let ids: Vec<&str> = dialogo.fields.iter().map(|f| f.id.as_str()).collect();
+    // The seven fields and the five controls, with their stable ids.
+    let ids: Vec<&str> = dialog.fields.iter().map(|f| f.id.as_str()).collect();
     assert_eq!(
         ids,
         [
@@ -635,272 +639,274 @@ async fn los_filtros_del_formulario_llegan_al_wire() {
             "recursive",
             "kinds",
         ],
-        "los campos viajan en el orden en que se pintan"
+        "the fields travel in the order they are painted"
     );
 
-    // Un FILTRO solo ya es una búsqueda: «todo lo que pese más de un mega»
-    // no necesita ningún nombre.
+    // A FILTER alone is already a search: "everything heavier than a
+    // megabyte" needs no name at all.
     h.dispatch(UiAction::DialogField {
-        id: dialogo.id,
+        id: dialog.id,
         field: "min-size".to_owned(),
-        value: Valor::Text {
+        value: Value::Text {
             text: "1M".to_owned(),
         },
     })
     .await
-    .expect("host vivo");
-    // Y un interruptor no manda su estado destino: dice que se TOCÓ.
+    .expect("host alive");
+    // And a switch does not send its target state: it says it was TOUCHED.
     h.dispatch(UiAction::DialogField {
-        id: dialogo.id,
+        id: dialog.id,
         field: "recursive".to_owned(),
-        value: Valor::Toggled,
+        value: Value::Toggled,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
-        id: dialogo.id,
+        id: dialog.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let pedidas = backend.params_busqueda.lock().expect("mutex").clone();
-    let params = pedidas.first().expect("la búsqueda llegó al wire");
-    assert_eq!(params.min_size, Some(1024 * 1024), "«1M» son bytes");
+    let requested = backend.params_busqueda.lock().expect("mutex").clone();
+    let params = requested.first().expect("the search reached the wire");
+    assert_eq!(params.min_size, Some(1024 * 1024), "\"1M\" is bytes");
     assert!(
         !params.recursive,
-        "el interruptor de subcarpetas se apagó: {params:?}"
+        "the subfolders switch got turned off: {params:?}"
     );
     assert!(
         params.name_glob.is_none() && params.name_regex.is_none(),
-        "y sin nombre, porque no se tecleó ninguno"
+        "and no name, because none was typed"
     );
 }
 
-/// **Un campo ilegible NO cierra el formulario.**
+/// **An unreadable field does NOT close the form.**
 ///
-/// La validación vive antes de sacar el diálogo de la pila, y no dentro de lo
-/// que se ejecuta después: allí el formulario ya se ha ido, y un `1 gigabyte`
-/// mal escrito se llevaba por delante los doce controles mientras el aviso
-/// señalaba un campo que ya no existía — un consejo que no se puede seguir.
+/// Validation lives before popping the dialog off the stack, and not inside
+/// what runs afterward: there the form is already gone, and a badly written
+/// `1 gigabyte` used to take down all twelve controls while the notice
+/// pointed at a field that no longer existed — advice that cannot be
+/// followed.
 #[tokio::test]
-async fn un_campo_ilegible_no_se_lleva_por_delante_el_formulario() {
-    use norte_ui_host::action::DialogFieldValue as Valor;
+async fn an_unreadable_field_does_not_take_down_the_form() {
+    use norte_ui_host::action::DialogFieldValue as Value;
 
     let backend = arbol_con_hallazgos("*", &[]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt de buscar es un formulario");
+        .expect("the search prompt is a form");
 
-    for (campo, texto) in [("name", "*.rs"), ("min-size", "1 gigabyte")] {
+    for (field, text) in [("name", "*.rs"), ("min-size", "1 gigabyte")] {
         h.dispatch(UiAction::DialogField {
-            id: dialogo.id,
-            field: campo.to_owned(),
-            value: Valor::Text {
-                text: texto.to_owned(),
+            id: dialog.id,
+            field: field.to_owned(),
+            value: Value::Text {
+                text: text.to_owned(),
             },
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
 
     let ack = h
         .dispatch(UiAction::Dialog {
-            id: dialogo.id,
+            id: dialog.id,
             choice: "confirm".to_owned(),
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "search-bad-field"),
-        "se rehúsa nombrando el motivo: {ack:?}"
+        "it refuses naming the reason: {ack:?}"
     );
 
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let despues = siguiente_foto(&mut sub).await;
-    let sigue = despues
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let after = siguiente_foto(&mut sub).await;
+    let still = after
         .dialogs
         .iter()
-        .find(|d| d.id == dialogo.id)
-        .expect("el formulario sigue abierto");
-    let valor = |id: &str| {
-        sigue
+        .find(|d| d.id == dialog.id)
+        .expect("the form is still open");
+    let value = |id: &str| {
+        still
             .fields
             .iter()
             .find(|f| f.id == id)
             .map(|f| f.value.clone())
             .unwrap_or_default()
     };
-    assert_eq!(valor("name"), "*.rs", "y no se perdió lo tecleado");
-    assert_eq!(valor("min-size"), "1 gigabyte");
+    assert_eq!(value("name"), "*.rs", "and what was typed was not lost");
+    assert_eq!(value("min-size"), "1 gigabyte");
     assert!(
         backend.busquedas.lock().expect("mutex").is_empty(),
-        "y nada llegó al wire"
+        "and nothing reached the wire"
     );
 }
 
-/// El ciclo de clases va y vuelve, y lo que llega al wire es su clase.
+/// The class cycle goes and comes back, and what reaches the wire is its
+/// class.
 #[tokio::test]
-async fn el_ciclo_de_clases_manda_la_clase_al_wire() {
-    use norte_ui_host::action::DialogFieldValue as Valor;
+async fn the_class_cycle_sends_the_class_to_the_wire() {
+    use norte_ui_host::action::DialogFieldValue as Value;
 
     let backend = arbol_con_hallazgos("*", &[]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt de buscar es un formulario");
+        .expect("the search prompt is a form");
 
-    // Una vuelta del ciclo: «cualquier cosa» → «ficheros».
+    // One turn of the cycle: "anything" → "files".
     h.dispatch(UiAction::DialogField {
-        id: dialogo.id,
+        id: dialog.id,
         field: "kinds".to_owned(),
-        value: Valor::Cycled,
+        value: Value::Cycled,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
-        id: dialogo.id,
+        id: dialog.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let pedidas = backend.params_busqueda.lock().expect("mutex").clone();
-    let params = pedidas.first().expect("la búsqueda llegó al wire");
+    let requested = backend.params_busqueda.lock().expect("mutex").clone();
+    let params = requested.first().expect("the search reached the wire");
     assert_eq!(
         params.kinds,
         vec![norte_proto::EntryKind::File],
-        "el ciclo dejó «ficheros», y una clase sola ya es criterio"
+        "the cycle left \"files\", and a single class is already a criterion"
     );
 }
 
-/// Un campo que este formulario no tiene se rehúsa NOMBRÁNDOLO, y no se
-/// contesta «resincroniza»: el diálogo está abierto y es el mismo, así que
-/// decir que está obsoleto escondería el fallo del renderer.
+/// A field this form does not have is refused NAMING IT, and it is not
+/// answered "resync": the dialog is open and is the same one, so saying it
+/// is stale would hide the renderer's bug.
 #[tokio::test]
-async fn un_campo_que_no_existe_se_rehusa_sin_fingir_un_modal_obsoleto() {
-    use norte_ui_host::action::DialogFieldValue as Valor;
+async fn a_field_that_does_not_exist_is_refused_without_faking_a_stale_modal() {
+    use norte_ui_host::action::DialogFieldValue as Value;
 
     let backend = arbol_con_hallazgos("*", &[]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt de buscar es un formulario");
+        .expect("the search prompt is a form");
 
     let ack = h
         .dispatch(UiAction::DialogField {
-            id: dialogo.id,
+            id: dialog.id,
             field: "no-existe".to_owned(),
-            value: Valor::Text {
+            value: Value::Text {
                 text: "x".to_owned(),
             },
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-unknown-field"),
         "{ack:?}"
     );
 
-    // Y un interruptor no recibe texto ni un campo de texto se «toca».
+    // And a switch receives no text nor is a text field "toggled".
     let ack = h
         .dispatch(UiAction::DialogField {
-            id: dialogo.id,
+            id: dialog.id,
             field: "name".to_owned(),
-            value: Valor::Toggled,
+            value: Value::Toggled,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-unknown-field"),
-        "cada control contesta lo suyo: {ack:?}"
+        "each control answers its own: {ack:?}"
     );
 }
 
-/// Un nombre hostil llega a los resultados enmascarado y MARCADO.
+/// A hostile name reaches the results masked and MARKED.
 #[tokio::test]
-async fn un_hallazgo_hostil_va_marcado() {
-    let hostil = "mem:///casa/ca%CC%81f%C3%A9%E2%80%AE.txt";
-    let backend = arbol_con_hallazgos("*", &[hostil]);
+async fn a_hostile_hit_is_marked() {
+    let hostile = "mem:///casa/ca%CC%81f%C3%A9%E2%80%AE.txt";
+    let backend = arbol_con_hallazgos("*", &[hostile]);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     por_la_paleta(&h, &mut sub, "pane.search").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let dialogo = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let dialog = snap
         .dialogs
         .iter()
         .find(|d| !d.fields.is_empty())
-        .expect("el prompt está");
+        .expect("the prompt is there");
     h.dispatch(UiAction::DialogField {
-        id: dialogo.id,
+        id: dialog.id,
         field: "name".to_owned(),
         value: norte_ui_host::action::DialogFieldValue::Text {
             text: "*".to_owned(),
         },
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
-        id: dialogo.id,
+        id: dialog.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     for _ in 0..20 {
         let Some(v) = siguiente_busqueda(&mut sub).await else {
             continue;
         };
-        if let Some(fila) = v.rows.first() {
+        if let Some(row) = v.rows.first() {
             assert!(
-                !fila.name.contains('\u{202e}'),
-                "un override bidi cruzó crudo: {:?}",
-                fila.name
+                !row.name.contains('\u{202e}'),
+                "a bidi override crossed over raw: {:?}",
+                row.name
             );
-            assert!(fila.hostile, "y se MARCA: {fila:?}");
+            assert!(row.hostile, "and it is MARKED: {row:?}");
             return;
         }
     }
-    panic!("los hallazgos nunca llegaron");
+    panic!("the hits never arrived");
 }
 
 // ---------------------------------------------------------------------------
-// Búsqueda semántica (tarea 6.1).
+// Semantic search (task 6.1).
 // ---------------------------------------------------------------------------
 
-/// La ventana pregunta al índice por SIGNIFICADO, y lo que vuelve se navega
-/// como cualquier otro hallazgo.
+/// The window asks the index by MEANING, and what comes back is navigated
+/// like any other hit.
 ///
-/// El catálogo ataba `pane.semantic-search` desde el keymap y el host
-/// contestaba `NotHere`: la capacidad existía en el daemon y en el TUI, y
-/// aquí no había por dónde pedirla.
+/// The catalogue bound `pane.semantic-search` from the keymap and the host
+/// answered `NotHere`: the capability existed in the daemon and in the TUI,
+/// and here there was no way to request it.
 #[tokio::test]
-async fn la_ventana_busca_por_significado() {
-    let falso = arbol_como_falso();
-    *falso.semanticos.lock().expect("semánticos") = Some(vec![
+async fn the_window_searches_by_meaning() {
+    let fake = arbol_como_falso();
+    *fake.semanticos.lock().expect("semánticos") = Some(vec![
         norte_proto::methods::SemanticHit {
             path: VPath::parse("mem:///casa/docs/a.md").expect("vpath"),
             score: 0.91,
@@ -910,7 +916,7 @@ async fn la_ventana_busca_por_significado() {
             score: 0.42,
         },
     ]);
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
@@ -921,51 +927,51 @@ async fn la_ventana_busca_por_significado() {
         text: "facturas del año pasado".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    // La vista se abre YA, vacía y corriendo; los hallazgos llegan después.
-    let mut vista = siguiente_busqueda(&mut sub)
+    // The view opens ALREADY, empty and running; hits arrive afterward.
+    let mut view = siguiente_busqueda(&mut sub)
         .await
-        .expect("la búsqueda abre");
+        .expect("the search opens");
     for _ in 0..20 {
-        if !vista.rows.is_empty() {
+        if !view.rows.is_empty() {
             break;
         }
-        vista = siguiente_busqueda(&mut sub).await.expect("sigue abierta");
+        view = siguiente_busqueda(&mut sub).await.expect("still open");
     }
-    assert!(vista.semantic, "la vista dice que esto es semántico");
-    assert_eq!(vista.rows.len(), 2);
-    assert_eq!(vista.rows[0].name, "a.md");
-    // El parecido se ENSEÑA: sin él, dos hallazgos con 0,91 y 0,42 se leen
-    // igual de buenos y el orden parece arbitrario.
-    assert!(vista.rows[0].score.is_some_and(|s| s > 0.9));
-    let pedidas = backend.semanticas_pedidas.lock().expect("pedidas").clone();
-    assert_eq!(pedidas.len(), 1);
-    assert_eq!(pedidas[0].0, "facturas del año pasado");
+    assert!(view.semantic, "the view says this is semantic");
+    assert_eq!(view.rows.len(), 2);
+    assert_eq!(view.rows[0].name, "a.md");
+    // The score is SHOWN: without it, two hits at 0.91 and 0.42 read as
+    // equally good and the order looks arbitrary.
+    assert!(view.rows[0].score.is_some_and(|s| s > 0.9));
+    let requested = backend.semanticas_pedidas.lock().expect("pedidas").clone();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(requested[0].0, "facturas del año pasado");
     assert!(
-        pedidas[0].1 <= norte_proto::methods::INDEX_SEMANTIC_MAX_K,
-        "la k va acotada a lo que el daemon acepta: {}",
-        pedidas[0].1
+        requested[0].1 <= norte_proto::methods::INDEX_SEMANTIC_MAX_K,
+        "k is clamped to what the daemon accepts: {}",
+        requested[0].1
     );
 }
 
-/// Sin índice, se DICE qué falta y cómo se arregla.
+/// With no index, it SAYS what is missing and how to fix it.
 ///
-/// `NotFound` aquí no es «no hay resultados»: es «este root no tiene filas en
-/// el índice», y confundirlo con una búsqueda vacía deja al lector creyendo
-/// que no hay nada parecido a lo que buscó.
+/// `NotFound` here is not "no results": it is "this root has no rows in the
+/// index", and confusing it with an empty search leaves the reader believing
+/// there is nothing like what they searched for.
 #[tokio::test]
-async fn una_busqueda_semantica_sin_indice_dice_que_falta_construirlo() {
-    let falso = arbol_como_falso();
-    // Sin `semanticos`: el falso contesta `NotFound`.
-    let (h, _snap) = host_arbol(Arc::new(falso)).await;
+async fn a_semantic_search_with_no_index_says_it_needs_building() {
+    let fake = arbol_como_falso();
+    // With no `semanticos`: the fake answers `NotFound`.
+    let (h, _snap) = host_arbol(Arc::new(fake)).await;
     let mut sub = h.subscribe();
 
     ejecutar_por_paleta(&h, &mut sub, "pane.semantic-search").await;
@@ -975,28 +981,28 @@ async fn una_busqueda_semantica_sin_indice_dice_que_falta_construirlo() {
         text: "lo que sea".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     for _ in 0..40 {
         if siguiente_aviso(&mut sub).await == "msg-semantic-no-index" {
             return;
         }
     }
-    panic!("nadie dijo que falta construir el índice");
+    panic!("nobody said the index needs building");
 }
 
-/// Una consulta VACÍA no sale del proceso.
+/// An EMPTY query does not leave the process.
 #[tokio::test]
-async fn una_consulta_semantica_vacia_no_se_manda() {
-    let falso = arbol_como_falso();
-    let backend = Arc::new(falso);
+async fn an_empty_semantic_query_is_not_sent() {
+    let fake = arbol_como_falso();
+    let backend = Arc::new(fake);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     ejecutar_por_paleta(&h, &mut sub, "pane.semantic-search").await;
@@ -1007,7 +1013,7 @@ async fn una_consulta_semantica_vacia_no_se_manda() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     asentar().await;
     assert!(
         backend
@@ -1018,15 +1024,15 @@ async fn una_consulta_semantica_vacia_no_se_manda() {
     );
 }
 
-/// Una instrucción de IA vacía deja el campo DELANTE, como su gemela.
+/// An empty AI instruction leaves the field IN FRONT, like its twin.
 ///
-/// El terminal deja el modal abierto con el error debajo. La ventana ya se
-/// había comido el diálogo y ponía el mensaje en la barra: un «escribe una
-/// instrucción» sobre una pantalla sin dónde escribirla no es una negativa,
-/// es un callejón. La consulta semántica —el mismo caso, tres ficheros más
-/// allá— ya se había arreglado así.
+/// The terminal leaves the modal open with the error underneath. The window
+/// had already swallowed the dialog and put the message on the bar: a "write
+/// an instruction" over a screen with nowhere to write it is not a refusal,
+/// it is a dead end. Semantic search — the same case, three files over — had
+/// already been fixed this way.
 #[tokio::test]
-async fn una_instruccion_de_ia_vacia_devuelve_el_campo() {
+async fn an_empty_ai_instruction_returns_the_field() {
     let backend = Arc::new(arbol_como_falso());
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1038,27 +1044,27 @@ async fn una_instruccion_de_ia_vacia_devuelve_el_campo() {
         secret: None,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     asentar().await;
 
-    let foto = foto(&h, &mut sub).await;
+    let snap = foto(&h, &mut sub).await;
     assert!(
-        foto.dialogs.iter().any(|d| d.input.is_some()),
-        "el campo vuelve: {:?}",
-        foto.dialogs
+        snap.dialogs.iter().any(|d| d.input.is_some()),
+        "the field comes back: {:?}",
+        snap.dialogs
     );
     assert!(
         backend.instrucciones.lock().expect("pedidas").is_empty(),
-        "y nada sale hacia el proveedor de IA"
+        "and nothing goes out to the AI provider"
     );
 }
 
-/// En SOLO LECTURA no se pregunta: la consulta sale del proceso hacia el
-/// proveedor de IA, igual que el plan de renombrado.
+/// In READ ONLY it is not even asked: the query leaves the process toward the
+/// AI provider, same as the rename plan.
 #[tokio::test]
-async fn en_solo_lectura_no_hay_busqueda_semantica() {
-    let falso = arbol_como_falso();
-    let backend = Arc::new(falso);
+async fn in_read_only_there_is_no_semantic_search() {
+    let fake = arbol_como_falso();
+    let backend = Arc::new(fake);
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
         initial_dir: dir(),
@@ -1084,21 +1090,21 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
 
     let mut sub = h.subscribe();
     h.dispatch(tecla_mod("p", true, false))
         .await
-        .expect("host vivo");
-    let paleta = siguiente_paleta(&mut sub).await.expect("la paleta abre");
-    // La paleta no lleva la clave de despacho —se elige por índice— así que
-    // se busca por la etiqueta, que es lo que el lector ve.
-    let etiqueta =
+        .expect("host alive");
+    let palette = siguiente_paleta(&mut sub).await.expect("the palette opens");
+    // The palette does not carry the dispatch key — it is chosen by index —
+    // so it is looked up by label, which is what the reader sees.
+    let label =
         norte_frontend::whichkey::command_label("pane.semantic-search", norte_i18n::Lang::Es);
     assert!(
-        !paleta.rows.iter().any(|r| r.text == etiqueta),
-        "una ventana sin efectos no ofrece preguntarle a un modelo: {:?}",
-        paleta
+        !palette.rows.iter().any(|r| r.text == label),
+        "a window with no effects does not offer asking a model: {:?}",
+        palette
             .rows
             .iter()
             .map(|r| r.text.clone())
@@ -1113,26 +1119,28 @@ async fn en_solo_lectura_no_hay_busqueda_semantica() {
     );
 }
 
-/// Ejecuta un comando por la PALETA, que es por donde se llega a lo que
-/// ningún preset ata (la búsqueda semántica es uno).
+/// Runs a command through the PALETTE, which is the way to reach whatever no
+/// preset binds (semantic search is one).
 pub(super) async fn ejecutar_por_paleta(
     h: &UiHost,
     sub: &mut norte_ui_host::controller::UiSubscription,
-    comando: &str,
+    command: &str,
 ) {
-    let ack = ejecutar_por_paleta_ack(h, sub, comando).await;
+    let ack = ejecutar_por_paleta_ack(h, sub, command).await;
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
-        "la paleta no pudo ejecutar `{comando}`: {ack:?}"
+        "the palette could not run `{command}`: {ack:?}"
     );
 }
 
-/// Tira todo lo que el host ya había publicado y nadie ha leído.
+/// Throws away everything the host has already published and nobody has
+/// read.
 ///
-/// No espera: lo que no está ahora no estaba pendiente. Un plazo de cero no
-/// vale —`recv` necesita un turno para ver lo que ya está encolado—, así que
-/// se le da un milisegundo, que es tiempo de sobra para lo ya publicado y
-/// demasiado poco para esperar a lo que aún no ha ocurrido.
+/// It does not wait: what is not there now was not pending. A zero deadline
+/// does not work — `recv` needs one turn to see what is already queued — so
+/// it is given one millisecond, which is plenty for what is already
+/// published and far too little to wait for something that has not happened
+/// yet.
 async fn drenar_fotos(sub: &mut norte_ui_host::controller::UiSubscription) {
     while tokio::time::timeout(std::time::Duration::from_millis(1), sub.recv())
         .await
@@ -1140,41 +1148,42 @@ async fn drenar_fotos(sub: &mut norte_ui_host::controller::UiSubscription) {
     {}
 }
 
-/// Como [`ejecutar_por_paleta`], pero devolviendo el ACUSE: lo que se
-/// comprueba a veces es el rechazo.
+/// Like [`ejecutar_por_paleta`], but returning the ACK: what is sometimes
+/// checked is the refusal.
 pub(super) async fn ejecutar_por_paleta_ack(
     h: &UiHost,
     sub: &mut norte_ui_host::controller::UiSubscription,
-    comando: &str,
+    command: &str,
 ) -> ActionAck {
-    let etiqueta = comando.to_owned();
+    let label = command.to_owned();
     h.dispatch(tecla_mod("p", true, false))
         .await
-        .expect("host vivo");
+        .expect("host alive");
     let _ = siguiente_paleta(sub).await;
-    for c in etiqueta.chars().skip(5).take(6) {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+    for c in label.chars().skip(5).take(6) {
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
     for _ in 0..40 {
-        // Lo PENDIENTE se tira antes de pedir la foto. Este bucle es un
-        // paseo con estado —lee el cursor, pulsa abajo, vuelve a leer—, así
-        // que una foto vieja le hace contar dos veces el mismo escalón y
-        // aterrizar en el comando de al lado: se vio con `pane.edit`, que
-        // acabó ejecutando `pane.edit-new`, un diálogo en vez de un efecto.
+        // What is PENDING is thrown away before requesting the snapshot.
+        // This loop is a stateful walk — it reads the cursor, presses down,
+        // reads again — so a stale snapshot makes it count the same step
+        // twice and land on the command next to it: this was seen with
+        // `pane.edit`, which ended up running `pane.edit-new`, a dialog
+        // instead of an effect.
         //
-        // Cualquier cosa que publique una foto por su cuenta lo dispara: la
-        // respuesta a un catálogo de atributos, un volumen, una capacidad.
-        // Tirarlas es correcto porque la única que importa es la de después
-        // del `Resync`, que es por definición la más nueva.
+        // Anything that publishes a snapshot on its own triggers it: the
+        // answer to an attribute catalogue, a volume, a capability. Throwing
+        // them away is correct because the only one that matters is the one
+        // after `Resync`, which is by definition the newest.
         drenar_fotos(sub).await;
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let p = siguiente_foto(sub)
             .await
             .palette
-            .expect("la paleta sigue abierta");
+            .expect("the palette is still open");
         assert!(
             !p.rows.is_empty(),
-            "`{comando}` no sale en la paleta con la consulta `{}`",
+            "`{command}` does not show up in the palette with the query `{}`",
             p.query
         );
         let i = p
@@ -1182,14 +1191,14 @@ pub(super) async fn ejecutar_por_paleta_ack(
             .and_then(|c| usize::try_from(c).ok())
             .unwrap_or(0)
             .min(p.rows.len() - 1);
-        if p.rows[i].text == etiqueta {
-            return h.dispatch(tecla("Enter")).await.expect("host vivo");
+        if p.rows[i].text == label {
+            return h.dispatch(tecla("Enter")).await.expect("host alive");
         }
-        // `ArrowDown`, no `Down`: la paleta acepta el nombre del navegador o
-        // el del proyecto en minúscula, y `Down` no es ninguno de los dos —
-        // este ayudante llevaba desde la fase 2 funcionando solo cuando el
-        // comando buscado caía el PRIMERO.
-        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+        // `ArrowDown`, not `Down`: the palette accepts the browser's name or
+        // the project's, lowercase, and `Down` is neither — this helper had
+        // been working since phase 2 only when the sought command happened
+        // to land FIRST.
+        h.dispatch(tecla("ArrowDown")).await.expect("host alive");
     }
-    panic!("`{comando}` no aparece entre lo que el filtro deja");
+    panic!("`{command}` does not appear among what the filter leaves");
 }

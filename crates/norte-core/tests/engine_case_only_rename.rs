@@ -1,31 +1,33 @@
-//! #274: renombrar cambiando SOLO la caja (o la normalización) en un volumen
-//! que pliega es trabajo de verdad, no una operación imposible.
+//! #274: renaming by changing ONLY the case (or the normalization) on a
+//! folding volume is real work, not an impossible operation.
 //!
-//! El planificador de lotes ya lo trata así
-//! (`a_case_only_rename_is_real_work_on_a_case_insensitive_directory`), y la
-//! issue decía que el renombrado de UNO contestaba otra cosa.
+//! The batch planner already treats it that way
+//! (`a_case_only_rename_is_real_work_on_a_case_insensitive_directory`), and
+//! the issue said the single-item rename answered something else.
 //!
-//! **Lo que estos tests establecen es que por el camino que la issue nombra no
-//! pasa.** `ops::move_task` sobre el MISMO provider va a `rename_with_policy`
-//! y no consulta `same_node` en ningún punto — las dos únicas llamadas a
-//! `same_node` están en `copy_task` y en `move_by_copy`, y a la segunda solo
-//! se llega cuando el rename devuelve `Unsupported` (EXDEV entre montajes).
-//! Así que un `Foo.txt → foo.txt` dentro del mismo directorio se ejecuta.
+//! **What these tests establish is that the path the issue names is not
+//! taken.** `ops::move_task` over the SAME provider goes to
+//! `rename_with_policy` and never consults `same_node` at any point — the
+//! only two calls to `same_node` are in `copy_task` and in `move_by_copy`, and
+//! the second is only reached when the rename returns `Unsupported` (EXDEV
+//! across mounts). So a `Foo.txt → foo.txt` within the same directory runs.
 //!
-//! **Y eso era verdad a medias, porque el doble era más permisivo que
-//! cualquier disco.** `MemProvider::rename` permitía `a → A` cuando el destino
-//! resolvía al propio origen, modelando el `rename(2)` de APFS. norte no
-//! renombra con `rename(2)`: renombra SIN PISAR —`renameat2(RENAME_NOREPLACE)`,
-//! `renamex_np(RENAME_EXCL)`, `MoveFileExW` sin replace— y ahí un destino que
-//! resuelve al mismo nodo EXISTE, así que el rename falla con `EEXIST`. Con
-//! `MemProvider::with_folding_noreplace` (#274) el doble contesta lo que
-//! contesta el disco, y entonces sí se ve: el rename se rehúsa con «ya existe»,
-//! y con `Overwrite` la secuencia era *borrar el destino* —que es el propio
-//! fichero— y renombrar después algo que ya no está.
+//! **And that was only half true, because the double was more permissive than
+//! any disk.** `MemProvider::rename` allowed `a → A` when the destination
+//! resolved to the source itself, modeling APFS's `rename(2)`. norte does not
+//! rename with `rename(2)`: it renames WITHOUT OVERWRITING —
+//! `renameat2(RENAME_NOREPLACE)`, `renamex_np(RENAME_EXCL)`, `MoveFileExW`
+//! without replace — and there a destination that resolves to the same node
+//! EXISTS, so the rename fails with `EEXIST`. With
+//! `MemProvider::with_folding_noreplace` (#274) the double answers what the
+//! disk answers, and then it shows: the rename is refused with "already
+//! exists", and with `Overwrite` the sequence was *delete the destination* —
+//! which is the file itself — and rename afterward something that is no
+//! longer there.
 //!
-//! Queda vivo el caso ESTRECHO que sigue sin poder montarse: un move que
-//! degrada a copy+delete por EXDEV sobre un volumen que pliega. Pide dos
-//! montajes reales, uno de ellos plegando.
+//! What remains is the NARROW case that still cannot be set up: a move that
+//! degrades to copy+delete over EXDEV on a folding volume. It needs two real
+//! mounts, one of them folding.
 
 use std::sync::Arc;
 
@@ -36,194 +38,194 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-async fn escribe(mem: &MemProvider, wire: &str) {
+async fn write(mem: &MemProvider, wire: &str) {
     let mut sink = mem.write(&vp(wire)).await.expect("write");
     sink.write(Bytes::from_static(b"x")).await.expect("chunk");
     sink.commit().await.expect("commit");
 }
 
-/// Un provider que NO distingue la caja, como APFS, NTFS o exFAT.
-async fn engine_que_pliega() -> Engine {
-    monta(MemProvider::with_flags(
+/// A provider that does NOT tell the case apart, like APFS, NTFS or exFAT.
+async fn folding_engine() -> Engine {
+    mount(MemProvider::with_flags(
         CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING,
     ))
     .await
     .0
 }
 
-/// El mismo, pero cuyo rename SIN PISAR ve el pliegue: lo que hace un disco
-/// (#274). Devuelve también el provider, para poder mirar qué quedó.
-async fn engine_que_pliega_al_renombrar() -> (Engine, Arc<MemProvider>) {
-    monta(
+/// The same, but whose no-overwrite rename sees the fold: what a disk does
+/// (#274). Also returns the provider, to be able to look at what was left.
+async fn folding_on_rename_engine() -> (Engine, Arc<MemProvider>) {
+    mount(
         MemProvider::with_flags(CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING)
             .with_folding_noreplace(),
     )
     .await
 }
 
-async fn monta(mem: MemProvider) -> (Engine, Arc<MemProvider>) {
+async fn mount(mem: MemProvider) -> (Engine, Arc<MemProvider>) {
     let mem = Arc::new(mem);
-    mem.mkdir(&vp("mem:///casa")).await.expect("casa");
-    escribe(&mem, "mem:///casa/Foo.txt").await;
+    mem.mkdir(&vp("mem:///home")).await.expect("home");
+    write(&mem, "mem:///home/Foo.txt").await;
     let engine = Engine::new();
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     (engine, mem)
 }
 
-/// Qué nombres hay en `mem:///casa`, en BYTES y ordenados por bytes.
+/// What names are in `mem:///home`, in BYTES and sorted by bytes.
 ///
-/// No `String`: dos nombres distintos que colapsaran al mismo `U+FFFD`
-/// pasarían un `assert_eq!` sin que nadie se enterase, y esto es justo un test
-/// sobre nombres (regla 1).
-async fn nombres(mem: &MemProvider) -> Vec<Vec<u8>> {
+/// Not `String`: two different names that collapsed to the same `U+FFFD`
+/// would pass an `assert_eq!` without anyone noticing, and this is precisely
+/// a test about names (rule 1).
+async fn names(mem: &MemProvider) -> Vec<Vec<u8>> {
     use futures::StreamExt as _;
-    let mut s = mem.list(&vp("mem:///casa")).await.expect("lista");
+    let mut s = mem.list(&vp("mem:///home")).await.expect("lists");
     let mut out = Vec::new();
     while let Some(e) = s.next().await {
-        let e = e.expect("entrada");
-        out.push(e.path.file_name().expect("hoja").as_bytes().to_vec());
+        let e = e.expect("entry");
+        out.push(e.path.file_name().expect("leaf").as_bytes().to_vec());
     }
     out.sort();
     out
 }
 
-/// Lo mismo sobre un directorio de disco de verdad.
-fn nombres_en(dir: &std::path::Path) -> Vec<Vec<u8>> {
+/// The same over a real disk directory.
+fn names_in(dir: &std::path::Path) -> Vec<Vec<u8>> {
     use std::os::unix::ffi::OsStrExt as _;
     let mut out: Vec<Vec<u8>> = std::fs::read_dir(dir)
         .expect("read_dir")
-        .map(|e| e.expect("entrada").file_name().as_bytes().to_vec())
+        .map(|e| e.expect("entry").file_name().as_bytes().to_vec())
         .collect();
     out.sort();
     out
 }
 
-/// `Foo.txt → foo.txt` en un volumen que pliega: los BYTES cambian, así que es
-/// un renombrado de verdad. Rechazarlo deja al lector sin salida — la ventana
-/// no tiene el modal de colisión con reintento que sí tiene el terminal.
+/// `Foo.txt → foo.txt` on a folding volume: the BYTES change, so it is a real
+/// rename. Rejecting it leaves the reader with no way out — the window has no
+/// collision-with-retry modal the way the terminal does.
 #[tokio::test]
-async fn un_rename_que_solo_cambia_la_caja_es_trabajo_de_verdad() {
-    let engine = engine_que_pliega().await;
+async fn a_rename_that_only_changes_the_case_is_real_work() {
+    let engine = folding_engine().await;
     let handle = engine
-        .move_(&vp("mem:///casa/Foo.txt"), &vp("mem:///casa/foo.txt"))
+        .move_(&vp("mem:///home/Foo.txt"), &vp("mem:///home/foo.txt"))
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(
         handle.join().await,
         TaskState::Completed,
-        "cambiar la caja no es renombrar algo sobre sí mismo"
+        "changing the case is not renaming something onto itself"
     );
 }
 
-/// Y mover algo exactamente sobre sí mismo NO es un error: es un no-op, que es
-/// lo que `rename(2)` promete cuando las dos rutas nombran el mismo fichero.
-/// Se fija aquí porque es lo que distingue este caso del que la guarda de
-/// «dentro de sí mismo» sí tiene que rechazar, y porque un futuro que lo
-/// convirtiera en error rompería el renombrado que no cambia nada.
+/// And moving something exactly onto itself is NOT an error: it is a no-op,
+/// which is what `rename(2)` promises when the two paths name the same file.
+/// This is pinned here because it is what tells apart this case from the one
+/// the "inside itself" guard does have to reject, and because a future change
+/// that turned it into an error would break the rename that changes nothing.
 #[tokio::test]
-async fn un_rename_sobre_si_mismo_es_un_no_op_y_no_un_error() {
-    let engine = engine_que_pliega().await;
+async fn a_rename_onto_itself_is_a_no_op_not_an_error() {
+    let engine = folding_engine().await;
     let handle = engine
-        .move_(&vp("mem:///casa/Foo.txt"), &vp("mem:///casa/Foo.txt"))
+        .move_(&vp("mem:///home/Foo.txt"), &vp("mem:///home/Foo.txt"))
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(handle.join().await, TaskState::Completed);
 }
 
-/// **El caso del issue, con el doble contestando lo que contesta un disco.**
+/// **The case from the issue, with the double answering what a disk answers.**
 ///
-/// Renombrar SIN PISAR ve el pliegue, así que el destino «ya existe» — y es el
-/// propio fichero. Rechazarlo deja al lector sin salida: la ventana no tiene el
-/// modal de colisión con reintento que sí tiene el terminal, y la ortografía es
-/// lo único que se quería cambiar.
+/// Renaming WITHOUT OVERWRITING sees the fold, so the destination "already
+/// exists" — and it is the file itself. Rejecting it leaves the reader with no
+/// way out: the window has no collision-with-retry modal the way the terminal
+/// does, and the spelling was the only thing that was meant to change.
 #[tokio::test]
-async fn con_un_rename_que_ve_el_pliegue_cambiar_la_caja_sigue_siendo_trabajo() {
-    let (engine, mem) = engine_que_pliega_al_renombrar().await;
+async fn with_a_rename_that_sees_the_fold_changing_the_case_is_still_work() {
+    let (engine, mem) = folding_on_rename_engine().await;
     let handle = engine
-        .move_(&vp("mem:///casa/Foo.txt"), &vp("mem:///casa/foo.txt"))
+        .move_(&vp("mem:///home/Foo.txt"), &vp("mem:///home/foo.txt"))
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
-        nombres(&mem).await,
+        names(&mem).await,
         vec![b"foo.txt".to_vec()],
-        "un fichero, con la ortografía nueva"
+        "one file, with the new spelling"
     );
 }
 
-/// **Y con `Overwrite` el fichero NO se pierde.**
+/// **And with `Overwrite` the file is NOT lost.**
 ///
-/// Ésta es la que muerde: el brazo de `Overwrite` borraba el destino antes de
-/// renombrar, y en un volumen que pliega el destino ES el origen. La secuencia
-/// era borrar el fichero y renombrar después algo que ya no estaba — un
-/// `Foo.txt → foo.txt` que se lleva el fichero por delante.
+/// This is the one that bites: the `Overwrite` arm deleted the destination
+/// before renaming, and on a folding volume the destination IS the source. The
+/// sequence was to delete the file and rename afterward something that was no
+/// longer there — a `Foo.txt → foo.txt` that takes the file down with it.
 #[tokio::test]
-async fn con_overwrite_un_cambio_de_caja_no_se_lleva_el_fichero_por_delante() {
+async fn with_overwrite_a_case_change_does_not_take_the_file_down() {
     use norte_core::TransferOptions;
 
-    let (engine, mem) = engine_que_pliega_al_renombrar().await;
+    let (engine, mem) = folding_on_rename_engine().await;
     let handle = engine
         .move_with(
-            &vp("mem:///casa/Foo.txt"),
-            &vp("mem:///casa/foo.txt"),
+            &vp("mem:///home/Foo.txt"),
+            &vp("mem:///home/foo.txt"),
             TransferOptions {
                 on_collision: norte_proto::CollisionPolicy::Overwrite,
                 ..TransferOptions::default()
             },
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
-        nombres(&mem).await,
+        names(&mem).await,
         vec![b"foo.txt".to_vec()],
-        "el fichero sigue ahí, con la ortografía nueva"
+        "the file is still there, with the new spelling"
     );
 }
 
-/// Con `Skip`, en cambio, no hay nada que saltar: la «colisión» es el propio
-/// fichero, así que el renombrado se hace igual. Saltarlo sería contestar «ya
-/// había uno ahí» sobre uno mismo.
+/// With `Skip`, on the other hand, there is nothing to skip: the "collision"
+/// is the file itself, so the rename happens all the same. Skipping it would
+/// answer "there was already one there" about itself.
 #[tokio::test]
-async fn con_skip_tampoco_se_salta_el_cambio_de_caja() {
+async fn with_skip_the_case_change_is_not_skipped_either() {
     use norte_core::TransferOptions;
 
-    let (engine, mem) = engine_que_pliega_al_renombrar().await;
+    let (engine, mem) = folding_on_rename_engine().await;
     let handle = engine
         .move_with(
-            &vp("mem:///casa/Foo.txt"),
-            &vp("mem:///casa/foo.txt"),
+            &vp("mem:///home/Foo.txt"),
+            &vp("mem:///home/foo.txt"),
             TransferOptions {
                 on_collision: norte_proto::CollisionPolicy::Skip,
                 ..TransferOptions::default()
             },
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(nombres(&mem).await, vec![b"foo.txt".to_vec()]);
+    assert_eq!(names(&mem).await, vec![b"foo.txt".to_vec()]);
 }
 
-/// **Un HARDLINK no es un cambio de ortografía**, aunque comparta inodo.
+/// **A HARDLINK is not a spelling change**, even though it shares an inode.
 ///
-/// `NodeId` es `(dispositivo, inodo)`, así que dos entradas de directorio
-/// distintas enlazadas al mismo fichero dan el mismo id. Decidir por identidad
-/// SOLA metía `mv a.txt b.txt` por el camino de la ortografía: paso al nombre
-/// intermedio, choque con `b.txt` —que sigue ahí—, vuelta atrás, y un
-/// `Conflict` donde `Overwrite` hacía lo correcto. Por eso la guarda pide
-/// también que las hojas plieguen a la misma clave.
+/// `NodeId` is `(device, inode)`, so two different directory entries linked to
+/// the same file give the same id. Deciding by identity ALONE routed
+/// `mv a.txt b.txt` through the spelling path: a step to the intermediate
+/// name, a clash with `b.txt` — which is still there —, a rollback, and a
+/// `Conflict` where `Overwrite` was the right thing. That is why the guard
+/// also requires the leaves to fold to the same key.
 ///
-/// Va sobre disco de VERDAD porque `MemProvider` no sabe hacer hardlinks.
+/// This runs against a REAL disk because `MemProvider` cannot do hardlinks.
 #[tokio::test]
-async fn un_hardlink_no_entra_por_el_camino_de_la_ortografia() {
+async fn a_hardlink_does_not_take_the_spelling_path() {
     use norte_core::TransferOptions;
 
     let dir = tempfile::tempdir().expect("tempdir");
-    std::fs::write(dir.path().join("a.txt"), b"contenido").expect("a");
-    std::fs::hard_link(dir.path().join("a.txt"), dir.path().join("b.txt")).expect("enlace");
+    std::fs::write(dir.path().join("a.txt"), b"content").expect("a");
+    std::fs::hard_link(dir.path().join("a.txt"), dir.path().join("b.txt")).expect("link");
 
     let engine = Engine::new();
     engine.register_provider(
@@ -239,110 +241,110 @@ async fn un_hardlink_no_entra_por_el_camino_de_la_ortografia() {
             },
         )
         .await
-        .expect("encola");
-    let estado = handle.join().await;
+        .expect("enqueues");
+    let state = handle.join().await;
 
-    // Lo que NO puede pasar: que quede el nombre de máquina por ahí.
-    let quedan = nombres_en(dir.path());
+    // What CANNOT happen: that the machine name is left lying around.
+    let left = names_in(dir.path());
     assert!(
-        !quedan.iter().any(|n| n.starts_with(b".norte-rename-")),
-        "ningún residuo del rodeo: {quedan:?}"
+        !left.iter().any(|n| n.starts_with(b".norte-rename-")),
+        "no residue from the detour: {left:?}"
     );
     assert!(
-        matches!(estado, TaskState::Completed),
-        "con Overwrite, un hardlink es una colisión con política, no un rodeo: {estado:?}"
+        matches!(state, TaskState::Completed),
+        "with Overwrite, a hardlink is a collision under policy, not a detour: {state:?}"
     );
 }
 
-/// **Cancelar entre los dos pasos no deja el fichero con el nombre del
-/// rodeo.**
+/// **Cancelling between the two steps does not leave the file with the
+/// detour's name.**
 ///
-/// La ventana no es cancelable a propósito: con el token del task, cancelar
-/// justo después del primer rename hacía que el segundo *y la vuelta atrás*
-/// salieran sin intentar nada, dejando el fichero con un nombre que el lector
-/// no escribió y contestando `Cancelled` — y aquí una task cancelada significa
-/// «el árbol está como estaba». Es la misma decisión que `rename::exec`: la
-/// cancelación se comprueba ENTRE operaciones, nunca dentro de una.
+/// The window is not cancelable on purpose: with the task's token, cancelling
+/// right after the first rename made the second one *and the rollback* come
+/// out without trying anything, leaving the file with a name the reader did
+/// not write and answering `Cancelled` — and here a cancelled task means "the
+/// tree is as it was". It is the same decision as `rename::exec`: cancellation
+/// is checked BETWEEN operations, never inside one.
 #[tokio::test]
-async fn cancelar_entre_los_dos_pasos_no_deja_el_nombre_del_rodeo() {
+async fn cancelling_between_the_two_steps_does_not_leave_the_detours_name() {
     let mem = Arc::new(
         MemProvider::with_flags(CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING)
             .with_folding_noreplace(),
     );
-    mem.mkdir(&vp("mem:///casa")).await.expect("casa");
-    escribe(&mem, "mem:///casa/Foo.txt").await;
+    mem.mkdir(&vp("mem:///home")).await.expect("home");
+    write(&mem, "mem:///home/Foo.txt").await;
     let engine = Engine::new();
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
 
     let handle = engine
-        .move_(&vp("mem:///casa/Foo.txt"), &vp("mem:///casa/foo.txt"))
+        .move_(&vp("mem:///home/Foo.txt"), &vp("mem:///home/foo.txt"))
         .await
-        .expect("encola");
-    // El primer rename es el del rodeo: en cuanto se aplica, se cancela.
+        .expect("enqueues");
+    // The first rename is the detour's: as soon as it applies, it cancels.
     mem.faults().cancel_after_renames(1, handle.cancel_token());
-    let estado = handle.join().await;
+    let state = handle.join().await;
 
-    let quedan = nombres(&mem).await;
+    let left = names(&mem).await;
     assert!(
-        !quedan.iter().any(|n| n.starts_with(b".norte-rename-")),
-        "ni cancelando queda el nombre del rodeo: {quedan:?}"
+        !left.iter().any(|n| n.starts_with(b".norte-rename-")),
+        "not even cancelling leaves the detour's name: {left:?}"
     );
     assert_eq!(
-        estado,
+        state,
         TaskState::Completed,
-        "la ventana entre los dos pasos no es cancelable"
+        "the window between the two steps is not cancelable"
     );
 }
 
-/// Un nombre pegado al límite de 255 bytes también se puede cambiar de caja.
+/// A name right at the 255-byte limit can also have its case changed.
 ///
-/// El nombre intermedio va por PREFIJO y no empotra la hoja: con un sufijo,
-/// una hoja de 250 bytes daba `ENAMETOOLONG` en el primer paso y el cambio de
-/// ortografía era imposible. Es lo que la fixture `name_max_255` del corpus
-/// dice desde que existe.
+/// The intermediate name goes by PREFIX and does not embed the leaf: with a
+/// suffix, a 250-byte leaf gave `ENAMETOOLONG` on the first step and the
+/// spelling change was impossible. This is what the corpus's `name_max_255`
+/// fixture has been saying since it exists.
 #[tokio::test]
-async fn una_hoja_al_limite_de_255_tambien_cambia_de_caja() {
-    let largo = "A".repeat(251);
+async fn a_leaf_at_the_255_limit_also_changes_case() {
+    let long = "A".repeat(251);
     let mem = Arc::new(
         MemProvider::with_flags(CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING)
             .with_folding_noreplace(),
     );
-    mem.mkdir(&vp("mem:///casa")).await.expect("casa");
-    escribe(&mem, &format!("mem:///casa/{largo}.txt")).await;
+    mem.mkdir(&vp("mem:///home")).await.expect("home");
+    write(&mem, &format!("mem:///home/{long}.txt")).await;
     let engine = Engine::new();
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
 
     let handle = engine
         .move_(
-            &vp(&format!("mem:///casa/{largo}.txt")),
-            &vp(&format!("mem:///casa/{}.txt", largo.to_lowercase())),
+            &vp(&format!("mem:///home/{long}.txt")),
+            &vp(&format!("mem:///home/{}.txt", long.to_lowercase())),
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(
-        nombres(&mem).await,
-        vec![format!("{}.txt", largo.to_lowercase()).into_bytes()]
+        names(&mem).await,
+        vec![format!("{}.txt", long.to_lowercase()).into_bytes()]
     );
 }
 
-/// Y una colisión de VERDAD sigue siendo una colisión: dos ficheros distintos,
-/// y el de destino no se toca. Sin esto, «trátalo como un cambio de caja»
-/// pasaría a significar «pisa lo que haya».
+/// And a REAL collision is still a collision: two different files, and the
+/// destination is not touched. Without this, "treat it as a case change"
+/// would come to mean "overwrite whatever is there".
 #[tokio::test]
-async fn una_colision_de_verdad_sigue_fallando() {
-    let (engine, mem) = engine_que_pliega_al_renombrar().await;
-    escribe(&mem, "mem:///casa/otro.txt").await;
+async fn a_real_collision_still_fails() {
+    let (engine, mem) = folding_on_rename_engine().await;
+    write(&mem, "mem:///home/other.txt").await;
     let handle = engine
-        .move_(&vp("mem:///casa/Foo.txt"), &vp("mem:///casa/otro.txt"))
+        .move_(&vp("mem:///home/Foo.txt"), &vp("mem:///home/other.txt"))
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert!(
         matches!(handle.join().await, TaskState::Failed { .. }),
-        "dos ficheros distintos siguen colisionando"
+        "two different files still collide"
     );
     assert_eq!(
-        nombres(&mem).await,
-        vec![b"Foo.txt".to_vec(), b"otro.txt".to_vec()]
+        names(&mem).await,
+        vec![b"Foo.txt".to_vec(), b"other.txt".to_vec()]
     );
 }

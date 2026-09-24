@@ -1,17 +1,17 @@
-//! La barra de sitios: unidades y favoritos.
+//! The places bar: drives and favorites.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `Estado`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
 impl Estado {
-    /// El foco está en la barra lateral de sitios.
+    /// Focus is on the places side bar.
     pub(super) fn sitios_tienen_el_foco(&self) -> bool {
         self.sitios.is_some()
             && self
@@ -20,51 +20,50 @@ impl Estado {
                 .is_some_and(|s| self.hueco_de_sitios() == Some(s))
     }
 
-    /// El movimiento y la activación, con el foco en la barra lateral.
+    /// Movement and activation, with focus on the side bar.
     ///
-    /// El vocabulario es el del LISTADO porque es el único mapa que esta
-    /// ventana tiene —no hay pantalla `dialog` aquí—, y cada comando
-    /// significa en la barra lo que significa en su superficie: bajar baja
-    /// por ella, entrar va al sitio, y la tecla de marcar PLIEGA, porque una
-    /// barra lateral no tiene nada que marcar y sí dos secciones que abrir y
-    /// cerrar.
+    /// The vocabulary is the LISTING's because it is the only map this window
+    /// has — there is no `dialog` screen here — and each command means in the
+    /// bar what it means on its own surface: down moves down through it,
+    /// enter goes to the place, and the mark key COLLAPSES, because a side
+    /// bar has nothing to mark and does have two sections to open and close.
     ///
-    /// La activación necesita el backend, así que se devuelve `None` para
-    /// que la trate `aplicar_efecto` por su camino normal; aquí solo se
-    /// mueve el cursor.
+    /// Activation needs the backend, so `None` is returned for
+    /// `aplicar_efecto` to handle through its normal path; here only the
+    /// cursor moves.
     pub(super) fn efecto_en_sitios(
         &mut self,
         efecto: Efecto,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
-        // Lo SUYO, antes de contar filas: por lo mismo que en el panel de
-        // procesos, un panel vacío que contesta «aplicado» a todo se traga la
-        // tecla con la que se sale de él.
+        // ITS OWN, before counting rows: for the same reason as the process
+        // panel, an empty panel that answers "applied" to everything
+        // swallows the key that gets you out of it.
         if !matches!(
             efecto,
             Efecto::Cursor(_) | Efecto::Pagina(_) | Efecto::Extremo { .. }
         ) {
             return None;
         }
-        let estado = self.sitios.as_mut()?;
-        let filas = estado.rows().len();
-        if filas == 0 {
+        let state = self.sitios.as_mut()?;
+        let rows = state.rows().len();
+        if rows == 0 {
             return Some((self.aplicada(), Vec::new()));
         }
-        let total = i64::try_from(filas).unwrap_or(i64::MAX);
-        let actual = i64::try_from(estado.cursor().min(filas - 1)).unwrap_or(0);
-        let destino = match efecto {
-            Efecto::Cursor(n) => actual.saturating_add(n.clamp(-total, total)),
+        let total = i64::try_from(rows).unwrap_or(i64::MAX);
+        let current = i64::try_from(state.cursor().min(rows - 1)).unwrap_or(0);
+        let target = match efecto {
+            Efecto::Cursor(n) => current.saturating_add(n.clamp(-total, total)),
             Efecto::Pagina(n) => {
-                actual.saturating_add(n.clamp(-total, total).saturating_mul(total))
+                current.saturating_add(n.clamp(-total, total).saturating_mul(total))
             }
             Efecto::Extremo { al_final: false } => 0,
             Efecto::Extremo { al_final: true } => total - 1,
-            // Todo lo demás sigue su camino. Entrar y plegar, en concreto,
-            // necesitan el backend —una navegación, o volver a pedir los
-            // volúmenes—, así que los atiende quien sí lo tiene.
+            // Everything else goes its own way. Entering and collapsing, in
+            // particular, need the backend — a navigation, or asking for the
+            // volumes again — so whoever does have it handles them.
             _ => return None,
         };
-        estado.set_cursor(usize::try_from(destino.max(0)).unwrap_or(0).min(filas - 1));
+        state.set_cursor(usize::try_from(target.max(0)).unwrap_or(0).min(rows - 1));
         let snap = self.snapshot();
         Some((
             self.aplicada(),
@@ -72,12 +71,12 @@ impl Estado {
         ))
     }
 
-    /// Alimenta la barra lateral con los favoritos de la configuración.
+    /// Feeds the side bar with the configuration's favorites.
     ///
-    /// De la config con la que ARRANCÓ la ventana, que es la que está usando.
-    /// Un favorito cuya ruta no parsea se conserva con su clave de error: la
-    /// hotlist es data del usuario, no configuración estructural, y uno que
-    /// desaparece en silencio es un fallo que nadie puede ver.
+    /// From the config the window STARTED with, which is the one in use. A
+    /// favorite whose path does not parse is kept with its error key: the
+    /// hotlist is user data, not structural configuration, and one that
+    /// silently disappears is a failure nobody can see.
     pub(super) fn sembrar_sitios(&mut self) {
         let items: Vec<(String, Result<VPath, String>)> = self
             .config
@@ -86,44 +85,44 @@ impl Estado {
             .iter()
             .map(|h| (h.name.clone(), h.target.clone()))
             .collect();
-        let estado = self
+        let state = self
             .sitios
             .get_or_insert_with(norte_frontend::places::PlacesState::new);
-        estado.set_favorites(&items);
+        state.set_favorites(&items);
         self.gen_sitios += 1;
     }
 
-    /// Pide los volúmenes para la barra lateral.
+    /// Requests the volumes for the side bar.
     ///
-    /// Lo llaman el arranque y desplegar la sección de unidades. Y nadie más:
-    /// una barra lateral con reloj rompería la regla de suspensión del ADR
-    /// 0058 desde el primer frame, y `host.volumes` no es gratis — monta y
-    /// consulta espacio en cada filesystem.
+    /// Called by startup and by expanding the drives section. And nobody
+    /// else: a side bar with a clock would break ADR 0058's suspension rule
+    /// from the first frame, and `host.volumes` is not free — it mounts and
+    /// queries space on every filesystem.
     pub(super) fn pedir_sitios(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) {
         if self.hueco_de_sitios().is_none() {
             return;
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.volumes()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Mensaje::Fondo(Box::new(Fondo::SitiosVolumenes(res))))
                 .await;
         });
     }
 
-    /// Los volúmenes llegaron a la barra lateral.
+    /// The volumes arrived at the side bar.
     ///
-    /// Un fallo NO vacía lo que hubiera: lo que se veía sigue siendo lo
-    /// último que el host dijo.
+    /// A failure does NOT empty whatever was there: what was seen is still
+    /// the last thing the host said.
     pub(super) fn aplicar_sitios(
         &mut self,
         res: Result<Vec<norte_proto::methods::Volume>, Error>,
@@ -131,78 +130,78 @@ impl Estado {
         let Ok(vols) = res else {
             return None;
         };
-        // Solo si la barra EXISTE en esta disposición. `get_or_insert_with`
-        // creaba un estado —sin favoritos, porque `sembrar_sitios` no corre—
-        // para una respuesta rezagada de una disposición que ya no tiene
-        // hueco `places`, y luego mandaba una foto entera para nada.
-        // `pedir_sitios` ya se guarda igual.
+        // Only if the bar EXISTS in this layout. `get_or_insert_with` used to
+        // create a state — without favorites, because `sembrar_sitios` does
+        // not run — for a late response from a layout that no longer has a
+        // `places` slot, and then it sent a whole snapshot for nothing.
+        // `pedir_sitios` already guards the same way.
         self.hueco_de_sitios()?;
         self.sitios
             .get_or_insert_with(norte_frontend::places::PlacesState::new)
             .set_drives(&vols);
-        // Las unidades se insertan ANTES que los favoritos: todo indice
-        // pintado hasta ahora nombra otra fila.
+        // Drives are inserted BEFORE favorites: every index painted until now
+        // names a different row.
         self.gen_sitios += 1;
         let snap = self.snapshot();
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
     }
 
-    /// Un click en una fila de la barra lateral: la elige Y la activa.
+    /// A click on a side bar row: selects it AND activates it.
     pub(super) fn activar_sitio(
         &mut self,
         row: u32,
         generation: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if generation != self.gen_sitios {
-            // Lo pulsado y lo que hay ahora no son la misma lista: los
-            // volúmenes aterrizan EN MEDIO. Rechazar es lo único correcto —
-            // `set_cursor` recorta al último, así que seguir habría navegado
-            // al último sitio de la barra.
+            // What was clicked and what is there now are not the same list:
+            // the volumes land IN THE MIDDLE. Rejecting is the only correct
+            // thing — `set_cursor` clamps to the last one, so going ahead
+            // would have navigated to the bar's last place.
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
-        let Some(estado) = self.sitios.as_mut() else {
+        let Some(state) = self.sitios.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        if row as usize >= estado.rows().len() {
+        if row as usize >= state.rows().len() {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         }
-        estado.set_cursor(row as usize);
-        self.activar_sitio_del_cursor(backend, buzon)
+        state.set_cursor(row as usize);
+        self.activar_sitio_del_cursor(backend, mailbox)
     }
 
-    /// Activa la fila del cursor de la barra lateral: navega a ella, o pliega
-    /// su sección si es una cabecera.
+    /// Activates the side bar's cursor row: navigates to it, or collapses its
+    /// section if it is a header.
     ///
-    /// El `cd` va al LISTADO enfocado por el mismo camino que cualquier otro:
-    /// es lo que hace que tener la barra abierta no cambie a dónde van las
-    /// operaciones.
+    /// The `cd` goes to the FOCUSED listing through the same path as any
+    /// other: that is what makes having the bar open not change where
+    /// operations go.
     pub(super) fn activar_sitio_del_cursor(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(estado) = self.sitios.as_mut() else {
+        let Some(state) = self.sitios.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        if let Some(destino) = estado.activate().cloned() {
+        if let Some(target) = state.activate().cloned() {
             return (
                 self.aplicada(),
-                self.navegar(&destino, Trail::Record, backend, buzon),
+                self.navegar(&target, Trail::Record, backend, mailbox),
             );
         }
-        // Una cabecera: se pliega. Y desplegar las unidades ES el momento de
-        // volver a pedirlas — un disco montado o desmontado desde que se
-        // abrió la ventana se ve aquí, sin un reloj de por medio.
-        estado.toggle_fold();
+        // A header: it collapses. And expanding the drives IS the moment to
+        // request them again — a disk mounted or unmounted since the window
+        // opened shows up here, with no clock involved.
+        state.toggle_fold();
         self.gen_sitios += 1;
-        let desplegadas = estado
+        let expanded = state
             .rows()
             .iter()
             .any(|r| matches!(r, norte_frontend::places::PlaceRow::Drive { .. }));
-        if desplegadas {
-            self.pedir_sitios(backend, buzon);
+        if expanded {
+            self.pedir_sitios(backend, mailbox);
         }
         let snap = self.snapshot();
         (
@@ -211,19 +210,18 @@ impl Estado {
         )
     }
 
-    /// La barra lateral de sitios, proyectada.
+    /// The places side bar, projected.
     ///
-    /// Si todavía no hay estado —la disposición la coloca pero nadie la ha
-    /// alimentado— se proyecta VACÍA con sus dos cabeceras, que es lo que
-    /// hace el modelo compartido: la lista no da un brinco cuando lleguen los
-    /// volúmenes.
+    /// If there is no state yet — the layout places it but nobody has fed it
+    /// — it is projected EMPTY with its two headers, which is what the shared
+    /// model does: the list does not jump when the volumes arrive.
     pub(super) fn barra_de_sitios(&self, id: u32) -> crate::dto::PlacesSlotView {
         use norte_frontend::places::{PlaceRow, PlacesState};
         let generation = self.gen_sitios;
 
-        let vacia = PlacesState::new();
-        let estado = self.sitios.as_ref().unwrap_or(&vacia);
-        let rows = estado
+        let empty = PlacesState::new();
+        let state = self.sitios.as_ref().unwrap_or(&empty);
+        let rows = state
             .rows()
             .iter()
             .map(|r| match r {
@@ -239,25 +237,25 @@ impl Estado {
                     read_only,
                     kind,
                 } => {
-                    // La etiqueta son BYTES y el punto de montaje un `VPath`:
-                    // los dos por la puerta compartida, nunca por
-                    // `to_string_lossy`. El nombre CORTO lo decide
-                    // `drive_name`, el mismo que la TUI.
-                    let (pintable, hostil) = norte_frontend::places::drive_name(label, mount);
-                    // El montaje entero va al título, ENMASCARADO; la bandera es
-                    // la del nombre que se PINTA, la misma que ve la TUI (una
-                    // bandera por lo que no está a la vista era una marca que
-                    // solo salía en una de las dos).
-                    let (montaje, _) = norte_frontend::display::path_display(mount);
+                    // The label is BYTES and the mount point a `VPath`: both
+                    // through the shared gate, never through
+                    // `to_string_lossy`. The SHORT name is decided by
+                    // `drive_name`, the same one the TUI uses.
+                    let (displayable, hostile) = norte_frontend::places::drive_name(label, mount);
+                    // The whole mount goes into the title, MASKED; the flag
+                    // is that of the name that gets PAINTED, the same one the
+                    // TUI sees (one flag for what is not on display was a
+                    // mark that only ever showed up on one of the two).
+                    let (mount_text, _) = norte_frontend::display::path_display(mount);
                     crate::dto::PlaceRowView::Drive {
-                        label: clamp_display(pintable),
-                        hostile: hostil,
+                        label: clamp_display(displayable),
+                        hostile,
                         detail: clamp_display(self.espacio_de(*free, *total, *read_only)),
-                        // Un `?` cuando no contestó, jamás un cero: se
-                        // leería como «lleno».
+                        // A `?` when it did not answer, never a zero: that
+                        // would read as "full".
                         free: free
                             .map_or_else(|| "?".to_owned(), norte_frontend::human_bytes_short),
-                        mount: clamp_display(montaje),
+                        mount: clamp_display(mount_text),
                         kind: match kind {
                             norte_proto::methods::VolumeKind::Fixed => "fixed",
                             norte_proto::methods::VolumeKind::Removable => "removable",
@@ -268,23 +266,24 @@ impl Estado {
                     }
                 }
                 PlaceRow::Favorite { name, target } => {
-                    let (destino, hostil) = match target {
+                    let (target_text, target_hostile) = match target {
                         Ok(v) => norte_frontend::display::path_display(v),
                         Err(_) => (String::new(), false),
                     };
-                    let (nombre, nombre_hostil) = norte_frontend::display_name(name.as_bytes());
+                    let (display_name, name_hostile) =
+                        norte_frontend::display_name(name.as_bytes());
                     crate::dto::PlaceRowView::Favorite {
-                        // El nombre lo escribe el usuario, pero puede venir
-                        // de la capa de PROYECTO: se enmascara igual.
-                        name: clamp_display(nombre),
-                        target: clamp_display(destino),
-                        // El nombre O el destino. La bandera documentaba el
-                        // destino y el nombre se enmascaraba tirando la suya,
-                        // así que un favorito llamado con un override bidi
-                        // llegaba sin marca ninguna.
-                        hostile: hostil || nombre_hostil,
-                        broken: target.as_ref().err().map_or_else(String::new, |clave| {
-                            clamp_display(norte_i18n::t_in(self.lang, clave))
+                        // The name is typed by the user, but it can come from
+                        // the PROJECT layer: it is masked the same way.
+                        name: clamp_display(display_name),
+                        target: clamp_display(target_text),
+                        // The name OR the target. The flag used to document
+                        // the target and the name was masked by dropping its
+                        // own, so a favorite named with a bidi override
+                        // arrived with no flag at all.
+                        hostile: target_hostile || name_hostile,
+                        broken: target.as_ref().err().map_or_else(String::new, |key| {
+                            clamp_display(norte_i18n::t_in(self.lang, key))
                         }),
                     }
                 }
@@ -293,29 +292,29 @@ impl Estado {
         crate::dto::PlacesSlotView {
             slot_id: id,
             rows,
-            cursor: estado.cursor() as u64,
+            cursor: state.cursor() as u64,
             generation,
         }
     }
 
-    /// El espacio de un volumen, dicho.
+    /// A volume's space, said out loud.
     ///
-    /// Un tamaño que el sistema no contestó se DICE: un `0` se lee como
-    /// «lleno», que es lo contrario de «no lo sé».
+    /// A size the system did not answer is SAID: a `0` reads as "full", which
+    /// is the opposite of "I don't know".
     pub(super) fn espacio_de(
         &self,
         free: Option<u64>,
         total: Option<u64>,
         read_only: bool,
     ) -> String {
-        // La frase la redacta el crate COMPARTIDO. Había tres versiones —dos
-        // en este mismo crate—, ya diferían en cómo escriben los números, y
-        // las tres decían «desconocido» cuando lo único que faltaba era el
-        // total, tirando el dato que sí había.
+        // The SHARED crate drafts the phrase. There used to be three versions
+        // — two in this same crate — and they already differed in how they
+        // write the numbers, and all three said "unknown" when the only thing
+        // missing was the total, throwing away the data that was there.
         norte_frontend::places::PlacesState::volume_detail(free, total, read_only, true, self.lang)
     }
 
-    /// El hueco que ocupa la barra lateral, si la disposición coloca una.
+    /// The slot the side bar occupies, if the layout places one.
     pub(super) fn hueco_de_sitios(&self) -> Option<SlotId> {
         self.reparto
             .placements
@@ -324,10 +323,10 @@ impl Estado {
             .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == "places"))
     }
 
-    /// Los huecos `metadata` COLOCADOS, y qué enseñaría cada uno AHORA.
+    /// The PLACED `metadata` slots, and what each would show NOW.
     ///
-    /// Del reparto y no del árbol, como el visor: un hueco detrás de una
-    /// pestaña existe pero no se ve.
+    /// From the layout, not the tree, like the viewer: a slot behind a tab
+    /// exists but is not visible.
     fn huecos_de_hoja(&self) -> Vec<SlotId> {
         self.reparto
             .placements
@@ -337,40 +336,41 @@ impl Estado {
             .collect()
     }
 
-    /// Pone al día lo que enseña cada hoja colocada, y devuelve una foto si
-    /// alguna cambió.
+    /// Brings up to date what each placed sheet shows, and returns a snapshot
+    /// if any changed.
     ///
-    /// La hoja SIGUE al cursor, y el cursor lo mueve cualquier mensaje: una
-    /// tecla, un clic, un listado que aterriza. La TUI lo resuelve gratis
-    /// porque recalcula en cada frame; aquí hay que preguntarlo después de
-    /// cada mensaje, exactamente como el visor acoplado (`sondear_previews`).
+    /// The sheet FOLLOWS the cursor, and any message moves the cursor: a key,
+    /// a click, a listing that lands. The TUI resolves this for free because
+    /// it recomputes every frame; here it has to be asked after every
+    /// message, exactly like the docked preview (`sondear_previews`).
     ///
-    /// Sin esto la hoja no tenía NINGÚN camino propio hasta el renderer:
-    /// viajaba de gorra en la foto entera que provocaba otro panel, así que
-    /// una disposición con hoja y sin visor la dejaba congelada en lo que
-    /// hubiera al arrancar. `SelectRow` —el clic— contesta con un parche de
-    /// filas, y ahí no va la hoja.
+    /// Without this, the sheet had NO path of its own to the renderer at all:
+    /// it rode piggyback on the whole snapshot another panel triggered, so a
+    /// layout with a sheet and no viewer left it frozen at whatever was there
+    /// on startup. `SelectRow` — the click — answers with a row patch, and
+    /// the sheet does not go in that.
     ///
-    /// No pide nada ni lanza nada: comparar cuesta lo que cuesta construir la
-    /// hoja, que sale del listado que ya está en memoria.
+    /// It requests nothing and launches nothing: comparing costs whatever it
+    /// costs to build the sheet, which comes from the listing already in
+    /// memory.
     pub(super) fn sondear_hojas(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let vivos: Vec<u32> = self
+        let alive: Vec<u32> = self
             .arbol
             .slot_ids()
             .into_iter()
             .map(|SlotId(id)| id)
             .collect();
-        self.hojas.retain(|id, _| vivos.contains(id));
-        let mut cambio = false;
+        self.hojas.retain(|id, _| alive.contains(id));
+        let mut changed = false;
         for slot in self.huecos_de_hoja() {
             let SlotId(id) = slot;
-            let ahora = self.hoja_de_atributos(slot);
-            if self.hojas.get(&id) != Some(&ahora) {
-                self.hojas.insert(id, ahora);
-                cambio = true;
+            let current = self.hoja_de_atributos(slot);
+            if self.hojas.get(&id) != Some(&current) {
+                self.hojas.insert(id, current);
+                changed = true;
             }
         }
-        if cambio {
+        if changed {
             let snap = self.snapshot();
             vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
         } else {
@@ -378,60 +378,62 @@ impl Estado {
         }
     }
 
-    /// La hoja de atributos de un hueco `metadata`.
+    /// The attribute sheet of a `metadata` slot.
     ///
-    /// Lo que enseña sale del panel al que este hueco SIGUE, resuelto con el
-    /// motor compartido: un hueco que sigue a un rol que se ha quedado sin
-    /// panel degrada al activo en vez de mirar al vacío en silencio.
+    /// What it shows comes from the panel this slot FOLLOWS, resolved with
+    /// the shared engine: a slot following a role that has been left without
+    /// a panel degrades to the active one instead of silently looking at
+    /// nothing.
     ///
-    /// No pide nada: la `Entry` ya la trajo el listado.
+    /// It requests nothing: the listing already brought the `Entry`.
     pub(super) fn hoja_de_atributos(&self, slot: SlotId) -> crate::dto::MetadataSlotView {
         let SlotId(id) = slot;
         let mut diags = Vec::new();
-        let seguido =
+        let followed =
             norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active));
-        // Con el FOCO en la propia hoja el rol activo es ella, y seguirse a
-        // sí misma es seguir a nadie: entonces manda el listado activo, que
-        // siempre existe (mismo arreglo que el visor acoplado, #291).
-        let pane = seguido
+        // With FOCUS on the sheet itself, the active role is the sheet, and
+        // following yourself is following nobody: so the active listing takes
+        // over, which always exists (same fix as the docked preview, #291).
+        let pane = followed
             .and_then(|SlotId(s)| self.huecos.get(&s))
             .or_else(|| self.huecos.get(&self.activo()))
             .map(|h| &h.pane);
-        // `cursor_entry` y no `selected`: la hoja DESCRIBE lo que hay bajo el
-        // cursor, y sobre la fila `..` —donde el cursor nace— «lo señalado»
-        // es `None` a propósito. Preguntando por el operando, el panel salía
-        // vacío en cada arranque y después de cada `cd`.
-        // La bandera sale del MISMO índice que la entrada (`cursor_entry` /
-        // `cursor_is_parent_row`): preguntando por `cursor()` a mano, un
-        // filtro de quick search —que elige por su cuenta y no mueve el
-        // cursor real— dejaba la hoja describiendo `..` mientras el listado
-        // resaltaba otra fila.
-        let entrada = pane.and_then(|p| p.cursor_entry());
-        let fila_de_subir = pane.is_some_and(PaneState::cursor_is_parent_row);
-        // A QUÉ sigue, para el título. Con la MISMA reinterpretación de
-        // nombres que la cabecera de ese listado, que es la ruta que el
-        // lector tiene delante para comparar.
-        let (sigue, sigue_hostil) = pane.map_or_else(
+        // `cursor_entry` and not `selected`: the sheet DESCRIBES what is under
+        // the cursor, and on the `..` row — where the cursor is born —
+        // "pointed at" is `None` on purpose. Asking for the selection
+        // instead, the panel came out empty on every startup and after every
+        // `cd`.
+        // The flag comes from the SAME index as the entry (`cursor_entry` /
+        // `cursor_is_parent_row`): asking `cursor()` by hand, a quick-search
+        // filter — which chooses on its own and does not move the real cursor
+        // — left the sheet describing `..` while the listing highlighted a
+        // different row.
+        let entry = pane.and_then(|p| p.cursor_entry());
+        let parent_row = pane.is_some_and(PaneState::cursor_is_parent_row);
+        // WHAT it follows, for the title. With the SAME name reinterpretation
+        // as that listing's header, which is the path the reader has in
+        // front of them to compare against.
+        let (follows, follows_hostile) = pane.map_or_else(
             || (String::new(), false),
             |p| norte_frontend::path_display_with(p.dir(), p.name_encoding()),
         );
-        let sigue = clamp_display(sigue);
-        let Some(e) = entrada else {
+        let follows = clamp_display(follows);
+        let Some(e) = entry else {
             return crate::dto::MetadataSlotView {
                 slot_id: id,
                 fields: Vec::new(),
                 note: clamp_display(norte_i18n::t_in(self.lang, "metadata-empty")),
-                follows_display: sigue,
-                follows_hostile: sigue_hostil,
+                follows_display: follows,
+                follows_hostile,
             };
         };
-        // Qué filas van dentro lo decide el crate COMPARTIDO, no este host:
-        // la misma hoja la pinta el TUI, y cuando cada uno tenía su copia ya
-        // divergieron (el TUI no marcaba un valor de atributo hostil).
-        // Aquí solo se acota lo que cruza el puente.
-        let catalogo = self.catalogos.get(e.path.scheme());
-        let fields = norte_frontend::metadata::sheet(e, fila_de_subir, catalogo, self.lang)
+        // Which fields go inside is decided by the SHARED crate, not this
+        // host: the TUI paints the same sheet, and back when each had its own
+        // copy they already diverged (the TUI did not flag a hostile
+        // attribute value). Here only what crosses the bridge is clamped.
+        let catalog = self.catalogos.get(e.path.scheme());
+        let fields = norte_frontend::metadata::sheet(e, parent_row, catalog, self.lang)
             .into_iter()
             .map(|f| crate::dto::MetadataFieldView {
                 label: clamp_display(f.label),
@@ -443,8 +445,8 @@ impl Estado {
             slot_id: id,
             fields,
             note: String::new(),
-            follows_display: sigue,
-            follows_hostile: sigue_hostil,
+            follows_display: follows,
+            follows_hostile,
         }
     }
 }

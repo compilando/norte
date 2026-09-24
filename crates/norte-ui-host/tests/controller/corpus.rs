@@ -1,76 +1,79 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// El corpus canónico contra las superficies nuevas.
+// The canonical corpus against the new surfaces.
 // ---------------------------------------------------------------------------
 
-/// Ninguna superficie deja pasar un peligro de terminal, y la que enmascara
-/// lo DICE.
+/// No surface lets a terminal hazard through, and whichever one masks it
+/// SAYS so.
 ///
-/// Una tabla sobre el corpus de `norte-testkit`, que es lo que faltaba: las
-/// superficies de esta fase se escribieron sin que ninguna lo tocara, y todas
-/// las banderas que se calculaban y se tiraban habrían salido de aquí. La
-/// propiedad es un PAR: lo pintado no lleva peligro Y la marca está puesta.
-/// Comprobar solo lo primero es lo que deja pasar una superficie que enmascara
-/// en silencio.
+/// A table over `norte-testkit`'s corpus, which was missing: this phase's
+/// surfaces were written without any of it touching them, and every flag
+/// that got computed and thrown away would have come from here. The property
+/// is a PAIR: what is painted carries no hazard AND the mark is set.
+/// Checking only the first is what lets a surface that silently masks
+/// through.
 ///
-/// TRES superficies, y se dice cuáles porque el doc de antes prometía nueve y
-/// ejercitaba dos (#277): el nombre de un FAVORITO (lo escribe el usuario en
-/// su `norte.toml`), la etiqueta de un VOLUMEN (la da el sistema y son bytes)
-/// y el valor de un ATRIBUTO (el nombre de la entrada bajo el cursor). El
-/// diálogo de APROBACIÓN tiene su propia tabla, porque sus rutas llegan del
-/// daemon ya redactadas y hay que pasarlas antes por el mismo lossy.
+/// THREE surfaces, and they are named because the earlier doc promised nine
+/// and exercised two (#277): a FAVORITE's name (the user writes it in their
+/// `norte.toml`), a VOLUME's label (the system gives it and it is bytes) and
+/// an ATTRIBUTE's value (the name of the entry under the cursor). The
+/// APPROVAL dialog has its own table, because its paths arrive from the
+/// daemon already redacted and have to be passed through the same lossy step
+/// first.
 #[tokio::test]
-// Larga por TABLA, no por lógica: cada superficie es un bloque con su
-// aserción y su frase, y partirla escondería cuáles se cubren.
+// Long by TABLE, not by logic: each surface is a block with its own
+// assertion and its own message, and splitting it would hide which ones are
+// covered.
 #[expect(
     clippy::too_many_lines,
-    reason = "tabla de superficies: una aserción y su frase por bloque"
+    reason = "surface table: one assertion and its message per block"
 )]
 pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
     let corpus = norte_testkit::corpus::hostile_names();
     assert!(
         corpus.len() >= 48,
-        "el corpus canónico está: {}",
+        "the canonical corpus stands at: {}",
         corpus.len()
     );
 
-    // Los que de verdad ALTERAN la pantalla. Un nombre largo o con NFD no se
-    // enmascara —ni debe—, así que exigirle marca sería exigir una mentira.
-    let alteran: Vec<&norte_testkit::corpus::HostileName> = corpus
+    // The ones that REALLY alter the screen. A long name or one in NFD does
+    // not get masked — nor should it — so requiring a mark for it would be
+    // requiring a lie.
+    let alter: Vec<&norte_testkit::corpus::HostileName> = corpus
         .iter()
         .filter(|n| norte_frontend::display_name(&n.bytes).1)
         .collect();
     assert!(
-        alteran.len() >= 8,
-        "el corpus trae peligros de verdad: {}",
-        alteran.len()
+        alter.len() >= 8,
+        "the corpus brings real hazards: {}",
+        alter.len()
     );
 
-    for n in alteran {
-        // El nombre de un favorito vive en un `String` del `norte.toml`, así
-        // que solo puede llevar lo que sea UTF-8 válido. Convertir el resto
-        // con `from_utf8_lossy` sería hacer aquí la conversión que el host
-        // tiene que marcar, y el test diría que el host no la marca cuando
-        // quien la hizo fue el test: es la trampa del doble lossy, que la
-        // bandera ya no puede recuperar porque U+FFFD no es un peligro.
-        let texto = match std::str::from_utf8(&n.bytes) {
+    for n in alter {
+        // A favorite's name lives in a `String` from `norte.toml`, so it can
+        // only carry what is valid UTF-8. Converting the rest with
+        // `from_utf8_lossy` would be doing here the conversion the host has
+        // to mark, and the test would say the host does not mark it when it
+        // was the test that did it: it is the double-lossy trap, which the
+        // flag can no longer recover from because U+FFFD is not a hazard.
+        let text = match std::str::from_utf8(&n.bytes) {
             Ok(t) => t.to_owned(),
             Err(_) => String::new(),
         };
 
-        // 1. El nombre de un FAVORITO: lo escribe el usuario, y la capa de
-        //    proyecto es «he abierto este repo», no «doy fe de esta cadena».
+        // 1. A FAVORITE's name: the user writes it, and the project layer
+        //    is "I have opened this repo", not "I vouch for this string".
         let mut cfg = ajustes_de_prueba();
         cfg.common.hotlist = vec![norte_config::HotlistItem {
-            name: texto.clone(),
+            name: text.clone(),
             target: norte_proto::VPath::parse("mem:///casa").map_err(|_| "err".to_owned()),
         }];
         let mut f = Falso::default();
-        // La entrada bajo el cursor es la hostil: su nombre es el primer campo
-        // de la HOJA DE ATRIBUTOS, que es la tercera superficie.
+        // The entry under the cursor is the hostile one: its name is the
+        // ATTRIBUTES SHEET's first field, which is the third surface.
         f.pon("mem:///casa", vec![(n.bytes.clone(), false)]);
-        // 2. La etiqueta de un VOLUMEN: la da el sistema y son bytes.
+        // 2. A VOLUME's label: the system gives it and it is bytes.
         f.volumenes = vec![norte_proto::methods::Volume {
             label: Some(n.bytes.clone()),
             ..volumen("mem:///casa", "ext4", false)
@@ -97,12 +100,12 @@ pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
             log_ring: None,
         })
         .await
-        .expect("arranca");
+        .expect("starts");
         let mut sub = h.subscribe();
 
-        let barra = sitios(&snap).expect("`full` coloca la barra").clone();
-        if !texto.is_empty() {
-            let favorito = barra
+        let bar = sitios(&snap).expect("`full` places the bar").clone();
+        if !text.is_empty() {
+            let favorite = bar
                 .rows
                 .iter()
                 .find_map(|r| match r {
@@ -111,66 +114,66 @@ pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
                     }
                     _ => None,
                 })
-                .expect("el favorito está");
-            sin_peligro(&favorito.0, &n.id, "el nombre de un favorito");
+                .expect("the favorite is there");
+            sin_peligro(&favorite.0, &n.id, "a favorite's name");
             assert!(
-                favorito.1,
-                "[{}] el favorito se enmascara y NO lo dice: {:?}",
-                n.id, favorito.0
+                favorite.1,
+                "[{}] the favorite is masked and does NOT say so: {:?}",
+                n.id, favorite.0
             );
         }
 
-        // La barra lateral, cuando lleguen los volúmenes.
+        // The side bar, once the volumes arrive.
         for _ in 0..20 {
-            h.dispatch(UiAction::Resync).await.expect("host vivo");
-            let foto = siguiente_foto(&mut sub).await;
-            let v = sitios(&foto).expect("colocada");
-            let disco = v.rows.iter().find_map(|r| match r {
+            h.dispatch(UiAction::Resync).await.expect("host alive");
+            let snap = siguiente_foto(&mut sub).await;
+            let v = sitios(&snap).expect("placed");
+            let drive = v.rows.iter().find_map(|r| match r {
                 norte_ui_host::dto::PlaceRowView::Drive { label, hostile, .. } => {
                     Some((label.clone(), *hostile))
                 }
                 _ => None,
             });
-            if let Some((label, hostile)) = disco {
-                sin_peligro(&label, &n.id, "la etiqueta de un volumen en la barra");
+            if let Some((label, hostile)) = drive {
+                sin_peligro(&label, &n.id, "a volume's label in the bar");
                 assert!(
                     hostile,
-                    "[{}] la etiqueta del volumen se enmascara y NO lo dice: {label:?}",
+                    "[{}] the volume's label is masked and does NOT say so: {label:?}",
                     n.id
                 );
                 break;
             }
         }
 
-        // 3. El valor de un ATRIBUTO: el primer campo de la hoja es el nombre
-        //    de la entrada bajo el cursor, o sea bytes del provider (#277).
-        //    El doc de este test la nombraba desde el principio y nadie la
-        //    ejercitaba.
-        let foto = esperar_foto(&h, &mut sub, "la hoja tiene el nombre", |f| {
+        // 3. An ATTRIBUTE's value: the sheet's first field is the name of
+        //    the entry under the cursor, i.e. bytes from the provider
+        //    (#277). This test's doc named it from the start and nobody
+        //    exercised it.
+        let snap = esperar_foto(&h, &mut sub, "the sheet has the name", |f| {
             hoja(f).is_some_and(|m| !m.fields.is_empty())
         })
         .await;
-        let campo = hoja(&foto)
-            .expect("la disposición `full` coloca la hoja")
+        let field = hoja(&snap)
+            .expect("the `full` layout places the sheet")
             .fields
             .first()
-            .expect("el primer campo es el nombre")
+            .expect("the first field is the name")
             .clone();
-        sin_peligro(&campo.value, &n.id, "el valor de un atributo");
+        sin_peligro(&field.value, &n.id, "an attribute's value");
         assert!(
-            campo.hostile,
-            "[{}] el valor del atributo se enmascara y NO lo dice: {:?}",
-            n.id, campo.value
+            field.hostile,
+            "[{}] the attribute's value is masked and does NOT say so: {:?}",
+            n.id, field.value
         );
     }
 }
 
-/// Ninguna cadena pintable lleva un peligro de terminal.
-pub(super) fn sin_peligro(pintado: &str, id: &str, donde: &str) {
-    for c in pintado.chars() {
+/// No paintable string carries a terminal hazard.
+pub(super) fn sin_peligro(painted: &str, id: &str, where_: &str) {
+    for c in painted.chars() {
         assert!(
             !norte_encoding::is_terminal_hazard(c),
-            "[{id}] {donde} lleva {c:?} sin enmascarar: {pintado:?}"
+            "[{id}] {where_} carries {c:?} unmasked: {painted:?}"
         );
     }
 }

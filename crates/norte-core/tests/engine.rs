@@ -1,7 +1,7 @@
-//! Matriz test-first del copy engine v0 (fase 10 de M0), contra `MemProvider`
-//! con fallos inyectados: feliz, recursivo hostil, colisiones, cancelación
-//! limpia por chunk, fallos en byte exacto, desconexión, move=rename,
-//! delete post-order y `copy_native`.
+//! Test-first matrix of the copy engine v0 (M0 phase 10), against
+//! `MemProvider` with injected faults: happy path, hostile recursive,
+//! collisions, clean per-chunk cancellation, byte-exact failures,
+//! disconnection, move=rename, post-order delete and `copy_native`.
 
 use std::sync::Arc;
 
@@ -13,15 +13,15 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
 async fn read_all(mem: &MemProvider, wire: &str) -> Result<Vec<u8>, Error> {
@@ -33,7 +33,7 @@ async fn read_all(mem: &MemProvider, wire: &str) -> Result<Vec<u8>, Error> {
     Ok(out)
 }
 
-/// Engine con un `MemProvider` registrado; devuelve también el provider.
+/// Engine with a registered `MemProvider`; also returns the provider.
 fn engine_with_mem() -> (Engine, Arc<MemProvider>) {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
@@ -66,7 +66,7 @@ async fn copy_file_happy_path() {
 #[tokio::test]
 async fn copy_dir_recursive_with_hostile_names() {
     let (engine, mem) = engine_with_mem();
-    // Árbol de 3 niveles con nombres hostiles del corpus.
+    // 3-level tree with hostile names from the corpus.
     let hostiles = norte_testkit::corpus::hostile_names();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/sub")).await.unwrap();
@@ -78,7 +78,7 @@ async fn copy_dir_recursive_with_hostile_names() {
         let seg = norte_proto::Segment::new(h.bytes.clone()).unwrap();
         let mut p = vp(&format!("mem:///{dir}"));
         p = p.join(seg);
-        let mut sink = mem.write(&p).await.expect("write hostil");
+        let mut sink = mem.write(&p).await.expect("hostile write");
         sink.write(Bytes::from_static(b"data")).await.unwrap();
         sink.commit().await.unwrap();
         paths.push(p);
@@ -91,18 +91,18 @@ async fn copy_dir_recursive_with_hostile_names() {
         .expect("submit");
     assert_eq!(handle.join().await, TaskState::Completed);
 
-    // Cada archivo hostil existe en el destino con bytes intactos.
+    // Every hostile file exists at the destination with intact bytes.
     for (i, h) in hostiles.iter().take(3).enumerate() {
         let dir = ["dst", "dst/sub", "dst/sub/deep"][i];
         let seg = norte_proto::Segment::new(h.bytes.clone()).unwrap();
         let p = vp(&format!("mem:///{dir}")).join(seg);
         let e = mem.stat(&p).await.unwrap_or_else(|err| {
-            panic!("[{}] falta en el destino: {err:?}", h.id);
+            panic!("[{}] missing at the destination: {err:?}", h.id);
         });
         assert_eq!(
             e.path.file_name().unwrap().as_bytes(),
             h.bytes.as_slice(),
-            "[{}] bytes intactos",
+            "[{}] intact bytes",
             h.id
         );
     }
@@ -111,8 +111,8 @@ async fn copy_dir_recursive_with_hostile_names() {
 #[tokio::test]
 async fn copy_collision_fails_without_writing() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///src", b"nuevo").await;
-    write_file(&mem, "mem:///dst", b"precioso contenido previo").await;
+    write_file(&mem, "mem:///src", b"new").await;
+    write_file(&mem, "mem:///dst", b"precious previous content").await;
 
     let handle = engine
         .copy(&vp("mem:///src"), &vp("mem:///dst"))
@@ -122,12 +122,12 @@ async fn copy_collision_fails_without_writing() {
         TaskState::Failed {
             error: Error::Conflict { conflict },
         } => assert_eq!(conflict, ConflictKind::Exists),
-        other => panic!("esperaba Conflict, fue {other:?}"),
+        other => panic!("expected Conflict, was {other:?}"),
     }
-    // El destino queda EXACTAMENTE como estaba.
+    // The destination is left EXACTLY as it was.
     assert_eq!(
         read_all(&mem, "mem:///dst").await.unwrap(),
-        b"precioso contenido previo"
+        b"precious previous content"
     );
 }
 
@@ -135,13 +135,13 @@ async fn copy_collision_fails_without_writing() {
 async fn copy_cancel_leaves_no_partial_destination() {
     let (engine, mem) = engine_with_mem();
     let content = vec![0x5A; 512 * 1024];
-    write_file(&mem, "mem:///grande", &content).await;
+    write_file(&mem, "mem:///big", &content).await;
 
     let handle = engine
-        .copy(&vp("mem:///grande"), &vp("mem:///copia"))
+        .copy(&vp("mem:///big"), &vp("mem:///copy"))
         .await
         .unwrap();
-    // Cancela en cuanto haya progreso de bytes (el engine chequea por chunk).
+    // Cancels as soon as there is byte progress (the engine checks per chunk).
     let mut rx = handle.progress();
     loop {
         let snap = rx.borrow_and_update().clone();
@@ -153,21 +153,21 @@ async fn copy_cancel_leaves_no_partial_destination() {
         }
     }
     handle.cancel();
-    // Puede haber terminado ya (carrera legítima); si no, debe ser Cancelled.
+    // It may already have finished (a legitimate race); if not, it must be Cancelled.
     let final_state = handle.join().await;
     match final_state {
         TaskState::Cancelled => {
-            // Cancelación limpia: ni archivo ni rastro en el destino.
+            // Clean cancellation: neither a file nor a trace at the destination.
             assert_eq!(
-                mem.stat(&vp("mem:///copia")).await.unwrap_err(),
+                mem.stat(&vp("mem:///copy")).await.unwrap_err(),
                 Error::NotFound,
-                "el destino debe quedar limpio tras cancelar"
+                "the destination must be clean after cancelling"
             );
         }
         TaskState::Completed => {
-            assert_eq!(read_all(&mem, "mem:///copia").await.unwrap(), content);
+            assert_eq!(read_all(&mem, "mem:///copy").await.unwrap(), content);
         }
-        other => panic!("estado inesperado: {other:?}"),
+        other => panic!("unexpected state: {other:?}"),
     }
 }
 
@@ -183,12 +183,12 @@ async fn copy_read_fault_fails_and_cleans_destination() {
         .unwrap();
     match handle.join().await {
         TaskState::Failed { error } => assert_eq!(error, Error::Io { retryable: false }),
-        other => panic!("esperaba Failed{{Io}}, fue {other:?}"),
+        other => panic!("expected Failed{{Io}}, was {other:?}"),
     }
     assert_eq!(
         mem.stat(&vp("mem:///dst")).await.unwrap_err(),
         Error::NotFound,
-        "destino limpio tras fallo de lectura"
+        "clean destination after a read failure"
     );
 }
 
@@ -204,12 +204,12 @@ async fn copy_write_fault_fails_and_cleans_destination() {
         .unwrap();
     match handle.join().await {
         TaskState::Failed { error } => assert_eq!(error, Error::Io { retryable: false }),
-        other => panic!("esperaba Failed{{Io}}, fue {other:?}"),
+        other => panic!("expected Failed{{Io}}, was {other:?}"),
     }
     assert_eq!(
         mem.stat(&vp("mem:///dst")).await.unwrap_err(),
         Error::NotFound,
-        "destino limpio tras fallo de escritura"
+        "clean destination after a write failure"
     );
 }
 
@@ -227,7 +227,7 @@ async fn copy_disconnect_maps_to_provider_unavailable() {
         TaskState::Failed { error } => {
             assert_eq!(error, Error::ProviderUnavailable { retryable: true });
         }
-        other => panic!("esperaba ProviderUnavailable, fue {other:?}"),
+        other => panic!("expected ProviderUnavailable, was {other:?}"),
     }
 }
 
@@ -238,9 +238,9 @@ async fn copy_native_used_when_server_copy_declared() {
         CapabilityFlags::SERVER_COPY | CapabilityFlags::CASE_SENSITIVE,
     ));
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    write_file(&mem, "mem:///src", b"contenido nativo").await;
-    // Si el engine intentara streaming, este fallo lo tumbaría: copy_native
-    // no lee por stream, así que debe completar igual.
+    write_file(&mem, "mem:///src", b"native content").await;
+    // If the engine tried streaming, this fault would take it down:
+    // copy_native does not read via stream, so it must complete all the same.
     mem.faults().fail_read_at(&vp("mem:///src"), 0);
 
     let handle = engine
@@ -251,7 +251,7 @@ async fn copy_native_used_when_server_copy_declared() {
     mem.faults().clear();
     assert_eq!(
         read_all(&mem, "mem:///dst").await.unwrap(),
-        b"contenido nativo"
+        b"native content"
     );
 }
 
@@ -260,24 +260,24 @@ async fn copy_native_used_when_server_copy_declared() {
 #[tokio::test]
 async fn move_same_provider_is_rename_zero_bytes() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///origen", b"contenido").await;
+    write_file(&mem, "mem:///source", b"content").await;
 
     let handle = engine
-        .move_(&vp("mem:///origen"), &vp("mem:///destino"))
+        .move_(&vp("mem:///source"), &vp("mem:///destination"))
         .await
         .unwrap();
     let rx = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
 
     assert_eq!(
-        mem.stat(&vp("mem:///origen")).await.unwrap_err(),
+        mem.stat(&vp("mem:///source")).await.unwrap_err(),
         Error::NotFound
     );
     assert_eq!(
-        read_all(&mem, "mem:///destino").await.unwrap(),
-        b"contenido"
+        read_all(&mem, "mem:///destination").await.unwrap(),
+        b"content"
     );
-    assert_eq!(rx.borrow().bytes_done, 0, "rename no copia bytes");
+    assert_eq!(rx.borrow().bytes_done, 0, "rename copies no bytes");
 }
 
 #[tokio::test]
@@ -294,7 +294,7 @@ async fn move_collision_fails_and_source_intact() {
         TaskState::Failed {
             error: Error::Conflict { .. },
         } => {}
-        other => panic!("esperaba Conflict, fue {other:?}"),
+        other => panic!("expected Conflict, was {other:?}"),
     }
     assert_eq!(read_all(&mem, "mem:///a").await.unwrap(), b"1");
     assert_eq!(read_all(&mem, "mem:///b").await.unwrap(), b"2");
@@ -317,7 +317,7 @@ async fn delete_tree_post_order() {
         mem.stat(&vp("mem:///d")).await.unwrap_err(),
         Error::NotFound
     );
-    // 4 entradas: d, d/sub, d/f1, d/sub/f2.
+    // 4 entries: d, d/sub, d/f1, d/sub/f2.
     assert_eq!(rx.borrow().entries_total, Some(4));
     assert_eq!(rx.borrow().entries_done, 4);
 }
@@ -326,7 +326,7 @@ async fn delete_tree_post_order() {
 async fn delete_missing_fails_not_found() {
     let (engine, mem) = engine_with_mem();
     let _ = &mem;
-    let handle = engine.delete(&vp("mem:///nada")).await.unwrap();
+    let handle = engine.delete(&vp("mem:///nothing")).await.unwrap();
     assert_eq!(
         handle.join().await,
         TaskState::Failed {
@@ -335,7 +335,7 @@ async fn delete_missing_fails_not_found() {
     );
 }
 
-// ---------- registro / passthrough ----------
+// ---------- registration / passthrough ----------
 
 #[tokio::test]
 async fn unknown_scheme_rejected_at_submit() {
@@ -364,9 +364,9 @@ async fn stat_and_list_passthrough() {
     assert_eq!(n, 1);
 }
 
-// ---------- cancelación limpia por Task (regla dura 3, hallazgos rust-reviewer) ----------
+// ---------- clean Task cancellation (hard rule 3, rust-reviewer findings) ----------
 
-/// Árbol src con `n` archivos bajo `mem:///src`.
+/// A source tree with `n` files under `mem:///src`.
 async fn build_tree(mem: &MemProvider, n: usize) {
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     for i in 0..n {
@@ -378,8 +378,8 @@ async fn build_tree(mem: &MemProvider, n: usize) {
 async fn copy_tree_cancel_leaves_complete_files_only() {
     let (engine, mem) = engine_with_mem();
     build_tree(&mem, 30).await;
-    // Latencia real por op: la task avanza despacio y la cancelación
-    // aterriza a mitad de árbol de forma fiable.
+    // Real per-op latency: the task advances slowly and the cancellation
+    // reliably lands halfway through the tree.
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(3)));
 
@@ -401,8 +401,8 @@ async fn copy_tree_cancel_leaves_complete_files_only() {
     let final_state = handle.join().await;
     mem.faults().clear();
     assert_eq!(final_state, TaskState::Cancelled);
-    // Árbol parcial permitido (doc de copy_task), pero CADA archivo presente
-    // está completo: jamás un archivo a medias sin marcar.
+    // A partial tree is allowed (copy_task's doc), but EVERY file present is
+    // complete: never a half file with no mark.
     let mut listed = mem.list(&vp("mem:///dst")).await.unwrap();
     while let Some(e) = listed.next().await {
         let e = e.unwrap();
@@ -411,7 +411,7 @@ async fn copy_tree_cancel_leaves_complete_files_only() {
             assert_eq!(
                 read_all(&mem, &format!("mem:///dst/{name}")).await.unwrap(),
                 b"data",
-                "archivo a medias en el destino: {name}"
+                "half a file at the destination: {name}"
             );
         }
     }
@@ -439,44 +439,44 @@ async fn delete_tree_cancel_keeps_root_and_rest_intact() {
     let final_state = handle.join().await;
     mem.faults().clear();
     assert_eq!(final_state, TaskState::Cancelled);
-    // Post-order: la raíz cae la ÚLTIMA — cancelado a mitad, sigue ahí.
+    // Post-order: the root falls LAST — cancelled halfway, it is still there.
     assert!(
         mem.stat(&vp("mem:///src")).await.is_ok(),
-        "la raíz solo cae al final; cancelar a mitad la deja"
+        "the root only falls at the end; cancelling halfway leaves it"
     );
 }
 
 #[tokio::test]
 async fn move_cancel_before_start_leaves_everything_intact() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///origen", b"contenido").await;
+    write_file(&mem, "mem:///source", b"content").await;
     mem.faults()
         .set_latency_per_op(Some(std::time::Duration::from_millis(20)));
 
     let handle = engine
-        .move_(&vp("mem:///origen"), &vp("mem:///destino"))
+        .move_(&vp("mem:///source"), &vp("mem:///destination"))
         .await
         .unwrap();
-    // Cancela inmediatamente: la task lo observa antes del rename.
+    // Cancels immediately: the task observes it before the rename.
     handle.cancel();
     let final_state = handle.join().await;
     mem.faults().clear();
     match final_state {
         TaskState::Cancelled => {
-            assert_eq!(read_all(&mem, "mem:///origen").await.unwrap(), b"contenido");
+            assert_eq!(read_all(&mem, "mem:///source").await.unwrap(), b"content");
             assert_eq!(
-                mem.stat(&vp("mem:///destino")).await.unwrap_err(),
+                mem.stat(&vp("mem:///destination")).await.unwrap_err(),
                 Error::NotFound
             );
         }
-        // Carrera legítima: el rename ganó a la cancelación (atómico, limpio).
+        // A legitimate race: the rename beat the cancellation (atomic, clean).
         TaskState::Completed => {
             assert_eq!(
-                read_all(&mem, "mem:///destino").await.unwrap(),
-                b"contenido"
+                read_all(&mem, "mem:///destination").await.unwrap(),
+                b"content"
             );
         }
-        other => panic!("estado inesperado: {other:?}"),
+        other => panic!("unexpected state: {other:?}"),
     }
 }
 
@@ -494,23 +494,23 @@ async fn copy_dir_into_itself_rejected() {
             error: Error::InvalidPath
         }
     );
-    // El árbol queda intacto: sin copia anidada fantasma.
+    // The tree is left intact: no phantom nested copy.
     let n = mem.list(&vp("mem:///a")).await.unwrap().count().await;
     assert_eq!(n, 0);
 }
 
-// ---------- deuda dura M0: EXDEV (#3) y move con walk único (#9) ----------
+// ---------- M0 hard debt: EXDEV (#3) and move with a single walk (#9) ----------
 
-/// Delega TODO en un [`MemProvider`] salvo `rename`, que devuelve
-/// `Unsupported` — como un FS real ante EXDEV (montajes distintos).
-struct SinRename(Arc<MemProvider>);
+/// Delegates EVERYTHING to a [`MemProvider`] except `rename`, which returns
+/// `Unsupported` — like a real FS facing EXDEV (different mounts).
+struct NoRename(Arc<MemProvider>);
 
 #[async_trait::async_trait]
-impl Provider for SinRename {
-    // La firma del trait es `-> &str`; el literal aquí es correcto.
+impl Provider for NoRename {
+    // The trait's signature is `-> &str`; the literal here is correct.
     #[expect(
         clippy::unnecessary_literal_bound,
-        reason = "La firma del trait es `-> &str`; el literal aquí es correcto"
+        reason = "the trait's signature is `-> &str`; the literal here is correct"
     )]
     fn scheme(&self) -> &str {
         "mem"
@@ -545,45 +545,45 @@ impl Provider for SinRename {
     }
 }
 
-/// EXDEV (issue #3): rename imposible en el mismo provider NO es un error
-/// terminal — el move degrada a copy+delete.
+/// EXDEV (issue #3): a rename impossible on the same provider is NOT a
+/// terminal error — the move degrades to copy+delete.
 #[tokio::test]
 async fn move_degrades_to_copy_delete_when_rename_unsupported() {
     let engine = Engine::new();
     let inner = Arc::new(MemProvider::new());
-    engine.register_provider(Arc::new(SinRename(Arc::clone(&inner))) as Arc<dyn Provider>);
-    write_file(&inner, "mem:///origen", b"contenido").await;
+    engine.register_provider(Arc::new(NoRename(Arc::clone(&inner))) as Arc<dyn Provider>);
+    write_file(&inner, "mem:///source", b"content").await;
 
     let handle = engine
-        .move_(&vp("mem:///origen"), &vp("mem:///destino"))
+        .move_(&vp("mem:///source"), &vp("mem:///destination"))
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
 
     assert_eq!(
-        read_all(&inner, "mem:///destino").await.unwrap(),
-        b"contenido"
+        read_all(&inner, "mem:///destination").await.unwrap(),
+        b"content"
     );
     assert_eq!(
-        inner.stat(&vp("mem:///origen")).await.unwrap_err(),
+        inner.stat(&vp("mem:///source")).await.unwrap_err(),
         Error::NotFound
     );
 }
 
-/// Origen cuyo primer `read` INYECTA un archivo nuevo en el directorio en
-/// movimiento: simula una entrada aparecida después del walk de la copia
-/// (la ventana del issue #9).
-struct InyectaEnRead {
+/// A source whose first `read` INJECTS a new file into the directory being
+/// moved: simulates an entry that appeared after the copy's walk (issue #9's
+/// window).
+struct InjectOnRead {
     inner: Arc<MemProvider>,
-    hecho: std::sync::atomic::AtomicBool,
+    done: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait::async_trait]
-impl Provider for InyectaEnRead {
-    // La firma del trait es `-> &str`; el literal aquí es correcto.
+impl Provider for InjectOnRead {
+    // The trait's signature is `-> &str`; the literal here is correct.
     #[expect(
         clippy::unnecessary_literal_bound,
-        reason = "La firma del trait es `-> &str`; el literal aquí es correcto"
+        reason = "the trait's signature is `-> &str`; the literal here is correct"
     )]
     fn scheme(&self) -> &str {
         "src"
@@ -602,8 +602,8 @@ impl Provider for InyectaEnRead {
         p: &VPath,
         range: Option<norte_proto::ByteRange>,
     ) -> Result<norte_vfs::ByteStream, Error> {
-        if !self.hecho.swap(true, std::sync::atomic::Ordering::SeqCst) {
-            write_file(&self.inner, "src:///dir/tardio", b"llegue tras el walk").await;
+        if !self.done.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            write_file(&self.inner, "src:///dir/late", b"arrived after the walk").await;
         }
         self.inner.read(p, range).await
     }
@@ -621,23 +621,24 @@ impl Provider for InyectaEnRead {
     }
 }
 
-/// Issue #9: lo aparecido en el origen DESPUÉS del walk de la copia jamás se
-/// borra sin haberse copiado. Con walks separados de copy y delete, `tardio`
-/// se borraba en silencio; con el plan único sobrevive (y el move falla con
-/// Conflict al no poder vaciar el dir — sin pérdida, jamás en silencio).
+/// Issue #9: what appears at the source AFTER the copy's walk is never
+/// deleted without having been copied. With separate copy and delete walks,
+/// `late` used to be deleted silently; with the single plan it survives (and
+/// the move fails with Conflict because it cannot empty the dir — no loss,
+/// never silently).
 #[tokio::test]
 async fn move_cross_provider_never_deletes_uncopied_entries() {
     let engine = Engine::new();
     let src_inner = Arc::new(MemProvider::new());
     let dst = Arc::new(MemProvider::new());
-    engine.register_provider(Arc::new(InyectaEnRead {
+    engine.register_provider(Arc::new(InjectOnRead {
         inner: Arc::clone(&src_inner),
-        hecho: std::sync::atomic::AtomicBool::new(false),
+        done: std::sync::atomic::AtomicBool::new(false),
     }) as Arc<dyn Provider>);
     engine.register_provider(Arc::clone(&dst) as Arc<dyn Provider>);
 
     src_inner.mkdir(&vp("src:///dir")).await.unwrap();
-    write_file(&src_inner, "src:///dir/a", b"planificado").await;
+    write_file(&src_inner, "src:///dir/a", b"planned").await;
 
     let handle = engine
         .move_(&vp("src:///dir"), &vp("mem:///dir"))
@@ -645,28 +646,25 @@ async fn move_cross_provider_never_deletes_uncopied_entries() {
         .unwrap();
     let state = handle.join().await;
 
-    // Lo planificado llegó al destino.
-    assert_eq!(
-        read_all(&dst, "mem:///dir/a").await.unwrap(),
-        b"planificado"
-    );
-    // `tardio` existe en ALGÚN lado (origen o destino): jamás pérdida muda.
-    let en_origen = src_inner.stat(&vp("src:///dir/tardio")).await.is_ok();
-    let en_destino = dst.stat(&vp("mem:///dir/tardio")).await.is_ok();
+    // What was planned reached the destination.
+    assert_eq!(read_all(&dst, "mem:///dir/a").await.unwrap(), b"planned");
+    // `late` exists SOMEWHERE (source or destination): never silent loss.
+    let at_source = src_inner.stat(&vp("src:///dir/late")).await.is_ok();
+    let at_dest = dst.stat(&vp("mem:///dir/late")).await.is_ok();
     assert!(
-        en_origen || en_destino,
-        "entrada tardía borrada sin copiarse (estado: {state:?})"
+        at_source || at_dest,
+        "late entry deleted without being copied (state: {state:?})"
     );
 }
 
-/// Regla 3 para el camino nuevo copy+delete del move (issues #3/#9):
-/// cancelar en plena fase DELETE deja destino completo + origen parcial —
-/// duplicado, jamás pérdida ni archivo a medias.
+/// Rule 3 for the move's new copy+delete path (issues #3/#9): cancelling in
+/// the middle of the DELETE phase leaves a complete destination + partial
+/// source — duplicated, never lost nor a half file.
 #[tokio::test]
 async fn move_by_copy_cancel_mid_delete_loses_nothing() {
     let engine = Engine::new();
     let inner = Arc::new(MemProvider::new());
-    engine.register_provider(Arc::new(SinRename(Arc::clone(&inner))) as Arc<dyn Provider>);
+    engine.register_provider(Arc::new(NoRename(Arc::clone(&inner))) as Arc<dyn Provider>);
     build_tree(&inner, 12).await;
     inner
         .faults()
@@ -677,8 +675,8 @@ async fn move_by_copy_cancel_mid_delete_loses_nothing() {
         .await
         .unwrap();
     let mut rx = handle.progress();
-    // Fase copy = 13 pasos (12 archivos + raíz); a partir de 14 la task está
-    // borrando el origen.
+    // Copy phase = 13 steps (12 files + root); from 14 onward the task is
+    // deleting the source.
     loop {
         let snap = rx.borrow_and_update().clone();
         if snap.entries_done >= 14 || snap.state.is_terminal() {
@@ -692,20 +690,20 @@ async fn move_by_copy_cancel_mid_delete_loses_nothing() {
     let state = handle.join().await;
     inner.faults().clear();
     assert_eq!(state, TaskState::Cancelled);
-    // Invariante: cada archivo original existe COMPLETO en origen o destino.
+    // Invariant: every original file exists COMPLETE at the source or the destination.
     for i in 0..12 {
         let name = format!("f{i:03}");
-        let contenido = match read_all(&inner, &format!("mem:///dst/{name}")).await {
+        let content = match read_all(&inner, &format!("mem:///dst/{name}")).await {
             Ok(c) => c,
             Err(_) => read_all(&inner, &format!("mem:///src/{name}"))
                 .await
-                .unwrap_or_else(|_| panic!("{name} perdido en la cancelación")),
+                .unwrap_or_else(|_| panic!("{name} lost during cancellation")),
         };
-        assert_eq!(contenido, b"data", "{name} a medias");
+        assert_eq!(content, b"data", "{name} left halfway");
     }
 }
 
-// ---------- fase 2: políticas de colisión, symlinks y reintentos (ADR 0005) ----------
+// ---------- phase 2: collision policies, symlinks and retries (ADR 0005) ----------
 
 use norte_core::TransferOptions;
 use norte_proto::{CollisionPolicy, SymlinkPolicy};
@@ -724,16 +722,16 @@ fn on_symlinks(s: SymlinkPolicy) -> TransferOptions {
     }
 }
 
-/// Wrapper de delegación pura con scheme propio: dos "providers" distintos
-/// sobre árboles Mem independientes para forzar el camino cross-provider.
+/// A pure delegation wrapper with its own scheme: two distinct "providers"
+/// over independent Mem trees to force the cross-provider path.
 struct Alias(Arc<MemProvider>);
 
 #[async_trait::async_trait]
 impl Provider for Alias {
-    // La firma del trait es `-> &str`; el literal aquí es correcto.
+    // The trait's signature is `-> &str`; the literal here is correct.
     #[expect(
         clippy::unnecessary_literal_bound,
-        reason = "La firma del trait es `-> &str`; el literal aquí es correcto"
+        reason = "the trait's signature is `-> &str`; the literal here is correct"
     )]
     fn scheme(&self) -> &str {
         "src"
@@ -779,7 +777,7 @@ impl Provider for Alias {
     }
 }
 
-/// Dos árboles Mem con schemes distintos, registrados en un engine.
+/// Two Mem trees with different schemes, registered on an engine.
 fn engine_cross() -> (Engine, Arc<MemProvider>, Arc<MemProvider>) {
     let engine = Engine::new();
     let src = Arc::new(MemProvider::new());
@@ -793,10 +791,10 @@ fn engine_cross() -> (Engine, Arc<MemProvider>, Arc<MemProvider>) {
 async fn copy_skip_merges_and_keeps_existing() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
-    write_file(&mem, "mem:///src/a", b"nuevo").await;
+    write_file(&mem, "mem:///src/a", b"new").await;
     write_file(&mem, "mem:///src/b", b"extra").await;
     mem.mkdir(&vp("mem:///dst")).await.unwrap();
-    write_file(&mem, "mem:///dst/a", b"viejo").await;
+    write_file(&mem, "mem:///dst/a", b"old").await;
 
     let handle = engine
         .copy_with(
@@ -807,7 +805,7 @@ async fn copy_skip_merges_and_keeps_existing() {
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(read_all(&mem, "mem:///dst/a").await.unwrap(), b"viejo");
+    assert_eq!(read_all(&mem, "mem:///dst/a").await.unwrap(), b"old");
     assert_eq!(read_all(&mem, "mem:///dst/b").await.unwrap(), b"extra");
 }
 
@@ -815,9 +813,9 @@ async fn copy_skip_merges_and_keeps_existing() {
 async fn copy_overwrite_replaces_colliding_file() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
-    write_file(&mem, "mem:///src/a", b"nuevo").await;
+    write_file(&mem, "mem:///src/a", b"new").await;
     mem.mkdir(&vp("mem:///dst")).await.unwrap();
-    write_file(&mem, "mem:///dst/a", b"viejo").await;
+    write_file(&mem, "mem:///dst/a", b"old").await;
 
     let handle = engine
         .copy_with(
@@ -828,13 +826,13 @@ async fn copy_overwrite_replaces_colliding_file() {
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(read_all(&mem, "mem:///dst/a").await.unwrap(), b"nuevo");
+    assert_eq!(read_all(&mem, "mem:///dst/a").await.unwrap(), b"new");
 }
 
 #[tokio::test]
 async fn copy_overwrite_file_over_dir_is_type_mismatch() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///a", b"archivo").await;
+    write_file(&mem, "mem:///a", b"file").await;
     mem.mkdir(&vp("mem:///dst")).await.unwrap();
     mem.mkdir(&vp("mem:///dst/a")).await.unwrap();
 
@@ -853,68 +851,68 @@ async fn copy_overwrite_file_over_dir_is_type_mismatch() {
                     conflict: ConflictKind::TypeMismatch,
                 },
         } => {}
-        other => panic!("esperaba TypeMismatch, fue {other:?}"),
+        other => panic!("expected TypeMismatch, was {other:?}"),
     }
-    // El dir sobrevive: jamás se borra un dir para plantar un archivo.
+    // The dir survives: a dir is never deleted to plant a file.
     assert!(mem.stat(&vp("mem:///dst/a")).await.is_ok());
 }
 
 #[tokio::test]
 async fn copy_rename_auto_creates_numbered_variant() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///origen.txt", b"v2").await;
-    write_file(&mem, "mem:///destino.txt", b"v1").await;
+    write_file(&mem, "mem:///source.txt", b"v2").await;
+    write_file(&mem, "mem:///destination.txt", b"v1").await;
 
-    for esperado in ["mem:///destino (1).txt", "mem:///destino (2).txt"] {
+    for expected in ["mem:///destination (1).txt", "mem:///destination (2).txt"] {
         let handle = engine
             .copy_with(
-                &vp("mem:///origen.txt"),
-                &vp("mem:///destino.txt"),
+                &vp("mem:///source.txt"),
+                &vp("mem:///destination.txt"),
                 on_collision(CollisionPolicy::RenameAuto),
             )
             .await
             .unwrap();
         assert_eq!(handle.join().await, TaskState::Completed);
-        assert_eq!(read_all(&mem, esperado).await.unwrap(), b"v2");
+        assert_eq!(read_all(&mem, expected).await.unwrap(), b"v2");
     }
     assert_eq!(
-        read_all(&mem, "mem:///destino.txt").await.unwrap(),
+        read_all(&mem, "mem:///destination.txt").await.unwrap(),
         b"v1",
-        "el original jamás se toca"
+        "the original is never touched"
     );
 }
 
 #[tokio::test]
 async fn copy_newer_replaces_only_older_destination() {
-    // Caso A: el origen es MÁS NUEVO (se escribió después) → reemplaza.
+    // Case A: the source is NEWER (it was written after) → replaces.
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///dst-viejo", b"v1").await;
-    write_file(&mem, "mem:///src-nuevo", b"v2").await;
+    write_file(&mem, "mem:///dst-old", b"v1").await;
+    write_file(&mem, "mem:///src-new", b"v2").await;
     let handle = engine
         .copy_with(
-            &vp("mem:///src-nuevo"),
-            &vp("mem:///dst-viejo"),
+            &vp("mem:///src-new"),
+            &vp("mem:///dst-old"),
             on_collision(CollisionPolicy::Newer),
         )
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(read_all(&mem, "mem:///dst-viejo").await.unwrap(), b"v2");
+    assert_eq!(read_all(&mem, "mem:///dst-old").await.unwrap(), b"v2");
 
-    // Caso B: el destino es más nuevo → skip, contenido intacto.
+    // Case B: the destination is newer → skip, content intact.
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///src-viejo", b"v1").await;
-    write_file(&mem, "mem:///dst-nuevo", b"v2").await;
+    write_file(&mem, "mem:///src-old", b"v1").await;
+    write_file(&mem, "mem:///dst-new", b"v2").await;
     let handle = engine
         .copy_with(
-            &vp("mem:///src-viejo"),
-            &vp("mem:///dst-nuevo"),
+            &vp("mem:///src-old"),
+            &vp("mem:///dst-new"),
             on_collision(CollisionPolicy::Newer),
         )
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(read_all(&mem, "mem:///dst-nuevo").await.unwrap(), b"v2");
+    assert_eq!(read_all(&mem, "mem:///dst-new").await.unwrap(), b"v2");
 }
 
 #[tokio::test]
@@ -934,7 +932,7 @@ async fn copy_ask_behaves_as_fail_in_m1() {
         TaskState::Failed {
             error: Error::Conflict { .. },
         } => {}
-        other => panic!("esperaba Conflict, fue {other:?}"),
+        other => panic!("expected Conflict, was {other:?}"),
     }
 }
 
@@ -942,7 +940,7 @@ async fn copy_ask_behaves_as_fail_in_m1() {
 async fn symlink_preserve_recreates_link_bytes() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
-    write_file(&mem, "mem:///src/f", b"contenido").await;
+    write_file(&mem, "mem:///src/f", b"content").await;
     mem.symlink(&vp("mem:///src/ln"), b"f", norte_vfs::SymlinkKind::File)
         .await
         .unwrap();
@@ -959,16 +957,16 @@ async fn symlink_preserve_recreates_link_bytes() {
     assert_eq!(
         mem.read_link(&vp("mem:///dst/ln")).await.unwrap(),
         b"f",
-        "bytes del target intactos"
+        "target bytes intact"
     );
-    assert_eq!(read_all(&mem, "mem:///dst/f").await.unwrap(), b"contenido");
+    assert_eq!(read_all(&mem, "mem:///dst/f").await.unwrap(), b"content");
 }
 
 #[tokio::test]
 async fn symlink_skip_copies_the_rest() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
-    write_file(&mem, "mem:///src/f", b"contenido").await;
+    write_file(&mem, "mem:///src/f", b"content").await;
     mem.symlink(&vp("mem:///src/ln"), b"f", norte_vfs::SymlinkKind::File)
         .await
         .unwrap();
@@ -982,11 +980,11 @@ async fn symlink_skip_copies_the_rest() {
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(read_all(&mem, "mem:///dst/f").await.unwrap(), b"contenido");
+    assert_eq!(read_all(&mem, "mem:///dst/f").await.unwrap(), b"content");
     assert_eq!(
         mem.stat(&vp("mem:///dst/ln")).await.unwrap_err(),
         Error::NotFound,
-        "el link no se copia"
+        "the link is not copied"
     );
 }
 
@@ -994,7 +992,7 @@ async fn symlink_skip_copies_the_rest() {
 async fn symlink_follow_copies_target_content_as_file() {
     let (engine, mem) = engine_with_mem();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
-    write_file(&mem, "mem:///src/f", b"contenido").await;
+    write_file(&mem, "mem:///src/f", b"content").await;
     mem.symlink(&vp("mem:///src/ln"), b"f", norte_vfs::SymlinkKind::File)
         .await
         .unwrap();
@@ -1009,12 +1007,13 @@ async fn symlink_follow_copies_target_content_as_file() {
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
     let e = mem.stat(&vp("mem:///dst/ln")).await.unwrap();
-    assert_eq!(e.kind, norte_proto::EntryKind::File, "contenido, no link");
-    assert_eq!(read_all(&mem, "mem:///dst/ln").await.unwrap(), b"contenido");
+    assert_eq!(e.kind, norte_proto::EntryKind::File, "content, not a link");
+    assert_eq!(read_all(&mem, "mem:///dst/ln").await.unwrap(), b"content");
 }
 
-/// M2 fase 1 (#19): Follow sobre dir-symlink ya NO es Unsupported — se
-/// expande como dir real (la matriz fina vive en `engine_m2_fase1.rs`).
+/// M2 phase 1 (#19): Follow over a dir-symlink is no longer Unsupported — it
+/// expands as a real dir (the fine-grained matrix lives in
+/// `engine_m2_fase1.rs`).
 #[tokio::test]
 async fn symlink_follow_dir_symlink_expands() {
     let (engine, mem) = engine_with_mem();
@@ -1037,7 +1036,7 @@ async fn symlink_follow_dir_symlink_expands() {
     assert_eq!(
         e.kind,
         norte_proto::EntryKind::Dir,
-        "expandido como dir real"
+        "expanded as a real dir"
     );
 }
 
@@ -1045,10 +1044,10 @@ async fn symlink_follow_dir_symlink_expands() {
 async fn move_skip_keeps_skipped_in_source() {
     let (engine, src, dst) = engine_cross();
     src.mkdir(&vp("src:///dir")).await.unwrap();
-    write_file(&src, "src:///dir/a", b"colisiona").await;
-    write_file(&src, "src:///dir/b", b"pasa").await;
+    write_file(&src, "src:///dir/a", b"collides").await;
+    write_file(&src, "src:///dir/b", b"goes through").await;
     dst.mkdir(&vp("mem:///dir")).await.unwrap();
-    write_file(&dst, "mem:///dir/a", b"viejo").await;
+    write_file(&dst, "mem:///dir/a", b"old").await;
 
     let handle = engine
         .move_with(
@@ -1059,22 +1058,25 @@ async fn move_skip_keeps_skipped_in_source() {
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    // Lo saltado SIGUE en el origen (jamás se borra sin copiarse).
-    assert_eq!(read_all(&src, "src:///dir/a").await.unwrap(), b"colisiona");
-    // Lo movido se fue del origen y está en el destino.
+    // What was skipped STAYS at the source (never deleted without copying).
+    assert_eq!(read_all(&src, "src:///dir/a").await.unwrap(), b"collides");
+    // What was moved left the source and is at the destination.
     assert_eq!(
         src.stat(&vp("src:///dir/b")).await.unwrap_err(),
         Error::NotFound
     );
-    assert_eq!(read_all(&dst, "mem:///dir/b").await.unwrap(), b"pasa");
-    assert_eq!(read_all(&dst, "mem:///dir/a").await.unwrap(), b"viejo");
+    assert_eq!(
+        read_all(&dst, "mem:///dir/b").await.unwrap(),
+        b"goes through"
+    );
+    assert_eq!(read_all(&dst, "mem:///dir/a").await.unwrap(), b"old");
 }
 
 #[tokio::test]
 async fn move_overwrite_same_provider_replaces() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///a", b"nuevo").await;
-    write_file(&mem, "mem:///b", b"viejo").await;
+    write_file(&mem, "mem:///a", b"new").await;
+    write_file(&mem, "mem:///b", b"old").await;
     let handle = engine
         .move_with(
             &vp("mem:///a"),
@@ -1084,19 +1086,19 @@ async fn move_overwrite_same_provider_replaces() {
         .await
         .unwrap();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(read_all(&mem, "mem:///b").await.unwrap(), b"nuevo");
+    assert_eq!(read_all(&mem, "mem:///b").await.unwrap(), b"new");
     assert_eq!(
         mem.stat(&vp("mem:///a")).await.unwrap_err(),
         Error::NotFound
     );
 }
 
-// ---------- reintentos con backoff (ADR 0005) ----------
+// ---------- retries with backoff (ADR 0005) ----------
 
 #[tokio::test]
 async fn retry_recovers_from_transient_unavailability() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///src.bin", b"datos").await;
+    write_file(&mem, "mem:///src.bin", b"data").await;
     mem.faults().unavailable_for_next(2);
 
     let handle = engine
@@ -1106,15 +1108,15 @@ async fn retry_recovers_from_transient_unavailability() {
     assert_eq!(
         handle.join().await,
         TaskState::Completed,
-        "reintenta y pasa"
+        "retries and passes"
     );
-    assert_eq!(read_all(&mem, "mem:///dst.bin").await.unwrap(), b"datos");
+    assert_eq!(read_all(&mem, "mem:///dst.bin").await.unwrap(), b"data");
 }
 
 #[tokio::test]
 async fn retry_gives_up_against_permanent_outage() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///src.bin", b"datos").await;
+    write_file(&mem, "mem:///src.bin", b"data").await;
     mem.faults().disconnect_after(0);
 
     let handle = engine
@@ -1125,45 +1127,45 @@ async fn retry_gives_up_against_permanent_outage() {
         TaskState::Failed {
             error: Error::ProviderUnavailable { .. },
         } => {}
-        other => panic!("esperaba ProviderUnavailable, fue {other:?}"),
+        other => panic!("expected ProviderUnavailable, was {other:?}"),
     }
 }
 
-// Reloj pausado: la latencia por op del MemProvider corre en el reloj de
-// tokio, así que «dormir y cancelar» deja de ser una carrera con la máquina.
+// Paused clock: `MemProvider`'s per-op latency runs on tokio's clock, so
+// "sleep and cancel" stops being a race with the machine.
 #[tokio::test(start_paused = true)]
 async fn cancel_during_backoff_is_prompt() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///src.bin", b"datos").await;
+    write_file(&mem, "mem:///src.bin", b"data").await;
     mem.faults().unavailable_for_next(u64::MAX);
 
-    let inicio = std::time::Instant::now();
+    let start = std::time::Instant::now();
     let handle = engine
         .copy(&vp("mem:///src.bin"), &vp("mem:///dst.bin"))
         .await
         .unwrap();
-    // Deja a la task entrar en la espera del backoff y cancela.
+    // Lets the task enter the backoff wait and cancels.
     tokio::time::sleep(std::time::Duration::from_millis(30)).await;
     handle.cancel();
     assert_eq!(handle.join().await, TaskState::Cancelled);
     assert!(
-        inicio.elapsed() < std::time::Duration::from_millis(500),
-        "la cancelación no espera a que el backoff termine"
+        start.elapsed() < std::time::Duration::from_millis(500),
+        "the cancellation does not wait for the backoff to finish"
     );
 }
 
-// ---------- hallazgos de revisión fase 2 ----------
+// ---------- phase 2 review findings ----------
 
-/// B1: copiar algo SOBRE SÍ MISMO con Overwrite jamás puede destruir el
-/// origen — es `InvalidPath`, con el contenido intacto.
+/// B1: copying something ONTO ITSELF with Overwrite can never destroy the
+/// source — it is `InvalidPath`, with the content intact.
 #[tokio::test]
 async fn copy_overwrite_onto_itself_never_destroys() {
     let (engine, mem) = engine_with_mem();
-    write_file(&mem, "mem:///unico", b"precioso").await;
+    write_file(&mem, "mem:///unique", b"precious").await;
     let handle = engine
         .copy_with(
-            &vp("mem:///unico"),
-            &vp("mem:///unico"),
+            &vp("mem:///unique"),
+            &vp("mem:///unique"),
             on_collision(CollisionPolicy::Overwrite),
         )
         .await
@@ -1174,10 +1176,10 @@ async fn copy_overwrite_onto_itself_never_destroys() {
             error: Error::InvalidPath
         }
     );
-    assert_eq!(read_all(&mem, "mem:///unico").await.unwrap(), b"precioso");
+    assert_eq!(read_all(&mem, "mem:///unique").await.unwrap(), b"precious");
 }
 
-/// B1 variante caja: en provider case-insensitive, `a → A` es el MISMO nodo.
+/// B1 case variant: on a case-insensitive provider, `a → A` is the SAME node.
 #[tokio::test]
 async fn copy_overwrite_case_variant_of_itself_never_destroys() {
     let engine = Engine::new();
@@ -1185,11 +1187,11 @@ async fn copy_overwrite_case_variant_of_itself_never_destroys() {
         CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING,
     ));
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    write_file(&mem, "mem:///unico", b"precioso").await;
+    write_file(&mem, "mem:///unique", b"precious").await;
     let handle = engine
         .copy_with(
-            &vp("mem:///UNICO"),
-            &vp("mem:///unico"),
+            &vp("mem:///UNIQUE"),
+            &vp("mem:///unique"),
             on_collision(CollisionPolicy::Overwrite),
         )
         .await
@@ -1197,12 +1199,12 @@ async fn copy_overwrite_case_variant_of_itself_never_destroys() {
     let state = handle.join().await;
     assert!(
         matches!(state, TaskState::Failed { .. }),
-        "copiarse sobre sí mismo no puede 'funcionar': {state:?}"
+        "copying onto itself cannot 'work': {state:?}"
     );
-    assert_eq!(read_all(&mem, "mem:///unico").await.unwrap(), b"precioso");
+    assert_eq!(read_all(&mem, "mem:///unique").await.unwrap(), b"precious");
 }
 
-/// B1 variante normalización: NFC → NFD del mismo nodo en Mem insensitive.
+/// B1 normalization variant: NFC → NFD of the same node on an insensitive Mem.
 #[tokio::test]
 async fn copy_overwrite_normalization_variant_never_destroys() {
     use norte_testkit::Normalization;
@@ -1212,7 +1214,7 @@ async fn copy_overwrite_normalization_variant_never_destroys() {
     // é NFC
     let nfc = "mem:///%C3%A9";
     let nfd = "mem:///e%CC%81";
-    write_file(&mem, nfc, b"precioso").await;
+    write_file(&mem, nfc, b"precious").await;
     let handle = engine
         .copy_with(&vp(nfc), &vp(nfd), on_collision(CollisionPolicy::Overwrite))
         .await
@@ -1220,22 +1222,22 @@ async fn copy_overwrite_normalization_variant_never_destroys() {
     let state = handle.join().await;
     assert!(
         matches!(state, TaskState::Failed { .. }),
-        "variante de normalización del propio origen: {state:?}"
+        "a normalization variant of the source itself: {state:?}"
     );
-    assert_eq!(read_all(&mem, nfc).await.unwrap(), b"precioso");
+    assert_eq!(read_all(&mem, nfc).await.unwrap(), b"precious");
 }
 
-/// M1: move same-provider de un DIR sobre un ARCHIVO con Overwrite es
-/// `TypeMismatch` — jamás se borra el archivo para plantar el dir.
+/// M1: a same-provider move of a DIR over a FILE with Overwrite is
+/// `TypeMismatch` — the file is never deleted to plant the dir.
 #[tokio::test]
 async fn move_overwrite_dir_over_file_is_type_mismatch() {
     let (engine, mem) = engine_with_mem();
-    mem.mkdir(&vp("mem:///carpeta")).await.unwrap();
-    write_file(&mem, "mem:///ocupado", b"archivo").await;
+    mem.mkdir(&vp("mem:///folder")).await.unwrap();
+    write_file(&mem, "mem:///taken", b"file").await;
     let handle = engine
         .move_with(
-            &vp("mem:///carpeta"),
-            &vp("mem:///ocupado"),
+            &vp("mem:///folder"),
+            &vp("mem:///taken"),
             on_collision(CollisionPolicy::Overwrite),
         )
         .await
@@ -1247,13 +1249,13 @@ async fn move_overwrite_dir_over_file_is_type_mismatch() {
                     conflict: ConflictKind::TypeMismatch,
                 },
         } => {}
-        other => panic!("esperaba TypeMismatch, fue {other:?}"),
+        other => panic!("expected TypeMismatch, was {other:?}"),
     }
-    assert_eq!(read_all(&mem, "mem:///ocupado").await.unwrap(), b"archivo");
+    assert_eq!(read_all(&mem, "mem:///taken").await.unwrap(), b"file");
 }
 
-/// M2: Follow + Overwrite sobre un dir-symlink NO destruye el destino:
-/// el sondeo del target ocurre ANTES de cualquier acción destructiva.
+/// M2: Follow + Overwrite over a dir-symlink does NOT destroy the
+/// destination: probing the target happens BEFORE any destructive action.
 #[tokio::test]
 async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
     let (engine, mem) = engine_with_mem();
@@ -1263,7 +1265,7 @@ async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
         .await
         .unwrap();
     mem.mkdir(&vp("mem:///dst")).await.unwrap();
-    write_file(&mem, "mem:///dst/ln", b"no me borres").await;
+    write_file(&mem, "mem:///dst/ln", b"don't delete me").await;
 
     let handle = engine
         .copy_with(
@@ -1277,9 +1279,9 @@ async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
         )
         .await
         .unwrap();
-    // M2 fase 1 (#19): el dir-symlink se expande como DIR, y un dir jamás
-    // pisa un archivo ni con Overwrite (TypeMismatch, ADR 0005). El
-    // invariante que este test pinnea sigue intacto: el destino NO se toca.
+    // M2 phase 1 (#19): the dir-symlink expands as a DIR, and a dir never
+    // overwrites a file, not even with Overwrite (TypeMismatch, ADR 0005).
+    // The invariant this test pins stays intact: the destination is NOT touched.
     assert_eq!(
         handle.join().await,
         TaskState::Failed {
@@ -1290,14 +1292,14 @@ async fn follow_dir_symlink_with_overwrite_leaves_destination_intact() {
     );
     assert_eq!(
         read_all(&mem, "mem:///dst/ln").await.unwrap(),
-        b"no me borres",
-        "el fallo era 100% predecible: el destino no se toca"
+        b"don't delete me",
+        "the failure was 100% predictable: the destination is not touched"
     );
 }
 
-/// Fase 7: el TUI lee vía el core (regla 7) — passthrough con rango.
+/// Phase 7: the TUI reads through the core (rule 7) — passthrough with a range.
 #[tokio::test]
-async fn engine_read_respeta_el_rango() {
+async fn engine_read_respects_the_range() {
     let (engine, mem) = engine_with_mem();
     write_file(&mem, "mem:///f", b"0123456789").await;
     let mut stream = engine
@@ -1317,11 +1319,11 @@ async fn engine_read_respeta_el_rango() {
     assert_eq!(out, b"234");
 }
 
-// ---------- fase 8: papelera (ADR 0009) ----------
+// ---------- phase 8: trash (ADR 0009) ----------
 
-/// Trash es UNA operación: el árbol entero desaparece, recuperable.
+/// Trash is ONE operation: the whole tree disappears, recoverable.
 #[tokio::test]
-async fn delete_trash_se_lleva_el_arbol() {
+async fn delete_trash_takes_the_whole_tree() {
     let (engine, mem) = engine_with_mem();
     build_tree(&mem, 3).await;
     let handle = engine
@@ -1335,18 +1337,18 @@ async fn delete_trash_se_lleva_el_arbol() {
     );
 }
 
-/// Sin capability TRASH el engine JAMÁS degrada: Unsupported y el árbol
-/// queda intacto (la degradación es decisión del usuario, ADR 0009).
+/// Without the TRASH capability the engine NEVER degrades: Unsupported and
+/// the tree stays intact (degradation is the user's decision, ADR 0009).
 #[tokio::test]
-async fn delete_trash_sin_capability_no_degrada() {
+async fn delete_trash_without_the_capability_does_not_degrade() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::with_flags(
         CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_SENSITIVE,
     ));
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    write_file(&mem, "mem:///valioso", b"datos").await;
+    write_file(&mem, "mem:///valuable", b"data").await;
     let handle = engine
-        .delete_with(&vp("mem:///valioso"), norte_proto::DeleteMode::Trash)
+        .delete_with(&vp("mem:///valuable"), norte_proto::DeleteMode::Trash)
         .await
         .unwrap();
     assert_eq!(
@@ -1355,12 +1357,12 @@ async fn delete_trash_sin_capability_no_degrada() {
             error: Error::Unsupported
         }
     );
-    assert_eq!(read_all(&mem, "mem:///valioso").await.unwrap(), b"datos");
+    assert_eq!(read_all(&mem, "mem:///valuable").await.unwrap(), b"data");
 }
 
-/// Regla 3 para el camino Trash (una sola op): cancelable ANTES de
-/// disparar — o gana la cancelación (árbol intacto) o ganó el trash
-/// (carrera legítima, como en el move).
+/// Rule 3 for the Trash path (a single op): cancelable BEFORE firing — either
+/// cancellation wins (an intact tree) or the trash won (a legitimate race,
+/// like in move).
 #[tokio::test]
 async fn delete_trash_cancel_before_start_leaves_tree_intact() {
     let (engine, mem) = engine_with_mem();
@@ -1376,55 +1378,55 @@ async fn delete_trash_cancel_before_start_leaves_tree_intact() {
     mem.faults().clear();
     match state {
         TaskState::Cancelled => {
-            assert!(mem.stat(&vp("mem:///src")).await.is_ok(), "árbol intacto");
+            assert!(mem.stat(&vp("mem:///src")).await.is_ok(), "intact tree");
         }
         TaskState::Completed => {
             assert_eq!(
                 mem.stat(&vp("mem:///src")).await.unwrap_err(),
                 Error::NotFound,
-                "el trash ganó la carrera: fue ENTERO"
+                "the trash won the race: it went ENTIRELY"
             );
         }
-        other => panic!("estado inesperado: {other:?}"),
+        other => panic!("unexpected state: {other:?}"),
     }
 }
 
-/// #51 (regla 3): el camino `copy_native` (server-copy: multipart copy S3
-/// puede tardar minutos) DEBE observar la cancelación — no vale esperar a
-/// que el provider termine. Latencia generosa en el provider: si el engine
-/// no racea el cancel contra `copy_native`, el join devuelve Completed.
+/// #51 (rule 3): the `copy_native` path (server-copy: an S3 multipart copy can
+/// take minutes) MUST observe cancellation — waiting for the provider to
+/// finish is not acceptable. Generous provider latency: if the engine does
+/// not race the cancel against `copy_native`, the join returns Completed.
 #[tokio::test]
-async fn copy_native_es_cancelable_a_mitad() {
+async fn copy_native_is_cancelable_halfway() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::with_flags(
         CapabilityFlags::SERVER_COPY | CapabilityFlags::CASE_SENSITIVE,
     ));
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
-    write_file(&mem, "mem:///src", b"contenido nativo").await;
-    // Gate determinista: copy_native queda PENDIENTE (multipart copy S3 de
-    // minutos); nada más se ve afectado. Solo la cancelación lo termina.
+    write_file(&mem, "mem:///src", b"native content").await;
+    // A deterministic gate: copy_native stays PENDING (an S3 multipart copy of
+    // minutes); nothing else is affected. Only the cancellation ends it.
     mem.faults().hold_copy_native(true);
 
     let handle = engine
         .copy(&vp("mem:///src"), &vp("mem:///dst"))
         .await
         .unwrap();
-    // Sincronización determinista: cancela SOLO cuando copy_native ya entró
-    // — sin esto, un runner lento cancelaría antes y el test pasaría en
-    // vacío por el checkpoint pre-copy.
+    // Deterministic synchronization: cancels ONLY once copy_native has
+    // already entered — without this, a slow runner would cancel earlier and
+    // the test would pass vacuously at the pre-copy checkpoint.
     while !mem.faults().copy_native_entered() {
         tokio::time::sleep(std::time::Duration::from_millis(5)).await;
     }
     handle.cancel();
     let state = tokio::time::timeout(std::time::Duration::from_secs(5), handle.join())
         .await
-        .expect("la cancelación no espera al provider");
+        .expect("the cancellation does not wait for the provider");
     assert_eq!(state, TaskState::Cancelled);
-    // Trampa CLAUDE.md: destino limpio — el drop paró el efecto de verdad
-    // (la mutación del MemProvider vive DETRÁS del gate).
+    // CLAUDE.md trap: a clean destination — the drop really stopped the
+    // effect (the `MemProvider`'s mutation lives BEHIND the gate).
     assert_eq!(
         mem.stat(&vp("mem:///dst")).await.unwrap_err(),
         Error::NotFound,
-        "el destino queda limpio tras cancelar el copy nativo"
+        "the destination stays clean after cancelling the native copy"
     );
 }

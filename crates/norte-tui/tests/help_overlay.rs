@@ -27,11 +27,11 @@ fn chords(layers: &[norte_tui::keymap::KeymapFile]) -> TuiChords {
     let (_, preset) = presets()
         .into_iter()
         .find(|(n, _)| *n == "orthodox")
-        .expect("preset orthodox");
+        .expect("orthodox preset");
     let known = all_commands();
     let build = |screen| {
         Effective::build_for(&preset, layers, &known, screen)
-            .unwrap_or_else(|e| panic!("efectivo {screen:?}: {e}"))
+            .unwrap_or_else(|e| panic!("effective {screen:?}: {e}"))
     };
     TuiChords::new(
         &build(Screen::Browse),
@@ -54,32 +54,32 @@ fn a_rebind_reaches_the_rendered_page() {
     assert_eq!(
         render_command("pane.copy", &chords(&[])),
         CommandText::Chord("F5".to_owned()),
-        "el preset orthodox ata `pane.copy` a f5, PINTADO `F5` (`paint_chord`)"
+        "the orthodox preset binds `pane.copy` to f5, PAINTED as `F5` (`paint_chord`)"
     );
 
     // A user layer that prepends its own binding — `prepend` is what wins, the
     // same precedence `Effective::bindings` reports and the run loop obeys.
     let layer =
         parse_keymap("[pane]\nprepend_keymap = [{ on = [\"ctrl+alt+k\"], run = \"pane.copy\" }]\n")
-            .expect("la capa parsea");
+            .expect("the layer parses");
     let rebound = chords(std::slice::from_ref(&layer));
     assert_eq!(
         render_command("pane.copy", &rebound),
-        // Los modificadores se escriben como los escribe la documentación; la
-        // TECLA no (`paint_chord`): `k` sigue en minúscula porque `ctrl+K` es
-        // un binding DISTINTO (`Char('K')`), y enseñar `Ctrl+K` sería enseñar
-        // un chord que este usuario no tiene.
+        // Modifiers are written the way the documentation writes them; the
+        // KEY is not (`paint_chord`): `k` stays lowercase because `ctrl+K` is
+        // a DIFFERENT binding (`Char('K')`), and teaching `Ctrl+K` would be
+        // teaching a chord this user does not have.
         CommandText::Chord("Ctrl+Alt+k".to_owned()),
-        "la página tiene que enseñar la tecla NUEVA, no la del preset"
+        "the page must teach the NEW key, not the preset's"
     );
     assert_eq!(
         rebound.chord("pane.copy").as_deref(),
         Some("Ctrl+Alt+k"),
-        "y el resolver mismo, que es de donde sale"
+        "and the resolver itself, which is where it comes from"
     );
 
-    // Un comando sin tecla se NOMBRA en vez de inventarse una — el otro
-    // extremo del contrato, para que el test de arriba no pase por casualidad
-    // con un resolver que responda cualquier cosa.
+    // A command with no key is NAMED instead of a key being made up — the
+    // other end of the contract, so the test above does not pass by chance
+    // with a resolver that answers anything.
     assert_eq!(rebound.chord("no.such.command"), None);
 }

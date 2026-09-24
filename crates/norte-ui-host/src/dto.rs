@@ -1,2202 +1,2248 @@
-//! Lo que el renderer VE. Nada más, y sobre todo, nada con autoridad.
+//! What the renderer SEES. Nothing more, and above all, nothing with authority.
 //!
-//! Tres reglas gobiernan este módulo, y las tres existen por el mismo motivo
-//! —que el renderer no puede ser autoridad de nada (ADR 0066)—:
+//! Three rules govern this module, and all three exist for the same reason
+//! —that the renderer cannot be the authority on anything (ADR 0066)—:
 //!
-//! 1. **Ningún path crudo cruza.** Ni `VPath`, ni `PathBuf`, ni `OsString`.
-//!    Lo que viaja es el texto YA saneado y una marca de si difiere del
-//!    nombre real. Para actuar sobre una fila se usa su [`RowKey`] opaca.
-//! 2. **Todo lo pintable está acotado en Rust** ([`crate::bridge`]).
-//! 3. **Nada aquí decide.** Un `enabled: false` es lo que el host resolvió;
-//!    el renderer lo pinta, no lo calcula.
+//! 1. **No raw path crosses.** Not `VPath`, not `PathBuf`, not `OsString`.
+//!    What travels is text ALREADY sanitized and a flag for whether it
+//!    differs from the real name. To act on a row, its opaque [`RowKey`] is
+//!    used.
+//! 2. **Everything paintable is scoped in Rust** ([`crate::bridge`]).
+//! 3. **Nothing here decides.** An `enabled: false` is what the host
+//!    resolved; the renderer paints it, it does not compute it.
 //!
-//! Y una regla sobre los NÚMEROS, que hoy no cuesta nada y mañana sí (#258).
-//! Cada `u64` de este módulo —`RowKey`, `ModalId`, `sequence`, `generation`,
-//! `task_id`, `total_rows`, `first_visible`, `marks`, `first_line`— llega al
-//! renderer como un `number` de JavaScript, o sea un `f64`: exacto solo hasta
-//! 2^53. Todos son contadores pequeños (un índice de fila, una época de
-//! listado, el contador del scheduler), así que hoy no hay nada roto. **El
-//! día que uno deje de ser un contador pequeño —un hash, un id aleatorio, un
-//! valor con la hora dentro— pasa a ser una `String` en el cable ANTES de
-//! cambiar de naturaleza**, porque si no el renderer lo redondea y dos filas
-//! distintas colisionan sin que nada se ponga rojo. Hacer `RowKey`
-//! infalsificable fue considerado y descartado en la ADR 0068; si alguien lo
-//! retoma, éste es el párrafo que hay que leer primero.
+//! And a rule about NUMBERS, which costs nothing today and will tomorrow
+//! (#258). Every `u64` in this module —`RowKey`, `ModalId`, `sequence`,
+//! `generation`, `task_id`, `total_rows`, `first_visible`, `marks`,
+//! `first_line`— arrives at the renderer as a JavaScript `number`, i.e. an
+//! `f64`: exact only up to 2^53. All of them are small counters (a row
+//! index, a listing epoch, the scheduler's counter), so nothing is broken
+//! today. **The day one of them stops being a small counter —a hash, a
+//! random id, a value with the time inside— it becomes a `String` on the
+//! wire BEFORE it changes nature**, because otherwise the renderer rounds it
+//! and two different rows collide without anything turning red. Making
+//! `RowKey` unforgeable was considered and dropped in ADR 0068; if anyone
+//! picks it back up, this is the paragraph to read first.
 
 use serde::{Deserialize, Serialize};
 
 use crate::bridge::{ModalId, RowKey};
 
-/// El estado COMPLETO de la pantalla.
+/// The COMPLETE state of the screen.
 ///
-/// Un `Snapshot` reemplaza lo que el renderer tuviera: es la única forma de
-/// recuperarse de un hueco en la secuencia, y por eso se manda entero.
+/// A `Snapshot` replaces whatever the renderer had: it is the only way to
+/// recover from a gap in the sequence, and that is why it is sent whole.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewSnapshot {
-    /// Estado de la conexión con el daemon.
+    /// State of the connection to the daemon.
     pub connection: ConnectionView,
-    /// Dónde va cada hueco y con qué papel. El renderer NO reparte la
-    /// pantalla: la recibe repartida (ADR 0066, decisión D14).
+    /// Where each slot goes and with what role. The renderer does NOT lay
+    /// out the screen: it receives it already laid out (ADR 0066, decision
+    /// D14).
     pub layout: LayoutView,
-    /// Los huecos de la disposición, por id.
+    /// The layout's slots, by id.
     pub slots: Vec<SlotView>,
-    /// Hueco con el foco de teclado.
+    /// Slot with keyboard focus.
     pub focus: Option<u32>,
-    /// La barra de estado.
+    /// The status bar.
     pub status: StatusView,
-    /// Diálogos abiertos, en orden de apertura.
+    /// Open dialogs, in opening order.
     pub dialogs: Vec<DialogView>,
-    /// Tasks vivas y las que acaban de terminar.
+    /// Live tasks and the ones that just finished.
     pub tasks: Vec<TaskView>,
-    /// La barra de menús: los títulos, y el desplegado si hay alguno.
+    /// The menu bar: the titles, and the open one if any.
     pub menu: MenuView,
-    /// La barra de paneles (#324): qué paneles hay, cómo están, y si alguno
-    /// tiene algo que contar. Puente 51.
+    /// The panel bar (#324): which panels exist, their state, and whether
+    /// any has something to report. Bridge 51.
     pub panel_bar: PanelBarView,
-    /// La mitad DERECHA de la barra de estado (ADR 0132, puente 85): los
-    /// elementos de `[ui] status_items` que caben, ya redactados y en su
-    /// orden. Ausente en un host anterior = ninguno.
+    /// The RIGHT half of the status bar (ADR 0132, bridge 85): the
+    /// `[ui] status_items` elements that fit, already worded and in their
+    /// order. Absent in an older host = none.
     #[serde(default)]
     pub status_items: Vec<StatusItemView>,
-    /// Los botones de disposición de la derecha de la barra de menús (ADR
-    /// 0133, puente 86), en su orden. Ausente en un host anterior = ninguno.
+    /// The layout buttons on the right of the menu bar (ADR 0133, bridge
+    /// 86), in their order. Absent in an older host = none.
     #[serde(default)]
     pub layout_buttons: Vec<ChromeButtonView>,
-    /// `[ui] row_stripes` (spec 2026-09-20): si las filas impares de un
-    /// listado van sobre una banda. Puente 80.
+    /// `[ui] row_stripes` (spec 2026-09-20): whether the odd rows of a
+    /// listing sit on a band. Bridge 80.
     ///
-    /// Viaja el INTERRUPTOR y no el color: el color es el rol `stripe` del
-    /// tema y ya cruza con los demás, en `--stripe-bg`. La paridad la pone
-    /// el renderer, que es quien sabe qué fila acabó pintando dónde.
+    /// The SWITCH travels, not the color: the color is the theme's `stripe`
+    /// role and already crosses with the rest, in `--stripe-bg`. Parity is
+    /// up to the renderer, which is the one that knows which row ended up
+    /// painted where.
     #[serde(default)]
     pub row_stripes: bool,
-    /// El selector de perfiles, si está abierto.
+    /// The profile picker, if open.
     pub profiles: Option<ProfilePickerView>,
-    /// La paleta de comandos, si está abierta.
+    /// The command palette, if open.
     pub palette: Option<PaletteView>,
-    /// «Ir a cualquier sitio», si está abierto (#357). Puente 77.
+    /// "Go to anywhere", if open (#357). Bridge 77.
     #[serde(default)]
     pub goto: Option<GotoView>,
-    /// El asistente de primer arranque (spec 2026-09-10), si está abierto.
-    /// Puente 63.
+    /// The first-launch wizard (spec 2026-09-10), if open. Bridge 63.
     #[serde(default)]
     pub wizard: Option<WizardView>,
-    /// La pantalla de arranque (spec 2026-09-15, ADR 0115), si está puesta.
-    /// Puente 69 (con `RowView::progress` y el ritmo de `TaskView`).
+    /// The splash screen (spec 2026-09-15, ADR 0115), if it is up. Bridge 69
+    /// (with `RowView::progress` and `TaskView`'s pace).
     ///
-    /// Del HOST y no del webview: lo que la hace valer la pena —dónde estabas,
-    /// a dónde sueles ir— solo lo sabe este lado, y una segunda pantalla de
-    /// arranque en el renderer acabaría diciendo otra cosa.
+    /// From the HOST, not the webview: what makes it worth having —where
+    /// you were, where you usually go— only this side knows, and a second
+    /// splash screen in the renderer would end up saying something else.
     #[serde(default)]
     pub splash: Option<SplashView>,
-    /// El panel de continuaciones, si hay un prefijo a medias.
+    /// The which-key panel, if there is a prefix half typed.
     pub whichkey: Option<WhichKeyView>,
-    /// La ayuda, si está abierta. Como el visor, ocupa la pantalla: mientras
-    /// esté, las teclas son suyas.
+    /// Help, if open. Like the viewer, it occupies the screen: while it is
+    /// up, the keys are its own.
     pub help: Option<HelpView>,
-    /// El tema, si se está mirando. Solo LECTURA: se ve qué colores tiene
-    /// cada rol y qué efectos declara que este renderer no sabe pintar.
+    /// The theme, if being viewed. READ-ONLY only: it shows which colors
+    /// each role has and which effects it declares that this renderer
+    /// cannot paint.
     pub theme: Option<ThemeView>,
-    /// Una búsqueda, si hay una abierta.
+    /// A search, if one is open.
     pub search: Option<SearchView>,
-    /// El panel de diferencias, si hay una comparación abierta.
+    /// The diff panel, if a comparison is open.
     pub compare: Option<CompareView>,
-    /// El panel de sincronización, si hay un plan abierto.
+    /// The sync panel, if a plan is open.
     pub sync: Option<SyncView>,
-    /// El selector de disposiciones, si está abierto.
+    /// The layout picker, if open.
     pub layouts: Option<LayoutPickerView>,
-    /// El selector de COLUMNAS, si está abierto.
+    /// The COLUMNS picker, if open.
     pub columns: Option<ColumnsPickerView>,
-    /// Un selector abierto (conexiones o volúmenes), si lo hay.
+    /// An open picker (connections or volumes), if any.
     pub picker: Option<PickerView>,
-    /// Las extensiones, si están abiertas. Desde la 6.4 GOBIERNAN: se
-    /// aprueba, se revoca, se enciende, se apaga y se configura — con el
-    /// mismo interruptor de efectos que decide si esta ventana escribe.
+    /// Extensions, if open. Since 6.4 they GOVERN: approved, revoked,
+    /// turned on, turned off and configured — with the same effects switch
+    /// that decides whether this window writes.
     pub extensions: Option<ExtensionsView>,
-    /// Las sesiones de agente, si el panel está abierto.
+    /// Agent sessions, if the panel is open.
     pub agents: Option<AgentsView>,
-    /// La salida del último comando de extensión, si sigue en pantalla.
+    /// The output of the last extension command, if it is still on screen.
     ///
-    /// Fuera del gestor a propósito: un comando se lanza desde la PALETA, y
-    /// una salida guardada dentro de una pantalla que no está abierta no la
-    /// ve nadie.
+    /// Deliberately outside the manager: a command is launched from the
+    /// PALETTE, and an output stored inside a screen that is not open is
+    /// seen by nobody.
     pub plugin_output: Option<ExtensionOutputView>,
-    /// La salida de un PROGRAMA que esta ventana corrió esperándolo (#312,
-    /// puente 52): hoy, el comparador de dos ficheros. `None` si no hay
-    /// ninguna en pantalla.
+    /// The output of a PROGRAM this window ran and waited on (#312, bridge
+    /// 52): today, the two-file comparator. `None` if none is on screen.
     pub program_output: Option<ProgramOutputView>,
-    /// Los ajustes, si están abiertos. Solo LECTURA: esta ventana enseña lo
-    /// que hay y no escribe nada hasta que la fase 5 dé el camino seguro.
+    /// Settings, if open. READ-ONLY only: this window shows what exists and
+    /// writes nothing until phase 5 gives it a safe path.
     pub settings: Option<SettingsView>,
-    /// El visor, si hay uno abierto. Ocupa la pantalla: mientras esté, las
-    /// teclas son suyas y el listado no se mueve por debajo.
+    /// The viewer, if one is open. It occupies the screen: while it is up,
+    /// the keys are its own and the listing does not move underneath.
     pub viewer: Option<ViewerView>,
-    /// El plan de renombrado en revisión, si lo hay. Se abre encima del
-    /// listado y las teclas son suyas hasta que se apruebe o se descarte.
+    /// The rename plan under review, if any. It opens over the listing and
+    /// the keys are its own until it is approved or discarded.
     pub ai_rename: Option<AiRenameView>,
-    /// El plan de ORGANIZAR en revisión (fase 8), si lo hay. Misma forma de
-    /// pantalla que el de renombrar y por la misma razón — un documento que
-    /// se lee antes de aprobarlo—, con otro contenido: un ÁRBOL.
+    /// The ORGANIZE plan under review (phase 8), if any. Same screen shape
+    /// as the rename one and for the same reason — a document read before
+    /// approving it—, with different content: a TREE.
     pub organize: Option<OrganizeView>,
-    /// Idioma negociado, para que el renderer pida el catálogo correcto.
+    /// Negotiated locale, so the renderer requests the right catalogue.
     pub locale: String,
 }
 
-/// El selector de PERFILES (ADR 0079).
+/// The PROFILE picker (ADR 0079).
 ///
-/// Las filas y lo que se dice de cada una son
-/// `norte_frontend::profile_picker`, el mismo modelo que pinta el terminal:
-/// una fila que no se puede usar se ENSEÑA con su motivo en vez de
-/// desaparecer, porque esconder un directorio que el lector creó es peor que
-/// enseñarlo roto.
+/// The rows and what is said about each are
+/// `norte_frontend::profile_picker`, the same model that paints the
+/// terminal: a row that cannot be used is SHOWN with its reason instead of
+/// disappearing, because hiding a directory the reader created is worse than
+/// showing it broken.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfilePickerView {
-    /// Las filas, en orden.
+    /// The rows, in order.
     pub rows: Vec<ProfileRowView>,
-    /// Cuál está señalada.
+    /// Which one is marked.
     pub cursor: u64,
-    /// La generación con la que se pintaron. La lista se llena desde una
-    /// tarea de fondo —leer `profiles/` es disco—, así que una fila
-    /// nombrada por índice puede nombrar otra cosa (ADR 0068).
+    /// The generation they were painted with. The list is filled from a
+    /// background task —reading `profiles/` is disk—, so a row named by
+    /// index can name something else (ADR 0068).
     pub generation: u64,
 }
 
-/// Una fila del selector de perfiles.
+/// A row of the profile picker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProfileRowView {
-    /// El nombre del directorio, ya pintable.
+    /// The directory name, already paintable.
     pub name: String,
-    /// Lo pintado difiere de los bytes del directorio (#266).
+    /// What is painted differs from the directory's bytes (#266).
     pub name_hostile: bool,
-    /// Su `[profile] title`, si lo declara. Nunca EN VEZ del nombre: dos
-    /// perfiles pueden compartir título y seguir siendo dos.
+    /// Its `[profile] title`, if it declares one. Never INSTEAD of the name:
+    /// two profiles can share a title and still be two.
     pub title: Option<String>,
-    /// Es el que está puesto ahora.
+    /// It is the one currently set.
     pub active: bool,
-    /// Qué OTRA cosa de norte se llama igual, ya dicho en el idioma del
-    /// lector. Vacío = solo es un perfil.
+    /// What OTHER norte thing shares this name, already said in the
+    /// reader's language. Empty = it is only a profile.
     ///
-    /// Se avisa porque es una trampa si no se dice: elegir el perfil `far` no
-    /// ata ni una tecla del preset `far`.
+    /// Flagged because it is a trap if not said: choosing the `far` profile
+    /// does not bind a single key of the `far` preset.
     pub clash: String,
-    /// Este perfil NO puede guardar dónde dejaste cada panel (su nombre no es
-    /// UTF-8, D4). Se dice ANTES de elegirlo, no después de perderlo.
+    /// This profile CANNOT save where you left each pane (its name is not
+    /// UTF-8, D4). Said BEFORE choosing it, not after losing it.
     pub no_state: bool,
-    /// Por qué no se puede cargar, ya saneado. Vacío = se puede.
+    /// Why it cannot be loaded, already sanitized. Empty = it can.
     pub problem: String,
 }
 
-/// La barra de menús.
+/// The menu bar.
 ///
-/// Los menús y sus entradas son `norte_frontend::menu`, el MISMO modelo que
-/// pinta el TUI: qué hay en cada menú y en qué orden no se decide dos veces.
-/// Lo que se aporta aquí es la proyección — títulos y etiquetas ya traducidos,
-/// el atajo de cada entrada, y si esta ventana sabe ejecutarla.
+/// The menus and their entries are `norte_frontend::menu`, the SAME model
+/// that paints the TUI: what is in each menu and in what order is not
+/// decided twice. What is contributed here is the projection — titles and
+/// labels already translated, each entry's shortcut, and whether this
+/// window can run it.
 ///
-/// No añade capacidades: añade una forma de ENCONTRARLAS. La paleta pide que
-/// sepas el nombre de lo que buscas y la ayuda pide que leas; un menú se
-/// recorre.
+/// It adds no capabilities: it adds a way to FIND them. The palette requires
+/// knowing the name of what you're looking for and help requires reading; a
+/// menu is browsed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MenuView {
-    /// ¿Se pinta la barra? Lo dice `[ui] menu_bar` de la configuración.
+    /// Is the bar painted? Set by `[ui] menu_bar` in the configuration.
     ///
-    /// Apagada, la barra no ocupa fila y el menú solo se abre por su tecla —
-    /// pero se abre: quien la apaga esconde la barra, no el menú.
+    /// Turned off, the bar takes no row and the menu only opens by its key —
+    /// but it does open: turning it off hides the bar, not the menu.
     pub bar: bool,
-    /// Los títulos, de izquierda a derecha, ya traducidos.
+    /// The titles, left to right, already translated.
     pub titles: Vec<String>,
-    /// Cuál está DESPLEGADO, si alguno. `None` = solo la barra.
+    /// Which one is OPEN, if any. `None` = only the bar.
     pub open: Option<u64>,
-    /// Las entradas del desplegado, vacías si no hay ninguno.
+    /// The open menu's entries, empty if none is open.
     pub items: Vec<MenuItemView>,
-    /// Qué entrada va resaltada dentro del desplegado.
+    /// Which entry is highlighted inside the open menu.
     pub cursor: u64,
 }
 
-/// Una entrada de un menú.
+/// An entry of a menu.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MenuItemView {
-    /// La etiqueta CORTA (`menu-item-*`), no la frase de la ayuda: esa es una
-    /// descripción, y con ella el desplegable se va a setenta columnas.
+    /// The SHORT label (`menu-item-*`), not the help sentence: that is a
+    /// description, and with it the dropdown would reach seventy columns.
     pub label: String,
-    /// El atajo que la corre, o vacío si no tiene ninguno en este preset
-    /// (puente 74: antes una raya, que se leía como «deshabilitada»).
+    /// The shortcut that runs it, or empty if it has none in this preset
+    /// (bridge 74: previously a dash, which read as "disabled").
     pub chord: String,
-    /// Esta ventana puede ejecutarla.
+    /// This window can run it.
     ///
-    /// Una entrada apagada SIGUE saliendo: el menú es el sitio donde se ve
-    /// qué existe, y esconder lo que este frontend no hace convertiría una
-    /// limitación en un misterio. Es la misma regla que la paleta aplica a
-    /// las filas que no puede correr.
+    /// A disabled entry STILL shows: the menu is where what exists is seen,
+    /// and hiding what this frontend does not do would turn a limitation
+    /// into a mystery. Same rule the palette applies to rows it cannot run.
     pub enabled: bool,
-    /// Si con esta entrada EMPIEZA una sección (ADR 0125, puente 74): `None`
-    /// sigue en la de la anterior, `Some("")` es una raya sin rótulo y
-    /// `Some(r)` una con el rótulo `r`, ya traducido. Va en la entrada y no
-    /// como elemento propio para que el cursor siga contando entradas.
+    /// Whether a section STARTS with this entry (ADR 0125, bridge 74):
+    /// `None` continues the previous one's, `Some("")` is a rule with no
+    /// label and `Some(r)` one with label `r`, already translated. It lives
+    /// on the entry and not as its own element so the cursor keeps counting
+    /// entries.
     pub section: Option<String>,
-    /// `normal`, `destructive` (se pinta en el color de peligro) o `ai` (lleva
-    /// la marca de IA). Lo decide `norte_frontend::menu::role`, el mismo que
-    /// lee el terminal.
+    /// `normal`, `destructive` (painted in the danger color) or `ai`
+    /// (carries the AI mark). Decided by `norte_frontend::menu::role`, the
+    /// same one the terminal reads.
     pub role: String,
 }
 
-/// La barra de paneles (#324, puente 51): una fila de botones, uno por
-/// panel que se abre y se cierra, que ENSEÑA los paneles en vez de esperar a
-/// que el lector sepa que existen.
+/// The panel bar (#324, bridge 51): a row of buttons, one per panel that
+/// opens and closes, that SHOWS the panels instead of waiting for the
+/// reader to know they exist.
 ///
-/// Qué botones hay y en qué orden lo decide `norte_frontend::panelbar` —el
-/// mismo código que la TUI (ADR 0077)—; este host solo recoge el estado y lo
-/// traduce. Viaja entera con cada cambio: seis botones no valen un protocolo
-/// de deltas.
+/// Which buttons exist and in what order is decided by
+/// `norte_frontend::panelbar` —the same code as the TUI (ADR 0077)—; this
+/// host only collects the state and translates it. It travels whole with
+/// every change: six buttons are not worth a delta protocol.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanelBarView {
-    /// `[ui] panel_bar`: si la barra se pinta. Apagada, los paneles siguen
-    /// abriéndose por su tecla, su menú y la paleta.
+    /// `[ui] panel_bar`: whether the bar is painted. Turned off, panels
+    /// still open by their key, their menu and the palette.
     pub bar: bool,
-    /// `[ui] panel_bar_style = "names"` (spec 2026-09-10): cada botón
-    /// enseña su nombre con la letra de acceso marcada; `false` = solo la
-    /// letra. Ausente en un host anterior al puente 63 = nombres.
+    /// `[ui] panel_bar_style = "names"` (spec 2026-09-10): each button shows
+    /// its name with the access letter marked; `false` = letter only.
+    /// Absent in a host older than bridge 63 = names.
     #[serde(default = "default_true")]
     pub names: bool,
-    /// `[ui] panel_bar_position` ya resuelta (puente 84): `true` = una
-    /// columna en el borde izquierdo, la barra de actividad; `false` = la
-    /// fila bajo el menú. `auto` lo resuelve el HOST, a columna: en la
-    /// ventana falta alto, no ancho. Ausente en un host anterior = fila.
+    /// `[ui] panel_bar_position` already resolved (bridge 84): `true` = a
+    /// column on the left edge, the activity bar; `false` = the row under
+    /// the menu. `auto` is resolved by the HOST, to column: the window
+    /// lacks height, not width. Absent in an older host = row.
     #[serde(default)]
     pub vertical: bool,
-    /// Los botones, en el orden en que se pintan. Un click vuelve como el
-    /// ÍNDICE en esta lista (`UiAction::PanelBarActivate`), nunca como un
-    /// comando: el renderer no despacha (ADR 0069).
+    /// The buttons, in the order they are painted. A click comes back as
+    /// the INDEX in this list (`UiAction::PanelBarActivate`), never as a
+    /// command: the renderer does not dispatch (ADR 0069).
     pub buttons: Vec<PanelButtonView>,
 }
 
-/// Un elemento de la mitad derecha de la barra de estado (ADR 0132).
+/// An element of the right half of the status bar (ADR 0132).
 ///
-/// Qué dice, con qué prioridad cede y qué corre un clic lo decide
-/// `norte_frontend::statusbar`, el mismo código que la TUI. Un clic vuelve
-/// como el `id` (`UiAction::StatusItemActivate`), nunca como un comando: el
-/// renderer no despacha (ADR 0069).
+/// What it says, at what priority it yields and what a click runs is
+/// decided by `norte_frontend::statusbar`, the same code as the TUI. A click
+/// comes back as the `id` (`UiAction::StatusItemActivate`), never as a
+/// command: the renderer does not dispatch (ADR 0069).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusItemView {
-    /// El id estable (`position`, `tasks`…).
+    /// The stable id (`position`, `tasks`…).
     pub id: String,
-    /// El texto, en el idioma de la sesión.
+    /// The text, in the session's language.
     pub text: String,
-    /// Qué es y qué hace pulsarlo, para el título.
+    /// What it is and what pressing it does, for the tooltip.
     pub tooltip: String,
-    /// Si pulsarlo hace algo.
+    /// Whether pressing it does anything.
     pub clickable: bool,
-    /// La barra de progreso ligera, detrás del texto (ADR 0146, puente 92).
-    /// Solo en el item `tasks` con trabajo en marcha; ausente en los demás.
+    /// The lightweight progress bar, behind the text (ADR 0146, bridge 92).
+    /// Only on the `tasks` item with work underway; absent on the rest.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<StatusProgressView>,
 }
 
-/// La barra del item `tasks` (ADR 0146).
+/// The `tasks` item's bar (ADR 0146).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatusProgressView {
-    /// Del total de la ráfaga, 0–100; `None` = no se sabe, y el renderer
-    /// anima la barra en vez de pintarla vacía.
+    /// Out of the burst's total, 0–100; `None` = unknown, and the renderer
+    /// animates the bar instead of painting it empty.
     pub percent: Option<u8>,
-    /// `running`, `done` o `failed`.
+    /// `running`, `done` or `failed`.
     pub phase: String,
 }
 
-/// Un botón del cromo que corre una orden (ADR 0133): los de disposición.
+/// A chrome button that runs a command (ADR 0133): the layout ones.
 ///
-/// Qué botones hay y qué corren lo decide `norte_frontend::layoutbar`; un
-/// clic vuelve como el `id`, nunca como la orden (ADR 0069).
+/// Which buttons exist and what they run is decided by
+/// `norte_frontend::layoutbar`; a click comes back as the `id`, never as the
+/// command (ADR 0069).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChromeButtonView {
-    /// Id estable (`split-h`, `pick`…): vuelve con el clic y elige el icono.
+    /// Stable id (`split-h`, `pick`…): comes back with the click and picks
+    /// the icon.
     pub id: String,
-    /// Su nombre corto, el de su entrada del menú.
+    /// Its short name, the one from its menu entry.
     pub label: String,
-    /// El atajo que hace lo mismo, o `—`.
+    /// The shortcut that does the same, or `—`.
     pub chord: String,
 }
 
-/// `true` para un campo que un host anterior no mandaba y que encendido es
-/// lo de siempre.
+/// `true` for a field an older host did not send and that being on is the
+/// usual thing.
 fn default_true() -> bool {
     true
 }
 
-/// Un botón de la barra de paneles.
+/// A button of the panel bar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanelButtonView {
-    /// El kind que abre. Texto de disposición, ya enmascarado: un kind puede
-    /// venir de un fichero o de un plugin, y acaba en un atributo del DOM.
+    /// The kind it opens. Layout text, already masked: a kind can come from
+    /// a file or a plugin, and ends up in a DOM attribute.
     pub kind: String,
-    /// El nombre corto, en el idioma de la sesión.
+    /// The short name, in the session's language.
     pub label: String,
-    /// La letra que la TUI pinta; aquí acompaña a la etiqueta para que las
-    /// dos superficies se lean igual.
+    /// The letter the TUI paints; here it accompanies the label so both
+    /// surfaces read the same.
     pub letter: String,
-    /// El atajo que hace lo mismo que el botón, o `—` si no tiene.
+    /// The shortcut that does the same as the button, or `—` if it has
+    /// none.
     pub chord: String,
-    /// Cerrado, abierto, o abierto Y con el teclado.
+    /// Closed, open, or open AND with the keyboard.
     pub state: PanelButtonState,
-    /// Tiene algo que contar sin estar a la vista: el registro con avisos
-    /// sin leer, procesos con tareas en el tablero.
+    /// Has something to report without being visible: the log with unread
+    /// notices, processes with tasks on the board.
     pub attention: bool,
-    /// CUÁNTAS cosas tiene que contar (puente 84): la cifra de la insignia.
-    /// `0` con `attention` apagado; ausente en un host anterior = `0`, y el
-    /// renderer pinta entonces la marca sin cifra.
+    /// HOW MANY things it has to report (bridge 84): the badge's count.
+    /// `0` with `attention` off; absent in an older host = `0`, and the
+    /// renderer then paints the mark with no count.
     #[serde(default)]
     pub count: u32,
 }
 
-/// Cómo está el panel de un botón.
+/// The state of a button's panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PanelButtonState {
-    /// Ni siquiera está en la disposición.
+    /// Not even in the layout.
     Closed,
-    /// Colocado y a la vista, pero el teclado va a otro sitio.
+    /// Placed and visible, but the keyboard goes elsewhere.
     Open,
-    /// Colocado, a la vista, y con el teclado.
+    /// Placed, visible, and with the keyboard.
     Focused,
 }
 
-/// La paleta de comandos abierta.
+/// The open command palette.
 ///
-/// El filtrado, el cursor y qué está seleccionado los decide
-/// `norte_frontend::palette_state`, el mismo modelo que el TUI: teclear para
-/// acotar una lista es una regla de presentación, y dos copias son dos
-/// paletas que se comportan distinto sin que nadie lo note.
+/// Filtering, the cursor and what is selected are decided by
+/// `norte_frontend::palette_state`, the same model as the TUI: typing to
+/// narrow a list is a presentation rule, and two copies are two palettes
+/// that behave differently without anyone noticing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaletteView {
-    /// Lo tecleado, ya saneado para pintar.
+    /// What was typed, already sanitized for painting.
     pub query: String,
-    /// Las filas que CASAN, en orden.
+    /// The rows that MATCH, in order.
     pub rows: Vec<PaletteRowView>,
-    /// Cuál está seleccionada, si hay alguna.
+    /// Which one is selected, if any.
     pub cursor: Option<u64>,
-    /// Cuántas filas hay en total, para decir cuánto se está acotando.
+    /// How many rows there are in total, to say how much is being narrowed.
     pub total: u64,
 }
 
-/// «Ir a cualquier sitio» abierto (#357, puente 77): la ruta tecleada, la
-/// historia del panel, los populares, los favoritos, las conexiones, los
-/// comandos y lo que el índice semántico encontró, en SECCIONES.
+/// "Go to anywhere" open (#357, bridge 77): the typed path, the pane's
+/// history, the popular ones, the favorites, the connections, the commands
+/// and what the semantic index found, in SECTIONS.
 ///
-/// Las secciones, su orden, el filtrado y el cursor los decide
-/// `norte_frontend::goto`, el mismo modelo que la TUI; el renderer pinta las
-/// líneas en orden y marca la del cursor.
+/// The sections, their order, the filtering and the cursor are decided by
+/// `norte_frontend::goto`, the same model as the TUI; the renderer paints
+/// the lines in order and marks the cursor's.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GotoView {
-    /// Lo tecleado, ya acotado para pintar.
+    /// What was typed, already narrowed for painting.
     pub query: String,
-    /// Las líneas en orden: cabeceras de sección y filas.
+    /// The lines in order: section headers and rows.
     pub lines: Vec<GotoLineView>,
-    /// El índice, en `lines`, de la fila seleccionada. Nunca una cabecera.
+    /// The index, in `lines`, of the selected row. Never a header.
     pub cursor: Option<u64>,
-    /// Lo que se pinta cuando `lines` está vacío, ya traducido: «nada casa
-    /// con eso» no es lo mismo que una pantalla en blanco.
+    /// What is painted when `lines` is empty, already translated: "nothing
+    /// matches that" is not the same as a blank screen.
     pub empty: String,
 }
 
-/// Una línea de «ir a».
+/// A "go to" line.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "line")]
 pub enum GotoLineView {
-    /// La cabecera de una sección, YA traducida. No recibe el cursor.
+    /// A section's header, ALREADY translated. Does not receive the cursor.
     Header {
-        /// El título de la sección.
+        /// The section's title.
         title: String,
     },
-    /// Una fila a la que se puede ir.
+    /// A row that can be gone to.
     Row {
-        /// Lo que se pinta, ya enmascarado si hacía falta.
+        /// What is painted, already masked if needed.
         text: String,
-        /// La segunda línea (la ruta de un favorito o una conexión, qué hace
-        /// un comando), o vacío.
+        /// The second line (a favorite's or a connection's path, what a
+        /// command does), or empty.
         desc: String,
-        /// Lo pintado DIFIERE de los bytes de origen. Viaja con la fila: esta
-        /// es una pantalla donde se elige a dónde ir.
+        /// What is painted DIFFERS from the source bytes. Travels with the
+        /// row: this is a screen where you choose where to go.
         hostile: bool,
     },
 }
 
-/// El asistente de primer arranque (spec 2026-09-10, puente 63): un paso,
-/// sus filas y el cursor. Todo ya traducido: el renderer pinta y devuelve
-/// filas o teclas, y el host escribe lo elegido por su camino de ajustes.
+/// The first-launch wizard (spec 2026-09-10, bridge 63): a step, its rows
+/// and the cursor. Everything already translated: the renderer paints and
+/// returns rows or keys, and the host writes what was chosen through its
+/// settings path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WizardView {
-    /// `Bienvenido a norte · 1/3 · teclas`.
+    /// `Welcome to norte · 1/3 · keys`.
     pub title: String,
-    /// La pregunta del paso.
+    /// The step's question.
     pub question: String,
-    /// Las filas del paso, en orden. Un click vuelve como el ÍNDICE
+    /// The step's rows, in order. A click comes back as the INDEX
     /// (`UiAction::WizardActivateRow`).
     pub rows: Vec<String>,
-    /// Cuál está elegida.
+    /// Which one is chosen.
     pub cursor: u64,
-    /// La línea de teclas.
+    /// The keys line.
     pub hint: String,
 }
 
-/// Un comando ofrecido por la paleta.
+/// A command offered by the palette.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PaletteRowView {
-    /// Lo que se enseña (el nombre del comando, o el título ya enmascarado
-    /// de un comando de plugin). NUNCA la clave de despacho.
+    /// What is shown (the command's name, or a plugin command's already
+    /// masked title). NEVER the dispatch key.
     pub text: String,
-    /// Qué hace, en el idioma del usuario.
+    /// What it does, in the user's language.
     pub desc: String,
-    /// El atajo que lo corre, o `—` si no tiene ninguno en este preset.
+    /// The shortcut that runs it, or `—` if it has none in this preset.
     pub chord: String,
-    /// Este frontend puede ejecutarlo.
+    /// This frontend can run it.
     pub enabled: bool,
-    /// Lo pintado DIFIERE de lo que declara quien aporta la fila.
+    /// What is painted DIFFERS from what the row's contributor declares.
     ///
-    /// Solo puede ser cierto en una fila de PLUGIN: su título y su
-    /// descripción los escribe un manifiesto, y esta es la pantalla donde se
-    /// elige qué código de tercero correr. Un texto enmascarado que viaja sin
-    /// su bandera se lee como fiel.
+    /// Can only be true on a PLUGIN row: its title and description are
+    /// written by a manifest, and this is the screen where you choose what
+    /// third-party code to run. A masked text that travels without its flag
+    /// reads as faithful.
     pub hostile: bool,
-    /// Va arriba por ser de los últimos lanzados (spec 2026-09-10). Solo
-    /// con la consulta vacía; con consulta, el orden es el de lo que casa.
+    /// Goes to the top for being among the last launched (spec 2026-09-10).
+    /// Only with an empty query; with a query, the order is by what
+    /// matches.
     #[serde(default)]
     pub recent: bool,
 }
 
-/// Lo que puede seguir a un prefijo a medias.
+/// What can follow a half-typed prefix.
 ///
-/// Se construye con `norte_frontend::whichkey`, que es el mismo modelo que
-/// pinta el TUI: qué teclas continúan la secuencia, cómo se llama cada una en
-/// el idioma del usuario, cuáles abren otra secuencia y cuáles no se pueden
-/// hacer aquí. El renderer lo pinta; no sabe resolver un prefijo.
+/// Built with `norte_frontend::whichkey`, the same model that paints the
+/// TUI: which keys continue the sequence, what each is called in the user's
+/// language, which open another sequence and which cannot be done here. The
+/// renderer paints it; it does not know how to resolve a prefix.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WhichKeyView {
-    /// El prefijo tecleado, ya pintado, con el contador delante si lo hay.
+    /// The typed prefix, already painted, with the counter in front if
+    /// there is one.
     pub title: String,
-    /// Una fila por tecla que puede seguir, en el orden compartido.
+    /// A row per key that can follow, in the shared order.
     pub rows: Vec<WhichKeyRowView>,
 }
 
-/// Una continuación posible.
+/// A possible continuation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WhichKeyRowView {
-    /// La tecla, escrita para leerse (`F5`) y enmascarada: un `keymap.toml`
-    /// de proyecto puede ligar cualquier punto de código.
+    /// The key, written to be read (`F5`) and masked: a project's
+    /// `keymap.toml` can bind any code point.
     pub chord: String,
-    /// Qué hace, en el idioma del usuario.
+    /// What it does, in the user's language.
     pub label: String,
-    /// Se puede hacer aquí.
+    /// Can be done here.
     pub enabled: bool,
-    /// Abre OTRA secuencia en vez de ejecutar algo. El renderer lo marca en
-    /// vez de nombrar un comando que la tecla no ejecuta.
+    /// Opens ANOTHER sequence instead of running something. The renderer
+    /// marks it instead of naming a command the key does not run.
     pub opens_sequence: bool,
-    /// Por qué no se puede, ya traducido. Vacío cuando sí se puede.
+    /// Why it cannot be done, already translated. Empty when it can.
     pub reason: String,
 }
 
-/// La ayuda abierta (F1).
+/// Help, open (F1).
 ///
-/// El corpus, el modelo del overlay y la resolución de las marcas vivas son
-/// los COMPARTIDOS (`norte_help`, `norte_frontend::help`,
-/// `norte_frontend::help_chords`): qué páginas hay, cuál está abierta, qué
-/// filas se pueden correr y con qué tecla las corre ESTE lector. El renderer
-/// no interpreta markdown y no resuelve una tecla: recibe bloques cerrados y
-/// los pinta.
+/// The corpus, the overlay's model and the resolution of live marks are the
+/// SHARED ones (`norte_help`, `norte_frontend::help`,
+/// `norte_frontend::help_chords`): which pages exist, which is open, which
+/// rows can be run and with which key THIS reader runs them. The renderer
+/// does not interpret markdown and does not resolve a key: it receives
+/// closed blocks and paints them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HelpView {
-    /// El título de la página abierta, ya acotado.
+    /// The title of the open page, already scoped.
     pub title: String,
-    /// Su id: una IDENTIDAD OPACA, no algo que se pinte.
+    /// Its id: an OPAQUE IDENTITY, not something painted.
     ///
-    /// Viaja ENTERA o no viaja. No pasa por el recorte de pantalla, que es lo
-    /// que hace el resto de este módulo, porque recortar no es inyectivo y
-    /// esto es una clave: dos ids que coincidieran en sus primeros miles de
-    /// bytes llegarían como una sola (ADR 0061, y el mismo motivo por el que
-    /// `norte_help::parse_untrusted` copia el id verbatim). Un id que no
-    /// cupiera viaja VACÍO, que es una identidad que no casa con nada, en vez
-    /// de una que casa con la equivocada.
+    /// Travels WHOLE or does not travel. It does not go through the screen
+    /// truncation the rest of this module does, because truncating is not
+    /// injective and this is a key: two ids that matched in their first
+    /// thousand bytes would arrive as one (ADR 0061, and the same reason
+    /// `norte_help::parse_untrusted` copies the id verbatim). An id that
+    /// would not fit travels EMPTY, which is an identity that matches
+    /// nothing, instead of one that matches the wrong thing.
     ///
-    /// Tampoco está enmascarada, y por eso **el renderer no la pinta jamás**:
-    /// quien quiera marcar la fila viva de la lateral tiene
-    /// [`HelpSidebarRowView::Topic::current`], que ya viene resuelto.
+    /// Also not masked, and that is why **the renderer never paints it**:
+    /// whoever wants to mark the sidebar's live row has
+    /// [`HelpSidebarRowView::Topic::current`], which already comes
+    /// resolved.
     pub topic_id: String,
-    /// La línea de procedencia de una página de plugin (quién la publica, si
-    /// se recortó, si hubo bytes que no decodificaron). `None` en una página
-    /// del binario: una página de plugin SIEMPRE lleva línea, y una que a
-    /// veces aparece enseña lo contrario de la verdad cuando falta.
+    /// A plugin page's provenance line (who publishes it, whether it was
+    /// truncated, whether there were bytes that did not decode). `None` on a
+    /// binary page: a plugin page ALWAYS carries a line, and one that
+    /// sometimes appears shows the opposite of the truth when it is
+    /// missing.
     pub badge: Option<String>,
-    /// La lateral: cabeceras de grupo y páginas, en el orden del modelo.
+    /// The sidebar: group headers and pages, in the model's order.
     pub sidebar: Vec<HelpSidebarRowView>,
-    /// Qué fila de la lateral tiene el cursor.
+    /// Which sidebar row has the cursor.
     pub cursor: u64,
-    /// Qué mitad tiene el teclado.
+    /// Which half has the keyboard.
     pub focus: HelpFocusView,
-    /// El cuerpo de la página, en bloques de un vocabulario CERRADO.
+    /// The page body, in blocks of a CLOSED vocabulary.
     pub blocks: Vec<HelpBlockView>,
-    /// Lo que `enter` puede hacer sobre el cuerpo: correr un comando o abrir
-    /// otra página.
+    /// What `enter` can do over the body: run a command or open another
+    /// page.
     pub actions: Vec<HelpActionView>,
-    /// Cuál está elegida, si hay alguna.
+    /// Which one is chosen, if any.
     pub action_cursor: Option<u64>,
-    /// Lo tecleado en el filtro, ya saneado para pintar.
+    /// What was typed in the filter, already sanitized for painting.
     pub filter: String,
-    /// El filtro está abierto: las teclas de texto son suyas.
+    /// The filter is open: text keys are its own.
     pub filtering: bool,
-    /// Hay a dónde volver (`⌫`). Cuando no lo hay, `⌫` cierra.
+    /// There is somewhere to go back to (`⌫`). When there is not, `⌫`
+    /// closes.
     pub can_back: bool,
-    /// La última petición de desplazar el CUERPO (puente 76), o `None` si en
-    /// esta apertura no ha habido ninguna.
+    /// The last request to scroll the BODY (bridge 76), or `None` if none
+    /// has happened in this opening.
     ///
-    /// El cuerpo lo desplaza el DOM, que es quien sabe lo que mide (#267);
-    /// lo que decide el HOST es qué tecla significa qué, con el keymap del
-    /// lector. Antes el renderer atendía `AvPág`, `Inicio`, `[`… como teclas
-    /// fijas, y un lector que las reataba veía el cambio en el terminal y no
-    /// aquí. El renderer aplica la petición UNA vez: `seq` crece con cada una,
-    /// y un parche que repinta la ayuda con la misma no la repite.
+    /// The body is scrolled by the DOM, which is the one that knows its
+    /// measurements (#267); what the HOST decides is which key means what,
+    /// with the reader's keymap. Previously the renderer handled `PgDn`,
+    /// `Home`, `[`… as fixed keys, and a reader who rebound them saw the
+    /// change in the terminal and not here. The renderer applies the
+    /// request ONCE: `seq` grows with each one, and a patch that repaints
+    /// help with the same one does not repeat it.
     pub scroll: Option<HelpScrollView>,
 }
 
-/// Una petición de desplazar el cuerpo de la ayuda (puente 76).
+/// A request to scroll the help body (bridge 76).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HelpScrollView {
-    /// Hacia dónde.
+    /// Where to.
     pub to: HelpScrollTo,
-    /// Crece con cada petición de esta apertura: lo que el renderer compara
-    /// para no aplicar dos veces la misma.
+    /// Grows with every request of this opening: what the renderer compares
+    /// to avoid applying the same one twice.
     pub seq: u64,
 }
 
-/// Hacia dónde desplazar el cuerpo. Vocabulario CERRADO: cuánto es una línea,
-/// una página o dónde empieza una sección lo mide el renderer.
+/// Where to scroll the body. CLOSED vocabulary: how much a line, a page, or
+/// where a section starts is measured by the renderer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HelpScrollTo {
-    /// Una línea arriba (flecha, en una página sin nada ejecutable).
+    /// One line up (arrow, on a page with nothing runnable).
     LineUp,
-    /// Una línea abajo.
+    /// One line down.
     LineDown,
-    /// Una pantalla arriba.
+    /// One screen up.
     PageUp,
-    /// Una pantalla abajo.
+    /// One screen down.
     PageDown,
-    /// Al principio.
+    /// To the beginning.
     Top,
-    /// Al final.
+    /// To the end.
     Bottom,
-    /// Al encabezado anterior.
+    /// To the previous heading.
     SectionPrev,
-    /// Al encabezado siguiente.
+    /// To the next heading.
     SectionNext,
 }
 
-/// Qué mitad del overlay tiene el cursor.
+/// Which half of the overlay has the cursor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HelpFocusView {
-    /// La lateral: arriba y abajo cambian de página.
+    /// The sidebar: up and down change page.
     Topics,
-    /// El cuerpo: arriba y abajo recorren lo ejecutable, `enter` actúa.
+    /// The body: up and down move through what is runnable, `enter` acts.
     Body,
 }
 
-/// Una fila de la lateral.
+/// A row of the sidebar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "row")]
 pub enum HelpSidebarRowView {
-    /// Cabecera de grupo, YA traducida. No se puede elegir.
+    /// Group header, ALREADY translated. Cannot be chosen.
     Group {
-        /// El texto de la cabecera.
+        /// The header's text.
         label: String,
     },
-    /// Una página que el lector puede abrir.
+    /// A page the reader can open.
     Topic {
-        /// Su título, ya acotado.
+        /// Its title, already scoped.
         title: String,
-        /// Es la que está abierta.
+        /// It is the one open.
         current: bool,
     },
 }
 
-/// Un bloque del cuerpo. Vocabulario CERRADO (ADR 0040): que un `help.md`
-/// hostil no pueda expresar nada fuera de esta lista es precisamente lo que
-/// lo hace seguro, y el renderer construye nodos del DOM uno a uno — nunca
-/// HTML — porque un bloque no es marcado, es datos.
+/// A block of the body. CLOSED vocabulary (ADR 0040): a hostile `help.md`
+/// being unable to express anything outside this list is exactly what makes
+/// it safe, and the renderer builds DOM nodes one at a time — never HTML —
+/// because a block is not markup, it is data.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "block")]
 pub enum HelpBlockView {
-    /// Encabezado de nivel 1..=3.
+    /// Level 1..=3 heading.
     Heading {
-        /// El nivel, ya acotado a 1..=3.
+        /// The level, already scoped to 1..=3.
         level: u8,
-        /// Su texto.
+        /// Its text.
         text: String,
     },
-    /// Un párrafo.
+    /// A paragraph.
     Paragraph {
-        /// Sus fragmentos.
+        /// Its spans.
         spans: Vec<HelpSpanView>,
     },
-    /// Una lista de puntos, de un solo nivel.
+    /// A single-level bullet list.
     Bullets {
-        /// Cada punto, con sus fragmentos.
+        /// Each bullet, with its spans.
         items: Vec<Vec<HelpSpanView>>,
     },
-    /// Un bloque de código, literal.
+    /// A literal code block.
     Code {
-        /// El lenguaje que declaraba la valla, si lo declaraba.
+        /// The language the fence declared, if it declared one.
         lang: Option<String>,
-        /// El contenido, sin marcas interpretadas.
+        /// The content, with no marks interpreted.
         text: String,
     },
-    /// Una tabla simple. Las filas llegan YA normalizadas al ancho de la
-    /// cabecera, así que el renderer indexa por columna sin comprobar nada.
+    /// A simple table. Rows arrive ALREADY normalized to the header's
+    /// width, so the renderer indexes by column without checking anything.
     Table {
-        /// La cabecera.
+        /// The header.
         header: Vec<String>,
-        /// Las filas.
+        /// The rows.
         rows: Vec<Vec<String>>,
     },
-    /// Un aviso destacado.
+    /// A highlighted callout.
     Callout {
-        /// De qué clase.
+        /// Which kind.
         kind: HelpCalloutView,
-        /// Su contenido.
+        /// Its content.
         spans: Vec<HelpSpanView>,
     },
-    /// La hoja de referencia de teclado: cada tecla ligada de una pantalla,
-    /// en el orden de precedencia REAL del mapa efectivo.
+    /// The keyboard reference sheet: every key bound on a screen, in the
+    /// REAL precedence order of the effective map.
     ///
-    /// Un bloque propio y no una tabla, porque no es prosa del corpus: se
-    /// genera del keymap del lector, así que un rebind la cambia, y sus
-    /// filas llevan disponibilidad y motivo que una celda de tabla no tiene
-    /// dónde poner.
+    /// A block of its own and not a table, because it is not corpus prose:
+    /// it is generated from the reader's keymap, so a rebind changes it, and
+    /// its rows carry availability and a reason that a table cell has
+    /// nowhere to put.
     Keys {
-        /// Las filas, en orden.
+        /// The rows, in order.
         rows: Vec<HelpKeyRowView>,
     },
 }
 
-/// De qué clase es un aviso destacado.
+/// What kind a highlighted callout is.
 ///
-/// Un enum y no una cadena: el renderer compone una clave Fluent con esto
-/// (`help-callout-{kind}`) y `t` contesta una clave que no tiene con la clave
-/// misma, así que una clase inesperada pintaría `help-callout-…` al lector —
-/// el mismo eco que el resto de este módulo se cuida de no producir.
+/// An enum and not a string: the renderer composes a Fluent key from this
+/// (`help-callout-{kind}`) and `t` answers a key it does not have with the
+/// key itself, so an unexpected kind would paint `help-callout-…` for the
+/// reader — the same echo the rest of this module is careful not to
+/// produce.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HelpCalloutView {
-    /// Nota neutra.
+    /// Neutral note.
     Note,
-    /// Aviso: algo puede salir mal.
+    /// Warning: something can go wrong.
     Warn,
-    /// Truco: algo va más rápido.
+    /// Tip: something goes faster.
     Tip,
 }
 
-/// Un fragmento dentro de un bloque.
+/// A span inside a block.
 ///
-/// Las dos marcas VIVAS del corpus (`{{cmd:id}}` y `[[topic]]`) llegan aquí ya
-/// resueltas contra el keymap y el idioma de ESTE lector: la prosa no puede
-/// mentir sobre una tecla porque nunca lleva una escrita.
+/// The corpus's two LIVE marks (`{{cmd:id}}` and `[[topic]]`) arrive here
+/// already resolved against THIS reader's keymap and language: the prose
+/// cannot lie about a key because it never carries one written out.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "span")]
 pub enum HelpSpanView {
-    /// Texto llano.
+    /// Plain text.
     Text {
-        /// El texto.
+        /// The text.
         text: String,
     },
-    /// Énfasis fuerte.
+    /// Strong emphasis.
     Strong {
-        /// El texto.
+        /// The text.
         text: String,
     },
-    /// Énfasis.
+    /// Emphasis.
     Emph {
-        /// El texto.
+        /// The text.
         text: String,
     },
-    /// Código en línea.
+    /// Inline code.
     Code {
-        /// El texto.
+        /// The text.
         text: String,
     },
-    /// Un comando, ya resuelto: la tecla que lo corre para este lector, o su
-    /// nombre cuando no tiene ninguna (nunca una tecla inventada).
+    /// A command, already resolved: the key that runs it for this reader,
+    /// or its name when it has none (never an invented key).
     Command {
-        /// Lo que se pinta.
+        /// What is painted.
         text: String,
-        /// Es una TECLA y no un nombre. El renderer la pinta como tal.
+        /// It is a KEY and not a name. The renderer paints it as such.
         is_chord: bool,
     },
-    /// Un enlace a otra página, YA resuelto a su título.
+    /// A link to another page, ALREADY resolved to its title.
     ///
-    /// No lleva el id de destino, y no es un olvido: una marca `[[topic]]` en
-    /// la prosa no está en la lista de acciones —esa la forman los comandos
-    /// de la página y sus «ver también»—, así que no hay nada que activar con
-    /// ella. Mandar la clave a un renderer que no puede usarla solo conseguía
-    /// que un id de tercero, que nadie enmascara porque es una clave, acabara
-    /// en un atributo del DOM.
+    /// It does not carry the destination id, and that is not an oversight: a
+    /// `[[topic]]` mark in the prose is not in the action list —that is
+    /// formed by the page's commands and its "see also"—, so there is
+    /// nothing to activate with it. Sending the key to a renderer that
+    /// cannot use it would only get a third-party id, which nobody masks
+    /// because it is a key, ending up in a DOM attribute.
     Link {
-        /// Su título, o el id si el corpus de este idioma no la tiene.
+        /// Its title, or the id if this language's corpus does not have it.
         text: String,
-        /// La fila de `HelpView::actions` que la sigue (puente 75): pulsar el
-        /// enlace es activar ESA fila. Un ÍNDICE y no el id, por lo mismo que
-        /// arriba: el renderer no recibe claves que no puede usar. `None` si
-        /// la página no tiene esa fila —no pasa en el corpus, que añade cada
-        /// enlace de la prosa a sus acciones—.
+        /// The `HelpView::actions` row that follows it (bridge 75): pressing
+        /// the link is activating THAT row. An INDEX and not the id, for the
+        /// same reason as above: the renderer does not receive keys it
+        /// cannot use. `None` if the page does not have that row —does not
+        /// happen in the corpus, which adds every link in the prose to its
+        /// actions—.
         action: Option<u64>,
     },
 }
 
-/// Una fila de la hoja de teclado.
+/// A row of the keyboard sheet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HelpKeyRowView {
-    /// La secuencia PINTADA (`F5`, `g g`) y enmascarada: un `keymap.toml` de
-    /// proyecto puede ligar cualquier punto de código.
+    /// The PAINTED sequence (`F5`, `g g`) and masked: a project's
+    /// `keymap.toml` can bind any code point.
     pub chord: String,
-    /// Qué hace, en el idioma del lector. Puede venir de un `keymap.toml`
-    /// del usuario, así que va enmascarado.
+    /// What it does, in the reader's language. Can come from a user's
+    /// `keymap.toml`, so it is masked.
     pub label: String,
-    /// La etiqueta pintada difiere de la que hay en el fichero (#266).
+    /// The painted label differs from the one in the file (#266).
     pub label_hostile: bool,
-    /// Esta build puede correrlo.
+    /// This build can run it.
     pub enabled: bool,
-    /// Por qué no, ya traducido. Vacío cuando sí.
+    /// Why not, already translated. Empty when it can.
     pub reason: String,
 }
 
-/// Algo que `enter` puede hacer sobre el cuerpo.
+/// Something `enter` can do over the body.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HelpActionView {
-    /// Cómo se llama, en el idioma del lector.
+    /// Its name, in the reader's language.
     pub label: String,
-    /// El atajo que lo corre, vacío si no tiene ninguno o si abre una página.
+    /// The shortcut that runs it, empty if it has none or if it opens a
+    /// page.
     pub chord: String,
-    /// Se puede hacer AHORA, con los hechos congelados al abrir la ayuda.
+    /// Can be done NOW, with the facts frozen when help was opened.
     pub enabled: bool,
-    /// Por qué no, ya traducido. Vacío cuando sí.
+    /// Why not, already translated. Empty when it can.
     pub reason: String,
-    /// Abre otra página en vez de ejecutar un comando.
+    /// Opens another page instead of running a command.
     pub opens_topic: bool,
 }
 
-/// Los ajustes abiertos (solo lectura).
+/// Settings, open (read-only).
 ///
-/// El registro, el valor efectivo de cada entrada y su texto localizado son
-/// los COMPARTIDOS (`norte_frontend::settings`): el mismo catálogo que pinta
-/// el TUI, con los mismos ids estables. Lo que este host añade es la
-/// proyección y una sección más —dónde vive cada cosa—, que es diagnóstico y
-/// no configuración.
+/// The registry, each entry's effective value and its localized text are
+/// the SHARED ones (`norte_frontend::settings`): the same catalogue that
+/// paints the TUI, with the same stable ids. What this host adds is the
+/// projection and one more section —where each thing lives—, which is
+/// diagnostics, not configuration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingsView {
-    /// Las secciones, en su orden. Solo las que tienen filas que enseñar con
-    /// el filtro puesto.
+    /// The sections, in their order. Only the ones with rows to show with
+    /// the filter applied.
     pub sections: Vec<SettingsSectionView>,
-    /// El índice de la izquierda: TODAS las secciones que esta superficie
-    /// tiene, tape o no el filtro sus filas.
+    /// The index on the left: ALL the sections this surface has, whether or
+    /// not the filter hides their rows.
     ///
-    /// Va aparte de [`Self::sections`] a propósito: una sección que el filtro
-    /// vació sigue en el índice —apagada— porque un índice que cambia de
-    /// largo mientras escribes no se puede usar como mapa, y no está en
-    /// `sections` porque no hay nada que pintar debajo de su rótulo.
+    /// Kept apart from [`Self::sections`] on purpose: a section the filter
+    /// emptied stays in the index —dimmed— because an index that changes
+    /// length while you type cannot be used as a map, and it is not in
+    /// `sections` because there is nothing to paint under its label.
     pub index: Vec<SectionIndexView>,
-    /// Qué mitad tiene el teclado: `"index"` o `"list"`.
+    /// Which half has the keyboard: `"index"` or `"list"`.
     ///
-    /// Viaja porque los DOS cursores se pintan siempre y el que no tiene el
-    /// teclado va apagado — la misma regla que las dos mitades de la ayuda
-    /// (ADR 0128). Sin esto, el renderer solo podría pintar uno, que es
-    /// justo lo que hace que no se sepa dónde está el foco.
+    /// Travels because BOTH cursors are always painted and the one without
+    /// the keyboard is dimmed — the same rule as help's two halves (ADR
+    /// 0128). Without this, the renderer could only paint one, which is
+    /// exactly what makes it impossible to know where focus is.
     pub focus: String,
-    /// Qué fila tiene el cursor, contando TODAS las filas de todas las
-    /// secciones en orden (las cabeceras no cuentan: no se pueden elegir).
+    /// Which row has the cursor, counting ALL rows of all sections in order
+    /// (headers do not count: they cannot be chosen).
     pub cursor: u64,
-    /// Lo que hay escrito en el buscador, YA ENMASCARADO.
+    /// What is typed in the search box, ALREADY MASKED.
     pub query: String,
-    /// Cuántos ajustes se ven con el filtro puesto.
+    /// How many settings are visible with the filter applied.
     pub shown: u64,
-    /// Cuántos hay en total. Con [`Self::shown`] son las dos cifras de «7 de
-    /// 33»: sin la segunda, «no hay nada» y «lo tapé con una letra» se leen
-    /// igual.
+    /// How many there are in total. With [`Self::shown`] they are the two
+    /// figures in "7 of 33": without the second, "there is nothing" and "I
+    /// hid it with a letter" read the same.
     pub total: u64,
 }
 
-/// Una sección en el índice de los ajustes.
+/// A section in the settings index.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SectionIndexView {
-    /// Su clave ESTABLE (`appearance`, `open-with`…): una identidad, no algo
-    /// que se pinte. Es lo que vuelve en `settings_jump_section`, y por eso
-    /// no pasa por el recorte de pantalla.
+    /// Its STABLE key (`appearance`, `open-with`…): an identity, not
+    /// something painted. It is what comes back in `settings_jump_section`,
+    /// and that is why it does not go through screen truncation.
     pub key: String,
-    /// Su rótulo, en el idioma del lector.
+    /// Its label, in the reader's language.
     pub title: String,
-    /// Cuántas de sus filas se ven con el filtro puesto. Cero = apagada.
+    /// How many of its rows are visible with the filter applied. Zero =
+    /// dimmed.
     pub visible: u64,
 }
 
-/// Una sección de los ajustes: entradas del registro, o ubicaciones.
+/// A settings section: registry entries, or locations.
 ///
-/// Un enum y no un struct con dos listas: una sección es de una clase o de la
-/// otra, y un struct con `rows` y `paths` obligaría a cada renderer a decidir
-/// qué hacer cuando llegan las dos llenas — una combinación que no existe.
+/// An enum and not a struct with two lists: a section is of one kind or the
+/// other, and a struct with `rows` and `paths` would force every renderer to
+/// decide what to do when both arrive full — a combination that does not
+/// exist.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "section")]
 pub enum SettingsSectionView {
-    /// Entradas del registro con su valor efectivo.
+    /// Registry entries with their effective value.
     Settings {
-        /// Su clave ESTABLE, la misma que la entrada del índice.
+        /// Its STABLE key, the same as the index entry.
         ///
-        /// Es lo que empareja una sección con su fila del índice. Casarlas
-        /// por el título traducido funcionaría hoy y se rompería el día que
-        /// dos secciones se llamen parecido o alguien retoque una cadena:
-        /// un rótulo es prosa, no una identidad.
+        /// It is what matches a section to its index row. Matching them by
+        /// the translated title would work today and break the day two
+        /// sections have similar names or someone tweaks a string: a label
+        /// is prose, not an identity.
         key: String,
-        /// Su título, ya traducido.
+        /// Its title, already translated.
         title: String,
-        /// Sus filas.
+        /// Its rows.
         rows: Vec<SettingRowView>,
     },
-    /// Dónde vive cada cosa.
+    /// Where each thing lives.
     Paths {
-        /// Su título, ya traducido.
+        /// Its title, already translated.
         title: String,
-        /// Sus filas.
+        /// Its rows.
         rows: Vec<PathRowView>,
     },
 }
 
-/// Una entrada del registro con su valor efectivo.
+/// A registry entry with its effective value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SettingRowView {
-    /// El id estable del catálogo (`ui.confirm-quit`). Una IDENTIDAD, no algo
-    /// que se pinte: viaja para que un renderer pueda anclar una fila entre
-    /// dos pintados, y por eso no pasa por el recorte de pantalla.
+    /// The catalogue's stable id (`ui.confirm-quit`). An IDENTITY, not
+    /// something painted: it travels so a renderer can anchor a row between
+    /// two paints, and that is why it does not go through screen
+    /// truncation.
     pub id: String,
-    /// Cómo se llama, en el idioma del lector.
+    /// Its name, in the reader's language.
     pub name: String,
-    /// Qué hace.
+    /// What it does.
     pub desc: String,
-    /// Su valor EFECTIVO, ya resuelto sobre las capas de configuración y como
-    /// texto para pintar. YA ENMASCARADO.
+    /// Its EFFECTIVE value, already resolved over the configuration layers
+    /// and as text ready to paint. ALREADY MASKED.
     pub value: String,
-    /// El valor se pinta DISTINTO de lo que es.
+    /// The value is painted DIFFERENT from what it is.
     ///
-    /// Sale de un `norte.toml` que puede ser el de PROYECTO, y esa capa
-    /// significa «he abierto este repositorio», no «doy fe de esta cadena»
-    /// (ADR 0026). En la misma lista viven las filas de `PathRowView`, que
-    /// siempre tuvieron su bandera: dos clases de fila prometiendo cosas
-    /// distintas sobre la misma columna era la incoherencia que había.
+    /// Comes from a `norte.toml` that can be the PROJECT one, and that layer
+    /// means "I opened this repository," not "I vouch for this string" (ADR
+    /// 0026). `PathRowView` rows live in the same list, and they always had
+    /// their flag: two kinds of row promising different things about the
+    /// same column was the inconsistency there used to be.
     pub hostile: bool,
-    /// Cambiarlo pide reiniciar la ventana: lo que se escribe se guarda, y
-    /// hace efecto en la siguiente.
+    /// Changing it requires restarting the window: what is written is
+    /// saved, and takes effect on the next one.
     pub restart_required: bool,
-    /// Su valor DE FÁBRICA, como texto.
+    /// Its FACTORY value, as text.
     ///
-    /// Se pinta como marcador de un campo vacío: «vacío» no es un hueco,
-    /// es este valor. Decirlo con un dato —`Inter`, `14`— informa; decirlo
-    /// con una frase («lo que norte trae») ocupa el sitio del dato y no
-    /// dice cuál es.
+    /// Painted as an empty field's placeholder: "empty" is not a gap, it is
+    /// this value. Saying it with a datum —`Inter`, `14`— informs; saying it
+    /// with a phrase ("what norte ships with") takes the datum's place and
+    /// does not say which one it is.
     pub default: String,
-    /// Qué control pide: `toggle`, `choice`, `number`, `text` o `args`.
+    /// What control it needs: `toggle`, `choice`, `number`, `text` or
+    /// `args`.
     ///
-    /// Viaja porque una ventana tiene controles de verdad y no puede
-    /// adivinar la clase mirando el texto del valor. Las listas vivas —temas
-    /// y presets— llegan ya resueltas en [`Self::choices`], así que el
-    /// renderer no distingue «enum del catálogo» de «temas instalados»: para
-    /// él las dos son un desplegable.
+    /// Travels because a window has real controls and cannot guess the kind
+    /// by looking at the value's text. Live lists —themes and presets—
+    /// arrive already resolved in [`Self::choices`], so the renderer does
+    /// not distinguish "catalogue enum" from "installed themes": to it both
+    /// are a dropdown.
     pub control: String,
-    /// Los valores admitidos, si el control es `choice`. Vacío si no.
+    /// The admitted values, if the control is `choice`. Empty if not.
     pub choices: Vec<String>,
-    /// Los topes de un `number`, los dos incluidos.
+    /// A `number`'s bounds, both inclusive.
     pub min: Option<i64>,
-    /// Ver [`Self::min`].
+    /// See [`Self::min`].
     pub max: Option<i64>,
-    /// Su valor NO es el de fábrica — el punto de «esto lo has tocado tú».
+    /// Its value is NOT the factory one — the "you touched this" flag.
     ///
-    /// Se calcula contra el valor por defecto, no contra «hay una clave en
-    /// tu fichero»: una clave escrita con el mismo valor que ya traía no es
-    /// un cambio, y marcarla como tal mandaría a restablecer algo que no
-    /// hace nada.
+    /// Computed against the default value, not against "there is a key in
+    /// your file": a key written with the same value it already had is not
+    /// a change, and marking it as one would send someone to reset
+    /// something that does nothing.
     pub modified: bool,
 }
 
-/// Dónde vive cada cosa: las capas de configuración, el estado, los logs y el
-/// socket del daemon.
+/// Where each thing lives: the configuration layers, the state, the logs
+/// and the daemon's socket.
 ///
-/// Es una sección de los ajustes y no una vista aparte porque responde a la
-/// misma pregunta que el resto —«¿de dónde sale lo que estoy viendo?»— y
-/// porque el catálogo no tiene comando para abrirla.
+/// It is a settings section and not a separate view because it answers the
+/// same question as the rest —"where does what I'm seeing come from?"— and
+/// because the catalogue has no command to open it.
 ///
-/// Lleva RUTAS y por eso lleva la misma marca que un nombre de fichero: el
-/// texto ya saneado, y una bandera de si difiere del real. Ningún valor
-/// secreto entra aquí: son ubicaciones, no contenidos.
+/// It carries PATHS and therefore carries the same mark as a file name: the
+/// already sanitized text, and a flag for whether it differs from the real
+/// one. No secret value enters here: these are locations, not contents.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PathRowView {
-    /// Qué es, ya traducido.
+    /// What it is, already translated.
     pub label: String,
-    /// Dónde, ya saneado para pintar.
+    /// Where, already sanitized for painting.
     pub display: String,
-    /// El texto de arriba DIFIERE de la ruta real.
+    /// The text above DIFFERS from the real path.
     pub hostile: bool,
-    /// El sitio no existe (una capa que nadie ha creado). Se DICE, en vez de
-    /// enseñar una ruta que parece estar ahí.
+    /// The place does not exist (a layer nobody created). It is SAID,
+    /// instead of showing a path that looks like it is there.
     pub missing: bool,
 }
 
-/// El gestor de extensiones abierto (solo lectura).
+/// The extensions manager, open (read-only).
 ///
-/// Aprobar una capability es una decisión de SEGURIDAD y es una mutación:
-/// esta ventana la enseña y no la toma, igual que no borra. El camino seguro
-/// lo da la fase 5.
+/// Approving a capability is a SECURITY decision and a mutation: this
+/// window shows it and does not make it, just as it does not delete. Phase
+/// 5 gives the safe path.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionsView {
-    /// Lo instalado, en el orden que dio el catálogo.
+    /// What is installed, in the order the catalogue gave.
     pub rows: Vec<ExtensionRowView>,
-    /// Cuál está elegida. Recorre `rows` y, detrás, `errors` (puente 79):
-    /// `rows.len() + j` es `errors[j]`.
+    /// Which one is chosen. Walks `rows` and, after it, `errors` (bridge
+    /// 79): `rows.len() + j` is `errors[j]`.
     pub cursor: u64,
-    /// La ficha de la elegida, cuando ya llegó su esquema. `None` mientras
-    /// se pide, o si no se pidió.
+    /// The chosen one's detail card, once its schema has arrived. `None`
+    /// while it is being requested, or if it was not requested.
     pub detail: Option<ExtensionDetailView>,
-    /// El catálogo todavía no ha llegado. Se DICE, en vez de enseñar una
-    /// lista vacía que se lee como «no tienes ninguna».
+    /// The catalogue has not arrived yet. It is SAID, instead of showing an
+    /// empty list that reads as "you have none."
     pub loading: bool,
-    /// Directorios que el daemon no pudo cargar, ya saneados. Se enseñan:
-    /// una extensión que falla al cargar y desaparece en silencio es una
-    /// extensión que el usuario cree tener.
+    /// Directories the daemon could not load, already sanitized. Shown:
+    /// an extension that fails to load and vanishes silently is an
+    /// extension the user believes they have.
     pub errors: Vec<ExtensionErrorView>,
 }
 
-/// La salida de UN comando de extensión.
+/// The output of ONE extension command.
 ///
-/// Todo lo de aquí lo escribe un tercero: el texto es lo que el plugin
-/// imprimió y el título es el de su manifiesto. Los dos entran enmascarados y
-/// acotados, y `truncated` viaja porque el receptor NO puede deducirlo — el
-/// texto le llega ya corto.
+/// Everything here is written by a third party: the text is what the plugin
+/// printed and the title is its manifest's. Both enter masked and scoped,
+/// and `truncated` travels because the receiver CANNOT deduce it — the text
+/// arrives already short.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionOutputView {
-    /// De qué extensión: su nombre ya enmascarado, con su bandera.
+    /// Which extension: its name already masked, with its flag.
     pub plugin: MaskedTextView,
-    /// Su id reverse-DNS, que el core SÍ valida.
+    /// Its reverse-DNS id, which the core DOES validate.
     ///
-    /// Va con el nombre porque el nombre no identifica: dos extensiones
-    /// pueden llamarse igual, y la que dice quién imprimió esto es esta.
+    /// Travels with the name because the name does not identify: two
+    /// extensions can share a name, and this is the one that says who
+    /// printed this.
     pub plugin_id: String,
-    /// Qué comando: su título ya enmascarado, con su bandera.
+    /// Which command: its title already masked, with its flag.
     pub command: MaskedTextView,
-    /// Lo que imprimió, LÍNEA A LÍNEA, cada una enmascarada y acotada.
+    /// What it printed, LINE BY LINE, each one masked and scoped.
     ///
-    /// Por líneas y no como una cadena: un salto de línea es un control C0,
-    /// o sea un peligro de terminal, así que enmascarar la salida entera
-    /// marcaba como hostil CUALQUIER salida de más de una línea — una
-    /// bandera que es cierta para todo lo honesto no dice nada. Vacío = no
-    /// imprimió nada, que se DICE: un panel en blanco se lee como que no
-    /// llegó a correr.
+    /// By lines and not as one string: a line break is a C0 control, i.e. a
+    /// terminal hazard, so masking the whole output would flag ANY output
+    /// over one line as hostile — a flag that is true for everything honest
+    /// says nothing. Empty = it printed nothing, which is SAID: a blank
+    /// panel reads as if it never got to run.
     pub lines: Vec<String>,
-    /// Alguna línea se pinta distinta de lo que el plugin imprimió.
+    /// Some line is painted different from what the plugin printed.
     pub text_hostile: bool,
-    /// La salida no cabía entera y se cortó.
+    /// The output did not fit whole and was cut.
     pub truncated: bool,
 }
 
-/// La salida de un PROGRAMA que la ventana corrió y esperó (#312).
+/// The output of a PROGRAM the window ran and waited on (#312).
 ///
-/// La terminal tiene un camino que el navegador no tiene: suspenderse,
-/// correr `diff -u` y esperar una tecla. Esto es su equivalente honesto: el
-/// proceso que hospeda corre el programa, captura lo que imprimió y se
-/// enseña aquí hasta que el lector lo cierra. Lo que imprimió lo escribió
-/// otro programa sobre ficheros que nombró cualquiera: entra enmascarado,
-/// por líneas y acotado, como la salida de una extensión.
+/// The terminal has a path the browser does not: suspending itself, running
+/// `diff -u` and waiting for a key. This is its honest equivalent: the
+/// hosting process runs the program, captures what it printed and shows it
+/// here until the reader closes it. What it printed was written by another
+/// program over files anyone could have named: it enters masked, by lines
+/// and scoped, like an extension's output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProgramOutputView {
-    /// Clave Fluent del título: qué se hizo («comparar dos ficheros»).
+    /// Fluent key of the title: what was done ("compare two files").
     pub title_key: String,
-    /// El programa y sus argumentos, ya enmascarados, para decir QUÉ corrió.
+    /// The program and its arguments, already masked, to say WHAT ran.
     pub command: MaskedTextView,
-    /// Lo que imprimió (stdout y stderr, en ese orden), LÍNEA A LÍNEA.
+    /// What it printed (stdout and stderr, in that order), LINE BY LINE.
     pub lines: Vec<String>,
-    /// Alguna línea se pinta distinta de lo que el programa imprimió.
+    /// Some line is painted different from what the program printed.
     pub text_hostile: bool,
-    /// La salida no cabía entera y se cortó.
+    /// The output did not fit whole and was cut.
     pub truncated: bool,
-    /// El programa no pudo correr, o acabó con error. Un comparador
-    /// devuelve 1 cuando los ficheros difieren, así que esto NO es
-    /// «distinto de cero»: es «no arrancó» o «se pasó del plazo».
+    /// The program could not run, or exited with an error. A comparator
+    /// returns 1 when the files differ, so this is NOT "nonzero": it is "did
+    /// not start" or "ran past the deadline."
     pub failed: bool,
 }
 
-/// Las sesiones de AGENTE que esta ventana ha visto pedir permiso.
+/// The AGENT sessions this window has seen request permission.
 ///
-/// Lo que la lista ES va DENTRO de ella (`note`): no hay método en el
-/// protocolo que enumere las sesiones vivas, así que esto son las vistas por
-/// esta ventana y no el censo de agentes del sistema. Una lista vacía sin esa
-/// nota se lee como «ningún agente ha tocado nada», que es una afirmación que
-/// esta ventana no puede hacer.
+/// What the list IS goes INSIDE it (`note`): there is no protocol method
+/// that lists live sessions, so these are the ones seen BY THIS WINDOW, not
+/// the system's census of agents. An empty list without that note reads as
+/// "no agent has touched anything," a claim this window cannot make.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentsView {
-    /// Las sesiones, de la vista más recientemente a la más antigua.
+    /// The sessions, from most recently seen to oldest.
     pub rows: Vec<AgentRowView>,
-    /// Cuál está elegida.
+    /// Which one is chosen.
     pub cursor: u64,
-    /// Cuántas veces ha cambiado esta lista.
+    /// How many times this list has changed.
     ///
-    /// Vuelve con el clic: la lista se reordena SOLA —una petición de
-    /// permiso sube a su sesión al primer puesto— y un clic tiene que
-    /// resolverse contra la que el lector estaba mirando. Aquí «esta fila» es
-    /// de quién se deshace el trabajo.
+    /// Comes back with the click: the list reorders ITSELF —a permission
+    /// request bumps its session to the top spot— and a click has to be
+    /// resolved against the one the reader was looking at. Here "this row"
+    /// is whose work gets undone.
     pub generation: u64,
-    /// Cuántas sesiones se han olvidado por el tope.
+    /// How many sessions have been forgotten due to the cap.
     ///
-    /// Se dice: el id de sesión lo elige el agente, así que inundar la lista
-    /// para empujar fuera a una concreta está a su alcance, y una lista
-    /// recortada que se presenta como completa es lo que convierte eso en
-    /// «esa sesión no existe».
+    /// Said out loud: the session id is chosen by the agent, so flooding the
+    /// list to push a specific one out is within its reach, and a truncated
+    /// list presented as complete is what turns that into "that session
+    /// doesn't exist."
     pub forgotten: u64,
-    /// Qué es esta lista, ya traducido.
+    /// What this list is, already translated.
     pub note: String,
-    /// Qué decir cuando no hay ninguna fila, ya traducido.
+    /// What to say when there is no row, already translated.
     ///
-    /// Lo compone el HOST porque no es siempre la misma frase: una ventana de
-    /// solo lectura ni siquiera se suscribe al canal de aprobaciones, así que
-    /// su lista vacía significa «esta ventana no escucha», no «ningún agente
-    /// ha pedido nada» — que es una afirmación que no puede hacer.
+    /// Composed by the HOST because it is not always the same sentence: a
+    /// read-only window does not even subscribe to the approvals channel,
+    /// so its empty list means "this window isn't listening," not "no agent
+    /// has requested anything" — a claim it cannot make.
     pub empty: String,
 }
 
-/// Una sesión de agente vista por esta ventana.
+/// An agent session seen by this window.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentRowView {
-    /// Su id, ya enmascarado: es una clave OPACA del daemon y puede llevar
-    /// cualquier byte. Lo que viaja de vuelta es el id crudo, no esto.
+    /// Its id, already masked: it is an OPAQUE daemon key and can carry any
+    /// byte. What travels back is the raw id, not this.
     pub session: String,
-    /// El id se pinta distinto de lo que es.
+    /// The id is painted different from what it is.
     pub session_hostile: bool,
-    /// Cuántas pidió y cuántas se le aprobaron desde aquí, ya en una frase
-    /// traducida.
+    /// How many it requested and how many were approved from here, already
+    /// as a translated sentence.
     ///
-    /// Compuesta AQUÍ y no en el renderer: el catálogo que cruza son cadenas
-    /// ya traducidas, sin sustitución de variables, así que un `{ $n }` al
-    /// otro lado se pinta literal. Y las dos cuentas no son la misma cosa —
-    /// otra ventana pudo contestar, o se denegó, o caducó.
+    /// Composed HERE and not in the renderer: the catalogue that crosses is
+    /// already-translated strings, with no variable substitution, so a
+    /// `{ $n }` on the other side would paint literally. And the two counts
+    /// are not the same thing — another window might have answered, or it
+    /// was denied, or it expired.
     pub counts: String,
-    /// Ya se le lanzó un deshacer y sigue en marcha.
+    /// An undo has already been launched for it and is still running.
     ///
-    /// Se dice y además se rehúsa lanzar otro: dos `policy.undo_session` de
-    /// la misma sesión caminan la misma lista de entradas, y el segundo
-    /// produce un informe lleno de bloqueos que no son de nadie.
+    /// Said, and also refuses to launch another: two `policy.undo_session`
+    /// calls for the same session walk the same list of entries, and the
+    /// second produces a report full of blocks that belong to nobody.
     pub undoing: bool,
-    /// El último op-kind que pidió (`copy`, `delete`…), ya enmascarado.
+    /// The last op-kind it requested (`copy`, `delete`…), already masked.
     pub last_op: String,
-    /// El op-kind se pinta distinto de lo que es.
+    /// The op-kind is painted different from what it is.
     pub last_op_hostile: bool,
 }
 
-/// Una cadena de tercero lista para pintar, con su bandera al lado.
+/// A third-party string ready to paint, with its flag alongside.
 ///
-/// Las dos juntas y no en campos hermanos: una bandera suelta acaba
-/// describiendo a la cadena de al lado —que es exactamente lo que pasó aquí,
-/// donde una sola bandera para tres cadenas la calculaba una de ellas.
+/// Both together and not in sibling fields: a loose flag ends up describing
+/// the string next to it —which is exactly what happened here, where a
+/// single flag for three strings was computed by one of them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaskedTextView {
-    /// Lo que se pinta, ya enmascarado y acotado.
+    /// What is painted, already masked and scoped.
     pub text: String,
-    /// Lo pintado DIFIERE de lo que su autor escribió.
+    /// What is painted DIFFERS from what its author wrote.
     pub hostile: bool,
 }
 
-/// Un comando que aporta una extensión.
+/// A command an extension contributes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionCommandView {
-    /// Su id de despacho. NUNCA se pinta: el manifiesto no le valida
-    /// charset, así que puede llevar cualquier byte —saltos de línea
-    /// incluidos—, y enmascararlo lo rompería como clave.
+    /// Its dispatch id. NEVER painted: the manifest does not validate its
+    /// charset, so it can carry any byte —line breaks included—, and masking
+    /// it would break it as a key.
     pub id: String,
-    /// Su título, ya enmascarado y acotado.
+    /// Its title, already masked and scoped.
     pub title: String,
-    /// El título se pinta distinto de lo que declara el manifiesto.
+    /// The title is painted different from what the manifest declares.
     pub hostile: bool,
 }
 
-/// Una extensión del catálogo.
+/// An extension from the catalogue.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionRowView {
-    /// Su id, reverse-DNS validado. Es una IDENTIDAD: viaja entera y sin
-    /// recortar, y sirve para pedir su ficha.
+    /// Its id, validated reverse-DNS. It is an IDENTITY: travels whole and
+    /// untruncated, and is used to request its detail card.
     pub id: String,
-    /// Su nombre, ya enmascarado y acotado (texto de tercero).
+    /// Its name, already masked and scoped (third-party text).
     pub name: String,
-    /// Quién la publica, ya enmascarado. Vacío si no lo declara.
+    /// Who publishes it, already masked. Empty if it does not declare one.
     pub publisher: String,
-    /// Su versión, ya enmascarada: la declara el manifiesto, o sea un
-    /// tercero, y acaba en una fila.
+    /// Its version, already masked: declared by the manifest, i.e. a third
+    /// party, and ends up in a row.
     pub version: String,
-    /// Qué papel juega (`previewer`, `indexer`…), del vocabulario del core.
+    /// What role it plays (`previewer`, `indexer`…), from the core's
+    /// vocabulary.
     pub category: String,
-    /// Qué hace, ya enmascarada y acotada. Vacía si no lo declara.
+    /// What it does, already masked and scoped. Empty if it does not
+    /// declare one.
     pub description: String,
-    /// Un humano aprobó sus capabilities.
+    /// A human approved its capabilities.
     pub approved: bool,
-    /// Un humano la tiene encendida.
+    /// A human has it turned on.
     pub enabled: bool,
-    /// Trae página de ayuda (`F1` la abre en su sección).
+    /// It ships a help page (`F1` opens it at its section).
     pub has_help: bool,
-    /// Cuántos comandos aporta.
+    /// How many commands it contributes.
     pub commands: u32,
-    /// Cuántas columnas aporta.
+    /// How many columns it contributes.
     pub columns: u32,
-    /// Las capabilities que solicita, tal como las declara.
+    /// The capabilities it requests, as it declares them.
     ///
-    /// En la FILA y no solo en la ficha, a propósito: son la decisión que un
-    /// humano aprueba, y esconderlas tras un segundo gesto convierte «esto
-    /// puede leer tus ficheros» en algo que hay que ir a buscar.
+    /// In the ROW and not only in the detail card, on purpose: they are the
+    /// decision a human approves, and hiding them behind a second gesture
+    /// turns "this can read your files" into something you have to go look
+    /// for.
     pub capabilities: Vec<String>,
 }
 
-/// Un directorio de extensión que no cargó.
+/// An extension directory that failed to load.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionErrorView {
-    /// Dónde, ya saneado.
+    /// Where, already sanitized.
     pub dir: String,
-    /// El texto de arriba DIFIERE de la ruta real.
+    /// The text above DIFFERS from the real path.
     pub hostile: bool,
-    /// Por qué, ya saneado: lo escribe el core, pero puede citar el
-    /// manifiesto del plugin.
+    /// Why, already sanitized: written by the core, but may quote the
+    /// plugin's manifest.
     pub reason: String,
-    /// El MOTIVO se pinta distinto de lo que es.
+    /// The REASON is painted different from what it is.
     ///
-    /// Aparte del de `dir` porque son dos cadenas con dos orígenes, y una
-    /// sola bandera para las dos deja al lector sin saber cuál mira.
+    /// Separate from `dir`'s because they are two strings with two origins,
+    /// and a single flag for both leaves the reader not knowing which one it
+    /// refers to.
     pub reason_hostile: bool,
-    /// El id con el que se desinstala (puente 79), o `None` si el nombre del
-    /// directorio no es un id: entonces no hay botón, y el host lo rehúsa
-    /// diciendo por qué. La regla es `norte_frontend::broken_plugin`.
+    /// The id it is uninstalled with (bridge 79), or `None` if the
+    /// directory's name is not an id: then there is no button, and the host
+    /// refuses it saying why. The rule is `norte_frontend::broken_plugin`.
     pub id: Option<String>,
 }
 
-/// La ficha de una extensión: lo que PIDE y lo que se le ha configurado.
+/// An extension's detail card: what it REQUESTS and what has been
+/// configured for it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionDetailView {
-    /// De quién es esta ficha.
+    /// Whose detail card this is.
     pub id: String,
-    /// Sus claves `[config]` con el valor efectivo. Vacío si no declara
-    /// ninguna.
+    /// Its `[config]` keys with their effective value. Empty if it declares
+    /// none.
     pub config: Vec<ExtensionConfigRowView>,
-    /// Los comandos que aporta, en orden de manifiesto. Vacío si no aporta
-    /// ninguno.
+    /// The commands it contributes, in manifest order. Empty if it
+    /// contributes none.
     pub commands: Vec<ExtensionCommandView>,
-    /// Qué clave está elegida dentro de la ficha.
+    /// Which key is chosen inside the detail card.
     pub cursor: u64,
-    /// El buffer de edición abierto (`string`/`int`), YA ENMASCARADO. `None`
-    /// = no se está editando nada.
+    /// The open edit buffer (`string`/`int`), ALREADY MASKED. `None` =
+    /// nothing is being edited.
     pub editing: Option<String>,
-    /// El buffer se pinta distinto de lo que se va a escribir. Un valor de
-    /// partida lo escribió el PLUGIN, así que puede traer lo que sea; lo que
-    /// viaja de vuelta al daemon es el operando crudo, no esto.
+    /// The buffer is painted different from what will be written. A
+    /// starting value was written by the PLUGIN, so it can carry anything;
+    /// what travels back to the daemon is the raw operand, not this.
     pub editing_hostile: bool,
 }
 
-/// Una clave `[config.<key>]` con su esquema y su valor efectivo.
+/// A `[config.<key>]` key with its schema and effective value.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExtensionConfigRowView {
-    /// La clave. Charset validado por el manifiesto, segura tal cual.
+    /// The key. Charset validated by the manifest, safe as is.
     pub key: String,
-    /// Su tipo (`string`, `bool`, `int`, `enum`). Un tipo que este frontend
-    /// no conozca —un peer más nuevo— se pinta como texto y no revienta.
+    /// Its type (`string`, `bool`, `int`, `enum`). A type this frontend
+    /// does not know —a newer peer— is painted as text and does not blow
+    /// up.
     pub kind: String,
-    /// El valor EFECTIVO: los defaults del esquema con el `config.toml`
-    /// superpuesto. YA ENMASCARADO.
+    /// The EFFECTIVE value: the schema's defaults with `config.toml`
+    /// overlaid. ALREADY MASKED.
     pub value: String,
-    /// El valor por defecto del esquema, para poder ver qué se ha cambiado.
-    /// YA ENMASCARADO.
+    /// The schema's default value, so what has changed can be seen. ALREADY
+    /// MASKED.
     pub default: String,
-    /// Qué es, ya enmascarada (texto del manifiesto). Vacía si no lo dice.
+    /// What it is, already masked (manifest text). Empty if it does not say.
     pub description: String,
-    /// Los valores válidos de un `enum`, o las cotas de un `int`, ya como
-    /// texto. Vacío cuando el tipo no tiene nada que acotar.
+    /// An `enum`'s valid values, or an `int`'s bounds, already as text.
+    /// Empty when the type has nothing to bound.
     pub domain: String,
-    /// Alguno de los tres campos de texto libre —valor, defecto, dominio— se
-    /// pinta DISTINTO de lo que es.
+    /// One of the three free-text fields —value, default, domain— is
+    /// painted DIFFERENT from what it is.
     ///
-    /// Los tres los escribe el plugin en su `plugin.toml` y el manifiesto
-    /// solo les acota la LONGITUD, no el charset: un valor de `enum` con un
-    /// override bidi dentro llegaba al DOM tal cual mientras tres rustdocs
-    /// afirmaban que eso no podía pasar.
+    /// All three are written by the plugin in its `plugin.toml` and the
+    /// manifest only bounds their LENGTH, not their charset: an `enum`
+    /// value with a bidi override inside reached the DOM as is while three
+    /// rustdocs claimed that could not happen.
     pub hostile: bool,
-    /// Este build sabe editar este `kind`.
+    /// This build knows how to edit this `kind`.
     ///
-    /// `false` para un tipo que no conoce —un peer más nuevo—: el modelo
-    /// compartido lo trata como solo lectura, y decirlo evita que la pantalla
-    /// ofrezca un `Enter` que no va a cambiar nada.
+    /// `false` for a type it does not know —a newer peer—: the shared model
+    /// treats it as read-only, and saying so keeps the screen from offering
+    /// an `Enter` that will not change anything.
     pub editable: bool,
 }
 
-/// El selector de COLUMNAS: qué columnas hay, en qué orden y con qué formato.
+/// The COLUMNS picker: which columns exist, in what order and with what
+/// format.
 ///
-/// El modelo es el compartido (`norte_frontend::columns_picker`), que la TUI
-/// envuelve en un overlay y esta ventana en un panel: la misma máquina, y por
-/// tanto las mismas reglas —el nombre va primero y no se puede ni apagar ni
-/// mover, un id que no parsea se PRESERVA porque es intención del usuario, y
-/// un attr que el provider anuncia y nadie configuró se OFRECE apagado.
+/// The model is the shared one (`norte_frontend::columns_picker`), which the
+/// TUI wraps in an overlay and this window in a panel: the same machine, and
+/// therefore the same rules —the name goes first and can be neither turned
+/// off nor moved, an id that does not parse is PRESERVED because it is user
+/// intent, and an attr the provider announces and nobody configured is
+/// OFFERED off.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnsPickerView {
-    /// Su título, ya traducido, CON el alcance dentro: el esquema al que se
-    /// aplica lo elegido (`sftp`, `zip+file`…) o «todos los esquemas».
+    /// Its title, already translated, WITH the scope inside: the scheme the
+    /// choice applies to (`sftp`, `zip+file`…) or "all schemes."
     ///
-    /// El alcance va en el título y no en un campo aparte porque es lo
-    /// primero que hay que saber para entender qué se está tocando, y desde
-    /// dentro del panel no hay forma de adivinarlo.
+    /// The scope goes in the title and not in a separate field because it is
+    /// the first thing you need to know to understand what is being
+    /// touched, and there is no way to guess it from inside the panel.
     pub title: String,
-    /// Las filas, en orden de pintado.
+    /// The rows, in paint order.
     pub rows: Vec<ColumnsPickerRowView>,
-    /// Qué fila tiene el cursor.
+    /// Which row has the cursor.
     pub cursor: u64,
-    /// La frase que explica qué se aplica y qué NO, ya traducida.
+    /// The sentence explaining what applies and what does NOT, already
+    /// translated.
     ///
-    /// Esta ventana todavía no escribe configuración: lo elegido vale para
-    /// ESTA ventana y se pierde al cerrarla. Callarlo dejaría al usuario
-    /// creyendo que acaba de configurar norte.
+    /// This window does not write configuration yet: what is chosen holds
+    /// for THIS window and is lost when it closes. Staying silent about it
+    /// would leave the user believing they just configured norte.
     pub note: String,
-    /// El pie con las teclas, pintado desde el KEYMAP (#287).
+    /// The footer with the keys, painted from the KEYMAP (#287).
     ///
-    /// Viene del host y no de una cadena del renderer porque los verbos
-    /// `dialog.*` se pueden reatar: un pie que dice `Shift+↑/↓` sobre un
-    /// keymap que ata otra cosa es una mentira que solo se descubre probando.
+    /// Comes from the host and not from a renderer string because the
+    /// `dialog.*` verbs can be rebound: a footer that says `Shift+↑/↓` over a
+    /// keymap that binds something else is a lie only testing uncovers.
     pub hint: String,
 }
 
-/// Una fila del selector de columnas.
-// Cuatro bools, cada uno un hecho independiente que se pinta distinto: la
-// etiqueta difiere de lo real, la columna está encendida, su formato lo fija
-// el esquema, y la fila no se puede tocar. Ver `RowView`.
+/// A row of the columns picker.
+// Four bools, each an independent fact painted differently: the label
+// differs from the real one, the column is on, its format is fixed by the
+// schema, and the row cannot be touched. See `RowView`.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "cuatro estados independientes de una celda; ver `RowView`"
+    reason = "four independent states of a cell; see `RowView`"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnsPickerRowView {
-    /// Su id, tal como viaja a la configuración (`size`, `attr:posix.mode`).
-    /// Una IDENTIDAD: entera o vacía, jamás recortada.
+    /// Its id, exactly as it travels to configuration (`size`,
+    /// `attr:posix.mode`). An IDENTITY: whole or empty, never truncated.
     pub id: String,
-    /// Cómo se llama, ya traducido y saneado. Para un `attr:` o un
-    /// `plugin:`, la etiqueta que da su catálogo, que es texto de tercero.
+    /// Its name, already translated and sanitized. For an `attr:` or a
+    /// `plugin:`, the label given by its catalogue, which is third-party
+    /// text.
     pub label: String,
-    /// La etiqueta se pinta DISTINTA de lo que es.
+    /// The label is painted DIFFERENT from what it is.
     pub hostile: bool,
-    /// Se pinta en el listado.
+    /// Is painted in the listing.
     pub enabled: bool,
-    /// El formato vigente (`iec`, `iso`…), vocabulario ASCII cerrado. Vacío
-    /// = esta columna no admite formato.
+    /// The current format (`iec`, `iso`…), closed ASCII vocabulary. Empty =
+    /// this column admits no format.
     pub format: String,
-    /// El formato lo FIJA un ajuste del esquema y aquí no se puede ciclar.
-    /// Se pinta apagado en vez de desaparecer: una tecla que no hace nada y
-    /// no dice por qué es peor que una que dice que no.
+    /// The format is FIXED by a schema setting and cannot be cycled here.
+    /// Painted dimmed instead of disappearing: a key that does nothing and
+    /// does not say why is worse than one that says no.
     pub format_locked: bool,
-    /// No se puede ni apagar ni mover. Es el caso del NOMBRE, que es la
-    /// primera columna por contrato del render.
+    /// Cannot be turned off or moved. The NAME's case, which is the first
+    /// column by the render's contract.
     pub fixed: bool,
 }
 
-/// El tema activo, visto por dentro.
+/// The active theme, seen from the inside.
 ///
-/// Los ROLES son la parte compartida: un tema de norte no nombra colores,
-/// nombra papeles (`selection`, `error`…), y cada frontend los pinta con su
-/// tecnología. Los EFECTOS no: son un bloque libre que interpreta cada
-/// renderer, así que lo que esta vista dice de ellos es qué declara el tema y
-/// qué de eso sabe hacer ESTA ventana.
+/// ROLES are the shared part: a norte theme does not name colors, it names
+/// roles (`selection`, `error`…), and each frontend paints them with its own
+/// technology. EFFECTS are not: they are a free block each renderer
+/// interprets, so what this view says about them is what the theme declares
+/// and what of that THIS window knows how to do.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThemeView {
-    /// Cómo se llama el tema activo, o el nombre del preset por defecto.
+    /// The active theme's name, or the default preset's name.
     pub name: String,
-    /// Cada rol con su color resuelto (`#rrggbb`), en orden.
+    /// Each role with its resolved color (`#rrggbb`), in order.
     pub roles: Vec<ThemeRoleView>,
-    /// Los efectos que el tema declara y que este renderer NO sabe pintar.
+    /// The effects the theme declares that this renderer does NOT know how
+    /// to paint.
     ///
-    /// Se dicen, en vez de ignorarse: un tema retro que no se ve distinto es
-    /// un tema que el usuario cree roto. Vacío = el tema no declara ninguno.
+    /// Said, instead of ignored: a retro theme that does not look different
+    /// is a theme the user believes is broken. Empty = the theme declares
+    /// none.
     ///
-    /// Cada clave con su bandera: salen del fichero de tema (#266).
+    /// Each key with its flag: they come from the theme file (#266).
     pub unsupported_effects: Vec<ThemeEffectView>,
-    /// Entre qué temas se puede elegir, en orden.
+    /// Which themes can be chosen from, in order.
     ///
-    /// Esta pantalla ELIGE desde que el catálogo puede volver a cruzar: antes
-    /// solo enseñaba, porque lo que hospeda resolvía el tema una vez al
-    /// arrancar y no había forma de decirle que había cambiado.
+    /// This screen CHOOSES since the catalogue can cross again: it used to
+    /// only show, because whatever hosted it resolved the theme once at
+    /// startup and there was no way to tell it it had changed.
     pub choices: Vec<String>,
-    /// Cuál está bajo el cursor. Mover el cursor previsualiza EN VIVO, igual
-    /// que en el terminal: un selector de tema que no enseña el tema obliga a
-    /// elegir a ciegas.
+    /// Which one is under the cursor. Moving the cursor previews LIVE, just
+    /// like the terminal: a theme picker that does not show the theme forces
+    /// choosing blind.
     pub cursor: u64,
 }
 
-/// Un efecto que el tema declara y que este renderer no pinta.
+/// An effect the theme declares that this renderer does not paint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThemeEffectView {
-    /// La clave, ya enmascarada.
+    /// The key, already masked.
     pub key: String,
-    /// Lo pintado difiere de lo que el fichero dice.
+    /// What is painted differs from what the file says.
     pub hostile: bool,
 }
 
-/// Un rol del tema con su color.
+/// A theme role with its color.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ThemeRoleView {
-    /// Qué papel juega (`selection`, `error`…). Vocabulario de norte.
+    /// What role it plays (`selection`, `error`…). norte's vocabulary.
     pub role: String,
-    /// Su color, `#rrggbb`. El renderer lo pinta como muestra; no lo parsea
-    /// para decidir nada.
+    /// Its color, `#rrggbb`. The renderer paints it as a swatch; it does not
+    /// parse it to decide anything.
     pub color: String,
 }
 
-/// El selector de VOLÚMENES del host: elige uno y el panel navega a él.
+/// The host's VOLUME picker: choose one and the pane navigates to it.
 ///
-/// Solo volúmenes, hoy. El selector de conexiones que la tarea 4.5 nombra a
-/// su lado no está aquí, y la ausencia es una decisión: leer
-/// `connections.toml` obliga a meter el crate de conexiones —con russh,
-/// opendal, suppaftp, age y el llavero— en esta ventana, para una lista que
-/// todavía no puede abrir ninguna. Llega con la fase 5, que necesita ese
-/// crate de todas formas. Mientras tanto `pane.connect` contesta «aquí no»,
-/// que es verdad.
+/// Volumes only, today. The connection picker task 4.5 names alongside it
+/// is not here, and the absence is a decision: reading `connections.toml`
+/// forces pulling the connections crate —with russh, opendal, suppaftp, age
+/// and the keyring— into this window, for a list that cannot open any of
+/// them yet. It arrives with phase 5, which needs that crate anyway. Until
+/// then `pane.connect` answers "not here," which is true.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PickerView {
-    /// Su título, ya traducido.
+    /// Its title, already translated.
     pub title: String,
-    /// Las filas.
+    /// The rows.
     pub rows: Vec<PickerRowView>,
-    /// Cuál está elegida, si hay alguna.
+    /// Which one is chosen, if any.
     pub cursor: Option<u64>,
-    /// La lista está vacía y por qué, ya traducido. Vacío cuando hay filas.
+    /// The list is empty and why, already translated. Empty when there are
+    /// rows.
     ///
-    /// «No hay ninguna» y «todavía no ha contestado» no son lo mismo, y una
-    /// lista vacía sin frase se lee siempre como lo primero.
+    /// "There are none" and "hasn't answered yet" are not the same, and an
+    /// empty list without a sentence always reads as the first.
     pub empty: String,
-    /// Sube cada vez que cambia el CONJUNTO de filas.
+    /// Rises every time the SET of rows changes.
     ///
-    /// El selector de volúmenes se abre VACÍO y se llena cuando contesta el
-    /// daemon, así que tiene la misma carrera que la barra lateral: un click
-    /// pintado sobre una lista y atendido sobre otra. Ver
-    /// [`PlacesSlotView::generation`].
+    /// The volume picker opens EMPTY and fills when the daemon answers, so
+    /// it has the same race as the sidebar: a click painted over one list
+    /// and handled over another. See [`PlacesSlotView::generation`].
     pub generation: u64,
 }
 
-/// Una fila de un selector.
+/// A row of a picker.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PickerRowView {
-    /// Lo que se enseña, ya saneado.
+    /// What is shown, already sanitized.
     pub label: String,
-    /// El texto de arriba DIFIERE de lo real (un punto de montaje es BYTES).
+    /// The text above DIFFERS from the real one (a mount point is BYTES).
     pub hostile: bool,
-    /// El detalle de la derecha, ya saneado: la URL de una conexión, o el
-    /// sistema de ficheros y el espacio de un volumen.
+    /// The detail on the right, already sanitized: a connection's URL, or a
+    /// volume's file system and space.
     pub detail: String,
 }
 
-/// La hoja de atributos de una entrada.
+/// An entry's attribute sheet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetadataSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Los campos, en orden: primero los que tiene toda entrada, luego los
-    /// atributos que el provider trajo con el listado.
+    /// The fields, in order: first the ones every entry has, then the
+    /// attributes the provider brought with the listing.
     pub fields: Vec<MetadataFieldView>,
-    /// No hay nada que enseñar, y esta es la frase que lo dice (el panel al
-    /// que sigue está vacío). Vacía cuando sí hay campos.
+    /// There is nothing to show, and this is the sentence that says so (the
+    /// pane it follows is empty). Empty when there are fields.
     pub note: String,
-    /// La ruta del listado al que esta hoja SIGUE, ya pintable.
+    /// The path of the listing this sheet FOLLOWS, already paintable.
     ///
-    /// «Detalles» a secas no dice de qué son los detalles: con dos listados
-    /// abiertos no había forma de saber cuál se está describiendo salvo mover
-    /// el cursor y mirar si la hoja se movía. Viaja aparte de los campos
-    /// porque no describe a la ENTRADA sino al panel, y va en el título.
+    /// "Details" alone does not say details of what: with two listings open
+    /// there was no way to know which one was being described short of
+    /// moving the cursor and watching whether the sheet moved. Travels apart
+    /// from the fields because it does not describe the ENTRY but the pane,
+    /// and goes in the title.
     ///
-    /// Vacía si el vínculo no resuelve a ningún listado.
+    /// Empty if the link does not resolve to any listing.
     pub follows_display: String,
-    /// La ruta de arriba DIFIERE de los bytes reales.
+    /// The path above DIFFERS from the real bytes.
     pub follows_hostile: bool,
 }
 
-/// Un campo de la hoja.
+/// A field of the sheet.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MetadataFieldView {
-    /// Cómo se llama, ya traducido (o la cabecera del catálogo de atributos).
+    /// Its name, already translated (or the attribute catalogue's header).
     pub label: String,
-    /// Su valor, ya formateado y saneado.
+    /// Its value, already formatted and sanitized.
     pub value: String,
-    /// El valor DIFIERE de lo real (solo el nombre puede serlo).
+    /// The value DIFFERS from the real one (only the name can).
     pub hostile: bool,
 }
 
-/// El panel de árbol de directorios.
+/// The directory tree panel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreeSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Las ramas visibles, en orden de pintado.
+    /// The visible branches, in paint order.
     pub rows: Vec<TreeRowView>,
-    /// Qué fila tiene el cursor.
+    /// Which row has the cursor.
     pub cursor: u64,
-    /// Sube cada vez que cambia el CONJUNTO de filas.
+    /// Rises every time the SET of rows changes.
     ///
-    /// Y cambia solo: desplegar una rama pide su listado, y ese listado llega
-    /// de una task de fondo e inserta filas EN MEDIO. Entre que el lector
-    /// suelta el botón sobre una y el host atiende la acción, esa fila puede
-    /// ser otra — el mismo peligro que la barra de sitios, y la misma cura
-    /// (ADR 0068).
+    /// And changes on its own: expanding a branch requests its listing, and
+    /// that listing arrives from a background task and inserts rows IN THE
+    /// MIDDLE. Between the reader releasing the button over one and the host
+    /// handling the action, that row can be another one — the same hazard as
+    /// the places bar, and the same cure (ADR 0068).
     pub generation: u64,
 }
 
-/// Una rama del árbol.
+/// A branch of the tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TreeRowView {
-    /// El nombre del directorio, saneado. La raíz lleva su ruta entera:
-    /// «`/`» a secas no dice desde dónde cuelga esto.
+    /// The directory's name, sanitized. The root carries its whole path:
+    /// "`/`" alone does not say where this hangs from.
     pub label: String,
-    /// El nombre PINTADO difiere de los bytes reales.
+    /// The PAINTED name differs from the real bytes.
     pub hostile: bool,
-    /// Cuántos niveles por debajo de la raíz (la raíz es 0).
+    /// How many levels below the root (the root is 0).
     pub depth: u32,
-    /// Está desplegada.
+    /// Is expanded.
     pub expanded: bool,
-    /// Tiene hijos que enseñar. `None` = todavía no se ha mirado, y son tres
-    /// estados distintos para el lector: una rama que se puede abrir, una hoja
-    /// que no, y una que aún no se sabe. Pintar «hoja» a algo que no se ha
-    /// leído es una respuesta inventada.
+    /// Has children to show. `None` = not looked at yet, and these are
+    /// three distinct states for the reader: a branch that can be opened, a
+    /// leaf that cannot, and one that is not known yet. Painting "leaf" on
+    /// something not yet read is a made-up answer.
     pub children: Option<bool>,
 }
 
-/// La barra lateral de sitios.
+/// The places sidebar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlacesSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Sus filas, en orden: cabecera de unidades, las unidades, cabecera de
-    /// favoritos, los favoritos. Una sección plegada no lista las suyas, pero
-    /// su cabecera SIGUE: sin ella la lista da un brinco cuando llegan.
+    /// Its rows, in order: volumes header, the volumes, favorites header,
+    /// the favorites. A collapsed section does not list its own, but its
+    /// header STAYS: without it the list jumps when they arrive.
     pub rows: Vec<PlaceRowView>,
-    /// Qué fila tiene el cursor.
+    /// Which row has the cursor.
     pub cursor: u64,
-    /// Sube cada vez que cambia el CONJUNTO de filas.
+    /// Rises every time the SET of rows changes.
     ///
-    /// Sin esto un click no era seguro. Los volúmenes llegan de una tarea de
-    /// fondo y se insertan EN MEDIO de la lista —las unidades van antes que
-    /// los favoritos—, así que entre que el usuario suelta el botón sobre
-    /// `~/proyectos` y el host atiende la acción, esa fila puede ser `/boot`.
-    /// El índice viaja acompañado de la generación con la que se pintó, y una
-    /// que no case se rechaza en vez de navegar a otro sitio (ADR 0068).
+    /// Without this a click was not safe. Volumes arrive from a background
+    /// task and are inserted IN THE MIDDLE of the list —volumes go before
+    /// favorites—, so between the user releasing the button over
+    /// `~/projects` and the host handling the action, that row can be
+    /// `/boot`. The index travels accompanied by the generation it was
+    /// painted with, and one that does not match is rejected instead of
+    /// navigating somewhere else (ADR 0068).
     pub generation: u64,
 }
 
-/// Una fila de la barra lateral.
+/// A row of the sidebar.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "row")]
 pub enum PlaceRowView {
-    /// La cabecera de una sección. No navega.
+    /// A section's header. Does not navigate.
     Header {
-        /// Su texto, ya traducido.
+        /// Its text, already translated.
         label: String,
-        /// Está plegada.
+        /// Is collapsed.
         folded: bool,
     },
-    /// Un volumen del host.
+    /// A host volume.
     Drive {
-        /// Cómo se llama: su etiqueta si la tiene, o su punto de montaje. Ya
-        /// saneado — ninguna plataforma promete que una etiqueta sea UTF-8.
+        /// What it is called: its label if it has one, or its mount point.
+        /// Already sanitized — no platform promises a label is UTF-8.
         label: String,
-        /// El texto de arriba DIFIERE de lo real.
+        /// The text above DIFFERS from the real one.
         hostile: bool,
-        /// El espacio y si es de solo lectura, ya formateado. Un tamaño que
-        /// el sistema no contestó se DICE; jamás se pinta un `0`.
+        /// The space and whether it is read-only, already formatted. A size
+        /// the system did not answer is SAID; a `0` is never painted.
         detail: String,
-        /// El espacio libre CORTO (`159G`, o `?` sin respuesta), para la
-        /// columna de la derecha de la fila (puente 87). Ausente en un host
-        /// anterior.
+        /// The SHORT free space (`159G`, or `?` with no answer), for the
+        /// row's right column (bridge 87). Absent in an older host.
         #[serde(default)]
         free: String,
-        /// El punto de montaje entero, saneado, para el título de la fila:
-        /// `label` es desde el puente 87 el nombre CORTO.
+        /// The whole mount point, sanitized, for the row's title: since
+        /// bridge 87, `label` is the SHORT name.
         #[serde(default)]
         mount: String,
-        /// La clase de unidad (`fixed`, `removable`, `network`, `unknown`):
-        /// elige el icono (puente 87).
+        /// The drive's kind (`fixed`, `removable`, `network`, `unknown`):
+        /// picks the icon (bridge 87).
         #[serde(default)]
         kind: String,
     },
-    /// Un favorito de la hotlist.
+    /// A hotlist favorite.
     Favorite {
-        /// El nombre que le puso el usuario, ya saneado.
+        /// The name the user gave it, already sanitized.
         name: String,
-        /// A dónde va, ya saneado. Vacío si su ruta no parsea.
+        /// Where it goes, already sanitized. Empty if its path does not
+        /// parse.
         target: String,
-        /// El texto de arriba DIFIERE de lo real.
+        /// The text above DIFFERS from the real one.
         hostile: bool,
-        /// Su ruta no parsea, y esta es la razón ya traducida. Vacía cuando
-        /// el favorito está bien.
+        /// Its path does not parse, and this is the already translated
+        /// reason. Empty when the favorite is fine.
         ///
-        /// Un favorito roto se PINTA con su motivo: uno que desaparece en
-        /// silencio es un fallo de configuración que nadie puede ver.
+        /// A broken favorite is PAINTED with its reason: one that
+        /// disappears silently is a configuration failure nobody can see.
         broken: String,
     },
 }
 
-/// El selector de disposiciones, con la vista previa de la elegida.
+/// The layout picker, with the chosen one's preview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutPickerView {
-    /// Su título, ya traducido.
+    /// Its title, already translated.
     pub title: String,
-    /// Las filas: primero las cinco de fábrica, luego las del usuario.
+    /// The rows: first the five factory ones, then the user's.
     pub rows: Vec<LayoutRowView>,
-    /// Cuál está elegida.
+    /// Which one is chosen.
     pub cursor: u64,
-    /// La FORMA de la disposición elegida, en caracteres: una línea por fila
-    /// de la miniatura, todas del mismo ancho.
+    /// The SHAPE of the chosen layout, in characters: one line per
+    /// thumbnail row, all the same width.
     ///
-    /// La pinta el host con el mismo motor que reparte la pantalla de verdad,
-    /// así que la vista previa no puede mentir sobre lo que va a salir.
+    /// Painted by the host with the same engine that lays out the real
+    /// screen, so the preview cannot lie about what will come out.
     pub preview: Vec<String>,
-    /// Por qué la elegida no tiene vista previa, ya traducido. Vacío cuando
-    /// sí la tiene.
+    /// Why the chosen one has no preview, already translated. Empty when it
+    /// has one.
     ///
-    /// CITA el fichero del usuario (el diagnóstico del parser TOML), así que
-    /// va enmascarado y con su bandera: lo que se enmascara se dice (#266).
+    /// QUOTES the user's file (the TOML parser's diagnostic), so it travels
+    /// masked and with its flag: what is masked is said (#266).
     pub problem: String,
-    /// El diagnóstico pintado difiere de lo que el fichero contiene.
+    /// The painted diagnostic differs from what the file contains.
     pub problem_hostile: bool,
 }
 
-/// Una disposición ofrecida.
+/// An offered layout.
 ///
-/// Cuatro banderas y no un estado: cada una es un HECHO independiente —de
-/// fábrica, el nombre difiere del real, comparte nombre con un preset de
-/// teclado, su fichero no parsea— y juntarlas en un enum obligaría a
-/// inventar combinaciones que no existen.
+/// Four flags and not a state: each is an independent FACT —factory, the
+/// name differs from the real one, shares a name with a keyboard preset, its
+/// file does not parse— and combining them into an enum would force
+/// inventing combinations that do not exist.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "avisos independientes de una fila; un enum inventaría combinaciones"
+    reason = "independent warnings for a row; an enum would invent combinations"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutRowView {
-    /// Su nombre, ya saneado. El nombre REAL son bytes —acaba en
-    /// `layouts/<nombre>.toml`— y no viaja: para elegir una fila se manda su
-    /// índice, no su nombre.
+    /// Its name, already sanitized. The REAL name is bytes —ends in
+    /// `layouts/<name>.toml`— and does not travel: choosing a row sends its
+    /// index, not its name.
     pub name: String,
-    /// El texto de arriba DIFIERE del nombre real.
+    /// The text above DIFFERS from the real name.
     pub hostile: bool,
-    /// Es una de las de fábrica.
+    /// Is one of the factory ones.
     pub factory: bool,
-    /// Su nombre coincide con el de un preset de TECLADO, y elegirla no
-    /// cambia ni una tecla. Se avisa: sin la línea, la coincidencia es una
-    /// trampa en vez de una comodidad.
+    /// Its name matches a KEYBOARD preset's, and choosing it does not
+    /// change a single key. Flagged: without the line, the coincidence is a
+    /// trap instead of a convenience.
     pub shares_keymap_name: bool,
-    /// Su fichero no parsea.
+    /// Its file does not parse.
     pub broken: bool,
 }
 
-/// Una búsqueda por el subárbol, con lo que lleva encontrado.
+/// A search across the subtree, with what it has found so far.
 ///
-/// Los resultados llegan en LOTES mientras la búsqueda corre: la vista se
-/// puede recorrer y usar antes de que termine, que es la mitad del valor de
-/// buscar en un árbol grande.
+/// Results arrive in BATCHES while the search runs: the view can be browsed
+/// and used before it finishes, which is half the value of searching a large
+/// tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchView {
-    /// Lo que se buscó, ya saneado.
+    /// What was searched for, already sanitized.
     pub query: String,
-    /// Dónde, ya saneado.
+    /// Where, already sanitized.
     pub root: String,
-    /// El texto de arriba DIFIERE de la ruta real.
+    /// The text above DIFFERS from the real path.
     pub root_hostile: bool,
-    /// Lo encontrado hasta ahora.
+    /// What has been found so far.
     pub rows: Vec<SearchRowView>,
-    /// Cuál está elegida, si hay alguna.
+    /// Which one is chosen, if any.
     pub cursor: Option<u64>,
-    /// Se preguntó por SIGNIFICADO contra el índice, no por nombre contra el
-    /// árbol.
+    /// It was asked by MEANING against the index, not by name against the
+    /// tree.
     ///
-    /// El renderer lo necesita para dos cosas: titular la vista y decidir si
-    /// pinta la columna de parecido. Y para no prometer lo que no hay: una
-    /// búsqueda semántica no recorre un subárbol, así que su alcance es el
-    /// índice entero y no [`Self::root`].
+    /// The renderer needs it for two things: titling the view and deciding
+    /// whether to paint the similarity column. And to avoid promising what
+    /// is not there: a semantic search does not walk a subtree, so its scope
+    /// is the whole index and not [`Self::root`].
     pub semantic: bool,
-    /// En qué estado está, YA dicho: cuántos van y si sigue corriendo, si
-    /// terminó, o si paró en su tope.
+    /// What state it is in, ALREADY said: how many so far and whether it is
+    /// still running, finished, or stopped at its cap.
     ///
-    /// Compuesto en Rust con la MISMA familia de frases que usa el TUI
-    /// (`search-status-*`): el catálogo llega al renderer con los textos ya
-    /// resueltos, así que interpolar un número es cosa del host.
+    /// Composed in Rust with the SAME family of sentences the TUI uses
+    /// (`search-status-*`): the catalogue reaches the renderer with the
+    /// texts already resolved, so interpolating a number is the host's job.
     ///
-    /// Los tres estados se dicen distinto porque son distintos: una lista
-    /// corta que ya no crece, una que todavía crece y una que paró en el tope
-    /// se leen igual si nadie las nombra.
+    /// The three states are said differently because they are different: a
+    /// short list that is no longer growing, one still growing and one that
+    /// stopped at the cap read the same if nobody names them.
     pub status: String,
-    /// Sigue corriendo. Va aparte de [`Self::status`] porque el renderer lo
-    /// usa para pintar, no para leer.
+    /// Still running. Kept apart from [`Self::status`] because the renderer
+    /// uses it to paint, not to read.
     pub running: bool,
 }
 
-/// Un resultado.
+/// A result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchRowView {
-    /// El nombre del fichero, ya saneado.
+    /// The file's name, already sanitized.
     pub name: String,
-    /// El texto de arriba DIFIERE del nombre real.
+    /// The text above DIFFERS from the real name.
     pub hostile: bool,
-    /// Dónde está, ya saneado: el directorio que lo contiene.
+    /// Where it is, already sanitized: the directory containing it.
     pub parent: String,
-    /// El directorio de arriba DIFIERE del real.
+    /// The directory above DIFFERS from the real one.
     pub parent_hostile: bool,
-    /// Es un directorio.
+    /// Is a directory.
     ///
-    /// `false` también cuando NO se sabe: un hallazgo semántico trae ruta y
-    /// parecido, no clase, y activarlo abre la carpeta con el cursor encima
-    /// —que es lo que hay que hacer con un fichero— en vez de intentar
-    /// entrar en algo que puede no ser un directorio.
+    /// `false` also when it is NOT known: a semantic hit brings a path and a
+    /// similarity, not a kind, and activating it opens the folder with the
+    /// cursor on it —which is what should be done with a file— instead of
+    /// trying to enter something that might not be a directory.
     pub is_dir: bool,
-    /// Cuánto se parece a lo que se preguntó, en `[-1, 1]`, mayor = más.
+    /// How similar it is to what was asked, in `[-1, 1]`, higher = more.
     ///
-    /// `None` en una búsqueda por NOMBRE: ahí no hay grados, o el patrón casa
-    /// o no casa, y pintar un número inventado convertiría un orden de
-    /// llegada en un ranking.
+    /// `None` in a search BY NAME: there are no degrees there, either the
+    /// pattern matches or it does not, and painting a made-up number would
+    /// turn an arrival order into a ranking.
     pub score: Option<f64>,
 }
 
-/// Lo que el visor enseña.
+/// What the viewer shows.
 ///
-/// Cinco banderas y no un estado: cada una es un HECHO independiente que el
-/// host resolvió (es hexadecimal, el encoding lo forzó el usuario, la
-/// decodificación tuvo errores, el fichero seguía, el nombre difiere del
-/// real), y juntarlas en un enum obligaría a inventar combinaciones que no
-/// existen.
+/// Five flags and not a state: each is an independent FACT the host
+/// resolved (is hexadecimal, the encoding was forced by the user, the
+/// decoding had errors, the file kept going, the name differs from the real
+/// one), and combining them into an enum would force inventing combinations
+/// that do not exist.
 ///
-/// El texto viene DECODIFICADO y en líneas por `norte_frontend::viewer`, que
-/// es el mismo modelo que pinta el TUI: la detección de encoding, el salto a
-/// hexadecimal de un binario y el recorte de la ventana visible son suyos, no
-/// del renderer.
+/// The text comes DECODED and in lines from `norte_frontend::viewer`, the
+/// same model that paints the TUI: encoding detection, a binary's jump to
+/// hexadecimal and the visible window's truncation are its own, not the
+/// renderer's.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "el visor: hex, recorte y ventana son suyos, no del renderer"
+    reason = "the viewer: hex, truncation and the window are its own, not the renderer's"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ViewerView {
-    /// El fichero, ya saneado para pintar.
+    /// The file, already sanitized for painting.
     pub path_display: String,
-    /// El texto de arriba DIFIERE del nombre real.
+    /// The text above DIFFERS from the real name.
     pub path_hostile: bool,
-    /// Nombre del encoding con el que se está leyendo.
+    /// Name of the encoding it is being read with.
     pub encoding: String,
-    /// Final de línea detectado (`lf`, `crlf`, `cr`, `mixed`).
+    /// Detected line ending (`lf`, `crlf`, `cr`, `mixed`).
     pub eol: String,
-    /// Se está enseñando en hexadecimal (binario, o a mano).
+    /// Is being shown in hexadecimal (binary, or by hand).
     pub hex: bool,
-    /// El encoding lo forzó el usuario, no la detección.
+    /// The encoding was forced by the user, not detection.
     pub forced: bool,
-    /// La decodificación tuvo errores: hay bytes que no eran de ese encoding.
+    /// The decoding had errors: there are bytes that did not belong to that
+    /// encoding.
     pub had_errors: bool,
-    /// Solo se leyó una cabecera: el fichero seguía.
+    /// Only a header was read: the file kept going.
     pub truncated: bool,
-    /// Líneas totales de lo leído.
+    /// Total lines of what was read.
     pub total_rows: u64,
-    /// Primera línea visible.
+    /// First visible line.
     pub first_line: u64,
-    /// Ancho de la línea más larga, en CELDAS.
+    /// Width of the longest line, in CELLS.
     ///
-    /// Con `first_col`, es lo que el renderer necesita para dibujar barra
-    /// horizontal. `0` en hexadecimal, que tiene un ancho fijo y no se
-    /// desplaza. Viaja aunque las `lines` ya vengan recortadas: el recorte dice
-    /// qué se ve, y esto dice cuánto hay — sin lo segundo, un fichero cortado
-    /// por la derecha se lee como un fichero corto.
+    /// With `first_col`, it is what the renderer needs to draw a horizontal
+    /// scrollbar. `0` in hexadecimal, which has a fixed width and does not
+    /// scroll. Travels even though `lines` already arrive truncated: the
+    /// truncation says what is seen, and this says how much there is —
+    /// without the latter, a file cut off on the right reads as a short
+    /// file.
     ///
-    /// Sin `serde(default)`, como el resto de esta vista: la compatibilidad
-    /// hacia atrás la resuelve `bridge_version` en el sobre, y un `default`
-    /// aquí solo debilitaría el golden — si alguien dejara de serializarlos, el
-    /// round-trip pasaría con ceros.
+    /// Without `serde(default)`, like the rest of this view: backward
+    /// compatibility is resolved by `bridge_version` in the envelope, and a
+    /// `default` here would only weaken the golden — if someone stopped
+    /// serializing them, the round-trip would pass with zeros.
     pub total_cols: u64,
-    /// Primera columna visible, en celdas.
+    /// First visible column, in cells.
     pub first_col: u64,
-    /// Las líneas de la ventana visible, ya saneadas y acotadas.
+    /// The visible window's lines, already sanitized and scoped.
     pub lines: Vec<String>,
-    /// «via ‹plugin›», ya traducido y con el nombre enmascarado dentro. Vacío
-    /// = es el fichero, leído por norte.
+    /// "via ‹plugin›", already translated with the name masked inside.
+    /// Empty = it is the file, read by norte.
     ///
-    /// Se dice siempre que hay uno. Un previewer puede enseñar cualquier cosa
-    /// —es su trabajo: un PDF como texto, un JSON formateado— y quien mira
-    /// tiene derecho a saber que no está viendo los bytes del fichero.
+    /// Said whenever there is one. A previewer can show anything —that is
+    /// its job: a PDF as text, a formatted JSON— and whoever is looking has
+    /// the right to know they are not seeing the file's own bytes.
     ///
-    /// Traducido aquí porque interpola el nombre, y un renderer no traduce.
+    /// Translated here because it interpolates the name, and a renderer
+    /// does not translate.
     pub preview_by: String,
-    /// La decodificación del fichero que se le dio al previewer fue con
-    /// PÉRDIDA: los `�` de su salida vienen de ahí y no del fichero.
+    /// The decoding of the file given to the previewer was LOSSY: the `�`
+    /// in its output come from there, not from the file.
     ///
-    /// Aparte de `had_errors`, que es el de la vista cruda: son dos
-    /// decodificaciones distintas y confundirlas culpa al fichero de lo que
-    /// hizo la lectura.
+    /// Kept apart from `had_errors`, which is the raw view's: they are two
+    /// different decodings, and confusing them blames the file for what the
+    /// read did.
     pub preview_lossy: bool,
-    /// Esto es una IMAGEN que se puede pintar, y así de grande dice ser.
+    /// This is an IMAGE that can be painted, and this is how big it claims
+    /// to be.
     ///
-    /// `None` = no es una imagen, o es una que esta ventana se NIEGA a
-    /// pintar; en el segundo caso [`Self::image_refused`] dice por qué. El
-    /// renderer pide los bytes aparte —no viajan en la foto— y hasta que
-    /// llegan enseña la vista cruda.
+    /// `None` = it is not an image, or it is one this window REFUSES to
+    /// paint; in the second case [`Self::image_refused`] says why. The
+    /// renderer requests the bytes separately —they do not travel in the
+    /// snapshot— and shows the raw view until they arrive.
     pub image: Option<ImageView>,
-    /// Por qué NO se va a pintar una imagen que sí se reconoció, ya
-    /// traducido. Vacío = no hay nada que explicar.
+    /// Why an image that WAS recognized will NOT be painted, already
+    /// translated. Empty = there is nothing to explain.
     ///
-    /// Se dice en vez de caer en silencio al hexview: un fichero que el
-    /// usuario sabe que es una foto y que aparece como bytes sin una palabra
-    /// parece norte roto, no norte prudente.
+    /// Said instead of silently falling back to the hexview: a file the
+    /// user knows is a photo that appears as bytes with no word looks like
+    /// broken norte, not cautious norte.
     pub image_refused: String,
-    /// El ZOOM de la imagen, en porcentaje de lo que ocuparía AJUSTADA
-    /// (puente 80). `100` = ajustada, que es como se abre.
+    /// The image's ZOOM, as a percentage of what FIT would occupy (bridge
+    /// 80). `100` = fit, which is how it opens.
     ///
-    /// Un porcentaje y no un tamaño en píxeles porque quien sabe cuánto es
-    /// «ajustada» es el renderer, que es quien tiene el hueco. El host lleva
-    /// la cuenta de los peldaños y se la dice; la multiplicación es de la
-    /// hoja de estilos.
+    /// A percentage and not a size in pixels because the one who knows how
+    /// much "fit" is is the renderer, which is the one with the slot. The
+    /// host keeps count of the steps and tells it; the multiplication
+    /// belongs to the stylesheet.
     ///
-    /// Un renderer anterior al puente 80 no lo lee y pinta la imagen
-    /// ajustada siempre, que es lo que hacía.
-    #[serde(default = "zoom_ajustado")]
+    /// A renderer older than bridge 80 does not read it and always paints
+    /// the image fit, which is what it used to do.
+    #[serde(default = "zoom_fit")]
     pub image_zoom: u16,
-    /// Las líneas visibles CON ESTILO cuando lo que se enseña lo produjo un
-    /// previewer (puente 49): una entrada por fila de [`Self::lines`], cada
-    /// una la lista ordenada de sus fragmentos. Vacío en la vista cruda.
+    /// The visible lines WITH STYLE when what is shown was produced by a
+    /// previewer (bridge 49): one entry per row of [`Self::lines`], each the
+    /// ordered list of its spans. Empty in the raw view.
     ///
-    /// El mismo texto que `lines`, partido y con su rol o su color: la TUI
-    /// lo pintaba desde el primer día y la ventana lo aplanaba. Un renderer
-    /// que no pinte fragmentos sigue con `lines` y no pierde nada.
+    /// The same text as `lines`, split and with its role or color: the TUI
+    /// painted it from day one and the window flattened it. A renderer that
+    /// does not paint spans keeps using `lines` and loses nothing.
     pub styled: Vec<Vec<SpanView>>,
 }
 
-/// El zoom que significa AJUSTADA, para el `serde(default)` de
-/// [`ViewerView::image_zoom`]: un host anterior al puente 80 no manda el
-/// campo, y lo que hacía era pintar ajustado.
-const fn zoom_ajustado() -> u16 {
+/// The zoom that means FIT, for [`ViewerView::image_zoom`]'s
+/// `serde(default)`: a host older than bridge 80 does not send the field,
+/// and what it used to do was paint fit.
+const fn zoom_fit() -> u16 {
     100
 }
 
-/// Un fragmento de una línea de preview con estilo (ADR 0037).
+/// A span of a styled preview line (ADR 0037).
 ///
-/// `role` GANA sobre `fg` cuando vienen los dos, como en la TUI: el tema del
-/// lector manda sobre el color fijo de un plugin. Un rol que el tema no
-/// conoce no llega aquí: el modelo compartido ya lo dejó en `None`.
+/// `role` WINS over `fg` when both are present, as in the TUI: the reader's
+/// theme rules over a plugin's fixed color. A role the theme does not know
+/// does not reach here: the shared model already left it as `None`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SpanView {
-    /// El texto, ya enmascarado a la entrada y acotado aquí.
+    /// The text, already masked on input and scoped here.
     pub text: String,
-    /// El rol del tema en kebab-case (`title`, `error`, `match`…), validado.
+    /// The theme role in kebab-case (`title`, `error`, `match`…), validated.
     pub role: Option<String>,
-    /// El color propio del plugin, `#rrggbb`. Solo cuenta sin `role`.
+    /// The plugin's own color, `#rrggbb`. Only counts without `role`.
     pub fg: Option<String>,
-    /// El FONDO del fragmento, `#rrggbb` (puente 50): un previewer de imagen
-    /// pinta medios bloques con el píxel de arriba en `fg` y el de abajo
-    /// aquí. Ningún rol manda sobre él.
+    /// The span's BACKGROUND, `#rrggbb` (bridge 50): an image previewer
+    /// paints half-blocks with the top pixel in `fg` and the bottom one
+    /// here. No role rules over it.
     pub bg: Option<String>,
 }
 
-/// Una imagen reconocida y aceptada: qué es y cuánto dice medir.
+/// A recognized and accepted image: what it is and how big it claims to be.
 ///
-/// Lo que declara su CABECERA, no lo que mida de verdad — nadie la ha
-/// decodificado todavía, y ese es justo el punto: el tamaño declarado es lo
-/// que se compara con el presupuesto ANTES de dársela a un decodificador.
+/// What its HEADER declares, not what it truly measures — nobody has
+/// decoded it yet, and that is exactly the point: the declared size is what
+/// gets compared against the budget BEFORE handing it to a decoder.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageView {
-    /// Su formato, reconocido por bytes MÁGICOS y jamás por la extensión: una
-    /// extensión es una afirmación de quien nombró el fichero.
+    /// Its format, recognized by MAGIC bytes and never by the extension: an
+    /// extension is a claim made by whoever named the file.
     pub format: String,
-    /// Ancho declarado, en píxeles.
+    /// Declared width, in pixels.
     pub width: u32,
-    /// Alto declarado, en píxeles.
+    /// Declared height, in pixels.
     pub height: u32,
 }
 
-/// El reparto de la pantalla: quién se pinta, dónde, y con qué papel.
+/// The screen's layout: who is painted, where, and with what role.
 ///
-/// Se mide en CELDAS de layout y no en píxeles, que es como están declarados
-/// los mínimos de cada panel y como los comparte el TUI: «esto no cabe»
-/// significa lo mismo en las dos superficies. El renderer multiplica por el
-/// tamaño de su celda —eso sí es suyo— y pinta.
+/// Measured in layout CELLS and not pixels, which is how each pane's
+/// minimums are declared and how the TUI shares them: "this doesn't fit"
+/// means the same on both surfaces. The renderer multiplies by its own cell
+/// size —that part is its own— and paints.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayoutView {
-    /// El tamaño que se repartió, en celdas.
+    /// The size that was laid out, in cells.
     pub cells: (u16, u16),
-    /// Los huecos que se pintan, en orden de pintado. Un hueco que no está
-    /// aquí es que no cabe o es una pestaña inactiva: no se pinta, y eso lo
-    /// decidió el mismo repartidor que usa el TUI.
+    /// The slots that are painted, in paint order. A slot not here either
+    /// does not fit or is an inactive tab: it is not painted, and that was
+    /// decided by the same layout engine the TUI uses.
     pub placements: Vec<SlotPlacement>,
-    /// Las PESTAÑAS de cada grupo que hay en pantalla.
+    /// The TABS of each group on screen.
     ///
-    /// Aparte de los `placements` porque una pestaña inactiva NO se coloca —
-    /// no se pinta su contenido— y aun así hay que enseñar que está: una
-    /// ventana con tres pestañas que solo muestra la de delante y no dice que
-    /// hay otras dos es una ventana que esconde trabajo abierto.
+    /// Kept apart from `placements` because an inactive tab is NOT placed —
+    /// its content is not painted— and yet it must be shown to exist: a
+    /// window with three tabs that only shows the front one and does not say
+    /// there are two more is a window hiding open work.
     pub tabs: Vec<TabGroupView>,
-    /// Si la marca de DESTINO dice algo con los listados que hay a la vista.
+    /// Whether the TARGET mark says anything with the listings currently
+    /// visible.
     ///
-    /// Que el rol EXISTA y que se PINTE son dos preguntas. La primera la
-    /// contesta [`SlotPlacement::role`], que es el modelo; ésta es la
-    /// segunda, y viaja calculada porque la decide el crate compartido
-    /// (`layout::target_worth_marking`) y no el renderer: escrita allí era un
-    /// número repetido en TypeScript, o sea la misma decisión en dos sitios
-    /// que esta rama existe para dejar de tener (ADR 0077).
+    /// Whether the role EXISTS and whether it is PAINTED are two questions.
+    /// [`SlotPlacement::role`] answers the first, which is the model; this
+    /// is the second, and it travels precomputed because it is decided by
+    /// the shared crate (`layout::target_worth_marking`) and not the
+    /// renderer: written there it was a number duplicated in TypeScript,
+    /// i.e. the same decision in two places that this field exists to stop
+    /// having (ADR 0077).
     ///
-    /// Con dos listados el destino es «el otro» y nadie necesita que se lo
-    /// digan; una marca que sale siempre deja de leerse, y entonces no está
-    /// el día que hay tres y una copia hacia el que el motor desempate solo
-    /// es pérdida de datos silenciosa (ADR 0058 D7).
+    /// With two listings the target is "the other one" and nobody needs to
+    /// be told; a mark that always shows stops being read, and then the day
+    /// there are three and a copy toward the one the engine's tiebreak
+    /// picks is silent data loss (ADR 0058 D7).
     ///
-    /// `#[serde(default)]`: ausente = `false`, que es no marcar. La dirección
-    /// segura, porque la marca de más es la que enseña a ignorarla.
+    /// `#[serde(default)]`: absent = `false`, which is not marking. The safe
+    /// direction, because an extra mark is the one that teaches ignoring
+    /// it.
     #[serde(default)]
     pub mark_target: bool,
 }
 
-/// Un grupo de pestañas y cuál está delante.
+/// A group of tabs and which one is in front.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabGroupView {
-    /// El hueco COLOCADO al que pertenece este grupo: el de la pestaña
-    /// activa, que es el que el renderer está pintando.
+    /// The PLACED slot this group belongs to: the active tab's, which is
+    /// the one the renderer is painting.
     pub slot_id: u32,
-    /// Sus pestañas, en el orden del árbol.
+    /// Its tabs, in the tree's order.
     pub tabs: Vec<TabView>,
-    /// Cuál está delante, como índice en `tabs`.
+    /// Which one is in front, as an index into `tabs`.
     pub active: u64,
-    /// Es un grupo de PANELES (fase F, puente 88), no de listados: los
-    /// paneles de un mismo borde comparten sitio. Sin `+`: una pestaña nueva
-    /// es un listado, y en un grupo de paneles no pinta nada. Ausente en un
-    /// host anterior = de listados.
+    /// Is a group of PANELS (phase F, bridge 88), not of listings: panels
+    /// on the same edge share a spot. No `+`: a new tab is a listing, and
+    /// does nothing in a panel group. Absent in an older host = of
+    /// listings.
     #[serde(default)]
     pub panels: bool,
 }
 
-/// Una pestaña.
+/// A tab.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TabView {
-    /// El hueco que hay dentro. Es lo que vuelve al elegirla con el ratón.
+    /// The slot inside. Comes back when chosen with the mouse.
     pub slot_id: u32,
-    /// Su rótulo: el nombre del directorio de su listado, ya enmascarado —un
-    /// directorio con nombre hostil dentro de una pestaña es tan hostil como
-    /// dentro de un listado—. Para lo que no es un listado, el nombre de su
-    /// kind.
+    /// Its label: its listing's directory name, already masked —a
+    /// directory with a hostile name inside a tab is as hostile as inside a
+    /// listing—. For something that is not a listing, its kind's name.
     pub title: String,
-    /// El rótulo se pinta distinto de lo que es.
+    /// The label is painted different from what it is.
     pub title_hostile: bool,
 }
 
-/// Un hueco colocado.
+/// A placed slot.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SlotPlacement {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Columna de la esquina superior izquierda, en celdas.
+    /// Column of the top-left corner, in cells.
     pub x: u16,
-    /// Fila de la esquina superior izquierda, en celdas.
+    /// Row of the top-left corner, in cells.
     pub y: u16,
-    /// Ancho en celdas.
+    /// Width in cells.
     pub width: u16,
-    /// Alto en celdas.
+    /// Height in cells.
     pub height: u16,
-    /// Su papel AHORA, si tiene alguno.
+    /// Its role NOW, if it has one.
     pub role: Option<SlotRole>,
-    /// Orden de tabulación. El renderer no lo calcula: mover el foco con el
-    /// tabulador es la misma regla en las dos superficies.
+    /// Tab order. The renderer does not compute it: moving focus with tab
+    /// is the same rule on both surfaces.
     pub focus_index: u32,
 }
 
-/// El papel de un hueco.
+/// A slot's role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SlotRole {
-    /// Tiene el foco de teclado.
+    /// Has keyboard focus.
     Active,
-    /// Es el DESTINO de una operación que necesita un segundo sitio.
+    /// Is the TARGET of an operation that needs a second spot.
     Target,
 }
 
-/// Estado de la conexión, tal como se pinta.
+/// Connection state, as painted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum ConnectionView {
-    /// Hablando con el daemon.
+    /// Talking to the daemon.
     Connected,
-    /// Se perdió y se está reintentando.
+    /// Was lost and is being retried.
     Reconnecting,
-    /// No hay conexión y no se reintenta.
+    /// No connection and no retry.
     Lost {
-        /// Clave Fluent del motivo.
+        /// Fluent key of the reason.
         reason_key: String,
     },
 }
 
-/// Un hueco de la disposición.
+/// A layout slot.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum SlotView {
-    /// Un listado.
+    /// A listing.
     ///
-    /// En caja: un listado con su ventana de filas es un orden de magnitud
-    /// más grande que un hueco sin proyectar, y un enum que mide lo que su
-    /// variante mayor se paga en cada `Vec<SlotView>` que se construye.
+    /// Boxed: a listing with its row window is an order of magnitude
+    /// bigger than an unprojected slot, and an enum sizes what its biggest
+    /// variant costs into every `Vec<SlotView>` that gets built.
     Browser(Box<BrowserSlotView>),
-    /// La hoja de atributos: lo que el listado ya sabe de la entrada bajo el
-    /// cursor del panel al que este hueco sigue.
+    /// The attribute sheet: what the listing already knows about the entry
+    /// under the cursor of the pane this slot follows.
     ///
-    /// **No lee nada.** La `Entry` ya está en el listado, y un panel que
-    /// siguiera al cursor pidiendo datos por fila convertiría bajar por un
-    /// directorio en una tormenta de peticiones.
+    /// **Reads nothing.** The `Entry` is already in the listing, and a pane
+    /// that followed the cursor requesting data per row would turn walking
+    /// down a directory into a storm of requests.
     Metadata(Box<MetadataSlotView>),
-    /// La barra lateral de sitios: los volúmenes del host y los favoritos
-    /// del usuario, con su cursor.
+    /// The places sidebar: the host's volumes and the user's favorites,
+    /// with its cursor.
     Places(Box<PlacesSlotView>),
-    /// El árbol de directorios: qué ramas hay abiertas y cuál tiene el cursor.
+    /// The directory tree: which branches are open and which has the
+    /// cursor.
     ///
-    /// **Solo directorios**, y **perezoso**: desplegar una rama lista ESE
-    /// directorio y nada más. Un árbol que se leyera entero al abrirse tardaría
-    /// minutos en un `$HOME` grande y horas contra un remoto.
+    /// **Directories only**, and **lazy**: expanding a branch lists THAT
+    /// directory and nothing else. A tree read whole on opening would take
+    /// minutes on a large `$HOME` and hours against a remote.
     Tree(Box<TreeSlotView>),
-    /// El panel de procesos: las MISMAS tareas que pinta la franja, con su
-    /// propio cursor.
+    /// The processes panel: the SAME tasks the strip paints, with its own
+    /// cursor.
     ///
-    /// No guarda una segunda copia: dos listas de tareas se separan, y la que
-    /// se ve deja de ser la que se cancela.
+    /// Keeps no second copy: two task lists drift apart, and the one you
+    /// see stops being the one that gets cancelled.
     Processes {
-        /// Id del hueco.
+        /// Slot id.
         slot_id: u32,
-        /// Qué fila tiene el cursor, si hay alguna.
+        /// Which row has the cursor, if any.
         cursor: Option<u64>,
     },
-    /// El panel de registro: lo que este proceso está registrando (#326).
+    /// The log panel: what this process is logging (#326).
     Log(Box<LogSlotView>),
-    /// El panel de TERMINAL (#362, puente 95): la rejilla de un shell.
+    /// The TERMINAL panel (#362, bridge 95): a shell's grid.
     ///
-    /// Lo que cruza son FILAS YA PINTADAS, no los bytes del pty. La emulación
-    /// —bytes a celdas— la hace `norte-term` una sola vez, del mismo lado que
-    /// la hace la terminal, así que los dos frontends enseñan lo mismo por
-    /// construcción y no porque alguien compare dos emuladores.
+    /// What crosses are ALREADY PAINTED ROWS, not the pty's bytes. The
+    /// emulation —bytes to cells— is done once by `norte-term`, on the same
+    /// side the terminal does it, so both frontends show the same thing by
+    /// construction and not because someone compares two emulators.
     Terminal(Box<TerminalSlotView>),
-    /// El visor ACOPLADO (#291, puente 51): el fichero bajo el cursor del
-    /// listado al que este hueco sigue, leído solo. Kind `viewer` en la
-    /// disposición; `preview` en el wire, que es lo que es.
+    /// The DOCKED viewer (#291, bridge 51): the file under the cursor of
+    /// the listing this slot follows, read-only. Kind `viewer` in the
+    /// layout; `preview` on the wire, which is what it is.
     Preview(Box<PreviewSlotView>),
-    /// El panel que pinta un PLUGIN (fase 3): el marco que describió su guest.
+    /// The panel a PLUGIN paints (phase 3): the frame its guest described.
     Panel(Box<PanelSlotView>),
-    /// El mapa de disco (fase 4): de qué está hecho el directorio, repartido
-    /// en rectángulos.
+    /// The disk map (phase 4): what the directory is made of, laid out into
+    /// rectangles.
     ///
-    /// El reparto lo hace el HOST con `norte_frontend::treemap::squarify`, no
-    /// el renderer: un treemap calculado dos veces son dos treemaps distintos
-    /// en cuanto alguien toque un redondeo (ADR 0077). Lo que cruza son las
-    /// líneas ya estiladas y sus zonas, igual que un panel de plugin.
+    /// The layout is done by the HOST with `norte_frontend::treemap::squarify`,
+    /// not the renderer: a treemap computed twice is two different treemaps
+    /// the moment someone touches a rounding (ADR 0077). What crosses are the
+    /// already styled lines and their zones, just like a plugin panel.
     DiskMap(Box<DiskMapSlotView>),
-    /// La línea de tiempo del journal (fase 7, #359, puente 78): lo que se ha
-    /// hecho en esta máquina, de lo más nuevo a lo más viejo, con el cursor
-    /// sobre el punto al que se volvería.
+    /// The journal timeline (phase 7, #359, bridge 78): what has been done
+    /// on this machine, newest to oldest, with the cursor on the point it
+    /// would revert to.
     ///
-    /// Las filas, cómo se agrupa un lote y qué se va a llevar un corte los
-    /// decide `norte_frontend::timeline`, el mismo modelo que la TUI.
+    /// The rows, how a batch is grouped and what a cut would take are
+    /// decided by `norte_frontend::timeline`, the same model as the TUI.
     Timeline(Box<TimelineSlotView>),
-    /// Un hueco de un tipo que este host todavía no proyecta. Se enseña
-    /// vacío y con su nombre: preservar lo que no se entiende es la regla de
-    /// la sesión (ADR 0059), y desaparecer sería peor que estar en gris.
+    /// A slot of a kind this host does not project yet. Shown empty and
+    /// with its name: preserving what is not understood is the session's
+    /// rule (ADR 0059), and disappearing would be worse than being grayed
+    /// out.
     Unsupported {
-        /// Id del hueco.
+        /// Slot id.
         slot_id: u32,
-        /// Nombre del kind, para decirlo. Lo escribe la disposición del
-        /// usuario, así que va enmascarado.
+        /// Kind's name, to say it. Written by the user's layout, so it
+        /// travels masked.
         kind_name: String,
-        /// El nombre pintado difiere del que hay en el fichero (#266).
+        /// The painted name differs from the one in the file (#266).
         kind_name_hostile: bool,
     },
 }
 
-/// El visor acoplado (#291): lo que enseña un hueco `viewer`.
+/// The docked viewer (#291): what a `viewer` slot shows.
 ///
-/// El MISMO [`ViewerView`] que el visor a pantalla completa —es el mismo
-/// visor en otro sitio, como en la TUI—, con dos diferencias que son del
-/// vínculo y no del contenido: sigue al cursor del listado en vez de abrirse
-/// con una tecla, y las líneas vienen ENTERAS hasta el tope del puente para
-/// que el hueco las desplace solo, porque no tiene teclas de visor.
+/// The SAME [`ViewerView`] as the full-screen viewer —it is the same viewer
+/// elsewhere, as in the TUI—, with two differences that belong to the link,
+/// not the content: it follows the listing's cursor instead of opening with
+/// a key, and the lines arrive WHOLE up to the bridge's cap so the slot can
+/// scroll them on its own, because it has no viewer keys.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreviewSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// El visor con lo leído, o `None` si no hay fichero que enseñar.
+    /// The viewer with what was read, or `None` if there is no file to
+    /// show.
     pub viewer: Option<ViewerView>,
-    /// Por qué no hay fichero, YA DICHO: un directorio, nada bajo el
-    /// cursor, un error de lectura. Vacío cuando hay visor.
+    /// Why there is no file, ALREADY SAID: a directory, nothing under the
+    /// cursor, a read error. Empty when there is a viewer.
     pub note: String,
 }
 
-/// El panel que pinta un PLUGIN (fase 3): lo que su guest describió.
+/// The panel a PLUGIN paints (phase 3): what its guest described.
 ///
-/// El guest no dibuja, DESCRIBE: líneas con estilo y zonas pulsables. El
-/// borde, el título y el foco los pone la ventana, que es lo que impide que un
-/// plugin se haga pasar por otro panel.
+/// The guest does not draw, it DESCRIBES: styled lines and clickable zones.
+/// The border, the title and focus are set by the window, which is what
+/// stops a plugin from impersonating another panel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PanelSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Qué panel es: el `<kind>`, sin el prefijo, ENMASCARADO y acotado.
+    /// Which panel it is: the `<kind>`, without the prefix, MASKED and
+    /// scoped.
     ///
-    /// Al declararlo se le exige un alfabeto (`KindRegistry::insert_panels`),
-    /// pero esto no sale de ahí: sale del ÁRBOL, que puede venir de un fichero
-    /// de disposición o de la sesión, y a un kind escrito a mano no le ha
-    /// exigido nada nadie. Se trata como el nombre de cualquier kind que el
-    /// host no conoce.
+    /// Declaring it requires an alphabet (`KindRegistry::insert_panels`),
+    /// but this does not come from there: it comes from the TREE, which can
+    /// come from a layout file or from the session, and a hand-written kind
+    /// has had nothing required of it by anyone. Treated like the name of
+    /// any kind the host does not know.
     pub title: String,
-    /// Las líneas del marco, cada una con sus tramos. Vacío mientras el primer
-    /// marco no ha llegado, o si el plugin falló: el hueco se pinta con su
-    /// borde y nada dentro, nunca en blanco sin marco.
+    /// The frame's lines, each with its spans. Empty while the first frame
+    /// has not arrived, or if the plugin failed: the slot is painted with
+    /// its border and nothing inside, never blank with no frame.
     pub lines: Vec<Vec<SpanView>>,
-    /// Las zonas pulsables, en celdas DENTRO del marco.
+    /// The clickable zones, in cells INSIDE the frame.
     pub hits: Vec<HitView>,
 }
 
-/// El mapa de disco (fase 4): el treemap ya repartido, listo para pintar.
+/// The disk map (phase 4): the treemap already laid out, ready to paint.
 ///
-/// Mismo reparto que un panel de plugin —líneas estiladas y zonas en celdas
-/// DENTRO del marco— y por la misma razón: el renderer pinta lo que le den y
-/// dice DÓNDE se pulsó; quién es cada rectángulo lo resuelve el host contra su
-/// propio marco.
+/// Same layout as a plugin panel —styled lines and zones in cells INSIDE
+/// the frame— and for the same reason: the renderer paints what it is given
+/// and says WHERE it was clicked; who each rectangle is is resolved by the
+/// host against its own frame.
 ///
-/// Aquí eso pesa más que allí, porque lo que se resuelve es el NOMBRE de un
-/// fichero: mandarlo por el cable obligaría a elegir entre la forma que se
-/// pinta —enmascarada, que no identifica nada— y la reversible, y sería un
-/// nombre que puede mandar cualquiera que hable con el renderer.
+/// It matters more here than there, because what is resolved is a file's
+/// NAME: sending it over the wire would force choosing between the painted
+/// form —masked, which identifies nothing— and the reversible one, and it
+/// would be a name anyone talking to the renderer could send.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DiskMapSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Qué directorio se está describiendo, para el título. Enmascarado y
-    /// acotado: sale de un nombre de fichero.
+    /// Which directory is being described, for the title. Masked and
+    /// scoped: comes from a file name.
     pub title: String,
-    /// El nombre pintado difiere del que hay en el disco (#266).
+    /// The painted name differs from the one on disk (#266).
     pub title_hostile: bool,
-    /// Las líneas del treemap, cada una con sus tramos. Vacío mientras no se
-    /// haya medido nada: el hueco se pinta con su borde y nada dentro.
+    /// The treemap's lines, each with its spans. Empty while nothing has
+    /// been measured: the slot is painted with its border and nothing
+    /// inside.
     pub lines: Vec<Vec<SpanView>>,
-    /// Un rectángulo por zona, en celdas DENTRO del marco.
+    /// One rectangle per zone, in cells INSIDE the frame.
     pub hits: Vec<HitView>,
-    /// La medida sigue en marcha.
+    /// The measurement is still running.
     ///
-    /// Viaja porque un mapa a medias sin decirlo se lee como un directorio
-    /// pequeño, que es la respuesta equivocada y encima creíble.
+    /// Travels because a half-done map without saying so reads as a small
+    /// directory, which is the wrong answer and a believable one at that.
     pub measuring: bool,
 }
 
-/// La línea de tiempo del journal (#359, puente 78).
+/// The journal timeline (#359, bridge 78).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// El título del panel, ya traducido.
+    /// The panel's title, already translated.
     pub title: String,
-    /// Las filas, de la más nueva a la más vieja. Un lote es UNA fila.
+    /// The rows, newest to oldest. A batch is ONE row.
     pub rows: Vec<TimelineRowView>,
-    /// La fila con el cursor: el punto al que se volvería.
+    /// The row with the cursor: the point it would revert to.
     pub cursor: Option<u64>,
-    /// Lo que se dice cuando no hay filas, ya traducido: «todavía no se ha
-    /// hecho nada» sólo cuando se ha MIRADO, «cargando» antes, y el motivo
-    /// si no hay historial que enseñar. Un panel vacío sin explicación se lee
-    /// como «no has hecho nada», que es otra cosa.
+    /// What is said when there are no rows, already translated: "nothing
+    /// has been done yet" only once it has been CHECKED, "loading" before
+    /// that, and the reason if there is no history to show. An empty panel
+    /// with no explanation reads as "you haven't done anything," which is a
+    /// different claim.
     pub empty: String,
-    /// Lo que se llevaría un `Enter` aquí, ya traducido; vacío sin filas. Es
-    /// el único número que importa antes de pulsar.
+    /// What an `Enter` here would take, already translated; empty with no
+    /// rows. It is the only number that matters before pressing.
     pub footer: String,
 }
 
-/// Una fila de la línea de tiempo.
+/// A row of the timeline.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TimelineRowView {
-    /// La hora, ya formateada.
+    /// The time, already formatted.
     pub time: String,
-    /// Quién: `user`, `agent`, `plugin`… Para el COLOR del punto: lo que
-    /// separa es «yo» de «algo en mi nombre».
+    /// Who: `user`, `agent`, `plugin`… For the dot's COLOR: what it
+    /// separates is "me" from "something in my name."
     pub actor: String,
-    /// El verbo.
+    /// The verb.
     pub op: String,
-    /// Sobre qué, como lo pintó el servidor (ya enmascarado).
+    /// On what, as the server painted it (already masked).
     pub path: String,
-    /// El servidor tuvo que enmascarar `path`.
+    /// The server had to mask `path`.
     pub hostile: bool,
-    /// Lo que la distingue, ya traducido: cuántas entradas trae si es un
-    /// lote, y si no tiene vuelta. Vacío si nada.
+    /// What sets it apart, already translated: how many entries it brings
+    /// if it is a batch, and whether it has no way back. Empty if nothing.
     pub tail: String,
 }
 
-/// Una zona pulsable de un panel de plugin: dónde está, y nada más.
+/// A plugin panel's clickable zone: where it is, and nothing more.
 ///
-/// **Sin su comando, a propósito.** El renderer dice DÓNDE se pulsó y el host
-/// resuelve qué zona era y qué comando le toca, con el mismo filtro que el
-/// terminal. Es la regla de esta ventana —el renderer cuenta lo que pasó, el
-/// host decide qué significa—, y aquí además cierra una puerta: un comando que
-/// viajara por el cable sería un comando que puede mandar cualquiera que hable
-/// con el renderer.
+/// **Without its command, on purpose.** The renderer says WHERE was
+/// clicked and the host resolves which zone it was and which command
+/// applies, with the same filter as the terminal. It is this window's rule
+/// —the renderer reports what happened, the host decides what it means—,
+/// and here it also closes a door: a command that traveled over the wire
+/// would be a command anyone talking to the renderer could send.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HitView {
-    /// Fila dentro del marco, contando desde cero.
+    /// Row inside the frame, counting from zero.
     pub row: u16,
-    /// Columna donde empieza.
+    /// Column where it starts.
     pub col: u16,
-    /// Cuántas celdas ocupa a lo ancho.
+    /// How many cells it spans in width.
     pub width: u16,
 }
 
-/// El panel de terminal (#362, puente 95): lo que el shell tiene pintado.
+/// The terminal panel (#362, bridge 95): what the shell has painted.
 ///
-/// **Es contenido AJENO**, y por eso no se parece a los demás paneles: no
-/// lleva ni un rol del tema. Lo que un programa pinta dentro es suyo, y un
-/// tema que le cambiara los colores a un `ls --color` estaría mintiendo sobre
-/// lo que ese programa dijo. Lo nuestro es el marco, que lo pone el renderer.
+/// **It is FOREIGN content**, and that is why it does not look like the
+/// other panels: it carries not a single theme role. What a program paints
+/// inside is its own, and a theme that changed the colors of an `ls
+/// --color` would be lying about what that program said. Ours is the
+/// frame, set by the renderer.
 ///
-/// Lo que sí garantiza quien lo manda es lo mismo que garantiza la rejilla: en
-/// una celda no puede haber acabado un byte de control, porque el parser se
-/// come los escapes y tira los C0 que no mueven el cursor. Por eso estas
-/// cadenas no vuelven a pasar por el enmascarado: ya no hay nada que
-/// enmascarar.
+/// What whoever sends it does guarantee is the same the grid guarantees: no
+/// control byte can have ended up in a cell, because the parser eats the
+/// escapes and drops the C0s that do not move the cursor. That is why these
+/// strings do not go through masking again: there is nothing left to mask.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Las filas, de arriba abajo, cada una con sus fragmentos.
+    /// The rows, top to bottom, each with its spans.
     ///
-    /// Van SIEMPRE todas las que tiene la rejilla: un terminal no se desplaza
-    /// como una lista, se repinta, y mandar «desde la fila N» obligaría al
-    /// renderer a llevar una copia que puede desincronizarse.
+    /// ALWAYS all the grid has: a terminal does not scroll like a list, it
+    /// repaints, and sending "from row N" would force the renderer to keep
+    /// a copy that can fall out of sync.
     pub rows: Vec<Vec<TerminalSpanView>>,
-    /// Dónde está el cursor: fila y columna, desde cero.
+    /// Where the cursor is: row and column, from zero.
     ///
-    /// `None` = no se pinta, y son dos casos que al renderer le dan igual: el
-    /// shell lo escondió (`CSI ?25l`, lo que hace cualquier programa de
-    /// pantalla completa mientras pinta) o el teclado no está en este panel.
+    /// `None` = not painted, and these are two cases the renderer treats
+    /// alike: the shell hid it (`CSI ?25l`, what any full-screen program
+    /// does while painting) or the keyboard is not on this panel.
     pub cursor: Option<(u16, u16)>,
-    /// No hay shell: se fue, o no se pudo arrancar.
+    /// There is no shell: it exited, or could not be started.
     ///
-    /// El hueco se queda igual, y el renderer lo dice. Cerrarlo por su cuenta
-    /// movería la disposición de alguien sin que la hubiera tocado.
+    /// The slot stays as is, and the renderer says so. Closing it on its
+    /// own would move someone's layout without them having touched it.
     #[serde(default)]
     pub no_shell: bool,
 }
 
-/// Un fragmento de una fila del terminal: texto con lo que el shell pidió.
+/// A span of a terminal row: text with what the shell requested.
 ///
-/// Tipo propio y no [`SpanView`], y la razón es un campo: un terminal dice
-/// «color 4», y qué azul sea eso lo decide la paleta de quien pinta.
-/// `SpanView` solo sabe de roles del tema y de colores hex, así que meterlo
-/// ahí obligaría a resolver el índice AQUÍ — y entonces el panel dejaría de
-/// obedecer al tema del lector y no habría forma de arreglarlo desde el tema.
-/// Además lleva atributos (negrita, subrayado…) que `SpanView` no tiene.
-// Los seis son banderas SGR independientes: el shell las pone y las quita una
-// a una (`SGR 1` / `SGR 22`), así que un struct de bools ES esa
-// representación. Mismo criterio que `norte_theme::Style` y que
-// `norte_term::Estilo`, de donde éste se traduce campo a campo.
+/// Its own type and not [`SpanView`], and the reason is one field: a
+/// terminal says "color 4," and which blue that is is decided by the
+/// painter's palette. `SpanView` only knows theme roles and hex colors, so
+/// putting it there would force resolving the index HERE — and then the
+/// panel would stop obeying the reader's theme, with no way to fix it from
+/// the theme. It also carries attributes (bold, underline…) `SpanView` does
+/// not have.
+// All six are independent SGR flags: the shell sets and clears them one at
+// a time (`SGR 1` / `SGR 22`), so a struct of bools IS that representation.
+// Same criterion as `norte_theme::Style` and `norte_term::Estilo`, from
+// which this one is translated field by field.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "seis atributos SGR independientes, como los manda el shell"
+    reason = "six independent SGR attributes, as sent by the shell"
 )]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TerminalSpanView {
-    /// El texto del fragmento.
+    /// The span's text.
     pub text: String,
-    /// Color del texto. Ausente = el normal de quien pinta.
+    /// Text color. Absent = the painter's normal one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fg: Option<TerminalColorView>,
-    /// Color del fondo. Ausente = el normal de quien pinta.
+    /// Background color. Absent = the painter's normal one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bg: Option<TerminalColorView>,
     /// `SGR 1`.
@@ -2211,8 +2257,9 @@ pub struct TerminalSpanView {
     /// `SGR 4`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub underline: bool,
-    /// `SGR 7`: los colores se cambian AL PINTAR, no aquí. Resolverlo antes
-    /// perdería cuál era cuál, y `SGR 27` tiene que poder deshacerlo.
+    /// `SGR 7`: colors are swapped WHEN PAINTING, not here. Resolving it
+    /// earlier would lose which was which, and `SGR 27` has to be able to
+    /// undo it.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub reverse: bool,
     /// `SGR 9`.
@@ -2220,1852 +2267,1923 @@ pub struct TerminalSpanView {
     pub strike: bool,
 }
 
-/// Un color tal como lo DIJO el shell, sin resolver.
+/// A color exactly as the shell SAID it, unresolved.
 ///
-/// Los dos casos son los dos que existen en el wire de un terminal, y se
-/// conservan distintos a propósito: ver [`TerminalSpanView`].
+/// The two cases are the two that exist on a terminal's wire, and are kept
+/// distinct on purpose: see [`TerminalSpanView`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum TerminalColorView {
-    /// Uno de los 256 de la paleta; del 0 al 15 son los «de siempre».
+    /// One of the palette's 256; 0 through 15 are the "usual" ones.
     Indexed {
-        /// El índice.
+        /// The index.
         index: u8,
     },
-    /// Uno exacto, que el programa eligió (`CSI 38;2;r;g;b m`), en `#rrggbb`.
+    /// An exact one, chosen by the program (`CSI 38;2;r;g;b m`), in
+    /// `#rrggbb`.
     Rgb {
-        /// El color, en hex con almohadilla.
+        /// The color, in hex with a hash sign.
         hex: String,
     },
 }
 
-/// El panel de registro (#326): la ventana visible del anillo en memoria.
+/// The log panel (#326): the visible window of the in-memory ring.
 ///
-/// Solo la VENTANA, como el listado: un anillo de dos mil líneas mandado entero
-/// en cada parche es el derroche que la decisión D7 existe para evitar, y el
-/// registro se mueve más que un directorio.
+/// Only the WINDOW, like the listing: a two-thousand-line ring sent whole
+/// on every patch is the waste decision D7 exists to avoid, and the log
+/// moves more than a directory.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Las líneas visibles, de arriba abajo y ya saneadas.
+    /// The visible lines, top to bottom and already sanitized.
     pub lines: Vec<LogLineView>,
-    /// Hasta qué nivel se está ENSEÑANDO, en su forma de wire.
+    /// Up to which level is being SHOWN, in its wire form.
     ///
-    /// Vocabulario cerrado (`error`, `warn`, `info`, `debug`, `trace`) y no la
-    /// etiqueta traducida: el renderer marca cuál está puesto, y comparar
-    /// frases traducidas para eso obligaría al renderer a conocer el idioma
-    /// del host.
+    /// Closed vocabulary (`error`, `warn`, `info`, `debug`, `trace`) and not
+    /// the translated label: the renderer marks which one is set, and
+    /// comparing translated sentences for that would force the renderer to
+    /// know the host's language.
     pub level: String,
-    /// Ese mismo nivel tal y como se PINTA (`TRACE`). Ver
-    /// [`LogLineView::level_label`]: el de arriba se compara, éste se lee.
+    /// That same level exactly as PAINTED (`TRACE`). See
+    /// [`LogLineView::level_label`]: the one above is compared, this one is
+    /// read.
     #[serde(default)]
     pub level_label: String,
-    /// El filtro de texto vigente, enmascarado y acotado. Vacío = todo.
+    /// The current text filter, masked and scoped. Empty = everything.
     ///
-    /// Lo teclea el lector, así que puede traer controles y marcas de
-    /// dirección: es texto para pintar como cualquier otro.
+    /// Typed by the reader, so it can carry controls and direction marks:
+    /// it is text to paint like any other.
     pub filter: String,
-    /// Está pegado al final y sigue lo que llega.
+    /// Is stuck to the end and follows what arrives.
     ///
-    /// Se dice porque es la diferencia entre «no pasa nada» y «te has
-    /// despegado y esto es historia»: sin ello, un panel quieto durante una
-    /// operación larga se lee igual en los dos casos.
+    /// Said because it is the difference between "nothing's happening" and
+    /// "you've scrolled away and this is history": without it, a panel
+    /// still during a long operation reads the same in both cases.
     pub following: bool,
-    /// Cuántas líneas pasan el filtro, para poder situar la ventana.
+    /// How many lines pass the filter, to be able to place the window.
     pub total: u64,
-    /// Índice de la primera línea que viaja en `lines`, dentro de las
-    /// filtradas.
+    /// Index of the first line travelling in `lines`, among the filtered
+    /// ones.
     pub first_visible: u64,
-    /// Cuántas líneas se han perdido, y de QUÉ anillo, ya DICHO.
+    /// How many lines were lost, and from WHICH ring, already SAID.
     ///
-    /// Se dice: un registro con un agujero silencioso miente sobre lo que
-    /// pasó, y la ausencia de una línea es indistinguible de que el evento no
-    /// ocurriera.
+    /// Said out loud: a log with a silent hole lies about what happened,
+    /// and the absence of a line is indistinguishable from the event never
+    /// occurring.
     ///
-    /// Con las dos fuentes a la vista (#328) son **dos números y no uno**,
-    /// cada uno nombrando su anillo, porque no significan lo mismo ni viven lo
-    /// mismo: el de la ventana cuenta lo que su anillo ha evacuado desde que
-    /// arrancó el proceso y no se reinicia nunca; el del daemon cuenta lo que
-    /// ESTA apertura del panel se perdió. Sumarlos daba un número que no era
-    /// ninguna de las dos cosas.
+    /// With both sources visible (#328) these are **two numbers, not one**,
+    /// each naming its ring, because they do not mean the same thing nor
+    /// live the same lifetime: the window's counts what its ring has
+    /// evicted since the process started and never resets; the daemon's
+    /// counts what THIS opening of the panel lost. Adding them gave a
+    /// number that was neither.
     ///
-    /// Traducido aquí y con el NÚMERO dentro, no un `u64` para que el renderer
-    /// componga la frase: un renderer no traduce ni sustituye números. Es la
-    /// misma regla que `BrowserSlotView::skipped_note`. Vacío = ninguna.
+    /// Translated here with the NUMBER inside, not a `u64` for the renderer
+    /// to compose the sentence: a renderer does not translate or
+    /// substitute numbers. Same rule as `BrowserSlotView::skipped_note`.
+    /// Empty = none.
     pub dropped_note: String,
-    /// Qué anillo está CAPTURANDO más de lo que se enseña, y hasta dónde. Ya
-    /// traducido; vacío = ninguno.
+    /// Which ring is CAPTURING more than what is shown, and up to where.
+    /// Already translated; empty = none.
     ///
-    /// Existe porque los dos niveles se separan a propósito —bajar lo que se
-    /// enseña no deja de capturar, o volver a subir mostraría un agujero— y
-    /// entonces el panel puede decir «info» mientras el proceso guarda TRACE
-    /// en memoria. Quien mira tiene derecho a saber que se está recogiendo más
-    /// de lo que ve, sobre todo antes de hacer una captura de pantalla.
+    /// Exists because the two levels are kept separate on purpose —lowering
+    /// what is shown does not stop capturing, and raising it back would
+    /// show a hole— and then the panel can say "info" while the process
+    /// keeps TRACE in memory. Whoever is looking has the right to know more
+    /// is being collected than they see, especially before taking a
+    /// screenshot.
     ///
-    /// Y desde #328 es también donde se dice el nivel del DAEMON, nombrándolo:
-    /// el suyo es global a todos sus clientes, otro pudo subirlo y nunca baja,
-    /// así que puede estar muy por encima del que este panel enseña. En
-    /// [`Self::level`] no cabe —ése es el que FILTRA la lista y el que los
-    /// botones mueven— y ponerlo ahí dejaba marcado un nivel que el panel no
-    /// estaba aplicando.
+    /// And since #328 it is also where the DAEMON's level is stated, naming
+    /// it: its own is global to all its clients, another one could have
+    /// raised it and it never lowers, so it can be well above what this
+    /// panel shows. It does not fit in [`Self::level`] —that is the one
+    /// that FILTERS the list and the one the buttons move— and putting it
+    /// there would have left a level marked as set that the panel was not
+    /// applying.
     pub capturing: String,
-    /// De qué PROCESO son estas líneas, ya traducido.
+    /// Which PROCESS these lines belong to, already translated.
     ///
-    /// Existe porque en la ventana la respuesta no es obvia y además no es la
-    /// que uno espera: `norte-gui` arranca su propio daemon (#300), así que
-    /// este anillo lleva lo del proceso de la VENTANA y **no** lo del daemon,
-    /// que es donde pasa la mitad interesante —los providers, el journal, la
-    /// política—. En la TUI embebida son el mismo proceso y no se nota.
+    /// Exists because in the window the answer is not obvious and, worse,
+    /// not the one you'd expect: `norte-gui` starts its own daemon (#300),
+    /// so this ring carries the WINDOW process's, **not** the daemon's,
+    /// which is where the interesting half happens —the providers, the
+    /// journal, the policy. In the embedded TUI they are the same process
+    /// and it goes unnoticed.
     ///
-    /// Callarlo haría que el panel pareciera roto: alguien abre el registro
-    /// mientras una conexión falla, no ve la línea que lo explica, y concluye
-    /// que el panel no funciona en vez de que está mirando otro proceso.
-    /// Desde #328 las del daemon también llegan, y esto dice cuáles se ven.
+    /// Staying silent about it would make the panel look broken: someone
+    /// opens the log while a connection fails, does not see the line that
+    /// explains it, and concludes the panel does not work instead of that
+    /// they are looking at another process. Since #328 the daemon's lines
+    /// also arrive, and this says which ones are visible.
     pub source: String,
-    /// La fuente EFECTIVA, en vocabulario cerrado: `window`, `daemon` o
+    /// The EFFECTIVE source, in closed vocabulary: `window`, `daemon` or
     /// `both` (#328).
     ///
-    /// Efectiva y no la preferencia guardada: sin un segundo anillo al otro
-    /// lado —un daemon sin la feature `logging`— la preferencia `both` se
-    /// enseña como `window`, porque eso es lo que el lector está mirando. Un
-    /// panel que dijera «los dos» sobre las líneas de uno solo mentiría en el
-    /// sitio donde más caro sale: el que abre el registro buscando lo que no
-    /// encuentra.
+    /// Effective and not the saved preference: without a second ring on
+    /// the other side —a daemon without the `logging` feature— the `both`
+    /// preference is shown as `window`, because that is what the reader is
+    /// actually looking at. A panel that said "both" over one ring's lines
+    /// alone would lie exactly where it costs most: whoever opens the log
+    /// looking for what they can't find.
     ///
-    /// Cerrado y sin traducir, como `level`: el renderer marca cuál está
-    /// puesta, y comparar frases traducidas para eso lo ataría al idioma.
+    /// Closed and untranslated, like `level`: the renderer marks which one
+    /// is set, and comparing translated sentences for that would tie it to
+    /// the language.
     pub source_mode: String,
-    /// Hay de verdad una SEGUNDA fuente que ofrecer.
+    /// There really is a SECOND source to offer.
     ///
-    /// `false` mientras el daemon no haya contestado nunca a su registro, y
-    /// entonces el selector no se pinta: ofrecer tres fuentes donde solo hay
-    /// una es un mando que no hace nada, que es peor que no tenerlo.
+    /// `false` while the daemon has never answered its own log, and then
+    /// the picker is not painted: offering three sources where there is
+    /// only one is a control that does nothing, which is worse than not
+    /// having it.
     pub sources_available: bool,
-    /// Lo que hay que decir sobre la fuente, ya traducido. Vacío = nada.
+    /// What needs to be said about the source, already translated. Empty =
+    /// nothing.
     ///
-    /// Dos frases, y son excluyentes. Que el daemon **no tiene registro que
-    /// servir**, que es la mitad de #326 aplicada a la otra orilla: el panel
-    /// vuelve al anillo local y lo dice, en vez de quedarse mudo. Y, cuando lo
-    /// que se enseña es el del daemon, **de quién es el nivel**: es global al
-    /// proceso, otro cliente pudo subirlo, y solo sube — así que el número que
-    /// hay al lado no es «lo que pediste», y callarlo dejaría al lector
-    /// creyendo que su petición se aplicó tal cual.
+    /// Two sentences, and they are exclusive. That the daemon **has no log
+    /// to serve**, which is half of #326 applied to the other shore: the
+    /// panel falls back to the local ring and says so, instead of staying
+    /// silent. And, when what is shown is the daemon's, **whose level it
+    /// is**: it is global to the process, another client could have raised
+    /// it, and it only goes up — so the number next to it is not "what you
+    /// asked for," and staying silent would leave the reader believing
+    /// their request was applied as is.
     pub source_note: String,
 }
 
-/// Una línea del registro, ya lista para pintar.
+/// A log line, already ready to paint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LogLineView {
-    /// La hora `HH:MM:SS`, en UTC.
+    /// The time `HH:MM:SS`, in UTC.
     ///
-    /// UTC y no local, igual que la columna de fecha en ISO: este árbol no
-    /// lleva base de datos de husos, y una hora local inventada a partir de
-    /// un desplazamiento fijo sería mentira dos veces al año. Lo que se
-    /// compara aquí son líneas entre sí, y para eso el huso da igual
-    /// mientras sea el mismo.
+    /// UTC and not local, same as the date column in ISO: this tree carries
+    /// no timezone database, and a local time invented from a fixed offset
+    /// would be a lie twice a year. What is compared here are lines against
+    /// each other, and for that the zone does not matter as long as it is
+    /// the same one.
     pub time: String,
-    /// El nivel, en su forma de wire — el renderer lo colorea por esto.
+    /// The level, in its wire form — the renderer colors it by this.
     ///
-    /// Es una IDENTIDAD, no un texto: se compara, no se pinta. Lo que se
-    /// pinta es [`Self::level_label`].
+    /// It is an IDENTITY, not text: it is compared, not painted. What is
+    /// painted is [`Self::level_label`].
     pub level: String,
-    /// El nivel tal y como se PINTA (`TRACE`), que es lo que pinta el
-    /// terminal.
+    /// The level exactly as PAINTED (`TRACE`), which is what the terminal
+    /// paints.
     ///
-    /// Separado del de arriba porque son dos cosas: una identidad estable que
-    /// el renderer usa para colorear y una etiqueta que se lee. Pintar la
-    /// identidad es lo que tenía a la ventana enseñando `trace` en las líneas,
-    /// `trace` en el chip del título y «traza» en sus botones — tres
-    /// vocabularios del mismo nivel, los tres a la vez en pantalla.
+    /// Separate from the one above because they are two things: a stable
+    /// identity the renderer uses to color and a label meant to be read.
+    /// Painting the identity is what had the window showing `trace` in the
+    /// lines, `trace` in the title chip and a translated word in its
+    /// buttons — three vocabularies for the same level, all three on screen
+    /// at once.
     ///
-    /// NO se traduce, y eso es la decisión: `TRACE` es lo que se escribe en
-    /// `RUST_LOG`, lo que sale en un pegado de un informe de fallo y lo que
-    /// alguien va a buscar con la vista en una lista larga. Los BOTONES de
-    /// nivel de la ventana sí van traducidos: son un mando, no un dato, y el
-    /// terminal no tiene ninguno con el que discrepar.
+    /// NOT translated, and that is the decision: `TRACE` is what is
+    /// written in `RUST_LOG`, what shows up pasted into a bug report and
+    /// what someone will scan for by eye in a long list. The window's level
+    /// BUTTONS are translated: they are a control, not data, and the
+    /// terminal has none to disagree with.
     ///
-    /// `#[serde(default)]`: vacío = un puente anterior, y entonces el
-    /// renderer cae a la identidad, que es lo que pintaba antes.
+    /// `#[serde(default)]`: empty = an older bridge, and then the renderer
+    /// falls back to the identity, which is what it used to paint.
     #[serde(default)]
     pub level_label: String,
-    /// El módulo que la emitió, enmascarado y acotado.
+    /// The module that emitted it, masked and scoped.
     pub target: String,
-    /// El mensaje, enmascarado y acotado.
+    /// The message, masked and scoped.
     ///
-    /// Enmascarado como cualquier otro texto que se pinta, y aquí con un
-    /// motivo propio: un mensaje de registro puede llevar dentro el nombre de
-    /// un fichero que alguien eligió, y un `U+202E` ahí reordena la línea
-    /// entera del panel.
+    /// Masked like any other text that is painted, and here for a reason of
+    /// its own: a log message can carry inside a file name someone chose,
+    /// and a `U+202E` there reorders the panel's whole line.
     pub message: String,
-    /// Lo pintado difiere de lo que hay, en el módulo o en el mensaje.
+    /// What is painted differs from what is there, in the module or the
+    /// message.
     pub hostile: bool,
-    /// De qué PROCESO salió: `window` o `daemon` (#328).
+    /// Which PROCESS it came from: `window` or `daemon` (#328).
     ///
-    /// Por línea y no solo en la cabecera, porque en una lista mezclada es la
-    /// mitad de la información: «el provider falló» y «la ventana no pudo
-    /// pintarlo» se leen igual sin saber quién lo escribió, y son dos averías
-    /// distintas. Cerrado y sin traducir: el renderer marca la fila, no la
-    /// lee en voz alta.
+    /// Per line and not only in the header, because in a mixed list it is
+    /// half the information: "the provider failed" and "the window
+    /// couldn't paint it" read the same without knowing who wrote it, and
+    /// they are two different failures. Closed and untranslated: the
+    /// renderer marks the row, it does not read it aloud.
     pub source: String,
 }
 
-/// En cuántos tramos iguales parte la regla de marcas un listado (ADR 0135).
+/// Into how many equal spans a listing's mark ruler is split (ADR 0135).
 ///
-/// Más que las filas de pantalla de cualquier ventana razonable, así que
-/// cada tramo cae en uno o dos píxeles de la regla; y fijo, para que diez
-/// mil marcas no crucen el puente como diez mil números.
+/// More than the screen rows of any reasonable window, so each span falls
+/// on one or two pixels of the ruler; and fixed, so ten thousand marks do
+/// not cross the bridge as ten thousand numbers.
 pub const MARK_RULER_SPANS: u16 = 256;
 
-/// El listado de un hueco.
+/// A slot's listing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BrowserSlotView {
-    /// Id del hueco.
+    /// Slot id.
     pub slot_id: u32,
-    /// Sube en cada re-listado. Una [`RowKey`] de otra generación es vieja.
+    /// Rises on every re-listing. A [`RowKey`] from another generation is
+    /// stale.
     pub generation: u64,
-    /// El trabajo que está llegando A ESTE directorio, 0–100 (ADR 0148,
-    /// puente 94): una línea fina en el borde del panel, como la de carga de
-    /// un navegador. `None` = nada que pintar. Se mueve por su propio cambio
-    /// ([`ViewChange::SlotProgress`]), no reenviando el listado.
+    /// Work arriving AT THIS directory, 0–100 (ADR 0148, bridge 94): a thin
+    /// line on the panel's edge, like a browser's loading bar. `None` =
+    /// nothing to paint. Moves through its own change
+    /// ([`ViewChange::SlotProgress`]), not by resending the listing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress: Option<u8>,
-    /// La localización, ya saneada para pintar.
+    /// The location, already sanitized for painting.
     pub path_display: String,
-    /// El texto de arriba DIFIERE de la ruta real (bytes no UTF-8, controles
-    /// enmascarados). El renderer lo marca; jamás lo esconde.
+    /// The text above DIFFERS from the real path (non-UTF-8 bytes, masked
+    /// controls). The renderer MUST mark it.
     pub path_hostile: bool,
-    /// Filas del directorio, si se sabe.
+    /// Rows in the directory, if known.
     pub total_rows: Option<u64>,
-    /// Primera fila que viaja en `rows`.
+    /// First row travelling in `rows`.
     pub first_visible: u64,
-    /// Las filas de la ventana visible (más el overscan que pida el
-    /// renderer). NUNCA el directorio entero.
+    /// The visible window's rows (plus whatever overscan the renderer
+    /// requests). NEVER the whole directory.
     pub rows: Vec<RowView>,
-    /// La columna de iconos está abierta en este listado (puente 62, ADR
-    /// 0105): ALGUNA de sus entradas —visible o no— tiene icono, así que
-    /// todas las filas llevan la celda, vacía o no, y los nombres siguen
-    /// alineados. Lo decide el host desde el pane entero; un renderer que lo
-    /// dedujera de las filas visibles cerraría la columna al desplazarse a
-    /// una página sin iconos y correría todos los nombres.
+    /// The icon column is open in this listing (bridge 62, ADR 0105): SOME
+    /// of its entries —visible or not— have an icon, so every row carries
+    /// the cell, empty or not, and names stay aligned. Decided by the host
+    /// from the whole pane; a renderer that deduced it from visible rows
+    /// would close the column when scrolling to an icon-free page and run
+    /// every name together.
     pub icon_column: bool,
-    /// Fila bajo el cursor, si hay alguna.
+    /// Row under the cursor, if any.
     pub cursor: Option<RowKey>,
-    /// Cuántas filas están marcadas en el hueco (no solo en la ventana).
+    /// How many rows are marked in the slot (not only in the window).
     pub marks: u64,
-    /// Qué tramos del listado llevan alguna marca (puente 89, ADR 0135): la
-    /// regla junto a la barra de desplazamiento, para ver dónde están las
-    /// marcas que la ventana no enseña. El listado se parte en
-    /// [`MARK_RULER_SPANS`] tramos iguales por posición; acotado por eso y
-    /// no por el número de marcas. Vacío sin marcas.
+    /// Which spans of the listing carry a mark (bridge 89, ADR 0135): the
+    /// ruler next to the scrollbar, to see where the marks the window does
+    /// not show are. The listing is split into [`MARK_RULER_SPANS`] equal
+    /// spans by position; bounded by that and not by the number of marks.
+    /// Empty with no marks.
     #[serde(default)]
     pub mark_ruler: Vec<u16>,
-    /// Cuántas entradas se saltó el provider, ya DICHO en el idioma del
-    /// lector. Vacío = ninguna, o el provider no lleva la cuenta.
+    /// How many entries the provider skipped, already SAID in the reader's
+    /// language. Empty = none, or the provider does not keep count.
     ///
-    /// Se dice en pantalla porque es la clase de fallo que no se puede
-    /// descubrir mirando: lo que falta no está, y no hay ninguna fila donde
-    /// el lector pueda tropezarse con ello. Un listado incompleto que se
-    /// calla miente por omisión.
+    /// Said on screen because this is the kind of failure that cannot be
+    /// discovered by looking: what is missing is not there, and there is no
+    /// row for the reader to stumble on it. An incomplete listing that says
+    /// nothing lies by omission.
     ///
-    /// Traducido AQUÍ, como la frase de estado de la búsqueda: un renderer
-    /// no traduce, y «se saltó una» y «se saltó 3» no se dicen igual en todos
-    /// los idiomas.
+    /// Translated HERE, like the search's status sentence: a renderer does
+    /// not translate, and "skipped one" and "skipped 3" are not said the
+    /// same in every language.
     pub skipped_note: String,
-    /// Cuántas entradas está APARTANDO la ocultación, ya dicho en el idioma
-    /// del lector. Vacío = ninguna, o la ocultación está apagada.
+    /// How many entries hiding is SETTING ASIDE, already said in the
+    /// reader's language. Empty = none, or hiding is off.
     ///
-    /// Permanente y no un mensaje de la barra: el aviso de `pane.toggle-hidden`
-    /// lo pisa la siguiente tecla, y entonces un listado que enseña menos de
-    /// lo que hay se queda mudo. Misma disciplina que [`Self::skipped_note`],
-    /// y traducido aquí por lo mismo — «1 oculta» y «3 ocultas» no se dicen
-    /// igual en todos los idiomas.
+    /// Permanent and not a status bar message: `pane.toggle-hidden`'s notice
+    /// is overwritten by the next key, and then a listing showing less than
+    /// what exists goes silent. Same discipline as [`Self::skipped_note`],
+    /// and translated here for the same reason — "1 hidden" and "3 hidden"
+    /// are not said the same in every language.
     pub hidden_note: String,
-    /// Los nombres se REINTERPRETAN con otra codificación (#57). Vacío = no.
+    /// Names are being REINTERPRETED with another encoding (#57). Empty =
+    /// no.
     ///
-    /// La misma disciplina que las dos de arriba, y por eso está aquí y no en
-    /// la barra: lo que se pinta no son los bytes que hay en el disco, y eso
-    /// hay que poder saberlo en el momento de decidir copiar o borrar algo.
-    /// El mensaje del toggle se lo lleva la siguiente tecla.
+    /// Same discipline as the two above, and that is why it is here and not
+    /// in the status bar: what is painted is not the bytes on disk, and that
+    /// must be knowable at the moment of deciding to copy or delete
+    /// something. The toggle's message gets overwritten by the next key.
     ///
-    /// `#[serde(default)]` NO promete compatibilidad con un puente anterior
-    /// —el renderer rechaza cualquier versión que no sea la suya—: está para
-    /// que las fixtures y los round-trips no tengan que enumerar campos que
-    /// casi siempre van vacíos.
+    /// `#[serde(default)]` does NOT promise compatibility with an older
+    /// bridge —the renderer rejects any version that is not its own—: it is
+    /// here so fixtures and round-trips do not have to enumerate fields
+    /// that are almost always empty.
     #[serde(default)]
     pub names_note: String,
-    /// El listado se está RELLENANDO todavía, y cuántas van. Vacío = entero.
+    /// The listing is STILL FILLING, and how many so far. Empty = whole.
     #[serde(default)]
     pub filling_note: String,
-    /// Marcas que el último refresco descartó porque su entrada ya no está.
-    /// Vacío = no cayó ninguna.
+    /// Marks the last refresh dropped because their entry is no longer
+    /// there. Empty = none dropped.
     #[serde(default)]
     pub pruned_note: String,
-    /// Cuántas entradas hay marcadas y cuánto pesan, ya dicho. Vacío = sin
-    /// marcas.
+    /// How many entries are marked and how much they weigh, already said.
+    /// Empty = no marks.
     #[serde(default)]
     pub marked_note: String,
-    /// Las MIGAS de la ruta (puente 65): la raíz (`⟨file⟩`, `⟨sftp⟩host`) y
-    /// un tramo por directorio, cada uno ya enmascarado. Pulsar el tramo
-    /// `depth` navega al directorio con esos `depth` tramos
-    /// (`breadcrumb_activate`). Vacío = la ruta va entera en `path_display`.
+    /// The path's BREADCRUMBS (bridge 65): the root (`⟨file⟩`, `⟨sftp⟩host`)
+    /// and one segment per directory, each already masked. Clicking segment
+    /// `depth` navigates to the directory with those `depth` segments
+    /// (`breadcrumb_activate`). Empty = the path goes whole in
+    /// `path_display`.
     #[serde(default)]
     pub path_segments: Vec<String>,
-    /// Cuánto del volumen está OCUPADO, en `0.0..=1.0` (puente 65): el
-    /// indicador de espacio del pie. `None` = no se sabe (sin volumen, o
-    /// un esquema que no lo dice).
+    /// How much of the volume is USED, in `0.0..=1.0` (bridge 65): the
+    /// footer's space indicator. `None` = unknown (no volume, or a scheme
+    /// that does not say).
     #[serde(default)]
     pub used_ratio: Option<f32>,
-    /// El pie del listado (spec 2026-09-10): cuántos directorios y ficheros,
-    /// cuánto pesan, lo marcado y el espacio libre del volumen, ya
-    /// redactado. Vacío = `[ui] pane_footer` apagado.
+    /// The listing's footer (spec 2026-09-10): how many directories and
+    /// files, how much they weigh, what is marked and the volume's free
+    /// space, already worded. Empty = `[ui] pane_footer` off.
     #[serde(default)]
     pub footer: String,
-    /// Las cabeceras de las columnas configuradas, en su orden. Incluye el
-    /// nombre, que en las filas viaja aparte (`display_name`).
+    /// The configured columns' headers, in their order. Includes the name,
+    /// which travels separately in the rows (`display_name`).
     pub columns: Vec<ColumnHeader>,
-    /// En qué anda el hueco.
+    /// What the slot is doing.
     pub state: SlotState,
-    /// El buscador incremental, si está abierto. Mientras lo esté, las
-    /// teclas de texto son SUYAS: es el contexto de entrada del listado.
+    /// The incremental search, if open. While it is, text keys are ITS
+    /// OWN: it is the listing's input context.
     pub quick: Option<QuickView>,
 }
 
-/// El buscador incremental de un listado.
+/// A listing's incremental search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuickView {
-    /// Lo tecleado, ya saneado para pintar.
+    /// What was typed, already sanitized for painting.
     pub query: String,
-    /// Filtra el listado (`filter`) o salta al primer match (`jump`).
+    /// Filters the listing (`filter`) or jumps to the first match (`jump`).
     pub mode: String,
-    /// Cuántas filas casan. Con cero, el renderer lo dice: un buscador que
-    /// no encuentra nada y no lo enseña parece roto.
+    /// How many rows match. With zero, the renderer says so: a search that
+    /// finds nothing and does not show it looks broken.
     pub matches: u64,
 }
 
-/// Lo que le pasa a un listado ahora mismo.
+/// What is happening to a listing right now.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum SlotState {
-    /// Listado completo y quieto.
+    /// Complete listing, at rest.
     Ready,
-    /// Pidiendo la primera página, o rellenando el resto.
+    /// Requesting the first page, or filling the rest.
     ///
-    /// Lleva A DÓNDE va, que es la mitad que faltaba. El cuerpo sigue
-    /// enseñando el listado ANTERIOR —a propósito: si la conexión falla, el
-    /// lector se queda donde estaba— y sin el destino esa mezcla no se puede
-    /// leer: la pantalla enseña un sitio mientras trabaja en otro, y no dice
-    /// cuál. El terminal pone el destino en la cabecera junto al spinner
-    /// desde #323.
+    /// Carries WHERE it is going, which is the missing half. The body keeps
+    /// showing the PREVIOUS listing —on purpose: if the connection fails,
+    /// the reader stays where they were— and without the destination that
+    /// mix cannot be read: the screen shows one place while working on
+    /// another, with no way to tell which. The terminal has put the
+    /// destination in the header next to the spinner since #323.
     ///
-    /// El UMBRAL —nada antes de 250 ms, porque por debajo la operación
-    /// termina antes de que el ojo lo registre y lo único que se ve es un
-    /// parpadeo— es cosa del renderer, y es donde tiene que estar: es un
-    /// retardo puramente visual, y en CSS no cuesta ni un temporizador ni un
-    /// mensaje.
+    /// The THRESHOLD —nothing before 250 ms, because below that the
+    /// operation finishes before the eye registers it and all you'd see is
+    /// a flicker— is the renderer's business, and that is where it belongs:
+    /// it is a purely visual delay, and in CSS it costs neither a timer nor
+    /// a message.
     Loading {
-        /// La clave Fluent del VERBO, del vocabulario CERRADO compartido
+        /// The VERB's Fluent key, from the shared CLOSED vocabulary
         /// (`norte_frontend::busy::BusyKind`): `busy-connecting`,
         /// `busy-listing`, `busy-opening`.
         ///
-        /// De ahí y no de una clave propia porque ese módulo existe desde
-        /// #323 justamente para que los dos frontends no digan cosas
-        /// distintas de la misma espera — y esta ventana decía «cargando…»
-        /// hasta para una conexión remota, que es el caso que lo destapó.
+        /// From there and not a key of its own because that module exists
+        /// since #323 precisely so both frontends do not say different
+        /// things about the same wait — and this window used to say
+        /// "loading…" even for a remote connection, the case that exposed
+        /// it.
         #[serde(default)]
         verb_key: String,
-        /// La ruta a la que va, ya pintable y con la reinterpretación
-        /// vigente. Vacía = un relleno del sitio en el que ya se está, que no
-        /// va a ninguna parte.
+        /// The path it is going to, already paintable and with the current
+        /// reinterpretation. Empty = padding for the place already there,
+        /// which goes nowhere.
         #[serde(default)]
         target_display: String,
-        /// Esa ruta DIFIERE de los bytes reales.
+        /// That path DIFFERS from the real bytes.
         #[serde(default)]
         target_hostile: bool,
     },
-    /// El listado falló. La clave Fluent dice por qué; el detalle ya viene
-    /// saneado y acotado.
+    /// The listing failed. The Fluent key says why; the detail already
+    /// arrives sanitized and scoped.
     Error {
-        /// Clave Fluent de la categoría.
+        /// Fluent key of the category.
         reason_key: String,
-        /// Detalle ya saneado, si lo hay.
+        /// Already sanitized detail, if any.
         detail: Option<String>,
     },
 }
 
-/// Una fila del listado.
-// Cuatro bools, y cada uno es un hecho INDEPENDIENTE que el renderer pinta
-// distinto: el nombre difiere de lo real, está bajo el cursor, está marcada,
-// su insignia difiere de lo real. No es un estado que se pueda plegar — el
-// lint apunta a parámetros y a máquinas de estado, no a una fila de wire.
+/// A row of the listing.
+// Four bools, and each is an INDEPENDENT fact the renderer paints
+// differently: the name differs from the real one, it is under the cursor,
+// it is marked, its badge differs from the real one. It is not a state that
+// can be folded — the lint targets parameters and state machines, not a
+// wire row.
 #[expect(
     clippy::struct_excessive_bools,
-    reason = "fila de wire: insignias independientes, no una máquina de estados"
+    reason = "wire row: independent badges, not a state machine"
 )]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RowView {
-    /// Clave opaca, válida para esta generación.
+    /// Opaque key, valid for this generation.
     pub key: RowKey,
-    /// Nombre listo para pintar.
+    /// Name ready to paint.
     pub display_name: String,
-    /// El nombre pintado difiere del real: bytes lossy o controles
-    /// enmascarados (spec §6). El renderer DEBE marcarlo.
+    /// The painted name differs from the real one: lossy bytes or masked
+    /// controls (spec §6). The renderer MUST mark it.
     pub hostile: bool,
-    /// Por dónde va la tarea que trabaja sobre ESTA fila, 0–100 (puente 69,
-    /// spec 2026-09-15). `None` = ninguna tarea la está tocando.
+    /// How far along the task working on THIS row is, 0–100 (bridge 69,
+    /// spec 2026-09-15). `None` = no task is touching it.
     ///
-    /// Lo resuelve el host con `processes::progress_for`, que casa por ruta
-    /// exacta: una copia DENTRO de un directorio no pinta el directorio a
-    /// medias, porque «la mitad de esta carpeta» no es lo que el número dice.
+    /// Resolved by the host with `processes::progress_for`, which matches
+    /// by exact path: a copy INSIDE a directory does not paint the
+    /// directory as half-done, because "half of this folder" is not what
+    /// the number says.
     #[serde(default)]
     pub progress: Option<u8>,
-    /// Qué es.
+    /// What it is.
     pub kind: RowKind,
-    /// Bajo el cursor.
+    /// Under the cursor.
     pub selected: bool,
-    /// Marcada para operar.
+    /// Marked to operate on.
     pub marked: bool,
-    /// Celdas de las columnas configuradas, en el orden de la cabecera.
+    /// Cells of the configured columns, in the header's order.
     pub cells: Vec<CellView>,
-    /// La insignia que un plugin puso en esta fila, ya enmascarada y acotada.
-    /// Vacía = ninguna.
+    /// The badge a plugin put on this row, already masked and scoped. Empty
+    /// = none.
     ///
-    /// Cosmética por contrato (ADR 0037): un decorador que no contesta, o un
-    /// catálogo caído, dejan la fila sin insignia y el listado igual.
+    /// Cosmetic by contract (ADR 0037): a decorator that does not answer,
+    /// or a fallen catalogue, leave the row without a badge and the listing
+    /// unaffected.
     pub badge: String,
-    /// La insignia se pinta DISTINTO de lo que es. La escribe un plugin y va
-    /// pegada a un nombre de fichero.
+    /// The badge is painted DIFFERENT from what it is. Written by a plugin
+    /// and attached to a file name.
     pub badge_hostile: bool,
-    /// El rol semántico que el plugin pidió para la fila (`warning`,
-    /// `error`…), del vocabulario CERRADO de `norte-theme`. Vacío = ninguno.
+    /// The semantic role the plugin requested for the row (`warning`,
+    /// `error`…), from `norte-theme`'s CLOSED vocabulary. Empty = none.
     ///
-    /// Un nombre que no está en el vocabulario llega vacío, no crudo: el
-    /// renderer lo usa para elegir un color del tema, y una cadena libre ahí
-    /// sería un plugin eligiendo su propio estilo.
+    /// A name not in the vocabulary arrives empty, not raw: the renderer
+    /// uses it to pick a theme color, and a free string there would be a
+    /// plugin choosing its own style.
     pub badge_role: String,
-    /// El ICONO de la fila (puente 62, ADR 0105): lo que un decorador de
-    /// hueco `icon` puso, ya enmascarado y acotado. Vacío = ninguno. Se
-    /// pinta a la IZQUIERDA del nombre en una columna de ancho fijo, que el
-    /// renderer abre en todas las filas del hueco en cuanto una lo tiene.
+    /// The row's ICON (bridge 62, ADR 0105): what an `icon` slot decorator
+    /// put, already masked and scoped. Empty = none. Painted to the LEFT of
+    /// the name in a fixed-width column, which the renderer opens on every
+    /// row of the slot as soon as one has it.
     pub icon: String,
-    /// El icono se pinta distinto de lo que es. Misma razón que la insignia.
+    /// The icon is painted different from what it is. Same reason as the
+    /// badge.
     pub icon_hostile: bool,
-    /// El color `#rrggbb` con que el TEMA pinta el nombre de esta entrada,
-    /// por `[files.ext]` (gana) o `[files.kind]`. Vacío = el tema no dice
-    /// nada de ella y el renderer usa el color normal del listado.
+    /// The `#rrggbb` color the THEME paints this entry's name with, from
+    /// `[files.ext]` (wins) or `[files.kind]`. Empty = the theme says
+    /// nothing about it and the renderer uses the listing's normal color.
     ///
-    /// Viaja RESUELTO y no como nombre de regla porque las extensiones son un
-    /// conjunto ABIERTO: un tema colorea las que quiera, así que no hay lista
-    /// de clases que el renderer pudiera conocer de antemano. Es lo contrario
-    /// que [`RowView::badge_role`], que sí es vocabulario cerrado.
+    /// Travels RESOLVED and not as a rule name because extensions are an
+    /// OPEN set: a theme colors whichever it wants, so there is no list of
+    /// classes the renderer could know in advance. The opposite of
+    /// [`RowView::badge_role`], which is closed vocabulary.
     #[serde(default)]
     pub name_color: String,
-    /// El nombre va en NEGRITA (un directorio, un ejecutable). Del mismo
-    /// estilo que `name_color`.
+    /// The name is in BOLD (a directory, an executable). Same style family
+    /// as `name_color`.
     #[serde(default)]
     pub name_bold: bool,
-    /// Atenuado. Los presets retro atenúan así los archivos comprimidos, y
-    /// sin este campo salían apagados en el terminal y a plena luz en la
-    /// ventana.
+    /// Dimmed. Retro presets dim compressed files this way, and without
+    /// this field they came out dim in the terminal and at full brightness
+    /// in the window.
     #[serde(default)]
     pub name_dim: bool,
-    /// Cursiva.
+    /// Italic.
     #[serde(default)]
     pub name_italic: bool,
-    /// Subrayado.
+    /// Underlined.
     #[serde(default)]
     pub name_underline: bool,
 }
 
-/// La cabecera de UNA columna.
+/// The header of ONE column.
 ///
-/// La etiqueta viene TRADUCIDA y saneada (`columns::header_label`, la misma
-/// que pinta el TUI): un renderer no traduce, y una cabecera de plugin es
-/// texto ajeno que ya llega enmascarado.
+/// The label arrives TRANSLATED and sanitized (`columns::header_label`, the
+/// same one the TUI paints): a renderer does not translate, and a plugin's
+/// header is foreign text that already arrives masked.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ColumnHeader {
-    /// Id estable de la columna (`name`, `size`, `attr:posix.mode`…). Es lo
-    /// que se manda de vuelta para ordenar: el renderer no nombra columnas
-    /// por su posición ni por su etiqueta.
+    /// The column's stable id (`name`, `size`, `attr:posix.mode`…). It is
+    /// what is sent back to sort: the renderer does not name columns by
+    /// their position or their label.
     ///
-    /// Una IDENTIDAD, así que viaja ENTERA o VACÍA: ni enmascarada ni
-    /// recortada. Las dos cosas la rompen —enmascarar no es inyectivo y dos
-    /// columnas configuradas podían colapsar en una, recortar la dejaba sin
-    /// casar con la suya— y no hace falta ninguna: quien la pinta es `label`,
-    /// y el renderer solo mete el id en un atributo `data-`.
+    /// An IDENTITY, so it travels WHOLE or EMPTY: neither masked nor
+    /// truncated. Both break it —masking is not injective and two
+    /// configured columns could collapse into one, truncating left it not
+    /// matching its own— and neither is needed: what paints it is `label`,
+    /// and the renderer only puts the id into a `data-` attribute.
     pub id: String,
-    /// Etiqueta ya traducida.
+    /// Already translated label.
     pub label: String,
-    /// `asc`/`desc` si el listado se ordena por ESTA columna; `None` si no.
+    /// `asc`/`desc` if the listing is sorted by THIS column; `None` if not.
     pub sort: Option<String>,
-    /// La columna ordena. Una que no, se pinta sin afordancia de click.
+    /// The column sorts. One that does not is painted without a click
+    /// affordance.
     pub sortable: bool,
-    /// Ancho FIJO en celdas, si `[ui.columns] spec.width` lo fija (puente
-    /// 64): la cabecera y las celdas de la columna lo siguen, y arrastrar el
-    /// borde de la cabecera lo cambia. `None` = a lo que mida su contenido.
-    /// Para la columna `name` es su SUELO (`columns::NAME_MIN`), no un ancho:
-    /// el nombre crece, y por debajo de eso el renderer descarta columnas.
+    /// FIXED width in cells, if `[ui.columns] spec.width` sets it (bridge
+    /// 64): the column's header and cells follow it, and dragging the
+    /// header's edge changes it. `None` = whatever its content measures.
+    /// For the `name` column it is its FLOOR (`columns::NAME_MIN`), not a
+    /// width: the name grows, and below that the renderer drops columns.
     #[serde(default)]
     pub width: Option<u16>,
-    /// `left` o `right`: la alineación configurada de la columna, la misma
-    /// que aplica el terminal. Solo tiene efecto con un ancho fijo.
+    /// `left` or `right`: the column's configured alignment, the same the
+    /// terminal applies. Only has an effect with a fixed width.
     #[serde(default)]
     pub align: String,
 }
 
-/// La clase de una entrada, en lo que al pintado le importa.
+/// An entry's kind, as far as painting cares.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RowKind {
-    /// Directorio.
+    /// Directory.
     Dir,
-    /// Fichero.
+    /// File.
     File,
-    /// Enlace simbólico.
+    /// Symbolic link.
     Symlink,
-    /// Cualquier otra cosa que el provider reporte.
+    /// Anything else the provider reports.
     Other,
 }
 
-/// El valor de una columna, ya formateado.
+/// A column's value, already formatted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CellView {
-    /// Id de la columna a la que pertenece.
+    /// Id of the column it belongs to.
     pub column: String,
-    /// Texto ya formateado y saneado. `None` = no se sabe (todavía).
+    /// Already formatted and sanitized text. `None` = not known (yet).
     pub text: Option<String>,
 }
 
-/// La barra de estado.
+/// The status bar.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct StatusView {
-    /// Mensaje efímero, ya traducido por el host.
+    /// Ephemeral message, already translated by the host.
     pub message: Option<String>,
-    /// Avisos persistentes (degradación, journal, sesión), acotados.
+    /// Persistent notices (degradation, journal, session), scoped.
     pub banners: Vec<BannerView>,
-    /// Avisos que caducaron sin que el lector abriera el registro (spec
-    /// 2026-09-10, `[ui] notice_seconds`). El renderer pinta una insignia
-    /// mientras haya alguno; pulsarla abre el panel de registro por el
-    /// botón de la barra de paneles. Abrirlo lo pone a cero.
+    /// Notices that expired without the reader opening the log (spec
+    /// 2026-09-10, `[ui] notice_seconds`). The renderer paints a badge
+    /// while there is one; clicking it opens the log panel via the panel
+    /// bar's button. Opening it resets it to zero.
     #[serde(default)]
     pub notices_unread: u32,
-    /// Lo que hay tecleado a medias: una secuencia, un contador, o las dos
-    /// cosas. Se pinta SIEMPRE que exista — un prefijo pendiente que no se
-    /// ve es un prefijo que no se puede cancelar.
+    /// What is half-typed: a sequence, a counter, or both. ALWAYS painted
+    /// while it exists — a pending prefix that is not visible is a prefix
+    /// that cannot be cancelled.
     pub pending: Option<PendingView>,
 }
 
-/// El panel de sincronización: el PLAN, antes de que nada se escriba.
+/// The sync panel: the PLAN, before anything is written.
 ///
-/// Ventana como el de diferencias y por lo mismo: un plan de medio millón de
-/// pasos no cruza el puente entero. Y como el de diferencias, los pasos se
-/// nombran por su `id`.
+/// Windowed like the diff panel and for the same reason: a half-million-step
+/// plan does not cross the whole bridge. And like the diff panel, steps are
+/// named by their `id`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncView {
-    /// La raíz ORIGEN, ya saneada y con su marca.
+    /// The SOURCE root, already sanitized and with its flag.
     pub source: DialogLine,
-    /// La raíz DESTINO, ya saneada y con su marca.
+    /// The DESTINATION root, already sanitized and with its flag.
     pub dest: DialogLine,
-    /// El modo pedido (`update` o `mirror`), por id estable.
+    /// The requested mode (`update` or `mirror`), by stable id.
     ///
-    /// Se pinta ANTES de aprobar y no es decoración: un `mirror` BORRA en el
-    /// destino y un `update` no.
+    /// Painted BEFORE approving and is not decoration: a `mirror` DELETES
+    /// at the destination and an `update` does not.
     pub mode: String,
-    /// La ventana de pasos.
+    /// The steps window.
     pub steps: Vec<SyncStepView>,
-    /// Índice del primer paso que viaja.
+    /// Index of the first step travelling.
     pub first_visible: u64,
-    /// Cuántos pasos tiene el plan, INCLUIDOS los que la lista no retiene.
+    /// How many steps the plan has, INCLUDING the ones the list does not
+    /// retain.
     ///
-    /// El modelo compartido acota cuántos cuerpos guarda y cuenta aparte los
-    /// que tira; sumarlos aquí es lo que evita que este número y el de la
-    /// línea de estado se contradigan en un plan grande.
+    /// The shared model bounds how many bodies it keeps and counts the
+    /// dropped ones separately; adding them here is what keeps this number
+    /// and the status line's from contradicting each other on a large plan.
     pub total: u64,
-    /// El RESUMEN del plan, ya dicho: cuántos irreversibles, cuántos bytes,
-    /// qué no se pudo leer, y si la lista esconde pasos.
+    /// The plan's SUMMARY, already said: how many irreversible, how many
+    /// bytes, what could not be read, and whether the list hides steps.
     ///
-    /// Es lo que un humano necesita antes de aprobar, y no cabe en la línea
-    /// de estado: un plan aprobable con tres pasos irreversibles y una rama
-    /// ilegible se leía como «5 pasos, pulsa aprobar».
+    /// What a human needs before approving, and it does not fit in the
+    /// status line: an approvable plan with three irreversible steps and an
+    /// unreadable branch used to read as "5 steps, press approve."
     pub summary: Vec<String>,
-    /// Lo que IMPIDE sincronizar, ya dicho, CON su ruta. Vacío = nada lo
-    /// impide.
+    /// What PREVENTS syncing, already said, WITH its path. Empty = nothing
+    /// prevents it.
     pub blockers: Vec<SyncBlockerView>,
-    /// Cuántos bloqueos hay DE VERDAD.
+    /// How many blockers there REALLY are.
     ///
-    /// El wire recorta la lista, y el total viaja aparte a propósito: un
-    /// humano necesita saber que hay cuarenta mil aunque solo se le enseñen
-    /// doscientos cincuenta y seis.
+    /// The wire truncates the list, and the total travels separately on
+    /// purpose: a human needs to know there are forty thousand even if only
+    /// two hundred fifty-six are shown.
     pub blockers_total: u64,
-    /// El estado, ya dicho: planificando, listo para aprobar, aplicando…
+    /// The status, already said: planning, ready to approve, applying…
     pub status: String,
-    /// Qué se puede hacer ahora, ya dicho (la línea de ayuda del pie).
+    /// What can be done now, already said (the footer's help line).
     pub hint: String,
-    /// La SEGUNDA pregunta, ya formulada, cuando el plan es peligroso.
+    /// The SECOND question, already worded, when the plan is dangerous.
     ///
-    /// `None` = todavía no se ha pedido aprobar, o este plan no la necesita
-    /// (todo se puede deshacer y no borra árboles). La compone el modelo
-    /// compartido, con una rama por perspectiva de deshacer: un titular que
-    /// diga «algo de esto se puede deshacer» sobre una confirmación que diga
-    /// «nada» enseña a saltarse las dos.
+    /// `None` = approval has not been requested yet, or this plan does not
+    /// need it (everything can be undone and it deletes no trees). Composed
+    /// by the shared model, with a branch per undo perspective: a headline
+    /// saying "some of this can be undone" over a confirmation saying
+    /// "nothing" teaches skipping both.
     pub confirming: Option<String>,
-    /// Los pasos que FALLARON, cuando la sincronización terminó.
+    /// The steps that FAILED, once the sync finished.
     ///
-    /// El recuento va en la línea de estado; esto es el detalle: qué ruta y
-    /// por qué. El desenlace de la Task dice si corrió, y lo que no se hizo
-    /// lo cuenta solo el informe.
+    /// The count goes in the status line; this is the detail: which path
+    /// and why. The Task's outcome says whether it ran, and what did not
+    /// happen is counted only by the report.
     pub failures: Vec<SyncFailureView>,
-    /// Ya se pidió PARAR lo que está corriendo.
+    /// STOPPING what is running has already been requested.
     ///
-    /// Viaja porque si no, pulsar `Escape` durante la escritura no cambia ni
-    /// una letra de la pantalla: no hay forma de distinguir «te oí» de «esta
-    /// tecla no hace nada», que es justo lo que empuja a pulsarla otra vez.
+    /// Travels because otherwise pressing `Escape` during writing changes
+    /// not a single letter on screen: there is no way to distinguish "I
+    /// heard you" from "this key does nothing," which is exactly what
+    /// pushes someone to press it again.
     pub cancel_requested: bool,
-    /// El plan se puede aprobar YA.
+    /// The plan can be approved NOW.
     ///
-    /// Lo decide el modelo compartido: un plan sin cerrar, con bloqueos, o ya
-    /// enviado, no se aprueba — y que el pie ofrezca aprobar lo que el modelo
-    /// va a rechazar es la pantalla rota que esto evita.
+    /// Decided by the shared model: an unfinished plan, one with blockers,
+    /// or one already submitted, is not approved — and a footer offering to
+    /// approve what the model is going to reject is the broken screen this
+    /// avoids.
     pub can_approve: bool,
-    /// Hay una Task corriendo (la del plan, o la de la aplicación).
+    /// A Task is running (the plan's, or the application's).
     pub running: bool,
 }
 
-/// Un paso que falló al aplicar el plan.
+/// A step that failed while applying the plan.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncFailureView {
-    /// Por qué falló, ya traducido.
+    /// Why it failed, already translated.
     pub cause: String,
-    /// Sobre qué ruta, ya saneada.
+    /// On which path, already sanitized.
     pub path: String,
-    /// Lo pintado difiere de los bytes.
+    /// What is painted differs from the bytes.
     pub path_hostile: bool,
-    /// De qué raíz cuelga la ruta (`source`, `dest` o `either`), por id
-    /// estable — para el estilo, no para leer.
+    /// Which root the path hangs from (`source`, `dest` or `either`), by
+    /// stable id — for styling, not for reading.
     pub anchor: String,
-    /// Lo mismo, ya traducido y para PINTAR. Vacío = no hay nada que decir.
+    /// The same, already translated and meant to be PAINTED. Empty =
+    /// nothing to say.
     ///
-    /// Viaja además del id porque el id no se lee: en un panel donde una ruta
-    /// sin calificar significa «del origen», callar un `either` es afirmar el
-    /// origen, y un atributo `data-` que ningún estilo mira lo calla igual.
+    /// Travels alongside the id because the id is not read: in a panel
+    /// where an unqualified path means "from the source," staying silent
+    /// about an `either` asserts the source, and a `data-` attribute no
+    /// style looks at silences it just the same.
     pub anchor_label: String,
 }
 
-/// Algo que impide sincronizar, con dónde pasa.
+/// Something that prevents syncing, with where it happens.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncBlockerView {
-    /// Qué es, ya traducido.
+    /// What it is, already translated.
     pub label: String,
-    /// Sobre qué ruta, ya saneada. La RAÍZ se dice «todo el árbol» y no como
-    /// una cadena vacía.
+    /// On which path, already sanitized. The ROOT is said as "the whole
+    /// tree" and not as an empty string.
     pub path: String,
-    /// Lo pintado difiere de los bytes.
+    /// What is painted differs from the bytes.
     pub path_hostile: bool,
 }
 
-/// Un paso del plan, ya listo para pintar.
+/// A plan step, already ready to paint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SyncStepView {
-    /// Su id dentro del plan: la identidad, jamás la posición.
+    /// Its id within the plan: the identity, never the position.
     pub id: u64,
-    /// Qué hace, ya traducido.
+    /// What it does, already translated.
     pub kind: String,
-    /// Por qué, ya traducido.
+    /// Why, already translated.
     pub reason: String,
-    /// Si el deshacer lo devuelve, ya dicho.
+    /// Whether undo brings it back, already said.
     ///
-    /// Nunca sale de `reversal` a secas: esa es la mitad de la respuesta, y
-    /// la que miente cuando el destino no tiene papelera.
+    /// Never comes from `reversal` alone: that is half the answer, and the
+    /// half that lies when the destination has no trash.
     pub undo: String,
-    /// De qué raíz cuelga la ruta (`source` o `dest`), por id estable.
+    /// Which root the path hangs from (`source` or `dest`), by stable id.
     pub anchor: String,
-    /// Lo mismo, ya traducido y para pintar. Vacío = no hay nada que decir.
+    /// The same, already translated and meant for painting. Empty =
+    /// nothing to say.
     pub anchor_label: String,
-    /// La ruta relativa, enmascarada.
+    /// The relative path, masked.
     pub path: String,
-    /// Lo pintado difiere de los bytes.
+    /// What is painted differs from the bytes.
     pub path_hostile: bool,
-    /// La ortografía del DESTINO, cuando sus bytes difieren de la del origen.
+    /// The DESTINATION's spelling, when its bytes differ from the source's.
     ///
-    /// La escritura cae sobre ESTA. Campo propio y no un sufijo del nombre:
-    /// dos ortografías en la misma celda las puede juntar un nombre.
+    /// The write lands on THIS one. A field of its own and not a suffix on
+    /// the name: two spellings in the same cell could be merged by a name.
     pub dest_path: Option<String>,
-    /// Lo pintado del destino difiere de sus bytes.
+    /// What is painted for the destination differs from its bytes.
     pub dest_path_hostile: bool,
-    /// Las dos ortografías se rinden IGUAL (un par NFC/NFD), así que el
-    /// lector no puede verlas distintas y hay que decírselo.
+    /// The two spellings render THE SAME (an NFC/NFD pair), so the reader
+    /// cannot see them as different and must be told.
     pub twins: bool,
 }
 
-/// El panel de diferencias: dos árboles comparados, fila a fila.
+/// The diff panel: two trees compared, row by row.
 ///
-/// Ventana y no lista entera, por el mismo motivo que un listado: el motor
-/// emite una fila por nombre emparejado de TODO el árbol y nada lo acota —un
-/// tope convertiría «¿son iguales?» en una respuesta a medias—, así que medio
-/// millón de filas no pueden cruzar el puente. Viaja lo que se ve, con su
-/// primera fila y el total.
+/// Windowed and not the whole list, for the same reason as a listing: the
+/// engine emits one row per matched name across the WHOLE tree and nothing
+/// bounds it —a cap would turn "are they the same?" into a half-answer—, so
+/// half a million rows cannot cross the bridge. What travels is what is
+/// visible, with its first row and the total.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompareView {
-    /// La raíz izquierda, ya saneada (el panel que lanzó la comparación).
+    /// The left root, already sanitized (the pane that launched the
+    /// comparison).
     pub left: String,
-    /// Lo pintado a la izquierda difiere de la ruta real.
+    /// What is painted on the left differs from the real path.
     pub left_hostile: bool,
-    /// La raíz derecha, ya saneada.
+    /// The right root, already sanitized.
     pub right: String,
-    /// Lo pintado a la derecha difiere de la ruta real.
+    /// What is painted on the right differs from the real path.
     pub right_hostile: bool,
-    /// La ventana de filas VISIBLES (las que un filtro no esconde).
+    /// The window of VISIBLE rows (the ones a filter does not hide).
     pub rows: Vec<CompareRowView>,
-    /// Índice, dentro de las visibles, de la primera fila que viaja.
+    /// Index, among the visible ones, of the first row travelling.
     pub first_visible: u64,
-    /// Cuántas filas visibles hay en total.
+    /// How many visible rows there are in total.
     pub total: u64,
-    /// La fila seleccionada, por su id. Anclada al id y no al índice: un
-    /// filtro esconde filas, jamás las renumera.
+    /// The selected row, by its id. Anchored to the id and not the index: a
+    /// filter hides rows, never renumbers them.
     pub selected: Option<u64>,
-    /// Los filtros por categoría, en orden fijo.
+    /// The category filters, in fixed order.
     pub filters: Vec<CompareFilterView>,
-    /// El estado, ya dicho: cuántas van y si sigue caminando.
+    /// The status, already said: how many so far and whether it is still
+    /// walking.
     pub status: String,
-    /// La comparación sigue corriendo.
+    /// The comparison is still running.
     pub running: bool,
 }
 
-/// Un filtro por categoría, con su recuento.
+/// A category filter, with its count.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompareFilterView {
-    /// Id estable de la categoría (`same`, `different`…), para el renderer.
+    /// Stable id of the category (`same`, `different`…), for the renderer.
     pub id: String,
-    /// Cómo se llama, en el idioma del lector.
+    /// Its name, in the reader's language.
     pub label: String,
-    /// Cuántas filas cayeron en ella, filtros aparte.
+    /// How many rows fell into it, filters aside.
     pub count: u64,
-    /// Está ESCONDIENDO su categoría.
+    /// Is HIDING its category.
     pub hidden: bool,
 }
 
-/// Una fila del panel de diferencias.
+/// A row of the diff panel.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompareRowView {
-    /// Su id dentro de esta comparación. Es la IDENTIDAD: seleccionar y
-    /// marcar van por él, jamás por la posición.
+    /// Its id within this comparison. It is the IDENTITY: selecting and
+    /// marking go by it, never by position.
     pub id: u64,
-    /// El veredicto, ya traducido.
+    /// The verdict, already translated.
     pub verdict: String,
-    /// Su categoría, por id estable (para pintar el color).
+    /// Its category, by stable id (for painting the color).
     pub category: String,
-    /// Cuánto vale el veredicto, ya traducido.
+    /// How confident the verdict is, already translated.
     pub confidence: String,
-    /// Qué rung lo decidió, ya traducido.
+    /// Which rung decided it, already translated.
     pub criterion: String,
-    /// El porqué, ya traducido, cuando el veredicto tiene porqué.
+    /// The reason, already translated, when the verdict has one.
     pub reason: Option<String>,
-    /// La cara izquierda, ausente en un huérfano de la derecha.
+    /// The left face, absent on a right-side orphan.
     pub left: Option<CompareFaceView>,
-    /// La cara derecha.
+    /// The right face.
     pub right: Option<CompareFaceView>,
-    /// Por qué esta fila enseña DOS ortografías, en una frase ya traducida.
+    /// Why this row shows TWO spellings, in an already translated sentence.
     ///
-    /// Frase y no insignia pegada al nombre, y eso no es estilo: lo que se
-    /// pega a un nombre lo puede falsificar un nombre.
+    /// A sentence and not a badge attached to the name, and that is not
+    /// style: what is attached to a name can be forged by a name.
     pub paired_under: Option<String>,
 }
 
-/// Una cara de una fila: lo que se sabe de una entrada, ya saneado.
+/// A row's face: what is known about an entry, already sanitized.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CompareFaceView {
-    /// El nombre, ya enmascarado.
+    /// The name, already masked.
     pub name: String,
-    /// Lo pintado difiere de los bytes que hay.
+    /// What is painted differs from the bytes that are there.
     pub hostile: bool,
-    /// El tamaño ya formateado, o vacío si el provider no lo sabe.
+    /// The already formatted size, or empty if the provider does not know
+    /// it.
     ///
-    /// Vacío y no un `0` fabricado: «no lo sé» y «cero bytes» son dos
-    /// respuestas distintas, y un huérfano sin hidratar da la primera.
+    /// Empty and not a fabricated `0`: "I don't know" and "zero bytes" are
+    /// two different answers, and an unhydrated orphan gives the first.
     pub size: String,
-    /// La fecha ya formateada, o vacía si no se sabe.
+    /// The already formatted date, or empty if unknown.
     pub mtime: String,
-    /// Es un directorio.
+    /// Is a directory.
     pub is_dir: bool,
 }
 
-/// Un aviso persistente de la barra.
+/// A persistent status bar notice.
 ///
-/// No es una cadena pelada, y los dos campos que la acompañan son por lo
-/// mismo que en un diálogo. La marca: el aviso de una sesión en claro pinta
-/// un `host` que viene del WIRE, se enmascara, y sin bandera la ausencia de
-/// insignia se lee como «esto es fiel» — en el indicador donde más valor
-/// tiene para quien ataca. Y el sujeto aparte: montar `{scheme}://{host}`
-/// dentro de la frase convierte a `bank.example@evil.example` en algo que se
-/// lee como userinfo de un host legítimo.
+/// Not a bare string, and the two fields alongside it are for the same
+/// reason as in a dialog. The flag: a notice about a plaintext session
+/// paints a `host` that comes from the WIRE, gets masked, and without a
+/// flag the absence of a badge reads as "this is faithful" — on the
+/// indicator that matters most to an attacker. And the subject apart:
+/// building `{scheme}://{host}` inside the sentence turns
+/// `bank.example@evil.example` into something that reads as the userinfo of
+/// a legitimate host.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BannerView {
-    /// La frase, ya traducida y sin nada que venga de fuera dentro.
+    /// The sentence, already translated and with nothing from outside
+    /// inside it.
     pub text: String,
-    /// De qué conexión habla, si habla de una.
+    /// Which connection it is about, if it is about one.
     pub subject: Option<BannerSubjectView>,
 }
 
-/// La conexión de la que habla un aviso: cada parte en su campo.
+/// The connection a notice is about: each part in its own field.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BannerSubjectView {
-    /// Esquema, ya enmascarado y acotado.
+    /// Scheme, already masked and scoped.
     pub scheme: String,
-    /// Host, ya enmascarado y acotado.
+    /// Host, already masked and scoped.
     pub host: String,
-    /// POR QUÉ está degradada, ya traducido (#279).
+    /// WHY it is degraded, already translated (#279).
     ///
-    /// Un motivo que este binario no conoce dice «motivo desconocido» y no
-    /// hereda la frase del que sí conoce: un aviso de seguridad no puede
-    /// afirmar una causa que nadie ha dicho.
+    /// A reason this binary does not know says "unknown reason" and does
+    /// not inherit the sentence from one that does: a security notice
+    /// cannot assert a cause nobody has stated.
     pub reason: String,
-    /// El detalle humano del wire, enmascarado y acotado, y solo cuando el
-    /// motivo es desconocido — que es cuando el contrato del proto dice
-    /// apoyarse en él.
+    /// The wire's human detail, masked and scoped, and only when the
+    /// reason is unknown — which is when the proto's contract says to lean
+    /// on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    /// Lo pintado difiere de lo que hay (en el esquema, el host o el detalle).
+    /// What is painted differs from what is there (in the scheme, the host
+    /// or the detail).
     pub hostile: bool,
 }
 
-/// Una secuencia o un contador a medio teclear.
+/// A half-typed sequence or counter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingView {
-    /// Los acordes tecleados, ya pintados (`ctrl+x g`).
+    /// The typed chords, already painted (`ctrl+x g`).
     pub chords: String,
-    /// El contador acumulado, si el preset los habilita y se está tecleando.
+    /// The accumulated counter, if the preset enables them and one is being
+    /// typed.
     pub count: Option<u32>,
 }
 
-/// Un diálogo abierto.
+/// An open dialog.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DialogView {
-    /// Su identidad: confirmar dos veces el MISMO id no hace nada dos veces.
+    /// Its identity: confirming the SAME id twice does nothing twice.
     pub id: ModalId,
-    /// Clave Fluent del título.
+    /// Fluent key of the title.
     pub title_key: String,
-    /// A DÓNDE va lo que este diálogo pregunta, si va a alguna parte.
+    /// WHERE what this dialog asks goes, if it goes anywhere.
     ///
-    /// Campo propio y no la primera línea del cuerpo, y eso NO es estilo. Un
-    /// cuerpo plano solo puede distinguir «el destino» de «los orígenes» con
-    /// un separador dentro del texto —una flecha, dos puntos—, y un nombre de
-    /// directorio puede contener ese separador: `→` (U+2192) es legítimo, no
-    /// es un peligro de terminal y por tanto no se enmascara ni se marca. Un
-    /// directorio llamado `docs → /casa/BORRAR` produciría una línea que se
-    /// lee como dos rutas, y quien confirma un movimiento cree que sus
-    /// ficheros van a la segunda. La fixture `arrow_join_spoof` del corpus
-    /// canónico dice exactamente esto: etiquetar FUERA DE BANDA, jamás por
-    /// un separador dentro del texto.
+    /// A field of its own and not the body's first line, and that is NOT
+    /// style. A flat body can only distinguish "the destination" from "the
+    /// sources" with a separator inside the text —an arrow, a colon—, and a
+    /// directory name can contain that separator: `→` (U+2192) is
+    /// legitimate, is not a terminal hazard and is therefore neither masked
+    /// nor flagged. A directory named `docs → /home/DELETE` would produce a
+    /// line that reads as two paths, and whoever confirms a move believes
+    /// their files are going to the second one. The canonical corpus's
+    /// `arrow_join_spoof` fixture says exactly this: label OUT OF BAND,
+    /// never with a separator inside the text.
     pub destination: Option<DialogLine>,
-    /// QUÉ se pregunta, cuando eso es una cosa nombrable aparte de las rutas
-    /// (la op de un agente: `delete`, `copy`…).
+    /// WHAT is being asked, when that is a nameable thing apart from the
+    /// paths (an agent's op: `delete`, `copy`…).
     ///
-    /// Campo propio por el mismo motivo que [`Self::destination`]: mezclado
-    /// con las rutas era una línea más, indistinguible de un nombre de
-    /// fichero que dijera lo mismo.
+    /// A field of its own for the same reason as [`Self::destination`]:
+    /// mixed with the paths it was one more line, indistinguishable from a
+    /// file name saying the same thing.
     pub subject: Option<DialogLine>,
-    /// QUIÉN pregunta, si no es quien está delante: la sesión del agente que
-    /// pidió la operación.
+    /// WHO is asking, if not whoever is in front of the screen: the agent
+    /// session that requested the operation.
     ///
-    /// Se descartaba, y era lo primero que hay que saber para decidir: el
-    /// título dice «aprobación de agente» y sin esto no se sabe de QUÉ
-    /// agente.
+    /// It used to be dropped, and it is the first thing you need to know to
+    /// decide: the title says "agent approval" and without this there is no
+    /// way to know WHICH agent.
     pub asker: Option<DialogLine>,
-    /// Cuándo deja de aceptarse la respuesta, ya traducido. `None` = no hay
-    /// plazo, o no se conoce.
+    /// When the answer stops being accepted, already translated. `None` =
+    /// no deadline, or it is not known.
     ///
-    /// Fuera del cuerpo, otra vez por lo mismo: entre líneas de rutas, un
-    /// fichero llamado `caduca en 3600 s` es la única línea con pinta de
-    /// plazo cuando el plazo REAL no se conoce —una pendiente reconstruida
-    /// por el resync de `policy.pending` no transporta el TTL restante—.
+    /// Outside the body, again for the same reason: among path lines, a
+    /// file named "expires in 3600 s" is the only line that looks like a
+    /// deadline when the REAL deadline is not known —a pending item
+    /// reconstructed by `policy.pending`'s resync does not carry the
+    /// remaining TTL—.
     pub deadline: Option<String>,
-    /// CUÁNDO vence, en epoch-ms, para que el renderer pueda contar (#279).
+    /// WHEN it expires, in epoch-ms, so the renderer can count down (#279).
     ///
-    /// [`Self::deadline`] es una frase calculada al ABRIR, así que se congela:
-    /// un modal que lleva cuatro minutos delante seguía diciendo «caduca en
-    /// 300 s». No miente de forma peligrosa —el diálogo se cierra solo al
-    /// vencer— pero deja de informar justo cuando más falta hace.
+    /// [`Self::deadline`] is a sentence computed on OPEN, so it freezes: a
+    /// modal that had been up for four minutes kept saying "expires in 300
+    /// s." It does not lie dangerously —the dialog closes on its own when
+    /// it expires— but it stops informing exactly when it matters most.
     ///
-    /// Viaja el instante y no los segundos restantes porque lo que se necesita
-    /// es una referencia FIJA: los segundos habría que refrescarlos con otro
-    /// parche por segundo, que es exactamente el trabajo que esto evita.
-    /// Host y renderer comparten máquina, así que comparten reloj.
+    /// The instant travels, not the remaining seconds, because what is
+    /// needed is a FIXED reference: the seconds would need refreshing with
+    /// another patch every second, which is exactly the work this avoids.
+    /// Host and renderer share a machine, so they share a clock.
     ///
-    /// `None` = no hay plazo o no se conoce (una pendiente reconstruida por el
-    /// resync de `policy.pending` no transporta el TTL restante). Entonces el
-    /// renderer pinta la frase tal cual y no cuenta nada: contar hacia atrás
-    /// desde un plazo inventado sería peor que no contar.
+    /// `None` = there is no deadline or it is not known (a pending item
+    /// reconstructed by `policy.pending`'s resync does not carry the
+    /// remaining TTL). Then the renderer paints the sentence as is and
+    /// counts nothing: counting down from a made-up deadline would be worse
+    /// than not counting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub deadline_at_ms: Option<i64>,
-    /// Líneas de cuerpo, ya saneadas y acotadas.
+    /// Body lines, already sanitized and scoped.
     ///
-    /// Cuando son RUTAS, el renderer las numera por posición: la etiqueta es
-    /// estructural y un nombre de fichero no puede escribirla.
+    /// When they are PATHS, the renderer numbers them by position: the
+    /// label is structural and a file name cannot write it.
     pub body: Vec<DialogLine>,
-    /// El cuerpo enseña MENOS elementos de los que la operación toca, y esto
-    /// lo dice ya traducido. Vacío = los enseña todos.
+    /// The body shows FEWER elements than the operation touches, and this
+    /// says so, already translated. Empty = it shows them all.
     ///
-    /// El cuerpo se acota (una selección de mil ficheros no cabe en un
-    /// diálogo), y una lista recortada sin decirlo describe una operación más
-    /// pequeña que la que se va a ejecutar: alguien marca doscientos, ve
-    /// dieciséis y confirma. Es el único sitio donde todavía se puede decir
-    /// que no.
+    /// The body is bounded (a selection of a thousand files does not fit in
+    /// a dialog), and a truncated list that does not say so describes an
+    /// operation smaller than the one about to run: someone marks two
+    /// hundred, sees sixteen, and confirms. This is the only place where it
+    /// is still possible to say no.
     ///
-    /// Traducido AQUÍ y en su propio campo, por los dos motivos de siempre:
-    /// un renderer no traduce ni sustituye números, y un aviso metido entre
-    /// las líneas del cuerpo lo podría suplantar un nombre de fichero.
+    /// Translated HERE and in its own field, for the usual two reasons: a
+    /// renderer does not translate or substitute numbers, and a notice
+    /// tucked among the body's lines could be impersonated by a file name.
     pub overflow_note: String,
-    /// Alguna de las que NO se enseñan se pintaría alterada.
+    /// Some of what is NOT shown would be painted altered.
     ///
-    /// El badge de hostil solo puede hablar de lo que se puede mirar, y lo
-    /// recortado no está aquí para inspeccionarlo — pero que ahí fuera haya
-    /// algo con bidi o invisibles sí se puede decir, y es lo que decide si
-    /// merece la pena ampliar antes de aprobar. El terminal lo dice desde
-    /// siempre en su resumen; esta ventana no, y eran las mismas rutas.
+    /// The hostile badge can only speak of what can be looked at, and what
+    /// was truncated is not here to inspect — but that there is something
+    /// with bidi or invisibles out there can still be said, and it is what
+    /// decides whether it is worth expanding before approving. The
+    /// terminal has always said this in its summary; this window did not,
+    /// and they were the same paths.
     ///
-    /// `#[serde(default)]`: ausente = `false`, que es no marcar. La dirección
-    /// segura es la contraria a la del badge de una ruta VISIBLE —allí callar
-    /// esconde algo que se está mirando— porque aquí un badge de más sobre un
-    /// recorte enseña a ignorarlo.
+    /// `#[serde(default)]`: absent = `false`, which is not flagging. The
+    /// safe direction is the opposite of a VISIBLE path's badge —there,
+    /// staying silent hides something being looked at— because here an
+    /// extra badge over a truncation teaches ignoring it.
     #[serde(default)]
     pub overflow_hostile: bool,
-    /// En qué punto está la comprobación del DESTINO: si cabe (#149) y si
-    /// sabe sujetar lo que se escriba en él (#164).
+    /// What point the DESTINATION check is at: whether it fits (#149) and
+    /// whether it knows how to hold what gets written to it (#164).
     ///
-    /// `#[serde(default)]`: un renderer de un puente anterior no lo manda, y
-    /// su ausencia es [`DestCheckView::NotAsked`], que es lo que era antes.
+    /// `#[serde(default)]`: a renderer from an older bridge does not send
+    /// it, and its absence is [`DestCheckView::NotAsked`], which is what it
+    /// used to be.
     #[serde(default)]
     pub dest_check: DestCheckView,
-    /// Lo que se puede responder.
+    /// What can be answered.
     pub choices: Vec<DialogChoice>,
-    /// El diálogo pide texto libre, y esto es lo tecleado hasta ahora, YA
-    /// enmascarado y acotado para pintar. No es el operando: lo que se va a
-    /// crear son los bytes que el usuario tecleó, que el host guarda aparte.
+    /// The dialog asks for free text, and this is what has been typed so
+    /// far, ALREADY masked and scoped for painting. It is not the operand:
+    /// what will be created are the bytes the user typed, kept separately
+    /// by the host.
     pub input: Option<String>,
-    /// Lo tecleado se pinta DISTINTO de lo que es (controles, marcas de
-    /// dirección). Es la única superficie donde se pide aprobar un nombre, y
-    /// enseñarlo crudo es como se aprueba otra cosa.
+    /// What is typed is painted DIFFERENT from what it is (controls,
+    /// direction marks). This is the only surface where approving a name is
+    /// asked for, and showing it raw is how something else gets approved.
     pub input_hostile: bool,
-    /// El campo es una CONTRASEÑA (#327).
+    /// The field is a PASSWORD (#327).
     ///
-    /// Cuando es `true`, [`Self::input`] lleva PUNTOS —uno por carácter— y no
-    /// el texto: lo tecleado se queda en el host, en un buffer que se pisa con
-    /// ceros al soltarlo (`norte_frontend::secret::TypedSecret`). El renderer
-    /// pinta el campo como contraseña y **nunca lo resiembra** con este valor,
-    /// que convertiría lo que el usuario escribió en una fila de puntos
-    /// literales.
+    /// When `true`, [`Self::input`] carries DOTS —one per character— and
+    /// not the text: what is typed stays on the host, in a buffer wiped
+    /// with zeros when released (`norte_frontend::secret::TypedSecret`).
+    /// The renderer paints the field as a password and **never reseeds it**
+    /// with this value, which would turn what the user typed into a row of
+    /// literal dots.
     ///
-    /// Un campo propio y no «adivínalo por el título» porque esta es la única
-    /// diferencia que importa entre pintar un nombre de fichero y pintar una
-    /// contraseña, y dejarla implícita significa que el siguiente diálogo que
-    /// pida un secreto la herede mal.
+    /// A field of its own and not "guess it from the title" because this is
+    /// the only difference that matters between painting a file name and
+    /// painting a password, and leaving it implicit means the next dialog
+    /// that asks for a secret inherits it wrong.
     ///
-    /// `#[serde(default)]`: un renderer de un puente anterior no lo manda, y
-    /// su ausencia significa «no es un secreto», que es lo que era antes.
+    /// `#[serde(default)]`: a renderer from an older bridge does not send
+    /// it, and its absence means "not a secret," which is what it used to
+    /// be.
     #[serde(default)]
     pub input_secret: bool,
-    /// Los CAMPOS de un diálogo que es un formulario (puente 91).
+    /// The FIELDS of a dialog that is a form (bridge 91).
     ///
-    /// Vacío —y entonces ausente del JSON— es el diálogo de siempre: una
-    /// pregunta con un [`Self::input`] a lo sumo. La búsqueda es el primero
-    /// que necesita siete campos y cuatro interruptores, pero la lista es
-    /// GENÉRICA a propósito: cualquier diálogo futuro con formulario la
-    /// quiere, y hacerla a medida de la búsqueda obligaría a rehacerla con el
-    /// segundo.
+    /// Empty —and then absent from the JSON— is the usual dialog: a
+    /// question with at most one [`Self::input`]. Search is the first that
+    /// needs seven fields and four toggles, but the list is GENERIC on
+    /// purpose: any future form dialog wants it, and tailoring it to search
+    /// would force redoing it for the second one.
     ///
-    /// Convive con `input` en vez de sustituirlo: aquel es el camino del
-    /// diálogo de un solo campo y el de la CONTRASEÑA, que no viaja por aquí
-    /// (#327) — un formulario guarda lo tecleado en el host para poder
-    /// proyectarlo, y eso es exactamente lo que un secreto no hace.
+    /// Coexists with `input` instead of replacing it: that one is the path
+    /// for a single-field dialog and for the PASSWORD one, which does not
+    /// travel here (#327) — a form stores what was typed on the host so it
+    /// can be projected, and that is exactly what a secret does not do.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub fields: Vec<DialogFieldView>,
 }
 
-/// Un campo de un diálogo-formulario (puente 91).
+/// A field of a form dialog (bridge 91).
 ///
-/// El renderer pinta lo que diga [`Self::kind`] y no decide nada más: la
-/// etiqueta es una CLAVE Fluent, el valor viene ya enmascarado y acotado, y
-/// qué valores existen en un ciclo lo resuelve Rust antes de mandarlo.
+/// The renderer paints what [`Self::kind`] says and decides nothing else:
+/// the label is a Fluent KEY, the value arrives already masked and scoped,
+/// and which values exist in a cycle is resolved by Rust before sending it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DialogFieldView {
-    /// Id ESTABLE del campo (`name`, `min-size`, `recursive`…).
+    /// STABLE id of the field (`name`, `min-size`, `recursive`…).
     ///
-    /// Por id y no por índice, por lo mismo que las filas del listado: un
-    /// campo que se inserte en medio renumeraría a todos los de debajo, y lo
-    /// que el renderer manda de vuelta nombraría otro.
+    /// By id and not by index, for the same reason as the listing's rows: a
+    /// field inserted in the middle would renumber every one below it, and
+    /// what the renderer sends back would name a different one.
     pub id: String,
-    /// Clave Fluent de la etiqueta.
+    /// Fluent key of the label.
     pub label_key: String,
-    /// Lo que se pinta del valor: enmascarado y acotado. Vacío para los que
-    /// no son de texto.
+    /// What is painted of the value: masked and scoped. Empty for the ones
+    /// that are not text.
     pub value: String,
-    /// Lo pintado DIFIERE de lo real (controles, marcas de dirección). El
-    /// renderer lo marca; jamás lo esconde.
+    /// What is painted DIFFERS from the real one (controls, direction
+    /// marks). The renderer marks it; never hides it.
     pub hostile: bool,
-    /// Qué clase de control es.
+    /// What kind of control it is.
     pub kind: DialogFieldKind,
 }
 
-/// Qué clase de control es un campo de formulario.
+/// What kind of control a form field is.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum DialogFieldKind {
-    /// Texto libre: el renderer es dueño del caret y manda el texto ENTERO.
+    /// Free text: the renderer owns the caret and sends the WHOLE text.
     Text,
-    /// Interruptor de dos estados.
+    /// A two-state toggle.
     Toggle {
-        /// Encendido.
+        /// On.
         on: bool,
     },
-    /// Un ciclo de valores cerrados; la etiqueta del valor ACTUAL, ya
-    /// elegida en Rust.
+    /// A cycle of closed values; the CURRENT value's label, already chosen
+    /// in Rust.
     ///
-    /// La clave y no el índice: cuántos valores hay y en qué orden es una
-    /// decisión de Rust, y un renderer que la supiera podría quedarse
-    /// desfasado sin que nada se ponga rojo.
+    /// The key and not the index: how many values there are and in what
+    /// order is a Rust decision, and a renderer that knew it could fall out
+    /// of sync without anything turning red.
     Cycle {
-        /// Clave Fluent del valor actual.
+        /// Fluent key of the current value.
         value_key: String,
     },
 }
 
-/// Qué se sabe de A DÓNDE VAN LOS BYTES, mientras se pregunta.
+/// What is known about WHERE THE BYTES ARE GOING, while it is being asked.
 ///
-/// De una transferencia es el directorio destino; de un borrado es la
-/// papelera, o su ausencia — que es el mismo tipo de hecho y por eso comparte
-/// canal: «⚠ SIN papelera: esto no se puede deshacer» responde a la misma
-/// pregunta que «no cabe» y «este destino no confina». Un canal y no tres
-/// también porque el renderer los pinta en un bloque que un nombre de fichero
-/// no puede suplantar, y tres bloques serían tres sitios donde olvidarse de
-/// esa propiedad.
+/// For a transfer it is the destination directory; for a delete it is the
+/// trash, or its absence — which is the same kind of fact and that is why
+/// it shares a channel: "⚠ NO trash: this cannot be undone" answers the
+/// same question as "doesn't fit" and "this destination doesn't confine."
+/// One channel and not three also because the renderer paints them in a
+/// block a file name cannot impersonate, and three blocks would be three
+/// places to forget that property.
 ///
-/// **Tres estados y no una lista de avisos, porque el silencio tenía que
-/// significar una sola cosa.** Las dos preguntas —¿cabe?, ¿sabe confinar?—
-/// son I/O, así que el diálogo se pinta antes de que vuelvan; con un solo
-/// `Vec` vacío, «todavía no lo he preguntado» y «lo pregunté y no hay nada
-/// que decir» llegaban idénticos, y el humano puede confirmar en ese hueco.
-/// La ausencia de la línea de #164 SIGNIFICA «este destino sujeta sus
-/// escrituras», así que dejarla ambigua es afirmarlo sin saberlo.
+/// **Three states and not a list of warnings, because silence had to mean
+/// exactly one thing.** The two questions —does it fit? does it know how to
+/// confine?— are I/O, so the dialog is painted before they come back; with
+/// a single empty `Vec`, "I haven't asked yet" and "I asked and there is
+/// nothing to say" arrived identical, and the human could confirm in that
+/// gap. The absence of #164's line MEANS "this destination holds its
+/// writes," so leaving it ambiguous asserts it without knowing it.
 ///
-/// El terminal no tiene este problema: pregunta en la cabecera de la vuelta,
-/// antes de pintar, así que su modal nunca se ve sin las respuestas puestas
-/// (`norte_tui::turn`). Esperarlas aquí dejaría F5 sin pintar nada contra un
-/// SFTP lento, que es peor: lo que el humano tiene delante mientras tanto es
-/// la lista de lo que va a copiar, que es lo que vino a leer.
+/// The terminal does not have this problem: it asks in the turn's header,
+/// before painting, so its modal is never seen without the answers set
+/// (`norte_tui::turn`). Waiting for them here would leave F5 painting
+/// nothing against a slow SFTP, which is worse: what the human has in front
+/// of them meanwhile is the list of what is about to be copied, which is
+/// what they came to read.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]
 pub enum DestCheckView {
-    /// Este diálogo no tiene nada que comprobar sobre a dónde van los bytes,
-    /// y es el valor por defecto. Los que sí: transferir, soltar y borrar.
+    /// This dialog has nothing to check about where the bytes are going,
+    /// and it is the default value. The ones that do: transfer, drop and
+    /// delete.
     #[default]
     NotAsked,
-    /// Se preguntó y no ha vuelto. El renderer lo DICE y reserva el sitio:
-    /// una línea que aparece de golpe encima de los botones los mueve bajo
-    /// el puntero de quien iba a pulsar.
+    /// It was asked and has not come back. The renderer SAYS SO and
+    /// reserves the spot: a line that suddenly appears above the buttons
+    /// moves them under the pointer of whoever was about to click.
     Checking,
-    /// Volvió. La lista vacía es la respuesta normal y no se pinta: que
-    /// quepa y que confine NO se anuncian, porque una línea en cada copia es
-    /// ruido y el ruido enseña a saltarse la línea el día que dice algo.
+    /// It came back. An empty list is the normal answer and is not
+    /// painted: that it fits and that it confines are NOT announced,
+    /// because a line on every copy is noise, and noise teaches skipping
+    /// the line the day it says something.
     ///
-    /// Ya traducidas y sin una sola cadena que controle un tercero. Van
-    /// aquí y no entre las líneas del cuerpo por eso mismo: ahí un nombre de
-    /// fichero las podría suplantar.
+    /// Already translated and without a single string a third party
+    /// controls. They go here and not among the body's lines for that same
+    /// reason: there a file name could impersonate them.
     Done {
-        /// Lo que hay que saber antes de decir que sí. Vacío = nada.
+        /// What needs to be known before saying yes. Empty = nothing.
         warnings: Vec<String>,
     },
 }
 
-/// Una línea del cuerpo de un diálogo.
+/// A line of a dialog's body.
 ///
-/// Estructura y no una cadena suelta porque la línea lleva DOS cosas: lo que
-/// se pinta y si lo que se pinta difiere de lo que hay. Un cuerpo de
-/// `Vec<String>` con un `Vec<bool>` al lado son dos vectores que se pueden
-/// desincronizar; una fila del listado ([`RowView`]) ya resuelve lo mismo
-/// así, y esto es lo mismo.
+/// A structure and not a bare string because the line carries TWO things:
+/// what is painted and whether what is painted differs from what is there.
+/// A body of `Vec<String>` with a `Vec<bool>` alongside are two vectors that
+/// can fall out of sync; a listing row ([`RowView`]) already solves the
+/// same problem this way, and this is the same.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DialogLine {
-    /// El texto, enmascarado y acotado.
+    /// The text, masked and scoped.
     pub text: String,
-    /// Lo pintado DIFIERE de lo real (bytes no UTF-8, controles, marcas de
-    /// dirección). El renderer lo marca; jamás lo esconde.
+    /// What is painted DIFFERS from the real one (non-UTF-8 bytes,
+    /// controls, direction marks). The renderer marks it; never hides it.
     ///
-    /// Aquí importa más que en ningún otro sitio: el cuerpo de un diálogo es
-    /// lo que alguien lee antes de aprobar que se borre, se copie o se mueva
-    /// un fichero. Un nombre que se pinta distinto de lo que es, sin insignia,
-    /// es un nombre que se lee como fiel — y la aprobación es de OTRA cosa.
+    /// Matters here more than anywhere else: a dialog's body is what
+    /// someone reads before approving that a file be deleted, copied or
+    /// moved. A name painted different from what it is, with no badge, is a
+    /// name that reads as faithful — and the approval is for SOMETHING
+    /// ELSE.
     pub hostile: bool,
 }
 
-/// El plan de renombrado que un modelo propuso, en revisión.
+/// The rename plan a model proposed, under review.
 ///
-/// Una pantalla propia y no un diálogo, por lo que TIENE que enseñar: parejas
-/// que se recorren, un veredicto del core que llega DESPUÉS de abrirse, y un
-/// detalle de colisiones. Un diálogo es una pregunta con respuestas; esto es
-/// un documento que se lee antes de aprobarlo.
+/// A screen of its own and not a dialog, because of what it HAS to show:
+/// pairs to browse, a core verdict that arrives AFTER it opens, and a
+/// collision detail. A dialog is a question with answers; this is a
+/// document read before approving it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiRenameView {
-    /// El directorio sobre el que se planeó.
+    /// The directory the plan was made for.
     pub dir: DialogLine,
-    /// La ventana de parejas que viaja, NO el plan entero.
+    /// The window of pairs travelling, NOT the whole plan.
     pub pairs: Vec<AiRenamePairView>,
-    /// La primera pareja de `pairs` dentro del plan.
+    /// The first pair of `pairs` within the plan.
     pub first_visible: u64,
-    /// Cuántas parejas tiene el plan.
+    /// How many pairs the plan has.
     pub total: u64,
-    /// Cuánto se ve de cuánto hay, ya traducido. Vacío = se ve todo.
+    /// How much is shown of how much there is, already translated. Empty =
+    /// all of it is shown.
     ///
-    /// Traducido AQUÍ y no en el renderer, y esta vez con una razón medida:
-    /// el catálogo que cruza el puente lleva las cadenas YA formateadas y sin
-    /// argumentos, y Fluent escribe una variable ausente como `{$shown}` —
-    /// sin espacios. El renderer sustituía `{ $shown }`, que no casa nunca,
-    /// así que la línea que dice cuánto del plan se está mirando pintaba dos
-    /// identificadores crudos en la pantalla donde se aprueba un lote.
+    /// Translated HERE and not in the renderer, and this time for a
+    /// measured reason: the catalogue that crosses the bridge carries
+    /// strings ALREADY formatted with no arguments, and Fluent writes a
+    /// missing variable as `{$shown}` — no spaces. The renderer was
+    /// substituting `{ $shown }`, which never matches, so the line saying
+    /// how much of the plan is being looked at painted two raw identifiers
+    /// on the screen where a batch is approved.
     pub more_note: String,
-    /// FUERA de la ventana hay algún nombre que se pinta distinto de lo que
-    /// es.
+    /// OUTSIDE the window there is a name painted different from what it
+    /// is.
     ///
-    /// La ventana son cinco parejas de hasta 256, y cada línea visible lleva
-    /// su marca. Sin esto, la marca solo existe para lo que se ve: basta con
-    /// poner la pareja alterada en la posición doce para que se apruebe un
-    /// plan sin que ninguna insignia haya aparecido jamás.
+    /// The window is five pairs out of up to 256, and every visible line
+    /// carries its flag. Without this, the flag only exists for what is
+    /// visible: putting the altered pair at position twelve is enough for a
+    /// plan to get approved without a single badge ever having appeared.
     pub hidden_hostile: bool,
-    /// El veredicto del core, ya traducido: comprobando, aplicable, no
-    /// aplicable, o no comprobado. Es la línea que no se puede perder.
+    /// The core's verdict, already translated: checking, applicable, not
+    /// applicable, or not checked. The line that cannot be lost.
     pub status: String,
-    /// La maquinaria del planificador y las colisiones, una por línea y ya
-    /// traducidas, cada una diciendo si lo pintado difiere de lo real.
+    /// The planner's machinery and the collisions, one per line and already
+    /// translated, each saying whether what is painted differs from the
+    /// real one.
     pub detail: Vec<DialogLine>,
-    /// Aprobar puede hacer algo. Lo dice el CORE (`executable`), no una
-    /// cuenta de colisiones: el campo es normativo y un veredicto futuro
-    /// puede parar un plan sin nombre ofensor que listar.
+    /// Approving can do something. Said by the CORE (`executable`), not a
+    /// collision count: the field is normative, and a future verdict can
+    /// stop a plan with no offending name to list.
     pub confirmable: bool,
-    /// Cuántos renombrados hará DE VERDAD, ya dicho y traducido. No es
-    /// `total`: el planificador tira las parejas nulas, y prometer las
-    /// pedidas sería prometer de más.
+    /// How many renames it will REALLY do, already said and translated. Not
+    /// `total`: the planner drops null pairs, and promising the requested
+    /// count would promise too much.
     ///
-    /// Vacío mientras no haya veredicto: hasta que el core conteste no se
-    /// sabe, y un cero se leería como «no hará nada».
+    /// Empty while there is no verdict: until the core answers it is not
+    /// known, and a zero would read as "will do nothing."
     pub real_steps_note: String,
-    /// El lector ha recorrido el plan ENTERO.
+    /// The reader has walked through the WHOLE plan.
     ///
-    /// Aprobar lo exige. Con 256 parejas permitidas y cinco visibles, la
-    /// pareja doscientos se ejecutaba sin que nadie la hubiera pintado nunca
-    /// — y la revisión es toda la defensa que hay contra un plan que un
-    /// modelo escribió a partir de nombres que un atacante controla.
+    /// Approving requires it. With 256 pairs allowed and five visible, pair
+    /// two hundred used to run without anyone ever having seen it painted
+    /// — and review is the entire defense there is against a plan a model
+    /// wrote from names an attacker controls.
     pub seen_all: bool,
 }
 
-/// El plan de ORGANIZAR en revisión (fase 8).
+/// The ORGANIZE plan under review (phase 8).
 ///
-/// Es el gemelo de [`AiRenameView`] con dos diferencias, y las dos vienen de
-/// lo mismo: aquí lo que cambia es la FORMA del directorio.
+/// The twin of [`AiRenameView`] with two differences, both coming from the
+/// same thing: here what changes is the SHAPE of the directory.
 ///
-/// - El cuerpo es un ÁRBOL, no una lista de parejas. Una lista de cuarenta
-///   `a.pdf → facturas/2026/a.pdf` no deja ver cuántas carpetas aparecen ni
-///   qué acaba dentro de cada una, que es justo lo que se está aprobando.
-/// - No hay veredicto que esperar. El token del plan viaja CON él, así que
-///   esta pantalla nace aprobable y no pasa por un `Pending`.
+/// - The body is a TREE, not a list of pairs. A list of forty
+///   `a.pdf → invoices/2026/a.pdf` does not let you see how many folders
+///   appear or what ends up inside each, which is exactly what is being
+///   approved.
+/// - There is no verdict to wait for. The plan's token travels WITH it, so
+///   this screen is born approvable and does not go through a `Pending`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrganizeView {
-    /// El directorio sobre el que se planeó.
+    /// The directory the plan was made for.
     pub dir: DialogLine,
-    /// La ventana de líneas del árbol que viaja, NO el árbol entero.
+    /// The window of tree lines travelling, NOT the whole tree.
     pub lines: Vec<OrganizeLineView>,
-    /// La primera línea de `lines` dentro del árbol.
+    /// The first line of `lines` within the tree.
     pub first_visible: u64,
-    /// Cuántas líneas tiene el árbol.
+    /// How many lines the tree has.
     pub total: u64,
-    /// Cuánto se ve de cuánto hay, ya traducido. Vacío = se ve todo.
+    /// How much is shown of how much there is, already translated. Empty =
+    /// all of it is shown.
     pub more_note: String,
-    /// FUERA de la ventana hay algún nombre que se pinta distinto de lo que
-    /// es. Sin esto, la marca solo existe para lo que se ve.
+    /// OUTSIDE the window there is a name painted different from what it
+    /// is. Without this, the flag only exists for what is visible.
     pub hidden_hostile: bool,
-    /// «Crea N carpetas y mueve M ficheros», ya traducido: lo que se lee para
-    /// decidir sin contar líneas. Va ANTES del árbol.
+    /// "Creates N folders and moves M files," already translated: what is
+    /// read to decide without counting lines. Goes BEFORE the tree.
     pub summary: String,
-    /// El lector ha recorrido el árbol ENTERO. Aprobar lo exige.
+    /// The reader has walked through the WHOLE tree. Approving requires it.
     pub seen_all: bool,
 }
 
-/// Una línea del árbol de organizar (fase 8).
+/// A line of the organize tree (phase 8).
 ///
-/// El `kind` viaja como DATO y no resuelto a un color: el renderer decide
-/// cómo se ve una carpeta nueva, y un tema monocromo necesita poder marcarla
-/// de otra forma. Que sea nueva o no lo decide
-/// [`norte_frontend::organize::tree_lines`], compartido con el terminal.
+/// `kind` travels as DATA and not resolved to a color: the renderer decides
+/// how a new folder looks, and a monochrome theme needs to be able to mark
+/// it another way. Whether it is new or not is decided by
+/// [`norte_frontend::organize::tree_lines`], shared with the terminal.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OrganizeLineView {
-    /// Cuánto se sangra: 0 es hijo directo del directorio del plan.
+    /// How much it is indented: 0 is a direct child of the plan's
+    /// directory.
     pub depth: u32,
-    /// El nombre, enmascarado y acotado, con su marca si difiere.
+    /// The name, masked and scoped, with its flag if it differs.
     pub text: DialogLine,
-    /// Qué es: una carpeta que se CREA, una que ya estaba, o un fichero que
-    /// se mueve.
+    /// What it is: a folder being CREATED, one that already existed, or a
+    /// file being moved.
     pub kind: OrganizeLineKind,
 }
 
-/// Qué representa una línea del árbol de organizar (fase 8).
+/// What an organize tree line represents (phase 8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum OrganizeLineKind {
-    /// Una carpeta que el plan va a CREAR.
+    /// A folder the plan is going to CREATE.
     NewDir,
-    /// Una carpeta que YA existe y a la que el plan mete algo.
+    /// A folder that ALREADY exists and that the plan puts something into.
     ExistingDir,
-    /// Un fichero que se mueve hasta ahí.
+    /// A file being moved there.
     Moved,
 }
 
-/// Una pareja del plan: de qué nombre a qué nombre.
+/// A plan's pair: from which name to which name.
 ///
-/// Los dos nombres van ENTEROS y por separado, jamás concatenados con una
-/// flecha: el mismo motivo que el destino de una transferencia
-/// ([`DialogView::destination`]) — un nombre puede contener la flecha.
+/// Both names travel WHOLE and separately, never concatenated with an
+/// arrow: the same reason as a transfer's destination
+/// ([`DialogView::destination`]) — a name can contain the arrow.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiRenamePairView {
-    /// El nombre de ahora.
+    /// The current name.
     pub from: DialogLine,
-    /// El que propone el modelo.
+    /// The one the model proposes.
     pub to: DialogLine,
 }
 
-/// Una respuesta posible de un diálogo.
+/// A dialog's possible answer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DialogChoice {
-    /// Id estable de la respuesta (`confirm`, `cancel`, `overwrite`…).
+    /// Stable id of the answer (`confirm`, `cancel`, `overwrite`…).
     pub id: String,
-    /// Clave Fluent de la etiqueta.
+    /// Fluent key of the label.
     pub label_key: String,
-    /// Esta respuesta DESTRUYE algo: el renderer la pinta como tal.
+    /// This answer DESTROYS something: the renderer paints it as such.
     pub destructive: bool,
 }
 
-/// La pantalla de arranque (puente 69, ADR 0115).
+/// The splash screen (bridge 69, ADR 0115).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SplashView {
-    /// El arte, una línea por fila. Viene del modelo compartido, así que la
-    /// brújula es la misma que pinta el terminal.
+    /// The art, one line per row. Comes from the shared model, so the
+    /// compass is the same one the terminal paints.
     pub art: Vec<String>,
-    /// Qué build corre.
+    /// Which build is running.
     pub version: String,
-    /// Y con qué revisión se compiló.
+    /// And which revision it was built from.
     pub revision: String,
-    /// Contra qué core habla, ya traducido.
+    /// Which core it talks to, already translated.
     pub daemon: String,
-    /// El pie: cómo se quita, y si los números hacen algo.
+    /// The footer: how to dismiss it, and whether the numbers do anything.
     pub hint: String,
-    /// Las secciones, ya filtradas: ninguna viene vacía.
+    /// The sections, already filtered: none arrives empty.
     pub sections: Vec<SplashSectionView>,
-    /// Cuánto le queda puesta, en milisegundos, o `None` si se queda hasta
-    /// que alguien la quite.
+    /// How much longer it stays up, in milliseconds, or `None` if it stays
+    /// until someone dismisses it.
     ///
-    /// El plazo lo decide el host —es suyo el modo `brief` y suyo el reloj—,
-    /// pero quien lo cumple es el renderer: aquí no hay bucle de eventos que
-    /// despierte solo, como sí lo hay en el terminal, y una pantalla que se
-    /// promete breve y se queda puesta hasta que tocas una tecla es peor que
-    /// no prometer nada. Así que el número CRUZA, en vez de que el renderer
-    /// se invente el suyo: dos relojes con la misma constante escrita dos
-    /// veces es exactamente la divergencia que el ADR 0077 persigue.
+    /// The deadline is decided by the host —the `brief` mode is its own and
+    /// so is the clock—, but who enforces it is the renderer: there is no
+    /// event loop here that wakes up on its own, as there is in the
+    /// terminal, and a screen that promises to be brief and stays up until
+    /// you press a key is worse than promising nothing. So the number
+    /// CROSSES, instead of the renderer making up its own: two clocks with
+    /// the same constant written twice is exactly the divergence ADR 0077
+    /// chases down.
     pub close_after_ms: Option<u32>,
 }
 
-/// Una sección de la pantalla de arranque (puente 69).
+/// A splash screen section (bridge 69).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SplashSectionView {
-    /// El título, ya traducido y saneado.
+    /// The title, already translated and sanitized.
     pub title: String,
-    /// Sus filas, en el orden en que se pintan.
+    /// Its rows, in the order they are painted.
     pub rows: Vec<SplashRowView>,
 }
 
-/// Una fila de la pantalla de arranque (puente 69).
+/// A splash screen row (bridge 69).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SplashRowView {
-    /// El número que la abre, o `0` si la fila no tiene tecla.
+    /// The number that opens it, or `0` if the row has no key.
     pub number: u8,
-    /// Lo que se lee, ya saneado.
+    /// What is read, already sanitized.
     pub label: String,
-    /// El detalle a la derecha (una ruta, un número de visitas).
+    /// The detail on the right (a path, a visit count).
     pub detail: String,
 }
 
-/// Una task del tablero.
+/// A task on the board.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TaskView {
-    /// Id de la task en el daemon.
+    /// The task's id in the daemon.
     pub task_id: u64,
-    /// Clase (`copy`, `move`, `delete`, `sync`…).
+    /// Kind (`copy`, `move`, `delete`, `sync`…).
     pub kind: String,
-    /// En qué estado está.
+    /// What state it is in.
     pub state: TaskStateView,
-    /// Porcentaje 0–100 si se sabe.
+    /// 0–100 percent if known.
     pub percent: Option<u8>,
-    /// El ritmo, ya escrito (`1.2 MiB/s`), o vacío si no se sabe. Puente 69.
+    /// The rate, already written (`1.2 MiB/s`), or empty if unknown. Bridge
+    /// 69.
     ///
-    /// Escrito por el HOST y no un número: `human_rate` es del crate
-    /// compartido, así que el terminal y la ventana dicen la misma velocidad
-    /// con las mismas unidades, y el renderer no elige redondeos.
+    /// Written by the HOST and not a number: `human_rate` belongs to the
+    /// shared crate, so the terminal and the window state the same speed
+    /// with the same units, and the renderer does not choose roundings.
     #[serde(default)]
     pub rate: String,
-    /// Lo que queda, ya escrito (`1m 20s`), o vacío. Puente 69.
+    /// What remains, already written (`1m 20s`), or empty. Bridge 69.
     #[serde(default)]
     pub eta: String,
-    /// Descripción corta ya saneada (qué se está moviendo).
+    /// Already sanitized short description (what is being moved).
     pub detail: Option<String>,
-    /// [`Self::detail`] difiere de la ruta real. Se marca por el mismo motivo
-    /// que en [`DialogLine::hostile`]: una copia cuyo fichero en curso se
-    /// pinta con el nombre enmascarado y sin insignia dice que ese ES el
-    /// nombre.
+    /// [`Self::detail`] differs from the real path. Flagged for the same
+    /// reason as [`DialogLine::hostile`]: a copy whose current file is
+    /// painted with a masked name and no badge says that IS the name.
     pub detail_hostile: bool,
-    /// La task es de OTRO cliente de la misma sesión.
+    /// The task belongs to ANOTHER client of the same session.
     pub foreign: bool,
 }
 
-/// Estado de una task.
+/// A task's state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStateView {
-    /// En cola.
+    /// Queued.
     Queued,
-    /// Corriendo.
+    /// Running.
     Running,
-    /// Pausada (ADR 0147, puente 93): viva, parada hasta que se reanude.
+    /// Paused (ADR 0147, bridge 93): alive, stopped until resumed.
     Paused,
-    /// Terminada bien.
+    /// Finished successfully.
     Done,
-    /// Falló.
+    /// Failed.
     Failed,
-    /// Cancelada.
+    /// Cancelled.
     Cancelled,
 }
 
-/// Un cambio sobre el snapshot anterior.
+/// A change over the previous snapshot.
 ///
-/// `base_sequence` es obligatorio y no es decorativo: aplicar un parche sobre
-/// otra base está PROHIBIDO, y el renderer que no tenga esa base pide un
-/// snapshot en vez de adivinar.
+/// `base_sequence` is mandatory and not decorative: applying a patch over
+/// another base is FORBIDDEN, and a renderer without that base requests a
+/// snapshot instead of guessing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ViewPatch {
-    /// La secuencia sobre la que este parche se aplica.
+    /// The sequence this patch applies over.
     pub base_sequence: u64,
-    /// Lo que cambia.
+    /// What changes.
     pub changes: Vec<ViewChange>,
 }
 
-/// Un cambio concreto.
+/// A specific change.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "change")]
 pub enum ViewChange {
-    /// El cursor de un hueco se movió (sin re-enviar las filas).
+    /// A slot's cursor moved (without resending the rows).
     Cursor {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Generación en la que vale la clave.
+        /// Generation the key is valid for.
         generation: u64,
-        /// Nueva fila bajo el cursor.
+        /// New row under the cursor.
         cursor: Option<RowKey>,
     },
-    /// Las filas visibles de un hueco cambiaron.
+    /// A slot's visible rows changed.
     Rows {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Generación.
+        /// Generation.
         generation: u64,
-        /// Primera fila que viaja.
+        /// First row travelling.
         first_visible: u64,
-        /// Las filas.
+        /// The rows.
         rows: Vec<RowView>,
-        /// La columna de iconos está abierta (puente 62): va CON las filas
-        /// porque es con un parche de filas como aterrizan los iconos, y un
-        /// renderer que se quedara con el valor de la última foto pintaría
-        /// la primera página de iconos sin su columna.
+        /// The icon column is open (bridge 62): travels WITH the rows
+        /// because it is with a rows patch that icons land, and a renderer
+        /// that kept the value from the last snapshot would paint the
+        /// first icon page without its column.
         icon_column: bool,
-        /// Cuántas filas tiene el listado ENTERO, no cuántas viajan.
+        /// How many rows the WHOLE listing has, not how many travel.
         ///
-        /// Viaja en el parche y no solo en la foto porque es la ALTURA del
-        /// desplazamiento del renderer (`total * alto_de_celda`, más
-        /// `aria-rowcount`), y el drenaje paginado contesta con parches
-        /// —también el último lote—. Sin esto el renderer se quedaba con el
-        /// total de la primera página para siempre: un directorio de cinco
-        /// mil ficheros topaba en la fila 100, y ni la rueda podía bajar ni
-        /// el rango visible podía pedir el resto.
+        /// Travels in the patch and not only in the snapshot because it is
+        /// the HEIGHT of the renderer's scroll
+        /// (`total * cell_height`, plus `aria-rowcount`), and paginated
+        /// draining answers with patches —including the last batch—.
+        /// Without this the renderer kept the first page's total forever: a
+        /// directory of five thousand files hit a wall at row 100, and
+        /// neither the wheel could scroll down nor the visible range could
+        /// request the rest.
         total_rows: Option<u64>,
     },
-    /// La CABECERA de un listado cambió: su ruta y lo que falta de él.
+    /// A listing's HEADER changed: its path and what is missing from it.
     ///
-    /// Aparte de [`ViewChange::Rows`] porque es otra parte de la pantalla —el
-    /// renderer la pinta en `paintHeader`—, y con ella porque se mueven a la
-    /// vez: `pane.names-encoding` retranscribe la ruta igual que las filas, y
-    /// `pane.toggle-hidden` mueve entradas dentro y fuera del listado, lo que
-    /// cambia cuántas se apartan.
+    /// Apart from [`ViewChange::Rows`] because it is another part of the
+    /// screen —the renderer paints it in `paintHeader`—, and bundled with it
+    /// because they move together: `pane.names-encoding` retranscribes the
+    /// path just like the rows, and `pane.toggle-hidden` moves entries in
+    /// and out of the listing, which changes how many are set aside.
     ///
-    /// Antes solo viajaba en la foto entera, así que las filas se repintaban
-    /// y el título se quedaba con la lectura vieja — el mojibake arriba y el
-    /// lector sin saber si el comando hizo algo (#57, #293).
+    /// It used to travel only in the whole snapshot, so the rows would
+    /// repaint and the title kept the old reading — mojibake at the top and
+    /// the reader not knowing whether the command did anything (#57, #293).
     BrowserHeader {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// La ruta, ya pintable y con la reinterpretación vigente.
+        /// The path, already paintable and with the current
+        /// reinterpretation.
         path_display: String,
-        /// Esa ruta DIFIERE de los bytes reales.
+        /// That path DIFFERS from the real bytes.
         path_hostile: bool,
-        /// Lo que el provider se saltó, ya dicho. Vacío si no se saltó nada.
+        /// What the provider skipped, already said. Empty if nothing was
+        /// skipped.
         skipped_note: String,
-        /// Lo que la ocultación aparta. Vacío si no aparta nada.
+        /// What hiding sets aside. Empty if nothing is set aside.
         hidden_note: String,
-        /// Los nombres se REINTERPRETAN con otra codificación (#57). Vacío si
-        /// no.
+        /// Names are being REINTERPRETED with another encoding (#57). Empty
+        /// if not.
         ///
-        /// Permanente mientras dure, como en el terminal: lo que se pinta no
-        /// son los bytes que hay en el disco, y eso hay que poder saberlo en
-        /// el momento de decidir copiar o borrar algo — no solo en el mensaje
-        /// del toggle, que la siguiente tecla se lleva.
+        /// Permanent for as long as it lasts, as in the terminal: what is
+        /// painted is not the bytes on disk, and that must be knowable at
+        /// the moment of deciding to copy or delete something — not only in
+        /// the toggle's message, which the next key overwrites.
         names_note: String,
-        /// El listado se está RELLENANDO todavía, y cuántas van. Vacío si ya
-        /// está entero.
+        /// The listing is STILL FILLING, and how many so far. Empty if
+        /// already whole.
         ///
-        /// Un listado incompleto jamás es silencioso: sin esto la pantalla
-        /// afirma que eso es todo lo que hay, que es precisamente lo que
-        /// todavía no se sabe.
+        /// An incomplete listing is never silent: without this the screen
+        /// asserts that is all there is, which is precisely what is not yet
+        /// known.
         filling_note: String,
-        /// Marcas que el último refresco descartó porque su entrada ya no
-        /// está. Vacío si no cayó ninguna.
+        /// Marks the last refresh dropped because their entry is no longer
+        /// there. Empty if none dropped.
         ///
-        /// El más grave de los avisos de esta cabecera: con la selección
-        /// vacía el embudo del operando cae al CURSOR, así que callarlo
-        /// redirige la siguiente operación en masa a algo que nadie marcó.
+        /// The most serious of this header's notices: with an empty
+        /// selection the operand funnel falls back to the CURSOR, so
+        /// staying silent redirects the next mass operation to something
+        /// nobody marked.
         pruned_note: String,
-        /// Cuántas entradas hay marcadas y cuánto pesan, ya dicho. Vacío sin
-        /// marcas: quien no marca no gana ruido.
+        /// How many entries are marked and how much they weigh, already
+        /// said. Empty with no marks: whoever does not mark gains no noise.
         marked_note: String,
-        /// El pie del listado (spec 2026-09-10), ya redactado; viaja con la
-        /// cabecera porque cambia con lo mismo que ella: marcar, ocultar,
-        /// rellenar. Vacío = `[ui] pane_footer` apagado.
+        /// The listing's footer (spec 2026-09-10), already worded; travels
+        /// with the header because it changes along with the same things it
+        /// does: marking, hiding, filling. Empty = `[ui] pane_footer` off.
         #[serde(default)]
         footer: String,
-        /// Las migas de la ruta (puente 65); ver `BrowserSlotView`.
+        /// The path's breadcrumbs (bridge 65); see `BrowserSlotView`.
         #[serde(default)]
         path_segments: Vec<String>,
-        /// Cuánto del volumen está ocupado (puente 65); ver `BrowserSlotView`.
+        /// How much of the volume is used (bridge 65); see
+        /// `BrowserSlotView`.
         #[serde(default)]
         used_ratio: Option<f32>,
-        /// Cuántas entradas hay marcadas, en crudo.
+        /// How many entries are marked, raw.
         ///
-        /// Sigue viajando al lado de [`Self::BrowserHeader::marked_note`] y
-        /// no es una duplicación: la frase es para PINTAR y este número es
-        /// para decidir (un renderer que quiera marcar el hueco, contar, o
-        /// habilitar algo), y derivar un número de una frase traducida es lo
-        /// que este DTO existe para no obligar a nadie a hacer.
+        /// Still travels alongside [`Self::BrowserHeader::marked_note`] and
+        /// is not a duplication: the sentence is for PAINTING and this
+        /// number is for deciding (a renderer that wants to flag the slot,
+        /// count, or enable something), and deriving a number from a
+        /// translated sentence is what this DTO exists to spare everyone
+        /// from doing.
         marks: u64,
-        /// La regla de marcas (puente 89, ADR 0135): qué tramos del listado
-        /// —de [`MARK_RULER_SPANS`] iguales— llevan alguna marca, en orden.
-        /// Vacío sin marcas.
+        /// The mark ruler (bridge 89, ADR 0135): which spans of the listing
+        /// —out of [`MARK_RULER_SPANS`] equal ones— carry a mark, in order.
+        /// Empty with no marks.
         #[serde(default)]
         mark_ruler: Vec<u16>,
     },
-    /// El estado de un hueco cambió (cargando, error, listo).
+    /// A slot's state changed (loading, error, ready).
     SlotState {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Estado nuevo.
+        /// New state.
         state: SlotState,
     },
-    /// La barra de estado cambió.
+    /// The status bar changed.
     Status(StatusView),
-    /// Los elementos de la mitad derecha de la barra de estado cambiaron
-    /// (ADR 0132). Como la barra de paneles: el host los compara con los
-    /// últimos que mandó al armar cada parche, porque los mueve casi todo
-    /// —el cursor, una marca, el orden, una tarea—.
+    /// The right half of the status bar's elements changed (ADR 0132). Like
+    /// the panel bar: the host compares them with the last ones it sent
+    /// when building each patch, because almost everything moves them —the
+    /// cursor, a mark, the order, a task.
     StatusItems {
-        /// La lista entera.
+        /// The whole list.
         status_items: Vec<StatusItemView>,
     },
-    /// La línea fina de un hueco se mueve (ADR 0148, puente 94).
+    /// A slot's thin line moves (ADR 0148, bridge 94).
     ///
-    /// Aparte del listado a propósito: el progreso llega a 30 Hz y reenviar
-    /// las filas en cada tic sería pagar un listado entero por dos píxeles.
+    /// Apart from the listing on purpose: progress arrives at 30 Hz and
+    /// resending the rows on every tick would pay for a whole listing for
+    /// two pixels.
     SlotProgress {
-        /// Qué hueco.
+        /// Which slot.
         slot_id: u32,
-        /// 0–100, o nada que pintar.
+        /// 0–100, or nothing to paint.
         progress: Option<u8>,
     },
-    /// El tablero de tasks cambió.
+    /// The task board changed.
     ///
-    /// Variante de STRUCT y no de tupla, y no por gusto: un enum etiquetado
-    /// por dentro (`tag = "change"`) no puede serializar una variante que
-    /// envuelva una secuencia — serde no tiene dónde poner la etiqueta. Como
-    /// tupla, esto compilaba y fallaba en tiempo de ejecución en el primer
-    /// renderer que lo pidiera por JSON.
+    /// A STRUCT variant and not a tuple one, and not by taste: an enum
+    /// tagged internally (`tag = "change"`) cannot serialize a variant that
+    /// wraps a sequence — serde has nowhere to put the tag. As a tuple, this
+    /// used to compile and fail at runtime on the first renderer that asked
+    /// for it as JSON.
     Tasks {
-        /// El tablero entero.
+        /// The whole board.
         tasks: Vec<TaskView>,
-        /// Qué fila del panel de procesos está elegida, sobre estas filas.
+        /// Which row of the processes panel is chosen, over these rows.
         ///
-        /// Viaja CON el tablero y no en un `ViewChange` propio, por lo mismo
-        /// que `total_rows` viaja con las filas de un listado: es la extensión
-        /// de lo que va al lado, y las dos se mueven a la vez. Una tarea que
-        /// caduca a los diez segundos quita una fila y desplaza el resto; sin
-        /// esto, el cursor solo viajaba en la foto entera, así que el panel
-        /// seguía resaltando la fila N —que ya es otra tarea, o ninguna—
-        /// mientras la tecla de cancelar actuaba sobre la que el host tiene
-        /// acotada. Resaltar una y parar otra es la avería, no el retraso.
+        /// Travels WITH the board and not in a `ViewChange` of its own, for
+        /// the same reason `total_rows` travels with a listing's rows: it
+        /// is an extension of what sits next to it, and both move at once.
+        /// A task that expires after ten seconds removes a row and shifts
+        /// the rest; without this, the cursor only travelled in the whole
+        /// snapshot, so the panel kept highlighting row N —which is now
+        /// another task, or none— while the cancel key acted on the one the
+        /// host has bounded. Highlighting one and stopping another is the
+        /// failure, not the delay.
         ///
-        /// `None` con el tablero vacío: un índice sin fila detrás resalta la
-        /// nada.
+        /// `None` with an empty board: an index with no row behind it
+        /// highlights nothing.
         #[serde(default)]
         cursor: Option<u64>,
     },
-    /// Los diálogos abiertos cambiaron. Struct por el mismo motivo que
+    /// The open dialogs changed. A struct for the same reason as
     /// [`ViewChange::Tasks`].
     Dialogs {
-        /// Los diálogos abiertos, en orden de apertura.
+        /// The open dialogs, in opening order.
         dialogs: Vec<DialogView>,
     },
-    /// La conexión cambió de estado.
+    /// The connection changed state.
     Connection(ConnectionView),
-    /// El reparto cambió: la ventana se redimensionó, o el foco (y con él
-    /// los papeles) se movió de hueco.
+    /// The layout changed: the window was resized, or focus (and with it
+    /// the roles) moved to another slot.
     Layout(LayoutView),
-    /// Las cabeceras de un listado cambiaron.
+    /// A listing's headers changed.
     ///
-    /// Ordenar mueve las filas Y la marca de orden. Sin este cambio, tras un
-    /// click en la cabecera el listado se repintaba en el orden nuevo y el
-    /// `▲` seguía describiendo el anterior: la pantalla se contradecía, y un
-    /// lector de pantalla leía `aria-sort` mintiendo.
+    /// Sorting moves the rows AND the sort mark. Without this change, after
+    /// a click on the header the listing repainted in the new order and the
+    /// `▲` kept describing the previous one: the screen contradicted
+    /// itself, and a screen reader read `aria-sort` lying.
     Columns {
-        /// Hueco.
+        /// Slot.
         slot_id: u32,
-        /// Las cabeceras, en su orden.
+        /// The headers, in their order.
         columns: Vec<ColumnHeader>,
     },
-    /// El selector de perfiles se abrió, se movió o se cerró.
+    /// The profile picker opened, moved, or closed.
     Profiles {
-        /// El selector, o `None` si se cerró.
+        /// The picker, or `None` if it closed.
         profiles: Option<ProfilePickerView>,
     },
-    /// La barra de menús: se desplegó uno, se movió el cursor, o se cerró.
+    /// The menu bar: one opened, the cursor moved, or it closed.
     ///
-    /// Entero y no un delta, como la ayuda: la barra y el desplegable son un
-    /// todo pequeño, y mandarlo por trozos sería inventarse un protocolo para
-    /// ahorrar unos cientos de bytes.
+    /// Whole and not a delta, like help: the bar and the dropdown are one
+    /// small whole, and sending it in pieces would mean inventing a
+    /// protocol to save a few hundred bytes.
     Menu {
-        /// La barra, siempre: la fila de títulos sigue ahí con el
-        /// desplegable cerrado.
+        /// The bar, always: the row of titles stays there with the
+        /// dropdown closed.
         menu: MenuView,
     },
-    /// La barra de paneles cambió: se abrió o cerró un panel, se movió el
-    /// teclado, o algo empezó a tener algo que contar.
+    /// The panel bar changed: a panel opened or closed, the keyboard moved,
+    /// or something started having something to report.
     ///
-    /// No la emite ningún sitio en particular: el host la compara con la
-    /// última que mandó cada vez que arma un parche, y la añade si difiere.
-    /// Es lo que hace que un panel abierto por tecla, por menú, por paleta o
-    /// por la propia barra la actualice igual — el «por frame» de la TUI,
-    /// traducido a un puente que solo habla cuando algo cambia.
+    /// Not emitted by any one place in particular: the host compares it
+    /// with the last one it sent every time it builds a patch, and adds it
+    /// if it differs. It is what makes a panel opened by key, by menu, by
+    /// palette or by the bar itself update the same — the TUI's "per
+    /// frame," translated into a bridge that only speaks when something
+    /// changes.
     PanelBar {
-        /// La barra entera.
+        /// The whole bar.
         panel_bar: PanelBarView,
     },
-    /// La paleta se abrió, se filtró, se movió o se cerró.
+    /// The palette opened, filtered, moved, or closed.
     Palette {
-        /// La paleta, o `None` si se cerró.
+        /// The palette, or `None` if it closed.
         palette: Option<PaletteView>,
     },
-    /// «Ir a cualquier sitio» se abrió, se filtró, se movió, recibió una
-    /// sección tardía (conexiones, índice) o se cerró (#357, puente 77).
+    /// "Go to anywhere" opened, filtered, moved, received a late section
+    /// (connections, index) or closed (#357, bridge 77).
     Goto {
-        /// La pantalla, o `None` si se cerró.
+        /// The screen, or `None` if it closed.
         goto: Option<GotoView>,
     },
-    /// La pantalla de arranque se puso o se quitó (puente 69).
+    /// The splash screen was shown or dismissed (bridge 69).
     Splash {
-        /// La pantalla, o `None` si se quitó.
+        /// The screen, or `None` if it was dismissed.
         splash: Option<SplashView>,
     },
-    /// El asistente de primer arranque se abrió, se movió o se cerró.
+    /// The first-launch wizard opened, moved, or closed.
     Wizard {
-        /// El asistente, o `None` si se cerró.
+        /// The wizard, or `None` if it closed.
         wizard: Option<WizardView>,
     },
-    /// El panel de continuaciones apareció, cambió o se fue.
+    /// The which-key panel appeared, changed, or went away.
     WhichKey {
-        /// Las continuaciones, o `None` si ya no hay prefijo a medias.
+        /// The continuations, or `None` if there is no longer a half-typed
+        /// prefix.
         whichkey: Option<WhichKeyView>,
     },
-    /// La ayuda se abrió, cambió de página, movió el cursor o se cerró.
+    /// Help opened, changed page, moved the cursor, or closed.
     ///
-    /// Un parche entero y no un delta por campo: una página cabe de sobra en
-    /// un mensaje, y el estado de la ayuda es un todo — la lateral, el
-    /// cuerpo y lo ejecutable se mueven juntos cuando el lector abre otra.
+    /// A whole patch and not a per-field delta: a page fits well within a
+    /// message, and help's state is one whole — the sidebar, the body and
+    /// what is runnable move together when the reader opens another one.
     Help {
-        /// La ayuda, o `None` si se cerró.
+        /// Help, or `None` if it closed.
         help: Option<HelpView>,
     },
-    /// El tema se abrió o se cerró.
+    /// The theme opened or closed.
     Theme {
-        /// El tema, o `None` si se cerró.
+        /// The theme, or `None` if it closed.
         theme: Option<ThemeView>,
     },
-    /// La búsqueda arrancó, encontró algo, terminó o se cerró.
+    /// The search started, found something, finished, or closed.
     Search {
-        /// La búsqueda, o `None` si se cerró.
+        /// The search, or `None` if it closed.
         search: Option<SearchView>,
     },
-    /// El panel de diferencias cambió (se abrió, llegaron filas, se cerró).
+    /// The diff panel changed (opened, rows arrived, closed).
     Compare {
-        /// La comparación, o `None` si se cerró.
+        /// The comparison, or `None` if it closed.
         compare: Option<CompareView>,
     },
-    /// El panel de sincronización cambió (se abrió, llegaron pasos, se cerró).
+    /// The sync panel changed (opened, steps arrived, closed).
     Sync {
-        /// El plan, o `None` si se cerró.
+        /// The plan, or `None` if it closed.
         sync: Option<SyncView>,
     },
-    /// El selector de disposiciones se abrió, se movió o se cerró.
+    /// The layout picker opened, moved, or closed.
     Layouts {
-        /// El selector, o `None` si se cerró.
+        /// The picker, or `None` if it closed.
         layouts: Option<LayoutPickerView>,
     },
-    /// El selector de columnas se abrió, se movió o se cerró.
+    /// The columns picker opened, moved, or closed.
     ColumnsPicker {
-        /// El selector, o `None` si se cerró.
+        /// The picker, or `None` if it closed.
         columns: Option<ColumnsPickerView>,
     },
-    /// Un selector se abrió, se movió o se cerró.
+    /// A picker opened, moved, or closed.
     Picker {
-        /// El selector, o `None` si se cerró.
+        /// The picker, or `None` if it closed.
         picker: Option<PickerView>,
     },
-    /// Las extensiones se abrieron, cambiaron o se cerraron.
+    /// Extensions opened, changed, or closed.
     Extensions {
-        /// El gestor, o `None` si se cerró.
+        /// The manager, or `None` if it closed.
         extensions: Option<ExtensionsView>,
     },
-    /// El panel de sesiones de agente se abrió, se movió o se cerró.
+    /// The agent sessions panel opened, moved, or closed.
     Agents {
-        /// El panel, o `None` si se cerró.
+        /// The panel, or `None` if it closed.
         agents: Option<AgentsView>,
     },
-    /// La salida de un comando de extensión se enseñó o se cerró.
+    /// An extension command's output was shown or closed.
     PluginOutput {
-        /// Lo que imprimió, o `None` si se cerró.
+        /// What it printed, or `None` if it closed.
         output: Option<ExtensionOutputView>,
     },
-    /// La salida de un programa (#312) se enseñó o se cerró.
+    /// A program's output (#312) was shown or closed.
     ProgramOutput {
-        /// Lo que imprimió, o `None` si se cerró.
+        /// What it printed, or `None` if it closed.
         output: Option<ProgramOutputView>,
     },
-    /// Los ajustes se abrieron, movieron el cursor o se cerraron.
+    /// Settings opened, moved the cursor, or closed.
     Settings {
-        /// Los ajustes, o `None` si se cerraron.
+        /// Settings, or `None` if it closed.
         settings: Option<SettingsView>,
     },
-    /// El visor cambió (se abrió, se desplazó, se cerró).
+    /// The viewer changed (opened, scrolled, closed).
     ///
-    /// Un parche y no una foto: el visor tapa la pantalla, y mandar el estado
-    /// entero por cada línea de scroll enviaba las filas visibles de TODOS
-    /// los listados que hay debajo, que es el derroche que la decisión D7
-    /// existe para evitar.
-    /// Variante de STRUCT, no de tupla: un enum etiquetado por dentro
-    /// tampoco puede serializar una variante que envuelva un `Option`. Es la
-    /// MISMA trampa que se llevó por delante a `Tasks` y `Dialogs`, y esta
-    /// vez la cazó el corpus antes de salir.
+    /// A patch and not a snapshot: the viewer covers the screen, and
+    /// sending the whole state on every scroll line would send the visible
+    /// rows of EVERY listing underneath, which is the waste decision D7
+    /// exists to avoid.
+    /// A STRUCT variant, not a tuple one: an internally tagged enum also
+    /// cannot serialize a variant wrapping an `Option`. It is the SAME trap
+    /// that caught `Tasks` and `Dialogs`, and this time the corpus caught it
+    /// before shipping.
     Viewer {
-        /// El visor, o `None` si se cerró.
+        /// The viewer, or `None` if it closed.
         viewer: Option<ViewerView>,
     },
-    /// El plan de renombrado en revisión cambió: se abrió, llegó el veredicto
-    /// del core, se recorrió, o se cerró.
+    /// The rename plan under review changed: opened, the core's verdict
+    /// arrived, was browsed, or closed.
     AiRename {
-        /// El plan, o `None` si se cerró.
+        /// The plan, or `None` if it closed.
         ai_rename: Option<AiRenameView>,
     },
-    /// El plan de ORGANIZAR en revisión cambió (fase 8): se abrió, se
-    /// recorrió, o se cerró. No tiene el tercer caso del de renombrar —«llegó
-    /// el veredicto»— porque su token viaja con el plan.
+    /// The ORGANIZE plan under review changed (phase 8): opened, was
+    /// browsed, or closed. It has no third case like the rename one's
+    /// "verdict arrived" because its token travels with the plan.
     Organize {
-        /// El plan, o `None` si se cerró.
+        /// The plan, or `None` if it closed.
         organize: Option<OrganizeView>,
     },
 }
 
-/// Algo que decir que no es un cambio de pantalla.
+/// Something to say that is not a screen change.
 ///
-/// Va por la MISMA secuencia que el resto: no es un segundo canal sin orden,
-/// porque «se perdió la conexión» y «este listado falló» tienen que llegar en
-/// el orden en que pasaron.
+/// Travels through the SAME sequence as everything else: it is not a
+/// second channel with no ordering, because "the connection was lost" and
+/// "this listing failed" have to arrive in the order they happened.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "notice")]
 pub enum UiNotice {
-    /// Un aviso normal, con su clave Fluent.
+    /// A normal notice, with its Fluent key.
     Message {
-        /// Clave Fluent.
+        /// Fluent key.
         key: String,
-        /// Detalle ya saneado.
+        /// Already-sanitized detail.
         detail: Option<String>,
     },
-    /// El host se está apagando y esta es la última cosa que dice.
+    /// The host is shutting down and this is the last thing it says.
     Shutdown {
-        /// Quedó trabajo sin terminar (una sesión sin escribir, una task
-        /// viva). Se DICE, no se calla.
+        /// Work was left unfinished (a session not written, a live task).
+        /// STATED, not kept quiet.
         incomplete: bool,
     },
-    /// Un fallo del propio host: el renderer no puede seguir confiando en su
-    /// copia del estado. No lleva nombres de fichero ni cuerpos de sesión.
+    /// A failure of the host itself: the renderer can no longer trust its
+    /// copy of the state. Carries no file names or session bodies.
     Fatal {
-        /// Clave Fluent del fallo.
+        /// Fluent key of the failure.
         key: String,
     },
 }
 
-/// Lo que el host le pide al PROCESO que lo hospeda, no al renderer.
+/// What the host asks of the PROCESS hosting it, not the renderer.
 ///
-/// Canal aparte, y no un `UiUpdate` más, por dos motivos que apuntan al mismo
-/// sitio. El primero es de audiencia: esto lleva RUTAS y programas, y la
-/// webview no tiene por qué verlos —ni tiene permiso para ejecutarlos: sus
-/// capabilities son escuchar eventos y nada más (ADR 0066 D11)—. El segundo
-/// es de responsabilidad: el host no lanza procesos ni toca el portapapeles;
-/// dice QUÉ hay que hacer, con operandos que salen de su propio estado
-/// semántico, y quien lo hospeda decide CÓMO con una puerta estrecha por
-/// cosa. Un frontend que no sepa hacer alguna simplemente no la hace, y el
-/// host se entera porque nadie le contesta.
+/// A separate channel, and not one more `UiUpdate`, for two reasons that
+/// point to the same place. The first is about audience: this carries
+/// PATHS and programs, and the webview has no reason to see them —nor
+/// permission to run them: its capabilities are listening for events and
+/// nothing else (ADR 0066 D11). The second is about responsibility: the
+/// host does not launch processes or touch the clipboard; it says WHAT
+/// must be done, with operands that come from its own semantic state, and
+/// whoever hosts it decides HOW, with one narrow door per thing. A
+/// frontend that does not know how to do one simply does not do it, and
+/// the host finds out because nobody answers it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeEffect {
-    /// Pon esto en el portapapeles.
+    /// Put this on the clipboard.
     ///
-    /// Ya compuesto —una ruta por línea, en su forma nativa cuando la
-    /// tiene—: componerlo es una regla de presentación y vive donde vive el
-    /// resto.
+    /// Already composed —one path per line, in its native form when it has
+    /// one—: composing it is a presentation rule and lives where the rest
+    /// of them do.
     CopyBytes {
-        /// Lo que se copia, en BYTES y sin decodificar.
+        /// What is copied, in BYTES and undecoded.
         ///
-        /// Bytes y no `String` porque un nombre de fichero es bytes (regla
-        /// 1): pasarlo por `from_utf8_lossy` metería el carácter de
-        /// sustitución en el portapapeles, y lo que se pegue después abriría
-        /// otro fichero —o ninguno—. El helper del sistema lo recibe por
-        /// STDIN, que tampoco lo decodifica.
+        /// Bytes and not `String` because a file name is bytes (rule 1):
+        /// running it through `from_utf8_lossy` would put the replacement
+        /// character on the clipboard, and whatever gets pasted afterward
+        /// would open a different file —or none. The system helper
+        /// receives it over STDIN, which does not decode it either.
         bytes: Vec<u8>,
-        /// Cuántas rutas lleva, para decirlo sin volver a contarlas.
+        /// How many paths it carries, to say so without counting them
+        /// again.
         count: usize,
     },
-    /// Abre ESTA entrada con la aplicación que el escritorio elija.
+    /// Opens THIS entry with whatever application the desktop picks.
     OpenPath {
-        /// Qué se abre. Es un `VPath`: quien lo hospeda lo convierte a ruta
-        /// nativa —o dice que no puede, porque un `sftp://` no se le pasa a
-        /// `xdg-open`—.
+        /// What is opened. It is a `VPath`: whoever hosts it converts it to
+        /// a native path —or says it cannot, because an `sftp://` is not
+        /// handed to `xdg-open`.
         path: norte_proto::VPath,
     },
-    /// Saca un aviso por el ESCRITORIO (#285).
+    /// Sends a notice through the DESKTOP (#285).
     ///
-    /// El texto viaja YA COMPUESTO, traducido, enmascarado y acotado: una
-    /// notificación sale del proceso y puede acabar en un historial o en la
-    /// pantalla de bloqueo, así que lo que lleva dentro tiene que haber
-    /// pasado por las mismas manos que lo que se pinta en la barra. Quien la
-    /// entrega solo la entrega.
+    /// The text travels ALREADY COMPOSED, translated, masked and clamped: a
+    /// notification leaves the process and can end up in a history or on
+    /// the lock screen, so what it carries has to have gone through the
+    /// same hands as what is painted on the bar. Whoever delivers it just
+    /// delivers it.
     Notify {
-        /// La primera línea: qué pasó, en categoría.
+        /// The first line: what happened, by category.
         titulo: String,
-        /// El detalle, con el nombre del fichero cuando lo hay.
+        /// The detail, with the file name when there is one.
         cuerpo: String,
     },
-    /// Pide al ESCRITORIO que el lector elija un directorio (#284).
+    /// Asks the DESKTOP for the reader to choose a directory (#284).
     ///
-    /// Existe porque con un solo listado en pantalla no hay panel destino del
-    /// que sacar el sitio, y rehusar la operación era dejar sin copiar a quien
-    /// no ha partido la ventana. El selector lo pinta el sistema, no norte.
+    /// Exists because with a single listing on screen there is no target
+    /// pane to take the place from, and refusing the operation left
+    /// whoever has not split the window unable to copy. The picker is
+    /// painted by the system, not norte.
     ///
-    /// **La ruta que vuelva es texto del renderer y se trata como tal**: el
-    /// host la valida y, sobre todo, la ENSEÑA en la confirmación antes de
-    /// mover un byte. Los operandos —qué se copia— siguen saliendo del estado
-    /// del host y no del mensaje, que es la regla de ADR 0069.
+    /// **The path that comes back is renderer text and is treated as
+    /// such**: the host validates it and, above all, SHOWS it in the
+    /// confirmation before moving a byte. The operands —what is copied—
+    /// still come from the host's state and not from the message, which
+    /// is ADR 0069's rule.
     PickDirectory {
-        /// Dónde abrir el selector: el directorio del panel activo. Es una
-        /// sugerencia, no una restricción — el lector puede irse a otro sitio.
+        /// Where to open the picker: the active pane's directory. It is a
+        /// suggestion, not a restriction — the reader can go somewhere
+        /// else.
         desde: norte_proto::VPath,
     },
-    /// Corre un PROGRAMA con estos argumentos (#312): suelto (`detached`,
-    /// un comparador gráfico que abre su ventana) o ESPERÁNDOLO y
-    /// capturando lo que imprima, que vuelve como
-    /// `UiAction::ProgramFinished` y se enseña.
+    /// Runs a PROGRAM with these arguments (#312): detached (a graphical
+    /// comparer that opens its own window) or WAITED FOR and with its
+    /// output captured, which comes back as `UiAction::ProgramFinished`
+    /// and is shown.
     ///
-    /// El argv viene RESUELTO: el programa ya es una ruta absoluta (ADR
-    /// 0082, antes de darle un `cwd`) y las rutas de los ficheros ya están
-    /// interpoladas con las reglas compartidas (`[ui] diff`, `%F`). Quien
-    /// hospeda no decide nada: lanza. En BYTES, porque un nombre de fichero
-    /// es bytes (regla 1) y un argumento que no fuera UTF-8 abriría otro
-    /// fichero o ninguno.
+    /// The argv arrives RESOLVED: the program is already an absolute path
+    /// (ADR 0082, before it is given a `cwd`) and the files' paths are
+    /// already interpolated with the shared rules (`[ui] diff`, `%F`).
+    /// Whoever hosts it decides nothing: it launches. In BYTES, because a
+    /// file name is bytes (rule 1) and an argument that was not UTF-8
+    /// would open a different file, or none.
     RunProgram {
-        /// Clave Fluent de lo que se está haciendo, para el panel.
+        /// Fluent key for what is being done, for the panel.
         title_key: String,
-        /// Programa (ruta absoluta) y argumentos, en bytes.
+        /// Program (absolute path) and arguments, in bytes.
         argv: Vec<Vec<u8>>,
-        /// Directorio de trabajo, en bytes nativos, si lo hay.
+        /// Working directory, in native bytes, if there is one.
         cwd: Option<Vec<u8>>,
-        /// `true` = lanzar y soltar; `false` = esperar y capturar.
+        /// `true` = launch and forget; `false` = wait and capture.
         detached: bool,
     },
-    /// Abre un terminal sentado en ESTE directorio.
+    /// Opens a terminal sitting in THIS directory.
     OpenTerminal {
-        /// Dónde se sienta.
+        /// Where it sits.
         dir: norte_proto::VPath,
     },
-    /// El RELEVO a la TERMINAL (fase 9): la pantalla ya está escrita y la
-    /// sesión, soltada; ahora lanza `ntc --attach` y CIERRA esta ventana.
+    /// The HANDOFF to the TERMINAL (phase 9): the screen is already
+    /// written and the session, released; now launches `ntc --attach` and
+    /// CLOSES this window.
     ///
-    /// Va por este canal y no por la vista porque lanzar un proceso y cerrarse
-    /// es de quien hospeda: el host no sabe abrir un emulador de terminal, ni
-    /// debe. Lo que el host garantiza antes de emitirlo es lo que hace seguro
-    /// el relevo — que la sesión está guardada y libre.
+    /// Goes through this channel and not through the view because
+    /// launching a process and closing is the host's business: the host
+    /// does not know how to open a terminal emulator, nor should it. What
+    /// the host guarantees before emitting it is what makes the handoff
+    /// safe — that the session is saved and free.
     ///
-    /// Si el lanzamiento falla, quien hospeda lo dice y NO se cierra: la
-    /// sesión está suelta pero la pantalla sigue aquí, que es el fallo
-    /// barato.
+    /// If the launch fails, whoever hosts it says so and does NOT close:
+    /// the session is released but the screen stays here, which is the
+    /// cheap failure.
     HandoffToTerminal {
-        /// `true` si este proceso habla con el daemon, para que la terminal
-        /// arranque igual. Sin él iría contra su core embebido y no
-        /// encontraría la sesión que se acaba de soltar.
+        /// `true` if this process talks to the daemon, so the terminal
+        /// starts up the same way. Without it, it would go against its
+        /// embedded core and would not find the session that was just
+        /// released.
         daemon: bool,
     },
-    /// El tema activo es ahora este: vuelve a resolver lo que salga de él.
+    /// The active theme is now this one: resolve whatever comes from it
+    /// again.
     ///
-    /// Va por ESTE canal y no por el de la vista porque el tema no cruza al
-    /// renderer como datos: cruza convertido en lo que ese renderer sepa
-    /// pintar —variables CSS en la webview, otra cosa en el siguiente— y esa
-    /// conversión es de quien hospeda, no del host. El host dice qué tema
-    /// hay; cómo se ve es de la casa.
+    /// Goes through THIS channel and not the view's because the theme does
+    /// not cross to the renderer as data: it crosses converted into
+    /// whatever that renderer knows how to paint —CSS variables in the
+    /// webview, something else in the next one— and that conversion
+    /// belongs to whoever hosts it, not the host. The host says which
+    /// theme there is; how it looks is the house's business.
     ///
-    /// Existe porque lo que hospeda resuelve el tema UNA vez al arrancar. Sin
-    /// esto, la ventana no podía cambiar de tema en marcha: ni desde su propio
-    /// selector, ni al cambiar de perfil — que es la mitad de para lo que
-    /// existe un perfil.
+    /// Exists because the host resolves the theme ONCE at startup. Without
+    /// this, the window could not change theme on the fly: not from its
+    /// own picker, nor on a profile change — which is half the point of a
+    /// profile existing.
     ThemeChanged {
-        /// Cómo se llama el tema que hay que resolver.
+        /// The name of the theme to resolve.
         name: String,
     },
-    /// Ciérrate: el lector lo pidió y, si había que preguntar, ya se
-    /// preguntó.
+    /// Close yourself: the reader asked, and if there was something to ask
+    /// about, it was already asked.
     ///
-    /// Quien hospeda vuelca la sesión y destruye la ventana. Va por aquí y no
-    /// por el gesto del gestor de ventanas porque la pregunta la decide el
-    /// host: `[ui] confirm_quit` es configuración, y una ventana que se
-    /// cierra sola con una copia a medias no es una ventana que obedece.
+    /// Whoever hosts it flushes the session and destroys the window. Goes
+    /// through here and not the window manager's own gesture because the
+    /// question is decided by the host: `[ui] confirm_quit` is
+    /// configuration, and a window that closes itself with a half-done
+    /// copy is not a window that obeys.
     CloseWindow,
 }
 
-/// Lo que el host manda al renderer.
+/// What the host sends to the renderer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "update")]
 pub enum UiUpdate {
-    /// Reemplaza TODO el estado del renderer.
+    /// Replaces the renderer's WHOLE state.
     ///
-    /// En caja: una foto entera es un orden de magnitud más grande que un
-    /// parche o un aviso, y sin la caja ese tamaño lo paga CADA mensaje que
-    /// cruza, la mayoría de los cuales son parches de cursor.
+    /// Boxed: a whole snapshot is an order of magnitude bigger than a
+    /// patch or a notice, and without the box that size is paid by EVERY
+    /// message that crosses, most of which are cursor patches.
     Snapshot(Box<ViewSnapshot>),
-    /// Cambia lo que dice, sobre la base que dice.
+    /// Changes what it says, on top of the base it says.
     Patch(ViewPatch),
-    /// Algo que decir, en el mismo orden que lo demás.
+    /// Something to say, in the same order as everything else.
     Notice(UiNotice),
 }

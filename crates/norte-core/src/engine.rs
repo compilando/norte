@@ -1,5 +1,5 @@
-//! [`Engine`]: la API embebida del core (M0). El daemon JSON-RPC (M1)
-//! envolverá esta misma API; los frontends no contienen lógica de negocio.
+//! [`Engine`]: the core's embedded API (M0). The JSON-RPC daemon (M1) will
+//! wrap this same API; frontends contain no business logic.
 
 use std::sync::{Arc, RwLock};
 
@@ -16,9 +16,8 @@ use crate::ops::OnExists;
 use crate::scheduler::{Priority, Scheduler, TaskHandle};
 use crate::sessions::SessionPool;
 
-/// Opciones de una copia/movimiento (ADR 0005): qué hacer ante colisiones
-/// y con los symlinks. `Default` = el comportamiento estricto de M0
-/// (`Fail` + `Preserve`).
+/// Options for a copy/move (ADR 0005): what to do on collisions and with
+/// symlinks. `Default` = M0's strict behavior (`Fail` + `Preserve`).
 ///
 /// ```
 /// use norte_core::TransferOptions;
@@ -29,221 +28,228 @@ use crate::sessions::SessionPool;
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TransferOptions {
-    /// Qué hacer si el destino ya existe.
+    /// What to do if the destination already exists.
     pub on_collision: CollisionPolicy,
-    /// Qué hacer con los symlinks del origen.
+    /// What to do with the source's symlinks.
     pub symlinks: SymlinkPolicy,
-    /// Reanudación de transferencias interrumpidas (ADR 0012); default
-    /// `Off` = contrato de M1 (cancelar deja destino limpio).
+    /// Resuming interrupted transfers (ADR 0012); default `Off` = M1's
+    /// contract (cancelling leaves a clean destination).
     pub resume: ResumePolicy,
-    /// Verificación del parcial al reanudar (solo con `resume=On`).
+    /// Verifying the partial on resume (only with `resume=On`).
     pub verify: VerifyPolicy,
-    /// A la COLA en vez de en paralelo (ADR 0149): de una en una.
+    /// QUEUED instead of in parallel (ADR 0149): one at a time.
     pub queued: bool,
 }
 
-/// De dónde sale el journal de un [`Engine`], que desde #177 ya no es siempre
-/// «lo tiene o no lo tiene».
+/// Where an [`Engine`]'s journal comes from, which since #177 is no longer
+/// always "has it or doesn't".
 ///
-/// Las tres variantes son los tres arranques que existen: un engine sin journal
-/// (tests, embebedores), el del daemon —que lo abre él y se niega a arrancar si
-/// no puede— y el de un frontend embebido, que no lo abre hasta que hace falta.
+/// The three variants are the three startups that exist: an engine with no
+/// journal (tests, embedders), the daemon's —which opens it itself and
+/// refuses to start if it cannot— and an embedded frontend's, which does not
+/// open it until it is needed.
 enum JournalSource {
-    /// Sin journal: `undo_session` y `sync.apply` responden `Unsupported`, y el
-    /// observer no registra nada.
+    /// No journal: `undo_session` and `sync.apply` answer `Unsupported`, and
+    /// the observer records nothing.
     None,
-    /// Ya abierto por quien construyó el engine (el daemon). Este proceso es el
-    /// dueño de la cadena desde antes de existir el engine.
+    /// Already opened by whoever built the engine (the daemon). This process
+    /// has owned the chain since before the engine existed.
     Open(Arc<crate::journal::SqliteJournal>),
-    /// El del directorio de estado, que se abrirá en la primera mutación —o en
-    /// la primera pregunta que necesite la cadena— y quizá no se pueda abrir.
+    /// The state directory's, which will open on the first mutation —or on
+    /// the first question that needs the chain— and may not be openable.
     Lazy(Arc<crate::embedded::LazyJournal>),
 }
 
-/// Núcleo embebido: registro de providers por scheme + operaciones.
-/// Lecturas (`stat`/`list`) son directas; mutaciones (`copy`/`move_`/
-/// `delete`) son Tasks con progreso y cancelación.
+/// Embedded core: registry of providers by scheme + operations. Reads
+/// (`stat`/`list`) are direct; mutations (`copy`/`move_`/`delete`) are Tasks
+/// with progress and cancellation.
 pub struct Engine {
-    /// Caché de providers + ciclo de vida de las sesiones remotas (#47):
-    /// providers de proceso por scheme, remotos por `scheme://authority`
-    /// (una sesión por host, con single-flight/evicción/backoff) y archive
-    /// compuestos por `fmt+scheme://authority`.
+    /// Cache of providers + remote sessions' lifecycle (#47): per-process
+    /// providers by scheme, remotes by `scheme://authority` (one session per
+    /// host, with single-flight/eviction/backoff), and composite archive ones
+    /// by `fmt+scheme://authority`.
     sessions: SessionPool,
-    /// Establece providers remotos bajo demanda (fase 6e, ADR 0015). Sin
-    /// conector, un scheme sin provider registrado es `Unsupported` (M0/M1).
+    /// Establishes remote providers on demand (phase 6e, ADR 0015). With no
+    /// connector, a scheme with no registered provider is `Unsupported`
+    /// (M0/M1).
     connector: RwLock<Option<Arc<dyn crate::connect::RemoteConnector>>>,
-    /// Observa los avisos de conexión (#44: degradación TLS). Sin observer, los
-    /// avisos se dropean (el `tracing::warn!` del connector persiste en el log).
+    /// Observes connection warnings (#44: TLS degradation). With no observer,
+    /// the warnings are dropped (the connector's `tracing::warn!` persists in
+    /// the log).
     connection_observer: RwLock<Option<Arc<dyn crate::connect::ConnectionObserver>>>,
     sched: Scheduler,
     observer: Arc<dyn MutationObserver>,
-    /// Si alguien se llevó ya el despachador de hooks (ADR 0100): es de UNO.
+    /// Whether someone already took the hook dispatcher (ADR 0100): it belongs to ONE.
     hooks_taken: std::sync::atomic::AtomicBool,
-    /// De dónde sale el journal de este engine: fuente de LECTURA para el undo
-    /// (M3-2) y para el gate de `sync.apply`. Es el MISMO objeto que `observer`
-    /// en las dos variantes que tienen uno.
+    /// Where this engine's journal comes from: the READ source for undo
+    /// (M3-2) and for `sync.apply`'s gate. It is the SAME object as
+    /// `observer` in the two variants that have one.
     ///
-    /// No es un `Option<Arc<..>>` desde #177 porque el brazo embebido no sabe
-    /// todavía si LO TIENE: lo abre en la primera mutación. Preguntárselo es
-    /// [`Self::journal`], que es `async` justo por eso.
+    /// Not an `Option<Arc<..>>` since #177 because the embedded arm does not
+    /// yet know whether it HAS one: it opens it on the first mutation. Asking
+    /// it is [`Self::journal`], which is `async` for exactly that reason.
     journal: JournalSource,
-    /// Las anclas de los directorios que el BACKEND EMBEBIDO ha listado (#301,
-    /// ADR 0073), **si este engine es de un frontend** (#317).
+    /// The anchors of the directories the EMBEDDED BACKEND has listed (#301,
+    /// ADR 0073), **if this engine belongs to a frontend** (#317).
     ///
-    /// Vive aquí y no en `Backend` porque `Backend::Embedded` es un `Arc` del
-    /// engine y nada más: dos clones suyos —el que lista un panel y el que
-    /// copia— no comparten ninguna otra cosa, y una memoria por clon no vería
-    /// nunca lo que listó el otro. Es el equivalente del `Inner` que el SDK
-    /// usa para el camino remoto.
+    /// Lives here and not in `Backend` because `Backend::Embedded` is an
+    /// `Arc` of the engine and nothing else: two of its clones —the one that
+    /// lists a pane and the one that copies— share nothing else, and a
+    /// per-clone memory would never see what the other listed. It is the
+    /// equivalent of the `Inner` the SDK uses for the remote path.
     ///
-    /// # `Option`, y ese es el punto
+    /// # `Option`, and that is the point
     ///
-    /// Un ancla dice **quién miró**, o sea un humano delante de una pantalla.
-    /// Eso solo es cierto en un proceso con UN cliente: el de un frontend
-    /// embebido. En el daemon hay muchos, cada uno con su propia idea de qué
-    /// está mirando, y una caché compartida pasaría el listado del cliente A a
-    /// la escritura del cliente B — que es lo que el ADR 0082 rechaza en sus
-    /// alternativas.
+    /// An anchor says **who looked**, i.e. a human in front of a screen.
+    /// That is only true in a process with ONE client: an embedded
+    /// frontend's. In the daemon there are many, each with its own idea of
+    /// what it is looking at, and a shared cache would pass client A's
+    /// listing to client B's write — which is what ADR 0082 rejects among
+    /// its alternatives.
     ///
-    /// Era un campo siempre presente cuyo rustdoc decía «el daemon no lo
-    /// toca». Lo decía y era verdad, pero lo sostenía una promesa en prosa y
-    /// no el tipo: bastaba con que alguien montase un `Backend::Embedded` sobre
-    /// el engine del daemon —para un job interno, para plugins— y la promesa
-    /// caía sin que nada se pusiera rojo. Ahora la instala
-    /// [`Self::with_client_anchors`], y la llama exactamente
-    /// [`crate::embedded::engine_in`], que es la constructora de los engines de
-    /// frontend y la que el daemon no usa.
+    /// It used to be an always-present field whose rustdoc said "the daemon
+    /// does not touch it". That was true, but it was held up by a prose
+    /// promise and not the type: it took nothing more than someone mounting
+    /// a `Backend::Embedded` over the daemon's engine —for an internal job,
+    /// for plugins— for the promise to fall with nothing turning red. Now
+    /// [`Self::with_client_anchors`] installs it, and the one that calls it
+    /// is exactly [`crate::embedded::engine_in`], which is the frontend
+    /// engines' constructor and the one the daemon does not use.
     anchors: Option<std::sync::Mutex<crate::anchor::AnchorCache>>,
-    /// Gate de policy consultado PRE-efecto en cada mutación (M3-3). Default
-    /// [`AllowAll`](crate::policy::AllowAll): el engine embebido/humano no se
-    /// sandboxea salvo que se instale una policy con [`Self::with_policy`].
+    /// Policy gate consulted PRE-effect on every mutation (M3-3). Default
+    /// [`AllowAll`](crate::policy::AllowAll): the embedded/human engine is
+    /// not sandboxed unless a policy is installed with [`Self::with_policy`].
     policy: Arc<dyn crate::policy::PolicyGate>,
-    /// Si la `policy` de arriba la instaló ALGUIEN ([`Self::with_policy`]) o es
-    /// la de por omisión.
+    /// Whether the `policy` above was installed by SOMEONE
+    /// ([`Self::with_policy`]) or is the default one.
     ///
-    /// No cambia ninguna decisión: `AllowAll` gatea igual de permisivo en los
-    /// dos casos. Existe porque el daemon tiene que poder AVISAR de la segunda
-    /// (#166) — «policy permisiva a propósito» y «policy que nadie instaló» son
-    /// la misma cosa para el gate y cosas distintas para el operador.
+    /// Changes no decision: `AllowAll` gates equally permissively in both
+    /// cases. It exists because the daemon has to be able to WARN about the
+    /// second case (#166) — "permissive policy on purpose" and "policy
+    /// nobody installed" are the same thing to the gate and different things
+    /// to the operator.
     policy_explicit: bool,
-    /// Resuelve un `Ask` de policy. Default [`DenyAll`](crate::approval::DenyAll)
+    /// Resolves a policy `Ask`. Default [`DenyAll`](crate::approval::DenyAll)
     /// (headless fail-closed).
     approvals: Arc<dyn crate::approval::ApprovalResolver>,
-    /// Límites anti-bomba de los providers archive compuestos (#95.2).
-    /// Default [`norte_vfs_archive::Limits::default`]; el operador los baja
-    /// vía [`Self::set_archive_limits`] ANTES de la primera navegación a un
-    /// contenedor (los providers compuestos se cachean con los límites
-    /// vigentes en su primer uso).
+    /// Anti-bomb limits for composite archive providers (#95.2). Default
+    /// [`norte_vfs_archive::Limits::default`]; the operator lowers them via
+    /// [`Self::set_archive_limits`] BEFORE the first navigation into a
+    /// container (composite providers are cached with the limits in effect
+    /// at their first use).
     archive_limits: RwLock<norte_vfs_archive::Limits>,
-    /// Ejecutable FIJADO para leer RAR (`[archive] rar_delegate`), o `None`
-    /// para sondear `PATH`. Se pone en el arranque con
-    /// [`Self::set_rar_delegate`], nunca desde la capa Project.
+    /// FIXED executable for reading RAR (`[archive] rar_delegate`), or `None`
+    /// to probe `PATH`. Set at startup with [`Self::set_rar_delegate`], never
+    /// from the Project layer.
     rar_delegate: RwLock<Option<std::path::PathBuf>>,
-    /// Proveedor de IA para el rename revisable (M4-A2, ADR 0031). `None` =
-    /// sin IA (`ai_rename_plan` → `Unsupported`). Inyectado con
+    /// AI provider for the reviewable rename (M4-A2, ADR 0031). `None` = no
+    /// AI (`ai_rename_plan` → `Unsupported`). Injected with
     /// [`Self::set_ai_provider`].
     ai_provider: RwLock<Option<norte_ai::SharedAiProvider>>,
-    /// Proveedor de EMBEDDINGS (M4-IA-2, ADR 0031 A3). Separado del de chat:
-    /// `[ai].embed_provider` puede nombrar otro proveedor/modelo. `None` =
-    /// sin embeddings (`index.embed` → `Unsupported`). Inyectado con
+    /// EMBEDDINGS provider (M4-IA-2, ADR 0031 A3). Separate from the chat
+    /// one: `[ai].embed_provider` can name a different provider/model.
+    /// `None` = no embeddings (`index.embed` → `Unsupported`). Injected with
     /// [`Self::set_ai_embed_provider`].
     ai_embed: RwLock<Option<norte_ai::SharedAiProvider>>,
-    /// Config `[ai]` (opt-in/local-only/denied-paths). Default deshabilitado
-    /// → el gate rechaza toda operación de IA.
+    /// `[ai]` config (opt-in/local-only/denied-paths). Default disabled → the
+    /// gate rejects every AI operation.
     ai_config: RwLock<crate::ai::AiConfig>,
-    /// Índice de búsqueda (M4, ADR 0034). `None` = sin índice
-    /// (`index.*` → `Unsupported`, fail-closed como la IA). Inyectado con
-    /// [`Self::with_index`]; lo instala el daemon.
+    /// Search index (M4, ADR 0034). `None` = no index (`index.*` →
+    /// `Unsupported`, fail-closed like AI). Injected with
+    /// [`Self::with_index`]; the daemon installs it.
     index: Option<Arc<norte_index::Index>>,
-    /// EL spool de planes de sincronización retenidos (ADR 0049). `None` = sin
-    /// retención, y entonces `sync.plan` responde `Unsupported` (fail-closed,
-    /// como el índice): un plan que no se puede retener tampoco se puede
-    /// aplicar, y servirlo sería enseñar un diálogo de aprobación sobre algo que
-    /// después no existe.
+    /// THE spool of retained sync plans (ADR 0049). `None` = no retention,
+    /// and then `sync.plan` answers `Unsupported` (fail-closed, like the
+    /// index): a plan that cannot be retained cannot be applied either, and
+    /// serving it would show an approval dialog for something that
+    /// afterward does not exist.
     ///
-    /// Lo instala el arranque con [`Self::set_spool`], **una sola vez y con un
-    /// solo `Spool::new`**: el registro de planes emitidos vive detrás de un
-    /// `Arc` dentro del handle, así que un segundo `Spool::new` sobre el mismo
-    /// directorio no es otro handle sino un spool que no reconoce ni un plan.
+    /// Startup installs it with [`Self::set_spool`], **once and with a
+    /// single `Spool::new`**: the registry of issued plans lives behind an
+    /// `Arc` inside the handle, so a second `Spool::new` over the same
+    /// directory is not another handle but a spool that recognizes not even
+    /// one plan.
     spool: RwLock<Option<crate::sync::Spool>>,
-    /// Anillo ACOTADO de informes de lotes de renames, por `task_id`
+    /// BOUNDED ring of rename batch reports, by `task_id`
     /// ([`Self::rename_batch_report`]).
     ///
-    /// El informe se retiene AQUÍ, y no en el daemon, porque hay dos
-    /// consumidores —el socket (`fs.rename_batch_report`) y el `Backend`
-    /// embebido— y dos anillos serían dos políticas de retención que se
-    /// contradicen a la primera. El actor guardado es el DUEÑO de la task: el
-    /// daemon lo necesita para decidir quién puede leerlo.
+    /// The report is retained HERE, and not in the daemon, because there are
+    /// two consumers —the socket (`fs.rename_batch_report`) and the embedded
+    /// `Backend`— and two rings would be two retention policies
+    /// contradicting each other from the start. The stored actor is the
+    /// task's OWNER: the daemon needs it to decide who can read it.
     batch_reports: std::sync::Mutex<std::collections::VecDeque<BatchReportEntry>>,
-    /// Anillo ACOTADO de informes de `sync.apply`, por `task_id`
+    /// BOUNDED ring of `sync.apply` reports, by `task_id`
     /// ([`Self::sync_report`]).
     ///
-    /// Gemelo exacto de `batch_reports` y por el mismo motivo: hay dos
-    /// consumidores —el socket (`sync.report`) y el `Backend` embebido— y dos
-    /// anillos serían dos políticas de retención que se contradicen a la
-    /// primera. El actor guardado es el DUEÑO de la Task; el daemon lo necesita
-    /// para decidir quién puede leerlo.
+    /// The exact twin of `batch_reports` and for the same reason: there are
+    /// two consumers —the socket (`sync.report`) and the embedded
+    /// `Backend`— and two rings would be two retention policies
+    /// contradicting each other from the start. The stored actor is the
+    /// Task's OWNER; the daemon needs it to decide who can read it.
     sync_reports: std::sync::Mutex<std::collections::VecDeque<SyncReportEntry>>,
-    /// Anillo ACOTADO de informes de `archive.test`, por `task_id`
+    /// BOUNDED ring of `archive.test` reports, by `task_id`
     /// ([`Engine::archive_test_report`]).
     ///
-    /// Tercero de la misma familia y por la misma razón: una Task no puede
-    /// devolver un valor, y lo que `archive.test` tiene que contar —qué entrada
-    /// falló y por qué— no cabe en un `Failed`. El mismo desalojo, con la misma
-    /// regla de «primero lo que no cuenta nada».
+    /// The third of the same family and for the same reason: a Task cannot
+    /// return a value, and what `archive.test` has to report —which entry
+    /// failed and why— does not fit in a `Failed`. The same eviction, with
+    /// the same "what counts for nothing goes first" rule.
     test_reports: std::sync::Mutex<std::collections::VecDeque<TestReportEntry>>,
-    /// Anillo ACOTADO de informes de undo, por `task_id`
+    /// BOUNDED ring of undo reports, by `task_id`
     /// ([`Engine::undo_report`]).
     ///
-    /// Vivía en el daemon, y era el único de la familia que no estaba aquí:
-    /// el `Backend` embebido deshacía (`undo_after`) y no tenía de dónde leer
-    /// qué había vuelto, así que contestaba `Unsupported` a su propio undo.
+    /// It used to live in the daemon, and was the only one of the family not
+    /// here: the embedded `Backend` undid (`undo_after`) and had nowhere to
+    /// read what came back from, so it answered `Unsupported` to its own undo.
     undo_reports: std::sync::Mutex<std::collections::VecDeque<UndoReportEntry>>,
-    /// Un undo a la vez (#358). Lo toma la Task de undo entera, del primer
-    /// paso al último: dos undos que eligieron la misma pila (un doble clic,
-    /// dos frontends, un reintento) no se pisan, y el segundo, al entrar,
-    /// re-mira el journal y se salta lo que el primero ya devolvió.
+    /// One undo at a time (#358). Taken by the whole undo Task, from the
+    /// first step to the last: two undos that picked the same stack (a
+    /// double click, two frontends, a retry) do not step on each other, and
+    /// the second one, on entering, looks at the journal again and skips
+    /// what the first already returned.
     ///
-    /// Dos límites, escritos para que nadie los dé por cerrados:
-    /// - El rollback de un `fs.rename_batch` EN MARCHA también escribe
-    ///   compensaciones y no toma este turno. Un undo que elija entradas de un
-    ///   lote que aún corre puede cruzarse con él; lo acotan `is_free` y el
-    ///   rename sin reemplazo, como antes de #358.
-    /// - Un undo de agente cuya puerta de policy pregunta (`ask`) retiene el
-    ///   turno mientras espera la aprobación (30 s en el daemon). Un undo
-    ///   humano espera detrás. No hay interbloqueo —aprobar no pasa por un
-    ///   undo—, solo espera.
+    /// Two limits, written so nobody takes them as closed:
+    /// - An IN-FLIGHT `fs.rename_batch`'s rollback also writes compensations
+    ///   and does not take this turn. An undo that picks entries from a
+    ///   batch still running can cross paths with it; `is_free` and the
+    ///   no-replace rename bound it, as before #358.
+    /// - An agent's undo whose policy gate asks (`ask`) holds the turn while
+    ///   it waits for approval (30 s in the daemon). A human undo waits
+    ///   behind it. There is no deadlock —approving does not go through an
+    ///   undo—, only waiting.
     undo_en_curso: Arc<tokio::sync::Mutex<()>>,
-    /// Anillo ACOTADO de informes de `archive.pack`, por `task_id`
+    /// BOUNDED ring of `archive.pack` reports, by `task_id`
     /// ([`Engine::archive_pack_report`]).
     ///
-    /// Cuarto de la familia, y el que más lejos lleva su motivo: los otros tres
-    /// cuentan lo que SALIÓ MAL, y este cuenta algo que salió BIEN y aun así
-    /// hay que decir — un `a\b.txt` guardado, que en Windows es un `b.txt`
-    /// dentro de una carpeta `a`. Un `Completed` es verdad y no lo cubre
-    /// (#250).
+    /// Fourth of the family, and the one that stretches its reason
+    /// furthest: the other three count what went WRONG, and this one counts
+    /// something that went RIGHT and still has to be said — an `a\b.txt`
+    /// saved, which on Windows is a `b.txt` inside an `a` folder. A
+    /// `Completed` is true and does not cover it (#250).
     pack_reports: std::sync::Mutex<std::collections::VecDeque<PackReportEntry>>,
-    /// Anillo ACOTADO de informes de `fs.checksum`, por `task_id`
+    /// BOUNDED ring of `fs.checksum` reports, by `task_id`
     /// ([`Self::checksum_report`]).
     ///
-    /// Gemelo de `pack_reports` y por el mismo motivo: hay dos consumidores —el
-    /// socket (`fs.checksum_report`) y el `Backend` embebido— y dos anillos
-    /// serían dos políticas de retención que se contradicen a la primera.
+    /// Twin of `pack_reports` and for the same reason: there are two
+    /// consumers —the socket (`fs.checksum_report`) and the embedded
+    /// `Backend`— and two rings would be two retention policies
+    /// contradicting each other from the start.
     checksum_reports: std::sync::Mutex<std::collections::VecDeque<ChecksumReportEntry>>,
-    /// Anillo ACOTADO de informes de `fs.dir_usage`, por `task_id`
+    /// BOUNDED ring of `fs.dir_usage` reports, by `task_id`
     /// ([`Self::dir_usage_report`]).
     ///
-    /// El sexto de la familia. Aquí lo que no cabe en el desenlace de una Task
-    /// es la LISTA de hijos medidos: `fs.dir_size` podía devolver su total por
-    /// el progreso porque era un número, y un mapa no lo es.
+    /// The sixth of the family. Here what does not fit in a Task's outcome
+    /// is the LIST of measured children: `fs.dir_size` could return its
+    /// total through progress because it was a number, and a map is not.
     dir_usage_reports: std::sync::Mutex<std::collections::VecDeque<DirUsageReportEntry>>,
 }
 
-/// La puerta de policy, capturable (#171).
+/// The policy gate, capturable (#171).
 ///
-/// Existe para que el cuerpo de una Task pueda preguntar por SU cuenta, sin
-/// `&self`: es lo que separa «gatear todo antes de empezar» de «gatear cada
-/// unidad cuando le toca». Ver [`Engine::policy_checker`].
+/// Exists so a Task's body can ask ON ITS OWN, with no `&self`: it is what
+/// separates "gate everything before starting" from "gate each unit as its
+/// turn comes". See [`Engine::policy_checker`].
 #[derive(Clone)]
 struct PolicyChecker {
     policy: Arc<dyn crate::policy::PolicyGate>,
@@ -251,7 +257,7 @@ struct PolicyChecker {
 }
 
 impl PolicyChecker {
-    /// La mitad de policy de [`Self::gate`].
+    /// The policy half of [`Self::gate`].
     async fn check(
         &self,
         actor: &crate::journal::Actor,
@@ -265,16 +271,16 @@ impl PolicyChecker {
         match self.policy.evaluate(actor, op, paths) {
             Decision::Allow => Ok(()),
             Decision::Deny(reason) => {
-                tracing::info!(?reason, op = op.kind(), "policy denegó la operación");
+                tracing::info!(?reason, op = op.kind(), "policy denied the operation");
                 Err(denied(reason))
             }
-            // Un plugin corre sin nadie delante (ADR 0101): una regla `ask`
-            // sobre él es un `deny` con su motivo, no un modal que nadie mira
-            // y que vence por TTL igual.
+            // A plugin runs with nobody in front of it (ADR 0101): an `ask`
+            // rule on it is a `deny` with its reason, not a modal nobody
+            // looks at and that expires by TTL anyway.
             Decision::Ask if matches!(actor, crate::journal::Actor::Plugin { .. }) => {
                 tracing::info!(
                     op = op.kind(),
-                    "policy pide confirmación a un plugin: denegado"
+                    "policy asks a plugin for confirmation: denied"
                 );
                 Err(denied(DenyReason::NotApproved))
             }
@@ -282,27 +288,28 @@ impl PolicyChecker {
                 let req = crate::approval::ApprovalRequest {
                     actor: actor.clone(),
                     op,
-                    // Redactadas como los spans (regla 10): son SOLO display
-                    // para el frontend que aprueba, jamás se reparsean.
+                    // Redacted like spans (rule 10): they are display ONLY
+                    // for the approving frontend, never reparsed.
                     //
-                    // Y ACOTADAS. La DECISIÓN se toma sobre `paths` entero
-                    // (arriba, `policy.evaluate`); lo que se recorta es lo que
-                    // se le enseña al humano. Desde el rename por lotes un solo
-                    // gate puede traer miles de rutas, y esta lista se difunde a
-                    // cada conexión humana y se retiene durante el TTL: sin
-                    // tope, un agente bajo una regla `ask` convierte cada
-                    // petición en megabytes de notificación y expulsa a los
-                    // suscriptores lentos por outbox lleno. Ningún frontend
-                    // pinta tantas rutas de todos modos.
+                    // And CAPPED. The DECISION is made over the whole
+                    // `paths` (above, `policy.evaluate`); what is trimmed is
+                    // what is shown to the human. From the batch rename a
+                    // single gate can carry thousands of paths, and this
+                    // list is broadcast to every human connection and
+                    // retained for the TTL: with no cap, an agent under an
+                    // `ask` rule turns every request into megabytes of
+                    // notification and evicts slow subscribers for a full
+                    // outbox. No frontend paints that many paths anyway.
                     paths: paths
                         .iter()
                         .take(APPROVAL_PATHS_SHOWN)
                         .map(|p| span_path(p))
                         .collect(),
-                    // Y el TOTAL viaja con ellas. Recortar la lista es
-                    // necesario; recortarla EN SILENCIO convertiría el modal en
-                    // una mentira — el humano aprobaría 32 rutas inocentes sin
-                    // saber que la decisión cubría ocho mil.
+                    // And the TOTAL travels with them. Trimming the list is
+                    // necessary; trimming it SILENTLY would turn the modal
+                    // into a lie — the human would approve 32 innocent
+                    // paths without knowing the decision covered eight
+                    // thousand.
                     paths_total: paths.len() as u64,
                 };
                 match self.approvals.request(req).await {
@@ -318,23 +325,24 @@ impl PolicyChecker {
 }
 
 impl Engine {
-    /// Engine con el observador no-op (el journal llega en M3).
+    /// Engine with the no-op observer (the journal arrives in M3).
     #[must_use]
     pub fn new() -> Self {
         Self::with_observer(Arc::new(NoopObserver))
     }
 
-    /// Engine con un observador de mutaciones propio (costura del journal), sin
-    /// fuente de undo (`undo_session` → `Unsupported`).
+    /// Engine with its own mutation observer (the journal's seam), with no
+    /// undo source (`undo_session` → `Unsupported`).
     #[must_use]
     pub fn with_observer(observer: Arc<dyn MutationObserver>) -> Self {
         Self::build(observer, JournalSource::None)
     }
 
-    /// El constructor de verdad: los tres públicos solo eligen QUÉ observer y
-    /// qué fuente de journal, y el resto del engine es idéntico en los tres.
-    /// Uno solo, y no tres copias de veinte campos, porque un campo nuevo que
-    /// se olvide en una copia es un engine con la mitad de sus piezas.
+    /// The real constructor: the three public ones only choose WHICH
+    /// observer and WHICH journal source, and the rest of the engine is
+    /// identical in all three. Just one, and not three copies of twenty
+    /// fields, because a new field forgotten in one copy is an engine with
+    /// half its pieces.
     fn build(observer: Arc<dyn MutationObserver>, journal: JournalSource) -> Self {
         Self {
             sessions: SessionPool::new(),
@@ -368,36 +376,35 @@ impl Engine {
 
     /// Le da a este engine la memoria de anclas de UN cliente (#301, #317).
     ///
-    /// Solo para un engine de frontend embebido, donde el único que lista es el
-    /// humano que mira. La llama [`crate::embedded::engine_in`]; un engine que
-    /// no pase por ahí —el del daemon— no la tiene, y entonces
-    /// `Backend::Embedded` sobre él no ancla nada y las escrituras se comportan
-    /// como en 0.53. Fallar así es lo correcto: perder la comprobación es
-    /// perder una comprobación, y compartirla entre clientes sería contestar
-    /// «quién miró» con el nombre de otro.
+    /// Only for an embedded frontend engine, where the only one listing is
+    /// the human looking. [`crate::embedded::engine_in`] calls it; an engine
+    /// that does not go through there —the daemon's— does not have it, and
+    /// then a `Backend::Embedded` over it anchors nothing and writes behave
+    /// as in 0.53. Failing that way is correct: losing the check is losing a
+    /// check, and sharing it between clients would answer "who looked" with
+    /// someone else's name.
     #[must_use]
     pub fn with_client_anchors(mut self) -> Self {
         self.anchors = Some(std::sync::Mutex::new(crate::anchor::AnchorCache::default()));
         self
     }
 
-    /// ¿Tiene este engine memoria de anclas de cliente ([`Self::with_client_anchors`])?
+    /// Does this engine have client anchor memory ([`Self::with_client_anchors`])?
     ///
-    /// Lo pregunta el test que fija que el engine del daemon NO la tiene: la
-    /// propiedad la sostiene el tipo, y esto es lo que la deja comprobar desde
-    /// fuera en vez de por lectura del código.
+    /// Asked by the test that fixes the daemon's engine as NOT having it: the
+    /// property is held up by the type, and this is what lets it be checked
+    /// from outside instead of by reading the code.
     #[must_use]
     pub fn has_client_anchors(&self) -> bool {
         self.anchors.is_some()
     }
 
-    /// Retiene el ancla del directorio que el BACKEND EMBEBIDO acaba de listar
-    /// (#301). Sin memoria de cliente instalada no hace nada.
+    /// Retains the anchor of the directory the EMBEDDED BACKEND just listed
+    /// (#301). Does nothing with no client memory installed.
     ///
-    /// Un lock envenenado se traga sin ruido, y es la respuesta correcta: lo
-    /// que se pierde es la COMPROBACIÓN de una escritura, nunca la escritura.
-    /// Hacerlo panicar convertiría un fallo de otro hilo en la muerte del
-    /// listado.
+    /// A poisoned lock is swallowed silently, and that is the correct
+    /// answer: what is lost is a write's CHECK, never the write. Panicking
+    /// would turn another thread's failure into the listing's death.
     pub(crate) fn remember_dir_anchor(&self, dir: &VPath, anchor: Option<norte_proto::DirAnchor>) {
         let Some(anchors) = self.anchors.as_ref() else {
             return;
@@ -407,20 +414,21 @@ impl Engine {
         }
     }
 
-    /// El ancla retenida de `dir`, si el backend embebido lo listó (#301).
+    /// `dir`'s retained anchor, if the embedded backend listed it (#301).
     pub(crate) fn remembered_dir_anchor(&self, dir: &VPath) -> Option<norte_proto::DirAnchor> {
         self.anchors.as_ref()?.lock().ok()?.get(dir)
     }
 
-    /// Compone el provider de RAR para `aref`, o dice que no se puede.
+    /// Composes the RAR provider for `aref`, or says it cannot.
     ///
-    /// Las dos negativas son la frontera del ítem 11:
+    /// The two negatives are item 11's boundary:
     ///
-    /// - el interior tiene que ser `file://` **sin authority**: el delegado
-    ///   recibe una ruta del sistema de ficheros, y no existe tal ruta para
-    ///   un `sftp://` ni para una entrada dentro de otro archivo;
-    /// - sin `7z` ni `unrar` instalados no hay lector: `Unsupported`, con la
-    ///   frase que nombra qué instalar en el log (el wire no lleva prosa).
+    /// - the interior has to be `file://` **with no authority**: the
+    ///   delegate receives a filesystem path, and no such path exists for
+    ///   an `sftp://` nor for an entry inside another archive;
+    /// - with no `7z` or `unrar` installed there is no reader:
+    ///   `Unsupported`, with the phrase naming what to install in the log
+    ///   (the wire carries no prose).
     fn rar_provider_for(
         &self,
         aref: &norte_proto::ArchiveRef,
@@ -429,7 +437,7 @@ impl Engine {
         if aref.outer.scheme() != "file" || aref.outer.authority().is_some() {
             tracing::warn!(
                 outer = %aref.outer.scheme(),
-                "rar solo se monta sobre un fichero LOCAL: el delegado necesita una ruta"
+                "rar only mounts over a LOCAL file: the delegate needs a path"
             );
             return Err(Error::Unsupported);
         }
@@ -437,12 +445,12 @@ impl Engine {
         let pinned = self
             .rar_delegate
             .read()
-            .expect("rar_delegate lock sano")
+            .expect("rar_delegate lock is sound")
             .clone();
         let delegate = match pinned {
             Some(program) => norte_vfs_rar::Delegate::pinned(program),
             None => norte_vfs_rar::Delegate::discover().map_err(|e| {
-                tracing::warn!(error = %e, "no hay lector de RAR instalado");
+                tracing::warn!(error = %e, "no RAR reader installed");
                 Error::from(e)
             })?,
         };
@@ -454,36 +462,38 @@ impl Engine {
         Ok(self.sessions.insert_composite(key, provider))
     }
 
-    /// El ejecutable que lee RAR, si la configuración FIJA uno
-    /// (`[archive] rar_delegate`). `None` = sondear `PATH`.
+    /// The executable that reads RAR, if the config FIXES one (`[archive]
+    /// rar_delegate`). `None` = probe `PATH`.
     ///
-    /// La clave viene de las capas System/User y NUNCA de Project: un
-    /// repositorio no elige qué binario se lanza al entrar en él.
+    /// The value comes from the System/User layers and NEVER from Project: a
+    /// repository does not choose which binary launches when entering it.
     ///
     /// # Panics
-    /// Si el lock interno está envenenado, como el resto de los del engine.
+    /// If the internal lock is poisoned, like the rest of the engine's.
     pub fn set_rar_delegate(&self, program: Option<std::path::PathBuf>) {
-        *self.rar_delegate.write().expect("rar_delegate lock sano") = program;
+        *self
+            .rar_delegate
+            .write()
+            .expect("rar_delegate lock is sound") = program;
     }
 
-    /// Fija los límites anti-bomba de los providers archive (#95.2, canal
-    /// config→provider del ADR 0018). Llamar en el ARRANQUE, antes de la
-    /// primera navegación a un contenedor: un `ArchiveProvider` ya compuesto
-    /// (cacheado por scheme) conserva los límites con los que nació.
+    /// Sets the archive providers' anti-bomb limits (#95.2, ADR 0018's
+    /// config→provider channel). Call at STARTUP, before the first
+    /// navigation into a container: an already composed `ArchiveProvider`
+    /// (cached by scheme) keeps the limits it was born with.
     ///
     /// # Panics
-    /// Si el lock interno está envenenado (otro hilo hizo panic a mitad de
-    /// escritura) — irrecuperable, mismo criterio que el resto de locks del
-    /// engine.
+    /// If the internal lock is poisoned (another thread panicked mid-write)
+    /// — unrecoverable, same criterion as the rest of the engine's locks.
     pub fn set_archive_limits(&self, limits: norte_vfs_archive::Limits) {
         *self
             .archive_limits
             .write()
-            .expect("archive_limits lock sano") = limits;
+            .expect("archive_limits lock is sound") = limits;
     }
 
-    /// Engine cuyo observer Y fuente de undo es el mismo `SqliteJournal` (M3-2).
-    /// El journal es single-writer (spec §4): un solo Engine por fichero.
+    /// Engine whose observer AND undo source is the same `SqliteJournal`
+    /// (M3-2). The journal is single-writer (spec §4): one Engine per file.
     #[must_use]
     pub fn with_journal(journal: Arc<crate::journal::SqliteJournal>) -> Self {
         Self::build(
@@ -492,17 +502,18 @@ impl Engine {
         )
     }
 
-    /// Engine EMBEBIDO: su journal es el del directorio de estado, y se abre en
-    /// la primera mutación (#177) — o en el primer `undo`/`sync.apply`, que es
-    /// lo mismo por otro camino: son las tres cosas que necesitan la cadena.
+    /// EMBEDDED engine: its journal is the state directory's, and it opens
+    /// on the first mutation (#177) — or on the first `undo`/`sync.apply`,
+    /// which is the same thing through another door: those are the three
+    /// things that need the chain.
     ///
-    /// Igual que [`Self::with_journal`], el observer y la fuente de undo son EL
-    /// MISMO objeto; la diferencia es que aquí ese objeto todavía no tiene un
-    /// fichero abierto detrás, y quizá no llegue a tenerlo (otro proceso puede
-    /// tener el lock). Construirlo no toca el disco ni le quita el journal a
-    /// nadie: ese es todo el punto.
+    /// Same as [`Self::with_journal`], the observer and the undo source are
+    /// THE SAME object; the difference is that here that object does not yet
+    /// have a file open behind it, and may never get one (another process
+    /// may hold the lock). Building it touches no disk and takes the
+    /// journal from nobody: that is the whole point.
     ///
-    /// Lo usan `norte-tui` y `norte-cli` sin daemon, vía
+    /// `norte-tui` and `norte-cli` use it with no daemon, via
     /// [`crate::embedded::engine_in`].
     #[must_use]
     pub fn with_lazy_journal(journal: Arc<crate::embedded::LazyJournal>) -> Self {
@@ -512,13 +523,13 @@ impl Engine {
         )
     }
 
-    /// Enchufa los hooks (ADR 0100): cada fila que el journal de este engine
-    /// comprometa se le ofrece a `tx`, venga de donde venga la mutación. Sin
-    /// journal no hay filas y no hay hooks — un engine sin journal tampoco
-    /// tiene undo, y es la misma razón.
+    /// Plugs in the hooks (ADR 0100): every row this engine's journal commits
+    /// is offered to `tx`, wherever the mutation comes from. With no journal
+    /// there are no rows and no hooks — an engine with no journal has no
+    /// undo either, and it is the same reason.
     ///
-    /// Con el journal perezoso del modo embebido el extremo se guarda y se
-    /// le pone a cada handle que se abra; por eso es `async`.
+    /// With the embedded mode's lazy journal the endpoint is saved and set
+    /// on every handle that opens; that is why it is `async`.
     pub async fn enable_hooks(&self, tx: crate::hooks::HookSender) {
         match &self.journal {
             JournalSource::None => {}
@@ -527,32 +538,34 @@ impl Engine {
         }
     }
 
-    /// ¿Lleva este engine un journal (abierto o perezoso)? Sin él no hay
-    /// filas, y sin filas no hay hooks que despachar.
+    /// Does this engine carry a journal (open or lazy)? With no rows there
+    /// are no rows, and with no rows there are no hooks to dispatch.
     #[must_use]
     pub fn has_journal(&self) -> bool {
         !matches!(self.journal, JournalSource::None)
     }
 
-    /// Reclama el hueco del despachador de hooks: `true` la PRIMERA vez, y
-    /// solo esa. Un engine tiene un despachador; el segundo que se arrancara
-    /// pisaría el extremo del primero en silencio.
+    /// Claims the hook dispatcher slot: `true` the FIRST time, and only
+    /// then. An engine has one dispatcher; a second one starting up would
+    /// silently overwrite the first one's endpoint.
     pub fn claim_hooks_slot(&self) -> bool {
         !self
             .hooks_taken
             .swap(true, std::sync::atomic::Ordering::AcqRel)
     }
 
-    /// A dónde van los avisos de «esta sesión no queda registrada» (#177).
+    /// Where "this session is not being recorded" warnings go (#177).
     ///
-    /// No-op si este engine no lleva journal perezoso (el del daemon no puede
-    /// quedarse sin journal: se niega a arrancar). Instalarlo es del arranque
-    /// del frontend, y llega a tiempo aunque una mutación se le adelante — ver
-    /// [`crate::embedded::LazyJournal::set_warning_sink`].
-    /// Devuelve si el sink quedó INSTALADO: `false` cuando este engine no puede
-    /// quedarse sin journal a mitad (el del daemon) ni puede tener uno (un
-    /// `Engine::new()`). Lo mira el `Backend` para no entregarle a un frontend
-    /// un canal que no va a sonar nunca y que le haría creerse cubierto.
+    /// No-op if this engine carries no lazy journal (the daemon's cannot be
+    /// left with no journal: it refuses to start). Installing it is part of
+    /// the frontend's startup, and arrives in time even if a mutation beats
+    /// it to it — see
+    /// [`crate::embedded::LazyJournal::set_warning_sink`]. Returns whether
+    /// the sink was INSTALLED: `false` when this engine cannot be left
+    /// without a journal midway (the daemon's) nor can have one
+    /// (an `Engine::new()`). The `Backend` checks it so as not to hand a
+    /// frontend a channel that is never going to ring and would make it
+    /// believe it is covered.
     pub fn set_journal_warning_sink(
         &self,
         sink: Arc<dyn crate::embedded::JournalWarningSink>,
@@ -564,21 +577,22 @@ impl Engine {
         false
     }
 
-    /// El journal de este engine, ABRIÉNDOLO si es perezoso y es la primera vez
-    /// que se pide.
+    /// This engine's journal, OPENING it if lazy and this is the first time
+    /// it is asked for.
     ///
-    /// `async` a propósito, y es el nudo de #177: las tres preguntas que se le
-    /// hacen a este campo —¿journalizo esta mutación?, ¿puedo deshacer?, ¿puedo
-    /// aplicar un plan de sincronización?— llegan en momentos distintos, y dos
-    /// de ellas ANTES de que el proceso haya mutado nada. Con la pereza metida
-    /// solo en el observer, esas dos contestarían «no hay journal» sobre un
-    /// engine que lo abriría sin problema. Aquí no: preguntar es abrir.
+    /// `async` on purpose, and it is #177's knot: the three questions asked
+    /// of this field —do I journal this mutation?, can I undo?, can I apply a
+    /// sync plan?— arrive at different times, and two of them BEFORE the
+    /// process has mutated anything. With laziness put only in the observer,
+    /// those two would answer "no journal" about an engine that would open
+    /// it just fine. Not here: asking is opening.
     ///
-    /// Que no haya dos handles del mismo fichero —ni dos dueños de la cadena—
-    /// lo garantiza la ventana del [`LazyJournal`](crate::embedded::LazyJournal):
-    /// UNA, compartida con el observer, con los intentos serializados bajo su
-    /// lock y el handle destruido al soltarlo. Desde #179 la apertura ya no es
-    /// única; lo que sigue siendo único es el DUEÑO en cada instante.
+    /// That there are no two handles of the same file —nor two owners of the
+    /// chain— is guaranteed by
+    /// [`LazyJournal`](crate::embedded::LazyJournal)'s window: ONE, shared
+    /// with the observer, with attempts serialized under its lock and the
+    /// handle destroyed on release. Since #179 opening is no longer unique;
+    /// what stays unique is the OWNER at every instant.
     async fn journal(&self) -> Option<Arc<crate::journal::SqliteJournal>> {
         match &self.journal {
             JournalSource::None => None,
@@ -587,26 +601,27 @@ impl Engine {
         }
     }
 
-    /// Abre ya el journal perezoso y dice si esta sesión queda registrada.
+    /// Opens the lazy journal right now and says whether this session ends up
+    /// recorded.
     ///
-    /// Para el llamante que va a mutar y necesita DECÍRSELO al humano antes
-    /// (hoy: `norte ai rename`, que pide confirmación para renombrar un
-    /// directorio entero con los nombres que propuso un modelo). Sin esto, la
-    /// respuesta llegaría después del sí.
+    /// For the caller that is about to mutate and needs to TELL the human
+    /// beforehand (today: `norte ai rename`, which asks for confirmation to
+    /// rename a whole directory with the names a model proposed). Without
+    /// this, the answer would arrive after the yes.
     ///
-    /// Toma el lock exclusivo AQUÍ, no en la primera mutación, y este proceso
-    /// lo conserva hasta que lo suelte
-    /// ([`LazyJournal::release`](crate::embedded::LazyJournal::release), que
-    /// hoy no llama nadie por su cuenta): si lo que viene después es una
-    /// pregunta al humano, `norte daemon run` no puede arrancar mientras él se
-    /// lo piensa. Solo tiene sentido a un paso de mutar, y es el precio de que
-    /// la respuesta llegue antes del sí y no después.
+    /// Takes the exclusive lock HERE, not on the first mutation, and this
+    /// process keeps it until it releases it
+    /// ([`LazyJournal::release`](crate::embedded::LazyJournal::release),
+    /// which nobody calls on their own today): if what comes next is a
+    /// question to the human, `norte daemon run` cannot start while they
+    /// think it over. It only makes sense one step from mutating, and it is
+    /// the price of the answer arriving before the yes and not after.
     ///
-    /// **Se salta el freno de reintento de #179 a propósito.** Este es el único
-    /// llamador para el que pagar los 250 ms de espera del lock vale
-    /// obviamente la pena: contestar `false` desde un veredicto de hace medio
-    /// minuto sería decirle al humano «esto no se va a registrar» sobre un
-    /// journal que ahora mismo está libre, y con eso delante decidirá que no.
+    /// **Skips #179's retry brake on purpose.** This is the one caller for
+    /// which paying the lock's 250 ms wait is obviously worth it: answering
+    /// `false` from a verdict half a minute old would tell the human "this
+    /// is not going to be recorded" about a journal that right now is free,
+    /// and with that in front of them they will decide not to.
     pub async fn ensure_journal(&self) -> bool {
         match &self.journal {
             JournalSource::None => false,
@@ -615,53 +630,56 @@ impl Engine {
         }
     }
 
-    /// Suelta el journal si lleva `ocioso` sin usarse (#179). `true` si al
-    /// volver el fichero está libre.
+    /// Releases the journal if it has gone `idle` unused (#179). `true` if
+    /// the file is free on return.
     ///
-    /// El engine del daemon y el que no journaliza contestan `true` sin hacer
-    /// nada: no tienen ventana que soltar. El del daemon, además, es dueño a
-    /// propósito — se niega a arrancar sin journal, así que soltarlo sería
-    /// quitarse a sí mismo lo que exige tener.
+    /// The daemon's engine and the one with no journaling answer `true`
+    /// doing nothing: they have no window to release. The daemon's,
+    /// moreover, is an owner on purpose — it refuses to start with no
+    /// journal, so releasing it would be taking away from itself what it
+    /// requires to have.
     ///
-    /// # Esto NO es cancel-safe (ver
+    /// # This is NOT cancel-safe (see
     /// [`LazyJournal::release`](crate::embedded::LazyJournal::release)).
-    /// Córrelo entero, en el CUERPO de una rama de `select!`, jamás en su
-    /// condición.
-    pub async fn release_journal_if_idle(&self, ocioso: std::time::Duration) -> bool {
+    /// Run it whole, in the BODY of a `select!` branch, never in its
+    /// condition.
+    pub async fn release_journal_if_idle(&self, idle: std::time::Duration) -> bool {
         match &self.journal {
             JournalSource::None | JournalSource::Open(_) => true,
-            JournalSource::Lazy(l) => l.release_if_idle(ocioso).await,
+            JournalSource::Lazy(l) => l.release_if_idle(idle).await,
         }
     }
 
-    /// Lo mismo, diciendo POR QUÉ no.
+    /// The same, saying WHY not.
     ///
-    /// `None` = esta sesión SÍ registra, o este engine no tiene ventana que
-    /// perder (el del daemon, o un `Engine::new()` que no journaliza nada por
-    /// construcción).
+    /// `None` = this session DOES record, or this engine has no window to
+    /// lose (the daemon's, or an `Engine::new()` that journals nothing by
+    /// construction).
     ///
-    /// Existe porque desde #178 los dos motivos ya no significan lo mismo y un
-    /// `bool` los confunde: con `Busy` la operación OCURRE sin registro y hay
-    /// que avisar; con `Failed` la operación va a ser REHUSADA por
-    /// el gate del engine y avisar sería el preámbulo de una pregunta cuya premisa
-    /// es falsa. Lo mira `norte ai rename`, que pregunta antes de dejar que un
-    /// modelo renombre un directorio entero.
+    /// Exists because since #178 the two reasons no longer mean the same
+    /// thing and a `bool` confuses them: with `Busy` the operation HAPPENS
+    /// with no record and it has to be warned about; with `Failed` the
+    /// operation is going to be REFUSED by the engine's gate and warning
+    /// would be the preamble to a question whose premise is false. `norte ai
+    /// rename` checks it, which asks before letting a model rename a whole
+    /// directory.
     ///
-    /// Se salta el freno de reintento, como [`Self::ensure_journal`] y por la
-    /// misma razón.
+    /// Skips the retry brake, like [`Self::ensure_journal`] and for the same
+    /// reason.
     pub async fn journal_obstacle(&self) -> Option<crate::embedded::NoJournal> {
         let JournalSource::Lazy(l) = &self.journal else {
             return None;
         };
-        // UN solo intento, y por eso `resolve_now` y no `acquire_now` seguido de
-        // `resolve`: aquel par pagaba dos aperturas, y si el texto del error de
-        // `SQLite` difería entre ellas —lo escribe en parte quien pueda escribir
-        // el fichero— el sink recibía dos avisos por una sola pregunta.
+        // ONE single attempt, and that is why `resolve_now` and not
+        // `acquire_now` followed by `resolve`: that pair paid for two
+        // openings, and if `SQLite`'s error text differed between them —it
+        // is partly written by whoever can write the file— the sink would
+        // receive two warnings for a single question.
         l.resolve_now().await.err()
     }
 
-    /// Instala el gate de policy y el resolver de aprobaciones (M3-3): a partir
-    /// de aquí, las mutaciones de agentes se evalúan PRE-efecto.
+    /// Installs the policy gate and the approval resolver (M3-3): from here
+    /// on, agent mutations are evaluated PRE-effect.
     #[must_use]
     pub fn with_policy(
         mut self,
@@ -674,69 +692,71 @@ impl Engine {
         self
     }
 
-    /// Si alguien llamó a [`Self::with_policy`] sobre este engine.
+    /// Whether someone called [`Self::with_policy`] on this engine.
     ///
-    /// Lo consulta el daemon en el arranque: montarse sobre un engine sin
-    /// policy explícita deja pasar a CUALQUIER actor, agentes incluidos, y
-    /// `sync.apply` bajo ese hueco es una llamada que reescribe un subárbol
-    /// (#166). No es un gate — es lo que hace falta para que el hueco salga en
-    /// el log en vez de en la sorpresa.
+    /// The daemon consults it at startup: mounting over an engine with no
+    /// explicit policy lets ANY actor through, agents included, and
+    /// `sync.apply` under that gap is a call that rewrites a subtree (#166).
+    /// It is not a gate — it is what is needed for the gap to show up in the
+    /// log instead of in the surprise.
     #[must_use]
     pub fn has_explicit_policy(&self) -> bool {
         self.policy_explicit
     }
 
-    /// Instala el índice de búsqueda (M4, ADR 0034). Sin él, `index.*` responde
-    /// `Unsupported` (fail-closed). Lo instala el daemon (single-writer del DB).
+    /// Installs the search index (M4, ADR 0034). Without it, `index.*`
+    /// answers `Unsupported` (fail-closed). The daemon installs it (the DB's
+    /// single writer).
     #[must_use]
     pub fn with_index(mut self, index: Arc<norte_index::Index>) -> Self {
         self.index = Some(index);
         self
     }
 
-    /// Instala EL spool de planes de sincronización (ADR 0049). Sin él,
-    /// [`Self::sync_plan_as`] responde [`Error::Unsupported`] (fail-closed).
+    /// Installs THE sync plan spool (ADR 0049). Without it,
+    /// [`Self::sync_plan_as`] answers [`Error::Unsupported`] (fail-closed).
     ///
-    /// El handle se **clona**, jamás se vuelve a construir: el registro de lo
-    /// que este proceso emitió vive dentro y es lo que hace que un plan solo lo
-    /// pueda aplicar quien lo produjo. Quien llame a esto dos veces con dos
-    /// `Spool::new` distintos deja huérfanos los planes del primero.
+    /// The handle is **cloned**, never rebuilt: the registry of what this
+    /// process issued lives inside it and is what makes a plan applicable
+    /// only by whoever produced it. Whoever calls this twice with two
+    /// different `Spool::new`s orphans the first one's plans.
     ///
     /// # Panics
-    /// Solo si el lock interno está envenenado (otro hilo hizo panic a mitad de
-    /// escritura) — irrecuperable, mismo criterio que el resto de locks.
+    /// Only if the internal lock is poisoned (another thread panicked
+    /// mid-write) — unrecoverable, same criterion as the rest of the locks.
     pub fn set_spool(&self, spool: crate::sync::Spool) {
-        *self.spool.write().expect("spool lock sano") = Some(spool);
+        *self.spool.write().expect("spool lock is sound") = Some(spool);
     }
 
-    /// El spool instalado, clonado. `None` = sin retención.
+    /// The installed spool, cloned. `None` = no retention.
     ///
     /// # Panics
-    /// Solo si el lock interno está envenenado.
+    /// Only if the internal lock is poisoned.
     #[must_use]
     pub fn spool(&self) -> Option<crate::sync::Spool> {
-        self.spool.read().expect("spool lock sano").clone()
+        self.spool.read().expect("spool lock is sound").clone()
     }
 
-    /// La puerta ÚNICA de toda mutación de este engine: policy primero, journal
-    /// después.
+    /// The ONE gate for every mutation of this engine: policy first, journal
+    /// after.
     ///
-    /// Evalúa la policy PRE-efecto; un `Ask` suspende hasta aprobación. `Err`
-    /// [`Error::PolicyDenied`] con la causa (`rule`) si se deniega — el wire lo
-    /// distingue de un `PermissionDenied` del OS/provider (M3-3b). Y después,
-    /// [`Self::journal_gate`]: un journal ILEGIBLE rehúsa (#178).
+    /// Evaluates the policy PRE-effect; an `Ask` suspends until approval.
+    /// `Err` [`Error::PolicyDenied`] with the cause (`rule`) if denied — the
+    /// wire distinguishes it from an OS/provider `PermissionDenied` (M3-3b).
+    /// And after that, [`Self::journal_gate`]: an UNREADABLE journal refuses
+    /// (#178).
     ///
-    /// **Ese orden, y no el otro.** El journal se pide DESPUÉS de que la policy
-    /// haya dicho que sí, porque pedirlo toma el lock exclusivo del fichero
-    /// (#177) y una operación que la policy iba a denegar no tiene por qué
-    /// quitárselo al daemon.
+    /// **That order, and not the other.** The journal is requested AFTER the
+    /// policy has said yes, because requesting it takes the file's exclusive
+    /// lock (#177) and an operation the policy was going to deny has no
+    /// reason to take it away from the daemon.
     ///
-    /// Que la comprobación viva AQUÍ y no en cada llamador es lo que la hace
-    /// completa: los nueve puntos de mutación del engine pasan por esta función,
-    /// y añadir el noveno no requiere acordarse de nada. Lo pinea
-    /// `toda_mutacion_pasa_por_el_gate_del_journal` en
-    /// `tests/embedded_journal.rs`, que es lo que impide que el noveno se
-    /// olvide de todos modos.
+    /// The check living HERE and not in every caller is what makes it
+    /// complete: the engine's nine mutation points go through this function,
+    /// and adding the ninth requires remembering nothing. Pinned by
+    /// `toda_mutacion_pasa_por_el_gate_del_journal` in
+    /// `tests/embedded_journal.rs`, which is what stops the ninth from being
+    /// forgotten anyway.
     async fn gate(
         &self,
         actor: &crate::journal::Actor,
@@ -747,71 +767,71 @@ impl Engine {
         self.journal_gate().await
     }
 
-    /// Rehúsa la mutación si el journal de esta sesión no se puede ABRIR
+    /// Refuses the mutation if this session's journal cannot be OPENED
     /// (#178).
     ///
-    /// Solo el caso `Failed`: sin permisos, corrupto, no-es-una-base-de-datos,
-    /// o de una era anterior a la cadena de hoy. Ahí seguir sería mutar sin
-    /// registro y sin undo, que es lo que la regla dura 4 prohíbe y lo que
-    /// `norte daemon run` ya rehúsa con esa misma entrada — la asimetría era el
-    /// bug.
+    /// Only the `Failed` case: no permissions, corrupt, not-a-database, or
+    /// from an era before today's chain. Continuing there would be mutating
+    /// with no record and no undo, which hard rule 4 prohibits and which
+    /// `norte daemon run` already refuses with that same entry — the
+    /// asymmetry was the bug.
     ///
-    /// **`Busy` NO rehúsa**, y esa mitad es la que impide que el arreglo sea
-    /// peor que el agujero: el ocupante habitual es benigno (un daemon vivo,
-    /// otra ventana) o transitorio (otro `norte cp` de un script, un daemon
-    /// reiniciándose), y negar ahí convertiría «hay un daemon» en «el gestor de
-    /// ficheros no funciona» y dejaría a un ocupante de paso tumbando una
-    /// sesión de tres horas.
+    /// **`Busy` does NOT refuse**, and that half is what stops the fix from
+    /// being worse than the hole: the usual occupant is benign (a live
+    /// daemon, another window) or transient (another `norte cp` from a
+    /// script, a restarting daemon), and denying there would turn "there is
+    /// a daemon" into "the file manager does not work" and would let a
+    /// passing occupant take down a three-hour session.
     ///
-    /// Los engines que no llevan journal perezoso pasan de largo: el del daemon
-    /// (que no arranca sin journal, así que ya falló en cerrado antes) y el de
-    /// un embebedor con `Engine::new()` (que no registra NADA por construcción
-    /// y para el que no hay fichero que arreglar).
+    /// Engines with no lazy journal pass through unaffected: the daemon's
+    /// (which does not start with no journal, so it already failed closed
+    /// earlier) and an embedder's with `Engine::new()` (which records
+    /// NOTHING by construction and for which there is no file to fix).
     ///
-    /// # Lo que este gate garantiza, con su plazo
-    /// **«No estaba ilegible la última vez que se miró», y eso puede ser hasta
-    /// [`FRENO_TRAS_FALLO`](crate::embedded::FRENO_TRAS_FALLO) atrás.** El
-    /// freno de #179 hace que un veredicto `Busy` se recuerde treinta segundos
-    /// sin volver a abrir; si en esa ventana el fichero pasa
-    /// de OCUPADO a ILEGIBLE —alguien suelta el lock y acto seguido lo
-    /// corrompe— este gate sigue contestando `Ok(())` desde la clasificación
-    /// vieja y las mutaciones de esa ventana pasan sin registro.
+    /// # What this gate guarantees, and its deadline
+    /// **"It was not unreadable the last time it was checked", and that can
+    /// be up to [`FRENO_TRAS_FALLO`](crate::embedded::FRENO_TRAS_FALLO) old.**
+    /// #179's brake makes a `Busy` verdict be remembered for thirty seconds
+    /// with no reopening; if in that window the file goes from BUSY to
+    /// UNREADABLE —someone releases the lock and right after corrupts it—
+    /// this gate keeps answering `Ok(())` from the old classification and
+    /// that window's mutations go through with no record.
     ///
-    /// Se acepta, y conviene entender por qué NO es una regresión: un `Busy`
-    /// falla en abierto por diseño (arriba), y quien puede sostener el lock
-    /// mantiene a la sesión sin registro **indefinidamente**, no treinta
-    /// segundos — es la mitad de #178 que sigue abierta y que sigue #203. Un
-    /// desfase de 30 s dentro de un agujero permanente no añade capacidad
-    /// alguna. Lo que NO se puede hacer es cerrarlo saltándose el freno aquí:
-    /// eso devuelve `ESPERA_POR_EL_LOCK` por CADA mutación mientras haya un
-    /// daemon vivo, que es exactamente el coste que el freno existe para no
-    /// pagar.
+    /// This is accepted, and it is worth understanding why it is NOT a
+    /// regression: a `Busy` fails open by design (above), and whoever can
+    /// hold the lock keeps the session unrecorded **indefinitely**, not
+    /// thirty seconds — it is the half of #178 that is still open and that
+    /// #203 follows up on. A 30 s lag inside a permanent hole adds no
+    /// capacity at all. What CANNOT be done is closing it by skipping the
+    /// brake here: that returns `ESPERA_POR_EL_LOCK` for EVERY mutation
+    /// while a daemon is alive, which is exactly the cost the brake exists
+    /// not to pay.
     async fn journal_gate(&self) -> Result<(), Error> {
         let JournalSource::Lazy(lazy) = &self.journal else {
             return Ok(());
         };
         match lazy.resolve().await {
             Ok(_) | Err(crate::embedded::NoJournal::Busy) => Ok(()),
-            Err(crate::embedded::NoJournal::Failed(motivo)) => {
-                // El motivo lleva el fichero y va al LOG del operador; la
-                // categoría que cruza al frontend no lleva ninguno de los dos
-                // (ver el rustdoc de la variante).
-                // «Operación» y no «mutación»: desde la fase 7 esta puerta la
-                // cruza también una LECTURA (`journal_page`, la línea de
-                // tiempo), y decirle al operador que se rehusó una mutación
-                // cuando alguien sólo abrió una pantalla es una línea de log
-                // que manda a buscar un cambio que no existió.
+            Err(crate::embedded::NoJournal::Failed(reason)) => {
+                // The reason carries the file and goes to the operator's
+                // LOG; the category that crosses to the frontend carries
+                // neither (see the variant's rustdoc).
+                // "Operation" and not "mutation": since phase 7 this gate is
+                // also crossed by a READ (`journal_page`, the timeline), and
+                // telling the operator a mutation was refused when someone
+                // just opened a screen is a log line that sends them looking
+                // for a change that never happened.
                 tracing::error!(
-                    motivo = %motivo,
-                    "operación rehusada: el journal de esta sesión no se puede abrir (#178)"
+                    reason = %reason,
+                    "operation refused: this session's journal cannot be opened (#178)"
                 );
                 Err(Error::JournalUnavailable)
-            } // SIN brazo comodín, y eso es el fail-closed: `NoJournal` es
-              // `#[non_exhaustive]` de puertas afuera, pero aquí dentro el
-              // compilador exige exhaustividad, así que un motivo NUEVO rompe la
-              // compilación en vez de colarse como «adelante» por un `_`. Lo que
-              // no se sabe clasificar no journaliza, y lo que no journaliza no
-              // muta: que lo decida quien añada el motivo.
+            } // NO wildcard arm, and that is the fail-closed: `NoJournal` is
+              // `#[non_exhaustive]` from outside the crate, but in here the
+              // compiler demands exhaustiveness, so a NEW reason breaks the
+              // build instead of sneaking through as "go ahead" via a `_`.
+              // What cannot be classified does not journal, and what does
+              // not journal does not mutate: let whoever adds the reason decide.
         }
     }
 
@@ -824,13 +844,13 @@ impl Engine {
         self.policy_checker().check(actor, op, paths).await
     }
 
-    /// La puerta de policy SIN `&self`: dos `Arc` que sí caben dentro del
-    /// cuerpo `'static` de una Task (#171).
+    /// The policy gate WITHOUT `&self`: two `Arc`s that DO fit inside a
+    /// Task's `'static` body (#171).
     ///
-    /// Preguntarle a la policy DESDE DENTRO de la Task —que es lo que hace el
-    /// ejecutor hacia delante y lo que el undo no hacía— exige poder capturar
-    /// la puerta. Es lo mismo que `sync::exec::SyncTargets` ya se lleva para
-    /// consultar paso a paso.
+    /// Asking the policy FROM INSIDE the Task —which is what the executor
+    /// does going forward and what undo did not do— requires being able to
+    /// capture the gate. It is the same thing `sync::exec::SyncTargets`
+    /// already carries around to consult step by step.
     fn policy_checker(&self) -> PolicyChecker {
         PolicyChecker {
             policy: Arc::clone(&self.policy),
@@ -838,110 +858,114 @@ impl Engine {
         }
     }
 
-    /// Registra un provider bajo su scheme (pisa el anterior si lo había).
+    /// Registers a provider under its scheme (overwrites the previous one if
+    /// there was one).
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    /// Never in practice: only from poisoning of the internal lock.
     pub fn register_provider(&self, provider: Arc<dyn Provider>) {
         self.sessions.register_process(provider);
     }
 
-    /// Configura el conector de providers remotos (fase 6e, ADR 0015 A):
-    /// ante un `VPath` remoto sin provider, el Engine le pide la conexión y
-    /// cachea el resultado por `scheme://authority`.
+    /// Configures the remote provider connector (phase 6e, ADR 0015 A): faced
+    /// with a remote `VPath` with no provider, the Engine asks it for the
+    /// connection and caches the result by `scheme://authority`.
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    /// Never in practice: only from poisoning of the internal lock.
     pub fn set_connector(&self, connector: Arc<dyn crate::connect::RemoteConnector>) {
-        *self.connector.write().expect("connector lock sano") = Some(connector);
+        *self.connector.write().expect("connector lock is sound") = Some(connector);
     }
 
-    /// Instala el observer de avisos de conexión (#44): el engine le entrega
-    /// cada `ConnectionWarning` de un establecimiento remoto. Sin observer, los
-    /// avisos se dropean (el `tracing::warn!` del connector sigue en el log).
+    /// Installs the connection warning observer (#44): the engine hands it
+    /// every `ConnectionWarning` from a remote establishment. With no
+    /// observer, the warnings are dropped (the connector's `tracing::warn!`
+    /// stays in the log).
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    /// Never in practice: only from poisoning of the internal lock.
     pub fn set_connection_observer(&self, observer: Arc<dyn crate::connect::ConnectionObserver>) {
         *self
             .connection_observer
             .write()
-            .expect("connection_observer lock sano") = Some(observer);
+            .expect("connection_observer lock is sound") = Some(observer);
     }
 
-    /// Instala un observer ENCADENADO al que ya estuviera: `hacer` recibe el
-    /// anterior y devuelve el nuevo, que debe reenviarle lo que reciba.
+    /// Installs an observer CHAINED to whichever one was there: `make`
+    /// receives the previous one and returns the new one, which must forward
+    /// to it whatever it receives.
     ///
-    /// Existe porque la ranura es de UNO y hay DOS hechos que salen por ella
-    /// —la degradación (#44) y el fallo (#322)— que el frontend toma por
-    /// canales separados. Antes, el segundo instalador pisaba al primero y
-    /// dejaba su canal mudo para siempre, en silencio.
+    /// Exists because the slot is for ONE and there are TWO facts that come
+    /// out through it —degradation (#44) and failure (#322)— that the
+    /// frontend takes as separate channels. Before, the second installer
+    /// overwrote the first and left its channel mute forever, silently.
     ///
-    /// Y es UNA operación y no «lee y luego pon»: con dos llamadas, dos
-    /// instaladores concurrentes leen el mismo anterior y el segundo pierde al
-    /// primero — el mismo fallo mudo, ahora con carrera. Aquí el swap ocurre
-    /// bajo el mismo candado de escritura.
+    /// And it is ONE operation and not "read then put": with two calls, two
+    /// concurrent installers read the same previous one and the second loses
+    /// the first — the same mute failure, now with a race. Here the swap
+    /// happens under the same write lock.
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento del lock interno.
-    pub fn chain_connection_observer<F>(&self, hacer: F)
+    /// Never in practice: only from poisoning of the internal lock.
+    pub fn chain_connection_observer<F>(&self, make: F)
     where
         F: FnOnce(
             Option<Arc<dyn crate::connect::ConnectionObserver>>,
         ) -> Arc<dyn crate::connect::ConnectionObserver>,
     {
-        let mut ranura = self
+        let mut slot = self
             .connection_observer
             .write()
-            .expect("connection_observer lock sano");
-        let previo = ranura.take();
-        *ranura = Some(hacer(previo));
+            .expect("connection_observer lock is sound");
+        let previous = slot.take();
+        *slot = Some(make(previous));
     }
 
-    /// Registra la host key de `host:port` tras confirmación explícita del
-    /// usuario (flujo TOFU, método `connection.trust_host_key`).
+    /// Registers `host:port`'s host key after explicit user confirmation
+    /// (TOFU flow, `connection.trust_host_key` method).
     ///
-    /// # Ni gate de policy ni entrada de journal, y por qué (#204, regla 4)
+    /// # Neither a policy gate nor a journal entry, and why (#204, rule 4)
     ///
-    /// Esto escribe `known_hosts`, que es el fichero más sensible que norte
-    /// escribe aparte del journal y el keyring: decide qué claves de host
-    /// aceptará a partir de ahora. Y no pasa ni por el gate ni por el journal.
-    /// Las dos ausencias son deliberadas y se dicen aquí para que nadie
-    /// vuelva a deducirlas:
+    /// This writes `known_hosts`, which is the most sensitive file norte
+    /// writes besides the journal and the keyring: it decides which host
+    /// keys it will accept from now on. And it goes through neither the gate
+    /// nor the journal. Both absences are deliberate and are stated here so
+    /// nobody has to deduce them again:
     ///
-    /// * **Quién puede llegar.** El despacho del daemon rechaza
-    ///   `connection.trust_host_key` para cualquier actor que no sea
-    ///   `Actor::User`, con `INVALID_REQUEST`, igual que
-    ///   `policy.grant_scope`/`decide`/`undo_session` (#66): bendecir la
-    ///   identidad de un host es un acto de gobierno humano, no una operación
-    ///   de fichero. Un agente no lo alcanza, así que un gate de scopes aquí
-    ///   defendería una puerta que ya está cerrada — y por rutas, que no es la
-    ///   dimensión en la que este permiso se mide. Por la API embebida no hay
-    ///   agentes: `Backend::Embedded` solo lo construyen la CLI y el TUI sin
-    ///   `--daemon`, y el puente MCP va SIEMPRE por socket con
-    ///   `agent_session`.
+    /// * **Who can reach it.** The daemon's dispatch rejects
+    ///   `connection.trust_host_key` for any actor other than `Actor::User`,
+    ///   with `INVALID_REQUEST`, the same as
+    ///   `policy.grant_scope`/`decide`/`undo_session` (#66): blessing a
+    ///   host's identity is an act of human governance, not a file
+    ///   operation. An agent cannot reach it, so a scopes gate here would
+    ///   defend a door that is already closed — and by paths, which is not
+    ///   the dimension this permission is measured in. Through the embedded
+    ///   API there are no agents: `Backend::Embedded` is only built by the
+    ///   CLI and the TUI with no `--daemon`, and the MCP bridge ALWAYS goes
+    ///   through the socket with `agent_session`.
     ///
-    /// * **Clasificación (regla 4): `Irreversible`, con motivo.** El journal
-    ///   describe el árbol de ficheros del usuario y su undo lo devuelve a un
-    ///   estado anterior; `known_hosts` no es parte de ese árbol, y «des-confiar
-    ///   una clave» no es una operación que este programa ofrezca ni que un
-    ///   `undo_session` deba poder hacer a ciegas — retirar una clave de host
-    ///   en un `undo` que el usuario pidió por OTRA cosa rompería conexiones
-    ///   que no tenían nada que ver. Lo que sí queda es rastro: el conector
-    ///   re-verifica el fingerprint contra la clave que el host presenta AHORA
-    ///   (anti-TOCTOU, ADR 0015 D) y la decisión la toma un humano delante del
+    /// * **Classification (rule 4): `Irreversible`, with a reason.** The
+    ///   journal describes the user's file tree and its undo returns it to a
+    ///   previous state; `known_hosts` is not part of that tree, and
+    ///   "untrusting a key" is not an operation this program offers nor one
+    ///   an `undo_session` should be able to do blindly — retiring a host
+    ///   key in an `undo` the user requested for ANOTHER reason would break
+    ///   connections that had nothing to do with it. What IS left is a
+    ///   trace: the connector re-verifies the fingerprint against the key
+    ///   the host presents NOW (anti-TOCTOU, ADR 0015 D) and the decision is
+    ///   made by a human in front of the
     ///   fingerprint.
     ///
-    /// Si algún día un agente necesitara esta puerta, lo que hace falta NO es
-    /// un scope de rutas: es una op de policy propia, y entonces sí una
-    /// entrada de journal que diga qué clave se aceptó y cuándo.
+    /// If an agent ever needed this door, what is needed is NOT a path
+    /// scope: it is its own policy op, and then yes, a journal entry saying
+    /// which key was accepted and when.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] sin conector; los del conector (p. ej.
-    /// [`Error::HostKeyMismatch`] si el host ya no presenta esa clave).
+    /// [`Error::Unsupported`] with no connector; the connector's (e.g.
+    /// [`Error::HostKeyMismatch`] if the host no longer presents that key).
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento del lock interno.
+    /// Never in practice: only from poisoning of the internal lock.
     pub async fn trust_host_key(
         &self,
         host: &str,
@@ -951,74 +975,76 @@ impl Engine {
         let connector = self
             .connector
             .read()
-            .expect("connector lock sano")
+            .expect("connector lock is sound")
             .clone()
             .ok_or(Error::Unsupported)?;
         connector.trust_host_key(host, port, fingerprint).await
     }
 
-    /// Guarda para ESTA sesión el secreto de la conexión `conn`, que un humano
-    /// acaba de teclear (método `connection.provide_secret`, #325).
+    /// Saves for THIS session connection `conn`'s secret, which a human just
+    /// typed (`connection.provide_secret` method, #325).
     ///
-    /// # Por qué existe, y qué NO hace
+    /// # Why it exists, and what it does NOT do
     ///
-    /// El resolutor de secretos mira variable de entorno, keyring y fichero
-    /// `age` (ADR 0015). Cuando una entrada declara `secret = "prompt"` y
-    /// ninguna de las tres tiene nada, el core no puede seguir solo: devuelve
-    /// [`Error::SecretNeeded`] y el frontend pregunta. Esta puerta es por
-    /// donde vuelve la respuesta.
+    /// The secret resolver looks at an environment variable, the keyring, and
+    /// an `age` file (ADR 0015). When an entry declares `secret = "prompt"`
+    /// and none of the three has anything, the core cannot continue alone:
+    /// it returns [`Error::SecretNeeded`] and the frontend asks. This door is
+    /// where the answer comes back through.
     ///
-    /// **El secreto vive en memoria y solo hasta que el daemon pare.** No se
-    /// escribe a `connections.toml`, ni al keyring, ni al fichero `age`; ese
-    /// «recordar» es otra decisión y no la toma este método.
+    /// **The secret lives in memory and only until the daemon stops.** It is
+    /// not written to `connections.toml`, nor to the keyring, nor to the
+    /// `age` file; that "remembering" is another decision and this method
+    /// does not make it.
     ///
-    /// # Quién puede llegar, y clasificación
+    /// # Who can reach it, and classification
     ///
-    /// Las mismas dos ausencias que [`Self::trust_host_key`], por las mismas
-    /// razones: el despacho del daemon lo rechaza para todo actor que no sea
-    /// `Actor::User` (teclear una contraseña es un acto humano; un agente que
-    /// pudiera inyectar credenciales de sesión elegiría con qué identidad
-    /// actúa el usuario), y no hay entrada de journal porque no toca el árbol
-    /// de ficheros ni deja nada que deshacer — al parar el daemon desaparece.
+    /// The same two absences as [`Self::trust_host_key`], for the same
+    /// reasons: the daemon's dispatch rejects it for any actor other than
+    /// `Actor::User` (typing a password is a human act; an agent that could
+    /// inject session credentials would be choosing which identity the user
+    /// acts under), and there is no journal entry because it touches
+    /// neither the file tree nor leaves anything to undo — it disappears
+    /// when the daemon stops.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] sin conector; los del conector.
+    /// [`Error::Unsupported`] with no connector; the connector's.
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento del lock interno.
-    // `skip_all` y no `skip(self)`: el segundo argumento es una CONTRASEÑA, y
-    // con `skip(self)` `tracing` la formatearía en el span. Está escrito aquí
-    // y no solo en el conector porque este es el método público, y es el que
-    // alguien ampliará.
+    /// Never in practice: only from poisoning of the internal lock.
+    // `skip_all` and not `skip(self)`: the second argument is a PASSWORD,
+    // and with `skip(self)` `tracing` would format it into the span. It is
+    // written here and not only in the connector because this is the public
+    // method, and the one someone will extend.
     #[tracing::instrument(level = "info", skip_all, fields(conn = %conn))]
     pub async fn provide_secret(&self, conn: &str, secret: &str) -> Result<(), Error> {
-        // La cadena vacía se rechaza AQUÍ y no solo en el diálogo del TUI.
-        // Que un frontend deje inerte el confirmar con el campo vacío es
-        // presentación; que un secreto vacío no entre en el resolutor es
-        // política, vive en el core (regla 7), y sin esta guarda un cliente
-        // con un bug mete un vacío que —al ir el escalón de sesión el
-        // primero— tapa las otras tres fuentes hasta que alguien pare el
-        // daemon.
+        // The empty string is rejected HERE and not only in the TUI's
+        // dialog. A frontend leaving the confirm inert with an empty field
+        // is presentation; an empty secret not entering the resolver is
+        // policy, it lives in the core (rule 7), and without this guard a
+        // client with a bug feeds in an empty one that —since the session
+        // step goes first— covers up the other three sources until someone
+        // stops the daemon.
         //
-        // `PermissionDenied` y no una variante nueva: es a lo que degrada
-        // `ConnectError::SecretEmpty` (#320) unos pasos más abajo, así que
-        // decir lo mismo aquí no inventa taxonomía — una credencial vacía es
-        // una credencial que no autentica.
+        // `PermissionDenied` and not a new variant: it is what
+        // `ConnectError::SecretEmpty` (#320) degrades to a few steps down,
+        // so saying the same here invents no new taxonomy — an empty
+        // credential is a credential that does not authenticate.
         if secret.is_empty() {
-            tracing::warn!("secreto vacío rechazado");
+            tracing::warn!("empty secret rejected");
             return Err(Error::PermissionDenied);
         }
         let connector = self
             .connector
             .read()
-            .expect("connector lock sano")
+            .expect("connector lock is sound")
             .clone()
             .ok_or(Error::Unsupported)?;
         connector.provide_secret(conn, secret).await
     }
 
-    /// La clave de registro/caché para `p`: providers de proceso van por
-    /// scheme; los remotos por `scheme://authority`.
+    /// The registration/cache key for `p`: process providers go by scheme;
+    /// remote ones by `scheme://authority`.
     fn provider_key(p: &VPath) -> String {
         match p.authority() {
             Some(a) => format!("{}://{a}", p.scheme()),
@@ -1026,15 +1052,15 @@ impl Engine {
         }
     }
 
-    /// Cierra la sesión remota de `p` (#140). `false` si no había ninguna.
+    /// Closes `p`'s remote session (#140). `false` if there was none.
     ///
-    /// Un scheme de PROCESO —`file://`, `mem://`, el de un provider-plugin— no
-    /// se cierra: no hay sesión que soltar, y decir que sí sería mentir sobre
-    /// algo que sigue exactamente igual. La siguiente operación sobre esa
-    /// autoridad vuelve a conectar por el camino de siempre: cerrar suelta, no
-    /// prohíbe.
+    /// A PROCESS scheme —`file://`, `mem://`, a provider-plugin's— is not
+    /// closed: there is no session to release, and saying yes would be
+    /// lying about something that stays exactly the same. The next
+    /// operation on that authority connects again through the usual path:
+    /// closing releases, it does not forbid.
     pub fn close_connection(&self, p: &VPath) -> bool {
-        // Registrado por scheme entero = provider de proceso, no una sesión.
+        // Registered by the whole scheme = a process provider, not a session.
         if self.sessions.lookup(p.scheme()).is_some() {
             return false;
         }
@@ -1043,21 +1069,22 @@ impl Engine {
 
     async fn provider_for(&self, p: &VPath) -> Result<Arc<dyn Provider>, Error> {
         let key = Self::provider_key(p);
-        // Primero el provider de proceso registrado para el scheme entero
-        // (local, mem de tests): tiene prioridad y no dispara conexiones.
+        // First the process provider registered for the whole scheme
+        // (local, tests' mem): it has priority and triggers no connections.
         if let Some(prov) = self.sessions.lookup(p.scheme()) {
             return Ok(prov);
         }
         if let Some(prov) = self.sessions.lookup(&key) {
             return Ok(prov);
         }
-        // Archivos como directorios (ADR 0018): scheme compuesto = provider
-        // por composición sobre el provider del CONTENEDOR. Antes del
-        // connector: el interior puede ser local o una conexión ya viva.
+        // Archives as directories (ADR 0018): a composite scheme = a
+        // provider by composition over the CONTAINER's provider. Before the
+        // connector: the interior can be local or an already live
+        // connection.
         if let Some(aref) = p.archive_split().map_err(|_| Error::InvalidPath)? {
-            // #56: tope de CAPAS anidadas ANTES de componer nada — cuenta
-            // los tokens de formato del scheme (pelado izquierda→derecha,
-            // mismo longest-match que el split).
+            // #56: nested LAYER cap BEFORE composing anything — counts the
+            // scheme's format tokens (peeled left→right, the same
+            // longest-match as the split).
             let mut layers = 0usize;
             let mut sch = p.scheme();
             while let Some(f) = norte_proto::scheme_archive_format(sch) {
@@ -1067,20 +1094,20 @@ impl Engine {
             let max_nesting = self
                 .archive_limits
                 .read()
-                .expect("archive_limits lock sano")
+                .expect("archive_limits lock is sound")
                 .max_nesting;
             if layers > max_nesting {
-                tracing::warn!(layers, max_nesting, "anidamiento de archivo sobre el tope");
+                tracing::warn!(layers, max_nesting, "archive nesting over the cap");
                 return Err(Error::LimitExceeded {
                     limit: Error::LIMIT_NESTING.into(),
                 });
             }
-            // `rar` no compone sobre un provider interior: el delegado
-            // externo necesita una RUTA de verdad, así que el interior tiene
-            // que ser un `file://` local y sin authority. Cualquier otra cosa
-            // —sftp, s3, o un archivo dentro de otro archivo— se niega AQUÍ,
-            // antes de componer nada, en vez de traerse el contenedor entero
-            // por una descarga que nadie pidió.
+            // `rar` does not compose over an inner provider: the external
+            // delegate needs a real PATH, so the interior has to be a local
+            // `file://` with no authority. Anything else —sftp, s3, or an
+            // archive inside another archive— is refused HERE, before
+            // composing anything, instead of bringing in the whole
+            // container for a download nobody asked for.
             if aref.format == "rar" {
                 return self.rar_provider_for(&aref, key);
             }
@@ -1088,22 +1115,22 @@ impl Engine {
                 "tar" => norte_vfs_archive::Format::Tar,
                 "zip" => norte_vfs_archive::Format::Zip,
                 "tar+gz" => norte_vfs_archive::Format::TarGz,
-                // Formato de la whitelist de proto sin provider aquí: una
-                // versión de core más vieja que el proto. Honesto: no sé.
+                // A format from proto's whitelist with no provider here: a
+                // core version older than the proto. Honest: unknown.
                 _ => return Err(Error::Unsupported),
             };
-            // #56: el exterior puede ser a su vez un path de archivo —
-            // recursión capa a capa, acotada por el gate max_nesting de
-            // arriba (jamás ilimitada).
+            // #56: the outer one can itself be an archive path — layer by
+            // layer recursion, bounded by the max_nesting gate above (never
+            // unbounded).
             let inner = Box::pin(self.provider_for(&aref.outer)).await?;
-            tracing::debug!(scheme = %p.scheme(), %key, "componiendo provider de archivo");
-            // expect: envenenado = otro hilo panicó a mitad de escritura —
-            // irrecuperable, misma convención que el resto de locks del
-            // engine (ver `# Panics` de `set_archive_limits`).
+            tracing::debug!(scheme = %p.scheme(), %key, "composing archive provider");
+            // expect: poisoned = another thread panicked mid-write —
+            // unrecoverable, the same convention as the rest of the
+            // engine's locks (see `set_archive_limits`'s `# Panics`).
             let limits = *self
                 .archive_limits
                 .read()
-                .expect("archive_limits lock sano");
+                .expect("archive_limits lock is sound");
             let provider: Arc<dyn Provider> =
                 Arc::new(norte_vfs_archive::ArchiveProvider::with_limits(
                     inner,
@@ -1111,14 +1138,14 @@ impl Engine {
                     p.scheme().to_owned(),
                     limits,
                 ));
-            // Double-check en el pool: si otra petición registró primero,
-            // gana la suya (el ArchiveProvider extra solo es RAM).
+            // Double-check in the pool: if another request registered
+            // first, its wins (the extra ArchiveProvider is only RAM).
             return Ok(self.sessions.insert_composite(key, provider));
         }
         let connector = self
             .connector
             .read()
-            .expect("connector lock sano")
+            .expect("connector lock is sound")
             .clone()
             .ok_or(Error::Unsupported)?;
         let Some(authority) = p.authority() else {
@@ -1127,17 +1154,18 @@ impl Engine {
         let observer = self
             .connection_observer
             .read()
-            .expect("connection_observer lock sano")
+            .expect("connection_observer lock is sound")
             .clone();
-        // Dedup canónica (#47): resuelve la forma canónica ANTES de marcar
-        // (lectura local de connections.toml) — un alias de una sesión viva
-        // acierta aquí y jamás abre una segunda.
+        // Canonical dedup (#47): resolves the canonical form BEFORE
+        // dialing (a local read of connections.toml) — an alias of a live
+        // session hits here and never opens a second one.
         let (cache_key, alias) = match connector.canonical_authority(p.scheme(), authority).await {
             Some(canonical) if canonical != authority => {
                 let ckey = format!("{}://{canonical}", p.scheme());
-                // alias_current re-lee la canónica BAJO el lock: si la
-                // sesión cayó entre el lookup y aquí, jamás re-inserta un
-                // Arc muerto como alias (sec MAJOR-2 del review #47).
+                // alias_current re-reads the canonical one UNDER the lock:
+                // if the session fell between the lookup and here, it never
+                // re-inserts a dead `Arc` as an alias (review #47's MAJOR-2
+                // finding).
                 if let Some(prov) = self.sessions.alias_current(&ckey, key.clone()) {
                     return Ok(prov);
                 }
@@ -1145,41 +1173,42 @@ impl Engine {
             }
             _ => (key, None),
         };
-        // El dial va en el pool (#47): single-flight por clave, timeout,
-        // cancelable por drop del waiter, backoff de fallos transitorios.
+        // The dial goes through the pool (#47): single-flight per key,
+        // timeout, cancelable by the waiter's drop, backoff on transient
+        // failures.
         self.sessions
             .connect_remote(cache_key, alias, p.scheme(), authority, connector, observer)
             .await
     }
 
-    /// Metadatos de un nodo (directo, sin Task).
+    /// A node's metadata (direct, no Task).
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    /// [`Error::Unsupported`] if there is no provider for the scheme; the provider's.
     pub async fn stat(&self, p: &VPath) -> Result<Entry, Error> {
         self.provider_for(p).await?.stat(p).await
     }
 
-    /// Listado de un directorio (directo, sin Task).
+    /// A directory's listing (direct, no Task).
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    /// [`Error::Unsupported`] if there is no provider for the scheme; the provider's.
     pub async fn list(&self, p: &VPath) -> Result<EntryStream, Error> {
         self.provider_for(p).await?.list(p).await
     }
 
-    /// [`Self::stat`] con opciones (#108 bloque 2): atributos por entrada.
+    /// [`Self::stat`] with options (#108 block 2): per-entry attributes.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    /// [`Error::Unsupported`] if there is no provider for the scheme; the provider's.
     pub async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
         self.provider_for(p).await?.stat_with(p, opt).await
     }
 
-    /// [`Self::list`] con opciones (#108 bloque 2): atributos por entrada.
+    /// [`Self::list`] with options (#108 block 2): per-entry attributes.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    /// [`Error::Unsupported`] if there is no provider for the scheme; the provider's.
     pub async fn list_with(
         &self,
         p: &VPath,
@@ -1188,61 +1217,61 @@ impl Engine {
         self.provider_for(p).await?.list_with(p, opt).await
     }
 
-    /// Catálogo de attrs del provider de `p`, SANEADO: `AttrCatalog::new` es
-    /// el único camino al wire y también el del backend embebido (ADR 0039
-    /// §4 — un catálogo en proceso jamás se cuela sin sanear).
+    /// `p`'s provider's attrs catalog, SANITIZED: `AttrCatalog::new` is the
+    /// one path to the wire and also the embedded backend's (ADR 0039 §4 —
+    /// an in-process catalog never sneaks through unsanitized).
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay provider para el scheme.
+    /// [`Error::Unsupported`] if there is no provider for the scheme.
     pub async fn attr_catalog(&self, p: &VPath) -> Result<norte_proto::AttrCatalog, Error> {
         Ok(norte_proto::AttrCatalog::new(
             self.provider_for(p).await?.attrs().to_vec(),
         ))
     }
 
-    /// Inyecta el proveedor de IA para el rename revisable (M4-A2, ADR 0031).
+    /// Injects the AI provider for the reviewable rename (M4-A2, ADR 0031).
     ///
     /// # Panics
-    /// Solo por envenenamiento del lock interno (irrecuperable).
+    /// Only from poisoning of the internal lock (unrecoverable).
     pub fn set_ai_provider(&self, provider: norte_ai::SharedAiProvider) {
-        *self.ai_provider.write().expect("ai_provider lock sano") = Some(provider);
+        *self.ai_provider.write().expect("ai_provider lock is sound") = Some(provider);
     }
 
-    /// Inyecta el proveedor de EMBEDDINGS para `index.embed` /
-    /// `index.search_semantic` (M4-IA-2, ADR 0031 A3). Separado de
-    /// [`Self::set_ai_provider`]: `[ai].embed_provider` puede nombrar otro
-    /// proveedor/modelo que el del rename.
+    /// Injects the EMBEDDINGS provider for `index.embed` /
+    /// `index.search_semantic` (M4-IA-2, ADR 0031 A3). Separate from
+    /// [`Self::set_ai_provider`]: `[ai].embed_provider` can name a different
+    /// provider/model than the rename's.
     ///
     /// # Panics
-    /// Solo por envenenamiento del lock interno (irrecuperable).
+    /// Only from poisoning of the internal lock (unrecoverable).
     pub fn set_ai_embed_provider(&self, provider: norte_ai::SharedAiProvider) {
-        *self.ai_embed.write().expect("ai_embed lock sano") = Some(provider);
+        *self.ai_embed.write().expect("ai_embed lock is sound") = Some(provider);
     }
 
-    /// Fija la config `[ai]` (opt-in/local-only/denied-paths). Sin ella el
-    /// gate rechaza toda operación de IA (default deshabilitado).
+    /// Sets the `[ai]` config (opt-in/local-only/denied-paths). Without it
+    /// the gate rejects every AI operation (default disabled).
     ///
     /// # Panics
-    /// Solo por envenenamiento del lock interno.
+    /// Only from poisoning of the internal lock.
     pub fn set_ai_config(&self, config: crate::ai::AiConfig) {
-        *self.ai_config.write().expect("ai_config lock sano") = config;
+        *self.ai_config.write().expect("ai_config lock is sound") = config;
     }
 
-    /// Sugiere un plan de rename REVISABLE para los archivos de `dir` según
-    /// `instruction` (spec §9, ADR 0031). NO muta nada — el plan es el
-    /// producto; aplicarlo es N `fs.move` gobernados (journal + undo +
-    /// policy). El gate opt-in se evalúa ANTES de que ningún nombre salga al
-    /// proveedor; los nombres hostiles (no-UTF8) se rechazan fail-loud sin
-    /// enviarse.
+    /// Suggests a REVIEWABLE rename plan for `dir`'s files according to
+    /// `instruction` (spec §9, ADR 0031). Mutates NOTHING — the plan is the
+    /// product; applying it is N governed `fs.move`s (journal + undo +
+    /// policy). The opt-in gate is evaluated BEFORE any name goes out to
+    /// the provider; hostile names (non-UTF8) are rejected fail-loud
+    /// without being sent.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay proveedor de IA instalado;
-    /// [`Error::PolicyDenied`] si el gate rechaza (IA off, local-only sobre
-    /// remoto, o `dir` bajo un `denied_prefix`); los del listado o del
-    /// proveedor mapeados a la taxonomía del wire.
+    /// [`Error::Unsupported`] if no AI provider is installed;
+    /// [`Error::PolicyDenied`] if the gate rejects (AI off, local-only over
+    /// remote, or `dir` under a `denied_prefix`); the listing's or the
+    /// provider's mapped to the wire's taxonomy.
     ///
     /// # Panics
-    /// Solo por envenenamiento de un lock interno (irrecuperable).
+    /// Only from poisoning of an internal lock (unrecoverable).
     pub async fn ai_rename_plan(
         &self,
         dir: &VPath,
@@ -1251,27 +1280,28 @@ impl Engine {
         self.ai_rename_plan_for(dir, instruction, &[]).await
     }
 
-    /// [`Self::ai_rename_plan`] sobre un SUBCONJUNTO de `dir` (#121).
+    /// [`Self::ai_rename_plan`] over a SUBSET of `dir` (#121).
     ///
-    /// `only` son nombres BASE. Vacío = el directorio entero, que es lo que
-    /// hacía antes de existir este parámetro.
+    /// `only` are BASE names. Empty = the whole directory, which is what it
+    /// did before this parameter existed.
     ///
-    /// Lo que compra no es comodidad: con la selección de primera clase (#103),
-    /// marcar cinco ficheros y pedir un plan mandaba los mil del directorio al
-    /// proveedor. Eso es más de lo que el humano señaló, y el gate de IA existe
-    /// justamente para acotar lo que sale de la máquina.
+    /// What it buys is not convenience: with first-class selection (#103),
+    /// marking five files and asking for a plan sent the directory's
+    /// thousand to the provider. That is more than what the human pointed
+    /// at, and the AI gate exists precisely to bound what leaves the
+    /// machine.
     ///
-    /// Un nombre que no está en el listado se IGNORA en vez de rechazar el
-    /// plan: entre marcar y pedir, un fichero puede haberse ido, y castigar al
-    /// lector por esa carrera no arregla nada. Si tras filtrar no queda
-    /// ninguno, no se llama al proveedor — un plan sobre nada no es una
-    /// pregunta.
+    /// A name not in the listing is IGNORED instead of rejecting the plan:
+    /// between marking and asking, a file may have gone away, and punishing
+    /// the reader for that race fixes nothing. If after filtering none are
+    /// left, the provider is not called — a plan over nothing is not a
+    /// question.
     ///
     /// # Errors
-    /// Las de [`Self::ai_rename_plan`].
+    /// [`Self::ai_rename_plan`]'s.
     ///
     /// # Panics
-    /// Solo por envenenamiento de un lock interno (irrecuperable).
+    /// Only from poisoning of an internal lock (unrecoverable).
     pub async fn ai_rename_plan_for(
         &self,
         dir: &VPath,
@@ -1280,49 +1310,53 @@ impl Engine {
     ) -> Result<crate::ai::RenamePlan, Error> {
         use futures::StreamExt;
 
-        /// Tope del reply acumulado (#M4 security): ver el bucle de drenado.
+        /// Cap on the accumulated reply (#M4 security): see the drain loop.
         const MAX_REPLY_BYTES: usize = 512 * 1024;
 
-        // El tope se comprueba AQUÍ y no solo en el dispatch del daemon, como
-        // el de `fs.set_mode`: `ntc` corre embebido por defecto, así que un
-        // tope que solo vive en el wire no protege al camino que más se usa.
-        // Lo que acota es un filtro O(nombres × entradas) sobre una llamada
-        // DIRECTA —sin Task— que solo puede morir por timeout.
+        // The cap is checked HERE and not only in the daemon's dispatch,
+        // like `fs.set_mode`'s: `ntc` runs embedded by default, so a cap
+        // that only lives on the wire does not protect the most used path.
+        // What it bounds is an O(names × entries) filter over a DIRECT
+        // call —no Task— that can only die by timeout.
         if only.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
-            tracing::debug!(n = only.len(), "ai.rename_plan por encima del tope");
+            tracing::debug!(n = only.len(), "ai.rename_plan over the cap");
             return Err(Error::InvalidPath);
         }
 
         let provider = self
             .ai_provider
             .read()
-            .expect("ai_provider lock sano")
+            .expect("ai_provider lock is sound")
             .clone()
             .ok_or(Error::Unsupported)?;
 
-        // Gate PRE-contenido: nada sale hasta que pasa (spec §9). El clon de
-        // la config evita retener el lock a través de los await.
+        // PRE-content gate: nothing goes out until it passes (spec §9). The
+        // config clone avoids holding the lock across the awaits.
         {
-            let config = self.ai_config.read().expect("ai_config lock sano").clone();
+            let config = self
+                .ai_config
+                .read()
+                .expect("ai_config lock is sound")
+                .clone();
             crate::ai::AiGate::new(&config)
                 .check(crate::ai::AiOp::Rename, provider.is_local(), &[dir])
                 .map_err(|reason| ai_denied_to_error(&reason))?;
         }
 
-        // Nombres base de los archivos del dir (a través del provider, jamás
-        // el FS directo — regla 9). Se OMITE toda entrada cuya ruta caiga
-        // bajo un `denied_prefix` (security MINOR del review #M4: el nombre
-        // de un dir denegado que sea hijo directo de `dir` no debe salir —
-        // el gate solo comprueba `dir`).
+        // Base names of the dir's files (through the provider, never the
+        // FS directly — rule 9). Every entry whose path falls under a
+        // `denied_prefix` is OMITTED (review #M4's security MINOR: the name
+        // of a denied dir that is a direct child of `dir` must not go out —
+        // the gate only checks `dir`).
         let denied = {
-            let config = self.ai_config.read().expect("ai_config lock sano");
+            let config = self.ai_config.read().expect("ai_config lock is sound");
             config.denied_prefixes.clone()
         };
-        // El subconjunto, como CONJUNTO: el filtro de abajo corre por cada
-        // entrada del listado, y una búsqueda lineal sobre 4096 nombres en un
-        // directorio de un millón son minutos de CPU en una llamada que no es
-        // una Task y que solo puede morir por timeout.
-        let solo: std::collections::HashSet<&[u8]> =
+        // The subset, as a SET: the filter below runs for every entry of
+        // the listing, and a linear search over 4096 names in a
+        // million-entry directory is minutes of CPU in a call that is not
+        // a Task and can only die by timeout.
+        let only_set: std::collections::HashSet<&[u8]> =
             only.iter().map(std::string::String::as_bytes).collect();
         let mut stream = self.list(dir).await?;
         let mut names = Vec::new();
@@ -1335,106 +1369,108 @@ impl Engine {
                 continue;
             }
             if let Some(name) = entry.path.file_name() {
-                // El subconjunto se filtra CONTRA EL LISTADO y por bytes
-                // (#121): el nombre que el frontend marcó tiene que existir
-                // aquí, y compararlo como texto perdería los que no son UTF-8
-                // — que son justo los que más falta hace no confundir.
-                if !solo.is_empty() && !solo.contains(name.as_bytes()) {
+                // The subset is filtered AGAINST THE LISTING and by bytes
+                // (#121): the name the frontend marked has to exist here,
+                // and comparing it as text would lose the non-UTF8 ones —
+                // which are exactly the ones it matters most not to confuse.
+                if !only_set.is_empty() && !only_set.contains(name.as_bytes()) {
                     continue;
                 }
                 names.push(name.clone());
             }
         }
         if names.is_empty() && !only.is_empty() {
-            // Lo que se marcó ya no está. No se llama al proveedor: un plan
-            // sobre nada no es una pregunta, y mandar la instrucción con una
-            // lista vacía gasta cuota para que conteste lo mismo.
+            // What was marked is no longer there. The provider is not
+            // called: a plan over nothing is not a question, and sending
+            // the instruction with an empty list spends quota just to get
+            // the same answer back.
             return Ok(crate::ai::RenamePlan::default());
         }
 
         let req = crate::ai::build_rename_prompt(&names, instruction)
             .map_err(|e| ai_to_proto_error(&e))?;
-        // Lo que se mide del canje, y lo que NO. Aquí se sabe si el contrato
-        // de salida tipada llegó a viajar (`estructurada`), y sin eso no hay
-        // forma de saber si sirve de algo: una capacidad declarada y no
-        // efectiva es justo lo que este camino tenía.
+        // What is measured about the exchange, and what is NOT. Here it is
+        // known whether the typed-output contract actually traveled
+        // (`structured`), and without that there is no way to know whether
+        // it is any use: a declared but ineffective capability is exactly
+        // what this path had.
         //
-        // Nunca la instrucción, nunca los nombres, nunca la respuesta: son
-        // datos del usuario y el log no es sitio para ellos (regla 10). Sólo
-        // el proveedor, el número de entradas, el tiempo y qué pasó.
-        let estructurada = provider
+        // Never the instruction, never the names, never the reply: they are
+        // user data and the log is no place for them (rule 10). Only the
+        // provider, the entry count, the time, and what happened.
+        let structured = provider
             .capabilities()
             .contains(norte_ai::AiCaps::JSON_OUTPUT);
-        let proveedor = provider.id();
-        let empezo = std::time::Instant::now();
-        // El fallo de establecimiento se mide TAMBIÉN: si sólo se midiera el
-        // camino que llega a parsear, `estructurada` diría qué tal va el
-        // contrato entre los intercambios que ya funcionaban, que es la
-        // muestra equivocada — los que se caen en red o en auth son los que
-        // más interesa contar.
+        let provider_id = provider.id();
+        let started = std::time::Instant::now();
+        // A connection failure is measured TOO: if only the path that gets
+        // to parsing were measured, `structured` would say how the contract
+        // is doing among exchanges that already worked, which is the wrong
+        // sample — the ones that fall over on network or auth are the ones
+        // most worth counting.
         let mut chat = match provider.chat(req).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::info!(
-                    proveedor,
-                    estructurada,
-                    entradas = names.len(),
-                    ms = empezo.elapsed().as_millis(),
-                    resultado = categoria_de_ai(&e),
-                    "plan de renombrado por IA"
+                    provider_id,
+                    structured,
+                    entries = names.len(),
+                    ms = started.elapsed().as_millis(),
+                    result = categoria_de_ai(&e),
+                    "AI rename plan"
                 );
                 return Err(ai_to_proto_error(&e));
             }
         };
-        // Cota del reply (security MAJOR del review #M4): un endpoint
-        // comprometido/MITM puede stremear deltas sub-1MiB sin fin (el tope
-        // por línea de http.rs no acota el ACUMULADO) → OOM. Un plan
-        // `[{from,to}]` legítimo cabe de sobra en 512 KiB.
+        // Reply cap (review #M4's security MAJOR): a compromised/MITM
+        // endpoint can stream sub-1MiB deltas forever (http.rs's per-line
+        // cap does not bound the ACCUMULATED total) → OOM. A legitimate
+        // `[{from,to}]` plan fits well within 512 KiB.
         let mut reply = String::new();
         while let Some(delta) = chat.next().await {
             let delta = delta.map_err(|e| ai_to_proto_error(&e))?;
             if reply.len() + delta.len() > MAX_REPLY_BYTES {
                 tracing::warn!(
                     max = MAX_REPLY_BYTES,
-                    "respuesta del proveedor de IA sobre el tope; abortando"
+                    "AI provider reply over the cap; aborting"
                 );
                 return Err(Error::Internal { panic: false });
             }
             reply.push_str(&delta);
         }
         let plan = crate::ai::validate_rename_reply(&reply, &names);
-        let categoria = plan.as_ref().map_or_else(|e| categoria_de_ai(e), |_| "ok");
+        let category = plan.as_ref().map_or_else(|e| categoria_de_ai(e), |_| "ok");
         tracing::info!(
-            proveedor,
-            estructurada,
-            entradas = names.len(),
+            provider_id,
+            structured,
+            entries = names.len(),
             bytes = reply.len(),
-            ms = empezo.elapsed().as_millis(),
-            resultado = categoria,
-            "plan de renombrado por IA"
+            ms = started.elapsed().as_millis(),
+            result = category,
+            "AI rename plan"
         );
         plan.map_err(|e| ai_to_proto_error(&e))
     }
 
-    /// Plan de ORGANIZAR por IA (fase 8, `ai.organize_plan`).
+    /// AI ORGANIZE plan (phase 8, `ai.organize_plan`).
     ///
-    /// El gemelo de [`Self::ai_rename_plan_for`], con el mismo gate, el mismo
-    /// filtrado de prefijos denegados, el mismo tope de respuesta y el mismo
-    /// cinturón de validación — lo único que cambia es que el destino puede
-    /// llevar subdirectorios, y esa diferencia la comprueba
-    /// [`crate::ai::validate_organize_reply`] con la MISMA función que usa el
-    /// core al ejecutar.
+    /// The twin of [`Self::ai_rename_plan_for`], with the same gate, the same
+    /// denied-prefix filtering, the same reply cap, and the same validation
+    /// belt — the only thing that changes is that the destination can carry
+    /// subdirectories, and that difference is checked by
+    /// [`crate::ai::validate_organize_reply`] with the SAME function the
+    /// core uses when executing.
     ///
-    /// **No muta nada.** El plan es el producto; aplicarlo es
+    /// **Mutates nothing.** The plan is the product; applying it is
     /// [`Self::organize`].
     ///
     /// # Errors
-    /// Las de [`Self::ai_rename_plan_for`]: sin proveedor,
-    /// [`Error::Unsupported`]; el gate de IA; lo que conteste el proveedor; y
-    /// [`Error::InvalidPath`] si `only` pasa del tope.
+    /// [`Self::ai_rename_plan_for`]'s: no provider, [`Error::Unsupported`];
+    /// the AI gate; whatever the provider answers; and
+    /// [`Error::InvalidPath`] if `only` exceeds the cap.
     ///
     /// # Panics
-    /// No: los `expect` son sobre locks propios.
+    /// No: the `expect`s are on this struct's own locks.
     pub async fn ai_organize_plan_for(
         &self,
         dir: &VPath,
@@ -1443,9 +1479,9 @@ impl Engine {
     ) -> Result<crate::ai::OrganizePlanReply, Error> {
         use futures::StreamExt;
 
-        /// El mismo tope de respuesta acumulada que el plan de renombrado, y
-        /// por el mismo motivo: un endpoint comprometido puede stremear sin
-        /// fin y el tope por línea no acota el acumulado.
+        /// The same accumulated-reply cap as the rename plan, and for the
+        /// same reason: a compromised endpoint can stream forever and the
+        /// per-line cap does not bound the accumulated total.
         const MAX_REPLY_BYTES: usize = 512 * 1024;
 
         if only.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
@@ -1454,25 +1490,29 @@ impl Engine {
         let provider = self
             .ai_provider
             .read()
-            .expect("ai_provider lock sano")
+            .expect("ai_provider lock is sound")
             .clone()
             .ok_or(Error::Unsupported)?;
-        // Gate PRE-contenido: nada sale hasta que pasa. Organizar se evalúa
-        // como `Rename` porque es lo que es —proponer nombres nuevos para
-        // ficheros de este directorio—, y darle un `AiOp` propio obligaría a
-        // cada configuración existente a permitirlo otra vez para algo que ya
-        // había decidido.
+        // PRE-content gate: nothing goes out until it passes. Organize is
+        // evaluated as `Rename` because that is what it is —proposing new
+        // names for this directory's files—, and giving it its own `AiOp`
+        // would force every existing config to allow it again for something
+        // it had already decided.
         {
-            let config = self.ai_config.read().expect("ai_config lock sano").clone();
+            let config = self
+                .ai_config
+                .read()
+                .expect("ai_config lock is sound")
+                .clone();
             crate::ai::AiGate::new(&config)
                 .check(crate::ai::AiOp::Rename, provider.is_local(), &[dir])
                 .map_err(|reason| ai_denied_to_error(&reason))?;
         }
         let denied = {
-            let config = self.ai_config.read().expect("ai_config lock sano");
+            let config = self.ai_config.read().expect("ai_config lock is sound");
             config.denied_prefixes.clone()
         };
-        let solo: std::collections::HashSet<&[u8]> =
+        let only_set: std::collections::HashSet<&[u8]> =
             only.iter().map(std::string::String::as_bytes).collect();
         let mut stream = self.list(dir).await?;
         let mut names = Vec::new();
@@ -1485,7 +1525,7 @@ impl Engine {
                 continue;
             }
             if let Some(name) = entry.path.file_name() {
-                if !solo.is_empty() && !solo.contains(name.as_bytes()) {
+                if !only_set.is_empty() && !only_set.contains(name.as_bytes()) {
                     continue;
                 }
                 names.push(name.clone());
@@ -1496,21 +1536,21 @@ impl Engine {
         }
         let req = crate::ai::build_organize_prompt(&names, instruction)
             .map_err(|e| ai_to_proto_error(&e))?;
-        let estructurada = provider
+        let structured = provider
             .capabilities()
             .contains(norte_ai::AiCaps::JSON_OUTPUT);
-        let proveedor = provider.id();
-        let empezo = std::time::Instant::now();
+        let provider_id = provider.id();
+        let started = std::time::Instant::now();
         let mut chat = match provider.chat(req).await {
             Ok(c) => c,
             Err(e) => {
                 tracing::info!(
-                    proveedor,
-                    estructurada,
-                    entradas = names.len(),
-                    ms = empezo.elapsed().as_millis(),
-                    resultado = categoria_de_ai(&e),
-                    "plan de organizar por IA"
+                    provider_id,
+                    structured,
+                    entries = names.len(),
+                    ms = started.elapsed().as_millis(),
+                    result = categoria_de_ai(&e),
+                    "AI organize plan"
                 );
                 return Err(ai_to_proto_error(&e));
             }
@@ -1521,54 +1561,53 @@ impl Engine {
             if reply.len() + delta.len() > MAX_REPLY_BYTES {
                 tracing::warn!(
                     max = MAX_REPLY_BYTES,
-                    "respuesta del proveedor de IA sobre el tope; abortando"
+                    "AI provider reply over the cap; aborting"
                 );
                 return Err(Error::Internal { panic: false });
             }
             reply.push_str(&delta);
         }
         let plan = crate::ai::validate_organize_reply(&reply, &names);
-        let categoria = plan.as_ref().map_or_else(|e| categoria_de_ai(e), |_| "ok");
-        // Nunca la instrucción, nunca los nombres, nunca la respuesta: son
-        // datos del usuario y el log no es sitio para ellos (regla 10).
+        let category = plan.as_ref().map_or_else(|e| categoria_de_ai(e), |_| "ok");
+        // Never the instruction, never the names, never the reply: they are
+        // user data and the log is no place for them (rule 10).
         tracing::info!(
-            proveedor,
-            estructurada,
-            entradas = names.len(),
+            provider_id,
+            structured,
+            entries = names.len(),
             bytes = reply.len(),
-            ms = empezo.elapsed().as_millis(),
-            resultado = categoria,
-            "plan de organizar por IA"
+            ms = started.elapsed().as_millis(),
+            result = category,
+            "AI organize plan"
         );
         plan.map_err(|e| ai_to_proto_error(&e))
     }
 
-    /// Total de entradas omitidas del índice del contenedor de `p` (#93),
-    /// `None` si el provider lista todo lo que existe (ver
+    /// Total entries omitted from `p`'s container's index (#93), `None` if
+    /// the provider lists everything that exists (see
     /// [`norte_vfs::Provider::list_skipped`]).
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    /// [`Error::Unsupported`] if there is no provider for the scheme; the provider's.
     pub async fn list_skipped(&self, p: &VPath) -> Result<Option<u64>, Error> {
         self.provider_for(p).await?.list_skipped(p).await
     }
 
-    /// El ancla del directorio `p` (#295): la identidad OPACA del nodo que un
-    /// listado devuelve, para que la copia que escriba ahí después pueda decir
-    /// cuál era.
+    /// Directory `p`'s anchor (#295): the OPAQUE identity of the node a
+    /// listing returns, so a copy writing there afterward can say what it was.
     ///
-    /// Se pregunta SIGUIENDO enlaces, porque lo que el humano estaba mirando es
-    /// el directorio cuyo contenido se listó, no el enlace por el que se llegó.
-    /// Un `~/copias -> /mnt/disco/copias` y `/mnt/disco/copias` dan la misma
-    /// ancla, que es exactamente lo que hace falta: el mismo destino aprobado
-    /// por dos nombres no puede ser dos destinos.
+    /// Asked FOLLOWING links, because what the human was looking at is the
+    /// directory whose content was listed, not the link it was reached
+    /// through. A `~/backups -> /mnt/disk/backups` and `/mnt/disk/backups`
+    /// give the same anchor, which is exactly what is needed: the same
+    /// destination approved under two names cannot be two destinations.
     ///
-    /// `None` = este provider no sabe dar identidad de nodo (un bucket, un
-    /// SFTP sin extensiones). Entonces no hay ancla, el cliente no manda
-    /// ninguna y la escritura se comporta como en 0.53.
+    /// `None` = this provider does not know how to give a node identity (a
+    /// bucket, an SFTP with no extensions). Then there is no anchor, the
+    /// client sends none, and the write behaves as in 0.53.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    /// [`Error::Unsupported`] if there is no provider for the scheme; the provider's.
     pub async fn dir_anchor(&self, p: &VPath) -> Result<Option<norte_proto::DirAnchor>, Error> {
         let id = self
             .provider_for(p)
@@ -1578,12 +1617,12 @@ impl Engine {
         Ok(id.map(crate::anchor::de_nodo))
     }
 
-    /// Lectura de un archivo como stream (directa, sin Task), con rango
-    /// opcional — el viewer lee cabeceras de archivos enormes sin tragarse
-    /// el resto (ADR 0005).
+    /// Reading a file as a stream (direct, no Task), with an optional
+    /// range — the viewer reads headers of huge files without swallowing
+    /// the rest (ADR 0005).
     ///
     /// # Errors
-    /// [`Error::Unsupported`] si no hay provider para el scheme; los del provider.
+    /// [`Error::Unsupported`] if there is no provider for the scheme; the provider's.
     pub async fn read(
         &self,
         p: &VPath,
@@ -1592,49 +1631,51 @@ impl Engine {
         self.provider_for(p).await?.read(p, range).await
     }
 
-    /// Búsqueda viva bajo un subtree (spec §17.1a, M4): Task cancelable
-    /// ([`TaskKind::Search`]) + canal `mpsc` de lotes de hits. El nombre casa
-    /// por glob O regex, el contenido por literal multi-encoding O regex; al
-    /// menos un criterio, glob/regex y `content`/`content_regex` excluyentes por
-    /// eje. Los matchers se COMPILAN aquí, ANTES de la Task: un patrón inválido
-    /// o una combinación ilegal es un error del REQUEST (no un fallo de la Task
-    /// ya lanzada).
+    /// Live search under a subtree (spec §17.1a, M4): cancelable Task
+    /// ([`TaskKind::Search`]) + `mpsc` channel of hit batches. The name
+    /// matches by glob OR regex, the content by multi-encoding literal OR
+    /// regex; at least one criterion, glob/regex and `content`/`content_regex`
+    /// mutually exclusive per axis. The matchers are COMPILED here, BEFORE
+    /// the Task: an invalid pattern or an illegal combination is a REQUEST
+    /// error (not a failure of an already-launched Task).
     ///
-    /// **Gate de policy**: NINGUNO. `fs.search` es LECTURA pura y se trata
-    /// EXACTAMENTE como `fs.list`/`fs.read`, que NO pasan por el gate del engine
-    /// (las lecturas son directas — ver [`Self::list`]/[`Self::read`] y
-    /// `handle_fs_list` en el daemon, que llaman al provider sin `PolicyOp`). No
-    /// existe un `PolicyOp` de lectura; introducir uno solo para `search` haría
-    /// que un agente pudiese LISTAR pero no BUSCAR el mismo subtree, una
-    /// asimetría sin sentido. El `actor` se propaga a la Task (por consistencia
-    /// con las mutaciones y para auditoría futura), pero no gatea nada.
+    /// **Policy gate**: NONE. `fs.search` is pure READ and is treated
+    /// EXACTLY like `fs.list`/`fs.read`, which do NOT go through the
+    /// engine's gate (reads are direct — see [`Self::list`]/[`Self::read`]
+    /// and `handle_fs_list` in the daemon, which call the provider with no
+    /// `PolicyOp`). There is no read `PolicyOp`; introducing one just for
+    /// `search` would let an agent LIST but not SEARCH the same subtree, a
+    /// pointless asymmetry. The `actor` is propagated to the Task (for
+    /// consistency with mutations and for future auditing), but it gates
+    /// nothing.
     ///
-    /// **Lo que el `actor` SÍ decide** (#165): las
-    /// [`walk_exclusions`](crate::policy::walk_exclusions) del recorrido. El
-    /// gate de lectura del daemon mira la RAÍZ, así que una búsqueda de un
-    /// AGENTE sobre `$HOME` —legítima— bajaría al directorio de estado del
-    /// daemon y devolvería `journal.db` y los spools de sync. No es un gate:
-    /// es por dónde no se baja, y el humano no lleva ninguna.
+    /// **What the `actor` DOES decide** (#165): the walk's
+    /// [`walk_exclusions`](crate::policy::walk_exclusions). The daemon's
+    /// read gate looks at the ROOT, so an AGENT's search over `$HOME`
+    /// —legitimate— would descend into the daemon's state directory and
+    /// return `journal.db` and the sync spools. It is not a gate: it is
+    /// where not to descend, and the human carries none.
     ///
-    /// **Mapeo de progreso** (lo consume el TUI): `entries_done` = entradas
-    /// examinadas (incluidas las saltadas por error); `bytes_done` = nº de hits
-    /// acumulados (no hay bytes reales en una búsqueda — se reutiliza el campo);
-    /// `current` = última entrada vista. `max_hits` alcanzado ⇒ `Completed` (no
-    /// `Failed`), el cliente infiere "truncada" comparando el total con el tope.
+    /// **Progress mapping** (the TUI consumes it): `entries_done` = entries
+    /// examined (including those skipped on error); `bytes_done` = number of
+    /// accumulated hits (there are no real bytes in a search — the field is
+    /// reused); `current` = last entry seen. `max_hits` reached ⇒ `Completed`
+    /// (not `Failed`), the client infers "truncated" by comparing the total
+    /// with the cap.
     ///
     /// # Errors
-    /// [`Error::InvalidPath`] si los criterios no validan/compilan (el daemon lo
-    /// traduce a `INVALID_PARAMS`; el detalle saneado lo obtiene con
-    /// [`crate::search::SearchMatchers::compile`], que devuelve el mensaje del
-    /// compilador de glob/regex). [`Error::Unsupported`] si el scheme del `root`
-    /// no tiene provider registrado.
+    /// [`Error::InvalidPath`] if the criteria do not validate/compile (the
+    /// daemon translates it to `INVALID_PARAMS`; the sanitized detail is
+    /// obtained with [`crate::search::SearchMatchers::compile`], which
+    /// returns the glob/regex compiler's message). [`Error::Unsupported`] if
+    /// `root`'s scheme has no registered provider.
     ///
-    /// **Lo que decide el actor, y lo que decide la petición** (0.81.0): las
-    /// exclusiones de la POLÍTICA (`policy::walk_exclusions`) se calculan
-    /// primero, y las que trae `params.exclude_roots` se AÑADEN a ellas. Se
-    /// suman y no se sustituyen, así que una petición puede estrechar el
-    /// recorrido y no puede ensancharlo: no hay forma de levantar un veto
-    /// metiendo rutas en una lista.
+    /// **What the actor decides, and what the request decides** (0.81.0):
+    /// the POLICY's exclusions (`policy::walk_exclusions`) are computed
+    /// first, and the ones `params.exclude_roots` brings are ADDED to them.
+    /// They are added and not substituted, so a request can narrow the walk
+    /// and cannot widen it: there is no way to lift a veto by putting paths
+    /// in a list.
     pub async fn search_as(
         &self,
         params: norte_proto::methods::FsSearchParams,
@@ -1647,20 +1688,20 @@ impl Engine {
         Error,
     > {
         let matchers = crate::search::SearchMatchers::compile(&params).map_err(|e| {
-            tracing::debug!(error = %e, "criterios de fs.search inválidos");
+            tracing::debug!(error = %e, "invalid fs.search criteria");
             Error::InvalidPath
         })?;
         let provider = self.provider_for(&params.root).await?;
         let root = params.root;
-        // Lo que un AGENTE no puede recorrer aunque su raíz sea legítima
-        // (#165): el directorio de estado del daemon cuelga de `$HOME`, y el
-        // gate de lectura del daemon solo mira la raíz de la búsqueda. El
-        // humano no se sandboxea, así que busca en sus propios ficheros.
+        // What an AGENT cannot walk even if its root is legitimate (#165):
+        // the daemon's state directory hangs off `$HOME`, and the daemon's
+        // read gate only looks at the search's root. The human is not
+        // sandboxed, so they search their own files.
         let mut excluded = crate::policy::walk_exclusions(&actor);
-        // Y lo que el LECTOR no quiere mirar (0.81.0). Se SUMAN, en este
-        // orden y sin poder quitarse: lo de la política es lo que no se
-        // puede leer, y esto es una preferencia. Una petición no levanta un
-        // veto añadiendo rutas a una lista.
+        // And what the READER does not want to look at (0.81.0). They are
+        // ADDED, in this order and with no way to be removed: the policy's
+        // is what cannot be read, and this is a preference. A request does
+        // not lift a veto by adding paths to a list.
         excluded.extend(params.exclude_roots.iter().cloned());
         let (tx, rx) = tokio::sync::mpsc::channel(8);
         let key = root.scheme().to_owned();

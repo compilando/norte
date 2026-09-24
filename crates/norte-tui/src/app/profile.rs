@@ -1,32 +1,33 @@
-//! Los perfiles vistos desde `App` (ADR 0079): dónde escribe un ajuste con
-//! un perfil puesto, y qué de un perfil no se puede aplicar en caliente en
-//! ESTA terminal.
+//! Profiles as seen from `App` (ADR 0079): where a setting writes when a
+//! profile is active, and what part of a profile can't be applied hot in
+//! THIS terminal.
 //!
-//! Lo que NO está aquí es nada que los dos frontends compartan. Leer el
-//! directorio es [`norte_frontend::config::read_profiles`] y girar por la
-//! lista es [`norte_frontend::profile_picker::next_profile`]: las dos vivían
-//! aquí, y la ventana las necesitaba igual — una segunda copia de «cuál es el
-//! siguiente perfil» son dos órdenes distintas esperando a divergir
-//! (ADR 0077).
+//! What is NOT here is anything the two frontends share. Reading the
+//! directory is [`norte_frontend::config::read_profiles`] and cycling
+//! through the list is
+//! [`norte_frontend::profile_picker::next_profile`]: both used to live here,
+//! and the window needed them just the same — a second copy of "what's the
+//! next profile" is two rules waiting to diverge (ADR 0077).
 
 impl crate::app::App {
-    /// Dónde va un ajuste que el lector cambia desde la interfaz.
+    /// Where a setting the reader changes from the UI goes.
     ///
-    /// El directorio del perfil ACTIVO si lo hay, y el del usuario si no.
+    /// The ACTIVE profile's directory if there is one, and the user's if
+    /// not.
     ///
-    /// No es una preferencia de estilo: un perfil está POR ENCIMA de la capa
-    /// del usuario (ADR 0079, D1), así que escribir ahí un ajuste que el
-    /// perfil también fija lo deja tapado — el tema se guarda, la barra dice
-    /// «config recargada», y la pantalla no cambia de color. Es exactamente la
-    /// forma del bug que D10 arregló para los atajos, y que el resto de los
-    /// ajustes no tenía arreglada.
+    /// It isn't a style preference: a profile sits ABOVE the user layer
+    /// (ADR 0079, D1), so writing there a setting the profile also fixes
+    /// leaves it covered up — the theme gets saved, the status bar says
+    /// "config reloaded", and the screen doesn't change color. It's exactly
+    /// the shape of the bug D10 fixed for shortcuts, and that the rest of
+    /// the settings didn't have fixed.
     ///
-    /// Cambiar un ajuste DENTRO de un espacio de trabajo significa cambiarlo
-    /// en ese espacio, lo fije ya el perfil o no. Quien quiera tocar su capa
-    /// de siempre sale del perfil primero.
+    /// Changing a setting INSIDE a workspace means changing it in that
+    /// workspace, whether the profile fixes it or not. Whoever wants to
+    /// touch their own layer leaves the profile first.
     ///
-    /// `None` cuando no hay dónde escribir, que es lo mismo que respondía
-    /// `user_config_dir()` antes: el llamante ya sabe decirlo.
+    /// `None` when there's nowhere to write, the same as `user_config_dir()`
+    /// used to answer before: the caller already knows how to say that.
     #[must_use]
     pub fn config_write_dir(&self) -> Option<std::path::PathBuf> {
         match &self.active_profile {
@@ -36,33 +37,35 @@ impl crate::app::App {
     }
 }
 
-/// Qué NO se puede aplicar sin reiniciar, de este perfil, en ESTA terminal.
+/// What CANNOT be applied without restarting, from this profile, in THIS
+/// terminal.
 ///
-/// Medido, no supuesto (D8). Lo que sí se aplica lo aplica
-/// [`crate::config_reload::reload_config`], que es el paso 2 del cambio: tema
-/// (ADR 0020), keymap entero, columnas con su re-orden, favoritos, openers, el
-/// modo de quick search y la confirmación de salida; el ratón lo re-aplica el
-/// bucle justo detrás, y la disposición y los ocultos llegan por los pasos 4
-/// y 5. La lista de abajo es el resto.
+/// Measured, not assumed (D8). What DOES apply is applied by
+/// [`crate::config_reload::reload_config`], which is step 2 of the change:
+/// theme (ADR 0020), the whole keymap, columns with their re-order,
+/// favorites, openers, the quick search mode and the quit confirmation; the
+/// mouse gets re-applied by the loop right behind it, and the layout and
+/// hidden files arrive via steps 4 and 5. The list below is the rest.
 ///
-/// **`[ui] lang` es lo único que queda**, y no por descuido: `norte_i18n::force`
-/// corre UNA vez por proceso, y el hot-reload del watcher ya lleva esa misma
-/// limitación escrita en su firma desde antes de que hubiera perfiles. Un
-/// cambio que se callara esto sería un cambio que miente.
+/// **`[ui] lang` is the only thing left**, and not by oversight:
+/// `norte_i18n::force` runs ONCE per process, and the watcher's hot-reload
+/// already carries that same limitation in its signature from before there
+/// were profiles. A change that stayed quiet about this would be a change
+/// that lies.
 ///
-/// Las fuentes y `reduce_motion` no salen aquí porque en una terminal no
-/// aplican en absoluto: son de la ventana, y decir «no se pudo aplicar» de algo
-/// que este frontend nunca aplica sería ruido.
+/// Fonts and `reduce_motion` don't appear here because in a terminal they
+/// don't apply at all: they belong to the window, and saying "couldn't be
+/// applied" about something this frontend never applies would be noise.
 #[must_use]
 pub fn no_aplicable_en_caliente(
-    antes: &norte_config::CommonConfig,
-    despues: &norte_config::CommonConfig,
+    before: &norte_config::CommonConfig,
+    after: &norte_config::CommonConfig,
 ) -> Vec<&'static str> {
-    let mut fuera = Vec::new();
-    if antes.ui_lang != despues.ui_lang {
-        fuera.push("ui.lang");
+    let mut out = Vec::new();
+    if before.ui_lang != after.ui_lang {
+        out.push("ui.lang");
     }
-    fuera
+    out
 }
 
 #[cfg(test)]
@@ -70,12 +73,13 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
 
-    /// Un ajuste cambiado con un PERFIL activo se escribe EN EL PERFIL.
+    /// A setting changed with an active PROFILE gets written TO THE PROFILE.
     ///
-    /// Escribirlo en la capa del usuario lo deja tapado por el perfil, que
-    /// está por encima (ADR 0079, D1): el tema se guarda, la barra dice
-    /// «config recargada» y la pantalla no cambia de color. Es la misma forma
-    /// que D10 arregló para los atajos, y que los ajustes no tenían.
+    /// Writing it to the user layer leaves it covered by the profile, which
+    /// sits above it (ADR 0079, D1): the theme gets saved, the status bar
+    /// says "config reloaded" and the screen doesn't change color. It's the
+    /// same shape D10 fixed for shortcuts, and that the settings didn't
+    /// have.
     #[test]
     fn con_perfil_activo_los_ajustes_se_escriben_en_el_perfil() {
         let mut app = super::super::App::new(
@@ -89,15 +93,15 @@ mod tests {
             ),
         );
         app.active_profile = Some(OsString::from("work"));
-        let dir = app.config_write_dir().expect("hay directorio");
+        let dir = app.config_write_dir().expect("there is a directory");
         assert!(
             dir.ends_with("profiles/work"),
-            "el ajuste va al perfil, no a la capa del usuario: {}",
+            "the setting goes to the profile, not to the user layer: {}",
             dir.display()
         );
     }
 
-    /// Y sin perfil, donde siempre.
+    /// And with no profile, wherever it always goes.
     #[test]
     fn sin_perfil_los_ajustes_van_a_la_capa_del_usuario() {
         let app = super::super::App::new(
@@ -113,39 +117,36 @@ mod tests {
         assert_eq!(app.config_write_dir(), norte_config::user_config_dir());
     }
 
-    /// Cambiar el idioma se ANUNCIA; cambiar el tema no, porque el tema sí se
-    /// aplica en caliente.
+    /// Changing the language gets ANNOUNCED; changing the theme doesn't,
+    /// because the theme DOES apply hot.
     #[test]
     fn solo_el_idioma_se_anuncia() {
-        let base = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("vacía");
-        let mut otro = base.clone();
-        otro.ui_theme = Some("nord".to_owned());
+        let base = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("empty");
+        let mut other = base.clone();
+        other.ui_theme = Some("nord".to_owned());
         assert!(
-            no_aplicable_en_caliente(&base, &otro).is_empty(),
-            "el tema es hot-reloadable (ADR 0020)"
+            no_aplicable_en_caliente(&base, &other).is_empty(),
+            "the theme is hot-reloadable (ADR 0020)"
         );
 
-        let mut con_idioma = base.clone();
-        con_idioma.ui_lang = Some("es".to_owned());
-        assert_eq!(
-            no_aplicable_en_caliente(&base, &con_idioma),
-            vec!["ui.lang"]
-        );
+        let mut with_lang = base.clone();
+        with_lang.ui_lang = Some("es".to_owned());
+        assert_eq!(no_aplicable_en_caliente(&base, &with_lang), vec!["ui.lang"]);
     }
 
-    /// Cada campo de `CommonConfig` está CLASIFICADO: o se aplica en caliente,
-    /// o se anuncia, o no es de este frontend.
+    /// Every `CommonConfig` field is CLASSIFIED: either it applies hot, or
+    /// it gets announced, or it doesn't belong to this frontend.
     ///
-    /// El destructuring va sin `..` a propósito. Un campo nuevo hace que este
-    /// test no COMPILE, que es más fuerte que un assert que falle: obliga a
-    /// decidir en qué grupo cae justo cuando alguien lo está añadiendo, y es
-    /// la única manera de que la línea que el cambio de perfil le dice al
-    /// lector siga siendo verdad dentro de un año.
+    /// The destructuring has no `..` on purpose. A new field makes this test
+    /// FAIL TO COMPILE, which is stronger than a failing assert: it forces a
+    /// decision about which group it falls into exactly when someone is
+    /// adding it, and it's the only way for the line the profile switch
+    /// tells the reader to stay true a year from now.
     #[test]
     fn todo_campo_de_common_config_esta_clasificado() {
-        let c = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("vacía");
+        let c = norte_config::load(&norte_config::Layers { dirs: Vec::new() }).expect("empty");
         let norte_config::CommonConfig {
-            // — Se aplican en caliente: `reload_config` (paso 2 del cambio).
+            // — Apply hot: `reload_config` (step 2 of the change).
             preset: _,
             ui_theme: _,
             ui_theme_light: _,
@@ -154,61 +155,63 @@ mod tests {
             ui_confirm_quit: _,
             ui_columns: _,
             hotlist: _,
-            // — El bucle de eventos lo re-aplica justo detrás de la recarga.
+            // — The event loop re-applies it right behind the reload.
             ui_mouse: _,
-            // — Igual: el bucle pide o retira el protocolo de teclado de kitty
-            //   detrás de la recarga.
+            // — Same: the loop requests or drops kitty's keyboard protocol
+            //   right behind the reload.
             ui_alt_menu: _,
-            // — Se aplica en caliente: el reparto de cada frame lee la config
-            //   vigente, así que la barra aparece o desaparece en el
-            //   siguiente pintado sin nada más.
+            // — Applies hot: each frame's layout reads the current config,
+            //   so the bar appears or disappears on the next paint with
+            //   nothing else needed.
             ui_menu_bar: _,
-            // — Igual que la de menús, y por lo mismo (#324).
+            // — Same as the menu one, and for the same reason (#324).
             ui_panel_bar: _,
-            // — Se aplica en caliente: `reload_config` copia el cromo a `App`
-            //   y cada frame lo lee (spec 2026-09-10).
+            // — Applies hot: `reload_config` copies the chrome to `App` and
+            //   every frame reads it (spec 2026-09-10).
             ui_chrome: _,
-            // — Se aplica en caliente: `reload_config` los copia a `App`, la
-            //   barra los lee cada frame y el siguiente listado pide sus
-            //   columnas (ADR 0137).
+            // — Applies hot: `reload_config` copies them to `App`, the
+            //   status bar reads them every frame and the next listing
+            //   requests its columns (ADR 0137).
             ui_status_plugins: _,
-            // — Se aplica en caliente: la recarga se la pasa a los dos panes
-            //   y la fila aparece o desaparece en el siguiente pintado.
+            // — Applies hot: the reload passes it to both panes and the row
+            //   appears or disappears on the next paint.
             ui_parent_entry: _,
-            // — Se aplican en caliente: `reload_config` vuelve a copiar el
-            //   editor a `App`, igual que hace con los openers.
+            // — Apply hot: `reload_config` copies the editor back to `App`,
+            //   the same as it does with openers.
             ui_editor: _,
             ui_editor_detached: _,
-            // — Igual que el editor: `reload_config` los vuelve a copiar, y el
-            //   siguiente `pane.compare-files` ya usa el comparador nuevo.
+            // — Same as the editor: `reload_config` copies them back, and
+            //   the next `pane.compare-files` already uses the new
+            //   comparator.
             ui_diff: _,
             ui_diff_detached: _,
-            // — Llegan por los pasos 4 y 5 (disposición y siembra de huecos).
+            // — Arrive via steps 4 and 5 (layout and slot seeding).
             ui_layout: _,
             ui_show_hidden: _,
-            // — NO se aplica en una recarga, y esa es su semántica: dice dónde
-            //   abre un hueco la PRIMERA vez, así que se siembra al entrar en
-            //   el perfil (`seed_profile_start`, paso 3) y solo para los huecos
-            //   de los que la sesión no sabe nada. Reaplicarlo en cada recarga
-            //   te devolvería al principio cada vez que se toca el fichero.
+            // — Does NOT apply on a reload, and that's its semantics: it
+            //   says where a slot opens the FIRST time, so it gets seeded on
+            //   entering the profile (`seed_profile_start`, step 3) and only
+            //   for the slots the session knows nothing about. Re-applying
+            //   it on every reload would send you back to square one every
+            //   time the file is touched.
             profile_start: _,
-            // — SE ANUNCIA: `norte_i18n::force` corre una vez por proceso.
+            // — GETS ANNOUNCED: `norte_i18n::force` runs once per process.
             ui_lang: _,
-            // — De la VENTANA: una terminal no los aplica nunca, así que
-            //   decir «no se pudo» sería ruido.
+            // — Belongs to the WINDOW: a terminal never applies them, so
+            //   saying "couldn't be applied" would be noise.
             ui_font: _,
             ui_mono_font: _,
             ui_font_size: _,
             ui_reduce_motion: _,
-            // — Un perfil NO puede fijarlos (ADR 0079, D2), así que un cambio
-            //   de perfil no los mueve por construcción. Por SECCIÓN entera:
-            //   el recorte es de la sección, así que una clave nueva dentro
-            //   de ellas hereda la respuesta sin pasar por aquí.
+            // — A profile CANNOT fix them (ADR 0079, D2), so a profile
+            //   switch doesn't move them by construction. By WHOLE SECTION:
+            //   the carve-out is the section's, so a new key inside them
+            //   inherits the answer without passing through here.
             daemon: _,
             archive: _,
             log: _,
             ai: _,
-            // — Diagnóstico de la carga, no ajustes.
+            // — Load diagnostics, not settings.
             sources: _,
             project_warnings: _,
             profile_warnings: _,

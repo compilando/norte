@@ -1,11 +1,10 @@
-//! Las pantallas del TUI: cada overlay a pantalla completa con su propia
-//! tabla de teclas.
+//! The TUI's screens: each a full-screen overlay with its own key table.
 //!
-//! Todas vivían en el root del binario `ntc` —un crate DISTINTO de esta lib—,
-//! así que ni los tests de integración ni un futuro frontend alternativo
-//! podían alcanzarlas sin que el bucle de eventos hiciera de intermediario.
+//! They all used to live in the `ntc` binary's root — a crate DISTINCT from
+//! this lib — so neither the integration tests nor a future alternative
+//! frontend could reach them without the event loop acting as go-between.
 //!
-//! Un fichero por pantalla y `mod.rs` de pura fachada, el mismo patrón que
+//! One file per screen and a pure-facade `mod.rs`, the same pattern as
 //! [`crate::jobs`].
 
 pub mod extensions;

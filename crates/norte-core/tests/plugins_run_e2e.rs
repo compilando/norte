@@ -1,13 +1,13 @@
-//! E2E de ejecución de plugins (M4-P4, cierre): la cadena completa
-//! descubrir → (denegar sin aprobar) → aprobar → activar → ejecutar, contra un
-//! componente WASM **real** compilado desde
-//! `norte-plugin-host/examples-wasm/command-demo` y ejecutado sandboxeado por el
-//! runtime de M4-P2.
+//! E2E of plugin execution (M4-P4, closing): the whole chain
+//! discover → (deny without approving) → approve → enable → run, against a
+//! **real** WASM component compiled from
+//! `norte-plugin-host/examples-wasm/command-demo` and run sandboxed by the
+//! M4-P2 runtime.
 //!
-//! Si el target `wasm32-wasip2` no está instalado el test hace SKIP (no hay
-//! artefacto que ejecutar): pasa en toolchains sin ese target y el resto de la
-//! suite queda verde. Con el target presente ejecuta el `.wasm` de verdad y
-//! comprueba la salida (`echo`/`shout`) y el error del guest.
+//! If the `wasm32-wasip2` target is not installed the test SKIPs (there is no
+//! artifact to run): it passes on toolchains without that target and the rest
+//! of the suite stays green. With the target present it runs the real
+//! `.wasm` and checks the output (`echo`/`shout`) and the guest's error.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -15,8 +15,9 @@ use std::process::Command;
 use norte_core::{PluginRegistry, PluginRunError};
 use norte_plugin_host::PluginRuntime;
 
-/// Manifiesto `command` mínimo del plugin sembrado — SIN capabilities
-/// especiales (echo/shout no tocan el FS). El id lleva puntos (reverse-DNS).
+/// The seeded plugin's minimal `command` manifest — WITHOUT special
+/// capabilities (echo/shout do not touch the FS). The id carries dots
+/// (reverse-DNS).
 const CMD_MANIFEST: &str = r#"
 [plugin]
 id = "org.norte.cmd"
@@ -26,11 +27,11 @@ version = "0.1.0"
 category = "command"
 "#;
 
-/// La cadena de cierre M4-P4 con un componente WASM REAL.
+/// The M4-P4 closing chain with a REAL WASM component.
 #[test]
-fn plugin_run_command_e2e_wasm_real() {
+fn plugin_run_command_e2e_real_wasm() {
     let Some(wasm) = build_guest("command-demo") else {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado; no hay .wasm que ejecutar");
+        eprintln!("SKIP: target wasm32-wasip2 not installed; no .wasm to run");
         return;
     };
 
@@ -44,66 +45,66 @@ fn plugin_run_command_e2e_wasm_real() {
     let rt = PluginRuntime::new().expect("PluginRuntime::new");
     let mut reg = PluginRegistry::discover(cfg.path()).expect("discover");
 
-    // 1) SIN aprobar: fail-closed. El .wasm ESTÁ presente, pero el consentimiento
-    //    manda: no se ejecuta nada.
+    // 1) UNAPPROVED: fail-closed. The .wasm IS present, but consent rules:
+    //    nothing runs.
     let err = reg
-        .run_command(&rt, "org.norte.cmd", "echo", "hola")
-        .expect_err("un plugin sin aprobar jamás se ejecuta, ni con .wasm presente");
+        .run_command(&rt, "org.norte.cmd", "echo", "hello")
+        .expect_err("an unapproved plugin never runs, even with .wasm present");
     assert!(
         matches!(err, PluginRunError::NotApproved(ref id) if id == "org.norte.cmd"),
-        "sin aprobar = NotApproved: {err:?}"
+        "unapproved = NotApproved: {err:?}"
     );
 
-    // 2) Aprobar + activar (persiste en plugins-state.toml, uso embebido).
+    // 2) Approve + enable (persists to plugins-state.toml, embedded usage).
     assert!(
         reg.set_approval("org.norte.cmd", true)
             .expect("set_approval"),
-        "el plugin existe: la aprobación se aplica"
+        "the plugin exists: the approval applies"
     );
     assert!(
         reg.set_enabled("org.norte.cmd", true).expect("set_enabled"),
-        "el plugin existe: la activación se aplica"
+        "the plugin exists: the enable applies"
     );
 
-    // 3) Ejecutar de verdad el componente WASM sandboxeado.
+    // 3) Actually run the sandboxed WASM component.
     let out = reg
-        .run_command(&rt, "org.norte.cmd", "echo", "hola")
-        .expect("echo debe ejecutar el guest real y devolver el arg");
-    assert_eq!(out, "hola", "el guest `echo` devuelve el arg tal cual");
+        .run_command(&rt, "org.norte.cmd", "echo", "hello")
+        .expect("echo must run the real guest and return the arg");
+    assert_eq!(out, "hello", "the `echo` guest returns the arg as is");
 
     let out = reg
-        .run_command(&rt, "org.norte.cmd", "shout", "hola")
-        .expect("shout debe ejecutar el guest real");
+        .run_command(&rt, "org.norte.cmd", "shout", "hello")
+        .expect("shout must run the real guest");
     assert_eq!(
-        out, "HOLA",
-        "el guest `shout` devuelve el arg en mayúsculas"
+        out, "HELLO",
+        "the `shout` guest returns the arg in uppercase"
     );
 
-    // 4) Un comando que el guest no conoce → Err del guest → Runtime(Guest).
+    // 4) A command the guest does not know → Err from the guest → Runtime(Guest).
     let err = reg
-        .run_command(&rt, "org.norte.cmd", "desconocido", "")
-        .expect_err("un comando desconocido devuelve Err desde el guest");
+        .run_command(&rt, "org.norte.cmd", "unknown", "")
+        .expect_err("an unknown command returns Err from the guest");
     assert!(
         matches!(err, PluginRunError::Runtime(_)),
-        "el Err de lógica del guest se mapea a Runtime: {err:?}"
+        "the guest's logic Err maps to Runtime: {err:?}"
     );
 }
 
-/// Compila el guest `examples-wasm/<name>/` de `norte-plugin-host` a
-/// `wasm32-wasip2` (release) y devuelve la ruta del `.wasm`.
+/// Compiles `norte-plugin-host`'s `examples-wasm/<name>/` guest to
+/// `wasm32-wasip2` (release) and returns the `.wasm`'s path.
 ///
-/// Réplica del helper de `norte-plugin-host/tests/support/mod.rs` (no accesible
-/// desde el árbol de tests de `norte-core`). Devuelve `None` (SKIP) si el target
-/// `wasm32-wasip2` no está instalado; si el target está pero el guest no
-/// compila, es un fallo real y aborta.
+/// A replica of the helper in `norte-plugin-host/tests/support/mod.rs` (not
+/// reachable from `norte-core`'s test tree). Returns `None` (SKIP) if the
+/// `wasm32-wasip2` target is not installed; if the target is present but the
+/// guest does not build, it is a real failure and aborts.
 fn build_guest(name: &str) -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
 
-    // `CARGO_MANIFEST_DIR` = .../crates/norte-core; el guest vive en el crate
-    // hermano norte-plugin-host.
+    // `CARGO_MANIFEST_DIR` = .../crates/norte-core; the guest lives in the
+    // sibling crate norte-plugin-host.
     let guest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("norte-plugin-host")
@@ -122,25 +123,21 @@ fn build_guest(name: &str) -> Option<PathBuf> {
         ])
         .arg(&target_dir)
         .status()
-        .expect("no se pudo lanzar cargo para compilar el guest");
+        .expect("could not launch cargo to compile the guest");
     assert!(
         status.success(),
-        "el guest {name} no compiló (target wasm32-wasip2 presente)"
+        "the {name} guest did not build (wasm32-wasip2 target present)"
     );
 
     let wasm = target_dir
         .join("wasm32-wasip2")
         .join("release")
         .join(format!("{}.wasm", name.replace('-', "_")));
-    assert!(
-        wasm.exists(),
-        "no se encontró el artefacto {}",
-        wasm.display()
-    );
+    assert!(wasm.exists(), "artifact {} not found", wasm.display());
     Some(wasm)
 }
 
-/// `true` si `rustup` reporta `target` entre los instalados.
+/// `true` if `rustup` reports `target` among the installed ones.
 fn target_installed(target: &str) -> bool {
     Command::new("rustup")
         .args(["target", "list", "--installed"])

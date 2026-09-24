@@ -1,39 +1,39 @@
-//! Una extensión que no cargó, vista desde un gestor.
+//! A plugin that did not load, seen from a manager.
 //!
-//! El descubridor la lista en `errors` y no en el catálogo, así que no tiene
-//! fila de catálogo que gobernar. Lo único que un humano puede hacer con ella
-//! desde el gestor es desinstalarla, y para eso hace falta un id. La regla de
-//! cuándo lo hay vive aquí, UNA vez, porque la aplican los dos frontends: una
-//! regla escrita dos veces diverge en silencio.
+//! The discoverer lists it in `errors`, not in the catalogue, so it has no
+//! catalogue row to govern. The only thing a human can do with it from the
+//! manager is uninstall it, and that needs an id. The rule for when there is
+//! one lives here, ONCE, because both frontends apply it: a rule written
+//! twice diverges silently.
 
 use norte_proto::methods::{PluginInfo, PluginLoadError};
 
-/// El id con el que se puede desinstalar un directorio de extensión que no
-/// cargó, o `None` si no lo hay.
+/// The id a plugin directory that did not load can be uninstalled with, or
+/// `None` if there is none.
 ///
-/// `plugin.uninstall` borra `plugins/<id>/` y valida el id ANTES de
-/// convertirlo en ruta, así que un directorio que no se llama como un id
-/// —`caf\xff`, `a b`— no tiene nada que mandarle. Se miran los BYTES si el
-/// peer los manda (#265): la cadena `dir` sale de un `to_string_lossy`, y un
-/// nombre convertido no es el nombre que hay en disco.
+/// `plugin.uninstall` deletes `plugins/<id>/` and validates the id BEFORE
+/// turning it into a path, so a directory not named like an id — `caf\xff`,
+/// `a b` — has nothing to send it. The BYTES are checked when the peer sends
+/// them (#265): the `dir` string comes from a `to_string_lossy`, and a
+/// converted name is not the name that is on disk.
 ///
-/// Y tampoco hay id si una extensión CARGADA de `loaded` lo usa. El
-/// descubridor no exige que el directorio se llame como el `id` del
-/// manifiesto: `plugins/org.a/` puede cargar como `org.b` al lado de un
-/// `plugins/org.b/` roto. Desinstalar `org.b` borraría el roto, pero
-/// retiraría también la aprobación de la cargada y el daemon la olvidaría:
-/// una extensión que el humano no eligió.
+/// And there is also no id if a LOADED plugin from `loaded` uses it. The
+/// discoverer does not require a directory to be named like the manifest's
+/// `id`: `plugins/org.a/` can load as `org.b` next to a broken
+/// `plugins/org.b/`. Uninstalling `org.b` would delete the broken one, but
+/// would also withdraw the loaded one's approval, and the daemon would forget
+/// it: a plugin the human did not choose.
 ///
 /// ```
 /// use norte_frontend::broken_plugin::uninstallable_id;
 /// use norte_proto::methods::PluginLoadError;
 ///
-/// let roto = PluginLoadError {
-///     dir: "org.acme.roto".to_owned(),
+/// let broken = PluginLoadError {
+///     dir: "org.acme.broken".to_owned(),
 ///     reason: "el manifiesto no parsea".to_owned(),
 ///     dir_bytes: None,
 /// };
-/// assert_eq!(uninstallable_id(&roto, &[]).as_deref(), Some("org.acme.roto"));
+/// assert_eq!(uninstallable_id(&broken, &[]).as_deref(), Some("org.acme.broken"));
 /// ```
 #[must_use]
 pub fn uninstallable_id(e: &PluginLoadError, loaded: &[PluginInfo]) -> Option<String> {
@@ -52,7 +52,7 @@ mod tests {
     use super::uninstallable_id;
     use norte_proto::methods::{PluginInfo, PluginLoadError};
 
-    fn roto(dir: &str, dir_bytes: Option<&[u8]>) -> PluginLoadError {
+    fn broken(dir: &str, dir_bytes: Option<&[u8]>) -> PluginLoadError {
         PluginLoadError {
             dir: dir.to_owned(),
             reason: "no cargó".to_owned(),
@@ -60,10 +60,10 @@ mod tests {
         }
     }
 
-    fn cargada(id: &str) -> PluginInfo {
+    fn loaded(id: &str) -> PluginInfo {
         PluginInfo {
             id: id.to_owned(),
-            name: "Otra".to_owned(),
+            name: "Other".to_owned(),
             publisher: String::new(),
             version: "1.0.0".to_owned(),
             category: "command".to_owned(),
@@ -80,39 +80,39 @@ mod tests {
     }
 
     #[test]
-    fn un_directorio_que_se_llama_como_un_id_tiene_id() {
+    fn a_directory_named_like_an_id_has_an_id() {
         assert_eq!(
-            uninstallable_id(&roto("org.acme.roto", Some(b"org.acme.roto")), &[]).as_deref(),
+            uninstallable_id(&broken("org.acme.roto", Some(b"org.acme.roto")), &[]).as_deref(),
             Some("org.acme.roto")
         );
     }
 
     #[test]
-    fn un_nombre_que_no_es_un_id_no_tiene_id() {
-        assert_eq!(uninstallable_id(&roto("a b", None), &[]), None);
-        assert_eq!(uninstallable_id(&roto("..", None), &[]), None);
+    fn a_name_that_is_not_an_id_has_no_id() {
+        assert_eq!(uninstallable_id(&broken("a b", None), &[]), None);
+        assert_eq!(uninstallable_id(&broken("..", None), &[]), None);
     }
 
-    /// Mandan los bytes: la cadena ya convertida podría casar con un id que
-    /// en disco no existe.
+    /// The bytes rule: the already-converted string could match an id that
+    /// does not exist on disk.
     #[test]
-    fn mandan_los_bytes_y_no_la_cadena_convertida() {
+    fn the_bytes_rule_not_the_converted_string() {
         assert_eq!(
-            uninstallable_id(&roto("org.acme.roto", Some(b"org.acme.rot\xff")), &[]),
+            uninstallable_id(&broken("org.acme.roto", Some(b"org.acme.rot\xff")), &[]),
             None
         );
     }
 
-    /// Un roto cuyo nombre es el id de una CARGADA no se ofrece: desinstalar
-    /// ese id se llevaría la aprobación de la otra.
+    /// A broken one whose name is the id of a LOADED one is not offered:
+    /// uninstalling that id would take the other one's approval with it.
     #[test]
-    fn un_id_que_usa_una_cargada_no_se_ofrece() {
+    fn an_id_a_loaded_plugin_uses_is_not_offered() {
         assert_eq!(
-            uninstallable_id(&roto("org.b", Some(b"org.b")), &[cargada("org.b")]),
+            uninstallable_id(&broken("org.b", Some(b"org.b")), &[loaded("org.b")]),
             None
         );
         assert_eq!(
-            uninstallable_id(&roto("org.b", Some(b"org.b")), &[cargada("org.a")]).as_deref(),
+            uninstallable_id(&broken("org.b", Some(b"org.b")), &[loaded("org.a")]).as_deref(),
             Some("org.b")
         );
     }

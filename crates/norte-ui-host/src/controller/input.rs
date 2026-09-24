@@ -1,56 +1,60 @@
-//! Las teclas: qué verbo resuelve cada acorde, y en qué pantalla.
+//! The keys: which verb resolves each chord, and on which screen.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are methods of `Estado`, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Listing them here would be a forty-line
+// list per file, across 32 files, that goes out of sync the moment the
+// parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
 impl Estado {
-    /// La tecla, cuando hay un CONTEXTO DE ENTRADA abierto que se la queda.
+    /// The key, when there is an open INPUT CONTEXT that keeps it.
     ///
-    /// `None` = no había ninguno (o el que había no la quiso) y la tecla
-    /// sigue su camino normal: el resolver del listado.
+    /// `None` = there was none (or the one there was did not want it) and the
+    /// key goes its normal way: the listing's resolver.
     ///
-    /// El ORDEN es el de quien tapa a quién. El visor es otra pantalla
-    /// entera; la ayuda tapa al listado y desde ella se puede abrir la
-    /// paleta, así que va antes; la paleta es un editor de texto libre; y el
-    /// buscador incremental solo se queda las teclas de TEXTO.
-    /// Las teclas de un diálogo: contestarlo o cancelarlo, y nada más.
+    /// The ORDER is who covers whom. The viewer is a whole other screen; help
+    /// covers the listing and the palette can be opened from it, so it goes
+    /// first; the palette is a free text editor; and the incremental search
+    /// only keeps TEXT keys.
+    // TODO(translation): review — this paragraph describes the general
+    /// input-context precedence order, but the item right after it is
+    /// `tecla_en_dialogo`'s own doc, about dialog keys specifically; it looks
+    /// like a stale fragment left by an earlier edit.
+    /// A dialog's keys: answering it or cancelling it, and nothing else.
     ///
-    /// El TEXTO no pasa por aquí. Lo teclea el campo del renderer y llega por
-    /// `dialog_input`, que es lo que permite que los bytes aprobados sean los
-    /// tecleados y no una reconstrucción a partir de teclas sueltas.
+    /// TEXT does not go through here. It is typed in the renderer's field and
+    /// arrives via `dialog_input`, which is what lets the approved bytes be
+    /// what was typed and not a reconstruction from loose keys.
     ///
-    /// `Enter` elige la primera respuesta NO destructiva, así que en el
-    /// diálogo de aprobación de un agente elige `deny`: aprobar una mutación
-    /// que uno no pidió no puede ser lo que pasa por dejar el dedo en Enter.
+    /// `Enter` chooses the first NON-destructive answer, so on an agent's
+    /// approval dialog it chooses `deny`: approving a mutation nobody asked
+    /// for cannot be what happens from leaving a finger on Enter.
     ///
-    /// Una tecla que no es ninguna de las dos se COME igual: un modal que
-    /// deja pasar la tecla que no entiende no es un modal.
+    /// A key that is neither of the two is EATEN just the same: a modal that
+    /// lets through a key it does not understand is not a modal.
     pub(super) fn tecla_en_dialogo(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(d) = self.dialogos.last() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         let id = d.id;
-        let tecleando = d.vista.input.is_some();
-        // DOS REGÍMENES, el mismo par que el TUI y que el resto de campos de
-        // este host. Con un campo abierto las teclas son LETRAS: resolverlas
-        // por el keymap convertiría escribir un nombre de fichero en
-        // contestar la pregunta, porque no hay verbo `dialog.*` para «teclea
-        // una letra». Sin campo, la tecla pasa por el resolutor COMPARTIDO,
-        // que es lo que hace que un preset que reata `dialog.confirm` cambie
-        // esta ventana y no solo el TUI.
-        let verbo = if tecleando {
+        let typing = d.vista.input.is_some();
+        // TWO REGIMES, the same pair as the TUI's and the rest of this host's
+        // fields. With a field open the keys are LETTERS: resolving them
+        // through the keymap would turn typing a file name into answering the
+        // question, because there is no `dialog.*` verb for "type a letter".
+        // Without a field, the key goes through the SHARED resolver, which is
+        // what makes a preset that rebinds `dialog.confirm` change this
+        // window and not just the TUI.
+        let verb = if typing {
             match k.key.as_str() {
                 "Enter" | "enter" => Some("dialog.confirm"),
                 "Escape" | "esc" => Some("dialog.cancel"),
@@ -66,11 +70,11 @@ impl Estado {
                     "dialog.cancel" => Some("dialog.cancel"),
                     "dialog.approve" => Some("dialog.approve"),
                     "dialog.deny" => Some("dialog.deny"),
-                    // Las cuatro salidas de una colisión (#287). Cada una
-                    // nombra SU respuesta: `dialog.confirm` sobre una
-                    // colisión no elige ninguna, porque «confirmar» no dice
-                    // cuál de las cuatro, y la que se elige por descarte es
-                    // la que destruye.
+                    // The four outcomes of a collision (#287). Each one names
+                    // ITS answer: `dialog.confirm` over a collision chooses
+                    // none, because "confirm" does not say which of the
+                    // four, and the one chosen by elimination is the
+                    // destructive one.
                     "dialog.overwrite" => Some("dialog.overwrite"),
                     "dialog.skip" => Some("dialog.skip"),
                     "dialog.rename" => Some("dialog.rename"),
@@ -83,18 +87,18 @@ impl Estado {
         let Some(d) = self.dialogos.last() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        // El VERBO elige entre las respuestas que ESTE diálogo ofrece: una
-        // que no ofrece no se interpreta —no hay respuestas implícitas en una
-        // superficie de decisión— y por eso `dialog.confirm` sobre una
-        // aprobación no aprueba: la afirmativa de una aprobación se llama
-        // `approve` a propósito, para que un renderer no las confunda.
-        let elegido = match verbo {
+        // The VERB chooses among the answers THIS dialog offers: one it does
+        // not offer is not interpreted — there are no implicit answers on a
+        // decision surface — and that is why `dialog.confirm` over an
+        // approval does not approve: an approval's affirmative is named
+        // `approve` on purpose, so a renderer cannot mix them up.
+        let chosen = match verb {
             Some("dialog.confirm") => d.vista.choices.iter().find(|c| c.id == "confirm"),
             Some("dialog.approve") => d.vista.choices.iter().find(|c| c.id == "approve"),
             Some("dialog.deny") => d.vista.choices.iter().find(|c| c.id == "deny"),
-            // Las de la colisión, cada una por su nombre. Un diálogo que no
-            // las ofrece las ignora, que es la regla de siempre: aquí no hay
-            // respuestas implícitas.
+            // The collision's, each by its own name. A dialog that does not
+            // offer them ignores them, which is the usual rule: there are no
+            // implicit answers here.
             Some("dialog.overwrite") => d.vista.choices.iter().find(|c| c.id == "overwrite"),
             Some("dialog.skip") => d.vista.choices.iter().find(|c| c.id == "skip"),
             Some("dialog.rename") => d.vista.choices.iter().find(|c| c.id == "rename"),
@@ -104,34 +108,35 @@ impl Estado {
                 .choices
                 .iter()
                 .find(|c| c.id == "cancel" || c.id == "deny")
-                // Cerrar SIEMPRE se puede: si el diálogo no ofrece cancelar
-                // ni denegar, la respuesta es la última que no destruye.
+                // Closing is ALWAYS possible: if the dialog offers neither
+                // cancel nor deny, the answer is the last non-destructive
+                // one.
                 .or_else(|| d.vista.choices.iter().rfind(|c| !c.destructive)),
             _ => None,
         }
         .map(|c| c.id.clone());
-        let Some(choice) = elegido else {
+        let Some(choice) = chosen else {
             return (self.aplicada(), Vec::new());
         };
-        // Sin secreto, y no es un olvido (#327): una TECLA no puede llevar una
-        // contraseña. Sobre un diálogo que la pide, este camino confirma con
-        // `None`, o sea de forma inerte, y la única puerta que entrega es la
-        // del renderer —el botón y el Enter del propio campo—, que sí tiene el
-        // valor. Es lo que se quiere: el host no guarda lo tecleado, así que
-        // un acorde no puede entregar algo que el host no tiene.
-        self.responder_dialogo(id, &choice, None, backend, buzon)
+        // No secret, and it is not an oversight (#327): a KEY cannot carry a
+        // password. Over a dialog that asks for one, this path confirms with
+        // `None`, i.e. inertly, and the only door that delivers it is the
+        // renderer's — the button and the field's own Enter — which does have
+        // the value. That is what is wanted: the host does not store what was
+        // typed, so a chord cannot deliver something the host does not have.
+        self.responder_dialogo(id, &choice, None, backend, mailbox)
     }
 
-    /// El verbo `dialog.*` de una tecla, por el resolutor COMPARTIDO (#287).
+    /// A key's `dialog.*` verb, through the SHARED resolver (#287).
     ///
-    /// Es la única puerta: las superficies modales de esta ventana atendían
-    /// teclas fijas, así que un preset que reataba `dialog.up` cambiaba el TUI
-    /// y no la ventana — justo la deriva que el catálogo común existe para no
-    /// tener.
+    /// It is the only door: this window's modal surfaces used to handle fixed
+    /// keys, so a preset that rebound `dialog.up` changed the TUI and not the
+    /// window — exactly the drift the common catalogue exists to not have.
     ///
-    /// `None` cuando la tecla no forma acorde, no está atada, o abre una
-    /// secuencia todavía sin resolver. En los tres casos la superficie no hace
-    /// nada, que es lo que hacía antes con una tecla que no entendía.
+    /// `None` when the key does not form a chord, is not bound, or opens a
+    /// sequence still unresolved. In all three cases the surface does
+    /// nothing, which is what it used to do with a key it did not
+    /// understand.
     pub(super) fn verbo_de_dialogo(&mut self, k: &crate::keys::KeyInput) -> Option<String> {
         let chord = k.to_chord().ok()?;
         match self.resolver_dialogo.push(chord) {
@@ -140,11 +145,11 @@ impl Estado {
         }
     }
 
-    /// El acorde atado a un verbo `dialog.*`, ya pintado. Vacío si ninguno.
+    /// The chord bound to a `dialog.*` verb, already painted. Empty if none.
     ///
-    /// Para los PIES de las superficies modales: se pintan con lo que el
-    /// keymap dice, no con un literal traducido, porque el literal deja de ser
-    /// cierto en cuanto alguien reata la tecla.
+    /// For modal surfaces' FOOTERS: they are painted with what the keymap
+    /// says, not with a translated literal, because the literal stops being
+    /// true the moment someone rebinds the key.
     pub(super) fn acorde_de_dialogo(&self, comando: &str) -> String {
         self.resolver_dialogo
             .effective()
@@ -155,15 +160,16 @@ impl Estado {
             .unwrap_or_default()
     }
 
-    /// ¿Hay delante una pantalla que se quedaría una tecla antes que el
-    /// listado? Las MISMAS que [`Self::tecla_de_un_overlay`] atiende, salvo
-    /// el menú, que es de quien pregunta.
+    /// Is there a screen in front that would keep a key before the listing?
+    /// The SAME ones [`Self::tecla_de_un_overlay`] handles, except the menu,
+    /// which belongs to whoever asks.
     ///
-    /// Es una segunda lista a propósito y no un desvío por aquella función:
-    /// esa ATIENDE la tecla (cancela un visor en vuelo, abandona un plan), y
-    /// preguntar no puede tener efectos. Quien añada un overlay allí lo añade
-    /// aquí; `alt_solo_no_abre_el_menu_encima_de_un_dialogo` pinea el caso
-    /// que importa.
+    /// It is a second list on purpose and not a detour through that function:
+    /// that one HANDLES the key (cancels a viewer read in flight, abandons a
+    /// plan), and asking cannot have effects. Whoever adds an overlay there
+    /// adds it here too;
+    /// `alt_solo_no_abre_el_menu_encima_de_un_dialogo` pins the case that
+    /// matters.
     pub(super) fn algo_se_queda_las_teclas(&self) -> bool {
         !self.dialogos.is_empty()
             || self.asistente.is_some()
@@ -191,143 +197,145 @@ impl Estado {
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
-        // El DIÁLOGO va antes que todo lo demás: es la única superficie
-        // modal de verdad —una pregunta que hay que contestar antes de
-        // seguir— y las teclas que no atrapaba caían al listado de DEBAJO.
-        // Con el prompt de un nombre abierto, `Backspace` navegaba al padre
-        // mientras se tecleaba y `Enter` entraba en el directorio bajo el
-        // cursor en vez de confirmar; con una confirmación de borrado
-        // abierta, `Enter` navegaba la pantalla que la pregunta tapaba.
+        // The DIALOG comes before everything else: it is the only truly modal
+        // surface — a question that must be answered before continuing —
+        // and keys it did not trap used to fall through to the listing
+        // UNDERNEATH. With a name prompt open, `Backspace` navigated to the
+        // parent while typing and `Enter` entered the directory under the
+        // cursor instead of confirming; with a delete confirmation open,
+        // `Enter` navigated the screen the question was covering.
         if !self.dialogos.is_empty() {
-            return Some(self.tecla_en_dialogo(k, backend, buzon));
+            return Some(self.tecla_en_dialogo(k, backend, mailbox));
         }
-        // El asistente de primer arranque (spec 2026-09-10): detrás del
-        // diálogo, que es una pregunta de seguridad, y delante de todo lo
-        // demás — está preguntando qué teclas tener, así que las suyas son
-        // fijas.
+        // The first-run wizard (spec 2026-09-10): behind the dialog, which is
+        // a security question, and in front of everything else — it is
+        // asking which keys to have, so its own are fixed.
         if self.asistente.is_some() {
-            return Some(self.tecla_en_asistente(k, backend, buzon));
+            return Some(self.tecla_en_asistente(k, backend, mailbox));
         }
-        // La SALIDA de un comando de extensión se queda TODAS las teclas
-        // mientras está: pinta a pantalla completa, así que un modal que
-        // dejara pasar la que no entiende no es un modal. `Enter` y `Escape`
-        // la cierran —las dos, porque cerrar un panel de lectura con `Enter`
-        // es el reflejo—; el resto no significan nada aquí y no caen a lo de
-        // debajo, donde una confirmación de borrado podía estar esperando un
-        // sí que el lector no ve. El momento lo elige el PLUGIN, que decide
-        // cuándo contesta su comando.
+        // An extension command's OUTPUT keeps ALL the keys while it is up: it
+        // paints full screen, so a modal that let through a key it does not
+        // understand is not a modal. `Enter` and `Escape` close it — both,
+        // because closing a read-only panel with `Enter` is the reflex; the
+        // rest mean nothing here and do not fall through to what is
+        // underneath, where a delete confirmation could be waiting for a yes
+        // the reader cannot see. The PLUGIN chooses the moment, deciding when
+        // its command answers.
         if self.escritorio.salida.is_some() {
             if matches!(k.key.as_str(), "Escape" | "esc" | "Enter" | "enter") {
                 return Some(self.cerrar_salida());
             }
             return Some((self.aplicada(), Vec::new()));
         }
-        // La salida de un programa (#312), por lo mismo y con las mismas
-        // teclas: se lee y se cierra.
+        // A program's output (#312), for the same reason and with the same
+        // keys: it is read and closed.
         if self.escritorio.programa.is_some() {
             if matches!(k.key.as_str(), "Escape" | "esc" | "Enter" | "enter") {
                 return Some(self.cerrar_salida_de_programa());
             }
             return Some((self.aplicada(), Vec::new()));
         }
-        // La AYUDA va primero, incluso antes que el visor, y no por gusto:
-        // se abre ENCIMA de lo que hubiera —también encima del visor, que es
-        // desde donde se pide la página del visor— y quien está arriba se
-        // queda las teclas. Al revés, `F1` en el visor abría una ayuda que no
-        // recibía ni una tecla y que ninguna podía cerrar.
+        // HELP goes first, even before the viewer, and not out of taste: it
+        // opens ON TOP of whatever was there — also on top of the viewer,
+        // which is where the viewer's help page is requested from — and
+        // whoever is on top keeps the keys. The other way around, `F1` in the
+        // viewer opened a help screen that received not a single key and that
+        // none could close.
         if self.ayuda.is_some() {
-            return Some(self.tecla_en_ayuda(k, backend, buzon));
+            return Some(self.tecla_en_ayuda(k, backend, mailbox));
         }
-        // La REVISIÓN de un plan de renombrado va antes que el resto de
-        // overlays y solo por detrás del diálogo y de la ayuda: es una
-        // pantalla que se lee entera antes de aprobar una mutación, y una
-        // tecla que se le escapara al listado de debajo movería el cursor
-        // bajo un plan que sigue esperando un sí.
-        // El panel de sincronización, igual que el de diferencias: mientras
-        // esté abierto se queda las teclas.
+        // The REVIEW of a rename plan goes before the rest of the overlays
+        // and only after the dialog and help: it is a screen read in full
+        // before approving a mutation, and a key that slipped through to the
+        // listing underneath would move the cursor under a plan that is still
+        // waiting for a yes.
+        // The sync panel, same as the diff one: while it is open it keeps the
+        // keys.
         if self.sincronizacion.is_some() {
-            return Some(self.tecla_en_sincronizacion(k, backend, buzon));
+            return Some(self.tecla_en_sincronizacion(k, backend, mailbox));
         }
-        // El panel de diferencias, cuando está abierto, se queda las teclas:
-        // es una pantalla entera, y una flecha que se le escapara movería el
-        // listado que hay debajo.
+        // The diff panel, when open, keeps the keys: it is a whole screen,
+        // and an arrow that slipped through it would move the listing
+        // underneath.
         if self.comparacion.is_some() {
-            return Some(self.tecla_en_comparacion(k, backend, buzon));
+            return Some(self.tecla_en_comparacion(k, backend, mailbox));
         }
         if self.revision_ia.is_some() {
-            return Some(self.tecla_en_revision_ia(k, backend, buzon));
+            return Some(self.tecla_en_revision_ia(k, backend, mailbox));
         }
-        // Fase 8: el árbol de organizar se queda las teclas por lo mismo que
-        // la revisión de al lado — es una pantalla entera y se aprueba con
-        // ellas.
+        // Phase 8: the organize tree keeps the keys for the same reason as
+        // the review next door — it is a whole screen and it is approved with
+        // them.
         if self.revision_organizar.is_some() {
-            return Some(self.tecla_en_revision_organizar(k, backend, buzon));
+            return Some(self.tecla_en_revision_organizar(k, backend, mailbox));
         }
         if self.busqueda.is_some() {
-            return Some(self.tecla_en_busqueda(k, backend, buzon));
+            return Some(self.tecla_en_busqueda(k, backend, mailbox));
         }
         if self.selector_disposicion.is_some() {
-            return Some(self.tecla_en_disposiciones(k, backend, buzon));
+            return Some(self.tecla_en_disposiciones(k, backend, mailbox));
         }
         if self.selector_columnas.is_some() {
-            return Some(self.tecla_en_columnas(k, backend, buzon));
+            return Some(self.tecla_en_columnas(k, backend, mailbox));
         }
         if self.selector.is_some() {
-            return Some(self.tecla_en_selector(k, backend, buzon));
+            return Some(self.tecla_en_selector(k, backend, mailbox));
         }
         if self.selector_perfil.is_some() {
-            return Some(self.tecla_en_perfiles(k, backend, buzon));
+            return Some(self.tecla_en_perfiles(k, backend, mailbox));
         }
         if self.tema_elegido.is_some() {
-            return Some(self.tecla_en_tema(k, buzon));
+            return Some(self.tecla_en_tema(k, mailbox));
         }
         if self.extensiones.is_some() {
-            return Some(self.tecla_en_extensiones(k, backend, buzon));
+            return Some(self.tecla_en_extensiones(k, backend, mailbox));
         }
         if self.agencia.panel {
-            return Some(self.tecla_en_agentes(k, backend, buzon));
+            return Some(self.tecla_en_agentes(k, backend, mailbox));
         }
         if self.ajustes.is_some() {
-            return Some(self.tecla_en_ajustes(k, buzon));
+            return Some(self.tecla_en_ajustes(k, mailbox));
         }
         if self.visor.is_some() {
-            return Some(self.tecla_en_visor(k, backend, buzon));
+            return Some(self.tecla_en_visor(k, backend, mailbox));
         }
-        // Cualquier tecla del LISTADO cancela una lectura de visor en vuelo.
-        // El usuario pulsó F3, se cansó y siguió a lo suyo: abrirle el visor
-        // medio segundo después es abrir una ventana que ya nadie pidió — y
-        // cambiarle el teclado de mapa sin gesto suyo. (Un segundo F3 pide su
-        // propia lectura y se queda con el testigo nuevo.)
+        // Any LISTING key cancels a viewer read in flight. The user pressed
+        // F3, got tired of waiting and moved on to something else: opening
+        // the viewer half a second later is opening a window nobody asked
+        // for anymore — and switching their keyboard's map with no gesture of
+        // theirs. (A second F3 requests its own read and keeps the new
+        // token.)
         self.visor_en_vuelo = None;
-        // El menú desplegado se queda las teclas, igual que la paleta: una
-        // flecha que se le escapara movería el listado de debajo.
+        // The open menu keeps the keys, same as the palette: an arrow that
+        // slipped through it would move the listing underneath.
         if self.menu.is_some() {
-            return Some(self.tecla_en_menu(k, backend, buzon));
+            return Some(self.tecla_en_menu(k, backend, mailbox));
         }
         if self.paleta.is_some() {
-            return Some(self.tecla_en_paleta(k, backend, buzon));
+            return Some(self.tecla_en_paleta(k, backend, mailbox));
         }
-        // «Ir a» (#357), por lo mismo que la paleta: es un editor de texto
-        // libre, y una letra que se le escapara actuaría sobre el listado.
+        // "Go to" (#357), for the same reason as the palette: it is a free
+        // text editor, and a letter that slipped through it would act on the
+        // listing.
         if self.ir_a.is_some() {
-            return Some(self.tecla_en_ir_a(k, backend, buzon));
+            return Some(self.tecla_en_ir_a(k, backend, mailbox));
         }
         if self.hueco().pane.quick().is_some() {
             return self.tecla_en_quick(k);
         }
-        // Y, cuando NADIE más la quería, `Escape` abandona un plan de
-        // renombrado que siga pensando. Va la ÚLTIMA, que es la única
-        // posición en la que «no la quería nadie» es verdad: por encima se
-        // comía el `Escape` que cierra la paleta y el que cancela el filtro
-        // rápido —una tecla haciendo dos cosas mal a la vez— y se saltaba el
-        // corte del visor en vuelo.
+        // And, when NOBODY else wanted it, `Escape` abandons a rename plan
+        // still thinking. It goes LAST, which is the only position where
+        // "nobody wanted it" is true: above it, it ate the `Escape` that
+        // closes the palette and the one that cancels the quick filter — one
+        // key doing two things badly at once — and it skipped the viewer's
+        // in-flight cut.
         //
-        // Y solo `Escape`, no cualquier tecla como el visor: el modelo tarda
-        // de verdad y seguir navegando mientras piensa es lo normal. Lo que
-        // no puede pasar es que el plan se abra encima de la pantalla medio
-        // minuto después de que su dueño se haya ido a otra cosa.
+        // And only `Escape`, not any key like the viewer: the model really
+        // does take a while, and continuing to navigate while it thinks is
+        // normal. What cannot happen is the plan opening on the screen half a
+        // minute after its owner has moved on to something else.
         if self.ia_en_vuelo.is_some() && (k.key == "Escape" || k.key == "esc") {
             self.epoca_ia += 1;
             self.ia_en_vuelo = None;
@@ -335,83 +343,85 @@ impl Estado {
                 self.lang,
                 "host-plan-abandoned",
             )));
-            let cambio = ViewChange::Status(self.status.clone());
-            return Some((self.aplicada(), vec![self.parche(vec![cambio])]));
+            let change = ViewChange::Status(self.status.clone());
+            return Some((self.aplicada(), vec![self.parche(vec![change])]));
         }
         None
     }
 
-    /// Una tecla con la pantalla de arranque puesta, o `None` si no lo está.
+    /// A key with the splash screen up, or `None` if it is not.
     ///
-    /// `1`..`9` ABRE la fila que lleva ese número —es lo que la pantalla
-    /// promete en su pie, y sin esto las filas se pintaban numeradas y el
-    /// número no hacía nada—; cualquier otra tecla la quita y no significa
-    /// nada más. Escribir sobre el listado de detrás sería actuar sobre algo
-    /// que el lector no está viendo. El terminal resuelve lo mismo en
-    /// `norte-tui/src/splash.rs`.
+    /// `1`..`9` OPENS the row carrying that number — it is what the screen
+    /// promises in its footer, and without this the rows were painted
+    /// numbered and the number did nothing; any other key removes it and
+    /// means nothing else. Typing onto the listing behind it would be acting
+    /// on something the reader is not looking at. The terminal resolves the
+    /// same thing in `norte-tui/src/splash.rs`.
     fn tecla_en_splash(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
         self.splash.as_ref()?;
-        // Un dígito CON modificador no es el atajo: `ctrl+1` es un chord del
-        // keymap en cualquier otra pantalla, y aquí sería una casualidad.
-        let digito = (k.key.chars().count() == 1 && !k.ctrl && !k.alt && !k.meta)
+        // A digit WITH a modifier is not the shortcut: `ctrl+1` is a keymap
+        // chord on any other screen, and here it would be a coincidence.
+        let digit = (k.key.chars().count() == 1 && !k.ctrl && !k.alt && !k.meta)
             .then(|| k.key.chars().next())
             .flatten()
             .and_then(|c| c.to_digit(10))
             .filter(|n| *n >= 1);
-        if let Some(n) = digito {
+        if let Some(n) = digit {
             let number = u8::try_from(n).unwrap_or(0);
-            return Some(self.activar_fila_de_splash(number, backend, buzon));
+            return Some(self.activar_fila_de_splash(number, backend, mailbox));
         }
         Some((self.aplicada(), self.cerrar_splash()))
     }
 
-    /// Una tecla: la resuelve el keymap COMPARTIDO y el host solo ejecuta.
+    /// A key: the SHARED keymap resolves it and the host only executes.
     ///
-    /// Los cuatro desenlaces son los del resolver, y ninguno se queda
-    /// callado: un comando corre, un prefijo o un contador a medias se
-    /// PINTAN (lo que no se ve no se puede cancelar), una tecla ligada a algo
-    /// que aquí no se puede hacer lo dice, y una tecla sin binding se
-    /// descarta dejando el estado limpio.
+    /// The four outcomes are the resolver's, and none stays silent: a command
+    /// runs, a half-finished prefix or count are PAINTED (what is not seen
+    /// cannot be cancelled), a key bound to something that cannot be done
+    /// here says so, and a key with no binding is discarded leaving the state
+    /// clean.
     pub(super) fn tecla(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // La pantalla de arranque se quita con LA TECLA QUE SEA, y esa tecla
-        // no hace nada más (ADR 0115). Va la primera de todas porque lo que
-        // está delante manda: escribir la tecla en el listado de detrás sería
-        // actuar sobre algo que el lector no está viendo. Lo mismo hace el
-        // terminal (`norte-tui/src/splash.rs`).
-        if let Some(salida) = self.tecla_en_splash(k, backend, buzon) {
-            return salida;
+        // The splash screen is removed by WHATEVER KEY, and that key does
+        // nothing else (ADR 0115). It goes first of all because whatever is
+        // in front rules: typing the key onto the listing behind it would be
+        // acting on something the reader is not looking at. The terminal does
+        // the same (`norte-tui/src/splash.rs`).
+        if let Some(outcome) = self.tecla_en_splash(k, backend, mailbox) {
+            return outcome;
         }
-        if let Some(salida) = self.tecla_de_un_overlay(k, backend, buzon) {
-            return salida;
+        if let Some(outcome) = self.tecla_de_un_overlay(k, backend, mailbox) {
+            return outcome;
         }
-        // El visor ACOPLADO con el foco se queda las teclas del visor (#291),
-        // como en la TUI: es el mismo visor en otro sitio. Lo que su keymap
-        // no ata —el tabulador, un atajo global— sigue su camino normal.
-        if let Some(salida) = self.tecla_en_preview(k) {
-            return salida;
+        // The DOCKED viewer with focus keeps the viewer's keys (#291), as in
+        // the TUI: it is the same viewer somewhere else. Whatever its keymap
+        // does not bind — the tab key, a global shortcut — goes its normal
+        // way.
+        if let Some(outcome) = self.tecla_en_preview(k) {
+            return outcome;
         }
-        // El panel de TERMINAL con el foco se queda los BYTES (#362), y este
-        // brazo no se parece a los de arriba: los demás traducen teclas a
-        // comandos, y aquí se le pasa todo a un shell —flechas, `tab`, F5,
-        // `ctrl+c`— porque dentro de un shell eso es lo que significan.
+        // The TERMINAL panel with focus keeps the BYTES (#362), and this arm
+        // does not look like the ones above: the others translate keys into
+        // commands, and here everything is handed to a shell — arrows, tab,
+        // F5, ctrl+c — because inside a shell that is what they mean.
         //
-        // Con UNA excepción, que es la puerta: el acorde suelto que abrió el
-        // panel lo saca. La tabla de bytes es la COMPARTIDA con la terminal.
-        if let Some(salida) = self.tecla_en_terminal(k, backend, buzon) {
-            return salida;
+        // With ONE exception, which is the door: the lone chord that opened
+        // the panel takes you out. The byte table is SHARED with the
+        // terminal.
+        if let Some(outcome) = self.tecla_en_terminal(k, backend, mailbox) {
+            return outcome;
         }
         let Ok(chord) = k.to_chord() else {
-            // Una tecla que el adaptador no entiende no se adivina.
+            // A key the adapter does not understand is not guessed at.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-key-unmapped".to_owned(),
@@ -421,31 +431,31 @@ impl Estado {
         };
         match self.resolver.push(chord) {
             Resolution::Run { command, count } => {
-                let veces = count.times();
-                let Some(efecto) = efecto_de(&command, veces) else {
-                    // En el catálogo, ligada, y este host no la hace. Se
-                    // dice con la MISMA frase que el TUI.
-                    let frase = norte_frontend::keymap::unavailable_message_in(
+                let times = count.times();
+                let Some(effect) = efecto_de(&command, times) else {
+                    // In the catalogue, bound, and this host does not do it.
+                    // Said with the SAME phrase as the TUI.
+                    let phrase = norte_frontend::keymap::unavailable_message_in(
                         &command,
                         Availability::NotHere,
                         self.lang,
                     );
-                    self.status.message = Some(clamp_display(frase));
+                    self.status.message = Some(clamp_display(phrase));
                     self.status.pending = None;
-                    let cambio = ViewChange::Status(self.status.clone());
+                    let change = ViewChange::Status(self.status.clone());
                     return (
                         ActionAck::Unavailable {
                             reason_key: "cmd-not-here".to_owned(),
                         },
-                        vec![self.parche(vec![cambio])],
+                        vec![self.parche(vec![change])],
                     );
                 };
                 self.status.pending = None;
-                // La secuencia se cerró: el panel de continuaciones describe
-                // teclas que ya no están vivas, y su propio contrato dice que
-                // se tira en cuanto cambia el estado del resolver.
+                // The sequence closed: the continuations panel describes keys
+                // that are no longer live, and its own contract says it is
+                // dropped as soon as the resolver's state changes.
                 self.whichkey = None;
-                self.aplicar_efecto(efecto, backend, buzon)
+                self.aplicar_efecto(effect, backend, mailbox)
             }
             Resolution::Pending(_) | Resolution::Counting(_) => {
                 self.status.pending = Some(PendingView {
@@ -458,30 +468,30 @@ impl Estado {
                         .join(" "),
                     count: self.resolver.count(),
                 });
-                // El panel se construye AQUÍ, en la transición, y no al
-                // proyectar: `build` cuesta varias cadenas y uno o dos
-                // formatos Fluent por fila.
+                // The panel is built HERE, on the transition, and not while
+                // projecting: `build` costs several strings and one or two
+                // Fluent formats per row.
                 self.whichkey = Some(norte_frontend::whichkey::WhichKeyRows::build(
                     &self.efectivo,
                     self.resolver.pending(),
                     self.resolver.count(),
                     self.lang,
                 ));
-                let cambios = vec![
+                let changes = vec![
                     ViewChange::Status(self.status.clone()),
                     ViewChange::WhichKey {
                         whichkey: self.vista_whichkey(),
                     },
                 ];
-                (self.aplicada(), vec![self.parche(cambios)])
+                (self.aplicada(), vec![self.parche(changes)])
             }
             Resolution::Unavailable { command, why } => {
-                let frase =
+                let phrase =
                     norte_frontend::keymap::unavailable_message_in(&command, why, self.lang);
-                self.status.message = Some(clamp_display(frase));
+                self.status.message = Some(clamp_display(phrase));
                 self.status.pending = None;
                 self.whichkey = None;
-                let cambio = ViewChange::Status(self.status.clone());
+                let change = ViewChange::Status(self.status.clone());
                 (
                     ActionAck::Unavailable {
                         reason_key: match why {
@@ -491,189 +501,194 @@ impl Estado {
                         }
                         .to_owned(),
                     },
-                    vec![self.parche(vec![cambio])],
+                    vec![self.parche(vec![change])],
                 )
             }
             Resolution::Reset => {
-                let habia = self.status.pending.take().is_some();
-                let panel = self.whichkey.take().is_some();
-                if habia || panel {
-                    let cambios = vec![
+                let had_pending = self.status.pending.take().is_some();
+                let had_panel = self.whichkey.take().is_some();
+                if had_pending || had_panel {
+                    let changes = vec![
                         ViewChange::Status(self.status.clone()),
                         ViewChange::WhichKey { whichkey: None },
                     ];
-                    return (self.aplicada(), vec![self.parche(cambios)]);
+                    return (self.aplicada(), vec![self.parche(changes)]);
                 }
                 (self.aplicada(), Vec::new())
             }
         }
     }
 
-    /// Las teclas mientras la paleta está abierta.
+    /// The keys while the palette is open.
     ///
-    /// Fijas a propósito: `esc` cierra, `enter` corre lo seleccionado, las
-    /// flechas mueven y lo demás teclea. Es lo mismo que hace el TUI, y por
-    /// el mismo motivo — el catálogo no tiene comandos para esto.
-    /// Teclas del menú desplegado.
+    /// Fixed on purpose: `esc` closes, `enter` runs what is selected, the
+    /// arrows move and everything else types. It is the same thing the TUI
+    /// does, and for the same reason — the catalogue has no commands for
+    /// this.
+    // TODO(translation): review — this paragraph documents the palette's
+    /// keys, but the item right after it is `tecla_en_menu`'s doc, about the
+    /// menu's keys; it looks like a stale fragment left by an earlier edit.
+    /// Open menu keys.
     ///
-    /// FIJAS, como las de la paleta y por lo mismo: no hay verbos `dialog.*`
-    /// para «menú siguiente», así que tampoco pueden salir del keymap. Las
-    /// flechas recorren, `Enter` ejecuta y `Escape` cierra; cualquier otra se
-    /// descarta en vez de caer al listado de debajo, que estaría actuando
-    /// sobre una pantalla que el lector no está mirando.
+    /// FIXED, like the palette's and for the same reason: there are no
+    /// `dialog.*` verbs for "next menu item", so they cannot come from the
+    /// keymap either. The arrows walk, `Enter` runs and `Escape` closes; any
+    /// other is discarded instead of falling through to the listing
+    /// underneath, which would be acted on for a screen the reader is not
+    /// looking at.
     pub(super) fn tecla_en_menu(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(m) = self.menu.as_mut() else {
+        let Some(menu_state) = self.menu.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         match k.key.as_str() {
             "Escape" | "esc" => self.olvidar_menu(),
-            "ArrowLeft" | "left" => m.cycle_menu(-1),
-            "ArrowRight" | "right" => m.cycle_menu(1),
-            "ArrowUp" | "up" => m.cycle_item(-1),
-            "ArrowDown" | "down" => m.cycle_item(1),
+            "ArrowLeft" | "left" => menu_state.cycle_menu(-1),
+            "ArrowRight" | "right" => menu_state.cycle_menu(1),
+            "ArrowUp" | "up" => menu_state.cycle_item(-1),
+            "ArrowDown" | "down" => menu_state.cycle_item(1),
             "Enter" | "enter" => {
-                let elegido = m.selected();
-                return self.ejecutar_del_menu(elegido, backend, buzon);
+                let chosen = menu_state.selected();
+                return self.ejecutar_del_menu(chosen, backend, mailbox);
             }
             _ => return (self.aplicada(), Vec::new()),
         }
-        let cambio = ViewChange::Menu {
+        let change = ViewChange::Menu {
             menu: self.vista_menu(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Cierra el menú y corre lo elegido.
+    /// Closes the menu and runs what was chosen.
     ///
-    /// El cierre viaja en su PROPIO parche y ANTES del efecto, por lo mismo
-    /// que la paleta: el comando puede abrir otra pantalla, y hacerlo por
-    /// detrás del menú lo dejaría comiéndose las teclas de la que acaba de
-    /// abrirse.
+    /// The close travels in its OWN patch and BEFORE the effect, for the same
+    /// reason as the palette: the command can open another screen, and doing
+    /// it behind the menu would leave it eating the keys of the one that just
+    /// opened.
     pub(super) fn ejecutar_del_menu(
         &mut self,
-        elegido: Option<&'static str>,
+        chosen: Option<&'static str>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.olvidar_menu();
-        let cierre = self.parche(vec![ViewChange::Menu {
+        let closing = self.parche(vec![ViewChange::Menu {
             menu: self.vista_menu(),
         }]);
-        let Some(cmd) = elegido else {
-            return (self.aplicada(), vec![cierre]);
+        let Some(cmd) = chosen else {
+            return (self.aplicada(), vec![closing]);
         };
-        // Por el MISMO camino que una tecla: un menú es otra puerta al
-        // catálogo, no un segundo despachador.
-        let (ack, mut resto) = match efecto_de(cmd, 1) {
-            Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
+        // Through the SAME path as a key: a menu is another door into the
+        // catalogue, not a second dispatcher.
+        let (ack, mut rest) = match efecto_de(cmd, 1) {
+            Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
             None => self.no_implementado(cmd),
         };
-        let mut envios = vec![cierre];
-        envios.append(&mut resto);
-        (ack, envios)
+        let mut outgoing = vec![closing];
+        outgoing.append(&mut rest);
+        (ack, outgoing)
     }
 
     pub(super) fn tecla_en_paleta(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(p) = self.paleta.as_mut() else {
+        let Some(palette) = self.paleta.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        let alto = 10;
+        let height = 10;
         match k.key.as_str() {
             "Escape" | "esc" => {
                 self.paleta = None;
             }
             "Enter" | "enter" => {
-                let elegido = p.selected();
+                let chosen = palette.selected();
                 self.paleta = None;
-                if let Some(cmd) = elegido {
+                if let Some(cmd) = chosen {
                     norte_frontend::session::note_palette_recent(&mut self.paleta_recientes, &cmd);
-                    // El cierre viaja en su PROPIO parche y antes que el
-                    // efecto. Sin él, un renderer que aplica parches —que es
-                    // lo que hace el de referencia— recibía el cambio del
-                    // comando y ninguno de la paleta, y la seguía pintando
-                    // encima del listado hasta la siguiente foto.
-                    let cierre = self.parche(vec![ViewChange::Palette { palette: None }]);
-                    // Se ejecuta por el MISMO camino que una tecla: la
-                    // paleta es otra puerta al catálogo, no un segundo
-                    // despachador.
-                    let (ack, mut resto) = match efecto_de(&cmd, 1) {
-                        Some(efecto) => self.aplicar_efecto(efecto, backend, buzon),
-                        // Una fila de PLUGIN no está en el catálogo de
-                        // comandos y no puede estarlo: la aporta un tercero
-                        // en tiempo de ejecución.
+                    // The close travels in its OWN patch and before the
+                    // effect. Without it, a renderer that applies patches —
+                    // which is what the reference one does — received the
+                    // command's change and none of the palette's, and kept
+                    // painting it over the listing until the next snapshot.
+                    let closing = self.parche(vec![ViewChange::Palette { palette: None }]);
+                    // It runs through the SAME path as a key: the palette is
+                    // another door into the catalogue, not a second
+                    // dispatcher.
+                    let (ack, mut rest) = match efecto_de(&cmd, 1) {
+                        Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
+                        // A PLUGIN row is not in the command catalogue and
+                        // cannot be: a third party contributes it at
+                        // runtime.
                         None if cmd.starts_with("plugin:") => {
-                            self.ejecutar_de_plugin(&cmd, backend, buzon)
+                            self.ejecutar_de_plugin(&cmd, backend, mailbox)
                         }
-                        // Una fila de RENAMER (C3, ADR 0095): pide el plan y lo
-                        // mete en la MISMA revisión que el de la IA.
+                        // A RENAMER row (C3, ADR 0095): requests the plan and
+                        // puts it into the SAME review as the AI's.
                         None if cmd.starts_with("renamer:") => {
-                            self.ejecutar_de_renamer(&cmd, backend, buzon)
+                            self.ejecutar_de_renamer(&cmd, backend, mailbox)
                         }
-                        // Una fila de ORGANIZER (fase 8): el mismo reparto,
-                        // otro método, y el plan aterriza en el mismo árbol
-                        // revisable que el del modelo.
+                        // An ORGANIZER row (phase 8): the same dispatch,
+                        // another method, and the plan lands on the same
+                        // reviewable tree as the model's.
                         None if cmd.starts_with("organizer:") => {
                             match norte_frontend::palette::parse_organizer_key(&cmd) {
                                 Some((id, org)) => {
                                     let (id, org) = (id.to_owned(), org.to_owned());
-                                    self.pedir_plan_de_organizar(Some((id, org)), backend, buzon)
+                                    self.pedir_plan_de_organizar(Some((id, org)), backend, mailbox)
                                 }
                                 None => self.no_implementado(&cmd),
                             }
                         }
                         None => self.no_implementado(&cmd),
                     };
-                    let mut envios = vec![cierre];
-                    envios.append(&mut resto);
-                    return (ack, envios);
+                    let mut outgoing = vec![closing];
+                    outgoing.append(&mut rest);
+                    return (ack, outgoing);
                 }
             }
-            "ArrowDown" | "down" => p.down(),
-            "ArrowUp" | "up" => p.up(),
-            "PageDown" | "pgdn" => p.page_down(alto),
-            "PageUp" | "pgup" => p.page_up(alto),
-            "Backspace" | "backspace" => p.backspace(),
-            otra => {
-                // Una tecla de TEXTO es un punto de código, no una unidad
-                // UTF-16 ni un nombre de tecla: `ArrowLeft` no se teclea.
-                let mut chars = otra.chars();
+            "ArrowDown" | "down" => palette.down(),
+            "ArrowUp" | "up" => palette.up(),
+            "PageDown" | "pgdn" => palette.page_down(height),
+            "PageUp" | "pgup" => palette.page_up(height),
+            "Backspace" | "backspace" => palette.backspace(),
+            other => {
+                // A TEXT key is a code point, not a UTF-16 unit nor a key
+                // name: `ArrowLeft` is not typed.
+                let mut chars = other.chars();
                 match (chars.next(), chars.next()) {
-                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => p.push_char(c),
+                    (Some(c), None) if !k.ctrl && !k.alt && !k.meta => palette.push_char(c),
                     _ => return (self.aplicada(), Vec::new()),
                 }
             }
         }
-        let cambio = ViewChange::Palette {
+        let change = ViewChange::Palette {
             palette: self.vista_paleta(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.aplicada(), vec![self.parche(vec![change])])
     }
 
-    /// Un comando del catálogo que este host no ejecuta, dicho con la misma
-    /// frase que el TUI.
+    /// A catalogue command this host does not execute, said with the same
+    /// phrase as the TUI.
     pub(super) fn no_implementado(
         &mut self,
         cmd: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let frase =
+        let phrase =
             norte_frontend::keymap::unavailable_message_in(cmd, Availability::NotHere, self.lang);
-        self.status.message = Some(clamp_display(frase));
-        let cambio = ViewChange::Status(self.status.clone());
+        self.status.message = Some(clamp_display(phrase));
+        let change = ViewChange::Status(self.status.clone());
         (
             ActionAck::Unavailable {
                 reason_key: "cmd-not-here".to_owned(),
             },
-            vec![self.parche(vec![cambio])],
+            vec![self.parche(vec![change])],
         )
     }
 }

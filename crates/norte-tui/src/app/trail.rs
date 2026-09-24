@@ -1,7 +1,8 @@
-//! El rastro de navegación, que ya no vive aquí.
+//! The navigation trail, which no longer lives here.
 //!
-//! [`Trail`] y [`TrailStep`] se fueron a `norte-frontend`: la pregunta que
-//! responden —de dónde vengo, a dónde vuelvo— no es de terminal, y el host
-//! gráfico la hace igual. Se re-exportan para no tocar los call-sites.
+//! [`Trail`] and [`TrailStep`] moved to `norte-frontend`: the question they
+//! answer — where did I come from, where do I go back to — is not a terminal
+//! question, and the graphical host answers it the same way. Re-exported here
+//! so the call sites don't need to change.
 
 pub use norte_frontend::nav::{Trail, TrailStep};

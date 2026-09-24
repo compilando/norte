@@ -1,5 +1,6 @@
-//! El ritual del refresco: un `Esc` a medias conserva el `Fill` del pane que
-//! no se refrescó, y un refresco bajo la ayuda abierta recongela sus hechos.
+//! The refresh ritual: an Esc halfway through keeps the `Fill` of the pane
+//! that was not refreshed, and a refresh under open help re-freezes its
+//! facts.
 
 use norte_proto::VPath;
 use norte_tui::app::{App, Pane};
@@ -14,16 +15,16 @@ fn fill() -> Fill {
 }
 
 fn app() -> App {
-    let d = VPath::parse("file:///d").expect("wire de test");
+    let d = VPath::parse("file:///d").expect("test wire");
     App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
 }
 
-/// #118 (regresión pedida en el issue): un Esc a medias del refresh
-/// re-listó el pane 0 pero ABANDONÓ el 1 — el ritual solo puede soltar
-/// el drenador del pane re-listado de verdad; el del otro sigue drenando
-/// un listado que sigue siendo el suyo (#78).
+/// #118 (regression requested in the issue): an Esc halfway through the
+/// refresh re-listed pane 0 but ABANDONED pane 1 — the ritual can only
+/// release the drainer of the pane that was actually re-listed; the other
+/// one's keeps draining a listing that is still its own (#78).
 #[test]
-fn esc_a_medias_conserva_el_fill_del_pane_no_refrescado() {
+fn an_esc_halfway_through_keeps_the_fill_of_the_unrefreshed_pane() {
     let mut app = app();
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     f.insert(norte_tui::panel::SLOT_RIGHT, fill());
@@ -32,43 +33,42 @@ fn esc_a_medias_conserva_el_fill_del_pane_no_refrescado() {
     after_panes_refresh(&mut app, [true, false], &mut f, &mut lp, &mut sr);
     assert!(
         f.get(norte_tui::panel::SLOT_RIGHT).is_some(),
-        "el fill del pane 1 (no re-listado) sobrevive al Esc a medias"
+        "pane 1's fill (not re-listed) survives the Esc halfway through"
     );
-    assert!(lp.is_empty(), "la dedup de la sonda #52 caduca igualmente");
+    assert!(
+        lp.is_empty(),
+        "the #52 probe's dedup still expires either way"
+    );
 }
 
-/// MAJOR-2: congelar impide que un veredicto cambie porque el lector se
-/// MUEVA, y eso está bien. Lo que no puede impedir es que cambie porque el
-/// MUNDO cambie: el brazo del `tick` no lleva guarda de overlay (a
-/// diferencia del de `dir_watch`, gateado por `watch_refresh_allowed`), así
-/// que una copia o un borrado que terminan con la ayuda abierta re-listan
-/// los dos panes y la entrada que los hechos describían puede haberse ido.
-/// La fila decía «no aplica a esta selección» de una selección que ya no
-/// existía.
+/// MAJOR-2: freezing stops a verdict from changing because the reader
+/// MOVES, and that is fine. What it cannot stop is it changing because the
+/// WORLD changes: the `tick` arm carries no overlay guard (unlike
+/// `dir_watch`'s, gated by `watch_refresh_allowed`), so a copy or a delete
+/// that finishes with help open re-lists both panes and the entry the facts
+/// described may be gone. The row said "does not apply to this selection"
+/// about a selection that no longer existed.
 #[test]
-fn un_refresh_bajo_la_ayuda_abierta_recongela_los_hechos() {
+fn a_refresh_under_open_help_refreezes_the_facts() {
     use norte_help::ChordResolver as _;
 
-    let d = VPath::parse("file:///d").expect("wire de test");
-    let fichero = norte_proto::Entry {
+    let d = VPath::parse("file:///d").expect("test wire");
+    let file = norte_proto::Entry {
         attrs: std::collections::BTreeMap::new(),
-        path: d.join(norte_proto::Segment::new(b"leeme.txt".to_vec()).expect("segmento")),
+        path: d.join(norte_proto::Segment::new(b"readme.txt".to_vec()).expect("segment")),
         kind: norte_proto::EntryKind::File,
         size: Some(3),
         mtime_ms: None,
     };
-    let mut app = App::new(
-        Pane::new(d.clone(), vec![fichero]),
-        Pane::new(d, Vec::new()),
-    );
+    let mut app = App::new(Pane::new(d.clone(), vec![file]), Pane::new(d, Vec::new()));
     norte_tui::overlays::open_contextual_help(&mut app, norte_help::Lang::En, &[], None);
     assert!(
         app.help_chords.availability("pane.view").is_available(),
-        "con un fichero bajo el cursor, F3 se puede pulsar"
+        "with a file under the cursor, F3 can be pressed"
     );
 
-    // La tarea termina, el refresh entra por debajo del overlay y se lleva
-    // por delante la entrada de la que hablaban los hechos.
+    // The task finishes, the refresh comes in under the overlay and sweeps
+    // away the entry the facts were talking about.
     app.panes[0].refresh_listing(Vec::new());
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut lp = Probed::new();
@@ -78,33 +78,33 @@ fn un_refresh_bajo_la_ayuda_abierta_recongela_los_hechos() {
     assert_eq!(
         app.help_chords.availability("pane.view").reason(),
         Some(norte_help::Reason::WrongTarget),
-        "el listado cambió: los hechos tienen que volver a congelarse"
+        "the listing changed: the facts must freeze again"
     );
 }
 
-/// #311: una task cuyo resultado ES un informe no puede dejar que el `done`
-/// genérico del tick le pise el mensaje. Las sumas son el caso: el veredicto
-/// («1 no coincide») lo pone la cosecha del informe, y la barra lo perdía —
-/// visto en tmux, donde el pie decía `done` sobre un modal con un MISMATCH
-/// dentro.
+/// #311: a task whose result IS a report must not let the tick's generic
+/// `done` clobber its message. Checksums are the case: the verdict
+/// ("1 does not match") is set by the report's harvest, and the bar was
+/// losing it — seen in tmux, where the footer said `done` over a modal with
+/// a MISMATCH inside.
 #[test]
-fn una_task_que_habla_por_su_informe_no_dice_done() {
+fn a_task_that_speaks_through_its_report_does_not_say_done() {
     use norte_proto::TaskKind;
     use norte_tui::refresh::habla_por_su_informe;
 
     assert!(
         habla_por_su_informe(TaskKind::Checksum),
-        "las sumas contestan con su informe, no con su estado"
+        "checksums answer with their report, not with their state"
     );
-    for otra in [
+    for other in [
         TaskKind::Copy,
         TaskKind::Move,
         TaskKind::Delete,
         TaskKind::Pack,
     ] {
         assert!(
-            !habla_por_su_informe(otra),
-            "una mutación sí termina con un `done`: {otra:?}"
+            !habla_por_su_informe(other),
+            "a mutation does finish with a `done`: {other:?}"
         );
     }
 }

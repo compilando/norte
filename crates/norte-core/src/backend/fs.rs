@@ -1,7 +1,7 @@
-//! El área de ficheros de [`Backend`](super::Backend): listar, leer,
-//! capabilities/atributos, stat, y las mutaciones de `fs.*` (copiar, mover,
-//! borrar, crear, permisos), más `fs.search`, `fs.dir_size`, `fs.checksum` y
-//! `fs.dir_usage` con sus informes.
+//! [`Backend`](super::Backend)'s file area: listing, reading,
+//! capabilities/attributes, stat, and `fs.*`'s mutations (copy, move,
+//! delete, create, permissions), plus `fs.search`, `fs.dir_size`,
+//! `fs.checksum` and `fs.dir_usage` with their reports.
 
 use futures::StreamExt;
 use norte_proto::{ByteRange, Capabilities, DeleteMode, Entry, Error, TaskId, VPath};
@@ -13,31 +13,31 @@ use crate::engine::TransferOptions;
 use super::{Backend, EntryStream, TaskRef};
 
 impl Backend {
-    /// Listado de un directorio como STREAM perezoso (ADR 0017). Embebido =
-    /// el stream del engine tal cual; remoto = primera página EAGER (paridad
-    /// de errores: `NotFound`/`TypeMismatch` en el `Result`, no como primer
-    /// item) + páginas siguientes por cursor. Soltar el stream lo cancela.
+    /// Directory listing as a LAZY STREAM (ADR 0017). Embedded = the
+    /// engine's stream as-is; remote = an EAGER first page (error parity:
+    /// `NotFound`/`TypeMismatch` in the `Result`, not as the first item) +
+    /// subsequent pages by cursor. Dropping the stream cancels it.
     ///
-    /// Devuelve además las omitidas del CONTENEDOR (#93): entradas que su
-    /// índice descartó por nombres hostiles/límites (providers archive) y que
-    /// por tanto JAMÁS saldrán del stream. `None` = no aplica (el backend
-    /// lista todo lo que existe). Disponible al abrir en ambos modos: el
-    /// embebido consulta el índice ya caliente; el remoto lo trae la primera
-    /// página (todas la repiten).
+    /// Also returns the CONTAINER's skipped entries (#93): entries its index
+    /// discarded for hostile names/limits (archive providers) and that will
+    /// therefore NEVER come out of the stream. `None` = not applicable (the
+    /// backend lists everything that exists). Available on open in both
+    /// modes: embedded queries the already-warm index; remote gets it from
+    /// the first page (every page repeats it).
     ///
     /// # Errors
-    /// Taxonomía del protocolo; con el daemon caído,
+    /// Protocol taxonomy; with the daemon down,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list_stream(&self, dir: &VPath) -> Result<(EntryStream, Option<u64>), Error> {
         self.list_stream_with(dir, &[]).await
     }
 
-    /// [`Backend::list_stream`] pidiendo atributos por entrada (#108 bloque
-    /// 2). `attrs` son ids del catálogo (`Backend::attr_catalog`); un id no
-    /// anunciado viene ausente, jamás es error.
+    /// [`Backend::list_stream`] requesting per-entry attributes (#108 block
+    /// 2). `attrs` are catalog ids (`Backend::attr_catalog`); an
+    /// unadvertised id comes back absent, never an error.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; con el daemon caído,
+    /// Protocol taxonomy; with the daemon down,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list_stream_with(
         &self,
@@ -50,9 +50,9 @@ impl Backend {
                     attrs: norte_vfs::AttrRequest::sanitized(attrs.to_vec()),
                 };
                 let stream = engine.list_with(dir, &opt).await?;
-                // Mismo cinturón de emisión que el daemon (ADR 0039 §5): un
-                // provider con bug no cuela ids no pedidos ni valores sobre
-                // tope por la ruta in-process.
+                // The same emission belt as the daemon (ADR 0039 §5): a
+                // buggy provider cannot sneak unrequested ids or
+                // over-the-cap values through the in-process path.
                 let belt = opt.attrs.clone();
                 let stream = stream
                     .map(move |item| {
@@ -62,11 +62,12 @@ impl Backend {
                         })
                     })
                     .boxed();
-                // Best-effort: un fallo aquí no tumba un listado que ya abrió
-                // (mismo contrato que el daemon) — degrada a "desconocido",
-                // pero JAMÁS en silencio (el punto de #93 es la señal).
+                // Best-effort: a failure here does not bring down a listing
+                // that already opened (same contract as the daemon) —
+                // degrades to "unknown", but NEVER silently (the whole
+                // point of #93 is the signal).
                 let skipped = engine.list_skipped(dir).await.unwrap_or_else(|e| {
-                    tracing::warn!(error = %e, "list_skipped falló; omitidas = desconocido");
+                    tracing::warn!(error = %e, "list_skipped failed; skipped = unknown");
                     None
                 });
                 Ok((stream, skipped))
@@ -76,32 +77,32 @@ impl Backend {
         }
     }
 
-    /// Listado COMPLETO (drena [`Backend::list_stream`]). El `ls` remoto de un
-    /// dir gigante ya no arriesga el `CALL_TIMEOUT` ni un frame monstruoso: son
-    /// N páginas acotadas por debajo.
+    /// FULL listing (drains [`Backend::list_stream`]). A remote `ls` on a
+    /// giant dir no longer risks `CALL_TIMEOUT` nor a monster frame: it's N
+    /// pages capped underneath.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; con el daemon caído,
+    /// Protocol taxonomy; with the daemon down,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list(&self, dir: &VPath) -> Result<Vec<Entry>, Error> {
         Ok(self.list_with_skipped(dir).await?.0)
     }
 
-    /// [`Backend::list`] + las omitidas del contenedor (#93) — para frontends
-    /// que quieran señalizarlas (`ls` de la CLI).
+    /// [`Backend::list`] + the container's skipped entries (#93) — for
+    /// frontends that want to flag them (the CLI's `ls`).
     ///
     /// # Errors
-    /// Taxonomía del protocolo; con el daemon caído,
+    /// Protocol taxonomy; with the daemon down,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list_with_skipped(&self, dir: &VPath) -> Result<(Vec<Entry>, Option<u64>), Error> {
         self.list_with_skipped_attrs(dir, &[]).await
     }
 
-    /// [`Backend::list_with_skipped`] pidiendo atributos por entrada (#108
-    /// bloque 2) — el `ls --attrs` de la CLI.
+    /// [`Backend::list_with_skipped`] requesting per-entry attributes (#108
+    /// block 2) — the CLI's `ls --attrs`.
     ///
     /// # Errors
-    /// Taxonomía del protocolo; con el daemon caído,
+    /// Protocol taxonomy; with the daemon down,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn list_with_skipped_attrs(
         &self,
@@ -116,11 +117,11 @@ impl Backend {
         Ok((entries, skipped))
     }
 
-    /// Lectura de PRESENTACIÓN (viewer): junta el rango pedido en memoria.
-    /// El caller acota (`len`) — esto no es el camino de las copias.
+    /// PRESENTATION read (a viewer): gathers the requested range in memory.
+    /// The caller caps it (`len`) — this is not the copy path.
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn read(&self, path: &VPath, range: Option<ByteRange>) -> Result<Vec<u8>, Error> {
         match self {
             Self::Embedded(engine) => {
@@ -136,10 +137,10 @@ impl Backend {
         }
     }
 
-    /// Capabilities del provider que sirve `path` (F8/papelera, ADR 0009).
+    /// Capabilities of the provider serving `path` (F8/trash, ADR 0009).
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn capabilities(&self, path: &VPath) -> Result<Capabilities, Error> {
         match self {
             Self::Embedded(engine) => engine.capabilities(path).await,
@@ -148,13 +149,13 @@ impl Backend {
         }
     }
 
-    /// Catálogo de attrs del provider que sirve `path` (#108 bloque 2),
-    /// SIEMPRE saneado: el embebido pasa por `Engine::attr_catalog`
-    /// (`AttrCatalog::new`, ADR 0039 §4) y el remoto por el deserializador
-    /// del wire (mismo saneo por el tipo).
+    /// The attr catalog of the provider serving `path` (#108 block 2),
+    /// ALWAYS sanitized: embedded goes through `Engine::attr_catalog`
+    /// (`AttrCatalog::new`, ADR 0039 §4) and remote through the wire's
+    /// deserializer (same sanitizing via the type).
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn attr_catalog(&self, path: &VPath) -> Result<norte_proto::AttrCatalog, Error> {
         match self {
             Self::Embedded(engine) => engine.attr_catalog(path).await,
@@ -178,7 +179,7 @@ impl Backend {
     /// `file://`, false of an embedded `sftp` pane.
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn capabilities_and_attrs(
         &self,
         path: &VPath,
@@ -196,19 +197,19 @@ impl Backend {
         }
     }
 
-    /// Metadatos de un nodo (`fs.stat`).
+    /// Metadata for a node (`fs.stat`).
     ///
     /// # Errors
-    /// Taxonomía del protocolo; con el daemon caído,
+    /// Protocol taxonomy; with the daemon down,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn stat(&self, path: &VPath) -> Result<Entry, Error> {
         self.stat_attrs(path, &[]).await
     }
 
-    /// [`Backend::stat`] pidiendo atributos por entrada (#108 bloque 2).
+    /// [`Backend::stat`] requesting per-entry attributes (#108 block 2).
     ///
     /// # Errors
-    /// Taxonomía del protocolo; con el daemon caído,
+    /// Protocol taxonomy; with the daemon down,
     /// `ProviderUnavailable{retryable:true}`.
     pub async fn stat_attrs(&self, path: &VPath, attrs: &[String]) -> Result<Entry, Error> {
         match self {
@@ -217,7 +218,7 @@ impl Backend {
                     attrs: norte_vfs::AttrRequest::sanitized(attrs.to_vec()),
                 };
                 let mut entry = engine.stat_with(path, &opt).await?;
-                // Mismo cinturón de emisión que el daemon (ADR 0039 §5).
+                // Same emission belt as the daemon (ADR 0039 §5).
                 opt.attrs.retain_conforming(&mut entry);
                 Ok(entry)
             }
@@ -226,70 +227,70 @@ impl Backend {
         }
     }
 
-    /// Retiene el ancla de un directorio que un PANEL acaba de listar (#301,
-    /// ADR 0073), para que la escritura que venga después pueda decir «el
-    /// destino era ESE».
+    /// Retains the anchor of a directory a PANEL just listed (#301, ADR
+    /// 0073), so a later write can say "the destination was THAT ONE".
     ///
-    /// Es lo que el daemon pone en la respuesta de `fs.list` y el SDK guarda
-    /// por su cuenta. Aquí no hay wire, así que lo guarda el engine — y sin
-    /// esto `ntc`, que corre embebido por DEFECTO, hacía toda operación
-    /// anclada SIN ancla: la comprobación que ADR 0076 pidió justo para
-    /// `fs.create` no la tenía el único frontend que lanza un `$EDITOR` sobre
-    /// lo creado.
+    /// This is what the daemon puts in `fs.list`'s response and the SDK
+    /// stores on its own. There's no wire here, so the engine stores it —
+    /// and without this, `ntc`, which runs embedded by DEFAULT, did every
+    /// anchored operation WITHOUT an anchor: the check ADR 0076 asked for
+    /// specifically for `fs.create` was missing from the one frontend that
+    /// launches an `$EDITOR` over what it just created.
     ///
-    /// # Se llama a mano, y ese es el punto
+    /// # Called by hand, and that's the point
     ///
-    /// No lo hace `list_stream_with`, que es el embudo de TODOS los listados:
-    /// por ahí pasan el árbol lateral (una rama por vuelta del bucle) y el
-    /// `fs.list` de un script Lua, y como recordar SOBRESCRIBE, cualquiera de
-    /// ellos rebendecía el ancla del panel con el nodo que viera en ese
-    /// momento. El ancla dice **quién miró**; un listado que no es una
-    /// pantalla no ha mirado nadie.
+    /// `list_stream_with` doesn't do it, and it's the funnel for ALL
+    /// listings: the side tree (one branch per loop iteration) and a Lua
+    /// script's `fs.list` both go through it, and since remembering
+    /// OVERWRITES, either of them would re-bless the panel's anchor with
+    /// whatever node it happened to see at that moment. The anchor says
+    /// **who looked**; a listing that isn't a screen has nobody looking.
     ///
-    /// Contra el daemon no hace nada: allí el ancla la manda el listado en su
-    /// respuesta y la guarda el SDK, que es de quien listó de verdad.
+    /// Does nothing against the daemon: there the listing's response sends
+    /// the anchor and the SDK stores it, which is who really listed.
     ///
-    /// Best-effort: un provider que no sabe dar identidad de nodo (un bucket,
-    /// un SFTP sin extensiones) no puede impedir un listado, y un fallo BORRA
-    /// la que hubiera —mandar una vieja sería que la escritura se rechazara a
-    /// sí misma—, así que la escritura siguiente se comporta como en 0.53.
+    /// Best-effort: a provider that can't give node identity (a bucket, an
+    /// SFTP with no extensions) cannot block a listing, and a failure
+    /// DELETES whatever was there —sending a stale one would make the write
+    /// reject itself—, so the next write behaves as it did in 0.53.
     pub async fn remember_listing_anchor(&self, dir: &VPath) {
         match self {
             Self::Embedded(engine) => {
-                let ancla = engine.dir_anchor(dir).await.unwrap_or_else(|e| {
-                    tracing::debug!(error = %e, "dir_anchor falló; sin ancla para este listado");
+                let anchor = engine.dir_anchor(dir).await.unwrap_or_else(|e| {
+                    tracing::debug!(error = %e, "dir_anchor failed; no anchor for this listing");
                     None
                 });
-                engine.remember_dir_anchor(dir, ancla);
+                engine.remember_dir_anchor(dir, anchor);
             }
             #[cfg(unix)]
             Self::Remote(_) => {}
         }
     }
 
-    /// El ancla retenida del directorio en el que `destino` va a escribirse
-    /// (#301).
+    /// The retained anchor of the directory `dest` is about to be
+    /// written into (#301).
     ///
-    /// `destino` es la ruta EXACTA de lo que se escribe, así que lo que se
-    /// busca es su PADRE: es el directorio que el humano listó y aprobó. La
-    /// misma cuenta que hace el SDK en el camino remoto.
+    /// `dest` is the EXACT path of what's being written, so what's
+    /// looked up is its PARENT: that's the directory the human listed and
+    /// approved. The same computation the SDK does on the remote path.
     ///
-    /// `None` —nadie listó ese directorio en esta sesión, o su provider no
-    /// sabe dar identidad de nodo— se comporta exactamente como 0.53: se
-    /// confina igual y esa comprobación no ocurre.
-    fn ancla_del_destino(engine: &Engine, destino: &VPath) -> Option<norte_proto::DirAnchor> {
-        engine.remembered_dir_anchor(&destino.parent()?)
+    /// `None` —nobody listed that directory this session, or its provider
+    /// can't give node identity— behaves exactly like 0.53: confinement
+    /// still applies and that check just doesn't happen.
+    fn destination_anchor(engine: &Engine, dest: &VPath) -> Option<norte_proto::DirAnchor> {
+        engine.remembered_dir_anchor(&dest.parent()?)
     }
 
-    /// Copia como task.
+    /// Copy as a task.
     ///
-    /// El ancla del directorio DESTINO viaja con la operación cuando este
-    /// backend lo listó (#301, ADR 0073) — igual que la pone el SDK en el
-    /// camino remoto, y por el mismo motivo: entre listar y escribir, ese
-    /// directorio puede haber dejado de ser el nodo que el humano miraba.
+    /// The DESTINATION directory's anchor travels with the operation when
+    /// this backend listed it (#301, ADR 0073) — same as the SDK sets it on
+    /// the remote path, and for the same reason: between listing and
+    /// writing, that directory may have stopped being the node the human
+    /// was looking at.
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn copy(
         &self,
         from: &VPath,
@@ -304,7 +305,7 @@ impl Backend {
                         to,
                         opts,
                         crate::journal::Actor::User,
-                        Self::ancla_del_destino(engine, to),
+                        Self::destination_anchor(engine, to),
                     )
                     .await?,
             )),
@@ -316,10 +317,10 @@ impl Backend {
         }
     }
 
-    /// Move como task. Con el ancla del destino, como [`Self::copy`].
+    /// Move as a task. With the destination's anchor, like [`Self::copy`].
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn move_(
         &self,
         from: &VPath,
@@ -334,7 +335,7 @@ impl Backend {
                         to,
                         opts,
                         crate::journal::Actor::User,
-                        Self::ancla_del_destino(engine, to),
+                        Self::destination_anchor(engine, to),
                     )
                     .await?,
             )),
@@ -346,10 +347,10 @@ impl Backend {
         }
     }
 
-    /// Borrado como task (papelera o permanente, ADR 0009).
+    /// Delete as a task (trash or permanent, ADR 0009).
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn delete(&self, path: &VPath, mode: DeleteMode) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => {
@@ -360,11 +361,11 @@ impl Backend {
         }
     }
 
-    /// Creación de UN directorio como Task (#104, F7). Sin `-p`; destino
-    /// ocupado = `Conflict{Exists}`.
+    /// Creation of ONE directory as a Task (#104, F7). No `-p`; an occupied
+    /// destination = `Conflict{Exists}`.
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn mkdir(&self, path: &VPath) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => Ok(TaskRef::from_handle(&engine.mkdir(path).await?)),
@@ -373,24 +374,24 @@ impl Backend {
         }
     }
 
-    /// Creación de UN fichero VACÍO como Task (#290). Destino ocupado =
-    /// `Conflict{Exists}`; la exclusividad la aporta el provider (atómica en
-    /// local y en objetos, con ventana en SFTP v3).
+    /// Creation of ONE EMPTY file as a Task (#290). An occupied destination
+    /// = `Conflict{Exists}`; exclusivity is the provider's to give (atomic
+    /// on local and on objects, with a window on SFTP v3).
     ///
-    /// Con el ancla del directorio, como [`Self::copy`] — y aquí es donde más
-    /// falta hace (#301): `fs.create` es el único método cuyo éxito entrega
-    /// una ruta a un programa de FUERA de norte (`$EDITOR`), que es el motivo
-    /// con el que ADR 0076 justificó ponerle ancla.
+    /// With the directory's anchor, like [`Self::copy`] — and this is where
+    /// it matters most (#301): `fs.create` is the only method whose success
+    /// hands a path to a program OUTSIDE norte (`$EDITOR`), which is the
+    /// reason ADR 0076 gave for anchoring it.
     ///
     /// # Errors
-    /// Taxonomía del protocolo.
+    /// Protocol taxonomy.
     pub async fn create_file(&self, path: &VPath) -> Result<TaskRef, Error> {
         match self {
             Self::Embedded(engine) => Ok(TaskRef::from_handle(
                 &engine
                     .create_file_as(
                         path,
-                        Self::ancla_del_destino(engine, path),
+                        Self::destination_anchor(engine, path),
                         crate::journal::Actor::User,
                     )
                     .await?,
@@ -400,14 +401,15 @@ impl Backend {
         }
     }
 
-    /// Cambia los permisos POSIX de un lote de rutas como Task (#314).
+    /// Changes POSIX permissions on a batch of paths as a Task (#314).
     ///
-    /// Muta: journal con reversa —el modo anterior— y gate de política. Una
-    /// ubicación sin permisos POSIX responde `Unsupported` y no cambia nada.
+    /// Mutates: journal with a reversal —the previous mode— and the policy
+    /// gate. A location with no POSIX permissions answers `Unsupported` and
+    /// changes nothing.
     ///
     /// # Errors
-    /// Taxonomía del protocolo: [`Error::InvalidPath`] sin rutas, por encima
-    /// del tope o con bits que no son de permiso; [`Error::PolicyDenied`];
+    /// Protocol taxonomy: [`Error::InvalidPath`] with no paths, over the
+    /// cap, or with bits that aren't permission bits; [`Error::PolicyDenied`];
     /// [`Error::Unsupported`].
     pub async fn set_mode(
         &self,
@@ -420,37 +422,37 @@ impl Backend {
         }
     }
 
-    /// Búsqueda viva (`fs.search`, live search): devuelve la Task
-    /// ([`TaskRef`], cancelable con `TaskRef::cancel`) y el STREAM de lotes de
-    /// hits ([`norte_proto::methods::SearchHits`]).
+    /// Live search (`fs.search`, live search): returns the Task
+    /// ([`TaskRef`], cancelable with `TaskRef::cancel`) and the hit-batch
+    /// STREAM ([`norte_proto::methods::SearchHits`]).
     ///
-    /// El humano de un frontend es siempre `User` (sin sandbox): el embebido
-    /// lo pasa tal cual a [`Engine::search_as`]; el remoto lo lanza contra el
-    /// daemon, que fija el actor server-side por la conexión.
+    /// A frontend's human is always `User` (no sandbox): embedded passes it
+    /// straight to [`Engine::search_as`]; remote launches it against the
+    /// daemon, which sets the actor server-side by connection.
     ///
-    /// # Ciclo de vida del canal de hits
-    /// - **Embebido:** el walker del engine cierra el `tx` al terminar, así que
-    ///   `rx` se cierra solo (drena hasta `None`).
-    /// - **Remoto:** la bomba del `RemoteBackend` enruta cada notificación
-    ///   `search.hits` por `task_id` a este `rx`. El route se retira —cerrando
-    ///   `rx`— cuando la Task llega a terminal (con una gracia que cubre la
-    ///   carrera hits-vs-terminal; ver `RemoteBackend::search`). En ambos casos
-    ///   el criterio de "búsqueda terminada" es el estado terminal de la
-    ///   [`TaskRef`]; el cierre de `rx` es la señal cómoda de que ya no llegan
-    ///   más lotes.
+    /// # Hit channel lifecycle
+    /// - **Embedded:** the engine's walker closes `tx` on finishing, so
+    ///   `rx` closes on its own (drain to `None`).
+    /// - **Remote:** the `RemoteBackend`'s pump routes each `search.hits`
+    ///   notification by `task_id` to this `rx`. The route is retired
+    ///   —closing `rx`— when the Task reaches terminal (with a grace period
+    ///   covering the hits-vs-terminal race; see `RemoteBackend::search`).
+    ///   In both cases the criterion for "search finished" is the
+    ///   [`TaskRef`]'s terminal state; `rx` closing is the convenient
+    ///   signal that no more batches are coming.
     ///
     /// # Errors
-    /// Criterios inválidos (cero criterios y cero filtros, glob y regex del
-    /// mismo eje, o una codificación que no se reconoce) →
-    /// [`Error::InvalidPath`] embebido / `INVALID_PARAMS` del daemon; resto,
-    /// taxonomía del protocolo; daemon caído = `ProviderUnavailable`.
+    /// Invalid criteria (zero criteria and zero filters, a glob and a regex
+    /// on the same axis, or an unrecognized encoding) →
+    /// [`Error::InvalidPath`] embedded / the daemon's `INVALID_PARAMS`;
+    /// otherwise, protocol taxonomy; daemon down = `ProviderUnavailable`.
     ///
-    /// Y contra un daemon anterior a 0.81 con cualquiera de los filtros
-    /// puestos, [`Error::Unsupported`]: ese daemon los ignoraría y
-    /// contestaría el SUPERCONJUNTO, que se lee igual que un resultado. El
-    /// rechazo vive en el SDK (`RemoteClient::search`) y por eso alcanza a
-    /// todo el mundo: éste es el único camino al cable, y el embebido no
-    /// cruza ninguno.
+    /// And against a pre-0.81 daemon with any of the filters set,
+    /// [`Error::Unsupported`]: that daemon would ignore them and answer
+    /// with the SUPERSET, which reads exactly like a real result. The
+    /// rejection lives in the SDK (`RemoteClient::search`) and that's why
+    /// it reaches everyone: this is the only path to the wire, and embedded
+    /// crosses none.
     pub async fn search(
         &self,
         params: norte_proto::methods::FsSearchParams,
@@ -467,18 +469,19 @@ impl Backend {
         }
     }
 
-    /// Cuánto ocupa lo que se le pase, como Task (`fs.dir_size`, 0.49.0,
-    /// #139).
+    /// How much space what's passed in takes up, as a Task (`fs.dir_size`,
+    /// 0.49.0, #139).
     ///
-    /// El TOTAL no vuelve por aquí: viaja en el progreso de la Task
-    /// (`bytes_done`/`entries_done`), que es lo que el frontend ya escucha para
-    /// pintar cualquier otra. El último snapshot es el resultado.
+    /// The TOTAL doesn't come back here: it travels in the Task's progress
+    /// (`bytes_done`/`entries_done`), which is what the frontend already
+    /// listens to for painting any other. The last snapshot is the result.
     ///
     /// # Errors
     ///
-    /// [`Error::InvalidPath`] sin rutas, y lo que devuelva el core. Un daemon
-    /// N-1 sin el método contesta `METHOD_NOT_FOUND` → [`Error::Unsupported`],
-    /// para que el frontend distinga «tu daemon es más viejo» de un fallo real.
+    /// [`Error::InvalidPath`] with no paths, and whatever the core returns.
+    /// An N-1 daemon with no such method answers `METHOD_NOT_FOUND` →
+    /// [`Error::Unsupported`], so the frontend can tell "your daemon is
+    /// older" apart from a real failure.
     pub async fn dir_size(
         &self,
         params: norte_proto::methods::FsDirSizeParams,
@@ -498,15 +501,16 @@ impl Backend {
         }
     }
 
-    /// El digest del contenido de un lote de ficheros (`fs.checksum`, 0.59.0,
-    /// #311): devuelve la Task, y los digests se recogen con
+    /// The content digest of a batch of files (`fs.checksum`, 0.59.0, #311):
+    /// returns the Task, and the digests are collected with
     /// [`Self::checksum_report`].
     ///
-    /// **No muta nada**: leer no es escribir (regla dura 4 no aplica).
+    /// **Mutates nothing**: reading isn't writing (hard rule 4 does not
+    /// apply).
     ///
     /// # Errors
-    /// [`Error::InvalidPath`] con la lista vacía; la taxonomía del protocolo
-    /// para el resto.
+    /// [`Error::InvalidPath`] with an empty list; protocol taxonomy for the
+    /// rest.
     pub async fn checksum(
         &self,
         params: norte_proto::methods::FsChecksumParams,
@@ -526,20 +530,20 @@ impl Backend {
         }
     }
 
-    /// Los digests que lleva calculados esa Task (`fs.checksum_report`,
-    /// 0.59.0, #311). SNAPSHOT: parcial mientras corre, definitivo cuando la
-    /// Task es terminal.
+    /// The digests that Task has computed so far (`fs.checksum_report`,
+    /// 0.59.0, #311). SNAPSHOT: partial while running, final once the Task
+    /// is terminal.
     ///
     /// # Errors
-    /// [`Error::NotFound`] si ese id nunca fue un lote de sumas de esta
-    /// instancia o si el anillo ya lo desalojó.
+    /// [`Error::NotFound`] if that id was never a checksum batch of this
+    /// instance or if the ring already evicted it.
     pub async fn checksum_report(
         &self,
         task_id: TaskId,
     ) -> Result<norte_proto::methods::FsChecksumReportResult, Error> {
         match self {
-            // Embebido no hay actor que comprobar: este `Backend` ES el humano
-            // en proceso (mismo criterio que `rename_batch_report`).
+            // Embedded has no actor to check: this `Backend` IS the human
+            // in-process (same criterion as `rename_batch_report`).
             Self::Embedded(engine) => engine
                 .checksum_report(task_id)
                 .map(|(_owner, r)| r)
@@ -549,30 +553,32 @@ impl Backend {
         }
     }
 
-    /// De qué está hecho un directorio, hijo a hijo (`fs.dir_usage`, 0.75.0,
-    /// fase 4): devuelve la Task, y el mapa se recoge con
+    /// What a directory is made of, child by child (`fs.dir_usage`, 0.75.0,
+    /// phase 4): returns the Task, and the map is collected with
     /// [`Self::dir_usage_report`].
     ///
-    /// **No muta nada**: medir no es escribir (regla dura 4 no aplica).
+    /// **Mutates nothing**: measuring isn't writing (hard rule 4 does not
+    /// apply).
     ///
     /// # Errors
-    /// [`Error::InvalidPath`] con `depth` en cero o por encima de
-    /// [`DIR_USAGE_MAX_DEPTH`](norte_proto::methods::DIR_USAGE_MAX_DEPTH). Los
-    /// dos se comprueban AQUÍ, antes de elegir brazo, para que el embebido y el
-    /// remoto contesten lo mismo — la lección de `check_pairs_cap`. El daemon
-    /// los sigue comprobando por su cuenta: aquello es la frontera, esto es la
-    /// paridad de las dos vías.
+    /// [`Error::InvalidPath`] with `depth` at zero or above
+    /// [`DIR_USAGE_MAX_DEPTH`](norte_proto::methods::DIR_USAGE_MAX_DEPTH).
+    /// Both are checked HERE, before picking an arm, so embedded and remote
+    /// answer the same thing — `check_pairs_cap`'s lesson. The daemon keeps
+    /// checking them on its own: that is the boundary, this is parity
+    /// between the two paths.
     ///
-    /// **Lo que NO se comprueba aquí es hasta dónde sabe bajar el servidor.**
-    /// Que hoy solo se sirva `depth: 1` es una capacidad del daemon, no el
-    /// contrato del tipo: cablearla en el cliente haría que un `Backend` 0.75
-    /// rechazara por su cuenta un `depth: 2` que un daemon 0.76 sí sirve, sin
-    /// llegar a preguntárselo. Eso lo contesta quien lo sabe, y llega como
-    /// [`Error::Unsupported`].
+    /// **What is NOT checked here is how deep the server knows how to go.**
+    /// That only `depth: 1` is served today is a daemon capability, not the
+    /// type's contract: wiring it into the client would make a 0.75
+    /// `Backend` reject a `depth: 2` on its own that a 0.76 daemon would
+    /// actually serve, without ever asking. Whoever knows answers that, and
+    /// it arrives as [`Error::Unsupported`].
     ///
-    /// Un daemon N-1 sin el método contesta `METHOD_NOT_FOUND` → también
-    /// [`Error::Unsupported`]: quien necesite distinguir «no conoce el método»
-    /// de «esa profundidad no se sirve» lo sabe por la `depth` que pidió.
+    /// An N-1 daemon with no such method answers `METHOD_NOT_FOUND` → also
+    /// [`Error::Unsupported`]: whoever needs to tell "doesn't know the
+    /// method" apart from "that depth isn't served" knows from the `depth`
+    /// it asked for.
     pub async fn dir_usage(
         &self,
         params: norte_proto::methods::FsDirUsageParams,
@@ -592,20 +598,20 @@ impl Backend {
         }
     }
 
-    /// El mapa que lleva medido esa Task (`fs.dir_usage_report`, 0.75.0, fase
-    /// 4). SNAPSHOT: parcial mientras corre, definitivo cuando la Task es
-    /// terminal.
+    /// The map that Task has measured so far (`fs.dir_usage_report`,
+    /// 0.75.0, phase 4). SNAPSHOT: partial while running, final once the
+    /// Task is terminal.
     ///
     /// # Errors
-    /// [`Error::NotFound`] si ese id nunca fue un mapa de esta instancia o si
-    /// el anillo ya lo desalojó.
+    /// [`Error::NotFound`] if that id was never a map of this instance or if
+    /// the ring already evicted it.
     pub async fn dir_usage_report(
         &self,
         task_id: TaskId,
     ) -> Result<norte_proto::methods::FsDirUsageReportResult, Error> {
         match self {
-            // Embebido no hay actor que comprobar: este `Backend` ES el humano
-            // en proceso (mismo criterio que `checksum_report`).
+            // Embedded has no actor to check: this `Backend` IS the human
+            // in-process (same criterion as `checksum_report`).
             Self::Embedded(engine) => engine
                 .dir_usage_report(task_id)
                 .map(|(_owner, r)| r)

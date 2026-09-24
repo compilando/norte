@@ -1,11 +1,11 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// La hoja de atributos y el panel de procesos (huecos de la fase 4).
+// The attributes sheet and the processes panel (phase 4 gaps).
 // ---------------------------------------------------------------------------
 
-/// Un host con la disposición `full`, que trae hoja de atributos y panel de
-/// procesos además de los dos listados.
+/// A host with the `full` layout, which brings an attributes sheet and a
+/// processes panel besides the two listings.
 pub(super) async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend,
@@ -28,13 +28,13 @@ pub(super) async fn host_full(backend: Arc<Falso>) -> (UiHost, norte_ui_host::Vi
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// El PRIMER listado de una foto, sea cual sea su posición.
+/// The FIRST listing in a snapshot, whatever its position.
 ///
-/// `listado` mira el hueco 0, que en `simple` es el listado; en `full` el
-/// hueco 0 es la barra lateral de sitios.
+/// `listado` looks at slot 0, which in `simple` is the listing; in `full`
+/// slot 0 is the places side bar.
 pub(super) fn primer_listado(
     snap: &norte_ui_host::ViewSnapshot,
 ) -> &norte_ui_host::dto::BrowserSlotView {
@@ -44,10 +44,10 @@ pub(super) fn primer_listado(
             SlotView::Browser(b) => Some(b.as_ref()),
             _ => None,
         })
-        .expect("la disposición tiene algún listado")
+        .expect("the layout has some listing")
 }
 
-/// La hoja de atributos de una foto, si está colocada.
+/// A snapshot's attributes sheet, if it is placed.
 pub(super) fn hoja(
     snap: &norte_ui_host::ViewSnapshot,
 ) -> Option<&norte_ui_host::dto::MetadataSlotView> {
@@ -57,70 +57,70 @@ pub(super) fn hoja(
     })
 }
 
-/// La hoja de atributos enseña la entrada bajo el cursor del listado al que
-/// SIGUE, y se mueve con él.
+/// The attributes sheet shows the entry under the cursor of the listing it
+/// FOLLOWS, and moves with it.
 #[tokio::test]
-async fn la_hoja_de_atributos_sigue_al_cursor() {
+async fn the_attributes_sheet_follows_the_cursor() {
     let (h, snap) = host_full(arbol()).await;
     let mut sub = h.subscribe();
-    let primera = hoja(&snap).expect("la disposición `full` coloca la hoja");
+    let first = hoja(&snap).expect("the `full` layout places the sheet");
     assert!(
-        primera.note.is_empty() && !primera.fields.is_empty(),
-        "con un listado con entradas, la hoja enseña la primera: {primera:?}"
+        first.note.is_empty() && !first.fields.is_empty(),
+        "with a listing that has entries, the sheet shows the first one: {first:?}"
     );
-    let nombre_de = |m: &norte_ui_host::dto::MetadataSlotView| {
+    let name_of = |m: &norte_ui_host::dto::MetadataSlotView| {
         m.fields
             .first()
             .map(|f| f.value.clone())
             .unwrap_or_default()
     };
-    let antes = nombre_de(primera);
-    assert!(!antes.is_empty(), "el primer campo es el nombre");
+    let before = name_of(first);
+    assert!(!before.is_empty(), "the first field is the name");
 
-    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let despues = nombre_de(hoja(&foto).expect("sigue colocada"));
+    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let after = name_of(hoja(&snap).expect("still placed"));
     assert_ne!(
-        antes, despues,
-        "la hoja siguió al cursor sin que nadie pidiera nada"
+        before, after,
+        "the sheet followed the cursor without anyone asking for anything"
     );
 }
 
-/// Con el FOCO en la propia hoja sigue enseñando la entrada del listado
-/// activo: seguir al rol activo cuando el activo es ella misma era seguir a
-/// nadie, y la hoja se vaciaba al pulsarla (mismo fallo que el visor
-/// acoplado, #291).
+/// With FOCUS on the sheet itself it still shows the active listing's entry:
+/// following the active role when the active one is itself was following
+/// nobody, and the sheet went empty when it was pressed (same bug as the
+/// docked viewer, #291).
 #[tokio::test]
-async fn la_hoja_de_atributos_enfocada_no_se_vacia() {
+async fn a_focused_attributes_sheet_does_not_go_empty() {
     let (h, snap) = host_full(arbol()).await;
     let mut sub = h.subscribe();
-    let primera = hoja(&snap).expect("la disposición `full` coloca la hoja");
-    assert!(!primera.fields.is_empty());
-    let slot = primera.slot_id;
+    let first = hoja(&snap).expect("the `full` layout places the sheet");
+    assert!(!first.fields.is_empty());
+    let slot = first.slot_id;
     let ack = h
         .dispatch(UiAction::FocusSlot { slot_id: slot })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
-    let enfocada = foto_hasta(&h, &mut sub, "la hoja con el foco", |s| {
+    let focused = foto_hasta(&h, &mut sub, "the sheet with focus", |s| {
         (s.focus == Some(slot)).then(|| s.clone())
     })
     .await;
-    let h2 = hoja(&enfocada).expect("sigue colocada");
+    let h2 = hoja(&focused).expect("still placed");
     assert!(
-        h2.note.is_empty() && h2.fields == primera.fields,
-        "la hoja enfocada sigue enseñando la entrada del listado: {h2:?}"
+        h2.note.is_empty() && h2.fields == first.fields,
+        "the focused sheet still shows the listing's entry: {h2:?}"
     );
 }
 
-/// Como [`host_full`], pero con la fila `..` ENCENDIDA — que es lo que trae
-/// la configuración de fábrica y lo que ve cualquiera que abra la ventana.
+/// Like [`host_full`], but with the `..` row ON — which is what the factory
+/// configuration brings and what anyone opening the window sees.
 ///
-/// El resto de esta suite la apaga a propósito (razona sobre índices de
-/// listado). Los tests de los paneles que SIGUEN al cursor no pueden
-/// permitírselo: el cursor nace justo sobre esa fila, así que apagarla es
-/// probar el único estado en el que nadie arranca.
+/// The rest of this suite turns it off on purpose (it reasons about listing
+/// indices). The tests for panels that FOLLOW the cursor cannot afford that:
+/// the cursor is born right on that row, so turning it off tests the one
+/// state nobody starts in.
 pub(super) async fn host_full_con_fila_de_subir(
     backend: Arc<Falso>,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
@@ -147,88 +147,90 @@ pub(super) async fn host_full_con_fila_de_subir(
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// Con el cursor sobre `..` la hoja DESCRIBE esa fila, no se vacía.
+/// With the cursor on `..` the sheet DESCRIBES that row, it does not go
+/// empty.
 ///
-/// El fallo que cierra: la ventana recién abierta enseñaba «nada bajo el
-/// cursor» en cada arranque y después de cada `cd`, porque el cursor nace
-/// sobre `..` y la hoja preguntaba por el OPERANDO —que sobre esa fila es
-/// `None` a propósito— en vez de por lo señalado.
+/// The bug this closes: a freshly opened window showed "nothing under the
+/// cursor" on every startup and after every `cd`, because the cursor is born
+/// on `..` and the sheet asked for the OPERAND — which on that row is `None`
+/// on purpose — instead of what is pointed to.
 #[tokio::test]
-async fn la_hoja_describe_la_fila_de_subir_en_vez_de_vaciarse() {
+async fn the_sheet_describes_the_parent_row_instead_of_going_empty() {
     let (_h, snap) = host_full_con_fila_de_subir(arbol()).await;
-    let hoja = hoja(&snap).expect("la disposición `full` coloca la hoja");
+    let sheet = hoja(&snap).expect("the `full` layout places the sheet");
     assert!(
-        hoja.note.is_empty(),
-        "sobre `..` hay algo que describir: {hoja:?}"
+        sheet.note.is_empty(),
+        "on `..` there is something to describe: {sheet:?}"
     );
-    let filas: Vec<(&str, &str)> = hoja
+    let rows: Vec<(&str, &str)> = sheet
         .fields
         .iter()
         .map(|f| (f.label.as_str(), f.value.as_str()))
         .collect();
     assert_eq!(
-        filas,
+        rows,
         [
             ("Nombre", ".."),
             ("Clase", "carpeta"),
             ("Destino", "⟨mem⟩/")
         ],
-        "`..` se llama `..` y dice a dónde lleva, no el nombre del padre"
+        "`..` is named `..` and says where it leads, not the parent's name"
     );
 }
 
-/// Subir por la fila `..` deja el cursor sobre el directorio del que se sale.
+/// Going up through the `..` row leaves the cursor on the directory being
+/// left.
 ///
-/// Igual que `UiAction::Parent`, que es la otra puerta a la MISMA
-/// navegación. Sin esto el cursor aterrizaba en la primera fila del padre
-/// según por cuál de las dos se subiera, y subir-y-bajar dejaba de ser
-/// reversible por una de ellas.
+/// Same as `UiAction::Parent`, which is the other door to the SAME
+/// navigation. Without this the cursor used to land on the parent's first
+/// row depending on which of the two was used to go up, and up-and-down
+/// stopped being reversible through one of them.
 #[tokio::test]
-async fn subir_por_la_fila_de_subir_deja_el_cursor_donde_estabas() {
+async fn going_up_through_the_parent_row_leaves_the_cursor_where_you_were() {
     let (h, snap) = host_full_con_fila_de_subir(arbol()).await;
     let mut sub = h.subscribe();
-    let listado = primer_listado(&snap);
-    let slot = listado.slot_id;
+    let listing = primer_listado(&snap);
+    let slot = listing.slot_id;
 
-    // Bajar a `docs` (la fila 1: detrás de `..`).
+    // Go down into `docs` (row 1: right after `..`).
     h.dispatch(UiAction::Activate {
         slot_id: slot,
         key: norte_ui_host::RowKey(1),
-        generation: listado.generation,
+        generation: listing.generation,
     })
     .await
-    .expect("host vivo");
-    let dentro = foto_hasta(&h, &mut sub, "el listado de `docs`", |s| {
+    .expect("host alive");
+    let inside = foto_hasta(&h, &mut sub, "the `docs` listing", |s| {
         let b = primer_listado(s);
         b.path_display.ends_with("docs").then(|| b.clone())
     })
     .await;
 
-    // Y volver a subir POR LA FILA `..`, que es la primera.
+    // And go back up THROUGH the `..` row, which is the first one.
     h.dispatch(UiAction::Activate {
         slot_id: slot,
         key: norte_ui_host::RowKey(0),
-        generation: dentro.generation,
+        generation: inside.generation,
     })
     .await
-    .expect("host vivo");
-    let fuera = foto_hasta(&h, &mut sub, "de vuelta en `casa`", |s| {
+    .expect("host alive");
+    let outside = foto_hasta(&h, &mut sub, "back in `casa`", |s| {
         let b = primer_listado(s);
         b.path_display.ends_with("casa").then(|| b.clone())
     })
     .await;
-    let bajo_el_cursor = fuera
+    let under_the_cursor = outside
         .cursor
-        .and_then(|k| fuera.rows.get(usize::try_from(k.0).unwrap_or(0)))
+        .and_then(|k| outside.rows.get(usize::try_from(k.0).unwrap_or(0)))
         .map(|r| r.display_name.clone());
     assert_eq!(
-        bajo_el_cursor.as_deref(),
+        under_the_cursor.as_deref(),
         Some("docs"),
-        "el cursor vuelve al directorio del que se salió, no a la fila 0: {:?}",
-        fuera
+        "the cursor goes back to the directory it left, not to row 0: {:?}",
+        outside
             .rows
             .iter()
             .map(|r| &r.display_name)
@@ -236,26 +238,27 @@ async fn subir_por_la_fila_de_subir_deja_el_cursor_donde_estabas() {
     );
 }
 
-/// La hoja DICE a qué listado sigue, y cambia cuando cambia el foco.
+/// The sheet SAYS which listing it follows, and changes when focus changes.
 ///
-/// «Detalles» a secas no dice de qué son los detalles: con dos listados
-/// abiertos, la única forma de saber cuál está describiendo era mover el
-/// cursor y ver si la hoja se movía. Ahora lleva la ruta del panel al que
-/// sigue, que es la pregunta que faltaba contestar.
+/// "Details" on its own does not say what the details are of: with two
+/// listings open, the only way to know which one it was describing was to
+/// move the cursor and see if the sheet moved. Now it carries the path of
+/// the panel it follows, which is the question that was missing an answer.
 #[tokio::test]
-async fn la_hoja_dice_a_que_listado_sigue() {
+async fn the_sheet_says_which_listing_it_follows() {
     let (h, snap) = host_full_con_fila_de_subir(arbol()).await;
     let mut sub = h.subscribe();
-    let primera = hoja(&snap).expect("colocada");
+    let first = hoja(&snap).expect("placed");
     assert_eq!(
-        primera.follows_display,
+        first.follows_display,
         norte_frontend::path_display(&dir()).0,
-        "la ruta del listado al que sigue: {primera:?}"
+        "the path of the listing it follows: {first:?}"
     );
-    assert!(!primera.follows_hostile);
+    assert!(!first.follows_hostile);
 
-    // Con el foco en el OTRO listado, la hoja lo dice: sigue al activo.
-    let otro = snap
+    // With focus on the OTHER listing, the sheet says so: it follows the
+    // active one.
+    let other = snap
         .slots
         .iter()
         .filter_map(|s| match s {
@@ -263,41 +266,41 @@ async fn la_hoja_dice_a_que_listado_sigue() {
             _ => None,
         })
         .nth(1)
-        .expect("`full` tiene dos listados");
+        .expect("`full` has two listings");
     h.dispatch(UiAction::Activate {
-        slot_id: otro,
+        slot_id: other,
         key: norte_ui_host::RowKey(1),
         generation: 0,
     })
     .await
     .ok();
-    h.dispatch(UiAction::FocusSlot { slot_id: otro })
+    h.dispatch(UiAction::FocusSlot { slot_id: other })
         .await
-        .expect("host vivo");
-    let foto = foto_hasta(&h, &mut sub, "el foco en el otro listado", |s| {
-        (s.focus == Some(otro)).then(|| s.clone())
+        .expect("host alive");
+    let snap = foto_hasta(&h, &mut sub, "focus on the other listing", |s| {
+        (s.focus == Some(other)).then(|| s.clone())
     })
     .await;
-    let h2 = hoja(&foto).expect("sigue colocada");
+    let h2 = hoja(&snap).expect("still placed");
     assert!(
         !h2.follows_display.is_empty(),
-        "y sigue diciendo a quién sigue: {h2:?}"
+        "and it still says whom it follows: {h2:?}"
     );
 }
 
-/// Un listado y una hoja de atributos, SIN visor acoplado.
+/// A listing and an attributes sheet, WITH NO docked viewer.
 ///
-/// La disposición `full` tiene los dos, y eso escondía el fallo: la hoja no
-/// tenía forma de actualizarse sola y viajaba de gorra en la foto entera que
-/// el VISOR provocaba al cambiar de nota. Sin visor en la disposición no hay
-/// quien la arrastre, y la hoja se quedaba congelada.
+/// The `full` layout has both, and that hid the bug: the sheet had no way to
+/// update on its own and travelled for free in the whole snapshot the VIEWER
+/// triggered when the note changed. With no viewer in the layout there is
+/// nobody to drag it along, and the sheet stayed frozen.
 pub(super) async fn host_hoja_sin_visor(
     backend: Arc<Falso>,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
     use norte_frontend::layout::{Bindings, Dir, Follow, KindId, Node, RoleId, SlotId};
     let mut cfg = norte_ui_host::ajustes_por_defecto();
     cfg.common.ui_parent_entry = Some(true);
-    let arbol = Node::split(
+    let tree = Node::split(
         Dir::Horizontal,
         vec![
             Node::slot(SlotId(1), KindId::browser()),
@@ -319,7 +322,7 @@ pub(super) async fn host_hoja_sin_visor(
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
-        layout: arbol,
+        layout: tree,
         viewport: (200, 60),
         settings: cfg,
         paths: norte_ui_host::settings::HostPaths::default(),
@@ -331,34 +334,36 @@ pub(super) async fn host_hoja_sin_visor(
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// Los kinds cuya vista sale del CURSOR del listado al que siguen.
+/// The kinds whose view comes from the CURSOR of the listing they follow.
 ///
-/// Lista a mano y a propósito, como `paridad.rs::NO_APLICA`: quien añada un
-/// hueco que siga al cursor la edita, y el test de abajo le exige una sonda.
-/// Derivarla del registro de kinds no vale — «seguir» es un vínculo del
-/// hueco, no una propiedad del kind, así que el registro no lo sabe.
+/// A hand-written list, on purpose, like `paridad.rs::NO_APLICA`: whoever
+/// adds a slot that follows the cursor edits it, and the test below demands
+/// it have a probe. Deriving it from the kind registry does not work —
+/// "following" is a bond of the slot, not a property of the kind, so the
+/// registry does not know it.
 pub(super) const SIGUEN_AL_CURSOR: &[&str] = &["viewer", "metadata"];
 
-/// Cada uno de ellos tiene camino propio hasta el renderer (ADR 0097, D3).
+/// Each one of them has its own path to the renderer (ADR 0097, D3).
 ///
-/// La ventana habla por PARCHES: uno de filas escribe `generation`,
-/// `first_visible`, `rows` y `cursor`, y nada más. Un panel que se deriva del
-/// cursor y no tiene sonda propia solo se refresca cuando OTRO panel provoca
-/// una foto entera — y la disposición de fábrica (`orthodox`) no coloca
-/// ninguno de los dos, así que ese «otro» no existe para la mayoría.
+/// The window speaks in PATCHES: a row one writes `generation`,
+/// `first_visible`, `rows` and `cursor`, and nothing else. A panel that
+/// derives from the cursor and has no probe of its own only refreshes when
+/// ANOTHER panel triggers a whole snapshot — and the factory layout
+/// (`orthodox`) places neither of them, so that "other" does not exist for
+/// most.
 ///
-/// Así se quedó congelada la hoja de atributos: viajaba de gorra en la foto
-/// del visor. Este test pone cada kind SOLO con un listado, mueve el cursor,
-/// y exige una foto SIN pedir `Resync` — que es lo único que tiene el
-/// renderer de verdad.
+/// This is how the attributes sheet ended up frozen: it travelled for free
+/// in the viewer's snapshot. This test puts each kind ALONE with a listing,
+/// moves the cursor, and demands a snapshot with NO `Resync` requested —
+/// which is the only thing a real renderer has.
 #[tokio::test]
-async fn todo_hueco_que_sigue_al_cursor_tiene_sonda_propia() {
+async fn every_slot_that_follows_the_cursor_has_its_own_probe() {
     use norte_frontend::layout::{Bindings, Dir, Follow, KindId, Node, RoleId, SlotId};
     for kind in SIGUEN_AL_CURSOR {
-        let arbol_layout = Node::split(
+        let layout_tree = Node::split(
             Dir::Horizontal,
             vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -381,7 +386,7 @@ async fn todo_hueco_que_sigue_al_cursor_tiene_sonda_propia() {
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
             keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
                 .expect("preset"),
-            layout: arbol_layout,
+            layout: layout_tree,
             viewport: (200, 60),
             settings: ajustes_de_prueba(),
             paths: norte_ui_host::settings::HostPaths::default(),
@@ -393,137 +398,141 @@ async fn todo_hueco_que_sigue_al_cursor_tiene_sonda_propia() {
             log_ring: None,
         })
         .await
-        .expect("arranca");
+        .expect("starts");
         let (h, snap) = h;
         let mut sub = h.subscribe();
-        let listado = primer_listado(&snap);
+        let listing = primer_listado(&snap);
 
         h.dispatch(UiAction::SelectRow {
-            slot_id: listado.slot_id,
+            slot_id: listing.slot_id,
             key: norte_ui_host::RowKey(1),
-            generation: listado.generation,
+            generation: listing.generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
         asentar().await;
 
         tokio::time::pause();
-        let llegada =
+        let arrival =
             tokio::time::timeout(std::time::Duration::from_secs(5), siguiente_foto(&mut sub)).await;
         tokio::time::resume();
         assert!(
-            llegada.is_ok(),
-            "el hueco `{kind}` sigue al cursor y no manda nada al moverlo: \
-             se queda congelado en cualquier disposición que no traiga otro \
-             panel que provoque una foto"
+            arrival.is_ok(),
+            "the `{kind}` slot follows the cursor and sends nothing when it \
+             moves: it stays frozen in any layout that brings no other panel \
+             to trigger a snapshot"
         );
     }
 }
 
-/// Pinchar una fila mueve la hoja, aunque no haya visor que arrastre la foto.
+/// Clicking a row moves the sheet, even with no viewer to drag the snapshot
+/// along.
 ///
-/// Lo que veía Oscar: en una disposición con árbol, dos listados y detalles
-/// —sin visor—, hacer clic en cualquier fila de cualquier panel dejaba la
-/// hoja en `..` para siempre. `SelectRow` contesta con un parche de FILAS, y
-/// la hoja solo viaja en la foto entera.
+/// What Oscar saw: in a layout with a tree, two listings and details — with
+/// no viewer — clicking any row of any panel left the sheet on `..` forever.
+/// `SelectRow` answers with a ROWS patch, and the sheet only travels in a
+/// whole snapshot.
 #[tokio::test]
-async fn pinchar_una_fila_mueve_la_hoja_sin_visor_en_la_disposicion() {
+async fn clicking_a_row_moves_the_sheet_with_no_viewer_in_the_layout() {
     let (h, snap) = host_hoja_sin_visor(arbol()).await;
     let mut sub = h.subscribe();
-    let primera = hoja(&snap).expect("la disposición coloca la hoja");
+    let first = hoja(&snap).expect("the layout places the sheet");
     assert_eq!(
-        primera.fields.first().map(|f| f.value.as_str()),
+        first.fields.first().map(|f| f.value.as_str()),
         Some(".."),
-        "de partida, la fila de subir"
+        "to start with, the parent row"
     );
-    let listado = primer_listado(&snap);
-    let generation = listado.generation;
-    // La fila 2 del listado: `..`, `docs`, y la siguiente.
-    let objetivo = listado
+    let listing = primer_listado(&snap);
+    let generation = listing.generation;
+    // Row 2 of the listing: `..`, `docs`, and the next one.
+    let target = listing
         .rows
         .get(2)
-        .expect("hay tercera fila")
+        .expect("there is a third row")
         .display_name
         .clone();
 
     h.dispatch(UiAction::SelectRow {
-        slot_id: listado.slot_id,
+        slot_id: listing.slot_id,
         key: norte_ui_host::RowKey(2),
         generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     asentar().await;
 
-    // SIN `Resync`, y ahí está la gracia: `foto_hasta` pide una foto en cada
-    // vuelta, así que un test escrito con él se pone verde aunque el clic no
-    // mande nada — la foto que examina la provocó el propio test. Lo que se
-    // comprueba aquí es lo que el host manda POR SU CUENTA al pinchar, que es
-    // lo único que tiene el renderer.
+    // With NO `Resync`, and that is the whole point: `foto_hasta` requests a
+    // snapshot on every round, so a test written with it would pass green
+    // even if the click sent nothing — the snapshot it examines would be the
+    // one the test itself triggered. What is checked here is what the host
+    // sends ON ITS OWN on a click, which is the only thing the renderer has.
     tokio::time::pause();
-    let llegada =
+    let arrival =
         tokio::time::timeout(std::time::Duration::from_secs(5), siguiente_foto(&mut sub)).await;
     tokio::time::resume();
-    let foto = llegada.expect("pinchar no produjo ninguna foto: la hoja se queda congelada");
+    let snap = arrival.expect("clicking produced no snapshot: the sheet stays frozen");
 
-    let hoja = hoja(&foto).expect("sigue colocada");
+    let sheet = hoja(&snap).expect("still placed");
     assert_eq!(
-        hoja.fields.first().map(|f| f.value.as_str()),
-        Some(objetivo.as_str()),
-        "la hoja describe la fila pinchada: {:?}",
-        hoja.fields
+        sheet.fields.first().map(|f| f.value.as_str()),
+        Some(target.as_str()),
+        "the sheet describes the clicked row: {:?}",
+        sheet.fields
     );
 }
 
-/// Con un filtro eligiendo otra fila, la hoja describe ESA fila y no `..`.
+/// With a filter choosing another row, the sheet describes THAT row and not
+/// `..`.
 ///
-/// El cursor REAL no se mueve en modo Filter, así que preguntar
-/// `is_parent_row(cursor())` por un lado y `cursor_entry()` por otro dejaba
-/// la hoja diciendo «`..`, carpeta» mientras el listado resaltaba un fichero
-/// — y el nombre hostil que el lector estaba mirando no se marcaba, que es
-/// justo para lo que se consulta esta hoja.
+/// The REAL cursor does not move in Filter mode, so asking
+/// `is_parent_row(cursor())` on one side and `cursor_entry()` on the other
+/// left the sheet saying "`..`, folder" while the listing highlighted a
+/// file — and the hostile name the reader was looking at went unmarked,
+/// which is exactly what this sheet is consulted for.
 #[tokio::test]
-async fn con_un_filtro_la_hoja_describe_la_fila_elegida_y_no_la_de_subir() {
+async fn with_a_filter_the_sheet_describes_the_chosen_row_not_the_parent() {
     let (h, _snap) = host_full_con_fila_de_subir(arbol()).await;
     let mut sub = h.subscribe();
-    // `caf\xC3(` es la entrada no-UTF-8 del árbol de pruebas: se filtra por
-    // una letra que la fila `..` no tiene.
+    // `caf\xC3(` is the test tree's non-UTF-8 entry: it is filtered by a
+    // letter the `..` row does not have.
     ejecutar_por_paleta(&h, &mut sub, "pane.quick-search").await;
     for c in "caf".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    // Se espera a la entrada HOSTIL, no a «la primera que no sea `..`»: con
-    // la query a medias («c») el filtro pasa por `docs`, que también es una
-    // fila de verdad y contestaría a esa pregunta sin probar nada.
-    let foto = foto_hasta(&h, &mut sub, "la hoja sobre lo filtrado", |s| {
+    // It waits for the HOSTILE entry, not "the first one that is not `..`":
+    // with the query half-typed ("c") the filter passes through `docs`,
+    // which is also a real row and would answer that question without
+    // proving anything.
+    let snap = foto_hasta(&h, &mut sub, "the sheet over what was filtered", |s| {
         hoja(s)
             .filter(|m| m.fields.first().is_some_and(|f| f.hostile))
             .cloned()
     })
     .await;
-    let nombre = foto.fields.first().expect("hay nombre");
+    let name = snap.fields.first().expect("there is a name");
     assert!(
-        nombre.hostile,
-        "describe la entrada resaltada, y la marca: {nombre:?}"
+        name.hostile,
+        "it describes the highlighted entry, and marks it: {name:?}"
     );
     assert!(
-        !foto.fields.iter().any(|f| f.label == "Destino"),
-        "y no la fila de subir: {:?}",
-        foto.fields
+        !snap.fields.iter().any(|f| f.label == "Destino"),
+        "and not the parent row: {:?}",
+        snap.fields
     );
 }
 
-/// Y el visor acoplado dice «directorio», no «nada seleccionado».
+/// And the docked viewer says "directory", not "nothing selected".
 ///
-/// La misma avería en el otro panel que sigue al cursor, y por la misma
-/// razón: preguntaba por el operando.
+/// The same bug in the other panel that follows the cursor, and for the same
+/// reason: it was asking for the operand.
 #[tokio::test]
-async fn el_visor_acoplado_sobre_la_fila_de_subir_dice_directorio() {
+async fn the_docked_viewer_over_the_parent_row_says_directory() {
     let (h, _snap) = host_full_con_fila_de_subir(arbol()).await;
     let mut sub = h.subscribe();
-    // Hasta que el listado aterriza no hay cursor, y ESA nota es otra: se
-    // espera a la del directorio, como el resto de los tests del visor.
-    let vista = foto_hasta(&h, &mut sub, "el hueco de preview sobre `..`", |s| {
+    // Until the listing lands there is no cursor, and THAT note is another
+    // one: it waits for the directory's, like the rest of the viewer's
+    // tests.
+    let view = foto_hasta(&h, &mut sub, "the preview slot over `..`", |s| {
         s.slots
             .iter()
             .find_map(|v| match v {
@@ -534,40 +543,40 @@ async fn el_visor_acoplado_sobre_la_fila_de_subir_dice_directorio() {
     })
     .await;
     assert_eq!(
-        vista.note, "directorio",
-        "`..` lleva a una carpeta: eso es lo que hay bajo el cursor"
+        view.note, "directorio",
+        "`..` leads to a folder: that is what is under the cursor"
     );
 }
 
-/// Un nombre hostil llega a la hoja enmascarado y MARCADO, igual que a una
-/// fila del listado.
+/// A hostile name reaches the sheet masked and MARKED, just like a listing
+/// row.
 #[tokio::test]
-async fn un_nombre_hostil_en_la_hoja_va_marcado() {
+async fn a_hostile_name_in_the_sheet_is_marked() {
     let (h, snap) = host_full(arbol()).await;
     let mut sub = h.subscribe();
-    // El árbol de pruebas tiene una entrada cuyo nombre no es UTF-8.
-    let mut vista = hoja(&snap).expect("colocada").clone();
+    // The test tree has an entry whose name is not UTF-8.
+    let mut view = hoja(&snap).expect("placed").clone();
     for _ in 0..6 {
-        if vista.fields.first().is_some_and(|f| f.hostile) {
+        if view.fields.first().is_some_and(|f| f.hostile) {
             break;
         }
-        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        vista = hoja(&foto).expect("colocada").clone();
+        h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        view = hoja(&snap).expect("placed").clone();
     }
-    let nombre = vista.fields.first().expect("hay nombre");
-    assert!(nombre.hostile, "la entrada no-UTF-8 se marca: {nombre:?}");
+    let name = view.fields.first().expect("there is a name");
+    assert!(name.hostile, "the non-UTF-8 entry is marked: {name:?}");
     assert!(
-        !nombre.value.contains('\u{fffd}') || nombre.hostile,
-        "y su texto ya viene saneado"
+        !name.value.contains('\u{fffd}') || name.hostile,
+        "and its text already comes sanitized"
     );
 }
 
-/// Con el foco en el panel de PROCESOS, bajar baja por él y no por el
-/// listado de al lado.
+/// With focus on the PROCESSES panel, down moves through it and not through
+/// the listing next to it.
 #[tokio::test]
-async fn el_panel_de_procesos_toma_sus_teclas() {
+async fn the_processes_panel_takes_its_own_keys() {
     let mut f = Falso::default();
     f.pon(
         "mem:///casa",
@@ -576,73 +585,73 @@ async fn el_panel_de_procesos_toma_sus_teclas() {
     let backend = Arc::new(f);
     let (h, snap) = host_full(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let cursor_antes = primer_listado(&snap).cursor;
+    let cursor_before = primer_listado(&snap).cursor;
 
-    // Se lanzan dos borrados para que el tablero tenga filas. El id del
-    // diálogo se LEE, y se espera al NUEVO: fijarlo a mano dejaba el segundo
-    // sin contestar, y un diálogo abierto se queda el teclado —que es justo
-    // lo que debe hacer—, así que el tabulador ya no llegaba a ningún lado.
-    // `Enter` no vale para confirmarlo: en un borrado `confirm` es
-    // destructivo y el teclado elige la primera respuesta que no lo es.
-    let mut contestado = norte_ui_host::ModalId(0);
+    // Two deletes are launched so the board has rows. The dialog's id is
+    // READ, and the NEW one is waited for: fixing it by hand left the second
+    // one unanswered, and an open dialog keeps the keyboard — which is
+    // exactly what it should do — so tab never reached anywhere. `Enter`
+    // does not work to confirm it: in a delete, `confirm` is destructive and
+    // the keyboard chooses the first answer that is not.
+    let mut answered = norte_ui_host::ModalId(0);
     for _ in 0..2 {
-        h.dispatch(tecla("F8")).await.expect("host vivo");
+        h.dispatch(tecla("F8")).await.expect("host alive");
         let id = loop {
-            h.dispatch(UiAction::Resync).await.expect("host vivo");
+            h.dispatch(UiAction::Resync).await.expect("host alive");
             if let Some(d) = siguiente_foto(&mut sub).await.dialogs.last()
-                && d.id != contestado
+                && d.id != answered
             {
                 break d.id;
             }
         };
-        contestado = id;
+        answered = id;
         h.dispatch(UiAction::Dialog {
             id,
             choice: "confirm".to_owned(),
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     }
 
-    // Se rota el foco hasta el panel de procesos. Por el recorrido de la
-    // PANTALLA (`alt+o`): `Tab` cicla listados y no para en los laterales
+    // Focus is cycled to the processes panel. Through the SCREEN's traversal
+    // (`alt+o`): `Tab` cycles listings and does not stop on the side ones
     // (ADR 0102).
-    let mut en_procesos = false;
+    let mut in_processes = false;
     for _ in 0..8 {
-        h.dispatch(tecla_alt("o")).await.expect("host vivo");
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let activo = foto
+        h.dispatch(tecla_alt("o")).await.expect("host alive");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let active = snap
             .layout
             .placements
             .iter()
             .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
             .map(|p| p.slot_id);
-        if let Some(id) = activo
-            && foto
+        if let Some(id) = active
+            && snap
                 .slots
                 .iter()
                 .any(|s| matches!(s, SlotView::Processes { slot_id, .. } if *slot_id == id))
         {
-            en_procesos = true;
+            in_processes = true;
             break;
         }
     }
-    assert!(en_procesos, "el anillo llega al panel de procesos");
+    assert!(in_processes, "the ring reaches the processes panel");
 
-    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
+    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
     assert_eq!(
-        primer_listado(&foto).cursor,
-        cursor_antes,
-        "bajar con el foco en procesos NO mueve el listado: el rol lo pintaba \
-         enfocado y las teclas se iban al panel de al lado"
+        primer_listado(&snap).cursor,
+        cursor_before,
+        "moving down with focus on processes does NOT move the listing: the \
+         role painted it focused and the keys went to the panel next to it"
     );
 }
 
-/// La barra lateral de sitios de una foto, si está colocada.
+/// A snapshot's places side bar, if it is placed.
 pub(super) fn sitios(
     snap: &norte_ui_host::ViewSnapshot,
 ) -> Option<&norte_ui_host::dto::PlacesSlotView> {
@@ -652,58 +661,58 @@ pub(super) fn sitios(
     })
 }
 
-/// La barra lateral llega con sus DOS cabeceras desde el primer frame, y los
-/// volúmenes se le añaden cuando el host contesta.
+/// The places side bar arrives with its TWO headers from the first frame,
+/// and volumes get added to it when the host answers.
 #[tokio::test]
-async fn la_barra_de_sitios_no_da_un_brinco_cuando_llegan_los_discos() {
+async fn the_places_bar_does_not_jump_when_the_drives_arrive() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
     f.volumenes = vec![volumen("mem:///otro", "ext4", false)];
     let (h, snap) = host_full(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    let primera = sitios(&snap).expect("la disposición `full` coloca la barra");
-    let cabeceras = primera
+    let first = sitios(&snap).expect("the `full` layout places the bar");
+    let headers = first
         .rows
         .iter()
         .filter(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Header { .. }))
         .count();
     assert_eq!(
-        cabeceras, 2,
-        "las dos cabeceras están desde el principio, aunque no haya nada debajo"
+        headers, 2,
+        "both headers are there from the start, even with nothing under them"
     );
 
-    // Los volúmenes llegan después: la barra no espera a ellos para pintarse.
-    let mut con_discos = None;
+    // The volumes arrive later: the bar does not wait for them to paint.
+    let mut with_drives = None;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let v = sitios(&foto).expect("sigue colocada").clone();
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let v = sitios(&snap).expect("still placed").clone();
         if v.rows
             .iter()
             .any(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Drive { .. }))
         {
-            con_discos = Some(v);
+            with_drives = Some(v);
             break;
         }
     }
-    let v = con_discos.expect("los volúmenes llegan a la barra");
-    let disco = v
+    let v = with_drives.expect("the volumes reach the bar");
+    let drive = v
         .rows
         .iter()
         .find_map(|r| match r {
             norte_ui_host::dto::PlaceRowView::Drive { detail, .. } => Some(detail.clone()),
             _ => None,
         })
-        .expect("hay un disco");
-    assert!(!disco.is_empty(), "y dice cuánto espacio tiene");
+        .expect("there is a drive");
+    assert!(!drive.is_empty(), "and it says how much space it has");
 }
 
-/// Con el foco en la barra lateral, bajar baja por ELLA, y entrar navega el
-/// LISTADO — que es lo que hace que tenerla abierta no cambie a dónde van las
-/// operaciones.
+/// With focus on the side bar, down moves through IT, and entering navigates
+/// the LISTING — which is what makes having it open not change where
+/// operations go.
 #[tokio::test]
-async fn la_barra_de_sitios_navega_el_listado_y_no_se_lo_queda() {
+async fn the_places_bar_navigates_the_listing_and_does_not_keep_it() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
     f.pon("mem:///otro", vec![(b"raiz.txt".to_vec(), false)]);
@@ -711,54 +720,55 @@ async fn la_barra_de_sitios_navega_el_listado_y_no_se_lo_queda() {
     let (h, _snap) = host_full(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    // Se espera a que los discos estén, y se busca su fila.
-    let mut fila_del_disco = None;
+    // It waits for the drives to be there, and looks for their row.
+    let mut drive_row = None;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let v = sitios(&foto).expect("colocada");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let v = sitios(&snap).expect("placed");
         if let Some(i) = v
             .rows
             .iter()
             .position(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Drive { .. }))
         {
-            fila_del_disco = Some((i, v.generation));
+            drive_row = Some((i, v.generation));
             break;
         }
     }
-    let (i, generacion) = fila_del_disco.expect("los discos llegan");
+    let (i, generation) = drive_row.expect("the drives arrive");
 
-    // Un click en el disco: elige Y activa, porque una barra lateral existe
-    // para ir a sitios.
+    // A click on the drive: it selects AND activates, because a side bar
+    // exists to go to places.
     h.dispatch(UiAction::PlaceActivateRow {
-        row: u32::try_from(i).expect("cabe"),
-        generation: generacion,
+        row: u32::try_from(i).expect("fits"),
+        generation,
     })
     .await
-    .expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let mut llego = false;
+    .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let mut arrived = false;
     for _ in 0..20 {
-        let foto = siguiente_foto(&mut sub).await;
-        if primer_listado(&foto).path_display.contains("otro") {
-            llego = true;
+        let snap = siguiente_foto(&mut sub).await;
+        if primer_listado(&snap).path_display.contains("otro") {
+            arrived = true;
             break;
         }
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
     }
-    assert!(llego, "el LISTADO navegó al volumen, no la barra");
+    assert!(arrived, "the LISTING navigated to the volume, not the bar");
 }
 
-/// Un click en la barra lateral no puede navegar a un sitio que no se pulsó.
+/// A click on the side bar cannot navigate to a place that was not pressed.
 ///
-/// Los volúmenes llegan de una tarea de fondo y se insertan EN MEDIO —las
-/// unidades van antes que los favoritos—, así que entre que el usuario suelta
-/// el botón sobre un favorito y el host atiende la acción, esa fila es otra.
-/// Sin generación el host la aceptaba, y `set_cursor` recorta en vez de
-/// rechazar, así que el peor caso era navegar al ÚLTIMO sitio de la lista con
-/// un acuse `Applied`. Es la carrera que el ADR 0068 existe para cerrar.
+/// Volumes arrive from a background task and get inserted IN THE MIDDLE —
+/// drives go before favorites — so between the user releasing the button
+/// over a favorite and the host handling the action, that row is a different
+/// one. With no generation the host used to accept it, and `set_cursor`
+/// clamps instead of rejecting, so the worst case was navigating to the
+/// LAST place in the list with an `Applied` ack. It is the race ADR 0068
+/// exists to close.
 #[tokio::test]
-async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
+async fn a_click_on_the_bar_does_not_navigate_elsewhere_if_the_list_changed() {
     let mut cfg = ajustes_de_prueba();
     cfg.common.hotlist = vec![norte_config::HotlistItem {
         name: "proyectos".to_owned(),
@@ -769,9 +779,9 @@ async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
     f.pon("mem:///proyectos", vec![(b"p.txt".to_vec(), false)]);
     f.pon("mem:///boot", vec![(b"vmlinuz".to_vec(), false)]);
     f.pon("mem:///datos", vec![(b"d.txt".to_vec(), false)]);
-    // DOS discos: desplazan el favorito lo justo para que su índice caiga
-    // sobre un disco y no sobre una cabecera. Con uno el click habría plegado
-    // una sección, que también está mal pero se nota menos.
+    // TWO drives: they shift the favorite just enough for its index to land
+    // on a drive and not on a header. With one, the click would have
+    // collapsed a section, which is also wrong but shows less.
     f.volumenes = vec![
         volumen("mem:///boot", "ext4", false),
         volumen("mem:///datos", "ext4", false),
@@ -797,80 +807,80 @@ async fn un_click_en_la_barra_no_navega_a_otro_sitio_si_la_lista_cambio() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
 
-    // La foto que el usuario TIENE DELANTE, antes de que lleguen los discos.
-    let antes = sitios(&snap).expect("colocada").clone();
-    let fila_pulsada = antes
+    // The snapshot the user HAS IN FRONT OF THEM, before the drives arrive.
+    let before = sitios(&snap).expect("placed").clone();
+    let clicked_row = before
         .rows
         .iter()
         .position(|r| matches!(r, norte_ui_host::dto::PlaceRowView::Favorite { .. }))
-        .expect("el favorito está desde el principio");
+        .expect("the favorite is there from the start");
 
-    // Los discos aterrizan y la lista es OTRA.
-    let mut despues = None;
+    // The drives land and the list is DIFFERENT.
+    let mut after = None;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let v = sitios(&siguiente_foto(&mut sub).await)
-            .expect("colocada")
+            .expect("placed")
             .clone();
-        if v.generation != antes.generation {
-            despues = Some(v);
+        if v.generation != before.generation {
+            after = Some(v);
             break;
         }
     }
-    let despues = despues.expect("los volúmenes llegan y suben la generación");
+    let after = after.expect("the volumes arrive and bump the generation");
     assert!(
         matches!(
-            despues.rows.get(fila_pulsada),
+            after.rows.get(clicked_row),
             Some(norte_ui_host::dto::PlaceRowView::Drive { .. })
         ),
-        "la fila que se pulsó es ahora un DISCO, que es lo que hace peligroso \
-         el índice desnudo: {:?}",
-        despues.rows.get(fila_pulsada)
+        "the row that was pressed is now a DRIVE, which is what makes the \
+         bare index dangerous: {:?}",
+        after.rows.get(clicked_row)
     );
 
-    // El click en vuelo, con la generación de la pantalla que se vio.
+    // The in-flight click, with the generation of the screen that was seen.
     let ack = h
         .dispatch(UiAction::PlaceActivateRow {
-            row: u32::try_from(fila_pulsada).expect("cabe"),
-            generation: antes.generation,
+            row: u32::try_from(clicked_row).expect("fits"),
+            generation: before.generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, norte_ui_host::ActionAck::Stale { .. }),
-        "se rechaza en vez de navegar a otro sitio: {ack:?}"
+        "it is rejected instead of navigating elsewhere: {ack:?}"
     );
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     for _ in 0..8 {
-        let foto = siguiente_foto(&mut sub).await;
+        let snap = siguiente_foto(&mut sub).await;
         assert!(
-            !primer_listado(&foto).path_display.contains("boot"),
-            "y el panel NO se fue al disco que nadie pulsó"
+            !primer_listado(&snap).path_display.contains("boot"),
+            "and the pane did NOT go to the drive nobody pressed"
         );
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
     }
 
-    // Con la generación buena, el mismo click sí va.
+    // With the right generation, the same click does go through.
     let ack = h
         .dispatch(UiAction::PlaceActivateRow {
-            row: u32::try_from(fila_pulsada).expect("cabe"),
-            generation: despues.generation,
+            row: u32::try_from(clicked_row).expect("fits"),
+            generation: after.generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
-        "y la generación buena sí vale: {ack:?}"
+        "and the right generation does work: {ack:?}"
     );
 }
 
-/// Un favorito cuya ruta no parsea se PINTA con su motivo: uno que
-/// desaparece en silencio es un fallo de configuración que nadie puede ver.
+/// A favorite whose path fails to parse is PAINTED with its reason: one that
+/// disappears silently is a configuration failure nobody can see.
 #[tokio::test]
-async fn un_favorito_roto_se_ve_y_dice_por_que() {
+async fn a_broken_favorite_shows_and_says_why() {
     let mut cfg = ajustes_de_prueba();
     cfg.common.hotlist = vec![
         norte_config::HotlistItem {
@@ -905,11 +915,11 @@ async fn un_favorito_roto_se_ve_y_dice_por_que() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let _ = &h;
 
-    let v = sitios(&snap).expect("colocada");
-    let favoritos: Vec<(String, String)> = v
+    let v = sitios(&snap).expect("placed");
+    let favorites: Vec<(String, String)> = v
         .rows
         .iter()
         .filter_map(|r| match r {
@@ -920,17 +930,17 @@ async fn un_favorito_roto_se_ve_y_dice_por_que() {
         })
         .collect();
     assert_eq!(
-        favoritos.len(),
+        favorites.len(),
         2,
-        "los dos favoritos se ven: {favoritos:?}"
+        "both favorites are visible: {favorites:?}"
     );
-    let roto = favoritos
+    let broken = favorites
         .iter()
         .find(|(n, _)| n == "roto")
-        .expect("el roto está");
-    assert!(!roto.1.is_empty(), "y dice por qué está roto");
+        .expect("the broken one is there");
+    assert!(!broken.1.is_empty(), "and it says why it is broken");
     assert!(
-        !roto.1.starts_with("err-"),
-        "traducido, no la clave: {roto:?}"
+        !broken.1.starts_with("err-"),
+        "translated, not the key: {broken:?}"
     );
 }

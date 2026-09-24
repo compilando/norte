@@ -1,6 +1,6 @@
 [package]
 name = "norte-core"
-description = "Núcleo de norte: scheduler de tasks, copy engine, sesiones"
+description = "norte's core: task scheduler, copy engine, sessions"
 license = "AGPL-3.0-only"
 version.workspace = true
 edition.workspace = true
@@ -8,51 +8,53 @@ rust-version.workspace = true
 repository.workspace = true
 authors.workspace = true
 
-# `testing`: expone puertas que un e2e necesita y un embebedor NO debe tener
-# (#241). `run_column_values_for_test` acuña un token de ubicación con el
-# `climb` que le pasen, y el `climb` solo es del actor humano — en la
-# biblioteca publicada eso es un camino de acuñado sin política. Los tests de
-# integración son crates aparte, así que `cfg(test)` no basta: hace falta una
-# feature, y el gate la activa (`features` en el justfile).
+# `testing`: exposes doors that an e2e needs and an embedder must NOT have
+# (#241). `run_column_values_for_test` mints a location token with whatever
+# `climb` it's given, and `climb` belongs only to the human actor — in the
+# published library that would be a minting path with no policy. Integration
+# tests are separate crates, so `cfg(test)` isn't enough: a feature is needed,
+# and the gate turns it on (`features` in the justfile).
 [features]
 testing = []
 
 [dependencies]
-# Providers de la cadena de salida = crates core (ADR 0010): el connection
-# manager de fase 6e (ADR 0015 A) resuelve connections.toml + secreto vía
-# norte-connect y construye SftpProvider/FtpProvider con la sesión inyectada.
-# El trait de conexión se implementa aquí; los providers jamás ven un secreto.
+# Output-chain providers = core crates (ADR 0010): the phase-6e connection
+# manager (ADR 0015 A) resolves connections.toml + secret via norte-connect
+# and builds SftpProvider/FtpProvider with the session injected. The
+# connection trait is implemented here; providers never see a secret.
 async-trait.workspace = true
-# fs.read del daemon devuelve bytes en base64 (JSON no lleva bytes crudos).
+# The daemon's fs.read returns bytes as base64 (JSON carries no raw bytes).
 base64.workspace = true
-# Chunks del ByteStream que reensambla PluginProvider (#30).
+# Chunks of the ByteStream that PluginProvider reassembles (#30).
 bytes.workspace = true
 futures.workspace = true
-# El motor de `fs.compare` (plan 2026-08-11): función pura de dos providers,
-# sin daemon ni scheduler. El core le pone la Task, el gate y el lote — la
-# comparación en sí no conoce ninguna de las tres cosas.
-# El lado CLIENTE del daemon (ADR 0066): el core lo USA para su
-# `Backend::Remote`, pero el SDK no puede verlo a él — su test de frontera lo
-# vigila.
+# The `fs.compare` engine (plan 2026-08-11): a pure function of two
+# providers, with no daemon or scheduler. The core wraps it with the Task,
+# the gate and the batch — the comparison itself knows none of those three
+# things.
+# The daemon's CLIENT side (ADR 0066): the core USES it for its
+# `Backend::Remote`, but the SDK must not see it — its boundary test watches
+# for that.
 norte-client.workspace = true
 norte-compare.workspace = true
-# El PLANIFICADOR de sincronización (plan 2026-08-11, ADR 0049): transductor
-# puro de filas de comparación a pasos de plan, sin daemon ni provider. El core
-# le pone la Task, el spool que retiene el plan aprobado y el ejecutor — el
-# plan en sí no conoce ninguna de las tres cosas. Mismo reparto que
+# The sync PLANNER (plan 2026-08-11, ADR 0049): a pure transducer from
+# comparison rows to plan steps, with no daemon or provider. The core wraps
+# it with the Task, the spool that holds the approved plan, and the
+# executor — the plan itself knows none of those three things. Same split as
 # norte-compare.
 norte-sync.workspace = true
 norte-config = { workspace = true, features = ["logging"] }
 norte-connect.workspace = true
-# Modelo de plugins (M4-P3): catálogo + manifiesto que el PluginRegistry expone.
+# Plugin model (M4-P3): the catalog + manifest that PluginRegistry exposes.
 norte-plugin-host.workspace = true
-# H3e: el host ACOTA el `help.md` de un plugin con el MISMO tope y la misma
-# detección de encoding que el parser hostil del frontend. La alternativa era
-# repetir el corte aquí, y dos topes que empiezan iguales no siguen iguales.
+# H3e: the host CAPS a plugin's `help.md` with the SAME limit and the same
+# encoding detection as the frontend's hostile parser. The alternative was
+# repeating the cutoff here, and two limits that start out equal don't stay
+# equal.
 norte-help.workspace = true
 norte-proto.workspace = true
-# Matchers de fs.search (M4 live search): detección/decodificación de encoding
-# de la aguja (transcodificación multi-encoding) y NFC del nombre.
+# fs.search matchers (M4 live search): needle encoding detection/decoding
+# (multi-encoding transcoding) and name NFC.
 norte-encoding.workspace = true
 norte-vfs.workspace = true
 norte-vfs-archive.workspace = true
@@ -68,41 +70,40 @@ norte-vfs-sftp.workspace = true
 # in the workspace graph as norte-core's own dev-dependency until now;
 # promoted here because `volumes::linux` needs it outside tests too.
 norte-vfs-local.workspace = true
-# Tokens de ubicación (ADR 0057): 32 bytes del CSPRNG del sistema. Ya es dep
-# del workspace (norte-connect la usa para los nonces de `secrets.age`).
+# Location tokens (ADR 0057): 32 bytes from the system CSPRNG. Already a
+# workspace dep (norte-connect uses it for `secrets.age` nonces).
 getrandom.workspace = true
-# Ítem 11 del roadmap: el provider de RAR, que el dispatch compone SOLO sobre
-# un `file://` local (el delegado necesita una ruta de verdad).
+# Roadmap item 11: the RAR provider, which the dispatch composes ONLY over a
+# local `file://` (the delegate needs a real path).
 norte-vfs-rar.workspace = true
-# El daemon (ADR 0011) serializa el dispatch JSON-RPC; mismo encoding que proto.
+# The daemon (ADR 0011) serializes the JSON-RPC dispatch; same encoding as proto.
 serde.workspace = true
 serde_json.workspace = true
-# Journal transaccional (M3-1, ADR 0023): storage + hash-chain.
+# Transactional journal (M3-1, ADR 0023): storage + hash chain.
 sha2.workspace = true
 hmac.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
-# Matchers puros de fs.search (M4 live search, ver justificación en el
-# Cargo.toml del workspace): glob/regex de nombre + aguja multi-encoding.
+# Pure fs.search matchers (M4 live search, see the justification in the
+# workspace Cargo.toml): name glob/regex + multi-encoding needle.
 regex.workspace = true
 globset.workspace = true
 memchr.workspace = true
-# NFC del fold de nombre (misma disciplina que el quick search del TUI).
+# NFC of the name fold (same discipline as the TUI's quick search).
 unicode-normalization.workspace = true
-# Reglas declarativas de policy.toml (M3-3, spec §10): parsing con deny_unknown_fields.
+# Declarative policy.toml rules (M3-3, spec §10): parsing with deny_unknown_fields.
 toml.workspace = true
-# Persistencia de plugins-state.toml (M4-P3): re-emisión preservando el fichero.
+# plugins-state.toml persistence (M4-P3): re-emission that preserves the file.
 toml_edit.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
 tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-# Appender rotatorio del log local (roadmap ítem 9). Es del proyecto tokio y es
-# el appender alrededor del que `tracing-subscriber` está diseñado; la
-# alternativa es escribir a mano la rotación, el nombrado de los ficheros, la
-# poda por retención y el guard del writer no bloqueante — más código que la
-# propia feature, y en el camino que tiene que funcionar cuando todo lo demás
-# ya ha fallado (regla 8).
+# Rotating appender for the local log (roadmap item 9). It's from the tokio
+# project and is the appender `tracing-subscriber` is designed around; the
+# alternative is hand-writing rotation, file naming, retention pruning, and
+# the non-blocking writer's guard — more code than the feature itself, and on
+# the path that has to work when everything else already failed (rule 8).
 tracing-appender.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -112,31 +113,31 @@ tracing-appender.workspace = true
 rustix.workspace = true
 
 [dev-dependencies]
-# FakeEmbed determinista para los tests de index.embed (M4-IA-2). La feature
-# `testutil` solo se activa en tests: el build normal no la ve.
+# Deterministic FakeEmbed for the index.embed tests (M4-IA-2). The `testutil`
+# feature only activates in tests: the normal build never sees it.
 norte-ai = { workspace = true, features = ["testutil"] }
-# Servidores SSH y FTP in-process para el test de integración del connection
-# manager (mismo arnés que norte-connect; sin Docker).
+# In-process SSH and FTP servers for the connection manager's integration
+# test (same harness as norte-connect; no Docker).
 libunftp.workspace = true
-# El planificador de rename por lotes es puro: la propiedad «todo plan
-# ejecutable aterriza exactamente los destinos pedidos» se comprueba generando
-# permutaciones, no enumerándolas a mano. Ya es dep del workspace.
+# The batch rename planner is pure: the property "every executable plan lands
+# exactly the requested destinations" is checked by generating permutations,
+# not enumerating them by hand. Already a workspace dep.
 proptest.workspace = true
 rand.workspace = true
 russh.workspace = true
 russh-sftp.workspace = true
 tempfile.workspace = true
-# Fixtures de connections.toml en los tests del connection manager.
+# connections.toml fixtures in the connection manager's tests.
 toml.workspace = true
 unftp-sbe-fs.workspace = true
 bytes.workspace = true
 norte-testkit.workspace = true
-# E2E del criterio de salida M2 (fase 10b): object-fs como remoto S3 stand-in.
+# E2E for the M2 exit criterion (phase 10b): object-fs as an S3 remote stand-in.
 opendal = { workspace = true, features = ["services-fs"] }
-# Benchmarks del copy engine cross-provider (fase 10c).
+# Cross-provider copy engine benchmarks (phase 10c).
 criterion.workspace = true
-# gzip de fixtures .tar.gz para el E2E del engine (#55) — mismo backend
-# (zlib-rs) que la dep directa de norte-vfs-archive, sin duplicar backend.
+# gzip for .tar.gz fixtures in the engine's E2E (#55) — same backend
+# (zlib-rs) as norte-vfs-archive's direct dep, so the backend isn't duplicated.
 flate2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time", "test-util"] }
 

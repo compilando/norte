@@ -2,9 +2,9 @@ use super::*;
 
 // ---------- ai.rename_plan (M4-IA, ADR 0031) ----------
 
-/// Proveedor de IA falso (copiado de `ai_rename.rs` — los binarios de test no
-/// comparten código): devuelve un JSON canned en dos deltas. `delay` retrasa
-/// la entrega para dejar la request EN VUELO (test de rpc.cancel, #72).
+/// Fake AI provider (copied from `ai_rename.rs` — test binaries do not share
+/// code): returns canned JSON in two deltas. `delay` delays delivery to leave
+/// the request IN FLIGHT (rpc.cancel test, #72).
 pub(super) struct FakeAi {
     reply: String,
     delay: Option<Duration>,
@@ -14,7 +14,7 @@ pub(super) struct FakeAi {
 impl norte_ai::AiProvider for FakeAi {
     #[expect(
         clippy::unnecessary_literal_bound,
-        reason = "firma del trait (&self→&str)"
+        reason = "the trait's signature (&self→&str)"
     )]
     fn id(&self) -> &str {
         "fake"
@@ -30,14 +30,14 @@ impl norte_ai::AiProvider for FakeAi {
         _req: norte_ai::ChatRequest,
     ) -> Result<norte_ai::ChatStream, norte_ai::AiError> {
         use futures::StreamExt as _;
-        // Latencia SIMULADA del proveedor, no una espera del test: es lo que
-        // abre la ventana en la que un `rpc.cancel` llega con la petición en
-        // vuelo. Este `sleep` se queda, como el `retraso_ms` del doble de
-        // `norte-ui-host`.
+        // SIMULATED provider latency, not a test wait: it is what opens the
+        // window in which an `rpc.cancel` arrives with the request in
+        // flight. This `sleep` stays, like `norte-ui-host`'s double's
+        // `retraso_ms`.
         if let Some(d) = self.delay {
             tokio::time::sleep(d).await;
         }
-        // Entrega en DOS deltas para ejercitar el drenado del stream.
+        // Delivered in TWO deltas to exercise draining the stream.
         let (a, b) = self.reply.split_at(self.reply.len() / 2);
         let items = vec![Ok(a.to_owned()), Ok(b.to_owned())];
         Ok(futures::stream::iter(items).boxed())
@@ -50,13 +50,13 @@ impl norte_ai::AiProvider for FakeAi {
     }
 }
 
-/// Daemon con proveedor de IA fake instalado y `[ai]` habilitado (M4-IA).
+/// A daemon with a fake AI provider installed and `[ai]` enabled (M4-IA).
 pub(super) async fn spawn_daemon_ai(reply: &str) -> TestDaemon {
     spawn_daemon_ai_delay(reply, None).await
 }
 
-/// Como [`spawn_daemon_ai`] pero el proveedor RETRASA su respuesta: la
-/// request queda en vuelo hasta que un `rpc.cancel` la retire.
+/// Like [`spawn_daemon_ai`] but the provider DELAYS its response: the
+/// request stays in flight until an `rpc.cancel` withdraws it.
 pub(super) async fn spawn_daemon_ai_slow(reply: &str, delay: Duration) -> TestDaemon {
     spawn_daemon_ai_delay(reply, Some(delay)).await
 }
@@ -97,7 +97,7 @@ pub(super) async fn spawn_daemon_ai_delay(reply: &str, delay: Option<Duration>) 
 }
 
 #[tokio::test]
-async fn ai_rename_plan_responde_por_el_socket() {
+async fn ai_rename_plan_answers_over_the_socket() {
     let d = spawn_daemon_ai(r#"[{"from":"a.txt","to":"informe-a.txt"}]"#).await;
     write_file(&d.mem, "mem:///a.txt", b"x").await;
     let c = connected_client(&d).await;
@@ -106,7 +106,7 @@ async fn ai_rename_plan_responde_por_el_socket() {
             methods::AI_RENAME_PLAN,
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///"),
-                instruction: "prefija informe-".into(),
+                instruction: "prefix informe-".into(),
                 names: Vec::new(),
             },
         )
@@ -117,11 +117,11 @@ async fn ai_rename_plan_responde_por_el_socket() {
     assert_eq!(plan.entries[0].to, "informe-a.txt");
 }
 
-/// Sin proveedor instalado el daemon responde `Unsupported`, no un panic ni
-/// un error opaco (mismo contrato que el engine embebido).
+/// With no provider installed the daemon answers `Unsupported`, not a panic
+/// nor an opaque error (same contract as the embedded engine).
 #[tokio::test]
-async fn ai_rename_plan_sin_proveedor_es_unsupported() {
-    let d = spawn_daemon(None).await; // sin set_ai_provider
+async fn ai_rename_plan_with_no_provider_is_unsupported() {
+    let d = spawn_daemon(None).await; // no set_ai_provider
     let c = connected_client(&d).await;
     let err = c
         .call::<_, methods::AiRenamePlanResult>(
@@ -133,23 +133,23 @@ async fn ai_rename_plan_sin_proveedor_es_unsupported() {
             },
         )
         .await
-        .expect_err("sin proveedor → error");
+        .expect_err("no provider → error");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::Unsupported)),
-            "Unsupported, fue {:?}",
+            "Unsupported, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Y tampoco distingue por los PARAMS: unos ilegibles y una instrucción que
-/// pasa del tope reciben la misma denegación que unos válidos. Si no, el
-/// agente aprende dónde está el tope y qué forma tiene el params sin que nadie
-/// le haya dejado llamar.
+/// And it does not distinguish by the PARAMS either: unreadable ones and an
+/// instruction over the cap receive the same denial as valid ones.
+/// Otherwise the agent learns where the cap is and what shape the params
+/// take without anyone having let it call at all.
 #[tokio::test]
-async fn ai_rename_plan_no_distingue_params_malos_para_un_agente() {
+async fn ai_rename_plan_does_not_distinguish_bad_params_for_an_agent() {
     let d = spawn_daemon_policy().await;
     let agent = connected_agent(&d, "s1").await;
 
@@ -159,14 +159,14 @@ async fn ai_rename_plan_no_distingue_params_malos_para_un_agente() {
             &serde_json::json!({ "esto": "no es el params" }),
         )
         .await
-        .expect_err("denegado");
+        .expect_err("denied");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
-            "params ilegibles tenían que dar `not-approved`, fue {:?}",
+            "unreadable params had to give `not-approved`, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 
     let err = agent
@@ -179,22 +179,22 @@ async fn ai_rename_plan_no_distingue_params_malos_para_un_agente() {
             },
         )
         .await
-        .expect_err("denegado");
+        .expect_err("denied");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
-            "una instrucción enorme tenía que dar `not-approved`, fue {:?}",
+            "a huge instruction had to give `not-approved`, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// MINOR-2 (security review M4-IA): la instrucción se capa server-side ANTES
-/// de tocar engine o proveedor — los tokens de ENTRADA son el coste; el frame
-/// de 16 MiB no es un límite.
+/// MINOR-2 (M4-IA security review): the instruction is capped server-side
+/// BEFORE touching the engine or the provider — INPUT tokens are the cost;
+/// the 16 MiB frame is not a limit.
 #[tokio::test]
-async fn instruccion_desmesurada_es_invalid_params() {
+async fn oversized_instruction_is_invalid_params() {
     let d = spawn_daemon_ai("[]").await;
     let c = connected_client(&d).await;
     let err = c
@@ -207,19 +207,18 @@ async fn instruccion_desmesurada_es_invalid_params() {
             },
         )
         .await
-        .expect_err("instrucción de 5 KiB → error de protocolo");
+        .expect_err("5 KiB instruction → protocol error");
     match err {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Una lista de `names` desmesurada es `-32602`, como la instrucción y como
-/// un lote de rutas (#121): lo que acota es un filtro que corre por cada
-/// entrada del listado, en una llamada DIRECTA que solo puede morir por
-/// timeout.
+/// An oversized `names` list is `-32602`, like the instruction and like a
+/// path batch (#121): what caps it is a filter that runs for every listing
+/// entry, in a DIRECT call that can only die by timeout.
 #[tokio::test]
-async fn names_por_encima_del_tope_es_invalid_params() {
+async fn names_above_the_cap_is_invalid_params() {
     let d = spawn_daemon_ai("[]").await;
     let c = connected_client(&d).await;
     let err = c
@@ -234,18 +233,18 @@ async fn names_por_encima_del_tope_es_invalid_params() {
             },
         )
         .await
-        .expect_err("por encima del tope");
+        .expect_err("above the cap");
     match err {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// **El daemon HONRA `names`**: sin este test, un handler que se comiera el
-/// campo pasaba la suite entera — que es exactamente lo que pasó mientras se
-/// escribía esto.
+/// **The daemon HONORS `names`**: without this test, a handler that swallowed
+/// the field would pass the whole suite — which is exactly what happened
+/// while this was being written.
 #[tokio::test]
-async fn el_daemon_pide_el_plan_solo_sobre_los_nombres_pedidos() {
+async fn the_daemon_asks_for_the_plan_only_over_the_requested_names() {
     let d = spawn_daemon_ai(r#"[{"from":"marcado.txt","to":"nuevo.txt"}]"#).await;
     let c = connected_client(&d).await;
     let plan: methods::AiRenamePlanResult = c
@@ -254,26 +253,26 @@ async fn el_daemon_pide_el_plan_solo_sobre_los_nombres_pedidos() {
             &methods::AiRenamePlanParams {
                 dir: vp("mem:///"),
                 instruction: "x".into(),
-                // Un nombre que NO está en el listado del daemon: si el campo
-                // se ignorara, el plan saldría del directorio entero y el
-                // proveedor contestaría su plan de siempre.
-                names: vec!["no-esta-en-el-listado.txt".into()],
+                // A name that is NOT in the daemon's listing: if the field
+                // were ignored, the plan would come out of the whole
+                // directory and the provider would answer its usual plan.
+                names: vec!["not-in-the-listing.txt".into()],
             },
         )
         .await
         .expect("plan");
     assert!(
         plan.entries.is_empty(),
-        "sobre nada que exista no se pregunta: {plan:?}"
+        "over nothing that exists, nothing is asked: {plan:?}"
     );
 }
 
-/// #72 sobre `ai.rename_plan`: la llamada al proveedor puede tardar — un
-/// `rpc.cancel` dropea el dispatch en vuelo (el stream HTTP aborta con el
-/// drop) y responde `Error::Cancelled` sin matar la conexión.
+/// #72 over `ai.rename_plan`: the provider call can take a while — an
+/// `rpc.cancel` drops the in-flight dispatch (the HTTP stream aborts on
+/// drop) and answers `Error::Cancelled` without killing the connection.
 #[tokio::test]
-async fn rpc_cancel_aborta_ai_rename_plan_en_vuelo() {
-    // FakeAi con delay grande: la request queda EN VUELO hasta el cancel.
+async fn rpc_cancel_aborts_ai_rename_plan_in_flight() {
+    // FakeAi with a big delay: the request stays IN FLIGHT until the cancel.
     let d = spawn_daemon_ai_slow("[]", Duration::from_secs(30)).await;
     let c = Arc::new(connected_client(&d).await);
 
@@ -294,7 +293,7 @@ async fn rpc_cancel_aborta_ai_rename_plan_en_vuelo() {
             .await
     });
 
-    let id = esperar_id(&id_slot).await;
+    let id = wait_for_id(&id_slot).await;
     c.notify(
         methods::RPC_CANCEL,
         &methods::RpcCancelParams {
@@ -308,14 +307,14 @@ async fn rpc_cancel_aborta_ai_rename_plan_en_vuelo() {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert_eq!(rpc.data, Some(Error::Cancelled));
         }
-        other => panic!("esperaba Cancelled, fue {other:?}"),
+        other => panic!("expected Cancelled, got {other:?}"),
     }
 }
 
-/// Fail-loud EN LA RESPUESTA (no en el join de la Task): `index.embed` sobre
-/// un root jamás construido con `index.build` es `NotFound` inmediato.
+/// Fail-loud IN THE RESPONSE (not in the Task's join): `index.embed` over a
+/// root never built with `index.build` is an immediate `NotFound`.
 #[tokio::test]
-async fn embed_sin_build_previo_es_not_found() {
+async fn embed_with_no_prior_build_is_not_found() {
     let d = spawn_daemon_embed(None).await;
     let c = connected_client(&d).await;
     let err = c
@@ -326,22 +325,24 @@ async fn embed_sin_build_previo_es_not_found() {
             },
         )
         .await
-        .expect_err("sin build previo → error");
+        .expect_err("no prior build → error");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert_eq!(rpc.data, Some(norte_proto::Error::NotFound));
         }
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// #72 sobre `index.search_semantic`: el embed de la query puede tardar — un
-/// `rpc.cancel` dropea el dispatch en vuelo y responde `Error::Cancelled`
-/// sin matar la conexión (espejo de `rpc_cancel_aborta_ai_rename_plan_en_vuelo`).
+/// #72 over `index.search_semantic`: embedding the query can take a while —
+/// an `rpc.cancel` drops the in-flight dispatch and answers `Error::Cancelled`
+/// without killing the connection (mirror of
+/// `rpc_cancel_aborts_ai_rename_plan_in_flight`).
 #[tokio::test]
-async fn rpc_cancel_aborta_search_semantic_en_vuelo() {
-    // FakeEmbed con delay grande: la request queda EN VUELO hasta el cancel.
+async fn rpc_cancel_aborts_search_semantic_in_flight() {
+    // FakeEmbed with a big delay: the request stays IN FLIGHT until the
+    // cancel.
     let d = spawn_daemon_embed(Some(Duration::from_secs(30))).await;
     let c = Arc::new(connected_client(&d).await);
 
@@ -362,7 +363,7 @@ async fn rpc_cancel_aborta_search_semantic_en_vuelo() {
             .await
     });
 
-    let id = esperar_id(&id_slot).await;
+    let id = wait_for_id(&id_slot).await;
     c.notify(
         methods::RPC_CANCEL,
         &methods::RpcCancelParams {
@@ -376,15 +377,15 @@ async fn rpc_cancel_aborta_search_semantic_en_vuelo() {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert_eq!(rpc.data, Some(Error::Cancelled));
         }
-        other => panic!("esperaba Cancelled, fue {other:?}"),
+        other => panic!("expected Cancelled, got {other:?}"),
     }
 }
 
-/// La query se capa server-side ANTES de tocar engine o proveedor (mismo
-/// cinturón de 4 KiB que la instrucción de `ai.rename_plan`): los tokens de
-/// ENTRADA son el coste; el frame de 16 MiB no es un límite.
+/// The query is capped server-side BEFORE touching the engine or the
+/// provider (the same 4 KiB belt as `ai.rename_plan`'s instruction): INPUT
+/// tokens are the cost; the 16 MiB frame is not a limit.
 #[tokio::test]
-async fn semantic_query_gigante_es_invalid_params() {
+async fn giant_semantic_query_is_invalid_params() {
     let d = spawn_daemon_embed(None).await;
     let c = connected_client(&d).await;
     let err = c
@@ -397,17 +398,18 @@ async fn semantic_query_gigante_es_invalid_params() {
             },
         )
         .await
-        .expect_err("query de 5 KiB → error de protocolo");
+        .expect_err("5 KiB query → protocol error");
     match err {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Pedir un `k` desmesurado NO es error: se recorta a `INDEX_SEMANTIC_MAX_K`
-/// (mismo patrón que `FS_LIST_MAX_PAGE` — el contrato documentado del wire).
+/// Asking for an oversized `k` is NOT an error: it is clamped to
+/// `INDEX_SEMANTIC_MAX_K` (same pattern as `FS_LIST_MAX_PAGE` — the wire's
+/// documented contract).
 #[tokio::test]
-async fn semantic_k_desmesurado_no_es_error() {
+async fn oversized_semantic_k_is_not_an_error() {
     let d = spawn_daemon_embed(None).await;
     let c = connected_client(&d).await;
     let r: methods::IndexSearchSemanticResult = c
@@ -420,9 +422,9 @@ async fn semantic_k_desmesurado_no_es_error() {
             },
         )
         .await
-        .expect("k gigante se recorta, jamás error");
+        .expect("a giant k gets clamped, never an error");
     assert!(
-        r.hits.len() <= usize::try_from(methods::INDEX_SEMANTIC_MAX_K).expect("cabe"),
-        "el clamp acota los hits"
+        r.hits.len() <= usize::try_from(methods::INDEX_SEMANTIC_MAX_K).expect("fits"),
+        "the clamp bounds the hits"
     );
 }

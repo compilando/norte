@@ -1,122 +1,125 @@
-//! El catálogo del protocolo: qué métodos existen y de qué forma son.
+//! The protocol catalogue: what methods exist and what shape they have.
 //!
-//! # Por qué existe
+//! # Why it exists
 //!
-//! Un método nuevo se toca en muchos sitios: la constante y sus tipos aquí, el
-//! reparto del daemon, el cliente remoto, las rutas de notificación, el
-//! backend embebido y el remoto, el schema, los goldens, el MCP o los
-//! frontends, y la ventana de compatibilidad N/N-1. Ninguno de esos sitios es
-//! superfluo y el reparto plano del daemon es deliberado — el problema nunca
-//! fue que hubiera muchas superficies, sino que **olvidar una no se notaba**.
+//! A new method touches many places: the constant and its types here, the
+//! daemon's dispatch, the remote client, the notification routes, the
+//! embedded and the remote backend, the schema, the goldens, MCP or the
+//! frontends, and the N/N-1 compatibility window. None of those places is
+//! superfluous, and the daemon's flat dispatch is deliberate — the problem
+//! was never that there were many surfaces, but that **forgetting one went
+//! unnoticed**.
 //!
-//! Esto es la fuente declarativa contra la que se puede comprobar. No genera
-//! los handlers, ni los cuerpos del daemon, ni la policy: genera la LISTA, y
-//! los tests la usan para preguntarle a cada superficie si está.
+//! This is the declarative source that can be checked against. It does not
+//! generate the handlers, the daemon's bodies, or the policy: it generates
+//! the LIST, and the tests use it to ask each surface whether it is there.
 //!
-//! # Lo que el catálogo NO dice
+//! # What the catalogue does NOT say
 //!
-//! No lleva el acceso (humano/agente) ni nada de policy. Es a propósito: un
-//! campo de acceso aquí sería una segunda fuente de verdad sobre quién puede
-//! llamar a qué, y una que nadie consulta miente en cuanto la primera cambie.
-//! Quien decide eso es el daemon, en el mismo sitio donde siempre. Cuando haya
-//! un test que verifique el acceso REAL contra lo declarado, entonces cabrá
-//! declararlo.
+//! It carries no access (human/agent) and nothing about policy. That is
+//! deliberate: an access field here would be a second source of truth about
+//! who can call what, and one nobody consults lies the moment the first one
+//! changes. Who decides that is the daemon, in the same place as always. Once
+//! there is a test that checks REAL access against what is declared, then it
+//! will be worth declaring it.
 //!
-//! # Dónde vive el nombre
+//! # Where the name lives
 //!
-//! La constante se queda donde está, con su documentación —que en este
-//! protocolo es la explicación de por qué cada método es como es, y son miles
-//! de líneas—. El catálogo la NOMBRA, no la redeclara: meterla dentro de una
-//! macro escondería justo lo que hay que leer. Que las dos no se separen lo
-//! garantiza un test: una constante de método que no esté aquí pone el gate en
-//! rojo.
+//! The constant stays where it is, with its documentation — which in this
+//! protocol is the explanation of why each method is the way it is, and runs
+//! to thousands of lines. The catalogue NAMES it, does not redeclare it:
+//! putting it inside a macro would hide exactly what needs reading. That the
+//! two never drift apart is guaranteed by a test: a method constant that is
+//! not here turns the gate red.
 
 use crate::methods;
 
-/// Si el método lo INICIA quien llama o lo manda el daemon por su cuenta.
+/// Whether the method is STARTED by the caller or sent by the daemon on its
+/// own.
 ///
-/// `non_exhaustive` desde el principio: el catálogo va a crecer (el acceso
-/// humano/agente entra en cuanto haya un test que lo verifique), y añadir una
-/// variante o un campo después sería una rotura de API que `cargo-semver-checks`
-/// marca. Ponerlo ahora no cuesta nada; ponerlo luego, un major.
+/// `non_exhaustive` from the start: the catalogue is going to grow (human/agent
+/// access enters as soon as there is a test that verifies it), and adding a
+/// variant or a field later would be an API break that `cargo-semver-checks`
+/// flags. Adding it now costs nothing; adding it later, a major.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Kind {
-    /// Petición con respuesta: lleva id y se contesta.
+    /// Request with a response: carries an id and gets answered.
     Request,
-    /// Notificación: sin id, sin respuesta. La manda el daemon.
+    /// Notification: no id, no response. Sent by the daemon.
     Notification,
 }
 
-/// Cómo entrega el método lo que produce.
+/// How the method delivers what it produces.
 ///
-/// Sobre una NOTIFICACIÓN, `Direct` no quiere decir «contesta»: quiere decir
-/// «de un disparo», frente a `Stream`, «por lotes». Una notificación no
-/// contesta nada.
+/// On a NOTIFICATION, `Direct` does not mean "answers": it means "in one
+/// shot", as opposed to `Stream`, "in batches". A notification answers
+/// nothing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Shape {
-    /// De un disparo: contesta en el propio resultado (o, si es notificación,
-    /// llega una y ya).
+    /// In one shot: answers in the result itself (or, if a notification, one
+    /// arrives and that's it).
     Direct,
-    /// Devuelve un `task_id` y el trabajo sigue por `task.progress`.
+    /// Returns a `task_id` and the work continues over `task.progress`.
     Task,
-    /// El resultado va llegando por notificaciones dirigidas.
+    /// The result arrives progressively through targeted notifications.
     Stream,
-    /// El handshake, que no es ninguna de las tres.
+    /// The handshake, which is none of the three.
     Handshake,
 }
 
-/// Una entrada del catálogo.
+/// One entry of the catalogue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct MethodInfo {
-    /// El nombre de wire, tomado de su constante.
+    /// The wire name, taken from its constant.
     pub name: &'static str,
-    /// Petición o notificación.
+    /// Request or notification.
     pub kind: Kind,
-    /// Cómo entrega lo que produce.
+    /// How it delivers what it produces.
     pub shape: Shape,
-    /// Nombre del tipo de params, o `"()"` si no lleva.
+    /// Name of the params type, or `"()"` if it carries none.
     pub params_ty: &'static str,
-    /// Nombre del tipo de result, o `"()"` si no lleva.
+    /// Name of the result type, or `"()"` if it carries none.
     pub result_ty: &'static str,
-    /// Para un [`Shape::Stream`], las notificaciones por las que entrega.
-    /// Vacío en todo lo demás.
+    /// For a [`Shape::Stream`], the notifications it delivers through. Empty
+    /// for everything else.
     ///
-    /// Es lo que ata `Stream`: sin esto, la diferencia con `Task` era «tiene
-    /// notificación propia» y el catálogo no decía cuál, así que nadie podía
-    /// desmentirlo. Nombrándolas, un test comprueba que existen, que están
-    /// catalogadas y que son notificaciones de verdad.
+    /// This is what ties `Stream` down: without this, the difference from
+    /// `Task` was "has its own notification" and the catalogue did not say
+    /// which one, so nobody could disprove it. By naming them, a test checks
+    /// that they exist, that they are catalogued, and that they really are
+    /// notifications.
     pub stream_notifs: &'static [&'static str],
 }
 
 impl MethodInfo {
-    /// El tipo de params, si lleva.
+    /// The params type, if it carries one.
     #[must_use]
     pub fn params(&self) -> Option<&'static str> {
         (self.params_ty != "()").then_some(self.params_ty)
     }
 
-    /// El tipo de result, si lleva.
+    /// The result type, if it carries one.
     #[must_use]
     pub fn result(&self) -> Option<&'static str> {
         (self.result_ty != "()").then_some(self.result_ty)
     }
 }
 
-/// Declara el catálogo, y hace que el compilador verifique los tipos.
+/// Declares the catalogue, and makes the compiler check the types.
 ///
-/// Los nombres de tipo se guardan como cadenas —un `&'static [MethodInfo]` no
-/// puede llevar tipos— y eso los dejaría sin comprobar. La función de abajo lo
-/// arregla: menciona cada uno, así que un nombre mal escrito no compila. Sin
-/// ella el catálogo sería una lista de deseos.
-macro_rules! rpc_catalogo {
+/// Type names are stored as strings — a `&'static [MethodInfo]` cannot carry
+/// types — and that would leave them unchecked. The function below fixes it:
+/// it mentions every one, so a misspelled name does not compile. Without it
+/// the catalogue would be a wish list.
+macro_rules! rpc_catalog {
     ($(
         $konst:ident, $kind:ident, $shape:ident, $params:ty, $result:ty
         $(, [$($notif:ident),* $(,)?])? ;
     )*) => {
-        /// Todos los métodos del protocolo, en el orden en que se declararon.
+        /// Every method of the protocol, in the order they were declared.
         pub const CATALOGO: &[MethodInfo] = &[
             $(
                 MethodInfo {
@@ -130,9 +133,9 @@ macro_rules! rpc_catalogo {
             ),*
         ];
 
-        /// Los tipos que el catálogo nombra EXISTEN. No se llama nunca.
+        /// The types the catalogue names EXIST. Never called.
         #[allow(dead_code, clippy::used_underscore_items)]
-        fn _los_tipos_existen() {
+        fn _the_types_exist() {
             $(
                 let _: Option<$params> = None;
                 let _: Option<$result> = None;
@@ -141,18 +144,18 @@ macro_rules! rpc_catalogo {
     };
 }
 
-rpc_catalogo! {
-    // El handshake, obligatorio antes que nada (ADR 0011).
+rpc_catalog! {
+    // The handshake, mandatory before anything else (ADR 0011).
     INITIALIZE, Request, Handshake, methods::InitializeParams, methods::InitializeResult;
     DAEMON_SHUTDOWN, Request, Direct, methods::DaemonShutdownParams, methods::DaemonShutdownResult;
 
-    // Lecturas del sistema de ficheros.
+    // Filesystem reads.
     FS_LIST, Request, Direct, methods::FsListParams, methods::FsListResult;
     FS_STAT, Request, Direct, methods::FsStatParams, methods::FsStatResult;
     FS_READ, Request, Direct, methods::FsReadParams, methods::FsReadResult;
     FS_CAPABILITIES, Request, Direct, methods::FsCapabilitiesParams, methods::FsCapabilitiesResult;
 
-    // Mutaciones: todas Task, todas por el journal.
+    // Mutations: all Task, all through the journal.
     FS_COPY, Request, Task, methods::FsCopyParams, methods::FsTaskResult;
     FS_MOVE, Request, Task, methods::FsMoveParams, methods::FsTaskResult;
     FS_DELETE, Request, Task, methods::FsDeleteParams, methods::FsTaskResult;
@@ -160,34 +163,35 @@ rpc_catalogo! {
     FS_CREATE, Request, Task, methods::FsCreateParams, methods::FsTaskResult;
     FS_SET_MODE, Request, Task, methods::FsSetModeParams, methods::FsTaskResult;
 
-    // Buscar y comparar: Task que entrega por notificación dirigida.
+    // Search and compare: a Task that delivers by targeted notification.
     FS_SEARCH, Request, Stream, methods::FsSearchParams, methods::FsTaskResult, [SEARCH_HITS];
     SEARCH_HITS, Notification, Stream, methods::SearchHits, ();
     FS_COMPARE, Request, Stream, methods::FsCompareParams, methods::FsTaskResult, [COMPARE_ROWS];
     COMPARE_ROWS, Notification, Stream, methods::CompareRowsBatch, ();
 
-    // Recuento, sumas y sus informes.
+    // Counting, checksums and their reports.
     FS_DIR_SIZE, Request, Task, methods::FsDirSizeParams, methods::FsTaskResult;
     FS_CHECKSUM, Request, Task, methods::FsChecksumParams, methods::FsTaskResult;
     FS_CHECKSUM_REPORT, Request, Direct, methods::FsChecksumReportParams, methods::FsChecksumReportResult;
     FS_DIR_USAGE, Request, Task, methods::FsDirUsageParams, methods::FsTaskResult;
     FS_DIR_USAGE_REPORT, Request, Direct, methods::FsDirUsageReportParams, methods::FsDirUsageReportResult;
 
-    // Índice y semántica.
-    // Task, no Direct: el daemon contesta `FsTaskResult { task_id }` y el
-    // `IndexBuildResult` es el DESENLACE, que además hoy no viaja por wire.
+    // Index and semantics.
+    // Task, not Direct: the daemon answers `FsTaskResult { task_id }` and the
+    // `IndexBuildResult` is the OUTCOME, which today does not travel on the
+    // wire either.
     INDEX_BUILD, Request, Task, methods::IndexBuildParams, methods::FsTaskResult;
     INDEX_QUERY, Request, Direct, methods::IndexQueryParams, methods::IndexQueryResult;
     INDEX_EMBED, Request, Task, methods::IndexEmbedParams, methods::FsTaskResult;
     INDEX_SEARCH_SEMANTIC, Request, Direct, methods::IndexSearchSemanticParams, methods::IndexSearchSemanticResult;
 
-    // Renombrado: el plan lo propone un modelo, el lote lo ejecuta el core.
+    // Renaming: a model proposes the plan, the core executes the batch.
     AI_RENAME_PLAN, Request, Direct, methods::AiRenamePlanParams, methods::AiRenamePlanResult;
     FS_RENAME_BATCH_PLAN, Request, Direct, methods::FsRenameBatchPlanParams, methods::FsRenameBatchPlanResult;
     FS_RENAME_BATCH, Request, Task, methods::FsRenameBatchParams, methods::FsTaskResult;
     FS_RENAME_BATCH_REPORT, Request, Direct, methods::FsRenameBatchReportParams, methods::FsRenameBatchReportResult;
 
-    // Archivos: empaquetar, comprobar, partir y juntar.
+    // Archives: pack, test, split and combine.
     ARCHIVE_PACK, Request, Task, methods::ArchivePackParams, methods::FsTaskResult;
     ARCHIVE_PACK_REPORT, Request, Direct, methods::ArchivePackReportParams, methods::ArchivePackReportResult;
     ARCHIVE_TEST, Request, Task, methods::ArchiveTestParams, methods::FsTaskResult;
@@ -195,7 +199,7 @@ rpc_catalogo! {
     FILE_SPLIT, Request, Task, methods::FileSplitParams, methods::FsTaskResult;
     FILE_COMBINE, Request, Task, methods::FileCombineParams, methods::FsTaskResult;
 
-    // Sincronizar: el plan queda RETENIDO a nombre de la conexión.
+    // Sync: the plan stays RETAINED under the connection's name.
     SYNC_PLAN, Request, Stream, methods::SyncPlanParams, methods::FsTaskResult, [SYNC_STEPS, SYNC_PLAN_DONE];
     SYNC_STEPS, Notification, Stream, methods::SyncStepsBatch, ();
     SYNC_PLAN_DONE, Notification, Stream, methods::SyncPlanDone, ();
@@ -209,12 +213,13 @@ rpc_catalogo! {
     TASK_RESUME, Request, Direct, methods::TaskPauseParams, methods::TaskPauseResult;
     TASK_MOVE, Request, Direct, methods::TaskMoveParams, methods::TaskMoveResult;
     TASK_PROGRESS, Notification, Stream, crate::TaskProgress, ();
-    // NOTIFICACIÓN, no petición: va sin id y sin respuesta, y un daemon N-1
-    // que no la conozca la descarta en silencio (ADR 0004). Mandarla como
-    // petición sería esperar una contestación que no llega nunca.
+    // NOTIFICATION, not a request: it goes with no id and no response, and an
+    // N-1 daemon that does not know it discards it silently (ADR 0004).
+    // Sending it as a request would mean waiting for an answer that never
+    // arrives.
     RPC_CANCEL, Notification, Direct, methods::RpcCancelParams, ();
 
-    // Conexiones.
+    // Connections.
     HOST_VOLUMES, Request, Direct, methods::HostVolumesParams, methods::HostVolumesResult;
     CONNECTION_LIST, Request, Direct, (), methods::ConnectionListResult;
     CONNECTION_CLOSE, Request, Direct, methods::ConnectionCloseParams, methods::ConnectionCloseResult;
@@ -224,7 +229,7 @@ rpc_catalogo! {
     CONNECTION_FAILED, Notification, Direct, methods::ConnectionFailed, ();
     DAEMON_GOING_AWAY, Notification, Direct, methods::DaemonGoingAway, ();
 
-    // Policy: gobierno humano de lo que pide un agente.
+    // Policy: human governance of what an agent asks for.
     POLICY_REQUEST_SCOPE, Request, Direct, methods::RequestScopeParams, methods::RequestScopeResult;
     POLICY_GRANT_SCOPE, Request, Direct, methods::GrantScopeParams, methods::GrantScopeResult;
     POLICY_DECIDE, Request, Direct, methods::PolicyDecideParams, methods::PolicyDecideResult;
@@ -233,20 +238,20 @@ rpc_catalogo! {
     POLICY_UNDO_SESSION, Request, Task, methods::PolicyUndoSessionParams, methods::PolicyUndoSessionResult;
     POLICY_UNDO_REPORT, Request, Direct, methods::PolicyUndoReportParams, methods::PolicyUndoReportResult;
 
-    // La línea de tiempo (fase 7): leer el journal, y deshacer hasta un punto
-    // de él. El undo devuelve Task e informa por `POLICY_UNDO_REPORT`, que es
-    // el de arriba: es el mismo undo con otro criterio de selección.
+    // The timeline (phase 7): read the journal, and undo up to a point in it.
+    // The undo returns a Task and reports through `POLICY_UNDO_REPORT`, the
+    // one above: it is the same undo with a different selection criterion.
     JOURNAL_LIST, Request, Direct, methods::JournalListParams, methods::JournalListResult;
     JOURNAL_UNDO_AFTER, Request, Task, methods::JournalUndoAfterParams, methods::PolicyUndoSessionResult;
 
-    // Organizar (fase 8): el plan lo propone un modelo o un plugin, y el
-    // MISMO plan lo aplica `fs.organize` — crear los directorios y mover, bajo
-    // un solo `batch_id`, para que se deshaga como una unidad.
+    // Organize (phase 8): the plan is proposed by a model or a plugin, and the
+    // SAME plan is applied by `fs.organize` — creating the directories and
+    // moving, under a single `batch_id`, so it undoes as one unit.
     AI_ORGANIZE_PLAN, Request, Direct, methods::AiOrganizePlanParams, methods::AiOrganizePlanResult;
     PLUGIN_ORGANIZE_PLAN, Request, Direct, methods::PluginOrganizePlanParams, methods::AiOrganizePlanResult;
     FS_ORGANIZE, Request, Task, methods::FsOrganizeParams, methods::FsTaskResult;
 
-    // Extensiones.
+    // Extensions.
     PLUGIN_LIST, Request, Direct, methods::PluginListParams, methods::PluginListResult;
     PLUGIN_SET_APPROVAL, Request, Direct, methods::PluginSetApprovalParams, methods::PluginSetApprovalResult;
     PLUGIN_SET_ENABLED, Request, Direct, methods::PluginSetEnabledParams, methods::PluginSetEnabledResult;
@@ -264,19 +269,19 @@ rpc_catalogo! {
     PLUGIN_HELP, Request, Direct, methods::PluginHelpParams, methods::PluginHelpResult;
     PLUGIN_NOTICE, Notification, Direct, methods::PluginNotice, ();
 
-    // Sesión de la ventana.
+    // The window's session.
     SESSION_GET, Request, Direct, (), methods::SessionGetResult;
     SESSION_PUT, Request, Direct, methods::SessionPutParams, methods::SessionPutResult;
     SESSION_RELEASE, Request, Direct, (), methods::SessionReleaseResult;
 
-    // El registro del daemon, que un frontend con proceso aparte no puede ver
-    // de otra forma. `Direct` y no `Stream`: se TIRA con un cursor, así que no
-    // hay notificación por la que entregue nada (ADR 0092).
+    // The daemon's log, which a frontend running as a separate process cannot
+    // otherwise see. `Direct`, not `Stream`: it is PULLED with a cursor, so
+    // there is no notification for it to deliver through (ADR 0092).
     LOG_TAIL, Request, Direct, methods::LogTailParams, methods::LogTailResult;
     LOG_LEVEL, Request, Direct, methods::LogLevelParams, methods::LogLevelResult;
 }
 
-/// La entrada de un método por su nombre de wire.
+/// The entry of a method by its wire name.
 #[must_use]
 pub fn buscar(name: &str) -> Option<&'static MethodInfo> {
     CATALOGO.iter().find(|m| m.name == name)
@@ -286,65 +291,70 @@ pub fn buscar(name: &str) -> Option<&'static MethodInfo> {
 mod tests {
     use super::*;
 
-    /// Ningún nombre repetido: dos entradas con el mismo nombre harían que
-    /// `buscar` contestara la primera y la otra no existiera para nadie.
+    /// No repeated name: two entries with the same name would make `buscar`
+    /// answer the first and leave the other one findable by nobody.
     #[test]
-    fn los_nombres_no_se_repiten() {
-        let mut vistos = std::collections::BTreeSet::new();
+    fn names_are_not_repeated() {
+        let mut seen = std::collections::BTreeSet::new();
         for m in CATALOGO {
-            assert!(vistos.insert(m.name), "nombre repetido: {}", m.name);
+            assert!(seen.insert(m.name), "repeated name: {}", m.name);
         }
     }
 
-    /// Una notificación no lleva resultado: no hay a quién contestárselo.
+    /// A notification carries no result: there is nobody to answer it to.
     #[test]
-    fn una_notificacion_no_tiene_resultado() {
+    fn a_notification_has_no_result() {
         for m in CATALOGO {
             if m.kind == Kind::Notification {
-                assert_eq!(m.result(), None, "{} es notificación y trae result", m.name);
+                assert_eq!(
+                    m.result(),
+                    None,
+                    "{} is a notification and carries a result",
+                    m.name
+                );
             }
         }
     }
 
-    /// **Un `Stream` nombra por dónde entrega, y lo nombrado es una
-    /// notificación catalogada.**
+    /// **A `Stream` names where it delivers, and what it names is a catalogued
+    /// notification.**
     ///
-    /// Es lo que hace `Stream` desmentible. Antes, la diferencia con `Task`
-    /// era «tiene notificación propia» y el catálogo no decía cuál: se podía
-    /// declarar `Stream` cualquier cosa y nada se ponía rojo.
+    /// This is what makes `Stream` disprovable. Before, the difference from
+    /// `Task` was "has its own notification" and the catalogue did not say
+    /// which one: anything could be declared `Stream` and nothing turned red.
     #[test]
-    fn un_stream_nombra_su_notificacion_y_existe() {
+    fn a_stream_names_its_notification_and_it_exists() {
         for m in CATALOGO {
             if m.shape == Shape::Stream && m.kind == Kind::Request {
                 assert!(
                     !m.stream_notifs.is_empty(),
-                    "{} dice Stream y no dice por dónde entrega",
+                    "{} says Stream and does not say where it delivers",
                     m.name
                 );
             }
             for n in m.stream_notifs {
                 let Some(info) = buscar(n) else {
-                    panic!("{} nombra `{n}`, que no está en el catálogo", m.name);
+                    panic!("{} names `{n}`, which is not in the catalogue", m.name);
                 };
                 assert_eq!(
                     info.kind,
                     Kind::Notification,
-                    "{} entrega por `{n}`, que no es una notificación",
+                    "{} delivers through `{n}`, which is not a notification",
                     m.name
                 );
             }
         }
     }
 
-    /// Y lo que no es `Stream` no nombra ninguna: un `Task` que dijera
-    /// entregar por notificación estaría mintiendo sobre su forma.
+    /// And whatever is not `Stream` names none: a `Task` that claimed to
+    /// deliver through a notification would be lying about its shape.
     #[test]
-    fn solo_un_stream_nombra_notificaciones() {
+    fn only_a_stream_names_notifications() {
         for m in CATALOGO {
             if m.shape != Shape::Stream {
                 assert!(
                     m.stream_notifs.is_empty(),
-                    "{} es {:?} y nombra notificaciones de stream",
+                    "{} is {:?} and names stream notifications",
                     m.name,
                     m.shape
                 );
@@ -352,14 +362,14 @@ mod tests {
         }
     }
 
-    /// Y `buscar` encuentra lo que hay.
+    /// And `buscar` finds what is there.
     #[test]
-    fn buscar_encuentra_por_nombre_de_wire() {
+    fn buscar_finds_by_wire_name() {
         assert_eq!(
             buscar(methods::FS_STAT).map(|m| m.shape),
             Some(Shape::Direct)
         );
         assert_eq!(buscar(methods::FS_COPY).map(|m| m.shape), Some(Shape::Task));
-        assert_eq!(buscar("fs.no_existe"), None);
+        assert_eq!(buscar("fs.does_not_exist"), None);
     }
 }

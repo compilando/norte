@@ -1,119 +1,124 @@
-//! El panel de registro de la ventana (#326): su proyección y sus mandos.
+//! The window's log panel (#326): its projection and its controls.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin tocarlos
-//! (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are `Estado` methods, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 //!
-//! El ESTADO —nivel, filtro, seguimiento del final, la regla de los dos
-//! niveles— vive en `norte_frontend::logpanel`, que es el mismo código que usa
-//! la TUI; las líneas salen del anillo de `norte_config::logring`. Aquí queda
-//! lo que es de esta ventana: cómo se proyecta al puente y qué hace cada mando.
+//! The STATE — level, filter, following the tail, the two-levels rule —
+//! lives in `norte_frontend::logpanel`, the same code the TUI uses; the
+//! lines come from `norte_config::logring`'s ring. What is this window's own
+//! stays here: how it projects to the bridge and what each control does.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Enumerating them here would be a
+// forty-line list per file, in 32 files, that goes stale the moment the
+// parent imports something — `super::*` tracks it on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
 use norte_config::logline::{LogLevel, LogLine};
 use norte_frontend::logpanel::LogSource;
 
-/// El kind que ocupa un hueco de registro. El mismo que la TUI.
+/// The kind that occupies a log slot. The same one the TUI uses.
 pub(super) const KIND: &str = "log";
 
-/// Cuántas líneas se le piden al daemon en cada vuelta.
+/// How many lines are requested from the daemon per round.
 ///
-/// El daemon recorta a 1000, así que esto es una petición y no un contrato.
-/// Quinientas porque una vuelta que no quepa NO pierde nada —lo que sobra
-/// sigue después del cursor y lo recoge la vuelta siguiente, medio segundo
-/// después— y porque el panel enseña como mucho una pantalla: pedir el anillo
-/// entero cada vez sería pagar dos mil líneas por cada una que se pinta.
+/// The daemon trims to 1000, so this is a request and not a contract. Five
+/// hundred because a round that does not fit loses NOTHING — the leftover
+/// stays past the cursor and the next round picks it up, half a second
+/// later — and because the panel shows at most one screen: requesting the
+/// whole ring every time would mean paying for two thousand lines for every
+/// one that gets painted.
 const MAX_REMOTO: u32 = 500;
 
-/// Techo de líneas del daemon que se guardan en memoria.
+/// Cap on daemon lines kept in memory.
 ///
-/// El anillo local ya tiene el suyo; éste es el mismo cuidado para el remoto,
-/// porque aquí las líneas se ACUMULAN vuelta a vuelta y sin tope un panel
-/// abierto toda una tarde crecería sin fin. Del mismo orden que el anillo por
-/// defecto: lo que se puede recorrer hacia atrás.
+/// The local ring already has its own; this is the same care for the remote
+/// one, because here lines ACCUMULATE round after round and with no cap a
+/// panel left open all afternoon would grow without end. Same order of
+/// magnitude as the default ring: what can be scrolled back through.
 const MAX_LINEAS_REMOTAS: usize = 2000;
 
-/// Cuántas líneas salta una página cuando el renderer no dice su alto.
+/// How many lines a page jumps when the renderer does not say its height.
 const PAGINA: isize = 10;
 
-/// Cada cuánto se mira si el registro ha cambiado.
+/// How often it is checked whether the log has changed.
 ///
-/// El panel promete que SIGUE lo que llega, y esa promesa hay que cumplirla:
-/// la TUI la cumple porque repinta por frame, y esta ventana solo repinta
-/// cuando alguien hace algo — así que sin sondeo el panel se quedaba congelado
-/// entre pulsaciones mientras decía «pegado al final».
+/// The panel promises it FOLLOWS what arrives, and that promise has to be
+/// kept: the TUI keeps it because it repaints every frame, and this window
+/// only repaints when someone does something — so without polling the panel
+/// would sit frozen between keystrokes while saying "stuck to the end".
 ///
-/// Medio segundo: un registro se lee, no se cronometra. Y el sondeo es BARATO
-/// —un `AtomicU64`, sin tocar el candado del anillo— así que lo que cuesta de
-/// verdad es la foto, y esa solo se manda cuando hay algo nuevo.
+/// Half a second: a log is read, not timed to the millisecond. And polling
+/// is CHEAP — an `AtomicU64`, without touching the ring's lock — so what
+/// actually costs something is the snapshot, and that is only sent when
+/// there is something new.
 const SONDEO: std::time::Duration = std::time::Duration::from_millis(500);
 
-/// Techo de filas que un renderer puede declarar visibles.
+/// Cap on rows a renderer can declare visible.
 ///
-/// Generoso para una pantalla de verdad —un monitor 4K con letra pequeña no
-/// llega— y acotado porque el número viene de la webview: sin techo, un `rows`
-/// enorme convierte cada foto en el anillo entero.
+/// Generous for a real screen — a 4K monitor with small type does not reach
+/// it — and capped because this number comes from the webview: with no cap,
+/// a huge `rows` would turn every snapshot into the whole ring.
 const MAX_FILAS_REGISTRO: usize = 512;
 
-/// Qué se sabe del registro del DAEMON.
+/// What is known about the DAEMON's log.
 ///
-/// Tres valores y no un `bool`, porque «todavía no ha contestado» y «ha dicho
-/// que no tiene registro» se enseñan distinto: lo primero no dice nada
-/// —el selector simplemente no está—, y lo segundo es una frase que el panel
-/// tiene que poner en pantalla. Colapsarlos haría que un panel recién abierto
-/// afirmara una carencia que nadie ha comprobado.
+/// Three values and not a `bool`, because "has not answered yet" and "said
+/// it has no log" are shown differently: the first says nothing — the
+/// selector is simply absent — and the second is a phrase the panel has to
+/// put on screen. Collapsing them would make a freshly opened panel assert a
+/// lack nobody has checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(super) enum Servicio {
-    /// Nunca ha contestado: no se sabe.
+    /// Has never answered: unknown.
     #[default]
     SinRespuesta,
-    /// Sirve su registro: hay una segunda fuente de verdad.
+    /// Serves its log: there is a second source of truth.
     Sirve,
-    /// Dijo que no tiene registro que servir.
+    /// Said it has no log to serve.
     SinAnillo,
 }
 
-/// La mitad remota del panel de registro (#328).
+/// The log panel's remote half (#328).
 #[derive(Debug, Default)]
 pub(super) struct RegistroRemoto {
-    /// Lo que el daemon lleva entregado, ya en forma de presentación y de lo
-    /// más viejo a lo más nuevo.
+    /// What the daemon has delivered so far, already in presentation form
+    /// and from oldest to newest.
     ///
-    /// Se acumula y no se repide entero en cada vuelta: el sondeo tira del
-    /// anillo remoto con un cursor, así que cada respuesta trae solo lo nuevo.
+    /// It accumulates and is not re-fetched whole every round: polling pulls
+    /// from the remote ring with a cursor, so each answer brings only what
+    /// is new.
     pub(super) lineas: Vec<LogLine>,
-    /// Por dónde iba. `None` = todavía no se ha preguntado, que es «dame lo
-    /// que haya» y NO es lo mismo que cero: contra un anillo que ya dio la
-    /// vuelta, un cero reportaría un `lost` falso en el primer sondeo.
+    /// Where it was up to. `None` = has not been asked yet, which is "give
+    /// me whatever there is" and is NOT the same as zero: against a ring
+    /// that has already wrapped around, a zero would report a false `lost`
+    /// on the first poll.
     pub(super) cursor: Option<u64>,
-    /// Hay una petición en vuelo.
+    /// A request is in flight.
     ///
-    /// Sin esto, un daemon que tardara más de medio segundo en contestar
-    /// acumularía una petición por tic para siempre.
+    /// Without this, a daemon slower than half a second to answer would
+    /// pile up one request per tick forever.
     pub(super) en_vuelo: bool,
-    /// Qué se sabe de si sirve su registro.
+    /// What is known about whether it serves its log.
     pub(super) servicio: Servicio,
-    /// El nivel que contestó tener puesto, en forma de wire.
+    /// The level it answered it has set, in wire form.
     ///
-    /// Suyo y no nuestro: es global a todos sus clientes y solo sube, así que
-    /// lo que se pidió y lo que hay puesto no tienen por qué coincidir.
+    /// Its own, not ours: it is global to all its clients and only goes up,
+    /// so what was requested and what is set need not match.
     pub(super) nivel: Option<String>,
-    /// Cuántas líneas se cayeron por detrás de este cursor. Se acumulan: un
-    /// hueco silencioso miente sobre lo que pasó.
+    /// How many lines were dropped past this cursor. They accumulate: a
+    /// silent gap lies about what happened.
     pub(super) perdidas: u64,
 }
 
 impl RegistroRemoto {
-    /// Empieza de cero, conservando lo que se sabe del daemon.
+    /// Starts from zero, keeping what is known about the daemon.
     ///
-    /// Las líneas y el cursor son de ESTA apertura; que el daemon sirva o no
-    /// su registro es un hecho sobre el daemon, y olvidarlo escondería el
-    /// selector medio segundo cada vez que se reabre el panel.
+    /// The lines and the cursor belong to THIS opening; whether the daemon
+    /// serves its log or not is a fact about the daemon, and forgetting it
+    /// would hide the selector for half a second every time the panel
+    /// reopens.
     pub(super) fn reiniciar(&mut self) {
         self.lineas.clear();
         self.cursor = None;
@@ -121,40 +126,41 @@ impl RegistroRemoto {
         self.perdidas = 0;
     }
 
-    /// ¿Tiene sentido volver a preguntarle algo a este daemon?
+    /// Does it make sense to ask this daemon anything again?
     ///
-    /// A uno que ya dijo que no tiene registro, no: la negativa no puede
-    /// cambiar mientras ese daemon viva —sale de una feature de compilación o
-    /// de un montaje que le falló al arrancar—, así que seguir preguntando son
-    /// RPC para siempre por una respuesta que no puede ser otra. Es asimétrico
-    /// a propósito: lo POSITIVO sí hay que seguir pidiéndolo, porque el
-    /// registro crece.
+    /// Not one that already said it has no log: the negative cannot change
+    /// while that daemon lives — it comes from a compile-time feature or
+    /// from a mount that failed at startup — so continuing to ask would be
+    /// RPCs forever for an answer that cannot be any other. It is
+    /// asymmetric on purpose: the POSITIVE case does need to keep being
+    /// asked, because the log grows.
     ///
-    /// Lo comparten el sondeo de `log.tail` y la petición de `log.level`, y
-    /// eso es el arreglo de una asimetría: el nivel se pedía solo por la
-    /// fuente, así que contra un daemon que ya había contestado `Unsupported`
-    /// la ventana mandaba un RPC muerto por cada pulsación de nivel. La TUI ya
-    /// lo hacía bien (`RegistroRemoto::debe_pedir`); ahora es la misma regla en
-    /// las dos.
+    /// Shared by `log.tail`'s polling and `log.level`'s request, and that is
+    /// the fix for an asymmetry: the level used to be requested only by the
+    /// source, so against a daemon that had already answered `Unsupported`
+    /// the window sent a dead RPC on every level press. The TUI already got
+    /// this right (`RegistroRemoto::debe_pedir`); now it is the same rule in
+    /// both.
     ///
-    /// No hay comparación de versiones aquí ni en ninguna parte: un daemon más
-    /// viejo ni siquiera completa el `initialize`.
+    /// There is no version comparison here or anywhere: an older daemon does
+    /// not even complete `initialize`.
     pub(super) const fn debe_pedir(&self) -> bool {
         !matches!(self.servicio, Servicio::SinAnillo)
     }
 }
 
-/// Una línea del cable a la forma que el panel pinta.
+/// One wire line into the shape the panel paints.
 ///
-/// Los dos tipos se llaman igual y conviven en este fichero a propósito:
-/// `methods::LogLine` es el CABLE y `logline::LogLine` la presentación, y
-/// mezclarlos es la manera de acabar mandando una `String` de nivel a un
-/// filtro que compara verbosidades.
+/// The two types share a name and coexist in this file on purpose:
+/// `methods::LogLine` is the WIRE one and `logline::LogLine` the
+/// presentation one, and mixing them up is how you end up sending a level
+/// `String` to a filter that compares verbosities.
 ///
-/// Un nivel que no se reconozca cae en `Info` en vez de tirar la línea: el
-/// protocolo dice que un valor desconocido tiene que poder LLEGAR, y perder el
-/// mensaje entero por no entender su etiqueta es peor que enseñarlo con la
-/// etiqueta corriente. Con el vocabulario cerrado de hoy no ocurre.
+/// An unrecognized level falls back to `Info` instead of dropping the line:
+/// the protocol says an unknown value has to be able to ARRIVE, and losing
+/// the whole message for not understanding its label is worse than showing
+/// it with the ordinary label. With today's closed vocabulary it does not
+/// happen.
 fn linea_de_wire(l: norte_proto::methods::LogLine) -> LogLine {
     LogLine {
         epoch_ms: l.epoch_ms,
@@ -165,11 +171,11 @@ fn linea_de_wire(l: norte_proto::methods::LogLine) -> LogLine {
 }
 
 impl Estado {
-    /// La proyección del panel: solo la VENTANA visible.
+    /// The panel's projection: only the visible WINDOW.
     ///
-    /// Como el listado, y por lo mismo: un anillo de dos mil líneas mandado
-    /// entero en cada parche es el derroche que la decisión D7 existe para
-    /// evitar, y el registro se mueve más que un directorio.
+    /// Like the listing, and for the same reason: a ring of two thousand
+    /// lines sent whole on every patch is the waste decision D7 exists to
+    /// prevent, and a log moves more than a directory does.
     pub(super) fn panel_de_registro(&self, slot: u32) -> crate::dto::LogSlotView {
         let lineas = self
             .log_ring
@@ -177,9 +183,9 @@ impl Estado {
             .map(norte_config::logring::LogRing::snapshot)
             .unwrap_or_default();
         let fuente = self.fuente_efectiva();
-        // Prestadas, no clonadas: `merge` devuelve referencias a propósito —el
-        // anillo ya clonó una vez en su `snapshot`— y el panel pinta como
-        // mucho una pantalla.
+        // Borrowed, not cloned: `merge` returns references on purpose — the
+        // ring already cloned once in its `snapshot` — and the panel paints
+        // at most one screen.
         let mezcla = norte_frontend::logpanel::merge(&lineas, &self.log_remoto.lineas, fuente);
         let visibles: Vec<_> = mezcla
             .into_iter()
@@ -194,27 +200,28 @@ impl Estado {
         crate::dto::LogSlotView {
             slot_id: slot,
             lines: ventana.collect(),
-            // El que se ENSEÑA, siempre, en todas las fuentes — y por tanto el
-            // que los botones controlan.
+            // The one that is SHOWN, always, across all sources — and
+            // therefore the one the buttons control.
             //
-            // Enseñar aquí el que el daemon contestó era un error de dos
-            // cabezas: el filtro de `visibles` sigue siendo el del panel, así
-            // que con el daemon a `trace` y el panel a `info` la cabecera
-            // marcaba `trace` mientras cada línea `debug` del daemon llegaba
-            // por el cable y se tiraba en silencio —justo el «no hay líneas de
-            // DEBUG es indistinguible de no capturarlas» que el rustdoc de
-            // `LogTailResult::level` existe para impedir—; y pulsar `info` no
-            // movía la marca, porque el daemon nunca baja, así que el mando se
-            // leía como muerto. El nivel del daemon se dice en `capturing`,
-            // que es el sitio que ya significa «se recoge más de lo que se ve».
+            // Showing here the one the daemon answered was a two-headed bug:
+            // the `visibles` filter is still the panel's, so with the daemon
+            // at `trace` and the panel at `info` the header marked `trace`
+            // while every `debug` line from the daemon arrived over the wire
+            // and was silently dropped — exactly the "no DEBUG lines is
+            // indistinguishable from not capturing them" that
+            // `LogTailResult::level`'s rustdoc exists to prevent — and
+            // pressing `info` did not move the mark, because the daemon
+            // never goes down, so the control read as dead. The daemon's
+            // level is stated in `capturing`, which is already the spot that
+            // means "more is being collected than is shown".
             level: self.log_panel.level().wire().to_owned(),
-            // El chip del título pintaba el id de cable; el terminal pinta la
-            // etiqueta (`Registro · TRACE`). Misma pareja que en cada línea:
-            // el id se compara —el renderer marca qué botón está puesto— y la
-            // etiqueta se lee.
+            // The title chip used to paint the wire id; the terminal paints
+            // the label (`Log · TRACE`). Same pairing as in every line: the
+            // id is compared — the renderer marks which button is set — and
+            // the label is read.
             level_label: self.log_panel.level().label().trim().to_owned(),
-            // El filtro lo TECLEA el lector, así que se pinta como cualquier
-            // otro texto de fuera: enmascarado y acotado.
+            // The filter is TYPED by the reader, so it is painted like any
+            // other outside text: masked and clamped.
             filter: clamp_display(
                 norte_frontend::display_name(self.log_panel.filter().as_bytes()).0,
             ),
@@ -226,19 +233,20 @@ impl Estado {
             source: clamp_display(norte_i18n::t_in(
                 self.lang,
                 match fuente {
-                    // De ESTE proceso, y decirlo es el punto: la ventana
-                    // arranca su propio daemon (#300), así que aquí NO está lo
-                    // del daemon —los providers, el journal, la política—, que
-                    // es la mitad interesante. Callarlo haría que el panel
-                    // pareciera roto: alguien lo abre mientras una conexión
-                    // falla, no ve la línea que lo explica, y concluye que el
-                    // panel no funciona en vez de que está mirando otro sitio.
+                    // From THIS process, and saying so is the point: the
+                    // window starts its own daemon (#300), so what is NOT
+                    // here is the daemon's — the providers, the journal, the
+                    // policy — which is the interesting half. Staying quiet
+                    // about it would make the panel look broken: someone
+                    // opens it while a connection fails, does not see the
+                    // line that explains it, and concludes the panel is not
+                    // working instead of that it is looking somewhere else.
                     LogSource::Window if self.log_ring.is_some() => "log-source-window",
-                    // No es «no se registra nada»: el proceso sigue
-                    // escribiendo a su fichero. Lo que falta es el anillo en
-                    // memoria, que es lo que este panel lee — y decir lo
-                    // primero sería una respuesta más tranquilizadora que la
-                    // verdad. La TUI ya tenía la frase exacta.
+                    // Not "nothing is being logged": the process keeps
+                    // writing to its file. What is missing is the in-memory
+                    // ring, which is what this panel reads — and saying the
+                    // first thing would be a more reassuring answer than the
+                    // truth. The TUI already had the exact phrase.
                     LogSource::Window => "log-no-ring",
                     LogSource::Daemon => "log-source-daemon",
                     LogSource::Both => "log-source-both",
@@ -255,23 +263,23 @@ impl Estado {
         }
     }
 
-    /// La fuente que de verdad se está enseñando.
+    /// The source that is really being shown.
     ///
-    /// La preferencia se guarda tal cual (`LogPanel::source`), pero una fuente
-    /// que no existe no se puede enseñar, y el panel informa de lo que hay y no
-    /// de lo que se pidió. Se colapsa en las DOS direcciones, que son la misma
-    /// regla vista desde cada orilla:
+    /// The preference is stored as is (`LogPanel::source`), but a source
+    /// that does not exist cannot be shown, and the panel reports what there
+    /// is, not what was requested. It collapses in BOTH directions, which
+    /// are the same rule seen from each shore:
     ///
-    /// - sin un anillo al otro lado (un daemon sin la feature `logging`, o el
-    ///   caso embebido) todo cae a `Window`;
-    /// - sin anillo en ESTE proceso —nadie montó la capa— no hay nada local que
-    ///   mezclar, así que todo cae a `Daemon`. Sin esto, un `Both` sobre un
-    ///   proceso sin anillo se anunciaba como «de la ventana y del daemon»
-    ///   siendo la lista entera del daemon.
+    /// - with no ring on the other side (a daemon without the `logging`
+    ///   feature, or the embedded case) everything falls to `Window`;
+    /// - with no ring in THIS process — nobody mounted the layer — there is
+    ///   nothing local to merge, so everything falls to `Daemon`. Without
+    ///   this, a `Both` over a ringless process announced itself as "from
+    ///   the window and the daemon" while being the daemon's whole list.
     ///
-    /// Con los dos anillos ausentes queda `Window`, que es donde vive la frase
-    /// de #326: no hay registro EN MEMORIA que leer, y eso no es lo mismo que
-    /// «no se registra nada».
+    /// With both rings absent it stays `Window`, which is where #326's
+    /// phrase lives: there is no log IN MEMORY to read, and that is not the
+    /// same as "nothing is being logged".
     fn fuente_efectiva(&self) -> LogSource {
         match (
             self.log_remoto.servicio == Servicio::Sirve,
@@ -283,16 +291,17 @@ impl Estado {
         }
     }
 
-    /// Lo que hay que decir sobre la fuente. Vacío = nada que decir.
+    /// What has to be said about the source. Empty = nothing to say.
     ///
-    /// Dos frases excluyentes, y las dos existen para que el panel no mienta
-    /// por omisión. Que el daemon no tiene registro que servir, o el lector
-    /// creería que la mitad interesante simplemente no ocurre. Y **de quién es
-    /// el nivel**, siempre que el daemon sea una de las fuentes que se leen —
-    /// no solo cuando es la única: en `Both`, que es lo que trae el panel al
-    /// abrirse, pulsar «traza» sube un anillo GLOBAL al daemon, compartido con
-    /// todos sus clientes, que no vuelve a bajar y que cerrar este panel no
-    /// baja. Callarlo en el camino corriente dejaba esa decisión sin anunciar.
+    /// Two mutually exclusive phrases, and both exist so the panel does not
+    /// lie by omission. That the daemon has no log to serve, or the reader
+    /// would think the interesting half simply is not happening. And **whose
+    /// level it is**, whenever the daemon is one of the sources being read —
+    /// not only when it is the only one: in `Both`, which is what the panel
+    /// opens with, pressing "trace" raises a GLOBAL ring on the daemon,
+    /// shared with all its clients, that never comes back down and that
+    /// closing this panel does not lower. Staying quiet about it on the
+    /// common path left that decision unannounced.
     fn nota_de_fuente(&self, fuente: LogSource) -> String {
         let clave = if self.log_remoto.servicio == Servicio::SinAnillo {
             "log-source-unsupported"
@@ -304,18 +313,18 @@ impl Estado {
         clamp_display(norte_i18n::t_in(self.lang, clave))
     }
 
-    /// Qué anillo está guardando MÁS de lo que se enseña, y cuál.
+    /// Which ring is holding MORE than is shown, and which.
     ///
-    /// Solo cuando se captura de más: decir «capturando info» sobre un panel
-    /// que enseña info sería ruido, y el ruido es lo que hace que se deje de
-    /// leer la línea que sí importa.
+    /// Only when more is being captured than is shown: saying "capturing
+    /// info" over a panel showing info would be noise, and noise is what
+    /// makes the line that does matter stop being read.
     ///
-    /// Con una sola fuente la frase no nombra el anillo —no hay otro con el
-    /// que confundirlo—; con las dos, cada parte dice de quién habla. Que aquí
-    /// aparezca el nivel del daemon es lo que hace legible la regla entera: el
-    /// suyo es global a sus clientes y solo sube, así que puede estar muy por
-    /// encima del que este panel enseña, y ese hueco es exactamente lo que
-    /// esta frase existe para no callar.
+    /// With a single source the phrase does not name the ring — there is no
+    /// other to confuse it with — with both, each part says whose it is.
+    /// That the daemon's level shows up here is what makes the whole rule
+    /// legible: its own is global to its clients and only goes up, so it can
+    /// sit well above what this panel shows, and that gap is exactly what
+    /// this phrase exists to not keep quiet about.
     fn nota_de_captura(&self, fuente: LogSource) -> String {
         let ensena = self.log_panel.level();
         let local = self
@@ -349,16 +358,17 @@ impl Estado {
         clamp_display(partes.join(" · "))
     }
 
-    /// Las líneas que se han perdido, por anillo y DICIENDO de cuál.
+    /// The lines that were lost, per ring and SAYING which one.
     ///
-    /// Dos números y no uno, porque no significan lo mismo y no viven lo
-    /// mismo: el del anillo local cuenta lo que ha evacuado desde que arrancó
-    /// el proceso y no se reinicia nunca; el del daemon cuenta lo que ESTA
-    /// apertura del panel se perdió, y vuelve a cero al reabrirlo. Sumarlos
-    /// daba un número que no era ninguna de las dos cosas.
+    /// Two numbers and not one, because they do not mean the same thing and
+    /// do not live the same lifetime: the local ring's counts what has been
+    /// evicted since the process started and never resets; the daemon's
+    /// counts what THIS opening of the panel lost, and goes back to zero on
+    /// reopening. Adding them together gave a number that was neither of the
+    /// two things.
     ///
-    /// De cada anillo solo se habla si se está leyendo: avisar de un hueco en
-    /// un registro que no está en pantalla es una alarma sobre nada.
+    /// Each ring is only mentioned if it is being read: warning about a gap
+    /// in a log that is not on screen is an alarm about nothing.
     fn nota_de_descartes(&self, fuente: LogSource) -> String {
         let mut partes: Vec<String> = Vec::new();
         let locales = self
@@ -368,8 +378,9 @@ impl Estado {
         if locales > 0 && fuente != LogSource::Daemon {
             partes.push(norte_i18n::ta_in(
                 self.lang,
-                // Sin nombrar el anillo cuando es el único que se lee: es la
-                // misma frase que la TUI, que nunca tiene dos.
+                // Without naming the ring when it is the only one being
+                // read: it is the same phrase the TUI uses, which never has
+                // two.
                 if fuente == LogSource::Window {
                     "log-dropped"
                 } else {
@@ -388,30 +399,32 @@ impl Estado {
         clamp_display(partes.join(" · "))
     }
 
-    /// Una línea, saneada.
+    /// One line, sanitized.
     ///
-    /// El mensaje pasa por `display_name` como cualquier texto que se pinta, y
-    /// aquí con un motivo propio: un mensaje de registro puede llevar dentro el
-    /// nombre de un fichero que alguien eligió, y un `U+202E` ahí reordena la
-    /// línea entera del panel.
+    /// The message goes through `display_name` like any painted text, and
+    /// here for a reason of its own: a log message can carry inside it a
+    /// file name someone chose, and a `U+202E` there reorders the panel's
+    /// whole line.
     fn linea_de_registro(l: &LogLine, origen: LogSource) -> crate::dto::LogLineView {
         let (target, t_hostil) = norte_frontend::display_name(l.target.as_bytes());
         let (mensaje, m_hostil) = norte_frontend::display_name(l.message.as_bytes());
         crate::dto::LogLineView {
             time: norte_frontend::format::hora_utc(l.epoch_ms),
             level: l.level.wire().to_owned(),
-            // Lo que se PINTA, que no es el id de cable. El renderer pintaba
-            // `trace` mientras el terminal pinta `TRACE` y sus propios botones
-            // decían «traza»: tres vocabularios del mismo nivel, y los tres a
-            // la vez en pantalla. La etiqueta es la de `LogLevel::label`, que
-            // es de donde la saca el terminal — sin el relleno de columnas,
-            // que es cosa de un ancho fijo que la ventana no tiene.
+            // What is PAINTED, which is not the wire id. The renderer used
+            // to paint `trace` while the terminal paints `TRACE` and its own
+            // buttons said "trace" in yet another spelling: three
+            // vocabularies for the same level, all three on screen at once.
+            // The label is the one from `LogLevel::label`, which is where
+            // the terminal takes it from — without the column padding,
+            // which is a fixed-width thing the window does not have.
             level_label: l.level.label().trim().to_owned(),
             target: clamp_display(target),
             message: clamp_display(mensaje),
             hostile: t_hostil || m_hostil,
-            // `Both` no le pasa a una línea: `merge` marca cada una con el
-            // proceso del que salió, que es lo único que aquí significa algo.
+            // `Both` is never passed to a line: `merge` marks each one with
+            // the process it came from, which is the only thing that means
+            // anything here.
             source: if origen == LogSource::Daemon {
                 "daemon"
             } else {
@@ -421,24 +434,26 @@ impl Estado {
         }
     }
 
-    /// Enseñar hasta este nivel.
+    /// Show up to this level.
     ///
-    /// **Sube el del ANILLO si hace falta, y nunca lo baja.** Es la regla que
-    /// `LogPanel::show_level` devuelve y que hay que atar: filtrar en la
-    /// pantalla lo que nunca se registró es imposible, así que pedir DEBUG
-    /// tiene que hacer que el anillo empiece a capturarlo. Y bajar a ERROR no
-    /// deja de capturar, porque entonces volver a subir enseñaría un agujero
-    /// del tamaño del rato que se estuvo en ERROR.
-    /// Y, cuando la fuente incluye al daemon, **se lo pide TAMBIÉN a él**
-    /// (#328). Su anillo es suyo: este cliente no aplica niveles, porque la
-    /// cota que impide que ahí dentro aparezca una contraseña vive en el
-    /// proceso que tiene el anillo. Lo que quede puesto lo contesta él, y
-    /// puede no ser lo que se pidió — es global a todos sus clientes.
+    /// **Raises the RING's level if needed, and never lowers it.** It is the
+    /// rule `LogPanel::show_level` returns and that has to be honored:
+    /// filtering on screen what was never logged is impossible, so
+    /// requesting DEBUG has to make the ring start capturing it. And
+    /// dropping to ERROR does not stop capturing, because then going back up
+    /// would show a hole the size of the time spent at ERROR.
+    /// And, when the source includes the daemon, **it is asked of it TOO**
+    /// (#328). Its ring is its own: this client does not apply levels,
+    /// because the boundary that prevents a password from showing up inside
+    /// lives in the process holding the ring. Whatever ends up set is
+    /// answered by it, and it may not be what was requested — it is global
+    /// to all its clients.
     ///
-    /// Se pide por la PREFERENCIA y no por la fuente efectiva: quien ha
-    /// elegido leer el daemon está pidiendo el nivel del daemon aunque ahora
-    /// mismo no haya contestado todavía, y la respuesta a esta llamada es
-    /// justamente una de las dos formas de averiguar si sabe de registro.
+    /// It is requested by the PREFERENCE and not by the effective source:
+    /// whoever chose to read the daemon is asking for the daemon's level
+    /// even if right now it has not answered yet, and the answer to this
+    /// call is precisely one of the two ways to find out whether it knows
+    /// about logging.
     pub(super) fn nivel_de_registro(
         &mut self,
         nivel: &str,
@@ -446,8 +461,9 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(nivel) = LogLevel::from_wire(nivel) else {
-            // Vocabulario CERRADO: uno que no se conoce no cae en `Info`, que
-            // dejaría el panel enseñando otra cosa de la que se pidió.
+            // CLOSED vocabulary: an unrecognized one does not fall back to
+            // `Info`, which would leave the panel showing something other
+            // than what was requested.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-log-level-unknown".to_owned(),
@@ -459,10 +475,11 @@ impl Estado {
         if let Some(anillo) = &self.log_ring {
             anillo.raise_to(nivel);
         }
-        // Y solo si hay alguien a quien pedírselo: a un daemon que ya dijo que
-        // no tiene anillo, subirle el nivel es un RPC por pulsación cuya
-        // respuesta ya se conoce. Es la misma condición que corta el sondeo
-        // (ver `RegistroRemoto::debe_pedir`), y la TUI ya la aplicaba aquí.
+        // And only if there is someone to ask: for a daemon that already
+        // said it has no ring, raising its level is an RPC per keystroke
+        // whose answer is already known. It is the same condition that cuts
+        // off polling (see `RegistroRemoto::debe_pedir`), and the TUI already
+        // applied it here.
         if self.log_panel.source() != LogSource::Window && self.log_remoto.debe_pedir() {
             let backend = Arc::clone(backend);
             let buzon = buzon.clone();
@@ -476,20 +493,22 @@ impl Estado {
         self.repintar_registro()
     }
 
-    /// Recorre la fuente del registro (#328).
+    /// Cycles the log's source (#328).
     ///
-    /// Sin una segunda fuente no hace nada y no se pinta: cambiar entre tres
-    /// vistas de un mismo anillo sería un mando que promete algo que no
-    /// existe. Aun así se acepta la acción en vez de rechazarla — el renderer
-    /// solo la manda cuando el selector está en pantalla, y un `Unavailable`
-    /// aquí sería un aviso sobre una pulsación que nadie pudo dar.
+    /// With no second source it does nothing and does not repaint: switching
+    /// between three views of the same ring would be a control promising
+    /// something that does not exist. The action is still accepted rather
+    /// than rejected — the renderer only sends it when the selector is on
+    /// screen, and an `Unavailable` here would be a notice about a press
+    /// nobody could have made.
     ///
-    /// La guarda es de AQUÍ y no del renderer, y eso se corrigió: dejarla en
-    /// `sources_available` bastaba para que no se viera nada raro —la fuente
-    /// efectiva colapsa a `Window` de todos modos—, pero la PREFERENCIA se
-    /// movía por debajo de un lector que no puede verla moverse, y reaparecía
-    /// puesta en otra cosa el día que sí hubiera daemon. Es lo mismo que hace
-    /// la TUI, que tampoco recorre sin daemon que sirva.
+    /// The guard is HERE and not the renderer's, and that was fixed: leaving
+    /// it in `sources_available` was enough for nothing odd to show — the
+    /// effective source collapses to `Window` anyway — but the PREFERENCE
+    /// moved underneath a reader who cannot see it move, and it reappeared
+    /// set to something else the day there really was a daemon. It is the
+    /// same thing the TUI does, which also does not cycle without a serving
+    /// daemon.
     pub(super) fn fuente_de_registro(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.log_remoto.servicio == Servicio::Sirve {
             self.log_panel.cycle_source();
@@ -497,7 +516,7 @@ impl Estado {
         self.repintar_registro()
     }
 
-    /// El filtro de texto sobre módulo y mensaje.
+    /// The text filter over module and message.
     pub(super) fn filtro_de_registro(
         &mut self,
         texto: &str,
@@ -514,10 +533,11 @@ impl Estado {
         self.repintar_registro()
     }
 
-    /// Sube o baja por el registro, despegándose del final.
+    /// Scrolls up or down through the log, detaching from the tail.
     ///
-    /// Despegarse es la mitad del panel: uno que salta siempre al final no se
-    /// puede leer mientras algo escribe, que es justo cuando hace falta.
+    /// Detaching is half the panel: one that always jumps to the end cannot
+    /// be read while something is writing, which is exactly when it is
+    /// needed.
     pub(super) fn desplazar_registro(
         &mut self,
         delta: i64,
@@ -527,8 +547,9 @@ impl Estado {
             .as_ref()
             .map(norte_config::logring::LogRing::snapshot)
             .unwrap_or_default();
-        // Sobre la lista MEZCLADA, que es la que se ve: contar solo las
-        // locales dejaría el tope corto y una página no llegaría al final.
+        // Over the MERGED list, which is what is seen: counting only the
+        // local ones would leave the cap short and a page would not reach
+        // the end.
         let visibles = norte_frontend::logpanel::merge(
             &lineas,
             &self.log_remoto.lineas,
@@ -546,31 +567,32 @@ impl Estado {
         self.repintar_registro()
     }
 
-    /// Vuelve a pegarse al final.
+    /// Sticks back to the end.
     pub(super) fn seguir_registro(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.log_panel.follow();
         self.repintar_registro()
     }
 
-    /// Cuántas filas caben, del frame que el renderer acaba de pintar.
+    /// How many rows fit, from the frame the renderer just painted.
     ///
-    /// La pone él y no se adivina aquí: en la TUI, adivinar el alto hizo que
-    /// cada página se saltara dos líneas y la primera cuatro, y lo que ninguna
-    /// de las dos ventanas enseñaba no se podía leer de ninguna manera.
+    /// It sets this, it is not guessed here: in the TUI, guessing the height
+    /// made every page skip two lines and the first one four, and what
+    /// neither window showed could not be read at all.
     pub(super) fn filas_de_registro(
         &mut self,
         filas: u32,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Con suelo y con TECHO. El suelo, para que una página mueva algo; el
-        // techo, porque este número lo manda la webview y sin él un `rows` de
-        // cuatro mil millones haría que cada foto llevara el anillo entero —
-        // dos mil líneas por acción, que es justo lo que la decisión D7 y el
-        // rustdoc de `LogSlotView` existen para impedir—. El camino del
-        // listado ya se acota igual.
+        // With a floor and a CEILING. The floor, so a page moves something;
+        // the ceiling, because this number is sent by the webview and
+        // without it a `rows` of four billion would make every snapshot
+        // carry the whole ring — two thousand lines per action, exactly what
+        // decision D7 and `LogSlotView`'s rustdoc exist to prevent. The
+        // listing's path is already capped the same way.
         let filas = (filas as usize).clamp(1, MAX_FILAS_REGISTRO);
         if filas == self.log_filas {
-            // Sin cambio no hay parche: el renderer manda esto por frame, y
-            // contestar a todos gastaría un número de secuencia por frame.
+            // With no change there is no patch: the renderer sends this
+            // every frame, and answering all of them would spend a sequence
+            // number per frame.
             return (self.aplicada(), Vec::new());
         }
         self.log_filas = filas;
@@ -578,16 +600,16 @@ impl Estado {
         self.repintar_registro()
     }
 
-    /// Repinta el registro, si hay algún hueco enseñándolo.
+    /// Repaints the log, if some slot is showing it.
     ///
-    /// Va como FOTO y no como parche, por lo mismo que el cursor del panel de
-    /// procesos: no hay un `ViewChange` para un hueco que no es un listado, y
-    /// añadir uno por esto sería contrato nuevo para lo que son teclas
-    /// sueltas, no un desplazamiento continuo.
+    /// It goes as a SNAPSHOT and not a patch, for the same reason as the
+    /// processes panel's cursor: there is no `ViewChange` for a slot that is
+    /// not a listing, and adding one for this would be a new contract for
+    /// what are one-off keys, not a continuous scroll.
     ///
-    /// Sin ningún hueco de registro no se manda nada —el panel se cierra y una
-    /// acción en vuelo aterriza después—: una foto de más gasta un número de
-    /// secuencia para pintar lo mismo.
+    /// With no log slot at all, nothing is sent — the panel closes and an
+    /// action in flight lands afterward — an extra snapshot spends a
+    /// sequence number to paint the same thing.
     fn repintar_registro(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.huecos_de_registro().is_empty() {
             return (self.aplicada(), Vec::new());
@@ -599,15 +621,15 @@ impl Estado {
         )
     }
 
-    /// Programa el siguiente sondeo del registro, si hay panel abierto.
+    /// Schedules the log's next poll, if there is a panel open.
     ///
-    /// Se rearma solo mientras el panel siga en pantalla y se apaga cuando se
-    /// cierra: un temporizador que sobreviviera al panel estaría despertando
-    /// al actor cada medio segundo para no pintar nada.
+    /// It only rearms while the panel stays on screen and turns off when it
+    /// closes: a timer that outlived the panel would be waking up the actor
+    /// every half second to paint nothing.
     ///
-    /// `epoca` distingue una apertura de la siguiente: abrir, cerrar y volver
-    /// a abrir dejaría dos temporizadores vivos sobre el mismo panel, y el
-    /// viejo seguiría rearmándose para siempre.
+    /// `epoca` tells one opening from the next: opening, closing and
+    /// reopening would leave two timers alive over the same panel, and the
+    /// old one would keep rearming forever.
     pub(super) fn sondear_registro(&self, buzon: &mpsc::Sender<Mensaje>) {
         if self.huecos_de_registro().is_empty() {
             return;
@@ -620,11 +642,11 @@ impl Estado {
         });
     }
 
-    /// El sondeo llegó: se repinta SOLO si el anillo tiene algo nuevo.
+    /// The poll arrived: it only repaints if the ring has something new.
     ///
-    /// El contador de entradas es un `AtomicU64` que solo sube, así que la
-    /// comprobación no toca el candado ni clona nada. Sin ella, esto sería una
-    /// foto entera de la pantalla dos veces por segundo para pintar lo mismo.
+    /// The entry counter is an `AtomicU64` that only goes up, so the check
+    /// touches neither the lock nor clones anything. Without it, this would
+    /// be a full screen snapshot twice a second to paint the same thing.
     pub(super) fn tic_de_registro(
         &mut self,
         epoca: u64,
@@ -632,15 +654,15 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         if epoca != self.log_epoca {
-            // De una apertura anterior: se deja morir sin rearmar.
+            // From a previous opening: let it die without rearming.
             return Vec::new();
         }
         self.sondear_registro(buzon);
-        // Y de paso se tira del registro del daemon (#328), colgado de ESTE
-        // temporizador y no de uno propio: dos relojes sobre el mismo panel
-        // son dos cosas que apagar al cerrarlo, y la segunda es la que se
-        // olvida. La respuesta vuelve por el buzón, así que el actor sigue
-        // siendo el único que escribe.
+        // And along the way the daemon's log is pulled (#328), hung off
+        // THIS timer and not one of its own: two clocks over the same panel
+        // are two things to turn off on close, and the second one is the
+        // one that gets forgotten. The answer comes back through the
+        // mailbox, so the actor is still the only one writing.
         self.pedir_registro_remoto(backend, buzon);
         let ahora = self
             .log_ring
@@ -650,9 +672,10 @@ impl Estado {
             return Vec::new();
         }
         self.log_visto = ahora;
-        // Solo lo que SIGUE el final se refresca solo. Quien se ha despegado
-        // está leyendo algo concreto, y moverle la lista debajo es peor que no
-        // enseñarle lo nuevo — que además va a seguir ahí cuando vuelva.
+        // Only whatever FOLLOWS the tail refreshes on its own. Whoever has
+        // detached is reading something specific, and moving the list
+        // underneath them is worse than not showing the new stuff — which
+        // will still be there when they come back, anyway.
         if !self.log_panel.following() {
             return Vec::new();
         }
@@ -660,35 +683,37 @@ impl Estado {
         salidas
     }
 
-    /// Tira del registro del DAEMON desde donde se quedó (#328).
+    /// Pulls the DAEMON's log from where it left off (#328).
     ///
-    /// Se pregunta SIEMPRE que el panel esté abierto, incluso con la fuente
-    /// puesta en «esta ventana»: es la única forma de saber si hay una segunda
-    /// fuente que ofrecer, y por tanto de decidir si el selector se pinta. Es
-    /// una llamada cada medio segundo mientras alguien mira el registro; un
-    /// panel cerrado no cuesta nada, que es donde está la mayor parte del
-    /// tiempo.
+    /// It is asked WHENEVER the panel is open, even with the source set to
+    /// "this window": it is the only way to know whether there is a second
+    /// source to offer, and therefore to decide whether the selector paints.
+    /// It is one call every half second while someone is looking at the
+    /// log; a closed panel costs nothing, which is where most of the time
+    /// is spent.
     ///
-    /// La época viaja con la petición: entre pedir y contestar caben un cierre
-    /// y una apertura, y la respuesta de la sesión anterior tiene que morir en
-    /// vez de aterrizar en el panel nuevo.
+    /// The epoch travels with the request: a close and an open fit between
+    /// asking and answering, and the previous session's answer has to die
+    /// instead of landing on the new panel.
     pub(super) fn pedir_registro_remoto(
         &mut self,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) {
         if self.huecos_de_registro().is_empty()
-            // Con una en vuelo no se encola otra: un daemon que tardara más de
-            // medio segundo acumularía una petición por tic para siempre.
+            // With one in flight another is not enqueued: a daemon slower
+            // than half a second to answer would pile up one request per
+            // tick forever.
             || self.log_remoto.en_vuelo
-            // Y a un daemon que ya ha dicho que no tiene registro no se le
-            // vuelve a preguntar. La negativa NO puede cambiar mientras ese
-            // daemon viva: sale de una feature de compilación o de un montaje
-            // que falló al arrancar. Seguir sondeando eran dos RPC por segundo,
-            // para siempre, por una respuesta que no puede ser otra.
+            // And a daemon that has already said it has no log is not asked
+            // again. The negative CANNOT change while that daemon lives: it
+            // comes from a compile-time feature or from a mount that failed
+            // at startup. Continuing to poll was two RPCs per second,
+            // forever, for an answer that cannot be any other.
             //
-            // Es asimétrico a propósito. Lo POSITIVO sí hay que seguir
-            // pidiéndolo —el registro crece— y por eso `Sirve` no corta nada.
+            // It is asymmetric on purpose. The POSITIVE case does need to
+            // keep being asked — the log grows — and that is why `Sirve`
+            // cuts off nothing.
             || !self.log_remoto.debe_pedir()
         {
             return;
@@ -706,16 +731,17 @@ impl Estado {
         });
     }
 
-    /// Aterriza lo que el daemon contestó a `log.tail`.
+    /// Lands what the daemon answered to `log.tail`.
     pub(super) fn aterrizar_registro_remoto(
         &mut self,
         epoca: u64,
         res: Result<norte_proto::methods::LogTailResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         if epoca != self.log_epoca {
-            // De una apertura anterior. Ni sus líneas ni su cursor valen ya, y
-            // `en_vuelo` es de la apertura de AHORA: tocarlo desde aquí
-            // desarmaría el guard de una petición que sigue viva.
+            // From a previous opening. Neither its lines nor its cursor are
+            // valid anymore, and `en_vuelo` belongs to the CURRENT opening:
+            // touching it from here would disarm the guard of a request that
+            // is still alive.
             return Vec::new();
         }
         self.log_remoto.en_vuelo = false;
@@ -730,9 +756,9 @@ impl Estado {
                 self.log_remoto
                     .lineas
                     .extend(r.lines.into_iter().map(linea_de_wire));
-                // El tope se aplica por delante: lo viejo es lo que se tira,
-                // igual que en el anillo, y cuenta como perdido — que es lo que
-                // impide que el recorte deje un hueco callado.
+                // The cap applies from the front: the old stuff is what gets
+                // dropped, same as in the ring, and it counts as lost — that
+                // is what keeps the trim from leaving a silent gap.
                 let sobra = self
                     .log_remoto
                     .lineas
@@ -747,25 +773,25 @@ impl Estado {
                 }
                 n
             }
-            // La ÚNICA degradación alcanzable: un daemon de la misma versión
-            // sin la feature `logging`. No hay comparación de versiones en
-            // ningún sitio — uno más viejo ni siquiera completa el
-            // `initialize`, así que jamás llega hasta aquí.
+            // The ONLY degradation that can be reached: a daemon of the same
+            // version without the `logging` feature. There is no version
+            // comparison anywhere — an older one does not even complete
+            // `initialize`, so it never gets this far.
             Err(Error::Unsupported) => {
                 self.log_remoto.servicio = Servicio::SinAnillo;
                 0
             }
-            // Un fallo cualquiera —la conexión se cayó, el daemon está
-            // ocupado— NO es «este daemon no tiene registro»: decirlo sería
-            // acusar de una carencia permanente a algo que se arregla solo en
-            // la vuelta siguiente. Se calla y se reintenta al medio segundo.
+            // Any failure — the connection dropped, the daemon is busy — is
+            // NOT "this daemon has no log": saying so would be accusing of a
+            // permanent lack something that fixes itself on the next round.
+            // It is kept quiet and retried in half a second.
             Err(_) => 0,
         };
         let cambia_el_estado = antes != (self.log_remoto.servicio, self.log_remoto.nivel.clone());
         self.repintar_si_hace_falta(nuevas > 0, cambia_el_estado)
     }
 
-    /// Aterriza el nivel que el daemon dejó puesto de verdad.
+    /// Lands the level the daemon really left set.
     pub(super) fn aterrizar_nivel_remoto(
         &mut self,
         epoca: u64,
@@ -787,13 +813,13 @@ impl Estado {
         self.repintar_si_hace_falta(false, cambia)
     }
 
-    /// La regla de repintado que comparten las dos respuestas del daemon.
+    /// The repaint rule shared by both of the daemon's answers.
     ///
-    /// Las líneas nuevas solo refrescan al que SIGUE el final —moverle la
-    /// lista debajo a quien se ha despegado es peor que no enseñarle lo
-    /// nuevo—, pero un cambio de ESTADO (apareció una segunda fuente, el
-    /// daemon dijo que no tiene registro, cambió su nivel) se pinta siempre:
-    /// no mueve la lista y es justo lo que hay que decir.
+    /// New lines only refresh whoever FOLLOWS the tail — moving the list
+    /// underneath someone who has detached is worse than not showing them
+    /// the new stuff — but a STATE change (a second source appeared, the
+    /// daemon said it has no log, its level changed) always paints: it does
+    /// not move the list and it is exactly what needs to be said.
     fn repintar_si_hace_falta(
         &mut self,
         hay_lineas: bool,
@@ -806,7 +832,7 @@ impl Estado {
         Vec::new()
     }
 
-    /// Los huecos que ahora mismo pintan el registro.
+    /// The slots that are painting the log right now.
     pub(super) fn huecos_de_registro(&self) -> Vec<u32> {
         self.reparto
             .placements

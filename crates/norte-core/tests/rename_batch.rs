@@ -22,7 +22,7 @@ use norte_vfs::Provider;
 /// `TaskHandle` has no `Debug`, so `expect_err` cannot be used on a submit.
 fn refusal<T>(r: Result<T, Error>) -> Error {
     match r {
-        Ok(_) => panic!("se esperaba un rechazo y la tarea se aceptó"),
+        Ok(_) => panic!("expected a refusal and the task was accepted"),
         Err(e) => e,
     }
 }
@@ -38,15 +38,15 @@ fn pairs(v: &[(&[u8], &[u8])]) -> Vec<(Vec<u8>, Vec<u8>)> {
 /// Seeds a file whose CONTENT is its original name, so a test can tell which
 /// file ended up where — names alone would pass even if nothing moved.
 async fn write_file(mem: &MemProvider, path: &VPath, content: &[u8]) {
-    let mut sink = mem.write(path).await.expect("write abre");
+    let mut sink = mem.write(path).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
 async fn read_all(mem: &MemProvider, path: &VPath) -> Vec<u8> {
-    let mut stream = mem.read(path, None).await.expect("read abre");
+    let mut stream = mem.read(path, None).await.expect("read opens");
     let mut out = Vec::new();
     while let Some(chunk) = stream.next().await {
         out.extend_from_slice(&chunk.expect("chunk"));
@@ -141,17 +141,17 @@ async fn a_permutation_lands_and_is_one_batch() {
     );
 
     let r = report.lock().expect("report lock").clone();
-    assert_eq!(r.applied, 3, "dos renames más el rodeo");
+    assert_eq!(r.applied, 3, "two renames plus the detour");
     assert_eq!(r.rolled_back, 0);
     assert!(r.stuck.is_none());
 
     let es = journal.journal().entries().await.expect("entries");
     let batches: std::collections::HashSet<_> = es.iter().filter_map(|e| e.batch_id).collect();
-    assert_eq!(batches.len(), 1, "un lote para toda la permutación");
-    // La DIRECCIÓN, no solo el recuento. `undo.rs` revierte un `"renamed"` con
-    // `rename(entry.path → entry.path_to)`: con los dos campos cambiados, la
-    // cadena queda perfectamente íntegra y el undo de la sesión renombra todo
-    // al revés. Contar entradas no lo ve; comparar bytes sí.
+    assert_eq!(batches.len(), 1, "one batch for the whole permutation");
+    // The DIRECTION, not just the count. `undo.rs` reverts a `"renamed"` with
+    // `rename(entry.path → entry.path_to)`: with both fields swapped, the
+    // chain stays perfectly intact and the session undo renames everything
+    // backward. Counting entries does not see this; comparing bytes does.
     let wire = |n: &[u8]| dir.join(seg(n)).to_wire().into_bytes();
     for (entry, step) in es.iter().zip(plan.plan().steps.iter()) {
         assert_eq!(entry.op, "renamed");
@@ -159,13 +159,13 @@ async fn a_permutation_lands_and_is_one_batch() {
         assert_eq!(
             (entry.path.clone(), entry.path_to.clone()),
             (wire(&step.to), Some(wire(&step.from))),
-            "path = DESTINO, path_to = ORIGEN",
+            "path = DESTINATION, path_to = SOURCE",
         );
     }
     assert_eq!(
         es.iter().filter(|e| e.batch_id.is_some()).count(),
         3,
-        "dos renames más el rodeo, todos journalizados",
+        "two renames plus the detour, all journalled",
     );
     assert!(
         journal
@@ -199,9 +199,9 @@ async fn a_permutation_of_hostile_names_survives_byte_for_byte() {
     assert_eq!(
         read_all(&provider, &dir.join(seg(&two))).await,
         one,
-        "el fichero que era `one` responde ahora a `two`",
+        "the file that was `one` now answers to `two`",
     );
-    // Y el journal guarda los bytes, no una conversión lossy de ellos.
+    // And the journal keeps the bytes, not a lossy conversion of them.
     let es = journal.journal().entries().await.expect("entries");
     let holds = |needle: &[u8]| {
         es.iter()
@@ -211,7 +211,10 @@ async fn a_permutation_of_hostile_names_survives_byte_for_byte() {
         .join(seg(&one))
         .to_wire()
         .into_bytes();
-    assert!(holds(&encoded), "el nombre hostil viaja íntegro al journal");
+    assert!(
+        holds(&encoded),
+        "the hostile name travels intact to the journal"
+    );
 }
 
 /// The stale-plan guard: the directory changed after the preview, so the
@@ -227,7 +230,7 @@ async fn a_drifted_directory_refuses_with_plan_stale() {
     assert_eq!(
         names_in(&provider, &dir).await,
         vec![b"a".to_vec(), b"z".to_vec()],
-        "no se tocó nada",
+        "nothing was touched",
     );
 }
 
@@ -268,9 +271,9 @@ async fn a_token_from_another_directory_is_stale() {
     assert_eq!(
         plan.plan(),
         other.plan(),
-        "el planificador es puro: mismos pasos, mismos veredictos",
+        "the planner is pure: same steps, same verdicts",
     );
-    assert_ne!(plan.hash(), other.hash(), "el token no es el mismo");
+    assert_ne!(plan.hash(), other.hash(), "the token is not the same");
 
     let e = refusal(engine.rename_batch(&there, &ps, plan.hash()).await);
     assert_eq!(e, Error::PlanStale);
@@ -324,7 +327,7 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
     let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
     // `c → d` is the last step (independent pairs keep the caller's order).
     assert_eq!(
-        plan.plan().steps.last().expect("un paso").from,
+        plan.plan().steps.last().expect("a step").from,
         b"c".to_vec()
     );
     provider.faults().fail_rename_at(&dir.join(seg(b"c")));
@@ -335,23 +338,19 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
         .expect("submit");
     match handle.join().await {
         TaskState::Failed { error } => assert!(matches!(error, Error::Io { .. }), "{error:?}"),
-        other => panic!("se esperaba Failed, llegó {other:?}"),
+        other => panic!("expected Failed, got {other:?}"),
     }
     assert_eq!(
         names_in(&provider, &dir).await,
         before,
-        "desandado hasta el principio",
+        "unwound back to the start",
     );
     let r = report.lock().expect("report lock").clone();
     assert_eq!(r.applied, 2);
     assert_eq!(r.rolled_back, 2);
     assert_eq!(r.compensations_lost, 0);
     assert!(r.uncertain.is_none());
-    assert_eq!(
-        r.failed_pair,
-        Some(2),
-        "la fila `c → d` que el usuario escribió"
-    );
+    assert_eq!(r.failed_pair, Some(2), "the `c → d` row the user wrote",);
     assert!(r.stuck.is_none());
 
     // The journal tells the truth: every applied step and every compensation.
@@ -359,12 +358,12 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
     assert_eq!(
         es.iter().filter(|e| e.undoes_seq.is_some()).count(),
         2,
-        "dos pasos aplicados, dos compensaciones",
+        "two applied steps, two compensations",
     );
     assert_eq!(
         es.iter().filter(|e| e.batch_id.is_some()).count(),
         4,
-        "los cuatro apuntes van dentro del lote",
+        "all four entries go inside the batch",
     );
     assert!(
         journal
@@ -373,10 +372,10 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
             .await
             .expect("verify")
             .is_intact(),
-        "la cadena sobrevive a un rollback",
+        "the chain survives a rollback",
     );
-    // Y nada del lote queda pendiente de deshacer: los originales están
-    // compensados, así que un `undo_session` posterior no los ve.
+    // And none of the batch is left pending undo: the originals are
+    // compensated, so a later `undo_session` does not see them.
     assert!(
         journal
             .journal()
@@ -384,7 +383,7 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
             .await
             .expect("revertible")
             .is_empty(),
-        "un lote desandado no deja trabajo al undo",
+        "an unwound batch leaves no work for undo",
     );
 }
 
@@ -429,7 +428,7 @@ async fn a_cancelled_batch_rolls_back() {
     while provider.stat(&first_dest).await.is_err() {
         assert!(
             std::time::Instant::now() < deadline,
-            "el primer paso nunca llegó a aplicarse",
+            "the first step never got applied",
         );
         tokio::time::sleep(Duration::from_millis(1)).await;
     }
@@ -438,12 +437,12 @@ async fn a_cancelled_batch_rolls_back() {
     provider.faults().clear();
     assert_eq!(names_in(&provider, &dir).await, before);
     let r = report.lock().expect("report lock").clone();
-    assert!(r.applied >= 1, "el sondeo vio aterrizar un paso");
-    assert_eq!(r.rolled_back, r.applied, "y todos volvieron");
+    assert!(r.applied >= 1, "the poll saw one step land");
+    assert_eq!(r.rolled_back, r.applied, "and all of them came back");
     assert!(r.stuck.is_none(), "{:?}", r.stuck);
     assert_eq!(r.compensations_lost, 0);
-    // El camino cancelado corre el MISMO código de compensación que el fallido,
-    // y hasta ahora nadie miraba si dejaba entradas sin compensar.
+    // The cancelled path runs the SAME compensation code as the failed one,
+    // and until now nobody checked whether it left entries uncompensated.
     assert!(
         journal
             .journal()
@@ -459,7 +458,7 @@ async fn a_cancelled_batch_rolls_back() {
             .await
             .expect("revertible")
             .is_empty(),
-        "un lote cancelado no deja trabajo al undo",
+        "a cancelled batch leaves no work for undo",
     );
 }
 
@@ -489,7 +488,7 @@ async fn undoing_a_session_reverts_the_whole_batch() {
         .expect("undo");
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(names_in(&provider, &dir).await, before);
-    // Y cada fichero volvió a SU nombre, no solo el conjunto de nombres.
+    // And each file went back to ITS name, not just the set of names.
     assert_eq!(
         read_all(&provider, &dir.join(seg(b"a"))).await,
         b"a".to_vec()
@@ -500,17 +499,21 @@ async fn undoing_a_session_reverts_the_whole_batch() {
     );
     let r = report.lock().expect("report lock").clone();
     assert!(r.blocked.is_none(), "{:?}", r.blocked);
-    assert_eq!(r.undone, 3, "las tres entradas del lote, deshechas");
+    assert_eq!(r.undone, 3, "the batch's three entries, undone");
 
-    // El undo es a su vez UN lote, y compensa las tres entradas originales, así
-    // que un segundo undo no tiene nada que hacer.
+    // The undo is in turn ONE batch, and it compensates all three original
+    // entries, so a second undo has nothing to do.
     let es = journal.journal().entries().await.expect("entries");
     let batches: std::collections::HashSet<_> = es.iter().filter_map(|e| e.batch_id).collect();
-    assert_eq!(batches.len(), 2, "el lote original y el que lo deshace");
+    assert_eq!(
+        batches.len(),
+        2,
+        "the original batch and the one undoing it"
+    );
     assert_eq!(
         es.iter().filter(|e| e.undoes_seq.is_some()).count(),
         3,
-        "una compensación por entrada original",
+        "one compensation per original entry",
     );
     assert!(
         journal
@@ -527,7 +530,7 @@ async fn undoing_a_session_reverts_the_whole_batch() {
             .await
             .expect("revertible")
             .is_empty(),
-        "un lote deshecho no deja trabajo a un undo posterior",
+        "an undone batch leaves no work for a later undo",
     );
 }
 
@@ -543,7 +546,7 @@ async fn a_batch_whose_member_is_blocked_is_left_untouched() {
         .await
         .expect("submit");
     assert_eq!(applied.join().await, TaskState::Completed);
-    // Alguien devolvió `a` a mano: revertir `x → a` lo pisaría.
+    // Someone put `a` back by hand: reverting `x → a` would overwrite it.
     write_file(&provider, &dir.join(seg(b"a")), b"mine").await;
     let after_squat = names_in(&provider, &dir).await;
 
@@ -555,11 +558,11 @@ async fn a_batch_whose_member_is_blocked_is_left_untouched() {
     assert_eq!(
         names_in(&provider, &dir).await,
         after_squat,
-        "el lote bloqueado no se deshace a medias",
+        "the blocked batch does not undo halfway",
     );
-    // Y `y` sigue siendo `y`: el miembro que SÍ se podía revertir tampoco se
-    // tocó. Esta es la propiedad; el listado de nombres por sí solo la deja
-    // pasar si alguien revierte `y → b` y luego se queda atascado en `x`.
+    // And `y` is still `y`: the member that COULD have been reverted was not
+    // touched either. This is the property; the name listing alone lets it
+    // slip through if someone reverts `y → b` and then gets stuck on `x`.
     assert_eq!(
         read_all(&provider, &dir.join(seg(b"y"))).await,
         b"b".to_vec(),
@@ -567,24 +570,24 @@ async fn a_batch_whose_member_is_blocked_is_left_untouched() {
     assert_eq!(
         read_all(&provider, &dir.join(seg(b"a"))).await,
         b"mine".to_vec(),
-        "el fichero del usuario sigue intacto",
+        "the user's file is still intact",
     );
     let r = report.lock().expect("report lock").clone();
-    assert_eq!(r.undone, 0, "nada del lote se deshizo");
-    let (seq, err) = r.blocked.expect("el lote se bloquea");
+    assert_eq!(r.undone, 0, "nothing of the batch was undone");
+    let (seq, err) = r.blocked.expect("the batch blocks");
     assert!(matches!(err, Error::Conflict { .. }), "{err:?}");
-    // El `seq` señala la entrada CONCRETA que no se puede revertir, no el lote
-    // entero: es lo que el humano tiene que ir a mirar.
+    // The `seq` points at the SPECIFIC entry that cannot be reverted, not the
+    // whole batch: that is what the human has to go look at.
     let es = journal.journal().entries().await.expect("entries");
-    let blocked_entry = es.iter().find(|e| e.seq == seq).expect("la entrada");
+    let blocked_entry = es.iter().find(|e| e.seq == seq).expect("the entry");
     assert_eq!(
         blocked_entry.path,
         dir.join(seg(b"x")).to_wire().into_bytes(),
-        "la entrada bloqueada es la de `a → x`",
+        "the blocked entry is `a → x`'s",
     );
 
-    // Nada se compensó, así que el lote sigue pendiente entero: un undo
-    // posterior (una vez quitado el ocupante) lo encuentra completo.
+    // Nothing was compensated, so the whole batch is still pending: a later
+    // undo (once the occupant is removed) finds it complete.
     assert_eq!(
         journal
             .journal()
@@ -604,21 +607,22 @@ async fn a_batch_whose_member_is_blocked_is_left_untouched() {
     );
 }
 
-/// Lo que para el lote bloqueado es el `feasible` de `undo.rs`, y NO el rechazo
-/// del provider.
+/// What stops the blocked batch is `undo.rs`'s `feasible`, and NOT the
+/// provider's rejection.
 ///
-/// `a_batch_whose_member_is_blocked_is_left_untouched` no distingue las dos
-/// cosas: sobre un `MemProvider` que ya rechaza un destino ocupado, borrar la
-/// simulación entera deja ese test verde igual, porque el paso que sobra falla
-/// en el provider y el ejecutor desanda lo que llevaba. El árbol acaba en el
-/// mismo sitio por un camino peor — pasando de verdad por el estado medio
-/// deshecho que el todo-o-nada existe para no visitar nunca.
+/// `a_batch_whose_member_is_blocked_is_left_untouched` does not tell the two
+/// things apart: over a `MemProvider` that already rejects an occupied
+/// destination, deleting the whole simulation would leave that test green all
+/// the same, because the extra step fails at the provider and the executor
+/// unwinds what it had run. The tree ends up in the same place through a worse
+/// path — really passing through the half-undone middle state that all-or-
+/// nothing exists to never visit.
 ///
-/// Aquí el provider PISA (`rename_clobbers`, el posix-rename de sftp y el
-/// copy+delete de object): el cinturón de abajo desaparece y el fichero del
-/// usuario se destruye si la unidad llega a ejecutarse. Sin red debajo, lo
-/// único que puede dejar el directorio intacto es haber respondido ANTES de
-/// tocar el provider.
+/// Here the provider CLOBBERS (`rename_clobbers`, sftp's posix-rename and
+/// object's copy+delete): the belt below disappears and the user's file is
+/// destroyed if the unit ever gets to run. With no net underneath, the only
+/// thing that can leave the directory intact is having answered BEFORE
+/// touching the provider.
 #[tokio::test]
 async fn a_blocked_batch_is_stopped_by_the_gate_not_by_the_provider() {
     let (engine, provider, journal, dir) = engine_with(&[b"a", b"b"]).await;
@@ -630,9 +634,10 @@ async fn a_blocked_batch_is_stopped_by_the_gate_not_by_the_provider() {
         .await
         .expect("submit");
     assert_eq!(applied.join().await, TaskState::Completed);
-    // Alguien devolvió `a` a mano: revertir `x → a` lo pisaría.
+    // Someone put `a` back by hand: reverting `x → a` would overwrite it.
     write_file(&provider, &dir.join(seg(b"a")), b"mine").await;
-    // …y este provider PISA en vez de rechazar. El no-clobber ya no lo pone él.
+    // …and this provider CLOBBERS instead of rejecting. It no longer enforces
+    // no-clobber itself.
     provider.faults().rename_clobbers(true);
     let after_squat = names_in(&provider, &dir).await;
 
@@ -641,28 +646,29 @@ async fn a_blocked_batch_is_stopped_by_the_gate_not_by_the_provider() {
     assert_eq!(
         names_in(&provider, &dir).await,
         after_squat,
-        "el lote bloqueado no se deshace a medias",
+        "the blocked batch does not undo halfway",
     );
-    // LA propiedad: el fichero del usuario sigue vivo. Con la simulación
-    // neutralizada, el paso `x → a` lo habría BORRADO — el `mine` se pierde y
-    // en su sitio queda el contenido de `a`.
+    // THE property: the user's file is still alive. With the simulation
+    // neutralized, the `x → a` step would have DELETED it — `mine` is lost
+    // and `a`'s content is left in its place.
     assert_eq!(
         read_all(&provider, &dir.join(seg(b"a"))).await,
         b"mine".to_vec(),
-        "el fichero del usuario sigue intacto: nadie llegó a renombrar encima",
+        "the user's file is still intact: nobody got to rename over it",
     );
-    // Y el miembro que SÍ se podía revertir tampoco se tocó.
+    // And the member that COULD have been reverted was not touched either.
     assert_eq!(
         read_all(&provider, &dir.join(seg(b"y"))).await,
         b"b".to_vec(),
     );
     let r = report.lock().expect("report lock").clone();
-    assert_eq!(r.undone, 0, "nada del lote se deshizo");
+    assert_eq!(r.undone, 0, "nothing of the batch was undone");
     assert!(r.batch_stuck.is_none(), "{:?}", r.batch_stuck);
     assert_eq!(r.compensations_lost, 0);
-    let (_seq, err) = r.blocked.expect("el lote se bloquea");
+    let (_seq, err) = r.blocked.expect("the batch blocks");
     assert!(matches!(err, Error::Conflict { .. }), "{err:?}");
-    // El lote sigue pendiente ENTERO: no se aplicó ni se compensó ni un paso.
+    // The batch is still ENTIRELY pending: not one step was applied nor
+    // compensated.
     assert_eq!(
         journal
             .journal()
@@ -682,37 +688,37 @@ async fn a_blocked_batch_is_stopped_by_the_gate_not_by_the_provider() {
     );
 }
 
-/// Un lote PARTIDO por una mutación intercalada, con un miembro bloqueado: o
-/// vuelve entero o no vuelve nada.
+/// A batch SPLIT by an interleaved mutation, with one member blocked: either it
+/// all comes back or none of it does.
 ///
-/// Es la mitad que `a_batch_interleaved_with_another_mutation_is_still_one_unit`
-/// no llega a probar. Allí la suelta es inocua, así que agrupar por entradas
-/// CONTIGUAS parte el lote en dos y aun así el resultado sale bien: los
-/// fragmentos se aplican en el mismo orden LIFO global y cada uno cabe por su
-/// cuenta. El agrupado por contigüidad solo se delata cuando un fragmento cabe
-/// y el otro no — y entonces el primero ya se aplicó.
+/// This is the half `a_batch_interleaved_with_another_mutation_is_still_one_unit`
+/// does not get to test. There, the loose one is harmless, so grouping by
+/// CONTIGUOUS entries splits the batch in two and the result still comes out
+/// right: the fragments apply in the same global LIFO order and each fits on
+/// its own. Grouping by contiguity only gives itself away when one fragment
+/// fits and the other does not — and by then the first one has already
+/// applied.
 ///
-/// Con el ocupante en `a`, agrupar por contigüidad devuelve `y → b` (fragmento
-/// nuevo, viable) y se atasca luego en `x → a` (fragmento viejo): media
-/// permutación deshecha, que es el estado que toda esta funcionalidad existe
-/// para impedir. Agrupando por `batch_id` la unidad se juzga entera y no se
-/// toca nada.
+/// With the occupant on `a`, grouping by contiguity returns `y → b` (a new,
+/// viable fragment) and then gets stuck on `x → a` (the old fragment): half
+/// the permutation undone, which is the state this whole feature exists to
+/// prevent. Grouping by `batch_id` judges the unit whole and touches nothing.
 ///
-/// El entrelazado se FABRICA (efectos reales + apuntes a mano) en vez de
-/// provocarse con dos tasks concurrentes: la carrera que interesa es un
-/// instante, y perseguirla con relojes es un test que un día se pone rojo por
-/// carga.
+/// The interleaving is FABRICATED (real effects + hand-written records)
+/// instead of provoked with two concurrent tasks: the race that matters is a
+/// single instant, and chasing it with clocks is a test that goes red one day
+/// under load.
 #[tokio::test]
 async fn an_interleaved_batch_with_a_blocked_member_is_never_half_undone() {
     let (engine, provider, journal, dir) = engine_with(&[b"a", b"b", b"lone"]).await;
     let user = norte_core::journal::Actor::User;
     let batch = journal.journal().alloc_batch().await.expect("alloc");
 
-    // Lote de dos renames independientes, con la suelta EN MEDIO.
+    // A batch of two independent renames, with the loose one IN BETWEEN.
     rename_and_record(&provider, &journal, &dir, b"a", b"x", Some(batch)).await;
     rename_and_record(&provider, &journal, &dir, b"lone", b"lone2", None).await;
     rename_and_record(&provider, &journal, &dir, b"b", b"y", Some(batch)).await;
-    // Alguien devolvió `a` a mano: el miembro más VIEJO del lote ya no cabe.
+    // Someone put `a` back by hand: the OLDEST member of the batch no longer fits.
     write_file(&provider, &dir.join(seg(b"a")), b"mine").await;
     let before = names_in(&provider, &dir).await;
 
@@ -721,25 +727,28 @@ async fn an_interleaved_batch_with_a_blocked_member_is_never_half_undone() {
     assert_eq!(
         names_in(&provider, &dir).await,
         before,
-        "el lote partido no se deshace a medias",
+        "the split batch does not undo halfway",
     );
-    // El miembro NUEVO del lote es el que un agrupado por contigüidad habría
-    // revertido solo: `y` tiene que seguir siendo `y`.
+    // The NEW member of the batch is the one a contiguity-based grouping
+    // would have reverted alone: `y` still has to be `y`.
     assert_eq!(
         read_all(&provider, &dir.join(seg(b"y"))).await,
         b"b".to_vec(),
-        "el fragmento viable del lote tampoco se toca",
+        "the viable fragment of the batch is not touched either",
     );
     assert_eq!(
         read_all(&provider, &dir.join(seg(b"a"))).await,
         b"mine".to_vec(),
     );
     let r = report.lock().expect("report lock").clone();
-    assert_eq!(r.undone, 0, "nada se deshizo: ni el lote ni la suelta");
-    let (_seq, err) = r.blocked.expect("el lote se bloquea");
+    assert_eq!(
+        r.undone, 0,
+        "nothing was undone: not the batch, not the loose one"
+    );
+    let (_seq, err) = r.blocked.expect("the batch blocks");
     assert!(matches!(err, Error::Conflict { .. }), "{err:?}");
-    // Las tres siguen pendientes: las dos del lote y la suelta, que el LIFO
-    // estricto no llega a tocar porque la unidad de arriba se bloqueó.
+    // All three are still pending: the batch's two and the loose one, which
+    // strict LIFO never gets to touch because the unit above it blocked.
     assert_eq!(
         journal
             .journal()
@@ -759,16 +768,17 @@ async fn an_interleaved_batch_with_a_blocked_member_is_never_half_undone() {
     );
 }
 
-/// Un undo de lote que se cae DESPUÉS de aplicar un paso deja el lote otra vez
-/// deshacible: el ejecutor desanda lo que llevaba y las compensaciones que
-/// escribió dejan de valer.
+/// A batch undo that fails AFTER applying a step leaves the batch revertible
+/// again: the executor unwinds what it had run and the compensations it wrote
+/// stop being valid.
 ///
-/// La trampa que esto pincha es de contabilidad, no de ficheros. El undo del
-/// paso ya aplicado escribió una compensación `C` que TAPA su entrada original;
-/// al desandarse, se escribe `D` que compensa a `C`. Con la condición ingenua
-/// («existe alguna compensación») la original quedaba tapada para siempre por
-/// una `C` que ya no vale: el árbol seguía con el lote aplicado y el journal
-/// decía que no había nada que deshacer. Silencioso e irrecuperable.
+/// The trap this pokes at is accounting, not files. The undo of the step
+/// already applied wrote a compensation `C` that COVERS its original entry;
+/// when unwound, `D` is written that compensates `C`. With the naive
+/// condition ("some compensation exists"), the original stayed covered
+/// forever by a `C` that was no longer valid: the tree still had the batch
+/// applied and the journal said there was nothing to undo. Silent and
+/// unrecoverable.
 #[tokio::test]
 async fn an_undo_that_rolls_itself_back_leaves_the_batch_revertible() {
     let (engine, provider, journal, dir) = engine_with(&[b"a", b"b"]).await;
@@ -782,23 +792,23 @@ async fn an_undo_that_rolls_itself_back_leaves_the_batch_revertible() {
     assert_eq!(applied.join().await, TaskState::Completed);
     let after_batch = names_in(&provider, &dir).await;
 
-    // El segundo paso del undo (`x → a`) falla; el primero (`y → b`) ya se
-    // aplicó y se desanda. `feasible` no lo ve: el ocupante no existe, es el
-    // provider el que se cae.
+    // The undo's second step (`x → a`) fails; the first one (`y → b`) already
+    // applied and gets unwound. `feasible` does not see it coming: the
+    // occupant does not exist, it is the provider that fails.
     provider.faults().fail_rename_at(&dir.join(seg(b"x")));
     let (handle, report) = engine.undo_session(user.clone()).await.expect("undo");
     assert_eq!(handle.join().await, TaskState::Completed);
     let r = report.lock().expect("report lock").clone();
-    assert_eq!(r.undone, 0, "el lote no se deshizo");
+    assert_eq!(r.undone, 0, "the batch was not undone");
     assert!(r.blocked.is_some());
     assert!(r.batch_stuck.is_none(), "{:?}", r.batch_stuck);
     assert_eq!(
         names_in(&provider, &dir).await,
         after_batch,
-        "el ejecutor devolvió el paso que había aplicado",
+        "the executor returned the step it had applied",
     );
 
-    // LA propiedad: el lote sigue pendiente ENTERO.
+    // THE property: the batch is still ENTIRELY pending.
     let rev = journal
         .journal()
         .revertible_for(&user)
@@ -807,11 +817,11 @@ async fn an_undo_that_rolls_itself_back_leaves_the_batch_revertible() {
     assert_eq!(
         rev.len(),
         2,
-        "las dos entradas del lote siguen por deshacer"
+        "the batch's two entries are still to be undone"
     );
 
-    // Y quitado el fallo, el undo lo termina — sin haber pasado nunca por un
-    // estado medio deshecho.
+    // And with the failure removed, undo finishes it — without ever passing
+    // through a half-undone state.
     provider.faults().clear();
     let (handle, report) = engine.undo_session(user.clone()).await.expect("undo");
     assert_eq!(handle.join().await, TaskState::Completed);
@@ -830,19 +840,19 @@ async fn an_undo_that_rolls_itself_back_leaves_the_batch_revertible() {
     );
 }
 
-/// Un lote y una mutación suelta ENTRELAZADOS en el journal: el lote se sigue
-/// consumiendo entero.
+/// A batch and a loose mutation INTERLEAVED in the journal: the batch still
+/// gets consumed whole.
 ///
-/// El agrupado no puede ser «entradas consecutivas». El scheduler corre hasta
-/// cuatro tasks por provider, así que otra mutación del MISMO actor puede
-/// aterrizar entre dos entradas del lote; con agrupado por contigüidad el lote
-/// se partiría en dos unidades y la primera lo dejaría a medias — que es
-/// exactamente lo que esta función existe para impedir.
+/// The grouping cannot be "consecutive entries". The scheduler runs up to four
+/// tasks per provider, so another mutation from the SAME actor can land
+/// between two entries of the batch; with contiguity-based grouping the batch
+/// would split into two units and the first would leave it halfway — which is
+/// exactly what this function exists to prevent.
 ///
-/// El entrelazado se FABRICA (efectos reales sobre el provider + apuntes a
-/// mano) en vez de provocarse con dos tasks concurrentes: la carrera que
-/// interesa es un instante, y un test que la persiga con relojes es un test
-/// que un día se pone rojo por carga.
+/// The interleaving is FABRICATED (real effects on the provider + hand-written
+/// records) instead of provoked with two concurrent tasks: the race that
+/// matters is a single instant, and a test that chases it with clocks is a
+/// test that goes red one day under load.
 #[tokio::test]
 async fn a_batch_interleaved_with_another_mutation_is_still_one_unit() {
     let (engine, provider, journal, dir) = engine_with(&[b"a", b"b", b"lone"]).await;
@@ -853,9 +863,9 @@ async fn a_batch_interleaved_with_another_mutation_is_still_one_unit() {
         rename_and_record(&provider, &journal, &dir, from, to, b)
     };
 
-    // Permutación `a ↔ b` aplicada a mano, con la suelta EN MEDIO.
+    // `a ↔ b` permutation applied by hand, with the loose one IN BETWEEN.
     step(b"a", temp, Some(batch)).await;
-    // …y aquí se cuela la mutación suelta, entre la primera y la última del lote.
+    // …and here the loose mutation slips in, between the batch's first and last.
     step(b"lone", b"lone2", None).await;
     step(b"b", b"a", Some(batch)).await;
     step(temp, b"b", Some(batch)).await;
@@ -864,14 +874,14 @@ async fn a_batch_interleaved_with_another_mutation_is_still_one_unit() {
     assert_eq!(handle.join().await, TaskState::Completed);
     let r = report.lock().expect("report lock").clone();
     assert!(r.blocked.is_none(), "{:?}", r.blocked);
-    assert_eq!(r.undone, 4, "las tres del lote más la suelta");
+    assert_eq!(r.undone, 4, "the batch's three plus the loose one");
     let mut want = vec![b"a".to_vec(), b"b".to_vec(), b"lone".to_vec()];
     want.sort();
     assert_eq!(names_in(&provider, &dir).await, want);
     assert_eq!(
         read_all(&provider, &dir.join(seg(b"a"))).await,
         b"a".to_vec(),
-        "la permutación volvió del todo",
+        "the permutation came all the way back",
     );
     assert!(
         journal
@@ -947,7 +957,7 @@ async fn the_gate_sees_every_path_including_the_temporaries() {
         .steps
         .iter()
         .find(|s| s.temp && s.to.starts_with(b".norte-rename-"))
-        .expect("un temporal")
+        .expect("a temporary")
         .to
         .clone();
     let (handle, _r) = engine
@@ -959,11 +969,11 @@ async fn the_gate_sees_every_path_including_the_temporaries() {
     let seen = gate.seen.lock().expect("seen lock").clone();
     assert!(
         seen.contains(&temp),
-        "el temporal pasa por el gate: {seen:?}"
+        "the temporary goes through the gate: {seen:?}"
     );
     assert!(seen.contains(&b"a".to_vec()) && seen.contains(&b"b".to_vec()));
-    // Un solo gate: las tres parejas de rutas llegan en UNA evaluación (2 por
-    // paso × 3 pasos), no una evaluación por paso.
+    // A single gate: the three path pairs arrive in ONE evaluation (2 per
+    // step × 3 steps), not one evaluation per step.
     assert_eq!(seen.len(), 6, "{seen:?}");
 }
 
@@ -1106,17 +1116,17 @@ async fn the_first_plan_uses_the_probed_case_regime_not_the_guess() {
     );
 }
 
-/// ADR 0054: el undo pregunta al DIRECTORIO, igual que preguntó el plan.
+/// ADR 0054: undo asks the DIRECTORY, just as the plan asked it.
 ///
-/// Los dos juzgan el mismo lote y tienen que juzgarlo con el MISMO plegado: si
-/// el plan lo calcula con el del directorio (un ext4/f2fs `+F`) y el undo con
-/// el que el provider declara para sí, `feasible` opina sobre un directorio
-/// que no es este. No se prueba con un escenario —un `+F` de verdad no puede
-/// sostener a la vez las dos grafías, así que el caso «el inverso choca con el
-/// gemelo» no se puede montar sin fingir un filesystem imposible—: se prueba
-/// que la pregunta se hace, que es exactamente lo que se arregló.
+/// Both judge the same batch and have to judge it with the SAME folding: if
+/// the plan computes it with the directory's (a real ext4/f2fs `+F`) and undo
+/// with what the provider declares for itself, `feasible` opines about a
+/// directory that is not this one. This is not proven with a scenario — a real
+/// `+F` cannot hold both spellings at once, so the case "the reverse clashes
+/// with the twin" cannot be set up without faking an impossible filesystem —
+/// it proves that the question IS asked, which is exactly what was fixed.
 #[tokio::test]
-async fn el_undo_pregunta_por_el_directorio() {
+async fn undo_asks_the_directory() {
     let (engine, provider, _journal, dir) = engine_with(&[b"a", b"b"]).await;
     let ps = pairs(&[(b"a", b"x"), (b"b", b"y")]);
     let plan = engine.rename_batch_plan(&dir, &ps).await.expect("plan");
@@ -1128,10 +1138,10 @@ async fn el_undo_pregunta_por_el_directorio() {
 
     assert!(
         provider.was_asked_about(&dir),
-        "el plan pregunta por la ubicación"
+        "the plan asks about the location"
     );
-    // Se olvida lo que preguntó el plan: lo que se afirma abajo es que el undo
-    // vuelve a preguntar, no que alguien preguntara alguna vez.
+    // What the plan asked is forgotten: what is asserted below is that undo
+    // asks again, not that someone asked at some point.
     provider.forget_who_asked();
 
     let (handle, report) = engine
@@ -1142,10 +1152,10 @@ async fn el_undo_pregunta_por_el_directorio() {
     assert_eq!(
         report.lock().expect("report").undone,
         2,
-        "y el undo revierte el lote entero"
+        "and undo reverts the whole batch"
     );
     assert!(
         provider.was_asked_about(&dir),
-        "el undo pregunta por la MISMA ubicación que el plan"
+        "undo asks about the SAME location as the plan"
     );
 }

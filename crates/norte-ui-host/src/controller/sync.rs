@@ -1,108 +1,110 @@
-//! Comparar dos directorios y sincronizarlos.
+//! Compare two directories and synchronize them.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are `Estado` methods, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Enumerating them here would be a
+// forty-line list per file, in 32 files, that goes stale the moment the
+// parent imports something — `super::*` tracks it on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-/// Un plan pedido cuya Task todavía no ha vuelto.
+/// A requested plan whose Task has not come back yet.
 ///
-/// Existe por el id: el modelo compartido lo necesita AL NACER para poder
-/// descartar lo que venga de otro plan.
+/// Exists because of the id: the shared model needs it AT BIRTH to be able
+/// to discard whatever comes from a different plan.
 pub(super) struct SyncPedida {
-    /// Cuál de todos los planes de esta ventana es.
+    /// Which of this window's plans this is.
     pub(super) epoca: u64,
-    /// Se abandonó antes de que la Task volviera.
+    /// It was abandoned before the Task came back.
     pub(super) abandonada: Arc<std::sync::atomic::AtomicBool>,
-    /// El modo pedido.
+    /// The requested mode.
     modo: norte_proto::methods::SyncMode,
-    /// Raíz origen.
+    /// Source root.
     origen: VPath,
-    /// Raíz destino.
+    /// Destination root.
     destino: VPath,
-    /// Reinterpretación de nombres del ORIGEN, congelada al pedir.
+    /// The SOURCE's name reinterpretation, frozen when requested.
     origen_encoding: Option<norte_encoding::NameEncoding>,
-    /// La del DESTINO, que puede ser otra.
+    /// The DESTINATION's, which can be a different one.
     destino_encoding: Option<norte_encoding::NameEncoding>,
 }
 
-/// Un plan de sincronización, con su modelo COMPARTIDO dentro.
+/// A synchronization plan, with its SHARED model inside.
 ///
-/// El modelo es `norte_frontend::sync::SyncView`, el mismo que el TUI: qué
-/// pasos hay, qué lo bloquea, si se puede aprobar y en qué estado va la Task.
-/// Aquí no se decide ni un paso ni un veredicto; el plan lo produce el core y
-/// solo él puede canjearlo.
+/// The model is `norte_frontend::sync::SyncView`, the same one the TUI uses:
+/// what steps there are, what blocks them, whether it can be approved and
+/// what state the Task is in. Not a single step or verdict is decided here;
+/// the core produces the plan and only it can redeem it.
 pub(super) struct Sincronizacion {
-    /// Cuál de todos los planes de esta ventana es.
+    /// Which of this window's plans this is.
     pub(super) epoca: u64,
-    /// La Task del PLAN (la de aplicar es otra, y la guarda el modelo).
+    /// The PLAN's Task (the apply's is a different one, and the model holds
+    /// it).
     task: norte_proto::TaskId,
-    /// La vista se cerró y lo que quede sobra.
+    /// The view closed and whatever is left is extra.
     abandonada: Arc<std::sync::atomic::AtomicBool>,
-    /// El modelo compartido.
+    /// The shared model.
     pub(super) vista: norte_frontend::sync::SyncView,
-    /// La ventana que el renderer dice estar pintando.
+    /// The window the renderer says it is painting.
     primera_visible: usize,
-    /// Cuántos pasos caben en esa ventana.
+    /// How many steps fit in that window.
     ventana: usize,
-    /// Su informe ya se pidió: es una RPC, y una reconexión reanuncia el
-    /// terminal.
+    /// Its report has already been requested: it is an RPC, and a
+    /// reconnection re-announces the terminal.
     informe_pedido: bool,
-    /// En qué época de CONEXIÓN vive su Task.
+    /// Which CONNECTION epoch its Task lives in.
     ///
-    /// Tras un relevo, el daemon nuevo reparte los ids desde 1: sin esto, una
-    /// task ajena con el mismo número cerraba la historia de esta escritura
-    /// con la prueba de otra.
+    /// After a handoff, the new daemon hands out ids starting from 1:
+    /// without this, an unrelated task with the same number would close this
+    /// write's history with someone else's proof.
     epoca_conexion: u64,
 }
 
-/// Una comparación de dos árboles, con su panel COMPARTIDO dentro.
+/// A comparison of two trees, with its SHARED pane inside.
 ///
-/// El modelo —qué filas hay, qué categorías están escondidas, cuál está
-/// seleccionada, de qué lado operan las teclas— es
-/// `norte_frontend::compare::ComparePane`, el mismo que pinta el TUI. Aquí no
-/// se vuelve a emparejar nada ni se decide ningún veredicto: eso lo hizo el
-/// core, y reproducirlo en el host sería la tercera copia.
+/// The model — which rows there are, which categories are hidden, which one
+/// is selected, which side the keys operate on — is
+/// `norte_frontend::compare::ComparePane`, the same one the TUI paints.
+/// Nothing is paired up again here and no verdict is decided: the core did
+/// that, and reproducing it in the host would be a third copy.
 pub(super) struct Comparacion {
-    /// Cuál de todas las comparaciones de esta ventana es. Misma razón que la
-    /// época de una búsqueda: el id de la Task llega tarde.
+    /// Which of this window's comparisons this is. Same reason as a
+    /// search's epoch: the Task's id arrives late.
     pub(super) epoca: u64,
-    /// La Task del daemon, en cuanto se sabe. Cero mientras no se sabe.
+    /// The daemon's Task, as soon as it is known. Zero while it is not.
     pub(super) task: norte_proto::TaskId,
-    /// La vista se cerró y lo que quede de esta comparación sobra.
+    /// The view closed and whatever is left of this comparison is extra.
     abandonada: Arc<std::sync::atomic::AtomicBool>,
-    /// El MODELO compartido: raíces, filas, filtros, selección, lado activo
-    /// y —lo que más importa— en qué estado quedó.
+    /// The shared MODEL: roots, rows, filters, selection, active side and —
+    /// what matters most — what state it ended up in.
     ///
-    /// Los cinco estados de `CompareState` son cómo un frontend dice si la
-    /// respuesta está COMPLETA, y en una comparación eso ES la respuesta.
-    /// Tener aquí un `bool viva` habría vuelto a perder el caso que ese enum
-    /// existe para no perder: lotes que se cayeron por el camino.
+    /// `CompareState`'s five states are how a frontend says whether the
+    /// answer is COMPLETE, and in a comparison that IS the answer. Having a
+    /// `bool alive` here would have lost again the case that enum exists not
+    /// to lose: batches dropped along the way.
     vista: norte_frontend::compare::CompareView,
-    /// La ventana que el renderer dice estar pintando.
+    /// The window the renderer says it is painting.
     primera_visible: usize,
-    /// Cuántas filas caben en esa ventana.
+    /// How many rows fit in that window.
     ventana: usize,
 }
 
 impl Estado {
-    /// El desenlace de la Task de una comparación entra en el modelo.
+    /// A comparison's Task's outcome enters the model.
     ///
-    /// Lo traduce `finish_from_task`, que es donde vive la diferencia que
-    /// importa: «terminó» no es lo mismo que «terminó y llegó todo». Una
-    /// comparación a la que se le perdieron lotes se lee INCOMPLETA, y una
-    /// cuyo canal se cerró sin desenlace observado se lee DESCONOCIDA — dos
-    /// estados que el CLI y el MCP ya perdieron cada uno por su cuenta.
-    /// La Task del APPLY terminó: se pide su informe.
+    /// `finish_from_task` translates it, and that is where the difference
+    /// that matters lives: "finished" is not the same as "finished and
+    /// everything arrived". A comparison that lost batches reads as
+    /// INCOMPLETE, and one whose channel closed with no outcome observed
+    /// reads as UNKNOWN — two states the CLI and the MCP each already got
+    /// wrong on their own.
+    /// The APPLY Task finished: its report is requested.
     ///
-    /// El desenlace de la Task dice si corrió; lo que se hizo y lo que NO lo
-    /// cuenta el informe, y sin él «terminó» se lee como «salió bien» sobre
-    /// un destino que puede haber quedado a medias.
+    /// The Task's outcome says whether it ran; what was done and what was
+    /// NOT is told by the report, and without it "finished" reads as
+    /// "succeeded" over a destination that may have been left halfway.
     pub(super) fn pedir_informe_de_sync(
         &mut self,
         p: &norte_proto::TaskProgress,
@@ -112,11 +114,11 @@ impl Estado {
         let Some(sinc) = self.sincronizacion.as_ref() else {
             return;
         };
-        // Los MISMOS tres guards que el informe de un lote, y por los mismos
-        // motivos: la CLASE (un `fs.copy` cualquiera puede llevar el mismo id
-        // tras un relevo), la ÉPOCA de conexión (los ids del daemon nuevo
-        // empiezan otra vez en 1) y la idempotencia (una reconexión reanuncia
-        // el terminal, y esto es una RPC).
+        // The SAME three guards as a batch's report, and for the same
+        // reasons: the CLASS (any `fs.copy` can carry the same id after a
+        // handoff), the connection EPOCH (the new daemon's ids start over at
+        // 1) and idempotence (a reconnection re-announces the terminal, and
+        // this is an RPC).
         if sinc.task != p.task_id
             || sinc.epoca_conexion != self.epoca_conexion
             || !matches!(p.kind, norte_proto::TaskKind::Sync)
@@ -148,7 +150,8 @@ impl Estado {
         });
     }
 
-    /// El informe llegó: entra en el modelo, que decide qué frase sale.
+    /// The report arrived: it enters the model, which decides what phrase
+    /// comes out.
     pub(super) fn informe_de_sync(
         &mut self,
         epoca: u64,
@@ -159,14 +162,14 @@ impl Estado {
         let Some(sinc) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) else {
             return Vec::new();
         };
-        // `on_apply_ended` es quien sabe leer el par (desenlace, informe): un
-        // apply cancelado CON informe dice las dos mitades —«cancelado tras
-        // aplicar N»— y uno sin informe deja que mande el error, porque no
-        // hay recuento que lo pueda sustituir.
-        // La categoría del error vuelve YA localizada en el idioma de esta
-        // ventana, porque el modelo lo recibe como parámetro: leerlo del
-        // global habría puesto el desenlace de una escritura en el idioma de
-        // otra ventana.
+        // `on_apply_ended` is the one that knows how to read the (outcome,
+        // report) pair: an apply cancelled WITH a report says both halves —
+        // "cancelled after applying N" — and one with no report lets the
+        // error take over, because there is no count that can replace it.
+        // The error's category comes back ALREADY localized into this
+        // window's language, because the model receives it as a parameter:
+        // reading it from the global would have put a write's outcome in
+        // another window's language.
         if let Some(categoria) = sinc.vista.on_apply_ended(estado, informe, lang) {
             sinc.vista.error = Some(clamp_display(categoria));
         }
@@ -176,18 +179,18 @@ impl Estado {
         vec![self.parche(vec![cambio])]
     }
 
-    /// El desenlace de la Task de un PLAN entra en el modelo.
+    /// A PLAN Task's outcome enters the model.
     ///
-    /// Sin esto, `run` se quedaba en `Running` para siempre y con él moría la
-    /// cláusula que el modelo compartido documenta como su motivo de existir:
-    /// un plan CANCELADO o FALLIDO no se aprueba aunque haya cerrado. El
-    /// `sync.plan_done` puede ir ya en el canal cuando el lector pulsa
-    /// `Escape`, así que sin el desenlace la pantalla ofrecía aprobar un plan
-    /// que acababan de mandar parar — y la fase B cuelga de ese campo el
-    /// botón que escribe.
+    /// Without this, `run` used to stay at `Running` forever, and with it
+    /// died the clause the shared model documents as its reason for
+    /// existing: a CANCELLED or FAILED plan is not approved even if it has
+    /// closed. `sync.plan_done` can already be on the channel when the
+    /// reader presses `Escape`, so without the outcome the screen offered
+    /// to approve a plan that had just been told to stop — and phase B hangs
+    /// the write button off that field.
     ///
-    /// Y por el progreso, no por el cierre del canal: una Task que muere sin
-    /// cerrar su stream dejaba el panel en «planificando…» para siempre.
+    /// And by progress, not by the channel closing: a Task that dies without
+    /// closing its stream used to leave the panel at "planning…" forever.
     pub(super) fn cerrar_sincronizacion(
         &mut self,
         p: &norte_proto::TaskProgress,
@@ -201,9 +204,9 @@ impl Estado {
         }
         sinc.vista.run = norte_frontend::sync::SyncRunState::from_task_state(&p.state);
         if let norte_proto::TaskState::Failed { error } = &p.state {
-            // La CATEGORÍA localizada, jamás el `Display` inglés: esto se
-            // pinta de forma persistente y varias variantes interpolan datos
-            // del otro extremo.
+            // The localized CATEGORY, never the English `Display`: this is
+            // painted persistently and several variants interpolate data
+            // from the other end.
             sinc.vista.error = Some(clamp_display(norte_frontend::error::error_category_in(
                 lang, error,
             )));
@@ -229,25 +232,25 @@ impl Estado {
         }]
     }
 
-    /// Las teclas mientras el panel de diferencias está abierto.
-    /// Las teclas mientras el panel de diferencias está abierto.
+    /// The keys while the differences panel is open.
+    /// The keys while the differences panel is open.
     ///
-    /// `Escape` DOS veces y no una: la primera pide cancelar la Task, la
-    /// segunda cierra pase lo que pase. Sin la segunda, cerrar dependía de
-    /// que el canal de filas se cerrara de verdad, y hay formas de que no lo
-    /// haga —un daemon muerto, un provider colgado de un NFS— que dejaban al
-    /// lector atrapado en la única pantalla de norte sin salida.
-    /// Las teclas mientras el panel de sincronización está abierto.
+    /// `Escape` TWICE and not once: the first asks to cancel the Task, the
+    /// second closes no matter what. Without the second, closing depended on
+    /// the row channel really closing, and there are ways it might not — a
+    /// dead daemon, a provider hung off an NFS — that left the reader
+    /// trapped on the one screen in norte with no way out.
+    /// The keys while the synchronization panel is open.
     ///
-    /// `Escape` DOS veces, por lo mismo que en el panel de diferencias: la
-    /// primera pide cancelar la Task viva —la del plan, o la del apply si ya
-    /// está escribiendo—, la segunda cierra pase lo que pase.
-    /// `dialog.approve` aprueba, y cuando el plan borra o deja algo sin vuelta
-    /// atrás contesta también la SEGUNDA pregunta: es la última pantalla donde
-    /// todavía se puede decir que no.
+    /// `Escape` TWICE, for the same reason as the differences panel: the
+    /// first asks to cancel the live Task — the plan's, or the apply's if it
+    /// is already writing — the second closes no matter what.
+    /// `dialog.approve` approves, and when the plan deletes or leaves
+    /// something with no way back it also answers the SECOND question: it is
+    /// the last screen where saying no is still possible.
     #[expect(
         clippy::too_many_lines,
-        reason = "despachador de una pantalla con dos regímenes de tecla"
+        reason = "dispatcher for a screen with two key regimes"
     )]
     pub(super) fn tecla_en_sincronizacion(
         &mut self,
@@ -258,9 +261,9 @@ impl Estado {
         let Some(sinc) = self.sincronizacion.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        // Con la SEGUNDA pregunta delante, las teclas son suyas: solo `y`
-        // contesta que sí, y cualquier otra cosa la retira. Una pregunta que
-        // se puede contestar con cualquier tecla no es una pregunta.
+        // With the SECOND question in front, the keys belong to it: only `y`
+        // answers yes, and anything else withdraws it. A question that can
+        // be answered with any key is not a question.
         if sinc.vista.confirming.is_some() {
             let si = self
                 .verbo_de_dialogo(k)
@@ -277,8 +280,8 @@ impl Estado {
             };
             return (self.aplicada(), vec![self.parche(vec![cambio])]);
         }
-        // `Home`/`End` se quedan fijas: el catálogo compartido no tiene verbo
-        // para «al principio» dentro de un diálogo.
+        // `Home`/`End` stay fixed keys: the shared catalog has no verb for
+        // "to the start" inside a dialog.
         let verbo = match k.key.as_str() {
             "Home" | "home" | "End" | "end" => None,
             _ => self.verbo_de_dialogo(k),
@@ -287,31 +290,32 @@ impl Estado {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         match (verbo.as_deref(), k.key.as_str()) {
-            // Aprobar el plan es `dialog.approve`, no `dialog.confirm`: lo
-            // que se contesta aquí es «sí, escribe» sobre un plan que ya está
-            // delante, que es exactamente lo que ese verbo nombra — y es el
-            // mismo con el que se contesta la SEGUNDA pregunta.
+            // Approving the plan is `dialog.approve`, not `dialog.confirm`:
+            // what is being answered here is "yes, write" over a plan
+            // already in front, which is exactly what that verb names — and
+            // it is the same one the SECOND question is answered with.
             (Some("dialog.approve"), _) => self.pedir_aprobacion(backend, buzon),
             (Some("dialog.cancel"), _) => {
-                // Mientras el daemon ESCRIBE, `Escape` pide cancelar y no
-                // cierra: cerrar pierde el informe —y con él el recuento, los
-                // fallos y el asa del deshacer— sobre un destino que se
-                // reescribió a medias.
+                // While the daemon is WRITING, `Escape` asks to cancel and
+                // does not close: closing loses the report — and with it the
+                // count, the failures and the undo handle — over a
+                // destination rewritten halfway.
                 let escribiendo = sinc.vista.is_submitted()
                     || matches!(
                         sinc.vista.state,
                         norte_frontend::sync::SyncState::Applying(_)
                     );
                 if escribiendo {
-                    // La PRIMERA vez pide parar y no cierra: cerrar pierde el
-                    // informe sobre un destino a medio reescribir.
+                    // The FIRST time asks to stop and does not close: closing
+                    // loses the report over a destination halfway rewritten.
                     //
-                    // La segunda SÍ cierra, y eso no contradice lo anterior:
-                    // «espera al informe» vale mientras el informe pueda
-                    // llegar, y hay formas de que no llegue nunca —un daemon
-                    // muerto, un `sync.report` que falla, una Task cuyo canal
-                    // se cae sin desenlace—. Sin esta salida, esta pantalla
-                    // —la que ESCRIBE— era la única de norte sin salida.
+                    // The second one DOES close, and that does not
+                    // contradict the above: "wait for the report" holds
+                    // while the report can arrive, and there are ways it
+                    // never does — a dead daemon, a failing `sync.report`, a
+                    // Task whose channel drops with no outcome. Without this
+                    // exit, this screen — the one that WRITES — was the only
+                    // one in norte with no way out.
                     if !sinc.vista.cancel_requested {
                         sinc.vista.cancel_requested = true;
                         let task = sinc.task;
@@ -329,8 +333,9 @@ impl Estado {
                         self.cancelar(task.get());
                     }
                     let mut fuera = vec![self.parche(vec![ViewChange::Sync { sync: None }])];
-                    // Y se DICE lo que se pierde al cerrar: el destino puede
-                    // haber quedado a medias y su informe ya no se va a ver.
+                    // And it IS SAID what is lost by closing: the
+                    // destination may have been left halfway and its report
+                    // is not going to be seen anymore.
                     fuera.extend(self.decir("msg-sync-closed-midway"));
                     return (self.aplicada(), fuera);
                 }
@@ -348,15 +353,16 @@ impl Estado {
                     );
                 }
                 sinc.vista.cancel_requested = true;
-                // Y el modelo se entera YA: si el `plan_done` viene de camino,
-                // sin esto el panel pasaría a «listo para aprobar» un plan que
-                // el lector acaba de mandar parar.
+                // And the model finds out RIGHT AWAY: if `plan_done` is on
+                // its way, without this the panel would switch to "ready to
+                // approve" a plan the reader just told to stop.
                 //
-                // Solo mientras algo CORRE. Sobre un plan ya aplicado, marcar
-                // «cancelado» reescribía el desenlace a «cancelado tras
-                // aplicar N; el resto no se aplicó» sobre una sincronización
-                // que terminó entera: dos frases falsas sobre lo que hay en
-                // disco, en la única pantalla que lo describe.
+                // Only while something is RUNNING. Over an already-applied
+                // plan, marking "cancelled" used to rewrite the outcome to
+                // "cancelled after applying N; the rest was not applied"
+                // over a synchronization that finished in full: two false
+                // sentences about what is on disk, on the one screen that
+                // describes it.
                 if matches!(sinc.vista.run, norte_frontend::sync::SyncRunState::Running) {
                     sinc.vista.run = norte_frontend::sync::SyncRunState::Cancelled;
                 }
@@ -375,10 +381,10 @@ impl Estado {
                 if total == 0 {
                     return (self.aplicada(), Vec::new());
                 }
-                // El TOPE del desplazamiento es «lo que hay menos lo que
-                // cabe», no «lo que hay menos uno»: con lo segundo, una sola
-                // flecha sobre un plan de dos pasos y una ventana de
-                // doscientos dejaba de mandar el primer paso.
+                // The scroll CAP is "how much there is minus how much fits",
+                // not "how much there is minus one": with the latter, a
+                // single arrow over a two-step plan and a window of two
+                // hundred used to stop sending the first step.
                 let tope = total.saturating_sub(sinc.ventana.max(1));
                 let pagina = sinc.ventana.max(1);
                 sinc.primera_visible = match (verbo.as_deref(), k.key.as_str()) {
@@ -395,19 +401,19 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            // Lo que no entiende se COME: un panel que deja pasar teclas no
-            // es una pantalla.
+            // What it does not understand is SWALLOWED: a panel that lets
+            // keys through is not a screen.
             _ => (self.aplicada(), Vec::new()),
         }
     }
 
-    /// `a`: pide aprobar el plan. Puede que haya una SEGUNDA pregunta.
+    /// `a`: asks to approve the plan. There may be a SECOND question.
     ///
-    /// La segunda no es ceremonia: la compone el modelo compartido con una
-    /// rama por perspectiva de deshacer, y solo aparece cuando el plan borra
-    /// árboles o deja algo sin vuelta atrás. Un plan que se deshace entero y
-    /// no borra nada no la tiene — preguntar siempre es lo que enseña a
-    /// contestar sin leer.
+    /// The second one is not ceremony: it is composed by the shared model
+    /// with one branch per undo perspective, and it only appears when the
+    /// plan deletes trees or leaves something with no way back. A plan that
+    /// undoes in full and deletes nothing does not have it — always asking
+    /// is what teaches people to answer without reading.
     pub(super) fn pedir_aprobacion(
         &mut self,
         backend: &Arc<dyn HostBackend>,
@@ -438,13 +444,13 @@ impl Estado {
         }
     }
 
-    /// Manda `sync.apply` con el hash que el CORE devolvió.
+    /// Sends `sync.apply` with the hash the CORE returned.
     ///
-    /// Por `SyncView::submit`, que es la ÚNICA puerta: mira `can_approve` y
-    /// echa el pestillo del apply en vuelo en el mismo gesto. Separarlos deja
-    /// la ventana en la que un segundo `a` —o un `Escape`— entra entre que la
-    /// petición sale y el daemon contesta, y esta ventana lee eventos entre
-    /// teclas, así que es alcanzable de verdad.
+    /// Through `SyncView::submit`, the ONLY door: it checks `can_approve` and
+    /// throws the in-flight-apply latch in the same gesture. Splitting them
+    /// leaves a window in which a second `a` — or an `Escape` — fits between
+    /// the request going out and the daemon answering, and this window reads
+    /// events between keys, so it is genuinely reachable.
     pub(super) fn aplicar_plan(
         &mut self,
         backend: &Arc<dyn HostBackend>,
@@ -474,8 +480,9 @@ impl Estado {
                         .await;
                 }
                 Err(e) => {
-                    // ¿Se SABE que no escribió? Solo si el daemon contestó que
-                    // no. Un transporte muerto deja la petición en el aire.
+                    // Is it KNOWN that it did not write? Only if the daemon
+                    // answered no. A dead transport leaves the request up in
+                    // the air.
                     let seguro = matches!(
                         e,
                         Error::PolicyDenied { .. }
@@ -487,8 +494,9 @@ impl Estado {
                             | Error::EncodingLoss
                     );
                     let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
-                    // Y se suelta el pestillo —cuando toca—: sin esto la `a`
-                    // queda muerta para siempre sobre un plan que nadie aplicó.
+                    // And the latch is released — when it should be —
+                    // without this `a` stays dead forever over a plan nobody
+                    // applied.
                     let _ = buzon2
                         .send(Mensaje::Fondo(Box::new(Fondo::SyncNoAplicado(
                             epoca, seguro,
@@ -503,7 +511,7 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// El daemon aceptó el apply: el modelo pasa a APLICANDO.
+    /// The daemon accepted the apply: the model switches to APPLYING.
     pub(super) fn sync_aplicando(
         &mut self,
         epoca: u64,
@@ -514,16 +522,17 @@ impl Estado {
         let Some(sinc) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) else {
             return Vec::new();
         };
-        // La Task que se sigue pasa a ser la del APPLY: es a la que apunta
-        // ahora el `Escape`, y de la que hay que pedir el informe.
+        // The Task being followed switches to the APPLY's: it is what
+        // `Escape` points at now, and the one the report has to be requested
+        // from.
         sinc.task = task;
         sinc.epoca_conexion = self.epoca_conexion;
         if !sinc.vista.on_apply_started(task) {
-            // El modelo la NIEGA —el lector pidió parar en la ventana en la
-            // que el apply todavía no tenía id— y entonces cancelarla es
-            // NUESTRO trabajo: nadie más conoce ese id, y el contrato del
-            // modelo lo dice con todas las letras. Sin esto, el daemon seguía
-            // reescribiendo el destino de un plan que el humano canceló.
+            // The model DENIES it — the reader asked to stop in the window
+            // during which the apply had no id yet — and then canceling it
+            // is OUR job: nobody else knows that id, and the model's
+            // contract spells it out. Without this, the daemon kept
+            // rewriting the destination of a plan the human cancelled.
             sinc.vista.on_apply_abandoned();
             let (_, mut fuera) = self.cancelar(task.get());
             fuera.extend(self.decir("msg-sync-cancelled-late"));
@@ -532,9 +541,10 @@ impl Estado {
             }]));
             return fuera;
         }
-        // Pudo nacer TERMINAL: el daemon la completó antes de contestar y su
-        // progreso no dispara nunca. Es la misma carrera que el tablero ya
-        // documenta, y aquí se traduce en un panel aplicando para siempre.
+        // It could be born TERMINAL: the daemon completed it before
+        // answering and its progress never fires. It is the same race the
+        // board already documents, and here it translates into a panel
+        // stuck applying forever.
         let nacio = self
             .tasks
             .get(&task.get())
@@ -558,9 +568,9 @@ impl Estado {
         if self.comparacion.is_none() {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        // Los DÍGITOS de los filtros no pasan por el resolutor: son
-        // posicionales —el n-ésimo de `CATEGORIES`— y no hay cinco verbos que
-        // los nombren. Es la misma decisión que en el TUI.
+        // The filters' DIGITS do not go through the resolver: they are
+        // positional — the nth of `CATEGORIES` — and there are no five verbs
+        // to name them. It is the same decision as in the TUI.
         let digito = k.key.len() == 1 && k.key.chars().all(|c| ('1'..='5').contains(&c));
         let verbo = if digito {
             None
@@ -596,8 +606,8 @@ impl Estado {
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
             (Some("dialog.pane"), _) => {
-                // Cambiar de lado cambia a qué panel navega `Enter` y sobre
-                // qué lado operan las teclas de fichero.
+                // Switching sides changes which pane `Enter` navigates to
+                // and which side the file keys operate on.
                 c.vista.pane.swap_active_side();
                 let cambio = ViewChange::Compare {
                     compare: self.vista_comparacion(),
@@ -634,8 +644,8 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            // 1..5: los filtros, en el orden fijo de las categorías, igual
-            // que en el TUI.
+            // 1..5: the filters, in the categories' fixed order, same as in
+            // the TUI.
             (_, d) if digito => {
                 let i = d.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(1) as usize - 1;
                 let Some(cat) = norte_frontend::compare::CATEGORIES.get(i).copied() else {
@@ -647,17 +657,18 @@ impl Estado {
                 };
                 (self.aplicada(), vec![self.parche(vec![cambio])])
             }
-            // Una tecla que no entiende se COME igual: un panel que deja
-            // pasar lo que no entiende no es una pantalla, es un adorno.
+            // A key it does not understand is SWALLOWED just the same: a
+            // panel that lets through what it does not understand is not a
+            // screen, it is decoration.
             _ => (self.aplicada(), Vec::new()),
         }
     }
 
-    /// Elige una fila del panel de diferencias.
-    /// Las cuatro acciones del panel de diferencias, en un brazo.
+    /// Chooses a row from the differences panel.
+    /// The differences panel's four actions, in one arm.
     ///
-    /// Juntas y no cuatro brazos del reparto general: son la misma superficie
-    /// y ninguna significa nada sin ella.
+    /// Together and not four arms of the general dispatch: they are the same
+    /// surface and none of them means anything without it.
     pub(super) fn accion_de_comparacion(
         &mut self,
         accion: &UiAction,
@@ -671,12 +682,12 @@ impl Estado {
             UiAction::CompareSetVisibleRange { first, count } => {
                 self.comparacion_ventana(*first, *count)
             }
-            // El reparto general solo manda aquí esas cuatro.
+            // The general dispatch only sends those four here.
             _ => (Self::obsoleta(StaleAction::Modal), Vec::new()),
         }
     }
 
-    /// Elige una fila del panel de diferencias.
+    /// Chooses a row from the differences panel.
     pub(super) fn comparacion_selecciona(
         &mut self,
         id: u64,
@@ -684,8 +695,8 @@ impl Estado {
         let Some(c) = self.comparacion.as_mut() else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        // `select` IGNORA un id que no llegó, que es lo correcto: la
-        // alternativa es una selección que nombra una fila inexistente.
+        // `select` IGNORES an id that did not arrive, which is correct: the
+        // alternative is a selection naming a nonexistent row.
         c.vista.pane.select(id);
         if c.vista.pane.selected_id() != Some(id) {
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
@@ -696,7 +707,7 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// Enseña o esconde una categoría entera.
+    /// Shows or hides a whole category.
     pub(super) fn comparacion_filtra(
         &mut self,
         categoria: &str,
@@ -708,8 +719,8 @@ impl Estado {
             .iter()
             .find(|c| c.id() == categoria)
         else {
-            // Una categoría que no existe es un renderer de otra versión, no
-            // una orden.
+            // A category that does not exist is a renderer from another
+            // version, not an order.
             return (Self::obsoleta(StaleAction::Generation), Vec::new());
         };
         c.vista.pane.toggle_filter(*cat);
@@ -719,7 +730,7 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// El renderer dice qué ventana pinta.
+    /// The renderer says which window it paints.
     pub(super) fn comparacion_ventana(
         &mut self,
         primera: u64,
@@ -729,8 +740,8 @@ impl Estado {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         c.primera_visible = usize::try_from(primera).unwrap_or(0);
-        // Acotada: lo que el renderer diga que le cabe no puede hacer que un
-        // parche lleve medio millón de filas.
+        // Capped: whatever the renderer says fits cannot make a patch carry
+        // half a million rows.
         c.ventana = usize::try_from(cuantas)
             .unwrap_or(Self::VENTANA_COMPARACION)
             .clamp(1, MAX_ROWS_PER_BATCH);
@@ -740,12 +751,12 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// Abre la fila elegida: navega al directorio del lado ACTIVO.
+    /// Opens the chosen row: navigates to the ACTIVE side's directory.
     ///
-    /// A dónde ir lo decide el modelo COMPARTIDO (`navigation_target`): la
-    /// fila si es un directorio, su padre si es un fichero, y `None` cuando
-    /// ese lado está vacío —un huérfano mirado desde el lado que no lo
-    /// tiene—, que NO cae al otro lado.
+    /// Where to go is decided by the SHARED model (`navigation_target`): the
+    /// row if it is a directory, its parent if it is a file, and `None` when
+    /// that side is empty — an orphan looked at from the side that does not
+    /// have it — which does NOT fall back to the other side.
     pub(super) fn comparacion_activa(
         &mut self,
         id: u64,
@@ -765,10 +776,11 @@ impl Estado {
                 self.decir_con("compare-no-target", &[("side", &lado)]),
             );
         };
-        // El panel que navega es el del lado ACTIVO, no el que tenga el foco:
-        // quien mira la derecha no puede perder su directorio de la izquierda
-        // por pulsar `Enter`. Se ENFOCA ese hueco y se navega por el camino
-        // de siempre, que es el que registra el rastro y pide el listado.
+        // The pane that navigates is the ACTIVE side's, not whichever has
+        // focus: whoever is looking at the right cannot lose their left
+        // directory by pressing `Enter`. That slot is FOCUSED and navigation
+        // goes through the usual path, the one that records the trail and
+        // requests the listing.
         if let Some(slot) = self.hueco_del_lado() {
             self.roles.set(RoleId::Active, SlotId(slot));
             self.reconcilia_roles();
@@ -781,7 +793,7 @@ impl Estado {
         (self.aplicada(), salidas)
     }
 
-    /// El hueco que corresponde al lado ACTIVO de la comparación.
+    /// The slot corresponding to the comparison's ACTIVE side.
     pub(super) fn hueco_del_lado(&self) -> Option<u32> {
         let c = self.comparacion.as_ref()?;
         let izquierdo = u32::try_from(c.vista.left_pane).ok()?;
@@ -791,19 +803,20 @@ impl Estado {
         }
     }
 
-    /// Pide el PLAN de sincronizar el panel activo sobre el destino.
+    /// Requests the PLAN to synchronize the active pane onto the destination.
     ///
-    /// El plan no escribe un byte: dice qué haría. Lo que escribe es
-    /// `sync.apply`, y solo contra el hash que este plan cierre.
+    /// The plan writes not a single byte: it says what it would do. What
+    /// writes is `sync.apply`, and only against the hash this plan closes
+    /// with.
     pub(super) fn pedir_sincronizacion(
         &mut self,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // UNA a la vez. Relanzar dejaba el panel anterior sin abandonar y su
-        // Task sin cancelar —el daemon seguía caminando un árbol para un plan
-        // que ya no se puede ver— y, con una petición en vuelo, la segunda
-        // pulsación mataba el panel de las dos.
+        // ONE at a time. Relaunching left the previous panel un-abandoned and
+        // its Task uncancelled — the daemon kept walking a tree for a plan
+        // that can no longer be seen — and, with a request in flight, the
+        // second press killed both panels' one.
         if self.sincronizacion.is_some() || self.sync_pedida.is_some() {
             return (
                 ActionAck::Unavailable {
@@ -823,15 +836,15 @@ impl Estado {
                 );
             }
         };
-        // Qué árbol se sobrescribe lo decide la regla COMPARTIDA, no una
-        // copia local: dos respuestas a «cuál de los dos se reescribe» es el
-        // bug más barato de escribir y el más caro de encontrar, porque las
-        // dos producen un plan perfectamente plausible.
+        // Which tree gets overwritten is decided by the SHARED rule, not a
+        // local copy: two answers to "which of the two is rewritten" is the
+        // cheapest bug to write and the most expensive to find, because both
+        // produce a perfectly plausible plan.
         let enfocado = self.hueco().pane.dir().clone();
         let otro = self.huecos[&destino_slot].pane.dir().clone();
-        // Con el panel de diferencias abierto manda el LADO ACTIVO; sin él,
-        // el pane con foco es el origen. Las dos ramas viven en la regla
-        // compartida, y aquí solo se le pasan los datos.
+        // With the differences panel open the ACTIVE SIDE rules; without it,
+        // the focused pane is the source. Both branches live in the shared
+        // rule, and here only the data is passed to it.
         let raices = norte_frontend::sync::sync_roots(
             self.comparacion.as_ref().map(|c| &c.vista),
             &norte_frontend::sync::Panes {
@@ -843,10 +856,11 @@ impl Estado {
         );
         let (origen, destino) = (raices.source.clone(), raices.dest.clone());
         if origen == destino {
-            // Raíces solapadas: el daemon lo rechaza con `OverlappingRoots` y
-            // no crea Task. Este atajo local es cortesía —la autoridad es el
-            // core, que también caza el solape ANIDADO— pero abrir un panel
-            // que va a morir es peor que decirlo antes.
+            // Overlapping roots: the daemon rejects it with
+            // `OverlappingRoots` and creates no Task. This local shortcut is
+            // a courtesy — the authority is the core, which also catches
+            // NESTED overlap — but opening a panel that is going to die is
+            // worse than saying so beforehand.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-same-directory".to_owned(),
@@ -860,7 +874,7 @@ impl Estado {
         )
     }
 
-    /// Encola `sync.plan` y engancha su canal de eventos al actor.
+    /// Enqueues `sync.plan` and hooks its event channel to the actor.
     pub(super) fn lanzar_plan_de_sync(
         &mut self,
         raices: norte_frontend::sync::SyncRoots,
@@ -876,9 +890,10 @@ impl Estado {
         self.epoca_busqueda += 1;
         let epoca = self.epoca_busqueda;
         let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        // `Update` y no `Mirror`: el modo que NO borra es el que puede ser el
-        // de por defecto. Elegir espejo es una decisión que se toma a
-        // propósito, y hasta que haya dónde tomarla no se ofrece.
+        // `Update` and not `Mirror`: the mode that does NOT delete is the
+        // one that can be the default. Choosing mirror is a decision made on
+        // purpose, and until there is somewhere to make it, it is not
+        // offered.
         let modo = norte_proto::methods::SyncMode::Update;
         let params = norte_proto::methods::SyncPlanParams {
             source: origen.clone(),
@@ -886,9 +901,9 @@ impl Estado {
             mode: modo,
             compare: norte_proto::methods::SyncCompareOptions::default(),
             on_unknown: norte_proto::methods::OnUnknown::default(),
-            // Sin `include`: el árbol entero. Acotar el plan a una selección
-            // es lo que hace el panel de diferencias con sus marcas, y eso
-            // llega cuando esta ventana tenga esa vía.
+            // With no `include`: the whole tree. Capping the plan to a
+            // selection is what the differences panel does with its marks,
+            // and that arrives when this window has that path.
             include: None,
         };
         let backend2 = Arc::clone(backend);
@@ -898,10 +913,11 @@ impl Estado {
             let (task, mut rx) = match backend2.sync_plan(params).await {
                 Ok(par) => par,
                 Err(e) => {
-                    // El fallo se DICE y además SUELTA la petición: sin lo
-                    // segundo, un daemon que no sabe planificar —o unas
-                    // raíces solapadas— dejaban `sync_pedida` puesta para
-                    // siempre y el siguiente intento se rehusaba solo.
+                    // The failure IS REPORTED and also RELEASES the request:
+                    // without the latter, a daemon that does not know how to
+                    // plan — or overlapping roots — used to leave
+                    // `sync_pedida` set forever and the next attempt refused
+                    // itself.
                     let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
                     let _ = buzon2
                         .send(Mensaje::Fondo(Box::new(Fondo::PlanDeSyncFallido(epoca))))
@@ -938,10 +954,10 @@ impl Estado {
                 }
             }
         });
-        // El panel se abre cuando se SABE el id de la Task, y no antes: el
-        // modelo compartido lo usa para descartar lo que venga de otro plan,
-        // y con un id de relleno descartaba también los suyos —el panel se
-        // quedaba en cero pasos y el plan cerraba «no se puede aprobar»—.
+        // The panel opens when the Task's id is KNOWN, and not before: the
+        // shared model uses it to discard whatever comes from another plan,
+        // and with a filler id it also discarded its own — the panel stayed
+        // at zero steps and the plan closed "cannot approve".
         self.sincronizacion = None;
         self.sync_pedida = Some(SyncPedida {
             epoca,
@@ -955,22 +971,21 @@ impl Estado {
         Vec::new()
     }
 
-    /// Un evento del plan: un lote de pasos, o su cierre.
-    /// El daemon aceptó el plan y dijo su Task: ahora se abre el panel.
+    /// A plan event: a batch of steps, or its closing.
+    /// The daemon accepted the plan and gave its Task: now the panel opens.
     ///
-    /// El modelo compartido nace CON el id porque es lo que usa para
-    /// descartar lo que venga de otro plan; construirlo antes, con un id de
-    /// relleno, hacía que descartara también sus propios lotes y el panel se
-    /// quedaba en cero pasos y cerraba «no se puede aprobar».
+    /// The shared model is born WITH the id because that is what it uses to
+    /// discard whatever comes from another plan; building it earlier, with a
+    /// filler id, made it discard its own batches too and the panel stayed
+    /// at zero steps and closed "cannot approve".
     pub(super) fn abrir_panel_de_sync(
         &mut self,
         epoca: u64,
         task: norte_proto::TaskId,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        // FILTRAR antes de TOMAR: `take()` incondicional se llevaba por
-        // delante una petición nueva cuando contestaba la Task de una vieja,
-        // y entonces no se abría panel ninguno mientras dos recorridos
-        // seguían caminando dos árboles en el daemon.
+        // FILTER before TAKING: an unconditional `take()` swept away a new
+        // request when an old one's Task answered, and then no panel opened
+        // at all while two traversals kept walking two trees on the daemon.
         if self.sync_pedida.as_ref().is_none_or(|p| p.epoca != epoca) {
             return Vec::new();
         }
@@ -986,10 +1001,10 @@ impl Estado {
                 pedida.modo,
                 pedida.origen,
                 pedida.destino,
-                // Las reinterpretaciones de cada lado, tal como las decidió
-                // la regla compartida: son DOS porque los dos panes son dos
-                // ubicaciones, y cruzarlas nombraría con otros bytes el
-                // fichero sobre el que cae la escritura.
+                // Each side's reinterpretations, exactly as the shared rule
+                // decided them: there are TWO because the two panes are two
+                // locations, and swapping them would name the file the
+                // write lands on with different bytes.
                 pedida.origen_encoding,
                 pedida.destino_encoding,
             ),
@@ -1015,16 +1030,18 @@ impl Estado {
         if sinc.epoca != epoca {
             return Vec::new();
         }
-        // El modelo COMPARTIDO decide qué entra: descarta lo que venga de
-        // otro plan por su `task_id`, y es quien sabe cuándo el plan cierra.
+        // The SHARED model decides what gets in: it discards whatever comes
+        // from another plan by its `task_id`, and it is the one that knows
+        // when the plan closes.
         let cambio = match ev {
             norte_client::SyncPlanEvent::Steps(lote) => sinc.vista.state.on_steps(lote),
             norte_client::SyncPlanEvent::Done(done) => sinc.vista.state.on_plan_done(done),
         };
         if !cambio {
-            // Que se descartó, DICHO: un lote rechazado después del cierre es
-            // una violación del contrato del daemon, y callarla la esconde.
-            tracing::warn!(epoca, "un evento del plan se descartó");
+            // That it was discarded IS STATED: a batch rejected after
+            // closing is a violation of the daemon's contract, and staying
+            // quiet about it hides it.
+            tracing::warn!(epoca, "a plan event was discarded");
             return Vec::new();
         }
         let cambio = ViewChange::Sync {
@@ -1033,7 +1050,7 @@ impl Estado {
         vec![self.parche(vec![cambio])]
     }
 
-    /// Los pasos de la ventana, proyectados por el modelo COMPARTIDO.
+    /// The window's steps, projected by the SHARED model.
     pub(super) fn pasos_proyectados(
         pasos: &[norte_proto::methods::SyncStep],
         papelera: norte_proto::methods::DestTrash,
@@ -1043,17 +1060,17 @@ impl Estado {
         pasos
             .iter()
             .map(|paso| {
-                // Las celdas las compone el modelo COMPARTIDO: qué hace el
-                // paso, por qué, si el deshacer lo devuelve —que NUNCA sale
-                // de `reversal` a secas, porque esa es media respuesta— y las
-                // dos ortografías cuando las hay.
+                // The cells are composed by the SHARED model: what the step
+                // does, why, whether undo brings it back — which NEVER comes
+                // straight from `reversal`, because that is half an answer —
+                // and both spellings when there are two.
                 let c = norte_frontend::sync::render_step(paso, papelera, enc);
                 crate::dto::SyncStepView {
                     id: c.id,
                     kind: clamp_display(norte_frontend::sync::step_label(paso.kind, lang)),
-                    // El porqué solo lo tienen los pasos que lo tienen: un
-                    // `Skip`, o uno que no se puede deshacer. Vacío es
-                    // AUSENCIA, no una frase inventada.
+                    // The reason is only carried by steps that have one: a
+                    // `Skip`, or one that cannot be undone. Empty is ABSENCE,
+                    // not an invented phrase.
                     reason: c.reason.map_or_else(String::new, |r| {
                         clamp_display(norte_frontend::sync::reason_label(r, lang))
                     }),
@@ -1070,7 +1087,7 @@ impl Estado {
             .collect()
     }
 
-    /// Los fallos del informe, cuando ya hay informe.
+    /// The report's failures, once there is a report.
     pub(super) fn fallos_proyectados(
         estado: &norte_frontend::sync::SyncState,
         enc: norte_frontend::sync::SyncEncodings,
@@ -1095,10 +1112,10 @@ impl Estado {
             .collect()
     }
 
-    /// De qué raíz cuelga una ruta, por su id estable.
+    /// Which root a path hangs off, by its stable id.
     ///
-    /// `either` se dice: en un panel donde una ruta sin calificar significa
-    /// «del origen», callarlo es afirmar el origen.
+    /// `either` is stated: on a panel where an unqualified path means "from
+    /// the source", staying quiet about it asserts the source.
     pub(super) fn nombre_de_ancla(anchor: norte_frontend::sync::RelAnchor) -> String {
         match anchor {
             norte_frontend::sync::RelAnchor::Dest => "dest".to_owned(),
@@ -1107,13 +1124,13 @@ impl Estado {
         }
     }
 
-    /// La etiqueta del ancla, ya traducida, o vacía cuando no hay nada que
-    /// decir.
+    /// The anchor's label, already translated, or empty when there is
+    /// nothing to say.
     ///
-    /// La etiqueta y no solo el id: el DTO promete que esto se pinta, y un
-    /// `data-` que ningún estilo lee no lo pinta — el `either` seguía
-    /// callado, que en un panel donde una ruta sin calificar significa «del
-    /// origen» es afirmar el origen.
+    /// The label and not just the id: the DTO promises this gets painted,
+    /// and a `data-` no style reads does not paint it — `either` stayed
+    /// silent, which on a panel where an unqualified path means "from the
+    /// source" is asserting the source.
     pub(super) fn etiqueta_de_ancla(
         anchor: norte_frontend::sync::RelAnchor,
         lang: norte_i18n::Lang,
@@ -1121,7 +1138,7 @@ impl Estado {
         norte_frontend::sync::anchor_label(anchor, lang).map_or_else(String::new, clamp_display)
     }
 
-    /// La proyección del panel de sincronización, acotada a su ventana.
+    /// The synchronization panel's projection, capped to its window.
     pub(super) fn vista_sincronizacion(&self) -> Option<crate::dto::SyncView> {
         let sinc = self.sincronizacion.as_ref()?;
         let v = &sinc.vista;
@@ -1148,25 +1165,26 @@ impl Estado {
                 text: clamp_display(destino),
                 hostile: destino_hostil,
             },
-            // El modo, por la etiqueta COMPARTIDA. Caer en «actualizar» ante
-            // un modo que esta build no sabe nombrar afirmaría la mitad
-            // SEGURA de lo que se está aprobando —«esto no borra»— sobre algo
-            // desconocido, y el propio catálogo lo prohíbe por escrito.
+            // The mode, by the SHARED label. Falling back to "update" for a
+            // mode this build cannot name would assert the SAFE half of what
+            // is being approved — "this does not delete" — about something
+            // unknown, and the catalog itself forbids that in writing.
             mode: clamp_display(norte_frontend::sync::mode_label(v.mode, self.lang)),
             steps: filas,
             first_visible: primera as u64,
-            // Los RETENIDOS más los que el modelo tiró: sin sumarlos, este
-            // número y el de la línea de estado se contradicen en un plan
-            // grande, y los dos cruzan en el mismo mensaje.
+            // The RETAINED ones plus what the model dropped: without adding
+            // them, this number and the status line's contradict each other
+            // on a large plan, and both cross in the same message.
             total: (pasos.len() as u64).saturating_add(
                 v.state
                     .plan()
                     .map_or(0, norte_frontend::sync::SyncPlan::dropped),
             ),
-            // El RESUMEN, que es lo que un humano lee antes de aprobar:
-            // irreversibles, bytes (con los que no se pudieron medir aparte),
-            // lo que no se pudo leer, y si la lista esconde pasos. No cabe en
-            // la línea de estado y no puede quedarse dentro del modelo.
+            // The SUMMARY, which is what a human reads before approving:
+            // irreversible ones, bytes (with the ones that could not be
+            // measured kept apart), what could not be read, and whether the
+            // list hides steps. It does not fit in the status line and
+            // cannot stay inside the model.
             summary: v
                 .state
                 .plan()
@@ -1177,9 +1195,10 @@ impl Estado {
                         .collect()
                 })
                 .unwrap_or_default(),
-            // Lo que IMPIDE aplicar, con SU RUTA: «el destino es de solo
-            // lectura» sin decir cuál manda a buscar el problema a ciegas, y
-            // un bloqueo de la raíz se dice «todo el árbol», no vacío.
+            // What PREVENTS applying, with ITS PATH: "the destination is
+            // read-only" with no path sends people hunting for the problem
+            // blindly, and a root blocker is said as "the whole tree", not
+            // left empty.
             blockers: v
                 .state
                 .plan()
@@ -1188,14 +1207,14 @@ impl Estado {
                         .blockers
                         .iter()
                         .map(|b| {
-                            // Sin reinterpretación: de qué raíz cuelga el
-                            // `rel` de un BLOQUEO no lo decide ninguna regla
-                            // compartida todavía —la que existe es para
-                            // pasos—, y elegirla aquí sería inventar una
-                            // segunda respuesta. Hoy no cambia nada porque
-                            // esta ventana no tiene override de codificación
-                            // de nombres; el día que lo tenga, la regla va
-                            // arriba y no aquí.
+                            // With no reinterpretation: which root a
+                            // BLOCKER's `rel` hangs off is not yet decided by
+                            // any shared rule — the one that exists is for
+                            // steps — and choosing it here would be
+                            // inventing a second answer. Today it changes
+                            // nothing because this window has no name-
+                            // encoding override; the day it does, the rule
+                            // goes up there and not here.
                             let ruta =
                                 norte_frontend::sync::rel_display_or_root(&b.rel, None, self.lang);
                             crate::dto::SyncBlockerView {
@@ -1209,24 +1228,25 @@ impl Estado {
                         .collect()
                 })
                 .unwrap_or_default(),
-            // Cuántos hay DE VERDAD: el wire recorta la lista a 256 y el
-            // total viaja aparte justo para que 40 000 no se lean como 256.
+            // How many there REALLY are: the wire trims the list to 256 and
+            // the total travels separately precisely so 40,000 does not read
+            // as 256.
             blockers_total: v.state.plan().map_or(0, |p| p.done().blockers_total),
             status: clamp_display(norte_frontend::sync::status_line(v, self.lang)),
-            // La línea de teclas del modelo ofrece `a aprobar` en cuanto el
-            // plan se puede aprobar, y esta fase NO tiene esa tecla: decir lo
-            // que no se puede hacer entrena a pulsarla justo en la pantalla
-            // donde la fase siguiente pone la escritura. Mientras aprobar no
-            // exista, esta pantalla dice que solo lee.
+            // The model's key line offers `a approve` as soon as the plan
+            // can be approved, and this phase does NOT have that key: saying
+            // what cannot be done teaches pressing it right on the screen
+            // where the next phase puts the write. While approving does not
+            // exist, this screen says it only reads.
             hint: clamp_display(if v.can_approve() {
                 norte_i18n::t_in(self.lang, "host-sync-read-only")
             } else {
                 norte_i18n::t_in(self.lang, norte_frontend::sync::hint_id(v))
             }),
             confirming: v.confirming.as_ref().map(|c| clamp_display(c.text.clone())),
-            // Los fallos del informe, uno a uno. El recuento va en la línea
-            // de estado, que lo compone el modelo compartido; esto es el
-            // detalle, y sin él «3 fallaron» no dice cuáles.
+            // The report's failures, one by one. The count goes in the
+            // status line, composed by the shared model; this is the
+            // detail, and without it "3 failed" does not say which.
             failures: fallos,
             cancel_requested: v.cancel_requested,
             can_approve: v.can_approve(),
@@ -1234,17 +1254,16 @@ impl Estado {
         })
     }
 
-    /// Cuántas filas de la comparación —o pasos de un plan— cruzan si el
-    /// renderer no ha dicho su ventana todavía.
+    /// How many comparison rows — or a plan's steps — get through if the
+    /// renderer has not said its window yet.
     pub(super) const VENTANA_COMPARACION: usize = 200;
 
-    /// Lanza la comparación de los dos paneles y abre el panel de
-    /// diferencias.
+    /// Launches the two panes' comparison and opens the differences panel.
     ///
-    /// La raíz derecha sale del hueco con el rol `Target`, por el MISMO
-    /// camino que una transferencia: dos formas de decidir «el otro panel»
-    /// son dos sitios donde pueden divergir, y con varios candidatos y
-    /// ninguno designado se pide elegir en vez de romper el empate.
+    /// The right root comes from the slot holding the `Target` role, through
+    /// the SAME path as a transfer: two ways of deciding "the other pane"
+    /// are two places they can drift apart, and with several candidates and
+    /// none designated it asks to choose instead of breaking the tie.
     pub(super) fn pedir_comparacion(
         &mut self,
         backend: &Arc<dyn HostBackend>,
@@ -1263,8 +1282,9 @@ impl Estado {
         };
         let izquierda = self.hueco().pane.dir().clone();
         if izquierda == derecha {
-            // El daemon lo rechazaría igual (`-32602`), y abrir un panel que
-            // promete una respuesta imposible es peor que decirlo antes.
+            // The daemon would reject it just the same (`-32602`), and
+            // opening a panel that promises an impossible answer is worse
+            // than saying so beforehand.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-same-directory".to_owned(),
@@ -1278,24 +1298,25 @@ impl Estado {
         )
     }
 
-    /// `pane.dir-size` (#139, #290): cuenta lo que ocupa lo MARCADO —o lo que
-    /// hay bajo el cursor— y lo deja en el tablero.
+    /// `pane.dir-size` (#139, #290): counts what is MARKED — or what is
+    /// under the cursor — takes up and leaves it on the board.
     ///
-    /// UNA Task para el lote entero, al revés que copiar o borrar: el método
-    /// del wire toma una lista, y contar por separado obligaría a quien
-    /// pregunta a sumar los bytes **y** los ilegibles, que no se suman igual
-    /// —un total redondo compuesto de dos cuentas parciales es una respuesta
-    /// equivocada, no una incompleta—.
+    /// ONE Task for the whole batch, unlike copy or delete: the wire's
+    /// method takes a list, and counting separately would force whoever asks
+    /// to add up the bytes **and** the unreadable ones, which do not add up
+    /// the same way — a round total made of two partial counts is a wrong
+    /// answer, not an incomplete one.
     ///
-    /// No hay directorios afectados que refrescar: esto no escribe nada. Su
-    /// resultado ES su progreso terminal, que el tablero ya sabe leer.
+    /// There are no affected directories to refresh: this writes nothing.
+    /// Its result IS its terminal progress, which the board already knows
+    /// how to read.
     pub(super) fn contar_tamano(
         &mut self,
         backend: &Arc<dyn HostBackend>,
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // `marked_paths` cae al cursor cuando no hay marcas: la misma fuente
-        // de «sobre qué opera esto» que usa una transferencia.
+        // `marked_paths` falls back to the cursor when there are no marks:
+        // the same source of "what this operates on" a transfer uses.
         let paths: Vec<VPath> = self.hueco().pane.marked_paths();
         if paths.is_empty() {
             return (
@@ -1317,7 +1338,7 @@ impl Estado {
         (self.aplicada(), Vec::new())
     }
 
-    /// Encola `fs.compare` y engancha su canal de filas al actor.
+    /// Enqueues `fs.compare` and hooks its row channel to the actor.
     pub(super) fn lanzar_comparacion(
         &mut self,
         izquierda: VPath,
@@ -1332,19 +1353,19 @@ impl Estado {
             left: izquierda.clone(),
             right: derecha.clone(),
             criteria: norte_proto::methods::CompareCriteria::default(),
-            // Sin tope de profundidad, como el TUI: una comparación que se
-            // para a mitad no ha contestado a lo que se le preguntó.
+            // With no depth cap, like the TUI: a comparison that stops
+            // halfway has not answered what it was asked.
             max_depth: None,
-            // La regla FAT, que es el default del wire.
+            // The FAT rule, which is the wire's default.
             mtime_tolerance_ms: 2000,
-            // Sin seguir enlaces, como el default del core: los destinos se
-            // comparan como BYTES, y seguirlos podría salirse del árbol que
-            // se preguntó.
+            // Without following links, like the core's default: destinations
+            // are compared as BYTES, and following them could step outside
+            // the tree that was asked about.
             follow_symlinks: false,
-            // Un huérfano se emite como UNA fila y no se recorre, que es lo
-            // que sabe hacer el default. Descender un lado es una decisión
-            // del plan de sincronización, no de una comparación que solo
-            // mira.
+            // An orphan is emitted as ONE row and is not descended into,
+            // which is what the default knows how to do. Descending into one
+            // side is a synchronization plan's decision, not a comparison's,
+            // which only looks.
             descend_orphans: None,
         };
         self.comparacion = Some(Comparacion {
@@ -1354,10 +1375,10 @@ impl Estado {
             vista: norte_frontend::compare::CompareView::new(
                 izquierda,
                 derecha,
-                // El hueco que lanzó la comparación ES el lado izquierdo, y
-                // eso decide a qué panel navega un `Enter`. Sin ello, quien
-                // mira el lado derecho perdía su directorio de la izquierda
-                // para ir a ver el de la derecha.
+                // The slot that launched the comparison IS the left side, and
+                // that decides which pane an `Enter` navigates to. Without
+                // it, whoever is looking at the right side lost their left
+                // directory to go see the right one's.
                 self.activo() as usize,
                 None,
                 None,
@@ -1383,9 +1404,9 @@ impl Estado {
             let _ = buzon2
                 .send(Mensaje::Fondo(Box::new(Fondo::ComparacionViva(epoca, id))))
                 .await;
-            // La vista pudo cerrarse mientras el daemon aceptaba la Task: en
-            // esa ventana el actor no tiene a quién cancelar, así que cancela
-            // quien sí lo tiene.
+            // The view may have closed while the daemon was accepting the
+            // Task: in that window the actor has nobody to cancel, so
+            // whoever does have it cancels it.
             if abandonada.load(std::sync::atomic::Ordering::SeqCst) {
                 cancel();
                 return;
@@ -1413,7 +1434,7 @@ impl Estado {
         vec![self.parche(vec![cambio])]
     }
 
-    /// Un lote de filas comparadas. Casa por ÉPOCA, como los hallazgos.
+    /// A batch of compared rows. Matches by EPOCH, like search hits.
     pub(super) fn aplicar_filas_comparadas(
         &mut self,
         epoca: u64,
@@ -1425,8 +1446,8 @@ impl Estado {
         if c.epoca != epoca {
             return Vec::new();
         }
-        // El panel COMPARTIDO es quien cuenta, filtra y selecciona: aquí solo
-        // se le dan las filas.
+        // The SHARED pane is the one that counts, filters and selects: here
+        // it is only given the rows.
         c.vista.pane.extend(lote.rows);
         let cambio = ViewChange::Compare {
             compare: self.vista_comparacion(),
@@ -1434,7 +1455,7 @@ impl Estado {
         vec![self.parche(vec![cambio])]
     }
 
-    /// La proyección del panel de diferencias, acotada a su ventana.
+    /// The differences panel's projection, capped to its window.
     pub(super) fn vista_comparacion(&self) -> Option<crate::dto::CompareView> {
         use norte_frontend::compare::{Category, cells_for};
 
@@ -1450,17 +1471,17 @@ impl Estado {
             .unwrap_or_default()
             .iter()
             .map(|r| {
-                // Las celdas las compone el modelo COMPARTIDO: los nombres
-                // enmascarados con su bandera, y los dos glifos del medio.
-                // Ni el emparejado ni el veredicto se recalculan aquí.
+                // The cells are composed by the SHARED model: the masked
+                // names with their flag, and the two glyphs in the middle.
+                // Neither the pairing nor the verdict is recomputed here.
                 let celdas = cells_for(r, None, None);
                 let cara = |f: Option<&norte_frontend::compare::RowFace>| {
                     f.map(|f| crate::dto::CompareFaceView {
                         name: clamp_display(f.name.clone()),
                         hostile: f.hostile,
-                        // Formateados con las MISMAS funciones que una
-                        // columna del listado: un tamaño o una fecha no
-                        // pueden leerse distinto según qué panel los pinte.
+                        // Formatted with the SAME functions as a listing
+                        // column: a size or a date cannot read differently
+                        // depending on which panel paints them.
                         size: f.size.map(norte_frontend::human_bytes).unwrap_or_default(),
                         mtime: f
                             .mtime_ms
@@ -1522,11 +1543,11 @@ impl Estado {
             total: visibles.len() as u64,
             selected: c.vista.pane.selected_id(),
             filters: filtros,
-            // La frase la compone el modelo COMPARTIDO, y no es un detalle:
-            // sus cinco estados son cómo se dice si la respuesta está
-            // completa, y una comparación que perdió lotes tiene que leerse
-            // distinto de una que terminó. El TUI y el CLI ya se equivocaron
-            // aquí cada uno por su cuenta.
+            // The phrase is composed by the SHARED model, and it is not a
+            // detail: its five states are how it is said whether the answer
+            // is complete, and a comparison that lost batches has to read
+            // differently from one that finished. The TUI and the CLI each
+            // already got this wrong on their own.
             status: clamp_display(norte_frontend::compare::status_line(
                 &c.vista,
                 c.vista.pane.marked_len(),

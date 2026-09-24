@@ -1,25 +1,25 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Which-key: qué continúa un prefijo a medias (fase 4, tarea 4.4).
+// Which-key: what continues a half-typed prefix (phase 4, task 4.4).
 // ---------------------------------------------------------------------------
 
-/// Un prefijo a medias enseña QUÉ puede seguir, con la etiqueta de cada
-/// tecla en el idioma del usuario y diciendo cuáles no se pueden hacer aquí.
+/// A half-typed prefix shows WHAT can follow, with each key's label in the
+/// user's language and saying which ones cannot be done here.
 ///
-/// Lo construye `norte_frontend::whichkey`, el mismo modelo que pinta el TUI:
-/// el renderer no sabe resolver un prefijo, solo pintar lo que continúa.
+/// It is built by `norte_frontend::whichkey`, the same model that paints the
+/// TUI: the renderer does not know how to resolve a prefix, only how to
+/// paint what continues it.
 #[tokio::test]
-async fn un_prefijo_a_medias_ensena_lo_que_sigue() {
+async fn a_half_typed_prefix_shows_what_follows() {
     use norte_frontend::keymap::{Effective, Screen, parse_keymap, parse_keymap_layer};
 
-    let preset = parse_keymap(
-        norte_frontend::keymap::presets::source("orthodox").expect("preset de fábrica"),
-    )
-    .expect("preset parsea");
-    // Una secuencia de dos teclas, que es lo que which-key existe para
-    // enseñar. Ningún preset de fábrica las usa en `pane`.
-    let capa = parse_keymap_layer(
+    let preset =
+        parse_keymap(norte_frontend::keymap::presets::source("orthodox").expect("factory preset"))
+            .expect("preset parses");
+    // A two-key sequence, which is what which-key exists to show. No factory
+    // preset uses them in `pane`.
+    let layer = parse_keymap_layer(
         r#"
 [pane]
 prepend_keymap = [
@@ -28,14 +28,14 @@ prepend_keymap = [
 ]
 "#,
     )
-    .expect("capa parsea");
+    .expect("layer parses");
     let keymap = Effective::build_for(
         &preset,
-        &[capa],
+        &[layer],
         &norte_ui_host::commands::todos(),
         Screen::Browse,
     )
-    .expect("efectivo");
+    .expect("effective");
 
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
@@ -58,7 +58,7 @@ prepend_keymap = [
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
 
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
@@ -69,40 +69,42 @@ prepend_keymap = [
         meta: false,
     }))
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let panel = siguiente_whichkey(&mut sub).await.expect("hay panel");
+    let panel = siguiente_whichkey(&mut sub)
+        .await
+        .expect("there is a panel");
     assert!(
         !panel.title.is_empty(),
-        "el panel dice qué prefijo describe"
+        "the panel says which prefix it describes"
     );
-    let teclas: Vec<&str> = panel.rows.iter().map(|r| r.chord.as_str()).collect();
+    let keys: Vec<&str> = panel.rows.iter().map(|r| r.chord.as_str()).collect();
     assert!(
-        teclas.contains(&"g") && teclas.contains(&"b"),
-        "enseña las dos continuaciones: {teclas:?}"
+        keys.contains(&"g") && keys.contains(&"b"),
+        "it shows both continuations: {keys:?}"
     );
-    for fila in &panel.rows {
-        assert!(!fila.label.is_empty(), "cada tecla dice qué hace: {fila:?}");
+    for row in &panel.rows {
+        assert!(!row.label.is_empty(), "each key says what it does: {row:?}");
     }
 
-    // Y al completar la secuencia, el panel se va: describía teclas que ya no
-    // están vivas.
-    h.dispatch(tecla("g")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.whichkey.is_none(), "la secuencia se cerró");
+    // And once the sequence completes, the panel goes away: it described
+    // keys that are no longer alive.
+    h.dispatch(tecla("g")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.whichkey.is_none(), "the sequence closed");
 }
 
-/// Espera la siguiente actualización que traiga el panel de continuaciones.
+/// Waits for the next update that carries the continuations panel.
 pub(super) async fn siguiente_whichkey(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::WhichKeyView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -112,23 +114,23 @@ pub(super) async fn siguiente_whichkey(
             }
         }
     }
-    panic!("no llegó ninguna actualización con panel");
+    panic!("no update with a panel ever arrived");
 }
 
 // ---------------------------------------------------------------------------
-// La paleta de comandos (fase 4, tarea 4.4).
+// The command palette (phase 4, task 4.4).
 // ---------------------------------------------------------------------------
 
-/// Espera la siguiente actualización que traiga la paleta.
+/// Waits for the next update that carries the palette.
 pub(super) async fn siguiente_paleta(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::PaletteView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -138,17 +140,17 @@ pub(super) async fn siguiente_paleta(
             }
         }
     }
-    panic!("no llegó ninguna actualización con paleta");
+    panic!("no update with a palette ever arrived");
 }
 
 pub(super) fn tecla_de(k: &str) -> UiAction {
     tecla(k)
 }
 
-/// `ctrl+p` abre la paleta con TODO lo que el host implementa, cada fila con
-/// su descripción y su atajo real.
+/// `ctrl+p` opens the palette with EVERYTHING the host implements, each row
+/// with its description and its real shortcut.
 #[tokio::test]
-async fn la_paleta_ofrece_lo_que_el_host_implementa() {
+async fn the_palette_offers_what_the_host_implements() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
@@ -159,34 +161,34 @@ async fn la_paleta_ofrece_lo_que_el_host_implementa() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let p = siguiente_paleta(&mut sub).await.expect("la paleta abre");
-    assert!(p.query.is_empty(), "arranca sin filtro");
+    let p = siguiente_paleta(&mut sub).await.expect("the palette opens");
+    assert!(p.query.is_empty(), "starts with no filter");
     assert_eq!(
         usize::try_from(p.total).unwrap_or(usize::MAX),
         norte_ui_host::commands::todos().len(),
-        "ofrece todo lo implementado, ni más ni menos"
+        "offers everything implemented, no more and no less"
     );
-    assert_eq!(p.rows.len() as u64, p.total, "sin filtro se ven todas");
-    let entrar = p
+    assert_eq!(p.rows.len() as u64, p.total, "with no filter, all are seen");
+    let enter = p
         .rows
         .iter()
         .find(|r| r.text == "nav.enter")
-        .expect("nav.enter está");
-    assert!(!entrar.desc.is_empty(), "cada fila dice qué hace");
+        .expect("nav.enter is there");
+    assert!(!enter.desc.is_empty(), "each row says what it does");
     assert_ne!(
-        entrar.chord, "—",
-        "y el atajo sale del preset, no de una lista a mano"
+        enter.chord, "—",
+        "and the shortcut comes from the preset, not a hand-written list"
     );
 }
 
-/// Teclear ACOTA, y lo que se corre es lo seleccionado — por el mismo camino
-/// que una tecla.
+/// Typing NARROWS it, and what runs is whatever is selected — through the
+/// same path as a keystroke.
 #[tokio::test]
-async fn teclear_en_la_paleta_acota_y_enter_ejecuta() {
+async fn typing_in_the_palette_narrows_it_and_enter_runs_it() {
     let (h, snap) = host_arbol(arbol()).await;
-    let cursor_antes = listado(&snap).cursor;
+    let cursor_before = listado(&snap).cursor;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "p".to_owned(),
@@ -196,56 +198,54 @@ async fn teclear_en_la_paleta_acota_y_enter_ejecuta() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguiente_paleta(&mut sub).await;
 
     for c in ["c", "u", "r", "s", "o", "r"] {
-        h.dispatch(tecla_de(c)).await.expect("host vivo");
+        h.dispatch(tecla_de(c)).await.expect("host alive");
     }
-    // Una foto, no el siguiente parche: hay seis en la cola y el primero
-    // describe la paleta tras la PRIMERA letra.
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let filtrada = siguiente_foto(&mut sub)
-        .await
-        .palette
-        .expect("sigue abierta");
+    // A snapshot, not the next patch: there are six queued and the first one
+    // describes the palette after the FIRST letter.
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let filtered = siguiente_foto(&mut sub).await.palette.expect("still open");
     assert!(
-        !filtrada.rows.is_empty()
-            && filtrada.rows.len() < usize::try_from(filtrada.total).unwrap_or(usize::MAX),
-        "teclear acota: {} de {}",
-        filtrada.rows.len(),
-        filtrada.total
+        !filtered.rows.is_empty()
+            && filtered.rows.len() < usize::try_from(filtered.total).unwrap_or(usize::MAX),
+        "typing narrows it: {} of {}",
+        filtered.rows.len(),
+        filtered.total
     );
     assert!(
-        filtrada.rows.iter().all(|r| {
-            // El filtro casa sobre lo PINTADO —nombre y descripción—, que es
-            // lo que el modelo compartido pliega: una fila cuya descripción
-            // habla del cursor casa igual, y eso es lo correcto.
-            let heno = format!("{} {}", r.text, r.desc).to_lowercase();
-            heno.contains("cursor")
+        filtered.rows.iter().all(|r| {
+            // The filter matches against what is PAINTED — name and
+            // description — which is what the shared model folds together:
+            // a row whose description mentions the cursor matches too, and
+            // that is correct.
+            let haystack = format!("{} {}", r.text, r.desc).to_lowercase();
+            haystack.contains("cursor")
         }),
-        "y lo que queda casa con lo tecleado: {:?}",
-        filtrada.rows
+        "and what is left matches what was typed: {:?}",
+        filtered.rows
     );
 
-    // Bajar y ejecutar: la paleta se cierra y el comando corre.
-    h.dispatch(tecla_de("ArrowDown")).await.expect("host vivo");
-    h.dispatch(tecla_de("Enter")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.palette.is_none(), "la paleta se cierra al ejecutar");
+    // Move down and run: the palette closes and the command runs.
+    h.dispatch(tecla_de("ArrowDown")).await.expect("host alive");
+    h.dispatch(tecla_de("Enter")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.palette.is_none(), "the palette closes on running");
     assert_ne!(
-        listado(&foto).cursor,
-        cursor_antes,
-        "y el comando de cursor se ejecutó"
+        listado(&snap).cursor,
+        cursor_before,
+        "and the cursor command ran"
     );
 }
 
-/// `esc` la cierra sin ejecutar nada.
+/// `esc` closes it without running anything.
 #[tokio::test]
-async fn escape_cierra_la_paleta_sin_ejecutar() {
+async fn escape_closes_the_palette_without_running_anything() {
     let (h, snap) = host_arbol(arbol()).await;
-    let antes = listado(&snap).cursor;
+    let before = listado(&snap).cursor;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "p".to_owned(),
@@ -255,28 +255,28 @@ async fn escape_cierra_la_paleta_sin_ejecutar() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
+    .expect("host alive");
     let _ = siguiente_paleta(&mut sub).await;
-    h.dispatch(tecla_de("Escape")).await.expect("host vivo");
+    h.dispatch(tecla_de("Escape")).await.expect("host alive");
     assert!(
         siguiente_paleta(&mut sub).await.is_none(),
-        "la paleta se cierra"
+        "the palette closes"
     );
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(listado(&foto).cursor, antes, "y no ejecutó nada");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&snap).cursor, before, "and it ran nothing");
 }
 
-/// Ejecutar desde la paleta CIERRA la paleta en el flujo de parches, no solo
-/// en la siguiente foto.
+/// Running from the palette CLOSES the palette in the patch stream, not only
+/// in the next snapshot.
 ///
-/// Un renderer que aplica parches —que es lo que hace el de referencia, y
-/// para lo que existe la secuencia— no puede enterarse de que la paleta se
-/// cerró solo si pide un `Resync`. Antes de este test, `enter` mandaba el
-/// parche del COMANDO y ninguno de la paleta: la lista se quedaba pintada
-/// encima del listado hasta que algo, por otro motivo, provocaba una foto.
+/// A renderer that applies patches — which is what the reference one does,
+/// and what the sequence exists for — cannot find out the palette closed
+/// unless it requests a `Resync`. Before this test, `enter` sent the
+/// COMMAND's patch and none of the palette's: the list stayed painted over
+/// the listing until something, for another reason, triggered a snapshot.
 #[tokio::test]
-async fn ejecutar_en_la_paleta_manda_su_cierre_en_un_parche() {
+async fn running_from_the_palette_sends_its_closing_in_a_patch() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
@@ -287,44 +287,43 @@ async fn ejecutar_en_la_paleta_manda_su_cierre_en_un_parche() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
-    let _ = siguiente_paleta(&mut sub).await.expect("la paleta abre");
+    .expect("host alive");
+    let _ = siguiente_paleta(&mut sub).await.expect("the palette opens");
 
-    h.dispatch(tecla_de("Enter")).await.expect("host vivo");
+    h.dispatch(tecla_de("Enter")).await.expect("host alive");
     assert!(
         siguiente_paleta(&mut sub).await.is_none(),
-        "el cierre viaja como parche, sin esperar a una foto"
+        "the closing travels as a patch, with no wait for a snapshot"
     );
 }
 
-/// Una tecla ligada a `lua:` en la capa del usuario dice que aquí no está
-/// (ADR 0110).
+/// A key bound to `lua:` in the user's layer says it is not here (ADR 0110).
 ///
-/// La ventana no ejecuta Lua. Antes la resolvía como disponible —el registro
-/// Lua es dinámico y el keymap no podía saber quién lo hospeda—, así que la
-/// hoja, which-key y la paleta la anunciaban y la tecla no hacía nada.
+/// The window does not run Lua. It used to resolve it as available — the Lua
+/// registry is dynamic and the keymap could not know who hosts it — so the
+/// sheet, which-key and the palette all advertised it and the key did
+/// nothing.
 #[tokio::test]
-async fn una_tecla_lua_dice_que_aqui_no_esta() {
+async fn a_lua_key_says_it_is_not_here() {
     use norte_frontend::keymap::{Effective, Screen, parse_keymap, parse_keymap_layer};
 
-    let preset = parse_keymap(
-        norte_frontend::keymap::presets::source("orthodox").expect("preset de fábrica"),
-    )
-    .expect("preset parsea");
-    let capa = parse_keymap_layer(
+    let preset =
+        parse_keymap(norte_frontend::keymap::presets::source("orthodox").expect("factory preset"))
+            .expect("preset parses");
+    let layer = parse_keymap_layer(
         r#"
 [pane]
 prepend_keymap = [{ on = ["ctrl+x"], run = "lua:saluda" }]
 "#,
     )
-    .expect("capa parsea");
+    .expect("layer parses");
     let keymap = Effective::build_for(
         &preset,
-        &[capa],
+        &[layer],
         &norte_ui_host::commands::todos(),
         Screen::Browse,
     )
-    .expect("una tecla lua: con nombre válido carga también en la ventana");
+    .expect("a lua: key with a valid name also loads in the window");
 
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
@@ -347,7 +346,7 @@ prepend_keymap = [{ on = ["ctrl+x"], run = "lua:saluda" }]
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
 
     let ack = h
         .dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
@@ -358,9 +357,9 @@ prepend_keymap = [{ on = ["ctrl+x"], run = "lua:saluda" }]
             meta: false,
         }))
         .await
-        .expect("host vivo");
+        .expect("host alive");
     match ack {
         ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "cmd-not-here"),
-        otro => panic!("se esperaba no disponible aquí: {otro:?}"),
+        other => panic!("expected not available here: {other:?}"),
     }
 }

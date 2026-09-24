@@ -1,14 +1,14 @@
-//! Los diálogos vistos desde el despacho: qué comandos acepta cada modal
-//! (los `ALLOW_*`), en qué se traduce un `dialog.*` ya resuelto y las dos
-//! decisiones que no pasan por ahí (la ayuda y la confianza de `init.lua`).
+//! The dialogs as seen from dispatch: what commands each modal accepts (the
+//! `ALLOW_*`), what an already-resolved `dialog.*` translates to, and the
+//! two decisions that don't go through there (help and `init.lua` trust).
 
 use super::modal::{DialogOutcome, Modal};
 
-/// ALLOWLIST de `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`/
-/// `Modal::ConfirmQuit` (S2, `[ui] confirm_quit`): `approve` y `confirm`
-/// ambos aceptan (Enter e `y` funcionan igual que antes de H1), `deny`/
-/// `cancel` rechazan. Excluye deliberadamente los comandos de
-/// colisión/aprobación — un rebind de `w`→`dialog.newer` no hace nada aquí.
+/// ALLOWLIST for `Modal::ConfirmDelete`/`Modal::ConfirmTransfer`/
+/// `Modal::ConfirmQuit` (S2, `[ui] confirm_quit`): `approve` and `confirm`
+/// both accept (Enter and `y` work the same as before H1), `deny`/`cancel`
+/// refuse. Deliberately excludes the collision/approval commands — a rebind
+/// of `w`→`dialog.newer` does nothing here.
 pub const ALLOW_CONFIRM: &[&str] = &[
     "dialog.approve",
     "dialog.confirm",
@@ -16,17 +16,17 @@ pub const ALLOW_CONFIRM: &[&str] = &[
     "dialog.cancel",
 ];
 
-/// ALLOWLIST de `Modal::ConfirmPluginUninstall` (ADR 0104): como
-/// [`ALLOW_CONFIRM`] pero SIN `dialog.approve`. Es la tecla que el lector
-/// acaba de pulsar en la lista para conceder capabilities, y sobre este
-/// modal borra ficheros; en el host solo `confirm` es afirmativo, y el pie
-/// del modal no debe ofrecer una tecla que aquí no significa nada.
+/// ALLOWLIST for `Modal::ConfirmPluginUninstall` (ADR 0104): like
+/// [`ALLOW_CONFIRM`] but WITHOUT `dialog.approve`. That's the key the reader
+/// just pressed in the list to grant capabilities, and over this modal it
+/// deletes files; on this host only `confirm` is affirmative, and the
+/// modal's footer must not offer a key that means nothing here.
 pub const ALLOW_UNINSTALL: &[&str] = &["dialog.confirm", "dialog.deny", "dialog.cancel"];
 
-/// ALLOWLIST de `Modal::Collision`: overwrite/skip/rename/newer eligen
-/// política y reintentan; `cancel` cierra. Excluye A PROPÓSITO
-/// `dialog.confirm`/`dialog.approve` — no hay respuesta inocua que Enter
-/// deba disparar sola (decisión 4 del plan H1, igual que antes de H1).
+/// ALLOWLIST for `Modal::Collision`: overwrite/skip/rename/newer choose a
+/// policy and retry; `cancel` closes. DELIBERATELY excludes
+/// `dialog.confirm`/`dialog.approve` — there's no innocuous answer Enter
+/// should fire on its own (decision 4 of plan H1, same as before H1).
 pub const ALLOW_COLLISION: &[&str] = &[
     "dialog.overwrite",
     "dialog.skip",
@@ -35,49 +35,49 @@ pub const ALLOW_COLLISION: &[&str] = &[
     "dialog.cancel",
 ];
 
-/// ALLOWLIST de `Modal::ApproveAgentOp`: SOLO `approve` confirma; `deny` y
-/// `cancel` deniegan (cerrar ES denegar, fail-safe). Excluye A PROPÓSITO
-/// `dialog.confirm` — aprobar una mutación de AGENTE no es una respuesta
-/// inocua que Enter deba disparar sola (decisión 2 del plan H1).
+/// ALLOWLIST for `Modal::ApproveAgentOp`: ONLY `approve` confirms; `deny`
+/// and `cancel` deny (closing IS denying, fail-safe). DELIBERATELY excludes
+/// `dialog.confirm` — approving an AGENT mutation isn't an innocuous answer
+/// Enter should fire on its own (decision 2 of plan H1).
 pub const ALLOW_APPROVAL: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
 
-/// ALLOWLIST de `Modal::TrustHostKey` (TOFU SSH, #45): mismo principio que
-/// [`ALLOW_APPROVAL`] — SOLO `approve` confía, `dialog.confirm` excluido a
-/// propósito (Enter jamás confía en una host key sin verificar).
+/// ALLOWLIST for `Modal::TrustHostKey` (SSH TOFU, #45): same principle as
+/// [`ALLOW_APPROVAL`] — ONLY `approve` trusts, `dialog.confirm` deliberately
+/// excluded (Enter never trusts an unverified host key).
 pub const ALLOW_TRUST_HOST: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
 
-/// ALLOWLIST de `Modal::AskSecret` (#325). Aquí `dialog.confirm` SÍ entra, al
-/// revés que en los tres de arriba, y la diferencia es de qué se pregunta:
-/// ellos piden un JUICIO sobre algo que el usuario no escribió —un
-/// fingerprint, una op de agente, unas capabilities—, donde un Enter reflejo
-/// aprueba sin haber mirado. Este pide un DATO que el usuario acaba de
-/// teclear, y sobre el que ya decidió al escribirlo.
+/// ALLOWLIST for `Modal::AskSecret` (#325). Here `dialog.confirm` DOES get
+/// in, unlike the three above, and the difference is what's being asked:
+/// they ask for a JUDGMENT about something the user didn't type — a
+/// fingerprint, an agent op, some capabilities — where a reflexive Enter
+/// approves without having looked. This one asks for a VALUE the user just
+/// typed, and already decided on by typing it.
 ///
-/// `dialog.approve` queda fuera por lo contrario: entregar una contraseña no
-/// es aprobar nada, y ofrecer la tecla de aprobar aquí enseñaría que sirve
-/// para eso.
+/// `dialog.approve` stays out for the opposite reason: delivering a
+/// password isn't approving anything, and offering the approve key here
+/// would suggest that's what it's for.
 ///
-/// Con el campo VACÍO, confirmar vuelve a ser inerte — el guard está dentro
-/// de [`dialog_action`], que devuelve `None` y deja el diálogo abierto (mismo
-/// mecanismo que un plan de lote no aplicable). Las
-/// dos mitades importan: entregar la cadena vacía reproduciría lo que #320
-/// cerró —un secreto vacío deja al provider tomando credenciales del
-/// ambiente—, y cerrar obligaría a rehacer la navegación entera por un Enter
-/// de más, que en un campo donde no se ve lo tecleado es el error fácil de
-/// cometer. Cancelar sigue vivo: irse SÍ es una respuesta.
+/// With an EMPTY field, confirming stays inert — the guard is inside
+/// [`dialog_action`], which returns `None` and leaves the dialog open (the
+/// same mechanism as a non-applicable batch plan). Both halves matter:
+/// delivering the empty string would reproduce what #320 closed — an empty
+/// secret leaves the provider taking credentials from the environment — and
+/// closing would force redoing the whole navigation over one extra Enter,
+/// which in a field where what's typed isn't shown is the easy mistake to
+/// make. Cancel stays alive: leaving IS an answer.
 pub const ALLOW_ASK_SECRET: &[&str] = &["dialog.confirm", "dialog.cancel"];
 
-/// ALLOWLIST de `Modal::ConfirmPluginApproval` (#280): mismo principio que
-/// [`ALLOW_APPROVAL`] — conceder capabilities a una extensión es LA decisión
-/// de seguridad de ese sistema, y `dialog.confirm` queda fuera a propósito:
-/// Enter no concede permiso para leer los ficheros de nadie.
+/// ALLOWLIST for `Modal::ConfirmPluginApproval` (#280): same principle as
+/// [`ALLOW_APPROVAL`] — granting capabilities to an extension IS that
+/// system's security decision, and `dialog.confirm` stays out on purpose:
+/// Enter doesn't grant permission to read anyone's files.
 pub const ALLOW_PLUGIN_APPROVAL: &[&str] = &["dialog.approve", "dialog.deny", "dialog.cancel"];
 
-/// ALLOWLIST del selector de tema (`on_theme_picker_key`, main.rs): sin
-/// riesgo de seguridad (elegir tema no muta nada fuera del propio popup),
-/// así que `confirm` SÍ dispara (a diferencia de los modales de arriba).
-/// Única lista de este overlay — dispatch (main.rs) y el hint generado
-/// (H1 T3, `hints::DialogHints`) la comparten, jamás una copia.
+/// ALLOWLIST for the theme picker (`on_theme_picker_key`, main.rs): no
+/// security risk (choosing a theme mutates nothing outside the popup
+/// itself), so `confirm` DOES fire (unlike the modals above). This
+/// overlay's only list — dispatch (main.rs) and the generated hint (H1 T3,
+/// `hints::DialogHints`) share it, never a copy.
 pub const ALLOW_PICKER: &[&str] = &[
     "dialog.up",
     "dialog.down",
@@ -85,11 +85,11 @@ pub const ALLOW_PICKER: &[&str] = &[
     "dialog.cancel",
 ];
 
-/// ALLOWLIST del picker de columnas (#108 7a, `on_columns_key`, main.rs) —
-/// única fuente para dispatch y para el hint generado del pie
-/// (`hints::DialogHints::columns`), patrón #24. `confirm` SÍ aplica+persiste
-/// (mismo criterio que [`ALLOW_PICKER`]: elegir columnas solo toca la config
-/// propia, no es una mutación de datos que Enter deba proteger).
+/// ALLOWLIST for the columns picker (#108 7a, `on_columns_key`, main.rs) —
+/// the single source for dispatch and for the footer's generated hint
+/// (`hints::DialogHints::columns`), the #24 pattern. `confirm` DOES
+/// apply+persist (same criterion as [`ALLOW_PICKER`]: choosing columns only
+/// touches its own config, it isn't a data mutation Enter has to protect).
 pub const ALLOW_COLUMNS: &[&str] = &[
     "dialog.up",
     "dialog.down",
@@ -102,127 +102,131 @@ pub const ALLOW_COLUMNS: &[&str] = &[
     "dialog.cancel",
 ];
 
-/// ALLOWLIST del gestor de extensiones (`on_extensions_key`, main.rs,
-/// M4-P3): `approve` togglea la aprobación del plugin (decisión 3 del plan
-/// H1 — "aprobar un plugin" reutiliza `dialog.approve`), `toggle-enabled`
-/// lo activa/desactiva. `confirm` (G3c) abre la sección de `[config]` del
-/// plugin resaltado, SI declara alguna clave — Enter jamás aprueba (pin del
-/// P1), solo entra en un submenú. Compartida por dispatch y el hint
-/// generado.
+/// ALLOWLIST for the extensions manager (`on_extensions_key`, main.rs,
+/// M4-P3): `approve` toggles the plugin's approval (decision 3 of plan H1 —
+/// "approving a plugin" reuses `dialog.approve`), `toggle-enabled`
+/// enables/disables it. `confirm` (G3c) opens the highlighted plugin's
+/// `[config]` section, IF it declares any key — Enter never approves (P1's
+/// pin), it only enters a submenu. Shared by dispatch and the generated
+/// hint.
 pub const ALLOW_EXTENSIONS: &[&str] = &[
     "dialog.up",
     "dialog.down",
     "dialog.approve",
     "dialog.toggle-enabled",
-    // Desinstalar (ADR 0104): el verbo que en la lista de favoritos quita
-    // una entrada quita aquí la extensión entera, y por eso pregunta.
+    // Uninstall (ADR 0104): the verb that removes an entry in the favorites
+    // list here removes the whole extension, and that's why it asks.
     "dialog.remove",
     "dialog.confirm",
     "dialog.cancel",
-    // `tab` mueve el foco entre la lista y los BOTONES de la ficha, que
-    // hasta ahora solo el ratón podía pulsar como botones (ADR 0104 los
-    // trajo con la ficha). Cada uno conserva su tecla; esto es el camino
-    // de quien recorre la pantalla en vez de recordar cinco letras.
+    // `tab` moves focus between the list and the card's BUTTONS, which
+    // until now only the mouse could press as buttons (ADR 0104 brought
+    // them with the card). Each keeps its own key; this is the path for
+    // whoever walks the screen instead of remembering five letters.
     "dialog.pane",
 ];
 
-/// ALLOWLIST del panel de `[config]` de un plugin (G3c, `on_extensions_key`
-/// cuando `mgr.config.is_some()` y NO se está editando un buffer — mientras
-/// se edita, las teclas se capturan RAW, mismo criterio que
-/// `on_nav_popup_key`'s `name_input`): `up`/`down` mueven el cursor sobre
-/// las claves, `confirm` cicla `bool`/`enum` o abre edición de
-/// `string`/`int`, `cancel` cierra el panel (vuelve a la lista de plugins,
-/// NO cierra el overlay entero).
+/// ALLOWLIST for a plugin's `[config]` panel (G3c, `on_extensions_key` when
+/// `mgr.config.is_some()` and a buffer is NOT being edited — while editing,
+/// keys get captured RAW, same criterion as `on_nav_popup_key`'s
+/// `name_input`): `up`/`down` move the cursor over the keys, `confirm`
+/// cycles a `bool`/`enum` or opens editing a `string`/`int`, `cancel`
+/// closes the panel (returns to the plugin list, does NOT close the whole
+/// overlay).
 pub const ALLOW_PLUGIN_CONFIG: &[&str] = &[
     "dialog.up",
     "dialog.down",
     "dialog.confirm",
     "dialog.cancel",
-    // `tab` sale del panel como `Esc`: se entra con `tab` desde el anillo
-    // de botones, y salir por la misma tecla es lo que se espera.
+    // `tab` leaves the panel like `Esc`: it's entered with `tab` from the
+    // button ring, and leaving with the same key is what's expected.
     "dialog.pane",
 ];
 
-/// ALLOWLIST del sidebar de sitios (L3, `on_places_key` en main.rs).
+/// ALLOWLIST for the places sidebar (L3, `on_places_key` in main.rs).
 ///
-/// El mismo vocabulario `dialog.*` que ya atan los siete presets: un panel que
-/// se mueve con flechas y confirma con Enter no necesita idioma propio, y
-/// dárselo habría sido siete presets tocados por una tecla nueva.
-/// `toggle-enabled` pliega la sección, `cancel` devuelve el teclado a los
-/// listados SIN cerrar el sidebar — cerrarlo es cosa de `layout.places`.
+/// The same `dialog.*` vocabulary all seven presets already bind: a panel
+/// that moves with arrows and confirms with Enter needs no vocabulary of
+/// its own, and giving it one would have meant seven presets touched by one
+/// new key. `toggle-enabled` folds the section, `cancel` hands the keyboard
+/// back to the listings WITHOUT closing the sidebar — closing it is
+/// `layout.places`'s job.
 pub const ALLOW_PLACES: &[&str] = &[
     "dialog.up",
     "dialog.down",
     "dialog.confirm",
     "dialog.toggle-enabled",
     "dialog.cancel",
-    // Ancho: con el teclado DENTRO, `layout.grow`/`shrink` cambian el ancho
-    // de ESTE panel. Es el único camino por el que se puede — el llamante de
-    // `layout_resize` pasa siempre un listado visible (#244 M1).
+    // Width: with the keyboard INSIDE, `layout.grow`/`shrink` change THIS
+    // panel's width. It's the only path through which they can —
+    // `layout_resize`'s caller always passes a visible listing (#244 M1).
     "layout.grow",
     "layout.shrink",
-    // Su PROPIA tecla, que por eso está atada en `[global]`: sin ella el
-    // sidebar se queda el `alt+b` y no puede cerrarse a sí mismo — abrías el
-    // panel y la misma tecla dejaba de existir. Lo destapó pilotar la TUI en
-    // tmux con la suite entera en verde, que es exactamente para lo que
-    // sirve el harness.
+    // Its OWN key, which is why it's bound in `[global]`: without it the
+    // sidebar keeps `alt+b` and can't close itself — you'd open the panel
+    // and that same key would stop existing. Piloting the TUI in tmux with
+    // the whole suite green uncovered it, which is exactly what the harness
+    // is for.
     "layout.places",
-    // El mapa de disco (fase 4): esta lista la filtran TAMBIÉN las teclas del
-    // árbol (`side_nav`), así que sin esto `alt+z` moría estando dentro del
-    // sidebar o del árbol — los dos paneles desde los que más apetece
-    // preguntar en qué se ha ido el sitio.
+    // The disk map (phase 4): this list is ALSO filtered by the tree's keys
+    // (`side_nav`), so without this `alt+z` died while inside the sidebar or
+    // the tree — the two panels from which asking where the space went is
+    // most tempting.
     "layout.disk-map",
-    // `Tab` sale a los listados sin cerrar el panel. Abrir una columna
-    // lateral dejaba muerta la tecla con la que se cambia de panel toda la
-    // vida: el panel se come lo que no esté aquí.
+    // `Tab` leaves to the listings without closing the panel. Opening a
+    // side column left dead the key you've always switched panels with: the
+    // panel swallows anything not listed here.
     //
-    // Los DOS verbos, y no uno: en la pantalla `dialog` los presets atan `tab`
-    // a `dialog.pane` —que es como se llama «al otro panel» en un diálogo— y
-    // `pane.switch` es como se llama en la de navegar. Aceptar solo el segundo
-    // dejaba el arreglo sin efecto con los presets tal y como se envían.
+    // Both VERBS, not one: on the `dialog` screen the presets bind `tab` to
+    // `dialog.pane` — which is what "the other panel" is called in a dialog
+    // — and `pane.switch` is what it's called on the navigation one.
+    // Accepting only the second left the fix without effect with the
+    // presets as they ship.
     "dialog.pane",
     "pane.switch",
-    // Y el anillo, que es lo que `Tab` NO hace: `pane.switch` devuelve el
-    // teclado a los listados, mientras que esto pasa al panel de al lado sea
-    // el que sea. Sin estas dos, la tecla del anillo se moría justo dentro
-    // del panel del que sirve para salir.
+    // And the ring, which is what `Tab` does NOT do: `pane.switch` hands the
+    // keyboard back to the listings, while this moves to whichever panel is
+    // next door. Without these two, the ring key died right inside the
+    // panel it's meant to get you out of.
     "layout.focus-next",
     "layout.focus-prev",
-    // Y las teclas de los OTROS paneles, por la misma regla que ya trajo aquí
-    // la del propio panel y la de cambiar de listado: abrir una columna
-    // lateral no puede matar la tecla con la que se abre la de al lado. Antes,
-    // con el teclado en el sidebar, `alt+j` no abría nada y no había forma de
-    // saber por qué.
+    // And the OTHER panels' keys, by the same rule that already brought
+    // this panel's own and the listing-switch one here: opening a side
+    // column must not kill the key that opens the one next to it. Before,
+    // with the keyboard in the sidebar, `alt+j` opened nothing and there was
+    // no way to know why.
     "layout.preview",
     "layout.processes",
     "layout.metadata",
     "pane.tree",
-    // Y el cromo de la APLICACIÓN, que no es de los listados: con el teclado
-    // dentro del sidebar o del árbol, `alt+m` no abría la barra de menús y no
-    // había forma de saber por qué — el panel se comía la tecla. Lo despacha
-    // `App::panel_chrome_command`, uno para los tres.
+    // And the APPLICATION's chrome, which isn't the listings': with the
+    // keyboard inside the sidebar or the tree, `alt+m` didn't open the menu
+    // bar and there was no way to know why — the panel swallowed the key.
+    // `App::panel_chrome_command` dispatches it, one for all three.
     "app.menu",
-    // Y salir, que es la tecla que peor puede morirse dentro de un panel: el
-    // lector cerraba la terminal creyendo que había salido y el proceso
-    // seguía vivo con el lock de la sesión. La atiende el cromo
-    // (`App::panel_chrome_command`), honrando `[ui] confirm_quit`.
+    // And quitting, the key that can die worst inside a panel: the reader
+    // closed the terminal believing they'd quit and the process stayed
+    // alive with the session lock. The chrome handles it
+    // (`App::panel_chrome_command`), honoring `[ui] confirm_quit`.
     "app.quit",
 ];
 
-/// ALLOWLIST del panel de procesos (`on_processes_key` en main.rs).
+/// ALLOWLIST for the processes panel (`on_processes_key` in main.rs).
 ///
-/// El mismo vocabulario `dialog.*` del sidebar, por lo mismo: un panel que se
-/// mueve con flechas y actúa con Enter no necesita idioma propio, y dárselo
-/// serían siete presets tocados por una tecla nueva. `confirm` CANCELA la
-/// tarea bajo el cursor —es la única acción que el protocolo tiene sobre una
-/// task—, `cancel` devuelve el teclado a los listados sin cerrar el panel, y
-/// `layout.processes` cierra desde dentro.
+/// The same `dialog.*` vocabulary as the sidebar, for the same reason: a
+/// panel that moves with arrows and acts with Enter needs no vocabulary of
+/// its own, and giving it one would be seven presets touched by one new
+/// key. `confirm` CANCELS the task under the cursor — it's the only action
+/// the protocol has over a task — `cancel` hands the keyboard back to the
+/// listings without closing the panel, and `layout.processes` closes from
+/// inside.
 ///
-/// Son DOS pulsaciones y no tres: abrir este panel YA le da el teclado, así
-/// que la siguiente cierra. La secuencia de tres —abrir, enfocar, cerrar— es
-/// la del visor acoplado, y ahí es deliberada por un motivo que aquí no
-/// aplica: el visor sigue al cursor del listado, así que darle el teclado al
-/// abrirlo apagaría lo único que hace. Este panel no sigue a nada.
+/// It's TWO keypresses and not three: opening this panel ALREADY gives it
+/// the keyboard, so the next one closes it. The three-press sequence — open,
+/// focus, close — belongs to the docked viewer, and there it's deliberate
+/// for a reason that doesn't apply here: the viewer follows the listing's
+/// cursor, so giving it the keyboard on open would turn off the one thing
+/// it does. This panel follows nothing.
 pub const ALLOW_PROCESSES: &[&str] = &[
     "dialog.up",
     "dialog.down",
@@ -231,43 +235,46 @@ pub const ALLOW_PROCESSES: &[&str] = &[
     "layout.grow",
     "layout.shrink",
     "layout.processes",
-    // Igual que el sidebar: `Tab` devuelve el teclado a los listados, con los
-    // dos nombres que esa tecla tiene según la pantalla, y el anillo pasa al
-    // panel de al lado.
+    // Same as the sidebar: `Tab` hands the keyboard back to the listings,
+    // with the two names that key has depending on the screen, and the ring
+    // moves to the panel next door.
     "dialog.pane",
     "pane.switch",
     "layout.focus-next",
     "layout.focus-prev",
-    // Y las de los otros paneles, igual que en el sidebar.
+    // And the other panels', same as the sidebar.
     "layout.places",
     "layout.preview",
     "layout.metadata",
     "pane.tree",
     "layout.disk-map",
-    // Y el cromo de la aplicación, por lo mismo que en el sidebar.
+    // And the application's chrome, for the same reason as the sidebar.
     "app.menu",
-    // Y salir, que es la tecla que peor puede morirse dentro de un panel: el
-    // lector cerraba la terminal creyendo que había salido y el proceso
-    // seguía vivo con el lock de la sesión. La atiende el cromo
-    // (`App::panel_chrome_command`), honrando `[ui] confirm_quit`.
+    // And quitting, the key that can die worst inside a panel: the reader
+    // closed the terminal believing they'd quit and the process stayed
+    // alive with the session lock. The chrome handles it
+    // (`App::panel_chrome_command`), honoring `[ui] confirm_quit`.
     "app.quit",
 ];
 
-/// ALLOWLIST del panel de registro (#323).
+/// ALLOWLIST for the log panel (#323).
 ///
-/// Propia y NO la de procesos, aunque los dos paneles se parezcan: allí
-/// `dialog.confirm` **cancela la tarea bajo el cursor**, y un `Enter` en un
-/// visor de log que cancela una copia es exactamente la clase de accidente que
-/// una allowlist existe para impedir. Aquí no hay nada que confirmar.
+/// Its own and NOT the processes one, even though the two panels look
+/// alike: there, `dialog.confirm` **cancels the task under the cursor**,
+/// and an `Enter` in a log viewer that cancels a copy is exactly the class
+/// of accident an allowlist exists to prevent. Here there's nothing to
+/// confirm.
 ///
-/// Tampoco lleva `dialog.up`/`down`: las flechas, las páginas, `Fin` y `Esc`
-/// los reclama el propio panel antes del keymap ([`crate::logview::key`]),
-/// porque son suyos mientras tenga el teclado.
+/// It also carries no `dialog.up`/`down`: the arrows, the pages, `End` and
+/// `Esc` are claimed by the panel itself before the keymap
+/// ([`crate::logview::key`]), because they're its own while it holds the
+/// keyboard.
 ///
-/// Lo que sí lleva es el cromo: cerrar desde dentro con la misma tecla que
-/// abrió, cambiar de panel, redimensionar y el menú. Sin `layout.log` en esta
-/// lista, `alt+l` moría en el embudo y el panel no se podía cerrar con la
-/// tecla que lo abría — que es como se descubrió que hacía falta esta lista.
+/// What it does carry is the chrome: closing from inside with the same key
+/// that opened it, switching panels, resizing and the menu. Without
+/// `layout.log` in this list, `alt+l` died in the funnel and the panel
+/// couldn't be closed with the key that opened it — which is how this list
+/// was found to be needed.
 pub const ALLOW_LOG: &[&str] = &[
     "layout.log",
     "layout.grow",
@@ -283,25 +290,26 @@ pub const ALLOW_LOG: &[&str] = &[
     "pane.tree",
     "layout.disk-map",
     "app.menu",
-    // Y salir, que es la tecla que peor puede morirse dentro de un panel: el
-    // lector cerraba la terminal creyendo que había salido y el proceso
-    // seguía vivo con el lock de la sesión. La atiende el cromo
-    // (`App::panel_chrome_command`), honrando `[ui] confirm_quit`.
+    // And quitting, the key that can die worst inside a panel: the reader
+    // closed the terminal believing they'd quit and the process stayed
+    // alive with the session lock. The chrome handles it
+    // (`App::panel_chrome_command`), honoring `[ui] confirm_quit`.
     "app.quit",
 ];
 
-/// ALLOWLIST del mapa de disco (fase 4).
+/// ALLOWLIST for the disk map (phase 4).
 ///
-/// Propia, como la del registro y por el mismo motivo: sin `layout.disk-map`
-/// en su propia lista, `alt+z` muere en el embudo y el panel no se puede
-/// cerrar con la tecla que lo abrió — que es como se descubrió que hacían
-/// falta estas listas.
+/// Its own, like the log's and for the same reason: without
+/// `layout.disk-map` in its own list, `alt+z` dies in the funnel and the
+/// panel can't be closed with the key that opened it — which is how these
+/// lists were found to be needed.
 ///
-/// No lleva `dialog.up`/`down` ni `dialog.confirm`: las flechas, las páginas,
-/// `Fin`, `Inicio`, `Enter`, `r` y `Esc` los reclama el propio panel antes del
-/// keymap ([`crate::diskmap::key`]), porque son suyos mientras tenga el
-/// teclado. Y `dialog.confirm` aquí ENTRARÍA en un directorio: dejarlo pasar
-/// al embudo sería un `Enter` con dos significados según quién lo mire.
+/// It carries no `dialog.up`/`down` nor `dialog.confirm`: the arrows, the
+/// pages, `End`, `Home`, `Enter`, `r` and `Esc` are claimed by the panel
+/// itself before the keymap ([`crate::diskmap::key`]), because they're its
+/// own while it holds the keyboard. And `dialog.confirm` here WOULD enter a
+/// directory: letting it through to the funnel would be an `Enter` with two
+/// meanings depending on who's looking.
 pub const ALLOW_DISK_MAP: &[&str] = &[
     "layout.disk-map",
     "layout.grow",
@@ -310,8 +318,8 @@ pub const ALLOW_DISK_MAP: &[&str] = &[
     "pane.switch",
     "layout.focus-next",
     "layout.focus-prev",
-    // Y las de los otros paneles: estar en el mapa no puede dejar sin efecto
-    // la tecla que abre la columna de al lado.
+    // And the other panels': being in the map must not disable the key that
+    // opens the column next door.
     "layout.places",
     "layout.preview",
     "layout.processes",
@@ -319,23 +327,24 @@ pub const ALLOW_DISK_MAP: &[&str] = &[
     "layout.log",
     "pane.tree",
     "app.menu",
-    // Y salir, por lo mismo que en el registro: la tecla que peor puede
-    // morirse dentro de un panel.
+    // And quitting, for the same reason as the log's: the key that can die
+    // worst inside a panel.
     "app.quit",
 ];
 
-/// ALLOWLIST de un panel APORTADO por un plugin (fase 3).
+/// ALLOWLIST for a panel CONTRIBUTED by a plugin (phase 3).
 ///
-/// Solo CROMO, y a propósito: mientras el guest no reciba comandos (T4), un
-/// panel de plugin con el teclado no tiene nada propio que hacer con una
-/// tecla. Sin esta lista las teclas caían al resolver de `browse` y actuaban
-/// sobre el LISTADO de detrás mientras el borde de foco decía que el teclado
-/// estaba en el panel — el fallo de #243, y aquí peor: procesos y registro
-/// filtran por su allowlist, así que allí lo destructivo ya estaba fuera; un
-/// panel sin embudo dejaba `F8` vivo sobre la selección del listado.
+/// CHROME only, on purpose: while the guest doesn't receive commands (T4), a
+/// plugin panel holding the keyboard has nothing of its own to do with a
+/// key. Without this list, the keys fell through to `browse`'s resolver and
+/// acted on the LISTING behind it while the focus border said the keyboard
+/// was in the panel — #243's bug, and worse here: processes and the log
+/// filter through their own allowlist, so there the destructive keys were
+/// already out; a panel with no funnel left `F8` alive over the listing's
+/// selection.
 ///
-/// `dialog.cancel` suelta el teclado y NO cierra nada, como en procesos: el
-/// panel lo puso una disposición, no esta pulsación.
+/// `dialog.cancel` releases the keyboard and does NOT close anything, as in
+/// processes: a layout put the panel there, not this keypress.
 pub const ALLOW_PANEL: &[&str] = &[
     "layout.grow",
     "layout.shrink",
@@ -352,22 +361,22 @@ pub const ALLOW_PANEL: &[&str] = &[
     "layout.disk-map",
     "pane.tree",
     "app.menu",
-    // Salir, por el mismo motivo que en el registro: la tecla que peor puede
-    // morirse dentro de un panel.
+    // Quitting, for the same reason as the log's: the key that can die
+    // worst inside a panel.
     "app.quit",
 ];
 
-/// ALLOWLIST de DESPACHO del popup de navegación (`on_nav_popup_key`,
-/// main.rs), unión de lo que History, Hotlist y Volumes aceptan: `add`/
-/// `remove` los filtra el caller a `kind == Hotlist` (nada que nombrar ni
-/// borrar en historial o volúmenes) y `toggle-enabled` a `kind == Volumes`
-/// (el toggle "mostrar todo" no significa nada en los otros dos) — mismo
-/// criterio que antes de H1.
+/// DISPATCH ALLOWLIST for the navigation popup (`on_nav_popup_key`,
+/// main.rs), the union of what History, Hotlist and Volumes accept:
+/// `add`/`remove` are filtered by the caller to `kind == Hotlist` (nothing
+/// to name or delete in history or volumes) and `toggle-enabled` to
+/// `kind == Volumes` (the "show all" toggle means nothing in the other two)
+/// — same criterion as before H1.
 ///
-/// El HINT impreso es más estrecho que esto por kind: [`ALLOW_NAV_HOTLIST`]
-/// y [`ALLOW_NAV_VOLUMES`] son los que de verdad pinta cada footer (design
-/// §D — el footer de volúmenes no debe ofrecer "añadir"/"borrar", que no
-/// significan nada sobre un volumen montado).
+/// The printed HINT is narrower than this per kind: [`ALLOW_NAV_HOTLIST`]
+/// and [`ALLOW_NAV_VOLUMES`] are what each footer actually paints (design §D
+/// — the volumes footer must not offer "add"/"remove", which mean nothing
+/// over a mounted volume).
 pub const ALLOW_NAV_POPUP: &[&str] = &[
     "dialog.up",
     "dialog.down",
@@ -376,16 +385,16 @@ pub const ALLOW_NAV_POPUP: &[&str] = &[
     "dialog.remove",
     "dialog.toggle-enabled",
     "dialog.cancel",
-    // Spec 2026-09-15 D2: abrir en el otro panel (cualquier lista que navega)
-    // y vaciar (historia y populares; lo filtra el caller por kind).
+    // Spec 2026-09-15 D2: open in the other panel (any list that navigates)
+    // and clear (history and popular; filtered by the caller per kind).
     "dialog.confirm-other",
     "dialog.clear",
-    // Filtrar la historia o los populares (lo filtra el caller por kind).
+    // Filter history or popular entries (filtered by the caller per kind).
     "dialog.filter",
 ];
 
-/// HINT del popup en modo HISTORIA o POPULARES (spec 2026-09-15 D2): añadir a
-/// favoritos, quitar, vaciar, abrir en el otro panel y filtrar.
+/// The popup's HINT in HISTORY or POPULAR mode (spec 2026-09-15 D2): add to
+/// favorites, remove, clear, open in the other panel and filter.
 pub const ALLOW_NAV_HISTORY: &[&str] = &[
     "dialog.up",
     "dialog.down",
@@ -398,9 +407,8 @@ pub const ALLOW_NAV_HISTORY: &[&str] = &[
     "dialog.cancel",
 ];
 
-/// HINT del popup en modo HOTLIST (H1 T3): historial y volúmenes pintan el
-/// suyo propio (o ninguno) — ver [`ALLOW_NAV_POPUP`] para el porqué de la
-/// separación.
+/// The popup's HINT in HOTLIST mode (H1 T3): history and volumes paint their
+/// own (or none) — see [`ALLOW_NAV_POPUP`] for why they're split apart.
 pub const ALLOW_NAV_HOTLIST: &[&str] = &[
     "dialog.up",
     "dialog.down",
@@ -410,8 +418,8 @@ pub const ALLOW_NAV_HOTLIST: &[&str] = &[
     "dialog.cancel",
 ];
 
-/// HINT del popup en modo VOLUMES (design §D): navegación, confirmar,
-/// cancelar y el toggle "mostrar todo" — nada de `add`/`remove`.
+/// The popup's HINT in VOLUMES mode (design §D): navigation, confirm,
+/// cancel and the "show all" toggle — no `add`/`remove`.
 pub const ALLOW_NAV_VOLUMES: &[&str] = &[
     "dialog.up",
     "dialog.down",
@@ -441,55 +449,57 @@ pub const ALLOW_HELP: &[&str] = &[
     "dialog.filter",
 ];
 
-/// Mapea un comando `dialog.*` YA RESUELTO (por el
-/// [`Resolver`](crate::keymap::Resolver) del efectivo `dialog`, H1 #24) al
-/// desenlace del modal activo, filtrando por el ALLOWLIST del modal
-/// concreto: `None` = comando fuera de allowlist, la tecla es INERTE para
-/// este modal (p. ej. Enter — `dialog.confirm` — sobre una aprobación de
-/// agente). La semántica de seguridad vive aquí, en código, jamás en el
-/// keymap: un rebind solo cambia qué TECLA dispara `dialog.approve`, nunca
-/// qué modales aceptan `dialog.approve` como confirmación.
+/// Maps an already-resolved `dialog.*` command (by the effective `dialog`'s
+/// [`Resolver`](crate::keymap::Resolver), H1 #24) to the active modal's
+/// outcome, filtered by the concrete modal's ALLOWLIST: `None` = command
+/// outside the allowlist, the key is INERT for this modal (e.g. Enter —
+/// `dialog.confirm` — over an agent approval). The security semantics live
+/// here, in code, never in the keymap: a rebind only changes which KEY
+/// fires `dialog.approve`, never which modals accept `dialog.approve` as a
+/// confirmation.
 ///
-/// `Modal::TrustLuaInit` no tiene allowlist — decisión 8 del plan H1, se
-/// resuelve aparte con [`trust_lua_key`] — y devuelve `None` aquí siempre.
-// Tabla modal→desenlace, un brazo por variante y exhaustiva a propósito: es
-// LA lista de qué acepta cada diálogo como respuesta, y verla entera de una
-// vez es el punto. Partirla movería la frontera de la semántica de seguridad
-// a un sitio arbitrario y haría más difícil ver que no falta ningún modal —
-// mismo criterio, y misma excepción, que `modal_title_body`.
+/// `Modal::TrustLuaInit` has no allowlist — decision 8 of plan H1, resolved
+/// separately with [`trust_lua_key`] — and always returns `None` here.
+// Modal→outcome table, one arm per variant and deliberately exhaustive:
+// it's THE list of what each dialog accepts as an answer, and seeing it
+// whole at once is the point. Splitting it would move the security
+// semantics' boundary to an arbitrary spot and make it harder to see that
+// no modal is missing — same criterion, and same exception, as
+// `modal_title_body`.
 #[expect(
     clippy::too_many_lines,
-    reason = "tabla modal→diálogo; mismo criterio que `modal_title_body`"
+    reason = "modal→dialog table; same criterion as `modal_title_body`"
 )]
 #[must_use]
 pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
     use norte_proto::CollisionPolicy as P;
     match modal {
-        // #139: las propiedades no PREGUNTAN nada — se leen y se cierran—, así
-        // que solo entienden cancelar. Darle un «confirmar» a un cuadro de
-        // solo lectura es enseñarle al lector que Enter hace algo aquí.
+        // #139: properties don't ASK anything — they're read and closed —
+        // so it only understands cancelling. Giving a "confirm" to a
+        // read-only box teaches the reader that Enter does something here.
         Modal::Properties { .. } => (cmd == "dialog.cancel").then_some(DialogOutcome::Cancelled),
-        // El informe de un lote tampoco pregunta: ya pasó. Lleva el pie de
-        // confirmar (`hints.confirm`), así que TODO lo que ese pie ofrece lo
-        // cierra — Enter es lo que se pulsa para «entendido», y aquí no hay
-        // nada que proteger con él. Un botón pintado que no hiciera nada sería
-        // peor que no pintarlo.
+        // A batch's report doesn't ask either: it already happened. It
+        // carries the confirm footer (`hints.confirm`), so EVERYTHING that
+        // footer offers closes it — Enter is what gets pressed for
+        // "understood", and there's nothing here to protect with it. A
+        // painted button that does nothing would be worse than not painting
+        // it.
         Modal::Report { .. } => match cmd {
             "dialog.approve" | "dialog.confirm" | "dialog.deny" | "dialog.cancel" => {
                 Some(DialogOutcome::Cancelled)
             }
             _ => None,
         },
-        // Las sumas tampoco preguntan nada: `confirm` COPIA la lista al
-        // portapapeles —lo único que se puede hacer con ella— y `cancel`
-        // cierra. No hay mutación que Enter deba proteger.
+        // Checksums don't ask anything either: `confirm` COPIES the list to
+        // the clipboard — the only thing that can be done with it — and
+        // `cancel` closes. There's no mutation Enter has to protect.
         Modal::Checksums { .. } => match cmd {
             "dialog.confirm" => Some(DialogOutcome::Confirmed),
             "dialog.cancel" => Some(DialogOutcome::Cancelled),
             _ => None,
         },
-        // Conceder capabilities: `approve` concede y todo lo demás de la
-        // lista cierra sin conceder — cerrar ES no conceder, fail-safe.
+        // Granting capabilities: `approve` grants and everything else on the
+        // list closes without granting — closing IS not granting, fail-safe.
         Modal::ConfirmPluginApproval { .. } => {
             if !ALLOW_PLUGIN_APPROVAL.contains(&cmd) {
                 return None;
@@ -500,23 +510,24 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 DialogOutcome::Cancelled
             })
         }
-        // M4-IA: `AiRenamePlan` es una superficie de decisión sobre contenido
-        // INICIADO y REVISADO por el humano — semántica [`ALLOW_CONFIRM`]
-        // (Enter confirma, como un delete/transfer), NO el allowlist de
-        // aprobación de agentes (`ALLOW_APPROVAL`, que excluye confirm).
+        // M4-IA: `AiRenamePlan` is a decision surface over content the human
+        // STARTED and REVIEWED — [`ALLOW_CONFIRM`] semantics (Enter
+        // confirms, like a delete/transfer), NOT the agent-approval
+        // allowlist (`ALLOW_APPROVAL`, which excludes confirm).
         //
-        // Con una salvedad que este brazo aparte existe para imponer (spec
-        // §17): confirmar necesita un plan de lote APLICABLE. Sin plan no hay
-        // `plan_hash` aprobado que mandar, y con veredictos el core no
-        // ejecutaría nada — en ambos casos la tecla de confirmar queda MUDA
-        // (cancelar sigue vivo), y el pie del modal deja de ofrecerla
-        // (`modal-rename-batch-plan-hint-blocked`). La decisión de si un plan
-        // se puede ejecutar es del core: aquí solo se lee `executable`.
-        // El plan de ORGANIZAR (fase 8) con la MISMA disciplina: confirmar
-        // está mudo hasta que el lector ha llegado al final del árbol. La
-        // regla es del crate compartido por lo que dice su propio comentario
-        // —dos criterios de aprobación según la superficie es la peor
-        // divergencia— y aquí pesa más: este plan además crea carpetas.
+        // With one caveat this separate arm exists to enforce (spec §17):
+        // confirming needs an APPLICABLE batch plan. With no plan there's no
+        // approved `plan_hash` to send, and with verdicts the core wouldn't
+        // execute anything — in both cases the confirm key stays MUTE
+        // (cancel stays alive), and the modal's footer stops offering it
+        // (`modal-rename-batch-plan-hint-blocked`). Whether a plan can be
+        // executed is the core's call: only `executable` gets read here.
+        // The ORGANIZE plan (phase 8) with the SAME discipline: confirming
+        // stays mute until the reader has reached the end of the tree. The
+        // rule belongs to the shared crate for the reason its own comment
+        // states — two approval criteria depending on the surface is the
+        // worst kind of drift — and here it weighs more: this plan also
+        // creates folders.
         Modal::OrganizePlan { seen, lines, .. } => {
             if !ALLOW_CONFIRM.contains(&cmd) {
                 return None;
@@ -541,12 +552,12 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 return None;
             }
             let confirms = matches!(cmd, "dialog.approve" | "dialog.confirm");
-            // Y que el lector HAYA LLEGADO AL FINAL, que es la mitad que
-            // faltaba aquí: se podía aprobar un plan de doscientos
-            // renombrados habiendo visto los diez primeros. La regla vive en
-            // el crate compartido porque la ventana ya la exigía, y una
-            // aprobación con dos criterios distintos según la superficie es
-            // la peor clase de divergencia (ADR 0077).
+            // And that the reader HAS REACHED THE END, which is the half
+            // that was missing here: a two-hundred-rename plan could be
+            // approved having seen the first ten. The rule lives in the
+            // shared crate because the window already required it, and an
+            // approval with two different criteria depending on the surface
+            // is the worst kind of drift (ADR 0077).
             if confirms && !norte_frontend::approval_ready(plan.confirmable(), *seen, entries.len())
             {
                 return None;
@@ -557,14 +568,14 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 DialogOutcome::Cancelled // dialog.deny | dialog.cancel
             })
         }
-        // Desinstalar una extensión es un borrado que pregunta, con la
-        // semántica de borrar ficheros (Enter confirma) — salvo que aquí
-        // `dialog.approve` no está en la lista: ver [`ALLOW_UNINSTALL`].
-        // Deshacer hasta un punto (fase 7) comparte allowlist y semántica con
-        // desinstalar, y por la misma razón: las dos aceptan una CONSECUENCIA
-        // sobre lo que ya existe, así que Enter confirma, Esc no, y
-        // `dialog.approve` no está — aprobar es el verbo de conceder
-        // permisos, no el de asumir un efecto.
+        // Uninstalling an extension is a delete that asks, with delete-file
+        // semantics (Enter confirms) — except `dialog.approve` isn't on the
+        // list here: see [`ALLOW_UNINSTALL`]. Undoing up to a point (phase
+        // 7) shares the allowlist and semantics with uninstalling, and for
+        // the same reason: both accept a CONSEQUENCE over something that
+        // already exists, so Enter confirms, Esc doesn't, and
+        // `dialog.approve` isn't there — approve is the verb for granting
+        // permissions, not for taking on an effect.
         Modal::ConfirmPluginUninstall { .. } | Modal::ConfirmUndoAfter { .. } => {
             if !ALLOW_UNINSTALL.contains(&cmd) {
                 return None;
@@ -574,9 +585,9 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 _ => DialogOutcome::Cancelled, // dialog.deny | dialog.cancel
             })
         }
-        // M4-IA-2: `SemanticHits` es igualmente una superficie de decisión
-        // sobre contenido PEDIDO por el humano — Enter navega al hit bajo el
-        // cursor, no muta nada.
+        // M4-IA-2: `SemanticHits` is likewise a decision surface over
+        // content the human REQUESTED — Enter navigates to the hit under
+        // the cursor, mutates nothing.
         Modal::ConfirmDelete { .. }
         | Modal::ConfirmTransfer { .. }
         | Modal::ConfirmQuit
@@ -619,17 +630,17 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 _ => DialogOutcome::Cancelled, // dialog.deny | dialog.cancel
             })
         }
-        // #325: el ÚNICO modal de texto libre que pasa por aquí. Los demás
-        // los intercepta el run loop entero (raw chars) y devuelven `None`;
-        // este solo intercepta teclear y borrar, y deja Enter/Esc a esta
-        // allowlist — porque su Enter es una DECISIÓN (entregar el secreto)
-        // y su Esc abandona una navegación suspendida, que es justo lo que
-        // `cancel_prompt` se niega a hacer.
+        // #325: the ONE free-text modal that goes through here. The run
+        // loop intercepts the others whole (raw chars) and they return
+        // `None`; this one only intercepts typing and erasing, and leaves
+        // Enter/Esc to this allowlist — because its Enter is a DECISION
+        // (delivering the secret) and its Esc abandons a suspended
+        // navigation, which is exactly what `cancel_prompt` refuses to do.
         Modal::AskSecret { input, .. } => {
             if !ALLOW_ASK_SECRET.contains(&cmd) {
                 return None;
             }
-            // Campo vacío = confirmar INERTE (ver [`ALLOW_ASK_SECRET`]).
+            // Empty field = INERT confirm (see [`ALLOW_ASK_SECRET`]).
             if cmd == "dialog.confirm" && input.is_empty() {
                 return None;
             }
@@ -639,10 +650,10 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
                 DialogOutcome::Cancelled
             })
         }
-        // #103 T9: `MarkPattern` es texto libre, como el diálogo de
-        // búsqueda — el run loop lo intercepta ANTES de llegar aquí (raw
-        // chars, jamás el contexto `dialog`), igual que `TrustLuaInit`.
-        // Ambos devuelven `None` siempre.
+        // #103 T9: `MarkPattern` is free text, like the search dialog — the
+        // run loop intercepts it BEFORE reaching here (raw chars, never the
+        // `dialog` context), same as `TrustLuaInit`. Both always return
+        // `None`.
         Modal::TrustLuaInit { .. }
         | Modal::MarkPattern { .. }
         | Modal::Mkdir { .. }
@@ -653,10 +664,10 @@ pub fn dialog_action(modal: &Modal, cmd: &str) -> Option<DialogOutcome> {
         | Modal::RenameBatchPattern { .. }
         | Modal::SemanticQuery { .. }
         | Modal::TransferDest { .. }
-        // #132: los dos de escribir archivos, por lo mismo.
+        // #132: the two write-archive ones, for the same reason.
         | Modal::Pack { .. }
         | Modal::Split { .. }
-        // #314: el de permisos también es texto libre — se teclea un modo.
+        // #314: the permissions one is also free text — a mode gets typed.
         | Modal::Chmod { .. }
         | Modal::TransferName { .. } => None,
     }
@@ -733,12 +744,12 @@ pub fn help_action(cmd: &str) -> Option<HelpOutcome> {
     })
 }
 
-/// Resuelve el modal [`Modal::TrustLuaInit`] (decisión 8 del plan H1: NO
-/// migrado al contexto `dialog` — es una ruta de resolución ESPECIAL que el
-/// run loop intercepta ANTES de consultar el keymap, porque necesita el
-/// `LuaHost` que solo vive ahí). Mismo contrato de seguridad que el resto de
-/// diálogos TOFU: `y` confía, `n`/Esc deniegan, Enter NO decide (sin default
-/// peligroso que se dispare solo).
+/// Resolves the [`Modal::TrustLuaInit`] modal (decision 8 of plan H1: NOT
+/// migrated to the `dialog` context — it's a SPECIAL resolution path the run
+/// loop intercepts BEFORE consulting the keymap, because it needs the
+/// `LuaHost` that only lives there). Same security contract as the rest of
+/// the TOFU dialogs: `y` trusts, `n`/Esc deny, Enter does NOT decide (no
+/// dangerous default that fires on its own).
 #[must_use]
 pub fn trust_lua_key(code: crossterm::event::KeyCode) -> DialogOutcome {
     use crossterm::event::KeyCode as K;
@@ -756,9 +767,9 @@ mod tests {
     use crate::app::testutil::*;
     use crate::app::trail::Trail;
 
-    /// TOFU (#45): confiar es decisión de seguridad — `dialog.approve`
-    /// confía; `dialog.deny`/`dialog.cancel` cancelan; `dialog.confirm`
-    /// (Enter) es INERTE (safety pin H1: sin default peligroso).
+    /// TOFU (#45): trusting is a security decision — `dialog.approve`
+    /// trusts; `dialog.deny`/`dialog.cancel` cancel; `dialog.confirm`
+    /// (Enter) is INERT (H1's safety pin: no dangerous default).
     #[test]
     fn trust_host_key_solo_approve_confia() {
         let m = Modal::TrustHostKey {
@@ -780,13 +791,13 @@ mod tests {
         assert_eq!(
             dialog_action(&m, "dialog.confirm"),
             None,
-            "Enter (dialog.confirm) jamás confía en una host key"
+            "Enter (dialog.confirm) never trusts a host key"
         );
     }
 
-    /// S2 (`[ui] confirm_quit`): `Modal::ConfirmQuit` reutiliza el ALLOWLIST
-    /// de `ConfirmDelete`/`ConfirmTransfer` — `y`/Enter confirman (cierran),
-    /// `n`/Esc cancelan, cualquier otro comando queda fuera (`None`).
+    /// S2 (`[ui] confirm_quit`): `Modal::ConfirmQuit` reuses
+    /// `ConfirmDelete`/`ConfirmTransfer`'s ALLOWLIST — `y`/Enter confirm
+    /// (close), `n`/Esc cancel, any other command is out (`None`).
     #[test]
     fn confirm_quit_reutiliza_allow_confirm() {
         let m = Modal::ConfirmQuit;
@@ -799,12 +810,13 @@ mod tests {
         assert_eq!(
             dialog_action(&m, "dialog.overwrite"),
             None,
-            "fuera del allowlist de confirm: inerte"
+            "outside the confirm allowlist: inert"
         );
     }
 
-    /// El informe de un lote se CIERRA con todo lo que su pie ofrece, y nunca
-    /// «confirma» nada: no hay nada que confirmar. Lo demás, inerte.
+    /// A batch report only CLOSES with everything its footer offers, and
+    /// never "confirms" anything: there's nothing to confirm. Everything
+    /// else, inert.
     #[test]
     fn el_informe_de_lote_solo_se_cierra() {
         let m = Modal::Report {
@@ -826,41 +838,41 @@ mod tests {
         assert_eq!(dialog_action(&m, "dialog.overwrite"), None);
     }
 
-    /// S2 (`[ui] confirm_quit`): las tres combinaciones modo × trabajo en
-    /// vuelo, cada una por separado (mismo estilo que
-    /// `has_pending_work_tasks_o_marcas_o_ninguno` de la GUI).
+    /// S2 (`[ui] confirm_quit`): the three mode × in-flight-work
+    /// combinations, each on its own (same style as the GUI's
+    /// `has_pending_work_tasks_o_marcas_o_ninguno`).
     #[test]
     fn quit_needs_confirm_los_tres_modos() {
         use crate::config::ConfirmQuit;
         assert!(
             !quit_needs_confirm(ConfirmQuit::Never, true),
-            "never NUNCA confirma, ni con trabajo en vuelo"
+            "never NEVER confirms, even with work in flight"
         );
         assert!(
             !quit_needs_confirm(ConfirmQuit::Never, false),
-            "never NUNCA confirma"
+            "never NEVER confirms"
         );
         assert!(
             quit_needs_confirm(ConfirmQuit::Always, false),
-            "always SIEMPRE confirma, incluso sin trabajo pendiente"
+            "always ALWAYS confirms, even with no pending work"
         );
         assert!(
             quit_needs_confirm(ConfirmQuit::Always, true),
-            "always SIEMPRE confirma"
+            "always ALWAYS confirms"
         );
         assert!(
             !quit_needs_confirm(ConfirmQuit::Auto, false),
-            "auto sin trabajo pendiente: cierra directo"
+            "auto with no pending work: closes right away"
         );
         assert!(
             quit_needs_confirm(ConfirmQuit::Auto, true),
-            "auto con trabajo pendiente: confirma (comportamiento pre-S2)"
+            "auto with pending work: confirms (pre-S2 behavior)"
         );
     }
 
-    /// TOFU Lua (M4, decisión 8 del plan H1: NO migrado): mismo contrato de
-    /// seguridad que el resto — solo `y` confía; `n` y Esc deniegan; Enter
-    /// NO decide.
+    /// Lua TOFU (M4, decision 8 of plan H1: NOT migrated): same security
+    /// contract as the rest — only `y` trusts; `n` and Esc deny; Enter does
+    /// NOT decide.
     #[test]
     fn trust_lua_init_solo_y_confia_y_enter_no_decide() {
         use crossterm::event::KeyCode as K;
@@ -870,7 +882,7 @@ mod tests {
         assert_eq!(
             trust_lua_key(K::Enter),
             DialogOutcome::Open,
-            "Enter jamás aprueba ejecutar un script ajeno"
+            "Enter never approves running someone else's script"
         );
     }
 }

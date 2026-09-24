@@ -1,13 +1,12 @@
-//! [`Backend`]: la MISMA superficie para el core embebido y el daemon
-//! (fase 3 M2). La regla 7 lo hace posible: los frontends solo cambian de
-//! transporte, jamás de lógica.
+//! [`Backend`]: the SAME surface for the embedded core and the daemon (phase
+//! 3 M2). Rule 7 is what makes this possible: frontends only change
+//! transport, never logic.
 //!
-//! - Embebido: passthrough a [`Engine`] (el default de arranque
-//!   instantáneo).
-//! - Remoto (solo unix, ADR 0011): JSON-RPC contra el daemon, con bomba de
-//!   notificaciones (`task.progress` → un `watch` por task), tasks
-//!   FORÁNEAS (encoladas por OTROS frontends) entregadas por canal, resync
-//!   vía `task.list` y reconexión con aviso.
+//! - Embedded: passthrough to [`Engine`] (the default for instant startup).
+//! - Remote (unix only, ADR 0011): JSON-RPC against the daemon, with a
+//!   notification pump (`task.progress` → a `watch` per task), FOREIGN tasks
+//!   (queued by OTHER frontends) delivered over a channel, resync via
+//!   `task.list`, and reconnection with a warning.
 
 use std::sync::Arc;
 
@@ -30,7 +29,7 @@ mod rename;
 mod session;
 mod sync;
 
-/// Proyecta un `IndexHit` del core (norte-index) al tipo del protocolo (M4).
+/// Projects an `IndexHit` from the core (norte-index) to the protocol type (M4).
 fn index_hit_to_proto(h: norte_index::IndexHit) -> norte_proto::methods::IndexHit {
     norte_proto::methods::IndexHit {
         path: h.path,
@@ -40,18 +39,18 @@ fn index_hit_to_proto(h: norte_index::IndexHit) -> norte_proto::methods::IndexHi
     }
 }
 
-/// Proyecta un [`crate::volumes::VolumeKind`] al tipo del protocolo (0.37.0,
-/// #131). Los dos tipos NO comparten definición (`norte-proto` no puede
-/// depender de `norte-core`, la dependencia va al revés): un `match`
-/// exhaustivo aquí es lo que mantiene el mapeo honesto — un kind nuevo en el
-/// core rompe la compilación de esta función en vez de degradar en silencio.
+/// Projects a [`crate::volumes::VolumeKind`] to the protocol type (0.37.0,
+/// #131). The two types do NOT share a definition (`norte-proto` cannot
+/// depend on `norte-core`, the dependency runs the other way): an exhaustive
+/// `match` here is what keeps the mapping honest — a new kind in the core
+/// breaks this function's compilation instead of silently degrading.
 ///
-/// `pub(crate)`: el handler de `host.volumes` en `daemon::server` reutiliza
-/// esta misma función (con [`volume_to_proto`]) en vez de duplicar el
-/// `match` — a diferencia de `index_hit_to_proto`, cuyo mapeo es tan trivial
-/// (cuatro campos sin ramas) que duplicarlo en el daemon no arriesga nada;
-/// aquí SÍ hay un `match` de variantes, y dos copias son dos sitios que
-/// olvidar al añadir una.
+/// `pub(crate)`: the `host.volumes` handler in `daemon::server` reuses this
+/// same function (with [`volume_to_proto`]) instead of duplicating the
+/// `match` — unlike `index_hit_to_proto`, whose mapping is so trivial (four
+/// fields with no branches) that duplicating it in the daemon risks nothing;
+/// here there IS a `match` over variants, and two copies are two places to
+/// forget when one is added.
 pub(crate) fn volume_kind_to_proto(
     k: crate::volumes::VolumeKind,
 ) -> norte_proto::methods::VolumeKind {
@@ -64,8 +63,8 @@ pub(crate) fn volume_kind_to_proto(
     }
 }
 
-/// Proyecta un [`crate::volumes::Volume`] al tipo del protocolo (0.37.0,
-/// #131). `pub(crate)`: ver el rustdoc de [`volume_kind_to_proto`].
+/// Projects a [`crate::volumes::Volume`] to the protocol type (0.37.0, #131).
+/// `pub(crate)`: see the rustdoc of [`volume_kind_to_proto`].
 pub(crate) fn volume_to_proto(v: crate::volumes::Volume) -> norte_proto::methods::Volume {
     norte_proto::methods::Volume {
         mount: v.mount,
@@ -78,21 +77,20 @@ pub(crate) fn volume_to_proto(v: crate::volumes::Volume) -> norte_proto::methods
     }
 }
 
-/// Timeout de llamadas de IA: el proveedor (modelo remoto) tarda
-/// legítimamente mucho más que un fs.*. Acota AMBOS brazos de
-/// [`Backend::ai_rename_plan`] (embebido y remoto — cancel-on-drop en el
-/// remoto igualmente).
+/// Timeout for AI calls: the provider (remote model) legitimately takes much
+/// longer than an fs.*. Bounds BOTH arms of [`Backend::ai_rename_plan`]
+/// (embedded and remote — cancel-on-drop on the remote one too).
 const AI_CALL_TIMEOUT: std::time::Duration = std::time::Duration::from_mins(2);
 
-/// El tipo de stream que devuelve [`Backend::list_stream`] (ADR 0017),
-/// re-exportado para que los frontends lo nombren sin depender de `norte-vfs`.
+/// The stream type returned by [`Backend::list_stream`] (ADR 0017),
+/// re-exported so frontends can name it without depending on `norte-vfs`.
 pub use norte_vfs::EntryStream;
 
-/// Una task en marcha, venga del scheduler embebido o del daemon.
+/// A task in flight, whether from the embedded scheduler or the daemon.
 ///
-/// NO es `Clone` a propósito: [`Self::join`] consume el handle, y dos dueños
-/// de la espera son dos sitios que creen que van a ver el desenlace. Lo que sí
-/// se puede repartir es OBSERVARLA — ver [`Self::observer`] (#173).
+/// NOT `Clone` on purpose: [`Self::join`] consumes the handle, and two owners
+/// of the wait are two places that believe they will see the outcome. What
+/// CAN be shared out is OBSERVING it — see [`Self::observer`] (#173).
 pub struct TaskRef {
     id: TaskId,
     rx: watch::Receiver<TaskProgress>,
@@ -101,13 +99,13 @@ pub struct TaskRef {
 }
 
 impl TaskRef {
-    /// SOLO para tests de frontends (#85): un `TaskRef` SINTÉTICO respaldado
-    /// por un `watch` del propio test — permite testear la lógica
-    /// async/stateful de un frontend (síntesis de terminal en muerte de
-    /// conexión, de-registro del canceller, read-after-write) sin engine ni
-    /// daemon. El canceller es un token suelto (cancel = no-op observable
-    /// vía `token.is_cancelled()` si el test conserva el clon). No es API
-    /// estable: `doc(hidden)`, puede cambiar sin bump.
+    /// ONLY for frontend tests (#85): a SYNTHETIC `TaskRef` backed by a
+    /// `watch` from the test itself — lets a frontend's async/stateful logic
+    /// (terminal synthesis on connection death, canceller deregistration,
+    /// read-after-write) be tested without an engine or a daemon. The
+    /// canceller is a loose token (cancel = a no-op observable via
+    /// `token.is_cancelled()` if the test keeps its clone). Not a stable
+    /// API: `doc(hidden)`, can change without a bump.
     #[doc(hidden)]
     #[must_use]
     pub fn synthetic_for_tests(id: TaskId, rx: watch::Receiver<TaskProgress>) -> Self {
@@ -119,38 +117,38 @@ impl TaskRef {
         }
     }
 
-    /// Id de la task.
+    /// The task's id.
     #[must_use]
     pub fn id(&self) -> TaskId {
         self.id
     }
 
-    /// Snapshots vivos (mismo contrato que el `watch` del scheduler: el
-    /// estado terminal siempre se publica salvo pérdida de conexión).
+    /// Live snapshots (same contract as the scheduler's `watch`: the terminal
+    /// state is always published except on lost connection).
     #[must_use]
     pub fn progress(&self) -> watch::Receiver<TaskProgress> {
         self.rx.clone()
     }
 
-    /// Handle clonable para cancelar desde otra task (Ctrl-C del CLI).
+    /// Clonable handle to cancel from another task (CLI's Ctrl-C).
     #[must_use]
     pub fn canceller(&self) -> TaskCanceller {
         self.canceller.clone()
     }
 
-    /// Una vista CLONABLE de esta task: id, progreso y cancelación, sin la
-    /// espera (#173).
+    /// A CLONABLE view of this task: id, progress and cancellation, without
+    /// the wait (#173).
     ///
-    /// Existe para el tablero de tasks de un frontend, que necesita PINTAR el
-    /// progreso y PEDIR la cancelación, no poseer la task. Antes tenía que
-    /// quedarse el [`TaskRef`] entero, así que quien lo lanzaba se quedaba sin
-    /// él — y por eso una sincronización APLICÁNDOSE, que solo se puede parar
-    /// desde su panel, no aparecía en el tablero: la operación más destructiva
-    /// del programa era la única invisible.
+    /// Exists for a frontend's task board, which needs to PAINT progress and
+    /// REQUEST cancellation, not own the task. It used to have to keep the
+    /// whole [`TaskRef`], so whoever launched it was left without it — and
+    /// that is why a sync APPLYING, which can only be stopped from its own
+    /// panel, did not show up on the board: the program's most destructive
+    /// operation was the only invisible one.
     ///
-    /// Que dos sitios puedan cancelar no rompe nada: [`TaskCanceller`] ya era
-    /// clonable, y una cancelación es idempotente y cooperativa. Lo que sigue
-    /// teniendo un solo dueño es la ESPERA.
+    /// Two places being able to cancel breaks nothing: [`TaskCanceller`] was
+    /// already clonable, and a cancellation is idempotent and cooperative.
+    /// What still has a single owner is the WAIT.
     #[must_use]
     pub fn observer(&self) -> TaskObserver {
         TaskObserver {
@@ -161,14 +159,14 @@ impl TaskRef {
         }
     }
 
-    /// Petición de cancelación cooperativa.
+    /// Cooperative cancellation request.
     pub fn cancel(&self) {
         self.canceller.cancel();
     }
 
-    /// Espera el estado terminal. Si la conexión con el daemon muere sin
-    /// desenlace conocido, devuelve `Failed{ProviderUnavailable}` — lo
-    /// honesto que se puede decir desde fuera.
+    /// Waits for the terminal state. If the connection to the daemon dies
+    /// with no known outcome, returns `Failed{ProviderUnavailable}` — the
+    /// most honest thing that can be said from the outside.
     pub async fn join(mut self) -> TaskState {
         loop {
             let state = self.rx.borrow().state.clone();
@@ -197,8 +195,8 @@ impl TaskRef {
     }
 }
 
-/// Vista clonable de una task viva: lo que hace falta para PINTARLA y
-/// PARARLA, sin poseerla ([`TaskRef::observer`], #173).
+/// Clonable view of a live task: what is needed to PAINT it and STOP it,
+/// without owning it ([`TaskRef::observer`], #173).
 ///
 /// ```
 /// use norte_core::backend::TaskRef;
@@ -217,10 +215,10 @@ impl TaskRef {
 ///     current: None,
 /// });
 /// let task = TaskRef::synthetic_for_tests(TaskId::new(7), rx);
-/// let observador = task.observer();
-/// // Dos observadores de la MISMA task, y la task sigue siendo de quien la lanzó.
-/// assert_eq!(observador.clone().id(), task.id());
-/// assert!(!observador.progress().borrow().state.is_terminal());
+/// let observer = task.observer();
+/// // Two observers of the SAME task, and the task is still owned by whoever launched it.
+/// assert_eq!(observer.clone().id(), task.id());
+/// assert!(!observer.progress().borrow().state.is_terminal());
 /// ```
 #[derive(Clone)]
 pub struct TaskObserver {
@@ -231,67 +229,70 @@ pub struct TaskObserver {
 }
 
 impl TaskObserver {
-    /// Id de la task observada.
+    /// Id of the observed task.
     #[must_use]
     pub fn id(&self) -> TaskId {
         self.id
     }
 
-    /// Snapshots vivos (el mismo `watch` que [`TaskRef::progress`]).
+    /// Live snapshots (the same `watch` as [`TaskRef::progress`]).
     #[must_use]
     pub fn progress(&self) -> watch::Receiver<TaskProgress> {
         self.rx.clone()
     }
 
-    /// Pide la cancelación cooperativa. Idempotente, y sobre una task ya
-    /// terminada no hace nada.
+    /// Requests cooperative cancellation. Idempotent, and a no-op on an
+    /// already-terminated task.
     pub fn cancel(&self) {
         self.canceller.cancel();
     }
 
-    /// Pausa (`true`) o reanuda (`false`) la task (ADR 0147). Cooperativa:
-    /// el estado `Paused` llega por el progreso cuando de verdad se para.
+    /// Pauses (`true`) or resumes (`false`) the task (ADR 0147). Cooperative:
+    /// the `Paused` state arrives through the progress channel when it
+    /// actually stops.
     ///
     /// # Errors
-    /// `Unsupported` si la task es de un daemon que no sabe pausar.
+    /// `Unsupported` if the task belongs to a daemon that does not know how
+    /// to pause.
     pub async fn set_paused(&self, paused: bool) -> Result<(), Error> {
         self.pauser.set_paused(paused).await
     }
 
-    /// Sube o baja la task en la cola en serie (ADR 0149), si aún no empezó.
+    /// Moves the task up or down the serial queue (ADR 0149), if it has not
+    /// started yet.
     ///
     /// # Errors
-    /// `Unsupported` con el scheduler EMBEBIDO: la cola se reordena por el
-    /// daemon, que es quien la tiene.
+    /// `Unsupported` with the EMBEDDED scheduler: the queue is reordered by
+    /// the daemon, which is the one holding it.
     pub async fn mover_en_cola(&self, up: bool) -> Result<(), Error> {
         self.pauser.mover_en_cola(up).await
     }
 
-    /// Un asa de pausa clonable, para pedirla desde otra task sin llevarse
-    /// el observador entero.
+    /// A clonable pause handle, to request it from another task without
+    /// carrying the whole observer along.
     #[must_use]
     pub fn pauser(&self) -> TaskPauser {
         self.pauser.clone()
     }
 }
 
-/// Pausa clonable de una task (ADR 0147), del scheduler embebido o del
-/// daemon. Aparte de [`TaskCanceller`] para no cambiar su forma, que usan
-/// otras superficies (MCP) que no pausan.
+/// Clonable pause for a task (ADR 0147), from the embedded scheduler or the
+/// daemon. Separate from [`TaskCanceller`] so as not to change its shape,
+/// which other surfaces (MCP) that do not pause also use.
 #[derive(Clone)]
 pub enum TaskPauser {
-    /// La puerta del scheduler embebido.
+    /// The embedded scheduler's gate.
     Embedded(crate::scheduler::PauseGate),
-    /// `task.pause`/`task.resume` contra el daemon.
+    /// `task.pause`/`task.resume` against the daemon.
     #[cfg(unix)]
     Remote(norte_client::RemoteTaskCanceller),
 }
 
 impl TaskPauser {
-    /// Pausa (`true`) o reanuda (`false`).
+    /// Pauses (`true`) or resumes (`false`).
     ///
     /// # Errors
-    /// `Unsupported` contra un daemon que no sabe pausar.
+    /// `Unsupported` against a daemon that does not know how to pause.
     pub async fn set_paused(&self, paused: bool) -> Result<(), Error> {
         match self {
             Self::Embedded(g) => {
@@ -307,10 +308,10 @@ impl TaskPauser {
         }
     }
 
-    /// Sube o baja en la cola en serie (ADR 0149).
+    /// Moves up or down the serial queue (ADR 0149).
     ///
     /// # Errors
-    /// `Unsupported` con el scheduler embebido.
+    /// `Unsupported` with the embedded scheduler.
     pub async fn mover_en_cola(&self, up: bool) -> Result<(), Error> {
         match self {
             Self::Embedded(_) => Err(Error::Unsupported),
@@ -320,22 +321,23 @@ impl TaskPauser {
     }
 }
 
-/// Cancelación clonable de una [`TaskRef`].
+/// Clonable cancellation for a [`TaskRef`].
 #[derive(Clone)]
 pub enum TaskCanceller {
-    /// Token del scheduler embebido.
+    /// Token from the embedded scheduler.
     Embedded(CancellationToken),
-    /// `task.cancel` contra el daemon (fire-and-forget: la confirmación
-    /// real llega por `task.progress`, contrato del método). El asa la
-    /// fabrica el SDK ([`norte_client::RemoteTaskCanceller`], ADR 0066).
+    /// `task.cancel` against the daemon (fire-and-forget: the real
+    /// confirmation arrives via `task.progress`, per the method's contract).
+    /// The handle is built by the SDK ([`norte_client::RemoteTaskCanceller`],
+    /// ADR 0066).
     #[cfg(unix)]
     Remote(norte_client::RemoteTaskCanceller),
 }
 
 impl From<norte_client::RemoteTask> for TaskRef {
-    /// Una task del daemon vista como [`TaskRef`]: el core no distingue de
-    /// dónde vino, y por eso `Backend` puede devolver lo mismo desde el
-    /// engine embebido y desde el SDK (ADR 0066).
+    /// A daemon task seen as a [`TaskRef`]: the core does not distinguish
+    /// where it came from, and that is why `Backend` can return the same
+    /// thing from the embedded engine and from the SDK (ADR 0066).
     fn from(t: norte_client::RemoteTask) -> Self {
         let id = t.id();
         let rx = t.progress();
@@ -351,10 +353,9 @@ impl From<norte_client::RemoteTask> for TaskRef {
 }
 
 impl From<crate::engine::TransferOptions> for norte_client::TransferOptions {
-    /// Las opciones del ENGINE, como las pone en los params un cliente
-    /// remoto. Campo a campo y sin `..Default::default()` a propósito: un
-    /// campo nuevo en cualquiera de las dos structs tiene que romper aquí y
-    /// no perderse en el viaje.
+    /// The ENGINE's options, as a remote client puts them in the params.
+    /// Field by field and deliberately without `..Default::default()`: a new
+    /// field on either struct must break here and not get lost along the way.
     fn from(o: crate::engine::TransferOptions) -> Self {
         let crate::engine::TransferOptions {
             on_collision,
@@ -374,7 +375,7 @@ impl From<crate::engine::TransferOptions> for norte_client::TransferOptions {
 }
 
 impl TaskCanceller {
-    /// Dispara la cancelación cooperativa.
+    /// Fires the cooperative cancellation.
     pub fn cancel(&self) {
         match self {
             Self::Embedded(token) => token.cancel(),
@@ -384,25 +385,26 @@ impl TaskCanceller {
     }
 }
 
-/// Evento de conexión del backend remoto (para la barra de mensajes).
+/// A connection event from the remote backend (for the message bar).
 ///
-/// Lo define el SDK ([`norte_client::ConnEvent`], ADR 0066) y se re-exporta
-/// aquí: lo produce la reconexión, que vive allí, y lo consume un frontend,
-/// que nombra `norte_core::backend`.
+/// Defined by the SDK ([`norte_client::ConnEvent`], ADR 0066) and
+/// re-exported here: it is produced by reconnection, which lives there, and
+/// consumed by a frontend, which names it `norte_core::backend`.
 pub use norte_client::ConnEvent;
 
-/// Observer de avisos de conexión (#44) que los reenvía por un canal: la vía
-/// del `Backend::Embedded` para que una CLI/TUI EN PROCESO surface la
-/// degradación igual que en modo daemon (donde el observer difunde por wire).
-/// Mapea el `ConnectionWarning` del core al `ConnectionDegraded` del wire.
+/// Connection-warning observer (#44) that forwards them over a channel: the
+/// route for `Backend::Embedded` so that an IN-PROCESS CLI/TUI can surface
+/// degradation just like daemon mode does (where the observer broadcasts
+/// over the wire). Maps the core's `ConnectionWarning` to the wire's
+/// `ConnectionDegraded`.
 struct ChannelConnectionObserver {
     tx: mpsc::UnboundedSender<norte_proto::methods::ConnectionDegraded>,
-    /// El observer que ya estaba en la ranura, si lo había.
+    /// The observer that was already in the slot, if there was one.
     ///
-    /// La ranura del engine es de UNO y los dos canales se toman por separado,
-    /// así que el segundo en instalarse tiene que seguir llamando al primero.
-    /// Sin esto, `take_failed` después de `take_degraded` dejaba el canal de
-    /// degradación mudo — y mudo en silencio, que es la peor forma.
+    /// The engine's slot holds ONE, and the two channels are taken
+    /// separately, so the second one to install itself has to keep calling
+    /// the first. Without this, `take_failed` after `take_degraded` left the
+    /// degradation channel mute — and silently mute, which is the worst kind.
     previo: Option<Arc<dyn crate::connect::ConnectionObserver>>,
 }
 
@@ -426,12 +428,13 @@ impl crate::connect::ConnectionObserver for ChannelConnectionObserver {
     }
 }
 
-/// Gemelo del de arriba para los fallos (#322): una conexión que NO se abrió.
+/// Twin of the one above for failures (#322): a connection that did NOT
+/// open.
 ///
-/// Dos observers y no uno con dos canales porque los dos `take_*` son
-/// independientes: un frontend puede querer el aviso de seguridad y no el
-/// diagnóstico, o al revés, y forzar los dos a la vez convertiría a uno en la
-/// condición del otro.
+/// Two observers and not one with two channels because the two `take_*` are
+/// independent: a frontend may want the security warning and not the
+/// diagnostic, or the other way around, and forcing both at once would turn
+/// one into the other's condition.
 struct ChannelFailureObserver {
     tx: mpsc::UnboundedSender<norte_proto::methods::ConnectionFailed>,
     previo: Option<Arc<dyn crate::connect::ConnectionObserver>>,
@@ -458,9 +461,10 @@ impl crate::connect::ConnectionObserver for ChannelFailureObserver {
     }
 }
 
-/// A dónde van los avisos de los hooks en `Backend::Embedded` (ADR 0100): a
-/// un canal que el frontend drena, igual que en modo daemon los difunde el
-/// wire. Sin esto el embebido correría los hooks y se tragaría sus frases.
+/// Where the hook notices go in `Backend::Embedded` (ADR 0100): a channel the
+/// frontend drains, just like daemon mode broadcasts them over the wire.
+/// Without this the embedded arm would run the hooks and swallow their
+/// messages.
 struct ChannelHookSink {
     tx: mpsc::UnboundedSender<norte_proto::methods::PluginNotice>,
 }
@@ -470,19 +474,19 @@ impl crate::hooks::HookNoticeSink for ChannelHookSink {
         let _ = self.tx.send(n);
     }
 
-    /// El frontend soltó el receptor: el despachador termina con él.
+    /// The frontend dropped the receiver: the dispatcher ends with it.
     fn is_closed(&self) -> bool {
         self.tx.is_closed()
     }
 }
 
-/// Sink de avisos del journal perezoso (#177) que los reenvía por un canal: la
-/// vía para que una TUI embebida pinte EN LA SESIÓN que sus mutaciones no están
-/// quedando registradas.
+/// Sink for lazy-journal notices (#177) that forwards them over a channel:
+/// the route for an embedded TUI to paint, IN THE SESSION, that its
+/// mutations are not being recorded.
 ///
-/// Gemelo de [`ChannelConnectionObserver`] y por el mismo motivo: el aviso nace
-/// dentro del core, en mitad de una mutación, y el frontend no tiene forma de
-/// preguntárselo a nadie después.
+/// Twin of [`ChannelConnectionObserver`] and for the same reason: the notice
+/// is born inside the core, mid-mutation, and the frontend has no way to ask
+/// anyone about it afterwards.
 struct ChannelJournalSink {
     tx: mpsc::UnboundedSender<crate::embedded::JournalStatus>,
 }
@@ -503,53 +507,55 @@ impl crate::embedded::JournalWarningSink for ChannelJournalSink {
     }
 }
 
-/// La «conexión» del brazo EMBEBIDO, para lo que la lleva por llave: hoy solo
-/// el spool de planes de sincronización, que ata cada plan aprobado a la
-/// conexión que lo produjo (ADR 0049).
+/// The EMBEDDED arm's "connection", for whatever carries it by key: today
+/// only the sync-plan spool, which ties each approved plan to the connection
+/// that produced it (ADR 0049).
 ///
-/// In-process hay exactamente UNA, y por eso es una constante y no un contador:
-/// planificar y aplicar tienen que casar, y dos ids distintos harían que un
-/// `sync_apply` de este mismo `Backend` contestara `PlanStale` a su propio plan.
+/// In-process there is exactly ONE, and that is why it is a constant and not
+/// a counter: planning and applying have to match, and two different ids
+/// would make a `sync_apply` from this same `Backend` answer `PlanStale` to
+/// its own plan.
 ///
-/// `u64::MAX` y no `0` deliberadamente: los `conn_id` del daemon salen de un
-/// contador que arranca en cero, así que este valor no puede coincidir con
-/// ninguno en un proceso que tenga las dos cosas a la vez — el spool no llegaría
-/// a confundir el plan de un cliente del socket con el de un `Backend`
-/// embebido. (Y el barrido por conexión compara el prefijo `"<id>-"` del nombre
-/// del fichero, que tampoco colisiona.)
+/// `u64::MAX` and deliberately not `0`: the daemon's `conn_id`s come from a
+/// counter that starts at zero, so this value cannot coincide with any of
+/// them in a process that has both at once — the spool would not end up
+/// confusing a socket client's plan with an embedded `Backend`'s. (And the
+/// per-connection sweep compares the `"<id>-"` prefix of the file name,
+/// which does not collide either.)
 ///
-/// **Corolario, para quien exponga estos métodos:** el `plan_hash` NO es un
-/// secreto —es un digest determinista de las raíces, las opciones y los pasos,
-/// calculable por cualquiera que pueda leer los dos árboles—, así que la única
-/// cosa que ata un plan a quien lo pidió es este `conn_id`, y aquí es una
-/// constante. Todo lo que alcance este brazo comparte la misma conexión y actúa
-/// como `Actor::User`, o sea sin gate de policy. `sync_plan`/`sync_apply` no
-/// deben cablearse a un entorno de scripting ni al host de plugins sin un actor
-/// propio: sería una escritura de árbol entero sin puerta.
+/// **Corollary, for whoever exposes these methods:** `plan_hash` is NOT a
+/// secret —it is a deterministic digest of the roots, the options and the
+/// steps, computable by anyone who can read the two trees—, so the only
+/// thing tying a plan to whoever requested it is this `conn_id`, and here it
+/// is a constant. Everything that reaches this arm shares the same
+/// connection and acts as `Actor::User`, i.e. with no policy gate.
+/// `sync_plan`/`sync_apply` must not be wired to a scripting environment or
+/// to the plugin host without their own actor: it would be a whole-tree
+/// write with no gate.
 const EMBEDDED_CONN_ID: u64 = u64::MAX;
 
-/// El backend REMOTO vive en el SDK desde ADR 0066 y se re-exporta aquí
-/// para que los consumidores de siempre (MCP, tests e2e) sigan nombrándolo
-/// donde lo nombraban.
+/// The REMOTE backend has lived in the SDK since ADR 0066 and is re-exported
+/// here so that its usual consumers (MCP, e2e tests) keep naming it where
+/// they always named it.
 pub mod remote {
     pub use norte_client::remote::*;
 }
 
-/// El core detrás de una única superficie (regla 7).
+/// The core behind a single surface (rule 7).
 pub enum Backend {
-    /// Core in-process: arranque instantáneo, sin daemon.
+    /// In-process core: instant startup, no daemon.
     Embedded(Arc<Engine>),
-    /// Contra el daemon UDS (ADR 0011).
+    /// Against the UDS daemon (ADR 0011).
     #[cfg(unix)]
     Remote(norte_client::RemoteBackend),
 }
 
 impl Clone for Backend {
-    /// Clon BARATO: comparte engine/conexión (Arc interno en ambas variantes).
-    /// OJO: los canales one-shot (`take_foreign_tasks`, `take_conn_events`,
-    /// `take_approvals`, `take_degraded`, `take_journal_warnings`) son del
-    /// PRIMER dueño — un clon
-    /// (p. ej. para scripting Lua, tasks 4-5) no debe llamarlos.
+    /// CHEAP clone: shares the engine/connection (internal Arc in both
+    /// variants). NOTE: the one-shot channels (`take_foreign_tasks`,
+    /// `take_conn_events`, `take_approvals`, `take_degraded`,
+    /// `take_journal_warnings`) belong to the FIRST owner — a clone (e.g.
+    /// for Lua scripting, tasks 4-5) must not call them.
     fn clone(&self) -> Self {
         match self {
             Self::Embedded(e) => Self::Embedded(Arc::clone(e)),
@@ -560,34 +566,36 @@ impl Clone for Backend {
 }
 
 impl Backend {
-    /// ¿Registra este backend sus mutaciones en un journal, y por tanto se
-    /// pueden deshacer?
+    /// Does this backend record its mutations in a journal, and can they
+    /// therefore be undone?
     ///
-    /// Hoy es exactamente «va contra el daemon», y contesta por lo que este
-    /// tipo puede PROMETER, no por lo que un proceso concreto haya montado.
-    /// El brazo embebido lleva el journal del directorio de estado desde #167
-    /// (`norte_core::embedded`) pero lo abre PEREZOSO y sobre un lock
-    /// exclusivo que otro proceso puede tener; y el spool que
-    /// [`Self::sync_plan`] necesita no lo instala este tipo sino quien
-    /// construye el engine —`norte-cli` lo hace, y solo para `norte sync`—,
-    /// así que ni el journal ni el spool son ciertos por construcción. Un
-    /// `true` aquí sería una promesa que este valor no puede sostener.
+    /// Today it is exactly "it talks to the daemon", and it answers for what
+    /// this type can PROMISE, not for what a given process happens to have
+    /// set up. The embedded arm has carried the state directory's journal
+    /// since #167 (`norte_core::embedded`) but opens it LAZILY and over an
+    /// exclusive lock another process may hold; and the spool that
+    /// [`Self::sync_plan`] needs is not installed by this type but by
+    /// whoever builds the engine —`norte-cli` does it, and only for `norte
+    /// sync`—, so neither the journal nor the spool are guaranteed by
+    /// construction. A `true` here would be a promise this value cannot
+    /// keep.
     ///
-    /// De modo que lo que dice es: **«hay un daemon detrás»**, que es la única
-    /// configuración en la que las dos cosas están garantizadas de antemano.
-    /// La pregunta VIVA —«¿queda registrada ESTA sesión?», la que hay que
-    /// contestarle a un humano antes de que diga que sí— es
-    /// [`Self::ensure_journal`], que abre el journal para responder; ésta no
-    /// abre nada.
+    /// So what it says is: **"there is a daemon behind it"**, which is the
+    /// only configuration where both things are guaranteed in advance. The
+    /// LIVE question —"does THIS session actually get recorded?", the one
+    /// that has to be answered to a human before they say yes— is
+    /// [`Self::ensure_journal`], which opens the journal to answer; this one
+    /// opens nothing.
     ///
-    /// Es una pregunta sobre el TRANSPORTE y no sobre el engine porque desde
-    /// fuera no hay forma de preguntárselo al engine: `Engine` no publica si
-    /// tiene journal, y un frontend que lo dedujera del primer `Unsupported`
-    /// se habría enterado después de enseñar un plan.
+    /// It is a question about the TRANSPORT and not about the engine because
+    /// there is no way to ask the engine from the outside: `Engine` does not
+    /// publish whether it has a journal, and a frontend that inferred it from
+    /// the first `Unsupported` would have found out after already showing a
+    /// plan.
     ///
-    /// Un frontend la usa para ATENUAR antes de que el lector pulse la tecla
-    /// (`norte_frontend::availability::Facts::journalled`), no para saltarse
-    /// ninguna comprobación: quien decide sigue siendo el core.
+    /// A frontend uses it to DIM before the reader presses the key
+    /// (`norte_frontend::availability::Facts::journalled`), not to skip any
+    /// check: the core still decides.
     ///
     /// ```
     /// use norte_core::{Engine, backend::Backend};
@@ -603,24 +611,24 @@ impl Backend {
         }
     }
 
-    /// ¿Hay un daemon al otro lado, o el core está en ESTE proceso?
+    /// Is there a daemon on the other end, or is the core in THIS process?
     ///
-    /// La pregunta del transporte, desnuda, que es distinta de
-    /// [`Self::is_journalled`]: aquella dice qué se puede PROMETER (journal y
-    /// spool) y ésta dice si existe un segundo proceso del que hablar.
+    /// The bare transport question, which differs from [`Self::is_journalled`]:
+    /// that one says what can be PROMISED (journal and spool) and this one
+    /// says whether a second process exists to talk about.
     ///
-    /// Existe porque hay superficies que no son «puedo o no puedo» sino «hay
-    /// otro sitio o no lo hay», y la primera es el panel de registro (#328).
-    /// Con el core embebido hay un solo anillo —el de este proceso, que es el
-    /// que el panel ya lee—, así que preguntarle al backend por el registro
-    /// del daemon contesta [`Error::Unsupported`] con toda la razón, y un
-    /// frontend que tratara esa respuesta como un hecho sobre un daemon
-    /// acabaría diciendo «este daemon no sirve su registro» donde no hay
-    /// ninguno. La respuesta correcta ahí no es otra frase: es **no
-    /// preguntar**, y no mencionar a nadie.
+    /// Exists because there are surfaces that are not "can or can't" but
+    /// "is there another place or isn't there", and the first one is the log
+    /// panel (#328). With the embedded core there is a single ring —this
+    /// process's, which is the one the panel already reads—, so asking the
+    /// backend for the daemon's log rightly answers [`Error::Unsupported`],
+    /// and a frontend that treated that answer as a fact about a daemon
+    /// would end up saying "this daemon does not serve its log" where there
+    /// is none. The right answer there is not another sentence: it is **not
+    /// asking**, and not mentioning anyone.
     ///
-    /// Se decide UNA vez y no cambia: el `Backend` no cambia de brazo en vida
-    /// del proceso.
+    /// Decided ONCE and it does not change: the `Backend` does not switch
+    /// arms during the process's lifetime.
     ///
     /// ```
     /// use norte_core::{Engine, backend::Backend};
@@ -636,28 +644,28 @@ impl Backend {
         }
     }
 
-    /// Abre ya el journal (si hace falta) y dice si ESTA sesión queda
-    /// registrada — la pregunta que un frontend hace justo antes de mutar y
-    /// necesita CONTESTAR al humano antes del sí, no después (`norte ai
-    /// rename`, y desde esta tarea `norte sync`).
+    /// Opens the journal now (if needed) and says whether THIS session ends
+    /// up recorded — the question a frontend asks right before mutating and
+    /// needs to ANSWER to the human before the yes, not after (`norte ai
+    /// rename`, and as of this task `norte sync`).
     ///
-    /// - Embebido: delega en [`Engine::ensure_journal`], que toma el lock
-    ///   perezoso AQUÍ (no en la primera mutación) y lo conserva hasta que se
-    ///   suelte por ocioso ([`Self::release_journal_if_idle`], que el TUI
-    ///   llama en su tick — #179).
-    /// - Remoto: siempre `true`. El daemon es DUEÑO del journal y se niega a
-    ///   arrancar sin uno (ver el arranque de `norte daemon run`); no hay un
-    ///   viaje de ida y vuelta que hacer para saberlo, y una conexión remota
-    ///   sin journal no es un estado que este proceso pueda observar ni
-    ///   remediar — solo el operador del daemon puede.
+    /// - Embedded: delegates to [`Engine::ensure_journal`], which takes the
+    ///   lazy lock HERE (not on the first mutation) and keeps it until it is
+    ///   released for being idle ([`Self::release_journal_if_idle`], which
+    ///   the TUI calls on its tick — #179).
+    /// - Remote: always `true`. The daemon OWNS the journal and refuses to
+    ///   start without one (see `norte daemon run`'s startup); there is no
+    ///   round trip to make to find out, and a remote connection with no
+    ///   journal is not a state this process can observe or remedy — only
+    ///   the daemon's operator can.
     ///
-    /// A diferencia de [`Self::is_journalled`] (que en el brazo embebido dice
-    /// `false` a propósito, ver su rustdoc), esto SÍ abre el journal cuando
-    /// puede: es la llamada de quien está a punto de mutar, no la de quien
-    /// solo quiere atenuar una tecla.
+    /// Unlike [`Self::is_journalled`] (which on the embedded arm says
+    /// `false` on purpose, see its rustdoc), this one DOES open the journal
+    /// when it can: it is the call of someone about to mutate, not of
+    /// someone who just wants to dim a key.
     ///
-    /// Un engine recién construido no tiene de dónde sacarlo, y entonces la
-    /// respuesta honesta es `false` — no un error:
+    /// A freshly built engine has nowhere to get it from, and then the
+    /// honest answer is `false` — not an error:
     ///
     /// ```
     /// use norte_core::{Engine, backend::Backend};
@@ -674,39 +682,39 @@ impl Backend {
         }
     }
 
-    /// Suelta el journal si lleva `ocioso` sin usarse (#179).
+    /// Releases the journal if it has gone unused for `idle` (#179).
     ///
-    /// Un `ntc` que copió un fichero a las 09:00 se quedaba `journal.db` hasta
-    /// salir, así que `norte daemon run` y `norte audit` no podían abrirlo en
-    /// todo el día. La ventana se reabre sola en la siguiente mutación, y la
-    /// reapertura RELEE la cadena — que es lo que hace que soltar sea seguro.
+    /// An `ntc` that copied a file at 09:00 would keep `journal.db` open
+    /// until it quit, so `norte daemon run` and `norte audit` could not open
+    /// it all day. The window reopens by itself on the next mutation, and the
+    /// reopen RE-READS the chain — which is what makes releasing it safe.
     ///
-    /// Remoto: `true` sin hacer nada. El journal es del DAEMON, que se niega a
-    /// arrancar sin uno; soltarlo desde aquí no es que sea inútil, es que no
-    /// es de este proceso.
+    /// Remote: `true` without doing anything. The journal belongs to the
+    /// DAEMON, which refuses to start without one; releasing it from here is
+    /// not useless, it is that it is not this process's to release.
     ///
-    /// # Esto NO es cancel-safe. En el CUERPO de una rama de `select!`, jamás
-    /// en su condición (ver
+    /// # This is NOT cancel-safe. In the BODY of a `select!` branch, never in
+    /// its condition (see
     /// [`LazyJournal::release`](crate::embedded::LazyJournal::release)).
-    pub async fn release_journal_if_idle(&self, ocioso: std::time::Duration) -> bool {
+    pub async fn release_journal_if_idle(&self, idle: std::time::Duration) -> bool {
         match self {
-            Self::Embedded(engine) => engine.release_journal_if_idle(ocioso).await,
+            Self::Embedded(engine) => engine.release_journal_if_idle(idle).await,
             #[cfg(unix)]
             Self::Remote(_) => true,
         }
     }
 
-    /// Lo mismo, diciendo POR QUÉ no — ver [`Engine::journal_obstacle`].
+    /// The same, saying WHY not — see [`Engine::journal_obstacle`].
     ///
-    /// `None` = esta sesión registra, o no hay ventana que perder (el daemon al
-    /// otro lado de un socket, o un `Engine::new()`).
+    /// `None` = this session records, or there is no window to lose (the
+    /// daemon on the other end of a socket, or an `Engine::new()`).
     ///
-    /// Existe por lo que #178 partió en dos: con `Busy` la operación ocurriría
-    /// sin registro —y el remedio es `--daemon`, hablar con quien tiene el
-    /// fichero— y con `Failed` no va a ocurrir en absoluto, y ahí `--daemon` no
-    /// es remedio ninguno porque el daemon se niega a arrancar con ese mismo
-    /// fichero. Un `bool` manda a la mitad de los usuarios contra la pared
-    /// equivocada.
+    /// Exists because of what #178 split in two: with `Busy` the operation
+    /// would happen without being recorded —and the remedy is `--daemon`,
+    /// talking to whoever holds the file— and with `Failed` it will not
+    /// happen at all, and there `--daemon` is no remedy at all because the
+    /// daemon refuses to start with that same file. A `bool` sends half the
+    /// users into the wrong wall.
     pub async fn journal_obstacle(&self) -> Option<crate::embedded::NoJournal> {
         match self {
             Self::Embedded(engine) => engine.journal_obstacle().await,
@@ -715,37 +723,38 @@ impl Backend {
         }
     }
 
-    /// Suelta los planes de sincronización que ESTE backend retiene, como hace
-    /// el daemon cuando se le cae una conexión.
+    /// Releases the sync plans THIS backend is holding, the way the daemon
+    /// does when a connection drops on it.
     ///
-    /// El derecho a aplicar un plan vive en un registro EN MEMORIA que muere
-    /// con el proceso, así que lo que esto se lleva no es un plan aplicable
-    /// sino su fichero: un listado con las rutas relativas de los dos árboles,
-    /// legible por quien pueda leer el directorio de estado. El daemon lo
-    /// suelta en dos sitios —barrido al arrancar y `Spool::drop_connection` al
-    /// cerrar cada conexión— y un proceso embebido no tiene ninguno de los
-    /// dos: **es el llamante quien tiene que llamar a esto al salir**, por
-    /// todos los caminos, incluido el que no aplicó nada.
+    /// The right to apply a plan lives in an IN-MEMORY registry that dies
+    /// with the process, so what this takes away is not an applicable plan
+    /// but its file: a listing with the relative paths of the two trees,
+    /// readable by anyone who can read the state directory. The daemon
+    /// releases it in two places —a sweep on startup and
+    /// `Spool::drop_connection` when each connection closes— and an embedded
+    /// process has neither of the two: **it is the caller's job to call this
+    /// on the way out**, through every path, including the one that applied
+    /// nothing.
     ///
-    /// No barre el directorio entero, y no es un descuido: un proceso embebido
-    /// comparte el directorio de estado con un daemon que puede estar vivo, y
-    /// no tiene el lock del journal con el que demostrar que no lo está. Se
-    /// lleva lo suyo y nada más.
+    /// It does not sweep the whole directory, and that is not an oversight:
+    /// an embedded process shares the state directory with a daemon that may
+    /// be alive, and it does not hold the journal lock with which to prove
+    /// that it is not. It takes only its own and nothing more.
     ///
-    /// Sin spool instalado (todo el que no sea `norte sync`) y contra el
-    /// daemon es un no-op: allí el dueño del spool es el daemon, y el
-    /// desmontaje de la conexión ya lo hace él.
+    /// With no spool installed (everyone except `norte sync`) and against
+    /// the daemon it is a no-op: there the spool's owner is the daemon, and
+    /// tearing down the connection is already its job.
     ///
-    /// No devuelve nada ni falla: un fichero que no se deja borrar queda en el
-    /// `tracing::warn!` y en el código de salida del comando, que es de la
-    /// sincronización y no de la limpieza (mismo criterio que el barrido de
-    /// arranque del daemon, ver [`crate::sync::Spool::sweep`]).
+    /// Returns nothing and does not fail: a file that refuses to be deleted
+    /// ends up in `tracing::warn!` and in the command's exit code, which
+    /// belongs to the sync and not to the cleanup (same criterion as the
+    /// daemon's startup sweep, see [`crate::sync::Spool::sweep`]).
     ///
     /// ```
     /// use norte_core::{Engine, backend::Backend};
     /// use std::sync::Arc;
     /// let rt = tokio::runtime::Runtime::new().expect("runtime");
-    /// // Sin spool instalado no hay nada que soltar, y decirlo no cuesta.
+    /// // With no spool installed there is nothing to release, and saying so costs nothing.
     /// let backend = Backend::Embedded(Arc::new(Engine::new()));
     /// rt.block_on(backend.drop_retained_plans());
     /// ```
@@ -755,11 +764,10 @@ impl Backend {
                 let Some(spool) = engine.spool() else { return };
                 match spool.drop_connection(EMBEDDED_CONN_ID).await {
                     Ok(report) if report.is_clean() => {}
-                    Ok(report) => tracing::warn!(
-                        failed = report.failed,
-                        "quedaron spools de sincronización sin borrar"
-                    ),
-                    Err(e) => tracing::warn!(error = %e, "no se pudo soltar el spool"),
+                    Ok(report) => {
+                        tracing::warn!(failed = report.failed, "sync spools were left undeleted")
+                    }
+                    Err(e) => tracing::warn!(error = %e, "could not release the spool"),
                 }
             }
             #[cfg(unix)]
@@ -768,13 +776,13 @@ impl Backend {
     }
 }
 
-/// El backend remoto (solo unix, como el daemon — ADR 0011).
+/// The remote backend (unix only, like the daemon — ADR 0011).
 #[cfg(unix)]
 #[cfg(test)]
 mod observer_tests {
     use super::*;
 
-    fn progreso(id: u64) -> (watch::Sender<TaskProgress>, watch::Receiver<TaskProgress>) {
+    fn progress_channel(id: u64) -> (watch::Sender<TaskProgress>, watch::Receiver<TaskProgress>) {
         let (tx, rx) = watch::channel(TaskProgress {
             task_id: TaskId::new(id),
             kind: norte_proto::TaskKind::Sync,
@@ -787,33 +795,37 @@ mod observer_tests {
             unreadable: None,
             unvisited: None,
         });
-        // El emisor se devuelve para que el test lo retenga vivo: un `watch`
-        // sin emisor no es lo que este test observa.
+        // The sender is returned so the test keeps it alive: a `watch` with
+        // no sender is not what this test observes.
         (tx, rx)
     }
 
-    /// #173: el observador cancela LA MISMA task, no una copia inerte. Es la
-    /// propiedad de la que depende que un tablero pueda parar una
-    /// sincronización que se está aplicando sin quitarle el handle a su panel.
+    /// #173: the observer cancels the SAME task, not an inert copy. This is
+    /// the property that lets a board stop a sync that is being applied
+    /// without taking the handle away from its panel.
     #[test]
-    fn el_observador_cancela_la_misma_task() {
-        let (_tx, rx) = progreso(7);
+    fn the_observer_cancels_the_same_task() {
+        let (_tx, rx) = progress_channel(7);
         let task = TaskRef::synthetic_for_tests(TaskId::new(7), rx);
         let TaskCanceller::Embedded(token) = task.canceller() else {
-            panic!("un TaskRef sintético cancela con un token embebido");
+            panic!("a synthetic TaskRef cancels with an embedded token");
         };
         assert!(!token.is_cancelled());
-        let observador = task.observer();
-        // Y clonado: el tablero clona su fila al reordenarla.
-        observador.clone().cancel();
-        assert!(token.is_cancelled(), "la cancelación llega a la task real");
-        assert_eq!(observador.id(), task.id());
+        let observer = task.observer();
+        // And cloned: the board clones its row when reordering it.
+        observer.clone().cancel();
+        assert!(
+            token.is_cancelled(),
+            "the cancellation reaches the real task"
+        );
+        assert_eq!(observer.id(), task.id());
     }
 
-    /// Y observar no consume: quien lanzó la task se la queda entera —
-    /// incluida la ESPERA, que es lo único que sigue teniendo un solo dueño.
+    /// And observing does not consume: whoever launched the task keeps all
+    /// of it — including the WAIT, which is the only thing that still has a
+    /// single owner.
     #[tokio::test]
-    async fn observar_no_le_quita_la_task_a_quien_la_lanzo() {
+    async fn observing_does_not_take_the_task_away_from_whoever_launched_it() {
         let (tx, rx) = watch::channel(TaskProgress {
             task_id: TaskId::new(9),
             kind: norte_proto::TaskKind::Sync,
@@ -827,12 +839,12 @@ mod observer_tests {
             unvisited: None,
         });
         let task = TaskRef::synthetic_for_tests(TaskId::new(9), rx);
-        let observador = task.observer();
+        let observer = task.observer();
         tx.send_modify(|p| p.state = TaskState::Completed);
         assert_eq!(
-            observador.progress().borrow().state,
+            observer.progress().borrow().state,
             TaskState::Completed,
-            "el observador ve el mismo canal"
+            "the observer sees the same channel"
         );
         assert!(matches!(task.join().await, TaskState::Completed));
     }

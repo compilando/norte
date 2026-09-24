@@ -1,30 +1,30 @@
-//! Un origen que entrega su contenido A PETICIÓN, para abrir a mano la
-//! ventana que un test necesita (#367, #368).
+//! A source that delivers its content ON REQUEST, to open by hand the window
+//! a test needs (#367, #368).
 //!
-//! Copiar o sincronizar un ÁRBOL da la ventana gratis: con cuatro mil entradas
-//! siempre queda trabajo detrás del momento en que el test interviene. Con un
-//! fichero, o con un plan de un paso, no queda nada — y hacer el fichero
-//! enorme es cambiar una carrera por otra, además de cara.
+//! Copying or syncing a WHOLE TREE gives the window for free: with four
+//! thousand entries there is always work left behind the moment the test
+//! steps in. With one file, or a one-step plan, nothing is left — and making
+//! the file huge trades one race for another, and it is expensive besides.
 //!
-//! Así que la ventana se abre a mano. Este provider avisa de que ya le están
-//! leyendo y se PARA hasta que el test le dice que siga. No hay plazos ni
-//! tamaños: hay un hecho («ya empezó») y una orden («sigue»), que es lo que
-//! este repositorio pide de una espera.
+//! So the window is opened by hand. This provider signals that it is
+//! already being read and STOPS until the test tells it to continue. No
+//! deadlines and no sizes: there is a fact ("it already started") and an
+//! order ("continue"), which is what this repository asks of a wait.
 //!
-//! Envuelve a `MemProvider` porque lo que estos tests prueban está en el lado
-//! del DESTINO, que sí tiene que ser el provider local de verdad: el fallo
-//! existe porque un descriptor sobrevive a un `rename`, y eso no se simula.
+//! Wraps `MemProvider` because what these tests check is on the DESTINATION
+//! side, which does have to be the real local provider: the failure exists
+//! because a descriptor survives a `rename`, and that cannot be simulated.
 //!
-//! Vive en un módulo compartido porque lo usan dos ficheros de test, y
-//! duplicarlo sería tener dos cosas que hay que cambiar a la vez.
+//! Lives in a shared module because two test files use it, and duplicating
+//! it would mean having two things to change at once.
 
 use std::sync::Arc;
 
 use norte_proto::{Error, VPath};
 use norte_vfs::Provider;
 
-/// El esquema por el que se registra. No es `file` a propósito: el destino de
-/// estos tests sí es local, y hacen falta los dos a la vez.
+/// The scheme it registers under. Deliberately not `file`: these tests'
+/// destination IS local, and both are needed at the same time.
 pub const ESQUEMA: &str = "lento";
 
 pub struct OrigenAPeticion {
@@ -33,31 +33,31 @@ pub struct OrigenAPeticion {
     sigue: Arc<tokio::sync::Semaphore>,
 }
 
-/// Lo que el test necesita para manejarlo: por dónde se entera de que empezó,
-/// y por dónde le da permiso para seguir.
+/// What the test needs to handle it: how it learns that it started, and how
+/// it gives it permission to continue.
 pub struct Mando {
     pub empezo: tokio::sync::mpsc::UnboundedReceiver<()>,
     pub sigue: Arc<tokio::sync::Semaphore>,
 }
 
 impl Mando {
-    /// Espera a que la lectura haya empezado DE VERDAD. `false` = no llegó, y
-    /// entonces el test no ha probado nada y tiene que decirlo.
+    /// Waits until the read has REALLY started. `false` = it never arrived,
+    /// and then the test proved nothing and has to say so.
     pub async fn empezo(&mut self) -> bool {
         tokio::time::timeout(std::time::Duration::from_secs(30), self.empezo.recv())
             .await
             .is_ok_and(|v| v.is_some())
     }
 
-    /// Suelta la lectura. Generoso a propósito: lo que se quiere es que no
-    /// vuelva a pararse, no contar permisos.
+    /// Releases the read. Generous on purpose: the point is that it never
+    /// stops again, not counting permits.
     pub fn sigue(&self) {
         self.sigue.add_permits(1024);
     }
 }
 
 impl OrigenAPeticion {
-    /// Envuelve `inner` y devuelve el provider y su mando.
+    /// Wraps `inner` and returns the provider and its remote.
     pub fn nuevo(inner: Arc<norte_testkit::MemProvider>) -> (Arc<dyn Provider>, Mando) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         let sigue = Arc::new(tokio::sync::Semaphore::new(0));
@@ -95,25 +95,26 @@ impl Provider for OrigenAPeticion {
         p: &VPath,
         range: Option<norte_proto::ByteRange>,
     ) -> Result<norte_vfs::ByteStream, Error> {
-        let interno = self.inner.read(p, range).await?;
+        let inner = self.inner.read(p, range).await?;
         let empezo = self.empezo.clone();
         let sigue = Arc::clone(&self.sigue);
-        // `then` espera al future ANTES de entregar el elemento, así que la
-        // parada ocurre antes del PRIMER trozo, no después: cuando el test se
-        // entera, la lectura está abierta y aparcada, todavía sin publicar
-        // nada. Sirve igual —lo que hace falta es que no haya terminado— pero
-        // no es lo que parece, y de ahí este comentario: alguien que lo creyera
-        // al revés podría «simplificar» el montaje sobre un modelo equivocado.
-        let mut primero = true;
-        Ok(Box::pin(futures::StreamExt::then(interno, move |chunk| {
+        // `then` awaits the future BEFORE delivering the item, so the stop
+        // happens before the FIRST chunk, not after: by the time the test
+        // finds out, the read is open and parked, still having published
+        // nothing. It works either way — what is needed is that it has not
+        // finished — but it is not what it looks like, hence this comment:
+        // someone who believed the opposite could "simplify" the setup on a
+        // wrong model.
+        let mut first = true;
+        Ok(Box::pin(futures::StreamExt::then(inner, move |chunk| {
             let (empezo, sigue) = (empezo.clone(), Arc::clone(&sigue));
-            let era_el_primero = std::mem::replace(&mut primero, false);
+            let was_the_first = std::mem::replace(&mut first, false);
             async move {
-                if era_el_primero {
+                if was_the_first {
                     let _ = empezo.send(());
-                    // Se suelta en cuanto el test da el permiso. Sin plazo: si
-                    // nunca llega, el `timeout` del desenlace lo convierte en
-                    // un test rojo y no en uno colgado.
+                    // Released as soon as the test gives permission. No
+                    // deadline: if it never arrives, the outcome's `timeout`
+                    // turns it into a red test, not a hung one.
                     let _ = sigue.acquire().await;
                 }
                 chunk

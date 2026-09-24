@@ -1,31 +1,32 @@
-//! **Una copia que falló no puede dejar un deshacer que borre lo que TÚ
-//! pusiste.**
+//! **A copy that failed cannot leave an undo that deletes what YOU put
+//! there.**
 //!
-//! Viene de #369, que encontró un revisor mirando el arreglo de #362 (ADR
-//! 0151). La cadena es corta y todo su daño está en el último eslabón:
+//! This comes from #369, which a reviewer found while looking at #362's fix
+//! (ADR 0151). The chain is short and all its damage is in the last link:
 //!
-//! 1. la copia escribe por el descriptor de la raíz de destino, y el diario
-//!    anota la ruta LÓGICA (`Mutation::Created(/destino/f0001)`);
-//! 2. si esa carpeta se borró —en norte, un `rename` a la papelera—, los
-//!    bytes van a la papelera mientras el diario sigue anotando `/destino/...`;
-//! 3. desde ADR 0151 la tarea FALLA, que es lo correcto, y esas entradas se
-//!    quedan ahí describiendo ficheros que no están en esas rutas;
-//! 4. lo natural después de «la carpeta de destino ya no está» es volver a
-//!    crearla y repetir la copia. Ahora esas rutas SÍ existen, y lo que
-//!    tienen dentro es la copia buena;
-//! 5. deshacer aquel lote fallido borra la copia buena.
+//! 1. the copy writes through the destination root's descriptor, and the
+//!    journal notes the LOGICAL path (`Mutation::Created(/destination/f0001)`);
+//! 2. if that folder was deleted — in norte, a `rename` to the trash — the
+//!    bytes go to the trash while the journal keeps noting
+//!    `/destination/...`;
+//! 3. since ADR 0151 the task FAILS, which is correct, and those entries stay
+//!    there describing files that are not at those paths;
+//! 4. the natural thing after "the destination folder is no longer there" is
+//!    to recreate it and repeat the copy. Now those paths DO exist, and what
+//!    is inside them is the good copy;
+//! 5. undoing that failed batch deletes the good copy.
 //!
-//! O sea: un borrado provocado por una operación que no ocurrió.
+//! In other words: a delete caused by an operation that never happened.
 //!
-//! La respuesta es ADR 0152: una entrada `created` anota la IDENTIDAD de lo
-//! que creó, y su deshacer se niega cuando lo que hay en esa ruta no es eso.
-//! La identidad se pregunta por el DESCRIPTOR de la raíz de destino, no por
-//! ruta, porque en este caso concreto la ruta ya no lleva ahí — preguntar por
-//! ruta deja sin identidad justo a las entradas que la necesitan.
+//! The answer is ADR 0152: a `created` entry notes the IDENTITY of what it
+//! created, and its undo refuses when what is at that path is not that. The
+//! identity is asked for through the destination root's DESCRIPTOR, not by
+//! path, because in this specific case the path no longer leads there —
+//! asking by path leaves without identity exactly the entries that need it.
 //!
-//! Va contra el sistema de ficheros REAL, como `engine_destino_que_desaparece`
-//! y por lo mismo: lo que hace posible el caso es un descriptor que sobrevive
-//! a un `rename`, y `MemProvider` no tiene descriptores.
+//! This runs against the REAL filesystem, like `engine_destino_que_desaparece`
+//! and for the same reason: what makes the case possible is a descriptor that
+//! survives a `rename`, and `MemProvider` has no descriptors.
 
 #![cfg(unix)]
 
@@ -36,16 +37,16 @@ use norte_proto::{CollisionPolicy, TaskState, VPath};
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-/// Bastantes para que la copia siga viva cuando el test interviene.
-const FICHEROS: usize = 4000;
+/// Enough for the copy to stay alive when the test steps in.
+const FILES: usize = 4000;
 
-/// Sondea un HECHO, no un plazo. Ver `engine_destino_que_desaparece`.
-async fn espera(mut cond: impl FnMut() -> bool) -> bool {
-    let hasta = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    while tokio::time::Instant::now() < hasta {
+/// Polls for a FACT, not a deadline. See `engine_destino_que_desaparece`.
+async fn wait(mut cond: impl FnMut() -> bool) -> bool {
+    let until = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    while tokio::time::Instant::now() < until {
         if cond() {
             return true;
         }
@@ -54,44 +55,45 @@ async fn espera(mut cond: impl FnMut() -> bool) -> bool {
     false
 }
 
-/// Deja una copia a medias con el destino borrado, y devuelve el diario.
+/// Leaves a half-done copy with the destination deleted, and returns the
+/// journal.
 ///
-/// Es el estado de partida de los dos tests: lo que queda después de que el
-/// lector borre la carpeta de destino mientras se copiaba.
-async fn copia_con_el_destino_borrado(
+/// This is the starting state for both tests: what is left after the reader
+/// deletes the destination folder while it was being copied to.
+async fn copy_with_the_destination_deleted(
     dir: &std::path::Path,
 ) -> (Engine, Arc<SqliteJournal>, TaskState) {
-    let origen = dir.join("origen");
-    std::fs::create_dir(&origen).expect("origen");
-    for i in 0..FICHEROS {
-        std::fs::write(origen.join(format!("f{i:04}")), vec![b'x'; 1024]).expect("fichero");
+    let source = dir.join("source");
+    std::fs::create_dir(&source).expect("source");
+    for i in 0..FILES {
+        std::fs::write(source.join(format!("f{i:04}")), vec![b'x'; 1024]).expect("file");
     }
 
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("journal open"),
     ));
-    // `with_journal` y no `with_observer`: el segundo anota pero no abre la
-    // puerta del deshacer, y este test necesita poder deshacer.
+    // `with_journal` and not `with_observer`: the latter records but does not
+    // open undo's door, and this test needs to be able to undo.
     let engine = Engine::with_journal(Arc::clone(&journal));
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::rooted(dir)) as Arc<dyn Provider>
     );
 
-    // Una mutación ANTES de la copia, que hace de corte para el deshacer:
-    // `undo_after` exige que el corte NOMBRE una entrada que existe, y se
-    // niega a un cero — que es lo que sale de un cursor rancio y seleccionaría
-    // la historia entera de alguien.
+    // A mutation BEFORE the copy, acting as the cut point for undo:
+    // `undo_after` requires the cut to NAME an entry that exists, and refuses
+    // a zero — which is what a stale cursor gives and would select someone's
+    // entire history.
     engine
-        .mkdir(&vp("file:///marca"))
+        .mkdir(&vp("file:///mark"))
         .await
-        .expect("marca")
+        .expect("mark")
         .join()
         .await;
 
     let handle = engine
         .copy_with_as(
-            &vp("file:///origen"),
-            &vp("file:///destino"),
+            &vp("file:///source"),
+            &vp("file:///destination"),
             norte_core::TransferOptions {
                 on_collision: CollisionPolicy::Fail,
                 ..norte_core::TransferOptions::default()
@@ -99,46 +101,48 @@ async fn copia_con_el_destino_borrado(
             norte_core::Actor::User,
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
 
-    let destino = dir.join("destino");
+    let destination = dir.join("destination");
     assert!(
-        espera(|| std::fs::read_dir(&destino).is_ok_and(|d| d.count() > 0)).await,
-        "la copia no llegó a empezar"
+        wait(|| std::fs::read_dir(&destination).is_ok_and(|d| d.count() > 0)).await,
+        "the copy never got to start"
     );
-    let cuando_borre = std::fs::read_dir(&destino).expect("destino").count();
-    std::fs::rename(&destino, dir.join("papelera")).expect("a la papelera");
+    let when_deleted = std::fs::read_dir(&destination)
+        .expect("destination")
+        .count();
+    std::fs::rename(&destination, dir.join("trash")).expect("to the trash");
     assert!(
-        cuando_borre < FICHEROS,
-        "la copia ya había acabado al borrar ({cuando_borre} de {FICHEROS}): \
-         este test no ha probado nada"
+        when_deleted < FILES,
+        "the copy had already finished when deleting ({when_deleted} of {FILES}): \
+         this test proved nothing"
     );
 
-    let estado = tokio::time::timeout(std::time::Duration::from_mins(1), handle.join())
+    let state = tokio::time::timeout(std::time::Duration::from_mins(1), handle.join())
         .await
-        .expect("la tarea se quedó colgada");
-    (engine, journal, estado)
+        .expect("the task got stuck");
+    (engine, journal, state)
 }
 
-/// **Y una copia que fue BIEN se sigue deshaciendo entera.**
+/// **And a copy that went WELL still undoes entirely.**
 ///
-/// La comprobación de identidad tiene dos lectores distintos: la copia anota
-/// lo que ve por el DESCRIPTOR de la raíz (`fstatat`) y el deshacer lee por
-/// RUTA (`symlink_metadata`). Si esos dos dejaran de coincidir, todo deshacer
-/// de una copia local se bloquearía, y el síntoma sería un undo que dice que
-/// ahí hay otra cosa — con la suite verde, porque los demás tests de undo van
-/// contra `mem://`, donde los dos lados llaman a la MISMA función y la
-/// asimetría no existe.
+/// The identity check has two different readers: the copy notes what it sees
+/// through the root's DESCRIPTOR (`fstatat`) and undo reads by PATH
+/// (`symlink_metadata`). If those two stopped agreeing, every undo of a local
+/// copy would block, and the symptom would be an undo saying something else is
+/// there — with the suite green, because the other undo tests run against
+/// `mem://`, where both sides call the SAME function and the asymmetry does
+/// not exist.
 ///
-/// O sea que este test no prueba una funcionalidad, prueba que dos maneras de
-/// mirar el mismo inodo siguen de acuerdo. Va contra el disco por eso.
+/// So this test does not test a feature, it tests that two ways of looking at
+/// the same inode still agree. It runs against disk for that reason.
 #[tokio::test]
-async fn una_copia_que_fue_bien_se_deshace_entera() {
+async fn a_copy_that_went_well_undoes_entirely() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let origen = dir.path().join("origen");
-    std::fs::create_dir(&origen).expect("origen");
+    let source = dir.path().join("source");
+    std::fs::create_dir(&source).expect("source");
     for i in 0..3 {
-        std::fs::write(origen.join(format!("f{i}")), b"x").expect("fichero");
+        std::fs::write(source.join(format!("f{i}")), b"x").expect("file");
     }
 
     let journal = Arc::new(SqliteJournal::new(
@@ -150,196 +154,200 @@ async fn una_copia_que_fue_bien_se_deshace_entera() {
     );
 
     engine
-        .mkdir(&vp("file:///marca"))
+        .mkdir(&vp("file:///mark"))
         .await
-        .expect("marca")
+        .expect("mark")
         .join()
         .await;
-    let estado = engine
+    let state = engine
         .copy_with_as(
-            &vp("file:///origen"),
-            &vp("file:///destino"),
+            &vp("file:///source"),
+            &vp("file:///destination"),
             norte_core::TransferOptions::default(),
             norte_core::Actor::User,
         )
         .await
-        .expect("encola")
+        .expect("enqueues")
         .join()
         .await;
     assert!(
-        matches!(estado, TaskState::Completed),
-        "la copia tenía que ir bien, fue {estado:?}"
+        matches!(state, TaskState::Completed),
+        "the copy had to go well, was {state:?}"
     );
     assert_eq!(
-        std::fs::read_dir(dir.path().join("destino"))
-            .expect("destino")
+        std::fs::read_dir(dir.path().join("destination"))
+            .expect("destination")
             .count(),
         3
     );
 
-    let corte = journal
+    let cut = journal
         .journal()
         .entries()
         .await
         .expect("entries")
         .first()
-        .expect("la marca está")
+        .expect("the mark is there")
         .seq;
-    let (handle, informe) = engine.undo_after(corte, None).await.expect("undo");
+    let (handle, report) = engine.undo_after(cut, None).await.expect("undo");
     let _ = tokio::time::timeout(std::time::Duration::from_mins(1), handle.join())
         .await
-        .expect("el undo se quedó colgado");
-    let r = informe.lock().expect("lock").clone();
+        .expect("undo got stuck");
+    let r = report.lock().expect("lock").clone();
 
     assert!(
         r.blocked.is_none(),
-        "nadie tocó nada: el deshacer no tenía por qué pararse. {r:?}"
+        "nobody touched anything: undo had no reason to stop. {r:?}"
     );
     assert!(
         r.undone >= 4,
-        "los tres ficheros y su carpeta tenían que volverse: {r:?}"
+        "the three files and their folder had to come back: {r:?}"
     );
     assert!(
-        !dir.path().join("destino").exists(),
-        "y el destino tenía que quedar deshecho: {r:?}"
+        !dir.path().join("destination").exists(),
+        "and the destination had to end up undone: {r:?}"
     );
 }
 
-/// **Lo que el diario anotó no está donde dice — pero dice QUÉ era.**
+/// **What the journal noted is not where it says — but it says WHAT it was.**
 ///
-/// Este test no es el daño, es la premisa: después del fallo quedan entradas
-/// `created` apuntando a rutas vacías, y lo que las salva de ser una trampa es
-/// que cada una anota la identidad de lo que creó. El de abajo enseña para qué
-/// sirve eso.
+/// This test is not the damage, it is the premise: after the failure there are
+/// `created` entries pointing at empty paths, and what saves them from being a
+/// trap is that each one notes the identity of what it created. The one below
+/// shows what that is for.
 ///
-/// La identidad tiene que estar en TODAS, y ahí es donde este test muerde: la
-/// implementación evidente —preguntar `Provider::node_id(ruta)` justo después
-/// de publicar— deja sin identidad a las que se escribieron después del
-/// borrado, que son la mayoría y son justo las que importan.
+/// The identity has to be in ALL of them, and that is where this test bites:
+/// the obvious implementation — asking `Provider::node_id(path)` right after
+/// publishing — leaves without identity the ones written after the delete,
+/// which are most of them and exactly the ones that matter.
 #[tokio::test]
-async fn una_copia_fallida_deja_entradas_que_apuntan_a_rutas_vacias() {
+async fn a_failed_copy_leaves_entries_pointing_at_empty_paths() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (_engine, journal, estado) = copia_con_el_destino_borrado(dir.path()).await;
+    let (_engine, journal, state) = copy_with_the_destination_deleted(dir.path()).await;
     assert!(
-        matches!(estado, TaskState::Failed { .. }),
-        "la tarea tiene que fallar (ADR 0151), fue {estado:?}"
+        matches!(state, TaskState::Failed { .. }),
+        "the task has to fail (ADR 0151), was {state:?}"
     );
 
-    let entradas = journal.journal().entries().await.expect("entries");
-    let creados: Vec<&norte_core::JournalEntry> = entradas
+    let entries = journal.journal().entries().await.expect("entries");
+    let created: Vec<&norte_core::JournalEntry> = entries
         .iter()
-        .filter(|e| e.op == "created" && e.path.starts_with(b"file:///destino/"))
+        .filter(|e| e.op == "created" && e.path.starts_with(b"file:///destination/"))
         .collect();
     assert!(
-        !creados.is_empty(),
-        "sin entradas no hay nada que demostrar: la copia no llegó a anotar nada"
+        !created.is_empty(),
+        "without entries there is nothing to prove: the copy never noted anything"
     );
-    // Y ninguna de esas rutas tiene nada: los bytes están en la papelera.
+    // And none of those paths has anything: the bytes are in the trash.
     assert_eq!(
-        std::fs::read_dir(dir.path().join("destino"))
+        std::fs::read_dir(dir.path().join("destination"))
             .ok()
             .map(Iterator::count),
         None,
-        "la carpeta de destino no existe, y el diario dice que creó ficheros dentro"
+        "the destination folder does not exist, and the journal says it created files inside"
     );
-    // Y cada una dice QUÉ creó, o su `delete` es un borrado a ciegas.
-    let sin_identidad = creados
+    // And each one says WHAT it created, or its `delete` is a blind delete.
+    let without_identity = created
         .iter()
         .filter(|e| e.reversal == "delete" && e.reversal_ref.is_none())
         .count();
     assert_eq!(
-        sin_identidad,
+        without_identity,
         0,
-        "{sin_identidad} de {} entradas prometen un `delete` sin decir QUÉ \
-         crearon: ese deshacer borra lo que haya en esa ruta, que es el daño \
-         de #369",
-        creados.len()
+        "{without_identity} of {} entries promise a `delete` without saying \
+         WHAT they created: that undo deletes whatever is at that path, which \
+         is #369's damage",
+        created.len()
     );
 }
 
-/// **Y deshacerlo no puede llevarse por delante la copia BUENA.**
+/// **And undoing it cannot take the GOOD copy down with it.**
 ///
-/// Éste es el daño, y con el gesto realista: falla la copia, el lector vuelve
-/// a crear la carpeta y repite. Ahora esas rutas tienen la copia buena
-/// dentro. Deshacer el lote fallido no puede tocarla.
+/// This is the damage, with the realistic gesture: the copy fails, the reader
+/// recreates the folder and repeats it. Now those paths have the good copy
+/// inside. Undoing the failed batch must not touch it.
 #[tokio::test]
-async fn deshacer_la_copia_fallida_no_borra_lo_que_se_puso_despues() {
+async fn undoing_the_failed_copy_does_not_delete_what_was_put_there_afterward() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (engine, journal, _estado) = copia_con_el_destino_borrado(dir.path()).await;
+    let (engine, journal, _state) = copy_with_the_destination_deleted(dir.path()).await;
 
-    // El lector vuelve a crear la carpeta y REPITE la copia, que es lo que
-    // hace cualquiera al leer «la carpeta de destino ya no está». Se simula
-    // poniendo un fichero en CADA ruta que el diario anotó.
+    // The reader recreates the folder and REPEATS the copy, which is what
+    // anyone does upon reading "the destination folder is no longer there".
+    // This is simulated by putting a file at EVERY path the journal noted.
     //
-    // Que estén todas es lo que hace de esto el caso real y no uno de
-    // laboratorio: el deshacer recorre de lo más nuevo a lo más viejo y se
-    // PARA en la primera ruta que no encuentra. Con una sola recreada, se
-    // para en la segunda y no toca nada — el fichero se salva por el orden de
-    // un fallo, no porque nadie lo esté protegiendo. Con la copia repetida no
-    // hay nada que lo pare.
-    let destino = dir.path().join("destino");
-    std::fs::create_dir(&destino).expect("la nueva");
-    let entradas = journal.journal().entries().await.expect("entries");
-    let creados: Vec<Vec<u8>> = entradas
+    // That all of them are there is what makes this the real case and not a
+    // lab one: undo walks from newest to oldest and STOPS at the first path it
+    // cannot find. With only one recreated, it stops at the second and
+    // touches nothing — the file is saved by a failure's ordering, not
+    // because anyone is protecting it. With the copy repeated there is
+    // nothing to stop it.
+    let destination = dir.path().join("destination");
+    std::fs::create_dir(&destination).expect("the new one");
+    let entries = journal.journal().entries().await.expect("entries");
+    let created: Vec<Vec<u8>> = entries
         .iter()
-        .filter(|e| e.op == "created" && e.path.starts_with(b"file:///destino/"))
+        .filter(|e| e.op == "created" && e.path.starts_with(b"file:///destination/"))
         .map(|e| e.path.clone())
         .collect();
-    assert!(!creados.is_empty(), "sin entradas no hay nada que deshacer");
-    for p in &creados {
-        let nombre = std::str::from_utf8(&p[b"file:///destino/".len()..]).expect("utf8");
+    assert!(
+        !created.is_empty(),
+        "without entries there is nothing to undo"
+    );
+    for p in &created {
+        let name = std::str::from_utf8(&p[b"file:///destination/".len()..]).expect("utf8");
         std::fs::write(
-            destino.join(nombre),
-            b"la copia BUENA, la de la segunda vez",
+            destination.join(name),
+            b"the GOOD copy, from the second time",
         )
-        .expect("repetida");
+        .expect("repeated");
     }
-    let suyo =
-        destino.join(std::str::from_utf8(&creados[0][b"file:///destino/".len()..]).expect("utf8"));
+    let theirs = destination
+        .join(std::str::from_utf8(&created[0][b"file:///destination/".len()..]).expect("utf8"));
 
-    // Y deshace aquel lote: el corte es la marca, o sea todo lo de la copia.
-    let entradas = journal.journal().entries().await.expect("entries");
-    let corte = entradas.first().expect("la marca está").seq;
-    let (handle, informe) = engine.undo_after(corte, None).await.expect("undo");
+    // And undoes that batch: the cut is the mark, i.e. the whole copy.
+    let entries = journal.journal().entries().await.expect("entries");
+    let cut = entries.first().expect("the mark is there").seq;
+    let (handle, report) = engine.undo_after(cut, None).await.expect("undo");
     let _ = tokio::time::timeout(std::time::Duration::from_mins(1), handle.join())
         .await
-        .expect("el undo se quedó colgado");
-    let r = informe.lock().expect("lock").clone();
+        .expect("undo got stuck");
+    let r = report.lock().expect("lock").clone();
 
     assert!(
-        suyo.exists(),
-        "el deshacer de una copia que FALLÓ se ha llevado un fichero que esa \
-         copia nunca escribió: lo puso el lector al repetirla. Informe: {r:?}"
+        theirs.exists(),
+        "undoing a copy that FAILED took down a file that copy never wrote: \
+         the reader put it there when repeating it. Report: {r:?}"
     );
-    // Y dicho al derecho: nada revertido de esas rutas, todas CONTADAS, y la
-    // sesión NO se para (#371). Que no se pare importa tanto como que no
-    // borre: si esto bloqueara, editar un solo fichero copiado con cualquier
-    // editor que guarde de forma atómica —vim, VS Code, `sed -i`, todos
-    // cambian el inodo— dejaría sin deshacer la copia entera por ese uno.
+    // And stated the right way round: nothing reverted from those paths, all
+    // COUNTED, and the session does NOT stop (#371). That it does not stop
+    // matters as much as that it does not delete: if this blocked, editing a
+    // single copied file with any editor that saves atomically — vim, VS
+    // Code, `sed -i`, they all change the inode — would leave the whole copy
+    // undone because of that one file.
     assert_eq!(
         r.undone, 0,
-        "no había nada que deshacer en esas rutas: {r:?}"
+        "there was nothing to undo at those paths: {r:?}"
     );
-    // Una más que ficheros: la propia carpeta `destino` también es un
-    // `created`, y la que hay ahora la creó el lector — otro nodo, misma
-    // respuesta.
+    // One more than the files: the `destination` folder itself is also a
+    // `created`, and the one that exists now was created by the reader —
+    // another node, same answer.
     assert_eq!(
         r.skipped_not_ours,
-        creados.len() as u64 + 1,
-        "se saltan TODAS y se dice cuántas, no solo la primera: {r:?}"
+        created.len() as u64 + 1,
+        "ALL of them are skipped and it says how many, not just the first: {r:?}"
     );
     assert!(
         r.blocked.is_none(),
-        "y no se para: lo que hay ahí lo puso el lector, no es una divergencia \
-         que nadie pueda explicar. {r:?}"
+        "and it does not stop: what is there was put by the reader, it is not \
+         a divergence nobody can explain. {r:?}"
     );
-    // Ni uno, no «casi ninguno»: como ya no se para en el primero, esto
-    // comprueba de verdad que la comprobación mira en todas.
-    for p in &creados {
-        let nombre = std::str::from_utf8(&p[b"file:///destino/".len()..]).expect("utf8");
+    // Not one, not "almost none": since it no longer stops at the first one,
+    // this really checks the check looks at all of them.
+    for p in &created {
+        let name = std::str::from_utf8(&p[b"file:///destination/".len()..]).expect("utf8");
         assert!(
-            destino.join(nombre).exists(),
-            "el deshacer se llevó {nombre}, que lo puso el lector: {r:?}"
+            destination.join(name).exists(),
+            "undo took down {name}, which the reader put there: {r:?}"
         );
     }
 }

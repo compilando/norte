@@ -1,125 +1,127 @@
-//! El panel de terminal (#362): un shell DENTRO de un hueco de la disposición.
+//! The terminal pane (#362): a shell INSIDE a layout slot.
 //!
-//! Es lo que Krusader tiene y norte no tenía. Lo que ya había es distinto y en
-//! una cosa mejor: `app.toggle-panels` cede la terminal ENTERA a un subshell
-//! vivo (ADR 0084) y `app.terminal` lanza un shell aparte. Lo que faltaba es
-//! verlo A LA VEZ que los listados.
+//! This is what Krusader has and norte did not. What already existed is
+//! different, and in one way better: `app.toggle-panels` hands the ENTIRE
+//! terminal over to a live subshell (ADR 0084), and `app.terminal` launches a
+//! separate shell. What was missing was seeing it AT THE SAME TIME as the
+//! listings.
 //!
-//! # El reparto
+//! # The split
 //!
-//! La emulación —los bytes a una rejilla de celdas— y el pty viven en
-//! `norte-term`: la primera siempre, el segundo tras su feature. Aquí queda
-//! solo el PINTADO con `ratatui`, que es lo único que no comparte con la
-//! ventana. El día que la ventana pinte su panel usará el mismo shell y la
-//! misma rejilla, así que los dos frontends enseñan lo mismo por construcción
-//! y no porque alguien compare dos emuladores.
+//! The emulation — bytes into a grid of cells — and the pty live in
+//! `norte-term`: the first always, the second behind its feature. What stays
+//! here is only the PAINTING with `ratatui`, the one thing it does not share
+//! with the window. The day the window paints its own pane it will use the
+//! same shell and the same grid, so the two frontends show the same thing by
+//! construction and not because someone compared two emulators.
 //!
-//! # Quién manda en el teclado
+//! # Who owns the keyboard
 //!
-//! Éste es el único panel que consume BYTES y no comandos del catálogo, así
-//! que mientras tiene las teclas se queda también con los acordes que serían
-//! de norte. La salida es UN acorde suelto —el mismo `layout.terminal` que lo
-//! abrió— y lo reconoce [`crate::keys`] antes de reenviar nada. Si el preset
-//! lo atara a una secuencia, `Effective::lone_chord` devuelve `None` y el
-//! panel NO toma las teclas: mejor un panel que se mira que uno del que no se
-//! puede salir.
+//! This is the only pane that consumes BYTES and not catalogue commands, so
+//! while it holds the keys it also keeps the chords that would otherwise
+//! belong to norte. The way out is ONE loose chord — the same
+//! `layout.terminal` that opened it — and [`crate::keys`] recognizes it
+//! before forwarding anything. If the preset bound it to a sequence,
+//! `Effective::lone_chord` returns `None` and the pane does NOT take the
+//! keys: a pane you can only look at is better than one you cannot leave.
 //!
-//! # Lo que este panel NO hace todavía
+//! # What this pane does NOT do yet
 //!
-//! No instala el gancho del prompt, así que el listado no sigue al shell ni el
-//! shell al listado: para eso está el subshell de #142, que sí lo instala. Un
-//! panel que tecleara `cd` en el shell del lector tiene los problemas de #363
-//! —y los tendría en un sitio donde el lector ve lo que pasa—, así que eso
-//! espera a que ese agujero esté cerrado.
+//! It does not install the prompt hook, so the listing does not follow the
+//! shell nor the shell the listing: that is what #142's subshell is for,
+//! which does install it. A pane that typed `cd` into the reader's shell has
+//! #363's problems — and would have them somewhere the reader watches it
+//! happen — so that waits until that hole is closed.
 
 use norte_term::{ColorTerm, Estilo, Pantalla};
 
-/// El shell del panel, con su rejilla. Es el de `norte-term`.
+/// The pane's shell, with its grid. It is `norte-term`'s.
 pub use norte_term::pty::Shell as TermPanel;
 
-/// El id del kind, que es también el sufijo de su comando.
+/// The kind's id, which is also its command's suffix.
 pub const KIND: &str = "terminal";
 
-/// El comando que abre el panel, le da el teclado y se lo quita.
+/// The command that opens the pane, gives it the keyboard, and takes it away.
 ///
-/// Es el MISMO que sale, y por eso está aquí y no escrito a mano en los dos
-/// sitios que lo buscan en el keymap: el acorde que lo corre es el único que
-/// el panel no le pasa al shell.
+/// It is the SAME one that exits, and that is why it lives here instead of
+/// being hand-written in the two places that look it up in the keymap: the
+/// chord that runs it is the only one the pane does not forward to the shell.
 pub const COMANDO: &str = "layout.terminal";
 
-/// Cómo se arranca el shell de un panel, con lo que norte decide.
+/// How a pane's shell is started, with what norte decides.
 ///
-/// El programa y el entorno los pone AQUÍ y no `norte-term`: resolver el shell
-/// del lector y el contrato de `NORTE_LEVEL` son reglas de norte, no de un
-/// emulador.
+/// The program and the environment are set HERE and not in `norte-term`:
+/// resolving the reader's shell and the `NORTE_LEVEL` contract are norte's
+/// rules, not an emulator's.
 ///
 /// # Errors
-/// Lo que falle al abrir el pty o al lanzar el shell.
-pub fn abrir(dir: &std::path::Path, tam: (u16, u16)) -> std::io::Result<TermPanel> {
+/// Whatever fails opening the pty or launching the shell.
+pub fn abrir(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<TermPanel> {
     norte_term::pty::Shell::abrir(
         &norte_term::pty::Arranque {
-            // `login_shell` se niega a devolver un `$SHELL` relativo y cae a
-            // `/bin/sh` (#302): sin eso, `portable_pty` lo buscaría por el
-            // `cwd`, que aquí es el directorio que el lector está mirando.
+            // `login_shell` refuses to return a relative `$SHELL` and falls
+            // back to `/bin/sh` (#302): without that, `portable_pty` would
+            // look it up via `cwd`, which here is the directory the reader is
+            // looking at.
             programa: &norte_frontend::shell::login_shell(),
             dir,
-            tam,
-            // El hijo sabe que está DENTRO de norte, igual que el subshell y
-            // que una suspensión: mismo contrato de `NORTE_LEVEL`, y el prompt
-            // del lector lo lee para decirlo.
+            tam: size,
+            // The child knows it is INSIDE norte, just like the subshell and
+            // a suspension do: the same `NORTE_LEVEL` contract, and the
+            // reader's prompt reads it to say so.
             env: &[(
                 norte_frontend::shell::LEVEL_VAR.into(),
                 norte_frontend::shell::next_norte_level().into(),
             )],
         },
-        // La misma tabla que contesta el subshell: una consulta de terminal se
-        // contesta igual venga de donde venga.
+        // The same table the subshell answers with: a terminal query gets
+        // the same answer no matter where it comes from.
         norte_frontend::subshell::terminal_reply,
     )
 }
 
-/// Las filas de la rejilla como spans de `ratatui`.
+/// The grid's rows as `ratatui` spans.
 ///
-/// El troceado —dónde se corta una fila— lo hace `norte-term`, porque es la
-/// misma decisión para los dos frontends y se toma una vez. Aquí solo se
-/// traduce cada tramo al estilo de este toolkit.
+/// The chunking — where a row is cut — is done by `norte-term`, because it is
+/// the same decision for both frontends and is made once. Here each segment
+/// is only translated into this toolkit's style.
 ///
-/// El contenido es AJENO y aun así no se enmascara nada: lo que sale de la
-/// rejilla ya no lleva ningún byte de control, y eso lo garantiza la rejilla,
-/// no este código.
+/// The content is FOREIGN and even so nothing is masked: what comes out of
+/// the grid no longer carries any control byte, and that is guaranteed by the
+/// grid, not by this code.
 #[must_use]
 pub fn filas<'a>(p: &Pantalla) -> Vec<ratatui::text::Line<'a>> {
     use ratatui::text::{Line, Span};
-    let (_, alto) = p.tamano();
-    (0..alto)
-        .map(|f| {
+    let (_, height) = p.tamano();
+    (0..height)
+        .map(|row| {
             Line::from(
-                p.fila_tramos(f)
+                p.fila_tramos(row)
                     .into_iter()
-                    .map(|(texto, estilo)| Span::styled(texto, estilo_de(estilo)))
+                    .map(|(text, style)| Span::styled(text, style_of(style)))
                     .collect::<Vec<Span<'a>>>(),
             )
         })
         .collect()
 }
 
-/// Un [`Estilo`] de terminal traducido al de `ratatui`.
+/// A terminal [`Estilo`] translated into `ratatui`'s.
 ///
-/// Un color INDEXADO pasa tal cual (`Color::Indexed`): en una terminal lo
-/// resuelve la paleta que el lector tiene puesta en su emulador, que es
-/// exactamente lo que haría si el programa corriera fuera de norte.
+/// An INDEXED color passes through as-is (`Color::Indexed`): on a terminal it
+/// is resolved by whatever palette the reader has set in their emulator,
+/// exactly what would happen if the program ran outside norte.
 ///
-/// **Por eso aquí no entra el tema de norte, ni como argumento.** Esto es
-/// contenido de OTRO programa, no cromo nuestro, y un tema que le cambiara los
-/// colores a un `ls --color` estaría mintiendo sobre lo que ese programa dijo.
-/// Lo nuestro es el marco, y el marco lo pinta quien lo dibuja.
-fn estilo_de(e: Estilo) -> ratatui::style::Style {
+/// **That is why norte's theme has no place here, not even as an argument.**
+/// This is ANOTHER program's content, not our chrome, and a theme that
+/// changed an `ls --color`'s colors would be lying about what that program
+/// said. Ours is the frame, and the frame is painted by whoever draws it.
+fn style_of(e: Estilo) -> ratatui::style::Style {
     use ratatui::style::{Modifier, Style};
     let mut s = Style::default();
-    if let Some(c) = color_de(e.fg) {
+    if let Some(c) = color_of(e.fg) {
         s = s.fg(c);
     }
-    if let Some(c) = color_de(e.bg) {
+    if let Some(c) = color_of(e.bg) {
         s = s.bg(c);
     }
     let mut m = Modifier::empty();
@@ -144,7 +146,7 @@ fn estilo_de(e: Estilo) -> ratatui::style::Style {
     s.add_modifier(m)
 }
 
-fn color_de(c: ColorTerm) -> Option<ratatui::style::Color> {
+fn color_of(c: ColorTerm) -> Option<ratatui::style::Color> {
     use ratatui::style::Color;
     match c {
         ColorTerm::PorDefecto => None,
@@ -153,39 +155,39 @@ fn color_de(c: ColorTerm) -> Option<ratatui::style::Color> {
     }
 }
 
-/// Dónde va el cursor dentro del área de contenido, si hay que pintarlo.
+/// Where the cursor goes within the content area, if it must be painted.
 ///
-/// Devuelve `None` cuando el shell lo escondió (`CSI ?25l`, que es lo que hace
-/// cualquier programa de pantalla completa) o cuando el panel no tiene las
-/// teclas: un cursor parpadeando en un panel que no las tiene dice que el
-/// teclado está ahí, y no lo está.
+/// Returns `None` when the shell hid it (`CSI ?25l`, which any full-screen
+/// program does) or when the pane does not have the keys: a cursor blinking
+/// in a pane that does not hold them says the keyboard is there, and it is
+/// not.
 #[must_use]
 pub fn cursor_en(
     p: &Pantalla,
     area: ratatui::layout::Rect,
-    con_teclado: bool,
+    has_keyboard: bool,
 ) -> Option<(u16, u16)> {
-    if !con_teclado || !p.cursor_visible() {
+    if !has_keyboard || !p.cursor_visible() {
         return None;
     }
-    let (fila, col) = p.cursor();
-    let (ancho, alto) = p.tamano();
-    // La columna puede valer tanto como el ancho —el estado «pendiente de
-    // salto»—, y ahí el cursor se pinta en la última celda: es donde un
-    // terminal de verdad lo deja.
-    let col = col.min(ancho.saturating_sub(1));
-    (fila < alto).then(|| (area.x + col, area.y + fila))
+    let (row, col) = p.cursor();
+    let (width, height) = p.tamano();
+    // The column can equal the width — the "pending wrap" state — and there
+    // the cursor is painted in the last cell: it is where a real terminal
+    // leaves it.
+    let col = col.min(width.saturating_sub(1));
+    (row < height).then(|| (area.x + col, area.y + row))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// El estilo de terminal llega a `ratatui` con los atributos puestos, y un
-    /// índice sigue siendo un índice: resolverlo aquí le quitaría al emulador
-    /// del lector su propia paleta.
+    /// A terminal style reaches `ratatui` with its attributes intact, and an
+    /// index stays an index: resolving it here would take away the reader's
+    /// emulator's own palette.
     #[test]
-    fn un_estilo_de_terminal_cruza_entero() {
+    fn a_terminal_style_crosses_over_whole() {
         let e = Estilo {
             fg: ColorTerm::Indexado(4),
             bg: ColorTerm::Rgb(1, 2, 3),
@@ -193,7 +195,7 @@ mod tests {
             subrayado: true,
             ..Estilo::default()
         };
-        let s = estilo_de(e);
+        let s = style_of(e);
         assert_eq!(s.fg, Some(ratatui::style::Color::Indexed(4)));
         assert_eq!(s.bg, Some(ratatui::style::Color::Rgb(1, 2, 3)));
         assert!(s.add_modifier.contains(ratatui::style::Modifier::BOLD));
@@ -203,38 +205,40 @@ mod tests {
         );
     }
 
-    /// Las celdas seguidas con el mismo estilo son UN span: ochenta spans por
-    /// fila es lo que hace que un `make` en el panel se note en el resto.
+    /// Cells in a row with the same style are ONE span: eighty spans per row
+    /// is what makes a `make` in the pane felt across the rest.
     #[test]
-    fn las_celdas_iguales_se_agrupan_en_un_span() {
+    fn equal_cells_group_into_one_span() {
         let mut p = Pantalla::nueva(10, 1);
         p.alimentar(b"aaa\x1b[31mbbb");
-        let filas = filas(&p);
-        let spans = &filas[0].spans;
-        // Tres y no dos: detrás de `bbb` quedan cuatro celdas sin escribir, y
-        // ésas llevan el estilo POR DEFECTO, no el rojo. Agruparlas con lo
-        // rojo pintaría el fondo del resto de la línea del color de la última
-        // orden, que es el fallo clásico de un emulador escrito a ojo.
-        assert_eq!(spans.len(), 3, "dos estilos y el relleno: {spans:?}");
+        let rows = filas(&p);
+        let spans = &rows[0].spans;
+        // Three, not two: after `bbb` four cells are left unwritten, and
+        // those carry the DEFAULT style, not red. Grouping them with the red
+        // one would paint the rest of the line's background with the last
+        // command's color, which is the classic bug of a hand-rolled
+        // emulator.
+        assert_eq!(spans.len(), 3, "two styles and the padding: {spans:?}");
         assert_eq!(spans[0].content, "aaa");
         assert_eq!(spans[1].content, "bbb");
         assert_eq!(spans[2].content, "    ");
         assert_eq!(spans[2].style, ratatui::style::Style::default());
     }
 
-    /// Sin teclado no se pinta cursor: sería decir que el teclado está aquí.
+    /// With no keyboard, no cursor is painted: that would say the keyboard is
+    /// here.
     #[test]
-    fn el_cursor_solo_se_pinta_con_el_teclado_dentro() {
+    fn the_cursor_is_only_painted_with_the_keyboard_inside() {
         let p = Pantalla::nueva(10, 3);
         let area = ratatui::layout::Rect::new(5, 2, 10, 3);
         assert_eq!(cursor_en(&p, area, false), None);
         assert_eq!(cursor_en(&p, area, true), Some((5, 2)));
     }
 
-    /// Y tampoco cuando el shell lo esconde, que es lo que hace cualquier
-    /// programa de pantalla completa mientras pinta.
+    /// And not either when the shell hides it, which any full-screen program
+    /// does while it paints.
     #[test]
-    fn un_cursor_escondido_no_se_pinta() {
+    fn a_hidden_cursor_is_not_painted() {
         let mut p = Pantalla::nueva(10, 3);
         p.alimentar(b"\x1b[?25l");
         let area = ratatui::layout::Rect::new(0, 0, 10, 3);

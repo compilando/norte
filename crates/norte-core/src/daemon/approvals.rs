@@ -1,16 +1,18 @@
-//! Router de aprobaciones del daemon (M3-3b Task 4): resuelve un `Ask` de
-//! policy con un round-trip humano por el wire. El gate del engine llama a
-//! [`ApprovalResolver::request`]; este router registra la pendiente, difunde
-//! `policy.approval_required` a los frontends suscritos y suspende la llamada
-//! hasta el `policy.decide` correspondiente (o el TTL, que deniega).
+//! Approval router for the daemon (M3-3b Task 4): resolves a policy `Ask`
+//! with a human round-trip over the wire. The engine's gate calls
+//! [`ApprovalResolver::request`]; this router registers the pending entry,
+//! broadcasts `policy.approval_required` to subscribed frontends and
+//! suspends the call until the matching `policy.decide` (or the TTL, which
+//! denies).
 //!
-//! Orden de construcción (el "chicken-egg" del plan): el resolver se crea
-//! ANTES que el engine y el daemon; el engine lo recibe en
-//! [`Engine::with_policy`](crate::Engine::with_policy) y el daemon en
-//! [`Daemon::bind_with_policy`](super::Daemon::bind_with_policy), que le
-//! inyecta el broadcaster (la salida hacia los suscriptores). Sin broadcaster
-//! instalado (engine sin daemon), un `Ask` se deniega INMEDIATO fail-closed:
-//! nadie podría oír la pregunta, colgar el TTL solo retrasaría lo inevitable.
+//! Construction order (the plan's "chicken-egg"): the resolver is created
+//! BEFORE the engine and the daemon; the engine receives it in
+//! [`Engine::with_policy`](crate::Engine::with_policy) and the daemon in
+//! [`Daemon::bind_with_policy`](super::Daemon::bind_with_policy), which
+//! injects the broadcaster (the outlet toward subscribers) into it. With no
+//! broadcaster installed (engine without a daemon), an `Ask` is denied
+//! IMMEDIATELY, fail-closed: nobody could hear the question, and letting the
+//! TTL hang would only delay the inevitable.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -24,62 +26,65 @@ use tokio::sync::oneshot;
 use crate::approval::{ApprovalOutcome, ApprovalRequest, ApprovalResolver};
 use crate::journal::Actor;
 
-/// TTL por defecto de una aprobación pendiente: vencido, el `Ask` se deniega
-/// (`not-approved`). Un humano ausente no deja la operación colgada eterna.
+/// Default TTL of a pending approval: once it expires, the `Ask` is denied
+/// (`not-approved`). An absent human does not leave the operation hanging
+/// forever.
 pub const DEFAULT_APPROVAL_TTL: Duration = Duration::from_mins(1);
 
-/// Aprobaciones pendientes simultáneas toleradas. Estructuralmente ya están
-/// acotadas (cada pendiente suspende el dispatch SERIAL de una conexión, y las
-/// conexiones tienen su propio tope), pero el cinturón es barato: por encima,
-/// un `Ask` nuevo se deniega fail-closed en vez de crecer sin límite.
+/// Simultaneous pending approvals tolerated. They are already structurally
+/// bounded (each pending entry suspends the SERIAL dispatch of one
+/// connection, and connections have their own cap), but the belt is cheap:
+/// above this, a new `Ask` is denied fail-closed instead of growing without
+/// limit.
 const MAX_PENDING_APPROVALS: usize = 256;
 
-/// Salida del router hacia los frontends: encapsula el encode + broadcast del
-/// daemon sin que este módulo conozca su `Shared` (lo instala
-/// `bind_with_policy` con un closure que captura un `Weak`).
+/// Outlet from the router toward the frontends: encapsulates the daemon's
+/// encode + broadcast without this module knowing its `Shared` (installed by
+/// `bind_with_policy` with a closure that captures a `Weak`).
 type Broadcaster = Box<dyn Fn(PolicyApprovalRequired) + Send + Sync>;
 
-/// Qué pasó al intentar decidir una aprobación (#279).
+/// What happened when trying to decide an approval (#279).
 ///
-/// Los tres modos de fallo son distintos para quien mira la pantalla: uno
-/// dice «vuelve a intentarlo», otro «llegaste tarde» y el tercero «esa
-/// aprobación no es de este daemon». Colapsarlos en un booleano obligaba al
-/// frontend a elegir una frase y acertar un tercio de las veces.
+/// The three failure modes read differently to whoever is looking at the
+/// screen: one says "try again", another "you were too late" and the third
+/// "that approval does not belong to this daemon". Collapsing them into a
+/// boolean forced the frontend to pick one phrasing and be right a third of
+/// the time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
-    /// Decidida: el gate suspendido se despertó con la respuesta.
+    /// Decided: the suspended gate woke up with the answer.
     Aplicada,
-    /// Estaba pendiente, pero el peticionario ya no escucha — su TTL venció o
-    /// su dispatch se canceló. La decisión no tuvo efecto.
+    /// It was pending, but the requester is no longer listening — its TTL
+    /// expired or its dispatch was cancelled. The decision had no effect.
     Vencida,
-    /// Ese id existió y ya no está pendiente: alguien lo resolvió antes —otra
-    /// ventana, su propio TTL barriéndolo, o el peticionario RETIRÁNDOLO con
-    /// un `rpc.cancel`—.
+    /// That id existed and is no longer pending: someone resolved it earlier
+    /// — another window, its own TTL sweeping it, or the requester WITHDRAWING
+    /// it with an `rpc.cancel`.
     ///
-    /// Los tres se cuentan juntos porque el consejo a quien pulsó es el mismo
-    /// —esa decisión ya no es suya, refresca la lista— y porque distinguirlos
-    /// pediría recordar por qué salió cada id, que es memoria por un matiz que
-    /// nadie usa.
+    /// The three are counted together because the advice to whoever clicked
+    /// is the same — that decision is no longer theirs, refresh the list —
+    /// and because telling them apart would mean remembering why each id
+    /// left, which is memory spent on a nuance nobody uses.
     YaDecidida,
-    /// Ese id no se ha emitido nunca en este proceso. Un modal rancio de antes
-    /// de un reinicio del daemon aterriza aquí.
+    /// That id was never issued in this process. A stale modal from before a
+    /// daemon restart lands here.
     Desconocida,
 }
 
-/// Una aprobación en vuelo: metadatos para `policy.pending` (resync) y el
-/// canal por el que `policy.decide` despierta al gate suspendido.
+/// An approval in flight: metadata for `policy.pending` (resync) and the
+/// channel through which `policy.decide` wakes up the suspended gate.
 struct PendingEntry {
     session: Option<String>,
     op: String,
     paths: Vec<String>,
-    /// Cuántas rutas cubre la decisión (`paths` puede ser un prefijo). Se
-    /// retiene para que el RESYNC de `policy.pending` diga lo mismo que dijo la
-    /// notificación: un frontend que reconecta no puede ver una lista recortada
-    /// creyendo que está entera.
+    /// How many paths the decision covers (`paths` can be a prefix). Kept so
+    /// the RESYNC of `policy.pending` says the same thing the notification
+    /// said: a frontend that reconnects must not see a trimmed list and
+    /// believe it is the whole thing.
     paths_total: u64,
-    /// Lo que la op AÑADE a la pregunta (#314): hoy, el modo de un `set-mode`.
-    /// Se retiene por lo mismo que `paths_total` — el resync tiene que decir
-    /// lo mismo que dijo la notificación.
+    /// What the op ADDS to the question (#314): today, the mode of a
+    /// `set-mode`. Kept for the same reason as `paths_total` — the resync
+    /// has to say the same thing the notification said.
     detail: norte_proto::methods::ApprovalDetail,
     decide: oneshot::Sender<bool>,
 }
@@ -87,20 +92,21 @@ struct PendingEntry {
 struct Inner {
     pending: Mutex<HashMap<u64, PendingEntry>>,
     next_id: AtomicU64,
-    /// El PRIMER id que este proceso pudo emitir (#279).
+    /// The FIRST id this process could have issued (#279).
     ///
-    /// Hace falta porque la secuencia no arranca en cero: se siembra con el
-    /// reloj para que un modal rancio de antes de un reinicio no acierte por
-    /// colisión. Sin esta cota, «existió» se decidiría solo con `id < next_id`
-    /// y CUALQUIER número pequeño inventado pasaría por «ya decidida», que es
-    /// justo la explicación equivocada para un id que nadie emitió nunca.
+    /// Needed because the sequence does not start at zero: it is seeded from
+    /// the clock so that a stale modal from before a restart cannot match by
+    /// collision. Without this bound, "existed" would be decided solely by
+    /// `id < next_id`, and ANY small made-up number would pass as "already
+    /// decided", which is exactly the wrong explanation for an id that was
+    /// never issued at all.
     first_id: u64,
     broadcaster: Mutex<Option<Broadcaster>>,
 }
 
-/// Resolver de `Ask` del daemon (M3-3b). Se comparte por `Arc` entre el engine
-/// (que lo llama desde el gate) y el `Shared` del daemon (que le enruta
-/// `policy.decide`/`policy.pending`).
+/// The daemon's `Ask` resolver (M3-3b). Shared via `Arc` between the engine
+/// (which calls it from the gate) and the daemon's `Shared` (which routes
+/// `policy.decide`/`policy.pending` to it).
 pub struct DaemonApprovalResolver {
     inner: Arc<Inner>,
     ttl: Duration,
@@ -113,14 +119,14 @@ impl Default for DaemonApprovalResolver {
 }
 
 impl DaemonApprovalResolver {
-    /// Con un TTL explícito por aprobación (los tests usan uno corto).
+    /// With an explicit per-approval TTL (tests use a short one).
     #[must_use]
     pub fn new(ttl: Duration) -> Self {
-        // Arranque NO-cero (security MINOR-1): tras un restart del daemon, un
-        // frontend con un modal rancio que reconecta no debe acertar por
-        // colisión con una pendiente NUEVA (ambas secuencias arrancarían en
-        // 0). El reloj basta como separador best-effort; la unicidad intra-
-        // proceso la da el fetch_add.
+        // NON-zero start (security MINOR-1): after a daemon restart, a
+        // frontend reconnecting with a stale modal must not match by
+        // collision with a NEW pending entry (both sequences would otherwise
+        // start at 0). The clock is enough as a best-effort separator;
+        // intra-process uniqueness comes from the fetch_add.
         let seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| {
@@ -137,44 +143,47 @@ impl DaemonApprovalResolver {
         }
     }
 
-    /// Instala la salida hacia los frontends. La llama el daemon al enlazar
-    /// (`bind_with_policy`); pisar una previa es un no-op razonable (último
-    /// daemon gana — en la práctica hay uno).
+    /// Installs the outlet toward the frontends. Called by the daemon when
+    /// binding (`bind_with_policy`); overwriting a previous one is a
+    /// reasonable no-op (last daemon wins — in practice there is one).
     ///
     /// # Panics
-    /// Solo si el lock interno queda envenenado.
+    /// Only if the internal lock is poisoned.
     pub fn set_broadcaster(&self, b: Broadcaster) {
         *self
             .inner
             .broadcaster
             .lock()
-            .expect("broadcaster lock sano") = Some(b);
+            .expect("broadcaster lock is sound") = Some(b);
     }
 
-    /// Resuelve la pendiente `approval_id` con `approve` y despierta al gate.
+    /// Resolves the pending `approval_id` with `approve` and wakes up the
+    /// gate.
     ///
-    /// Una decisión CONSUME la pendiente — un segundo `decide` del mismo id
-    /// falla (anti doble-decisión).
+    /// A decision CONSUMES the pending entry — a second `decide` on the same
+    /// id fails (anti double-decision).
     ///
-    /// **Distingue las tres formas de fallar** (#279), porque piden respuestas
-    /// distintas de quien mira la pantalla y antes se colapsaban en un solo
-    /// `false` que el frontend solo podía contar como «tu clic no llegó» —
-    /// verdad en uno de los tres casos y mentira en los otros dos.
+    /// **Distinguishes the three ways of failing** (#279), because they call
+    /// for different answers to whoever is looking at the screen and used to
+    /// be collapsed into a single `false` that the frontend could only read
+    /// as "your click didn't get through" — true in one of the three cases
+    /// and false in the other two.
     ///
     /// # Panics
-    /// Solo si el lock interno queda envenenado.
+    /// Only if the internal lock is poisoned.
     #[must_use]
     pub fn decide(&self, approval_id: u64, approve: bool) -> Decision {
         let entry = self
             .inner
             .pending
             .lock()
-            .expect("pending approvals lock sano")
+            .expect("pending approvals lock is sound")
             .remove(&approval_id);
         match entry {
-            // `send` falla si el receptor murió en la carrera: el TTL ya se
-            // consumió o el dispatch se canceló. La decisión NO tuvo efecto y
-            // el ack no puede mentir (ni el log de auditoría M3-5).
+            // `send` fails if the receiver died in the race: the TTL was
+            // already consumed or the dispatch was cancelled. The decision
+            // had NO effect and the ack must not lie (nor the M3-5 audit
+            // log).
             Some(e) => {
                 if e.decide.send(approve).is_ok() {
                     Decision::Aplicada
@@ -182,12 +191,12 @@ impl DaemonApprovalResolver {
                     Decision::Vencida
                 }
             }
-            // No está pendiente. El id lo dice, pero hacen falta las DOS cotas:
-            // la secuencia arranca en una semilla del reloj, así que «menor que
-            // el siguiente» por sí solo daría por existente cualquier número
-            // pequeño que alguien invente. Dentro del rango que este proceso ha
-            // emitido, existió y ya lo resolvió alguien; fuera, no se emitió
-            // nunca aquí.
+            // Not pending. The id alone says so, but it takes BOTH bounds:
+            // the sequence starts at a clock-derived seed, so "less than
+            // next" alone would treat any small made-up number as existing.
+            // Within the range this process has issued, it existed and
+            // someone already resolved it; outside it, it was never issued
+            // here.
             None if (self.inner.first_id..self.inner.next_id.load(Ordering::Relaxed))
                 .contains(&approval_id) =>
             {
@@ -197,19 +206,19 @@ impl DaemonApprovalResolver {
         }
     }
 
-    /// Instantánea de las aprobaciones pendientes (resync de `policy.pending`
-    /// para un frontend que conecta después del broadcast). Orden estable por
+    /// Snapshot of the pending approvals (resync of `policy.pending` for a
+    /// frontend that connects after the broadcast). Stable order by
     /// `approval_id`.
     ///
     /// # Panics
-    /// Solo si el lock interno queda envenenado.
+    /// Only if the internal lock is poisoned.
     #[must_use]
     pub fn pending(&self) -> Vec<PendingApproval> {
         let map = self
             .inner
             .pending
             .lock()
-            .expect("pending approvals lock sano");
+            .expect("pending approvals lock is sound");
         let mut out: Vec<PendingApproval> = map
             .iter()
             .map(|(&approval_id, e)| PendingApproval {
@@ -226,19 +235,19 @@ impl DaemonApprovalResolver {
     }
 }
 
-/// Guard RAII de la pendiente: si el future de [`request`] se cancela (el
-/// shutdown del daemon corta el dispatch) o el TTL vence, la entrada sale del
-/// mapa al soltarse el guard — jamás una pendiente huérfana que
-/// `policy.pending` mostraría para siempre. Tras un `decide` el remove es un
-/// no-op benigno.
+/// RAII guard for the pending entry: if the [`request`] future is cancelled
+/// (daemon shutdown cuts the dispatch) or the TTL expires, the entry leaves
+/// the map when the guard is dropped — never an orphaned pending entry that
+/// `policy.pending` would show forever. After a `decide`, the remove is a
+/// benign no-op.
 ///
-/// La MUERTE de la conexión peticionaria SÍ cancela este future (#64,
-/// resuelto): la lectura del socket vive en su propia task y un EOF/reset
-/// cancela `peer_gone`, dropeando el dispatch suspendido → este guard retira
-/// la pendiente. (Punto ciego residual acotado: si el peer dejó >`INBOX_FRAMES`
-/// frames en vuelo, el reader queda bloqueado en el envío al inbox y no
-/// observa el EOF hasta que el Ask resuelva por TTL — los clientes de norte
-/// son request/response, así que no aplica.)
+/// The requesting connection's DEATH DOES cancel this future (#64, solved):
+/// reading the socket lives in its own task, and an EOF/reset cancels
+/// `peer_gone`, dropping the suspended dispatch → this guard removes the
+/// pending entry. (Residual, bounded blind spot: if the peer left more than
+/// `INBOX_FRAMES` frames in flight, the reader stays blocked sending to the
+/// inbox and does not observe the EOF until the Ask resolves by TTL — norte's
+/// clients are request/response, so this does not apply.)
 ///
 /// [`request`]: ApprovalResolver::request
 struct PendingGuard {
@@ -251,36 +260,38 @@ impl Drop for PendingGuard {
         self.inner
             .pending
             .lock()
-            .expect("pending approvals lock sano")
+            .expect("pending approvals lock is sound")
             .remove(&self.id);
     }
 }
 
 #[async_trait]
 impl ApprovalResolver for DaemonApprovalResolver {
-    /// Suspende hasta `policy.decide` o TTL. La suspensión retiene SOLO el
-    /// dispatch (serial) de la conexión que pidió la op — no el pool de
-    /// workers del scheduler ni a otras conexiones.
+    /// Suspends until `policy.decide` or TTL. The suspension holds ONLY the
+    /// (serial) dispatch of the connection that requested the op — not the
+    /// scheduler's worker pool nor other connections.
     async fn request(&self, req: ApprovalRequest) -> ApprovalOutcome {
-        // La sesión de display sale del ACTOR fijado server-side en el
-        // handshake, jamás de nada que el peticionario declare aquí.
+        // The display session comes from the ACTOR fixed server-side at the
+        // handshake, never from anything the requester declares here.
         let session = match &req.actor {
             Actor::User => None,
             Actor::Agent { session } => Some(session.clone()),
-            // M4: el id de plugin viaja en `session` como identificador de
-            // display — si el modelo de plugins pide distinguirlo en el wire,
-            // será campo nuevo en proto, no sobrecarga de este.
+            // M4: the plugin id travels in `session` as a display
+            // identifier — if the plugin model needs to distinguish it on
+            // the wire, that will be a new proto field, not overloading
+            // this one.
             Actor::Plugin { id } => Some(id.clone()),
         };
         let op = req.op.kind().to_owned();
-        // #314: lo que la op añade a la pregunta. Para todas menos una, nada:
-        // la op y las rutas SON la decisión. Un `set-mode` no, porque dos con
-        // las mismas rutas y modos distintos significan cosas opuestas.
+        // #314: what the op adds to the question. For all but one, nothing:
+        // the op and the paths ARE the decision. Not `set-mode`, because two
+        // requests with the same paths and different modes mean opposite
+        // things.
         let detail = match &req.op {
-            // #315: y con el ALCANCE, no solo el modo. Un recursivo sobre una
-            // raíz se preguntaba como «set-mode sobre 1 ruta» y lo que se
-            // aprobaba eran cien mil nodos: el mismo agujero que el modo vino
-            // a cerrar en 0.61, una talla más grande.
+            // #315: and with the SCOPE, not just the mode. A recursive
+            // change on a root used to be asked as "set-mode on 1 path" while
+            // what was actually being approved was a hundred thousand nodes:
+            // the same hole the mode came to close in 0.61, one size bigger.
             crate::policy::PolicyOp::SetMode {
                 mode,
                 recursive,
@@ -299,9 +310,9 @@ impl ApprovalResolver for DaemonApprovalResolver {
                 .inner
                 .pending
                 .lock()
-                .expect("pending approvals lock sano");
+                .expect("pending approvals lock is sound");
             if pending.len() >= MAX_PENDING_APPROVALS {
-                tracing::warn!("aprobaciones pendientes al tope; Ask denegado fail-closed");
+                tracing::warn!("pending approvals at capacity; Ask denied fail-closed");
                 return ApprovalOutcome::Denied;
             }
             pending.insert(
@@ -320,16 +331,16 @@ impl ApprovalResolver for DaemonApprovalResolver {
             inner: Arc::clone(&self.inner),
             id,
         };
-        // Difunde DESPUÉS de registrar: un `policy.pending` concurrente la ve
-        // por uno de los dos caminos, jamás por ninguno.
+        // Broadcast AFTER registering: a concurrent `policy.pending` sees it
+        // through one of the two paths, never through neither.
         {
             let broadcaster = self
                 .inner
                 .broadcaster
                 .lock()
-                .expect("broadcaster lock sano");
+                .expect("broadcaster lock is sound");
             let Some(broadcast) = broadcaster.as_ref() else {
-                tracing::warn!("Ask sin broadcaster instalado: denegado fail-closed");
+                tracing::warn!("Ask with no broadcaster installed: denied fail-closed");
                 return ApprovalOutcome::Denied;
             };
             broadcast(PolicyApprovalRequired {
@@ -344,8 +355,8 @@ impl ApprovalResolver for DaemonApprovalResolver {
         }
         match tokio::time::timeout(self.ttl, rx).await {
             Ok(Ok(true)) => ApprovalOutcome::Approved,
-            // El sender solo muere sin enviar si el resolver entero se está
-            // desmontando: denegar es lo único honesto.
+            // The sender only dies without sending if the whole resolver is
+            // being torn down: denying is the only honest thing to do.
             Ok(Ok(false) | Err(_)) => ApprovalOutcome::Denied,
             Err(_elapsed) => ApprovalOutcome::TimedOut,
         }
@@ -372,7 +383,8 @@ mod tests {
         })
     }
 
-    /// Espera (con tope) a que haya exactamente `n` pendientes registradas.
+    /// Waits (with a cap) until there are exactly `n` pending entries
+    /// registered.
     async fn wait_pending(resolver: &DaemonApprovalResolver, n: usize) {
         for _ in 0..200 {
             if resolver.pending().len() == n {
@@ -380,38 +392,41 @@ mod tests {
             }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-        panic!("nunca hubo {n} pendientes");
+        panic!("never reached {n} pending entries");
     }
 
     #[tokio::test]
-    async fn sin_broadcaster_deniega_inmediato_fail_closed() {
+    async fn no_broadcaster_denies_immediately_fail_closed() {
         let r = Arc::new(DaemonApprovalResolver::new(Duration::from_secs(30)));
         let out = ask(&r).await.expect("join");
         assert_eq!(out, ApprovalOutcome::Denied);
-        assert!(r.pending().is_empty(), "el guard limpió la pendiente");
+        assert!(
+            r.pending().is_empty(),
+            "the guard cleaned up the pending entry"
+        );
     }
 
     #[tokio::test]
-    async fn decide_aprueba_y_consume_la_pendiente() {
+    async fn decide_approves_and_consumes_the_pending_entry() {
         let r = Arc::new(DaemonApprovalResolver::new(Duration::from_secs(30)));
         r.set_broadcaster(Box::new(|_| {}));
         let task = ask(&r);
         wait_pending(&r, 1).await;
         let id = r.pending()[0].approval_id;
-        assert_eq!(r.decide(id, true), Decision::Aplicada, "existía");
+        assert_eq!(r.decide(id, true), Decision::Aplicada, "it existed");
         assert_eq!(task.await.expect("join"), ApprovalOutcome::Approved);
-        // Una decisión consume el id — y lo que se contesta al segundo intento
-        // es «ya la decidió alguien», no «no existe» (#279): con dos ventanas
-        // abiertas eso es exactamente lo que ha pasado.
+        // A decision consumes the id — and what a second attempt is told is
+        // "someone already decided it", not "it doesn't exist" (#279): with
+        // two windows open that is exactly what happened.
         assert_eq!(r.decide(id, true), Decision::YaDecidida);
         assert!(r.pending().is_empty());
     }
 
-    /// Un id que este proceso no ha emitido nunca se distingue de uno que ya
-    /// se decidió (#279): el primero es un modal rancio de antes de un
-    /// reinicio, y el consejo al usuario no es el mismo.
+    /// An id this process never issued is distinguished from one already
+    /// decided (#279): the former is a stale modal from before a restart,
+    /// and the advice to the user is not the same.
     #[tokio::test]
-    async fn un_id_jamas_emitido_es_desconocido() {
+    async fn an_id_never_issued_is_unknown() {
         let r = Arc::new(DaemonApprovalResolver::new(Duration::from_secs(30)));
         r.set_broadcaster(Box::new(|_| {}));
         let task = ask(&r);
@@ -421,13 +436,14 @@ mod tests {
             r.decide(id.saturating_add(1000), true),
             Decision::Desconocida
         );
-        // Y la de verdad sigue pendiente: preguntar por otra no la toca.
+        // And the real one is still pending: asking about another does not
+        // touch it.
         assert_eq!(r.decide(id, false), Decision::Aplicada);
         let _ = task.await;
     }
 
     #[tokio::test]
-    async fn decide_deniega() {
+    async fn decide_denies() {
         let r = Arc::new(DaemonApprovalResolver::new(Duration::from_secs(30)));
         r.set_broadcaster(Box::new(|_| {}));
         let task = ask(&r);
@@ -438,30 +454,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ttl_vencido_es_timed_out_y_limpia() {
+    async fn expired_ttl_is_timed_out_and_cleans_up() {
         let r = Arc::new(DaemonApprovalResolver::new(Duration::from_millis(50)));
         r.set_broadcaster(Box::new(|_| {}));
         let task = ask(&r);
         assert_eq!(task.await.expect("join"), ApprovalOutcome::TimedOut);
-        assert!(r.pending().is_empty(), "el TTL no deja huérfanas");
+        assert!(r.pending().is_empty(), "the TTL leaves no orphans");
     }
 
     #[tokio::test]
-    async fn cancelar_el_future_limpia_la_pendiente() {
+    async fn cancelling_the_future_cleans_up_the_pending_entry() {
         let r = Arc::new(DaemonApprovalResolver::new(Duration::from_secs(30)));
         r.set_broadcaster(Box::new(|_| {}));
         let task = ask(&r);
         wait_pending(&r, 1).await;
-        // El future se cancela (en el daemon real: el shutdown corta el
-        // dispatch — la muerte del peer NO llega aquí, ver rustdoc del guard
-        // e issue #64). El guard debe sacar la pendiente del mapa.
+        // The future is cancelled (in the real daemon: shutdown cuts the
+        // dispatch — the peer's death does NOT arrive here, see the guard's
+        // rustdoc and issue #64). The guard must remove the pending entry
+        // from the map.
         task.abort();
         let _ = task.await;
         wait_pending(&r, 0).await;
     }
 
     #[tokio::test]
-    async fn la_notificacion_lleva_lo_registrado() {
+    async fn the_notification_carries_what_was_registered() {
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<PolicyApprovalRequired>();
         let r = Arc::new(DaemonApprovalResolver::new(Duration::from_millis(50)));
         r.set_broadcaster(Box::new(move |n| {
@@ -470,8 +487,8 @@ mod tests {
         let task = ask(&r);
         let notif = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
-            .expect("el broadcast salió")
-            .expect("canal vivo");
+            .expect("the broadcast went out")
+            .expect("channel alive");
         assert_eq!(notif.session.as_deref(), Some("s1"));
         assert_eq!(notif.op, "copy");
         assert_eq!(notif.paths, vec!["mem:///a".to_string()]);

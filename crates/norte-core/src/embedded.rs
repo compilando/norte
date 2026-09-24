@@ -1,187 +1,197 @@
-//! El journal del proceso EMBEBIDO (#167), abierto en la PRIMERA mutación
+//! The journal of the EMBEDDED process (#167), opened on the FIRST mutation
 //! (#177).
 //!
-//! La regla dura 4 —«toda mutación pasa por el journal»— se afirmaba en
-//! `CLAUDE.md` y se cumplía en un solo método: `sync.apply` exige journal y
-//! rehúsa sin él, mientras copiar, mover, borrar, renombrar y enterrar por el
-//! transporte embebido no registraban nada. Este módulo es la otra mitad: el
-//! TUI y el CLI sin daemon usan EL journal del directorio de estado, el mismo
-//! que abriría el daemon.
+//! Hard rule 4 —"every mutation goes through the journal"— was asserted in
+//! `CLAUDE.md` and was honored in a single method: `sync.apply` requires a
+//! journal and refuses without one, while copy, move, delete, rename and bury
+//! over the embedded transport recorded nothing. This module is the other
+//! half: the TUI and the daemon-less CLI use THE journal of the state
+//! directory, the same one the daemon would open.
 //!
-//! # Un solo escritor, y quién se lo queda
+//! # A single writer, and who holds it
 //!
-//! La cadena de hashes del journal asume un dueño único (spec §4, ADR 0024), y
-//! quien lo impone no es una convención: [`crate::journal::Journal::open`] abre
-//! `SQLite` con `locking_mode=EXCLUSIVE`. Un segundo proceso —otro TUI embebido, o
-//! el daemon corriendo— pierde la carrera al abrir con `database is locked`.
+//! The journal's hash chain assumes a single owner (spec §4, ADR 0024), and
+//! what enforces it is not a convention: [`crate::journal::Journal::open`] opens
+//! `SQLite` with `locking_mode=EXCLUSIVE`. A second process —another embedded
+//! TUI, or the running daemon— loses the race when opening, with
+//! `database is locked`.
 //!
-//! Ese caso NO impide arrancar. Un `norte cp` que deja de funcionar porque hay
-//! un daemon vivo sería peor que la falta de registro que arregla esto: se
-//! sigue sin journal, se avisa, y el TUI ya atenúa lo que exige journal
-//! (`pane.sync-dirs`) con su razón visible.
+//! That case does NOT stop startup. A `norte cp` that stops working because a
+//! daemon is alive would be worse than the missing record this fixes: it
+//! keeps going without a journal, it warns, and the TUI already dims what
+//! requires a journal (`pane.sync-dirs`) with its reason visible.
 //!
-//! # Por qué PEREZOSO
+//! # Why LAZY
 //!
-//! Abrirlo en el arranque hacía dueño del fichero a un proceso que a lo mejor
-//! no escribe una fila en toda su vida, y el dueño lo es MIENTRAS VIVE: un
-//! `ntc` navegando impedía arrancar el daemon —y con él `norte mcp serve`, o
-//! sea el gobierno de los agentes— y le negaba la lectura a `norte audit`
-//! (#177). Con [`LazyJournal`] el lock se toma en la primera mutación, que es
-//! el primer instante en que hace falta y el único en que el estorbo se
-//! justifica. Corolario que ordena el resto del módulo: la definición de «este
-//! proceso quiere el journal» dejó de ser una lista de subcomandos que había
-//! que mantener a mano y pasó a ser la que de verdad importa — **emite una
-//! [`Mutation`](crate::observer::Mutation), o pide la cadena para deshacerla**.
+//! Opening it at startup made the owner of the file a process that might
+//! never write a single row in its whole life, and the owner holds it WHILE
+//! ALIVE: a browsing `ntc` prevented the daemon from starting —and with it
+//! `norte mcp serve`, i.e. agent governance— and denied `norte audit` its read
+//! (#177). With [`LazyJournal`] the lock is taken on the first mutation, which
+//! is the first instant it is needed and the only one where the nuisance is
+//! justified. A corollary that orders the rest of the module: the definition
+//! of "this process wants the journal" stopped being a list of subcommands
+//! that had to be kept by hand and became the one that actually matters —
+//! **it emits a [`Mutation`](crate::observer::Mutation), or it asks for the
+//! chain to undo it**.
 //!
-//! El aviso viaja con esa misma pereza: no hay nada que avisar hasta que se
-//! intenta abrir. Por eso [`LazyJournal::set_warning_sink`] existe — el TUI no
-//! tiene subscriber de `tracing` y el aviso tiene que llegar A LA PANTALLA, en
-//! la sesión, cuando ocurre.
+//! The warning travels with that same laziness: there is nothing to warn
+//! about until an open is attempted. That's why [`LazyJournal::set_warning_sink`]
+//! exists — the TUI has no `tracing` subscriber and the warning has to reach
+//! THE SCREEN, in the session, when it happens.
 //!
-//! # La ventana de propiedad se abre y se cierra más de una vez (#179)
+//! # The ownership window opens and closes more than once (#179)
 //!
-//! El dueño lo era MIENTRAS VIVÍA, y el veredicto se decidía UNA vez. Las dos
-//! cosas eran la misma: una ventana de propiedad que solo sabía abrirse.
+//! The owner held it WHILE ALIVE, and the verdict was decided ONCE. The two
+//! things were the same thing: an ownership window that only knew how to
+//! open.
 //!
-//! - **Se reintenta, con freno.** Si en la primera mutación el journal era de
-//!   otro, esta sesión vuelve a intentarlo — como mucho una vez cada
-//!   [`FRENO_TRAS_FALLO`], para no pagar `ESPERA_POR_EL_LOCK` por mutación.
-//!   El ocupante suele ser de paso (otro `norte cp` de un script, un `norte
-//!   audit`, un daemon reiniciándose) y un cuarto de segundo de solape marcaba
-//!   una sesión de tres horas. Reintentar tras un fallo es seguro: un intento
-//!   FALLIDO no construye ningún `ChainState`.
-//! - **Y se suelta**, con [`LazyJournal::release`], que cierra el pool y
-//!   devuelve el fichero. Solo cuando nadie más sostiene el handle: abrir un
-//!   segundo sobre el mismo fichero sería este proceso quitándose el journal a
-//!   sí mismo. La POLÍTICA es [`LazyJournal::release_if_idle`], y vive aquí y
-//!   no en el frontend porque el reloj de «cuándo se usó» es de esta ventana y
-//!   porque decidir y cerrar tienen que pasar bajo el MISMO lock; el frontend
-//!   solo elige cada cuánto preguntar (el TUI, en su tick de sesión).
-//! - **Reabrir RELEE la cadena, y eso no es negociable.** `ChainState`
-//!   (`last_seq`, `last_hash`) sale del fichero en CADA adquisición porque
-//!   [`crate::journal::Journal`] se construye de nuevo: un par viejo choca
-//!   contra la PK de `seq`, y como `last_seq` solo avanza al acertar, fallarían
-//!   TODAS las mutaciones siguientes — un efecto aplicado sin su fila, en
-//!   bucle. Por eso `release` DESTRUYE el handle en vez de guardarlo.
-//! - **Cada transición llega al sink**, la recuperación incluida
-//!   ([`JournalStatus`]). El TUI pinta un indicador permanente de «esta sesión
-//!   NO queda registrada» y una sesión que volviera a registrar en silencio lo
-//!   convertiría en mentira.
+//! - **It retries, with a brake.** If on the first mutation the journal
+//!   belonged to someone else, this session tries again — at most once every
+//!   [`FRENO_TRAS_FALLO`], so as not to pay `LOCK_WAIT` per mutation.
+//!   The occupant is usually transient (another `norte cp` from a script, a
+//!   `norte audit`, a daemon restarting) and a quarter of a second of overlap
+//!   used to mark a three-hour session. Retrying after a failure is safe: a
+//!   FAILED attempt builds no `ChainState`.
+//! - **And it is released**, with [`LazyJournal::release`], which closes the
+//!   pool and returns the file. Only when nobody else holds the handle:
+//!   opening a second one over the same file would be this process taking the
+//!   journal away from itself. The POLICY is [`LazyJournal::release_if_idle`],
+//!   and it lives here and not in the frontend because the clock for "when it
+//!   was last used" belongs to this window, and because deciding and closing
+//!   have to happen under the SAME lock; the frontend only chooses how often
+//!   to ask (the TUI, on its session tick).
+//! - **Reopening RE-READS the chain, and that is not negotiable.**
+//!   `ChainState` (`last_seq`, `last_hash`) comes out of the file on EVERY
+//!   acquisition because [`crate::journal::Journal`] is built anew: a stale
+//!   pair collides with the `seq` PK, and since `last_seq` only advances on a
+//!   hit, EVERY following mutation would fail — an effect applied without its
+//!   row, in a loop. That's why `release` DESTROYS the handle instead of
+//!   keeping it.
+//! - **Every transition reaches the sink**, recovery included
+//!   ([`JournalStatus`]). The TUI paints a permanent indicator of "this
+//!   session is NOT being recorded", and a session that started recording
+//!   again silently would turn it into a lie.
 //!
-//! # `Failed` falla en CERRADO, `Busy` no (#178)
+//! # `Failed` fails CLOSED, `Busy` does not (#178)
 //!
-//! Los dos motivos tenían la MISMA consecuencia —sin journal, un aviso, y a
-//! seguir—, así que la clasificación no compraba nada y fallaba en ABIERTO
-//! justo donde el daemon falla en cerrado (`daemon run` aborta con esa misma
-//! entrada). Cualquiera con escritura en el directorio de estado desactivaba el
-//! registro de todas las sesiones embebidas —`ntc`, `norte cp/mv/rm/mkdir` y,
-//! la valiosa, `norte ai rename --yes`— en silencio y para siempre, detrás de
-//! un aviso al que el usuario está entrenado a no hacer caso porque también
-//! salta en el caso benigno. Y la pereza de #177 SUBÍA su gravedad: una sesión
-//! que aún no había mutado no tenía nada, así que un ocupante que abriera el
-//! fichero una vez y se durmiera condenaba también a las ya arrancadas.
+//! The two reasons had the SAME consequence —no journal, a warning, and
+//! carry on— so the classification bought nothing and it failed OPEN exactly
+//! where the daemon fails closed (`daemon run` aborts on that very same
+//! input). Anyone with write access to the state directory could disable the
+//! recording of every embedded session —`ntc`, `norte cp/mv/rm/mkdir` and, the
+//! valuable one, `norte ai rename --yes`— silently and forever, behind a
+//! warning the user is trained to ignore because it also fires in the benign
+//! case. And the laziness from #177 RAISED its severity: a session that had
+//! not mutated yet had nothing, so an occupant that opened the file once and
+//! went dormant also condemned the ones already running.
 //!
-//! Ahora se separan, y el reparto es el que impide que el arreglo sea peor que
-//! el agujero:
+//! Now they are separated, and that split is what keeps the fix from being
+//! worse than the hole:
 //!
-//! - **`Failed` REHÚSA**, con
-//!   [`Error::JournalUnavailable`](norte_proto::Error::JournalUnavailable), y
-//!   lo hace ANTES del efecto: en el gate de [`crate::Engine`], no en el
-//!   observer. Cuando el observer corre la mutación ya ocurrió, así que fallar
-//!   ahí no la desharía — solo diría que falló algo que funcionó.
-//! - **`Busy` SIGUE**, sin registro y avisando. Rehusar aquí convertiría «hay
-//!   un daemon» en «el gestor de ficheros no funciona», y un ocupante de paso
-//!   tumbaría una sesión de tres horas: la misma razón por la que existe el
-//!   reintento de #179, que además es lo que cura este caso solo.
+//! - **`Failed` REFUSES**, with
+//!   [`Error::JournalUnavailable`](norte_proto::Error::JournalUnavailable), and
+//!   it does so BEFORE the effect: in [`crate::Engine`]'s gate, not in the
+//!   observer. By the time the observer runs, the mutation has already
+//!   happened, so failing there would not undo it — it would only say
+//!   something that worked had failed.
+//! - **`Busy` CARRIES ON**, unrecorded and warning. Refusing here would turn
+//!   "there is a daemon" into "the file manager doesn't work", and a
+//!   transient occupant would take down a three-hour session: the same reason
+//!   the #179 retry exists, and it is also what cures this case on its own.
 //!
-//! No hay `--no-journal` que lo salte, y es a propósito: la salida es arreglar
-//! o quitar el fichero, que es lo que dice el mensaje. Una bandera para «muta
-//! sin registrar» acaba en un alias, y con ella el agujero vuelve entero.
+//! There is no `--no-journal` to skip it, and that's on purpose: the way out
+//! is to fix or remove the file, which is what the message says. A flag for
+//! "mutate without recording" ends up as an alias, and with it the hole comes
+//! back whole.
 //!
-//! # El veredicto se fija POR OPERACIÓN, no por mutación (#205)
+//! # The verdict is fixed PER OPERATION, not per mutation (#205)
 //!
-//! Que la ventana sepa reabrirse abrió un filo que antes no existía: con el
-//! journal preguntado por MUTACIÓN, un `copy_tree` que empieza con el fichero
-//! ocupado y dura más que [`FRENO_TRAS_FALLO`] empezaba a registrar a mitad —
-//! las primeras k entradas sin fila, las n-k siguientes con ella, dentro de UNA
-//! Task y UN actor. Y entonces `undo` desanda la cola registrada y deja la
-//! cabeza que no lo está: media copia deshecha, sin poder nombrar la otra
-//! mitad, porque de ella no hay filas. **«No quedó registrado» se arregla a
-//! mano; «quedó registrado a medias» es una trampa**, y era peor que el agujero
-//! que el reintento vino a cerrar.
+//! The window knowing how to reopen exposed an edge that did not exist
+//! before: with the journal asked about PER MUTATION, a `copy_tree` that
+//! starts with the file busy and runs longer than [`FRENO_TRAS_FALLO`] started
+//! recording halfway through — the first k entries without a row, the
+//! following n-k with one, inside ONE Task and ONE actor. And then `undo`
+//! walks back the recorded tail and leaves the head that isn't recorded:
+//! half the copy undone, unable to name the other half, because it has no
+//! rows. **"It wasn't recorded" is fixed by hand; "it was recorded halfway"
+//! is a trap**, and it was worse than the hole the retry came to close.
 //!
-//! Lo cierra [`MutationObserver::pin_for_task`](crate::observer::MutationObserver::pin_for_task):
-//! el cuerpo de cada Task que muta resuelve el journal UNA vez, antes del
-//! primer efecto, y se queda con lo que le salga —el handle, o un no-op— para
-//! todas sus mutaciones. La operación vuelve a quedar entera dentro o entera
-//! fuera, que es lo que era cuando el veredicto duraba toda la sesión.
+//! [`MutationObserver::pin_for_task`](crate::observer::MutationObserver::pin_for_task)
+//! closes it: the body of every mutating Task resolves the journal ONCE,
+//! before the first effect, and keeps whatever it gets —the handle, or a
+//! no-op— for all of its mutations. The operation goes back to being entirely
+//! in or entirely out, which is what it was when the verdict lasted the whole
+//! session.
 //!
-//! Dos corolarios que conviene tener escritos:
+//! Two corollaries worth having written down:
 //!
-//! - **el aviso de recuperación habla de lo que EMPIEZA**, no de «a partir de
-//!   ahora»: una operación en vuelo conserva el veredicto con el que arrancó, y
-//!   una frase que prometiera lo contrario sería falsa justo para ella;
-//! - **mientras una Task muta, [`LazyJournal::release`] contesta `false`**,
-//!   porque el handle fijado es un `Arc` vivo. Eso protege la ventana FIJADO →
-//!   última fila, que es donde hay filas que perder. La que va del gate al
-//!   fijado no la protege nadie —el gate suelta su `Arc` y la Task puede
-//!   esperar en la cola— y ahí soltar no rompe nada, pero puede dejar la
-//!   operación entera sin registrar si otro gana la reapertura;
-//! - **el fijado vuelve a mirar si el journal es ILEGIBLE**, y rehúsa la Task
-//!   si lo es (#178). El gate mira antes de encolar y esto mira al empezar de
-//!   verdad; entre los dos caben treinta segundos en los que un fichero puede
-//!   corromperse.
+//! - **the recovery warning talks about what is STARTING**, not "from now
+//!   on": an operation already in flight keeps the verdict it started with,
+//!   and a phrase promising otherwise would be false precisely for it;
+//! - **while a Task is mutating, [`LazyJournal::release`] answers `false`**,
+//!   because the pinned handle is a live `Arc`. That protects the window from
+//!   PINNED → last row, which is where there are rows to lose. Nobody
+//!   protects the one from the gate to the pin —the gate drops its `Arc` and
+//!   the Task may wait in the queue— and there, releasing breaks nothing, but
+//!   it can leave the whole operation unrecorded if someone else wins the
+//!   reopen;
+//! - **pinning looks again at whether the journal is UNREADABLE**, and
+//!   refuses the Task if it is (#178). The gate looks before enqueuing and
+//!   this looks when actually starting; thirty seconds fit between the two,
+//!   in which a file can become corrupted.
 //!
-//! # Lo que este mecanismo NO cubre
+//! # What this mechanism does NOT cover
 //!
-//! - **Nadie suelta el journal por su cuenta.** [`LazyJournal::release`] es la
-//!   primitiva; no hay temporizador de ociosidad que la llame, así que una
-//!   sesión que mutó a las 09:00 sigue siendo la dueña hasta que el frontend
-//!   decida soltar. Esa política es la mitad de #179 que no vive aquí.
-//! - **`gc_partials` no pasa por el gate**, así que barre sus propios
-//!   `.norte-partial` aunque el journal esté ilegible. Es basura de este
-//!   proceso, no datos del usuario, y nunca llevó fila.
-//! - **El directorio de estado tiene que ser LOCAL.** WAL + `EXCLUSIVE` sobre
-//!   NFS/SMB depende de un `fcntl` que esos sistemas no siempre respetan, y ahí
-//!   dos máquinas pueden creerse dueñas del mismo fichero a la vez.
+//! - **Nobody releases the journal on its own.** [`LazyJournal::release`] is
+//!   the primitive; there is no idleness timer that calls it, so a session
+//!   that mutated at 09:00 keeps being the owner until the frontend decides to
+//!   release. That policy is the half of #179 that does not live here.
+//! - **`gc_partials` does not go through the gate**, so it sweeps its own
+//!   `.norte-partial` files even when the journal is unreadable. It's this
+//!   process's own garbage, not user data, and it never carried a row.
+//! - **The state directory has to be LOCAL.** WAL + `EXCLUSIVE` over NFS/SMB
+//!   depends on an `fcntl` that those systems don't always honor, and there
+//!   two machines can believe they own the same file at the same time.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// Por qué esta sesión NO queda registrada en el journal.
+/// Why this session is NOT being recorded in the journal.
 ///
-/// `#[non_exhaustive]`: un motivo nuevo no debería romper a quien haga `match`
-/// (el TUI lo mapea a Fluent, y su rama `_` es la red).
+/// `#[non_exhaustive]`: a new reason shouldn't break whoever does a `match`
+/// (the TUI maps it to Fluent, and its `_` arm is the safety net).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum NoJournal {
-    /// Otro proceso —un daemon, u otro embebido que ya mutó— tiene el lock
-    /// exclusivo.
+    /// Another process —a daemon, or another embedded one that already
+    /// mutated— holds the exclusive lock.
     Busy,
-    /// No se pudo abrir por una razón que no es el lock (permisos, disco, DB
-    /// corrupta, una DB de una era anterior a la cadena de hoy). Lleva el texto
-    /// del error: [`crate::journal::JournalError`] no es `Clone` y esto viaja
-    /// por un canal hasta la pantalla.
+    /// Could not open for a reason that isn't the lock (permissions, disk, a
+    /// corrupt DB, a DB from an era before today's chain). Carries the error
+    /// text: [`crate::journal::JournalError`] is not `Clone` and this travels
+    /// over a channel up to the screen.
     Failed(String),
 }
 
 impl NoJournal {
-    /// La frase para el humano, sin traducir.
+    /// The phrase for the human, untranslated.
     ///
-    /// Es la del log y la del CLI. El TUI NO la usa salvo como red: su interfaz
-    /// pasa por Fluent (`msg-journal-busy` / `msg-journal-refused`).
+    /// It's the one for the log and for the CLI. The TUI does NOT use it
+    /// except as a safety net: its interface goes through Fluent
+    /// (`msg-journal-busy` / `msg-journal-refused`).
     ///
-    /// **Las dos frases dicen cosas DISTINTAS desde #178**, y confundirlas es
-    /// el defecto que esa issue existe para no repetir: `Busy` es «esto pasó y
-    /// no quedó anotado», `Failed` es «esto NO ha pasado».
+    /// **The two phrases say DIFFERENT things since #178**, and confusing them
+    /// is the defect this issue exists to not repeat: `Busy` is "this
+    /// happened and wasn't recorded", `Failed` is "this has NOT happened".
     #[must_use]
     pub fn text(&self) -> String {
         match self {
             Self::Busy => "otro proceso tiene el journal (un daemon, u otra sesión embebida): las \
                            mutaciones de ESTA sesión no quedan registradas (#167)"
                 .to_owned(),
-            Self::Failed(motivo) => format!(
-                "el journal no se pudo abrir ({motivo}): esta sesión REHÚSA mutar mientras \
+            Self::Failed(reason) => format!(
+                "el journal no se pudo abrir ({reason}): esta sesión REHÚSA mutar mientras \
                  siga así, porque nada quedaría registrado ni se podría deshacer. Arregla \
                  lo que nombra el motivo —el directorio o el fichero— y vuelve a intentarlo \
                  (#178)"
@@ -190,305 +200,308 @@ impl NoJournal {
     }
 }
 
-/// Lo que le pasó al journal de ESTA sesión, en el orden en que le pasó.
+/// What happened to THIS session's journal, in the order it happened.
 ///
-/// No es un estado que se consulte: es el evento que cruza hasta la pantalla.
-/// Existe porque el indicador del frontend tiene que poder APAGARSE — un
-/// «NO se registra» que no sabe volverse «ya sí» miente en cuanto la ventana
-/// se reabre (#179).
+/// It isn't a state you query: it's the event that crosses over to the
+/// screen. It exists because the frontend's indicator has to be able to turn
+/// OFF — a "NOT being recorded" that doesn't know how to become "now it is"
+/// lies the moment the window reopens (#179).
 ///
-/// `#[non_exhaustive]`: una transición nueva no debería romper a quien haga
+/// `#[non_exhaustive]`: a new transition shouldn't break whoever does a
 /// `match`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum JournalStatus {
-    /// Esta sesión dejó de quedar registrada, por este motivo.
+    /// This session stopped being recorded, for this reason.
     Lost(NoJournal),
-    /// Y volvió a quedarlo: la ventana se reabrió.
+    /// And it started being recorded again: the window reopened.
     Recovered,
-    /// **El journal lleva [`SOSPECHA_TRAS`] ocupado y no hay daemon
-    /// escuchando** (#203).
+    /// **The journal has been busy for [`SUSPICION_AFTER`] and there is no
+    /// daemon listening** (#203).
     ///
-    /// [`NoJournal::Busy`] es benigno casi siempre: un daemon vivo, otro `ntc`,
-    /// un `norte cp` de un script. Por eso sigue adelante y solo avisa — y por
-    /// eso mismo el aviso se ignora, que es lo que hace barato el ataque:
-    /// cualquiera con el mismo uid retiene el lock (`begin exclusive`) y todas
-    /// las sesiones embebidas dejan de registrar, detrás de una frase que
-    /// también sale cuando no pasa nada.
+    /// [`NoJournal::Busy`] is almost always benign: a live daemon, another
+    /// `ntc`, a `norte cp` from a script. That's why it carries on and only
+    /// warns — and that's exactly why the warning gets ignored, which is what
+    /// makes the attack cheap: anyone with the same uid holds the lock
+    /// (`begin exclusive`) and every embedded session stops recording, behind
+    /// a phrase that also fires when nothing is wrong.
     ///
-    /// Estos dos hechos juntos SÍ distinguen un caso del otro, y hoy nadie los
-    /// juntaba: *lleva minutos ocupado* y *el socket del daemon no contesta*.
-    /// No prueba que haya un atacante —un daemon muerto a mitad de una
-    /// transacción larga da lo mismo— pero deja de ser el caso corriente, y
-    /// eso es exactamente lo que un indicador tiene que poder decir.
+    /// These two facts together DO distinguish one case from the other, and
+    /// until now nobody combined them: *it's been busy for minutes* and *the
+    /// daemon's socket doesn't answer*. It doesn't prove there's an
+    /// attacker —a daemon that died mid a long transaction looks the same—
+    /// but it stops being the ordinary case, and that is exactly what an
+    /// indicator has to be able to say.
     ///
-    /// Lo que NO hace es rehusar la mutación. Convertir «alguien tiene tu
-    /// journal» en «el gestor de ficheros no funciona» es el arreglo que #178
-    /// evitó a propósito.
+    /// What it does NOT do is refuse the mutation. Turning "someone has your
+    /// journal" into "the file manager doesn't work" is the fix #178
+    /// deliberately avoided.
     Squatted,
 }
 
-/// Quien recibe los cambios de «esta sesión queda registrada» o no.
+/// Whoever receives the changes of "this session is being recorded" or not.
 ///
-/// Lo implementa el frontend. El TUI empuja por un canal hasta el run loop, que
-/// lo pinta EN la sesión: un `eprintln!` lo tapa la pantalla alternativa un
-/// segundo después y la sesión dura horas.
+/// The frontend implements it. The TUI pushes it over a channel up to the run
+/// loop, which paints it IN the session: an `eprintln!` gets covered by the
+/// alternate screen a second later and the session lasts hours.
 ///
-/// **Se llama con locks internos tomados y desde dentro de una mutación**: la
-/// implementación tiene que ser corta y no bloquear (un `send` a un canal
-/// ilimitado, guardar en un `Mutex`), y **no puede volver a entrar en el
-/// [`LazyJournal`] que la llamó** — el lock de la ventana de propiedad está
-/// tomado y reentrar lo bloquearía para siempre.
+/// **It is called with internal locks held and from inside a mutation**: the
+/// implementation has to be short and non-blocking (a `send` to an unbounded
+/// channel, storing in a `Mutex`), and **it cannot re-enter the
+/// [`LazyJournal`] that called it** — the ownership window's lock is held and
+/// re-entering it would block forever.
 pub trait JournalWarningSink: Send + Sync {
-    /// Esta sesión NO queda registrada, y este es el motivo. Una vez por
-    /// EPISODIO: mientras el motivo no cambie, no se repite.
+    /// This session is NOT being recorded, and this is why. Once per
+    /// EPISODE: as long as the reason doesn't change, it isn't repeated.
     ///
-    /// **No paniquees aquí.** Esto corre dentro del `on_mutation` de una
-    /// mutación que ya se aplicó, así que un panic haría fallar la Task de una
-    /// operación que funcionó.
+    /// **Don't panic here.** This runs inside the `on_mutation` of a mutation
+    /// that has already been applied, so a panic would fail the Task of an
+    /// operation that worked.
     fn on_no_journal(&self, why: &NoJournal);
 
-    /// La sesión VOLVIÓ a quedar registrada: la ventana se reabrió tras un
+    /// The session started being recorded AGAIN: the window reopened after an
     /// [`Self::on_no_journal`].
     ///
-    /// Sin cuerpo por omisión A PROPÓSITO: un sink que se olvide de esto deja
-    /// su indicador encendido sobre una sesión que sí registra, que es
-    /// exactamente la mentira que #179 vino a quitar. Que el compilador lo
-    /// pregunte.
+    /// No default body ON PURPOSE: a sink that forgets this leaves its
+    /// indicator lit over a session that IS being recorded, which is exactly
+    /// the lie #179 came to remove. Let the compiler ask about it.
     ///
-    /// No se emite en la PRIMERA apertura, que no recupera nada.
+    /// Not emitted on the FIRST open, which recovers nothing.
     fn on_journal_recovered(&self);
 
-    /// El journal lleva minutos ocupado y NO hay daemon escuchando (#203):
-    /// [`JournalStatus::Squatted`].
+    /// The journal has been busy for minutes and there is NO daemon listening
+    /// (#203): [`JournalStatus::Squatted`].
     ///
-    /// Con cuerpo por omisión, al revés que [`Self::on_journal_recovered`], y
-    /// la asimetría es deliberada: olvidarse de la recuperación deja un
-    /// indicador MINTIENDO, mientras que olvidarse de ésta solo deja el aviso
-    /// genérico —que es lo que se enseñaba hasta ahora— así que el default cae
-    /// del lado de decir menos, nunca de decir algo falso.
+    /// With a default body, unlike [`Self::on_journal_recovered`], and the
+    /// asymmetry is deliberate: forgetting the recovery leaves an indicator
+    /// LYING, while forgetting this one only leaves the generic warning —
+    /// which is what was shown until now— so the default falls on the side of
+    /// saying less, never of saying something false.
     fn on_journal_squatted(&self) {
         self.on_no_journal(&NoJournal::Busy);
     }
 }
 
-/// Lo que se espera a que el lock quede libre antes de darlo por ocupado.
+/// How long to wait for the lock to free up before calling it busy.
 ///
-/// Corto A PROPÓSITO. Quien tiene el lock lo tiene mientras vive (un daemon, o
-/// una sesión de TUI de tres horas), así que esperar no lo consigue: el plazo de
-/// `sqlx` por omisión son CINCO SEGUNDOS, y con un daemon vivo eso convertía
-/// cada `norte cp` embebido en cinco segundos parado antes de seguir igual, sin
-/// registro. Lo que sí cabe en este plazo es la única espera que sirve de algo:
-/// el hueco entre dos procesos cortos, uno cerrando y el siguiente abriendo.
-const ESPERA_POR_EL_LOCK: std::time::Duration = std::time::Duration::from_millis(250);
+/// Short ON PURPOSE. Whoever holds the lock holds it while alive (a daemon,
+/// or a three-hour TUI session), so waiting doesn't get it: `sqlx`'s default
+/// timeout is FIVE SECONDS, and with a live daemon that turned every embedded
+/// `norte cp` into five seconds stalled before carrying on the same way,
+/// unrecorded. What DOES fit in this timeout is the one wait that's worth
+/// anything: the gap between two short-lived processes, one closing and the
+/// next opening.
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
 
-/// Como mucho un intento de apertura cada tanto, tras uno que falló.
+/// At most one open attempt every so often, after one that failed.
 ///
-/// El reintento de #179 es lo que salva a la sesión del ocupante de paso, pero
-/// sin freno costaría `ESPERA_POR_EL_LOCK` en CADA mutación mientras el
-/// ocupante siga ahí —y el ocupante habitual, un daemon, sigue ahí toda la
-/// tarde—. Treinta segundos es el orden de magnitud de «reiniciar un daemon»
-/// sin ser el de «notarlo al copiar».
+/// The #179 retry is what saves the session from a transient occupant, but
+/// without a brake it would cost `LOCK_WAIT` on EVERY mutation while the
+/// occupant is still there —and the usual occupant, a daemon, stays there all
+/// afternoon. Thirty seconds is the order of magnitude of "restarting a
+/// daemon", not of "noticing it while copying".
 pub const FRENO_TRAS_FALLO: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// Cuánto lleva `Busy` un journal antes de que valga la pena preguntarse si
-/// quien lo tiene es un daemon (#203).
+/// How long a journal has been `Busy` before it's worth wondering whether a
+/// daemon holds it (#203).
 ///
-/// Cinco minutos, y el número tiene dos lados. Corto de más, un daemon que
-/// arranca lento o una sesión de otro `ntc` se llevarían la frase fuerte, que
-/// es exactamente el ruido que este issue viene a quitar. Largo de más, la
-/// sesión pasa la tarde entera sin registrar detrás del aviso suave. Un
-/// arranque de daemon y un `norte cp` de un script viven en segundos; cinco
-/// minutos no es ninguno de los dos.
-pub const SOSPECHA_TRAS: std::time::Duration = std::time::Duration::from_mins(5);
+/// Five minutes, and the number has two sides. Too short, a slow-starting
+/// daemon or another `ntc`'s session would get the strong phrase, which is
+/// exactly the noise this issue comes to remove. Too long, the session spends
+/// the whole afternoon unrecorded behind the mild warning. A daemon startup
+/// and a script's `norte cp` live in seconds; five minutes is neither.
+pub const SUSPICION_AFTER: std::time::Duration = std::time::Duration::from_mins(5);
 
-/// Quién contesta «¿hay un daemon escuchando?» (#203).
+/// Who answers "is a daemon listening?" (#203).
 ///
-/// Es una inyección y no una llamada directa por dos razones, y la segunda es
-/// la que manda: un test no puede levantar un daemon para probar el caso en
-/// que NO lo hay, y el `LazyJournal` no tiene por qué saber dónde vive un
-/// socket. El default de producción es [`DaemonSocketProbe`].
+/// It's an injection and not a direct call for two reasons, and the second is
+/// the one that rules: a test cannot spin up a daemon to test the case where
+/// there ISN'T one, and `LazyJournal` has no business knowing where a socket
+/// lives. The production default is [`DaemonSocketProbe`].
 pub trait DaemonPresence: Send + Sync {
-    /// `true` si algo contesta en el socket del daemon de este usuario.
+    /// `true` if something answers on this user's daemon socket.
     ///
-    /// Un socket huérfano (el daemon murió sin limpiarlo) contesta `false`:
-    /// lo que importa es si hay alguien AL OTRO LADO, no si el fichero existe.
+    /// An orphaned socket (the daemon died without cleaning it up) answers
+    /// `false`: what matters is whether there's someone ON THE OTHER END, not
+    /// whether the file exists.
     fn any_daemon_listening(&self) -> bool;
 }
 
-/// El probe de producción: un `connect` al socket por omisión de este uid.
+/// The production probe: a `connect` to this uid's default socket.
 ///
-/// Mismo criterio que el arranque del daemon usa para detectar otro vivo — un
-/// `connect` lo delata, y un socket huérfano da `ECONNREFUSED`.
+/// Same criterion the daemon's startup uses to detect another one alive — a
+/// `connect` gives it away, and an orphaned socket gives `ECONNREFUSED`.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DaemonSocketProbe;
 
 impl DaemonPresence for DaemonSocketProbe {
     fn any_daemon_listening(&self) -> bool {
-        // Síncrono y no bloqueante en la práctica: un `connect` a un socket
-        // unix local resuelve en el acto, exista o no. Corre con el lock de la
-        // ventana tomado, así que aquí no cabe nada más caro.
+        // Synchronous and, in practice, non-blocking: a `connect` to a local
+        // unix socket resolves on the spot, whether it exists or not. Runs
+        // with the window's lock held, so nothing more expensive fits here.
         std::os::unix::net::UnixStream::connect(crate::daemon::default_socket_path(None)).is_ok()
     }
 }
 
-/// Lo que se espera a que el pool termine de cerrarse en [`LazyJournal::release`].
+/// How long to wait for the pool to finish closing in [`LazyJournal::release`].
 ///
-/// Un tope y no una espera indefinida: el cierre corre con el lock de la
-/// ventana tomado, y ese lock lo necesita cada mutación. Generoso a propósito —
-/// cerrar es local y rápido, así que agotarlo ya es una anomalía.
-const ESPERA_POR_EL_CIERRE: std::time::Duration = std::time::Duration::from_secs(5);
+/// A cap and not an indefinite wait: the close runs with the window's lock
+/// held, and every mutation needs that same lock. Generous on purpose —
+/// closing is local and fast, so exhausting it is already an anomaly.
+const CLOSE_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// El journal de `<state>/journal.db` abierto EN LA PRIMERA MUTACIÓN (#177), y
-/// reabierto cuantas veces haga falta (#179).
+/// The journal at `<state>/journal.db`, opened ON THE FIRST MUTATION (#177),
+/// and reopened as many times as needed (#179).
 ///
-/// Es a la vez el [`MutationObserver`](crate::observer::MutationObserver) del
-/// engine y su fuente de lectura para el undo, y esas dos caras comparten UNA
-/// ventana: si fueran dos, el undo podría abrir un segundo handle sobre el mismo
-/// fichero —o contestar «sin journal» sobre un fichero libre— y la cadena
-/// dejaría de tener un dueño único.
+/// It is at once the engine's [`MutationObserver`](crate::observer::MutationObserver)
+/// and its read source for undo, and those two faces share ONE window: if
+/// they were two, undo could open a second handle over the same file —or
+/// answer "no journal" over a free file— and the chain would stop having a
+/// single owner.
 ///
 /// ```
 /// # let rt = tokio::runtime::Builder::new_current_thread()
 /// #     .enable_all().build().expect("runtime");
-/// // El tempdir se crea FUERA del runtime: crearlo es I/O bloqueante y dentro
-/// // de un contexto async sería justo lo que prohíbe la regla dura 2.
+/// // The tempdir is created OUTSIDE the runtime: creating it is blocking I/O
+/// // and inside an async context it would be exactly what hard rule 2
+/// // forbids.
 /// let dir = tempfile::tempdir().expect("tempdir");
 /// let lazy = norte_core::embedded::LazyJournal::in_state_dir(dir.path());
-/// // Recién construido no ha tocado el disco: el daemon todavía puede abrirlo.
+/// // Freshly built, it hasn't touched disk: the daemon can still open it.
 /// assert!(!lazy.attempted());
 /// # rt.block_on(async {
-/// // Y pedirlo lo abre.
+/// // And asking for it opens it.
 /// assert!(lazy.get().await.is_some());
 /// assert!(lazy.attempted());
-/// // Soltarlo lo devuelve, y el siguiente que lo pida lo vuelve a abrir —
-/// // releyendo la cadena del fichero.
+/// // Releasing it gives it back, and whoever asks for it next reopens it —
+/// // re-reading the file's chain.
 /// assert!(lazy.release().await);
 /// assert!(lazy.get().await.is_some());
 /// # });
 /// ```
 pub struct LazyJournal {
-    /// El fichero. Se guarda resuelto para no depender de que el directorio de
-    /// estado siga siendo el mismo cuando por fin se abra.
+    /// The file. Stored resolved so it doesn't depend on the state directory
+    /// still being the same by the time it's finally opened.
     path: PathBuf,
-    /// Cada cuánto se puede reintentar tras un intento fallido.
-    freno: std::time::Duration,
-    /// **La ventana de propiedad, entera y bajo UN lock**: el handle mientras
-    /// se tiene, el último veredicto cuando no, y lo último que se le dijo al
-    /// sink.
+    /// How often a retry is allowed after a failed attempt.
+    retry_brake: std::time::Duration,
+    /// **The ownership window, whole and under ONE lock**: the handle while
+    /// it's held, the last verdict when it isn't, and the last thing told to
+    /// the sink.
     ///
-    /// Un [`tokio::sync::Mutex`] y no un `std`: abrir es `async` y el lock se
-    /// sostiene A TRAVÉS del `await` a propósito — es lo que serializa los
-    /// intentos. Sin eso, dos mutaciones concurrentes abrirían dos handles y la
-    /// segunda se vería `Busy` contra el lock de la primera, o sea un proceso
-    /// negándose a journalizar por culpa de sí mismo. Es la propiedad que daba
-    /// gratis el `OnceCell` que había aquí antes, y la que hay que reproducir a
-    /// mano ahora que el intento puede repetirse.
-    estado: tokio::sync::Mutex<Ventana>,
-    /// Quién contesta si hay un daemon escuchando (#203). Se consulta SOLO
-    /// cuando un `Busy` ya lleva [`Self::sospecha`], que es lo que hace que el
-    /// `connect` no cueste nada en el caso normal.
-    presencia: Arc<dyn DaemonPresence>,
-    /// Cuánto tiene que llevar ocupado un episodio antes de preguntarse por el
-    /// daemon. [`SOSPECHA_TRAS`] salvo en tests.
-    sospecha: std::time::Duration,
-    /// A dónde van los avisos, y el aviso que espera a que haya dónde.
+    /// A [`tokio::sync::Mutex`] and not a `std` one: opening is `async` and
+    /// the lock is held ACROSS the `await` on purpose — that's what
+    /// serializes the attempts. Without that, two concurrent mutations would
+    /// open two handles and the second would see `Busy` against the first
+    /// one's lock, i.e. a process refusing to journal because of itself. It's
+    /// the property the `OnceCell` that used to be here gave for free, and the
+    /// one that has to be reproduced by hand now that the attempt can repeat.
+    window: tokio::sync::Mutex<OwnershipWindow>,
+    /// Who answers whether a daemon is listening (#203). Queried ONLY once a
+    /// `Busy` has already lasted [`Self::suspicion_delay`], which is what
+    /// makes the `connect` cost nothing in the normal case.
+    presence: Arc<dyn DaemonPresence>,
+    /// How long an episode has to have been busy before wondering about the
+    /// daemon. [`SUSPICION_AFTER`] except in tests.
+    suspicion_delay: std::time::Duration,
+    /// Where the warnings go, and the warning waiting for somewhere to go.
     ///
-    /// **Orden de locks: `estado` → `sink` y `estado` → `hooks`, y jamás al
-    /// revés.** `emitir` corre
-    /// SIEMPRE con `estado` tomado, y de eso depende algo que no se ve: el «qué
-    /// se anunció» vive en `estado` y el «qué queda pendiente» vive aquí, o sea
-    /// en dos locks distintos, y solo son coherentes porque los dos se tocan
-    /// dentro de la misma sección crítica. Un `set_warning_sink` que se pusiera
-    /// a leer `estado` invertiría el orden y sería un abrazo mortal.
+    /// **Lock order: `window` → `sink` and `window` → `hooks`, and never the
+    /// other way around.** `emit` ALWAYS runs with `window` held, and
+    /// something invisible depends on that: "what was announced" lives in
+    /// `window` and "what's still pending" lives here, i.e. in two different
+    /// locks, and they're only consistent because both are touched inside the
+    /// same critical section. A `set_warning_sink` that started reading
+    /// `window` would invert the order and be a deadly embrace.
     sink: Mutex<SinkSlot>,
-    /// Intentos de apertura pagados. FUERA del lock porque
-    /// [`LazyJournal::attempted`] es síncrono (lo llama un `Debug` y lo llaman
-    /// los tests) y porque contar no necesita exclusión.
-    intentos: std::sync::atomic::AtomicU64,
-    /// El extremo de los hooks (ADR 0100), si el embebedor lo instaló: se le
-    /// pone a cada handle que se abra, porque el fichero puede abrirse y
-    /// soltarse varias veces en una sesión y el despachador es uno.
+    /// Open attempts paid for. OUTSIDE the lock because
+    /// [`LazyJournal::attempted`] is synchronous (a `Debug` calls it, and so
+    /// do the tests) and because counting doesn't need exclusion.
+    open_attempts: std::sync::atomic::AtomicU64,
+    /// The hooks endpoint (ADR 0100), if the embedder installed one: it's set
+    /// on every handle that gets opened, because the file can be opened and
+    /// released several times in a session and the dispatcher is a single
+    /// one.
     hooks: Mutex<Option<crate::hooks::HookSender>>,
 }
 
-/// El estado de la ventana de propiedad.
+/// The state of the ownership window.
 #[derive(Default)]
-struct Ventana {
-    /// El handle MIENTRAS esta sesión es la dueña.
+struct OwnershipWindow {
+    /// The handle WHILE this session is the owner.
     ///
-    /// `None` no significa «no se pudo»: significa «ahora mismo no lo tiene»,
-    /// que también es el estado recién construido y el de después de un
+    /// `None` doesn't mean "couldn't": it means "doesn't have it right now",
+    /// which is also the freshly-built state and the one after a
     /// [`LazyJournal::release`].
     handle: Option<Arc<crate::journal::SqliteJournal>>,
-    /// El último intento FALLIDO: cuándo y qué dijo. Lo consulta el freno.
-    /// `None` mientras se tiene el handle, o antes del primer intento.
-    ultimo_fallo: Option<(std::time::Instant, NoJournal)>,
-    /// Lo último que se le contó al sink, para no repetirlo ni contradecirlo.
-    anunciado: Option<JournalStatus>,
-    /// Cuándo se usó el handle por última vez, para la política de ociosidad
-    /// (#179). `None` mientras no se tiene.
-    ultimo_uso: Option<std::time::Instant>,
-    /// Desde cuándo lleva ocupado este EPISODIO (#203): lo pone el primer
-    /// `Busy` y lo borra cualquier otra cosa —una apertura buena, un `Failed`—,
-    /// porque lo que se mide es «cuánto lleva ESTE ocupante», no cuántos ha
-    /// habido.
-    ocupado_desde: Option<std::time::Instant>,
+    /// The last FAILED attempt: when, and what it said. The brake consults
+    /// it. `None` while the handle is held, or before the first attempt.
+    last_failure: Option<(std::time::Instant, NoJournal)>,
+    /// The last thing told to the sink, so as not to repeat or contradict it.
+    announced: Option<JournalStatus>,
+    /// When the handle was last used, for the idleness policy (#179). `None`
+    /// while it isn't held.
+    last_used: Option<std::time::Instant>,
+    /// Since when this EPISODE has been busy (#203): the first `Busy` sets it
+    /// and anything else clears it —a good open, a `Failed`— because what's
+    /// measured is "how long has THIS occupant lasted", not how many there
+    /// have been.
+    busy_since: Option<std::time::Instant>,
 }
 
-/// El sink y el aviso PENDIENTE, bajo un solo lock.
+/// The sink and the PENDING warning, under a single lock.
 ///
-/// Dos campos y un lock, y no dos locks ni un `OnceLock` para el sink, porque
-/// la única propiedad que importa es atómica entre los dos: instalar un sink y
-/// entregarle lo pendiente no puede entrelazarse con «resolver y avisar», o el
-/// aviso se pierde (sink instalado un instante tarde) o se duplica. Perderlo es
-/// el fallo que #177 llama «peor que hoy»: una sesión que muta sin registro y
-/// sin decirlo.
+/// Two fields and one lock, and not two locks or a `OnceLock` for the sink,
+/// because the only property that matters is atomic between the two:
+/// installing a sink and handing it the pending warning cannot interleave
+/// with "resolve and warn", or the warning gets lost (sink installed an
+/// instant late) or duplicated. Losing it is the failure #177 calls "worse
+/// than today": a session that mutates unrecorded and without saying so.
 #[derive(Default)]
 struct SinkSlot {
     sink: Option<Arc<dyn JournalWarningSink>>,
-    /// Solo se retiene una PÉRDIDA. Una recuperación sin sink no tiene nada que
-    /// apagar —nadie encendió nada— así que en vez de encolarse BORRA lo
-    /// pendiente: entregarle a un sink tardío una pérdida que ya se recuperó
-    /// sería encender un indicador para una sesión que sí registra.
-    pendiente: Option<NoJournal>,
+    /// Only a LOSS is retained. A recovery with no sink has nothing to turn
+    /// off —nobody turned anything on— so instead of queuing it CLEARS the
+    /// pending one: handing a late sink a loss that has already recovered
+    /// would light up an indicator for a session that IS recording.
+    pending: Option<NoJournal>,
 }
 
 impl LazyJournal {
-    /// El journal `<state_dir>/journal.db`, todavía SIN abrir.
+    /// The journal at `<state_dir>/journal.db`, still NOT opened.
     ///
-    /// No toca el disco: construirlo es gratis y no le quita el fichero a
-    /// nadie. Ese es el punto de #177.
+    /// Doesn't touch disk: building it is free and takes the file away from
+    /// nobody. That's the point of #177.
     #[must_use]
     pub fn in_state_dir(state_dir: &Path) -> Self {
         Self::with_retry_brake(state_dir, FRENO_TRAS_FALLO)
     }
 
-    /// Como [`Self::in_state_dir`], con otro freno de reintento.
+    /// Like [`Self::in_state_dir`], with another retry brake.
     ///
-    /// Existe para los tests —que no pueden esperar [`FRENO_TRAS_FALLO`] para
-    /// ver un reintento, ni fiarse de un reloj para ver que NO lo hubo— y para
-    /// un embebedor con otra cadencia. `Duration::ZERO` reintenta en cada
-    /// mutación, con lo que eso cuesta.
+    /// Exists for the tests —which cannot wait for [`FRENO_TRAS_FALLO`] to see
+    /// a retry, nor rely on a clock to see that there wasn't one— and for an
+    /// embedder with a different cadence. `Duration::ZERO` retries on every
+    /// mutation, with whatever that costs.
     #[must_use]
-    pub fn with_retry_brake(state_dir: &Path, freno: std::time::Duration) -> Self {
+    pub fn with_retry_brake(state_dir: &Path, retry_brake: std::time::Duration) -> Self {
         Self {
             path: state_dir.join("journal.db"),
-            freno,
-            estado: tokio::sync::Mutex::new(Ventana::default()),
-            presencia: Arc::new(DaemonSocketProbe),
-            sospecha: SOSPECHA_TRAS,
+            retry_brake,
+            window: tokio::sync::Mutex::new(OwnershipWindow::default()),
+            presence: Arc::new(DaemonSocketProbe),
+            suspicion_delay: SUSPICION_AFTER,
             sink: Mutex::new(SinkSlot::default()),
-            intentos: std::sync::atomic::AtomicU64::new(0),
+            open_attempts: std::sync::atomic::AtomicU64::new(0),
             hooks: Mutex::new(None),
         }
     }
 
-    /// Instala el extremo de los hooks (ADR 0100): en el handle que haya
-    /// ahora, y en cada uno que se abra después.
+    /// Installs the hooks endpoint (ADR 0100): on whatever handle exists now,
+    /// and on every one opened afterward.
     pub async fn set_hook_sender(&self, tx: crate::hooks::HookSender) {
-        let v = self.estado.lock().await;
-        if let Some(j) = &v.handle {
+        let w = self.window.lock().await;
+        if let Some(j) = &w.handle {
             j.set_hook_sender(tx.clone());
         }
         *self
@@ -497,319 +510,321 @@ impl LazyJournal {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx);
     }
 
-    /// Con otro probe de presencia de daemon (#203).
+    /// With another daemon-presence probe (#203).
     ///
-    /// Para los tests, que necesitan el caso «lleva ocupado un buen rato y no
-    /// hay daemon» sin levantar ninguno, y para un embebedor que sepa por otra
-    /// vía si hay uno.
+    /// For the tests, which need the "has been busy a good while and there's
+    /// no daemon" case without spinning one up, and for an embedder that
+    /// knows some other way whether there is one.
     #[must_use]
-    pub fn with_daemon_presence(mut self, presencia: Arc<dyn DaemonPresence>) -> Self {
-        self.presencia = presencia;
+    pub fn with_daemon_presence(mut self, presence: Arc<dyn DaemonPresence>) -> Self {
+        self.presence = presence;
         self
     }
 
-    /// Con otro plazo de sospecha (#203).
+    /// With another suspicion delay (#203).
     ///
-    /// Para los tests, que no pueden esperar [`SOSPECHA_TRAS`] ni fiarse de un
-    /// reloj para ver que el plazo NO se cumplió. `Duration::ZERO` sospecha en
-    /// el segundo intento del mismo episodio — el primero abre el episodio, y
-    /// eso es del diseño y no del plazo.
+    /// For the tests, which cannot wait for [`SUSPICION_AFTER`] nor rely on a
+    /// clock to see that the delay was NOT met. `Duration::ZERO` suspects on
+    /// the second attempt of the same episode — the first one opens the
+    /// episode, and that's a design fact, not a matter of the delay.
     #[must_use]
-    pub fn with_suspicion_delay(mut self, sospecha: std::time::Duration) -> Self {
-        self.sospecha = sospecha;
+    pub fn with_suspicion_delay(mut self, suspicion_delay: std::time::Duration) -> Self {
+        self.suspicion_delay = suspicion_delay;
         self
     }
 
-    /// Instala a quien recibe los avisos, y le entrega el que ya hubiera.
+    /// Installs whoever receives the warnings, and hands it whatever was
+    /// already pending.
     ///
-    /// Lo segundo importa: el sink lo instala el arranque del frontend, y un
-    /// arranque que se cruce con una mutación temprana no puede dejar muda a
-    /// una sesión sin registro.
+    /// The second part matters: the sink is installed by the frontend's
+    /// startup, and a startup that overlaps with an early mutation cannot
+    /// leave an unrecorded session mute.
     ///
-    /// **Una sola vez por proceso.** Un segundo sink reemplaza al primero —el
-    /// primer receptor se queda mudo para siempre— y encima ya no encuentra el
-    /// aviso pendiente, que el primero se llevó. Quien lo instala es el
-    /// arranque del frontend, vía [`crate::backend::Backend::take_journal_warnings`],
-    /// que es de un solo dueño por el mismo motivo que sus canales hermanos.
+    /// **Only once per process.** A second sink replaces the first —the first
+    /// receiver goes mute forever— and on top of that it no longer finds the
+    /// pending warning, which the first one took. Whoever installs it is the
+    /// frontend's startup, via
+    /// [`crate::backend::Backend::take_journal_warnings`], which has a single
+    /// owner for the same reason as its sibling channels.
     ///
-    /// Y hay una segunda razón, más fina: lo pendiente es lo NO ENTREGADO, no
-    /// el estado. Un sink que llegue después de que el primero se llevara la
-    /// pérdida se cree cubierto sobre una sesión que no lo está, y más tarde
-    /// recibirá una recuperación de algo que nunca enseñó.
+    /// And there's a second, finer reason: what's pending is what's NOT
+    /// DELIVERED, not the state. A sink that arrives after the first one took
+    /// the loss believes it's covering a session that isn't covered, and will
+    /// later receive a recovery for something it never showed.
     ///
     /// # Panics
-    /// Si el lock interno está envenenado (otro hilo hizo panic sosteniéndolo)
-    /// — irrecuperable, mismo criterio que el resto de locks del engine.
+    /// If the internal lock is poisoned (another thread panicked while
+    /// holding it) — unrecoverable, same criterion as the engine's other
+    /// locks.
     pub fn set_warning_sink(&self, sink: Arc<dyn JournalWarningSink>) {
-        let mut slot = self.sink.lock().expect("lock del sink sano");
-        if let Some(why) = slot.pendiente.take() {
+        let mut slot = self.sink.lock().expect("sink lock is sound");
+        if let Some(why) = slot.pending.take() {
             sink.on_no_journal(&why);
         }
         slot.sink = Some(sink);
     }
 
-    /// ¿Se ha intentado ya abrir el journal, alguna vez?
+    /// Has an attempt ever been made to open the journal?
     ///
-    /// «Intentado», no «conseguido» ni «ahora mismo»: lo que responde es si este
-    /// proceso ya pagó una apertura. Para tests y para quien quiera saber si el
-    /// lock llegó a estar en juego.
+    /// "Attempted", not "succeeded" nor "right now": what this answers is
+    /// whether this process has already paid for an open. For tests, and for
+    /// whoever wants to know if the lock was ever in play.
     #[must_use]
     pub fn attempted(&self) -> bool {
         self.attempts() > 0
     }
 
-    /// Cuántas aperturas se han pagado.
+    /// How many opens have been paid for.
     ///
-    /// Es lo que mide el freno de #179 en los tests: «tardó menos de X» mide la
-    /// carga de la máquina tanto como el código, y contra los 250 ms de
-    /// `ESPERA_POR_EL_LOCK` el margen no daba para distinguirlos.
+    /// This is what the #179 brake measures in the tests: "it took less than
+    /// X" measures the machine's load as much as the code, and against
+    /// `LOCK_WAIT`'s 250 ms the margin wasn't enough to tell them apart.
     #[must_use]
     pub fn attempts(&self) -> u64 {
-        self.intentos.load(std::sync::atomic::Ordering::Relaxed)
+        self.open_attempts
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    /// El journal de esta sesión, abriéndolo si ahora mismo no se tiene.
+    /// This session's journal, opening it if it isn't currently held.
     ///
-    /// `None` = esta sesión NO queda registrada, y el motivo ya se avisó (una
-    /// vez por episodio, aquí dentro).
+    /// `None` = this session is NOT being recorded, and the reason has
+    /// already been warned about (once per episode, in here).
     ///
-    /// **El [`Arc`] devuelto no debe sobrevivir a la operación que lo pidió.**
-    /// Mientras viva, [`Self::release`] no puede soltar el fichero (devuelve
-    /// `false`), así que guardarlo en un campo de vida larga convierte el
-    /// release en un no-op permanente y silencioso. Los consumidores de este
-    /// árbol lo sostienen exactamente lo que dura su Task, que es lo correcto.
+    /// **The returned [`Arc`] must not outlive the operation that asked for
+    /// it.** While it's alive, [`Self::release`] cannot let go of the file
+    /// (returns `false`), so storing it in a long-lived field turns release
+    /// into a permanent, silent no-op. The consumers in this tree hold it for
+    /// exactly as long as their Task lasts, which is correct.
     pub async fn get(&self) -> Option<Arc<crate::journal::SqliteJournal>> {
         self.resolve().await.ok()
     }
 
-    /// Suelta el journal: cierra el pool y devuelve el fichero a quien lo
-    /// quiera (el daemon, un `norte audit`).
+    /// Releases the journal: closes the pool and returns the file to whoever
+    /// wants it (the daemon, a `norte audit`).
     ///
-    /// `true` si al volver esta sesión no lo tiene — incluido el caso de que no
-    /// lo tuviera ya. `false` si alguien más sostiene un [`Arc`] del handle: ahí
-    /// NO se suelta, porque cerrar el pool por debajo de una mutación en vuelo
-    /// la mataría, y reabrir mientras el otro `Arc` vive abriría un SEGUNDO
-    /// handle sobre el mismo fichero.
+    /// `true` if, on return, this session doesn't hold it — including the
+    /// case where it already didn't. `false` if someone else holds an
+    /// [`Arc`] of the handle: there it is NOT released, because closing the
+    /// pool under an in-flight mutation would kill it, and reopening while the
+    /// other `Arc` is alive would open a SECOND handle over the same file.
     ///
-    /// La siguiente mutación lo vuelve a abrir, releyendo la cadena del fichero
-    /// — que es la razón de que aquí se DESTRUYA el handle en vez de guardarlo
-    /// (ver la nota del módulo sobre `ChainState`).
+    /// The next mutation reopens it, re-reading the file's chain — which is
+    /// why the handle is DESTROYED here instead of kept (see the module note
+    /// about `ChainState`).
     ///
-    /// # Precondición: NINGUNA mutación puede estar entre su gate y su fila
+    /// # Precondition: NO mutation may be between its gate and its row
     ///
-    /// Esto es lo que hay que resolver ANTES de llamar a esto desde un
-    /// temporizador de ociosidad, y es la razón de que el temporizador no esté
-    /// escrito todavía.
+    /// This is what has to be resolved BEFORE calling this from an idleness
+    /// timer, and it's the reason that timer isn't written yet.
     ///
-    /// [`crate::Engine`] comprueba el journal en el gate, ANTES del efecto, y
-    /// lo escribe en el observer, DESPUÉS. Entre esos dos instantes `release`
-    /// puede cerrar la ventana; si además otro proceso se lleva el fichero
-    /// mientras tanto, la reapertura del observer da `Busy`, `on_mutation`
-    /// contesta `Ok(())` —la mutación ya ocurrió, fallar ahí solo mentiría
-    /// sobre algo que funcionó— y el efecto se queda sin fila. El aviso al
-    /// frontend SÍ sale, así que no es mudo, pero la regla dura 4 se rompe.
+    /// [`crate::Engine`] checks the journal at the gate, BEFORE the effect,
+    /// and writes it into the observer, AFTER. Between those two instants
+    /// `release` can close the window; if on top of that another process
+    /// takes the file in the meantime, the observer's reopen gives `Busy`,
+    /// `on_mutation` answers `Ok(())` —the mutation already happened, failing
+    /// there would only lie about something that worked— and the effect is
+    /// left without a row. The warning to the frontend DOES go out, so it
+    /// isn't mute, but hard rule 4 is broken.
     ///
-    /// **Desde #205 la precondición se cumple sola dentro del engine**, y por
-    /// eso este método puede empezar a tener llamantes: el cuerpo de cada Task
-    /// que muta fija el journal al principio
+    /// **Since #205 the precondition is satisfied on its own inside the
+    /// engine**, and that's why this method can start having callers: the
+    /// body of every mutating Task pins the journal at the start
     /// ([`MutationObserver::pin_for_task`](crate::observer::MutationObserver::pin_for_task))
-    /// y sostiene ese `Arc` hasta el final, así que `Arc::try_unwrap` falla y
-    /// esto contesta `false` mientras haya una operación en vuelo. Antes no
-    /// era así: `crate::ops` tomaba y soltaba el handle POR ENTRADA, y entre
-    /// dos entradas no lo sostenía nadie.
+    /// and holds that `Arc` until the end, so `Arc::try_unwrap` fails and this
+    /// answers `false` for as long as an operation is in flight. It wasn't
+    /// like this before: `crate::ops` took and released the handle PER ENTRY
+    /// POINT, and between two entry points nobody held it.
     ///
-    /// Lo que sigue sin cubrir el `Arc` es un observer que no sea este —un
-    /// embebedor con su propio [`crate::observer::MutationObserver`] que no
-    /// implemente `pin_for_task`—, y ahí la precondición vuelve a ser del
-    /// llamante.
+    /// What's still left uncovered for the `Arc` is an observer other than
+    /// this one —an embedder with its own
+    /// [`crate::observer::MutationObserver`] that doesn't implement
+    /// `pin_for_task`— and there the precondition is the caller's again.
     ///
-    /// # Esto NO es cancel-safe. Córrelo entero o `tokio::spawn`-éalo.
+    /// # This is NOT cancel-safe. Run it to completion or `tokio::spawn` it.
     ///
-    /// Dropear este future en el `await` del cierre deja el handle ya SACADO de
-    /// la ventana y el pool cerrándose por su cuenta en el worker de `sqlx`: el
-    /// siguiente `resolve` abre contra nuestra propia conexión agonizando y se
-    /// lleva un `Busy` que nos hemos inventado nosotros — un aviso de «sesión
-    /// sin registro» falso, y [`FRENO_TRAS_FALLO`] de mutaciones de verdad sin
-    /// registrar hasta que el reintento lo cura. O sea, exactamente el bug que
-    /// esta función existe para no tener.
+    /// Dropping this future at the close's `await` leaves the handle already
+    /// TAKEN OUT of the window while the pool keeps closing on its own in
+    /// `sqlx`'s worker: the next `resolve` opens against our own dying
+    /// connection and gets a `Busy` that we made up ourselves — a false
+    /// "unrecorded session" warning, and [`FRENO_TRAS_FALLO`] worth of real
+    /// mutations left unrecorded until the retry cures it. In other words,
+    /// exactly the bug this function exists to not have.
     ///
-    /// Un `tokio::select!` con esto en una rama lo dispara. Ponlo en el CUERPO
-    /// de la rama, no en la condición.
+    /// A `tokio::select!` with this in one branch triggers it. Put it in the
+    /// BODY of the branch, not in the condition.
     pub async fn release(&self) -> bool {
-        let mut v = self.estado.lock().await;
-        Self::release_bajo_lock(&mut v).await
+        let mut w = self.window.lock().await;
+        Self::release_under_lock(&mut w).await
     }
 
-    /// Suelta el journal **si lleva `ocioso` sin usarse** (#179).
+    /// Releases the journal **if it has gone unused for `idle_for`** (#179).
     ///
-    /// Es la política que la primitiva no traía, y vive aquí y no en el
-    /// frontend por dos razones: el reloj de «cuándo se usó» es de esta
-    /// ventana —el frontend tendría que espiarlo—, y la decisión y el cierre
-    /// tienen que ocurrir bajo el MISMO lock, o entre mirar y soltar cabe una
-    /// mutación que se queda sin registro.
+    /// It's the policy the primitive didn't come with, and it lives here and
+    /// not in the frontend for two reasons: the clock for "when it was used"
+    /// belongs to this window —the frontend would have to spy on it— and the
+    /// decision and the close have to happen under the SAME lock, or a
+    /// mutation could slip in unrecorded between checking and releasing.
     ///
-    /// Devuelve `true` si al volver el fichero está libre: se soltó ahora, o
-    /// no lo teníamos. `false` = sigue siendo nuestro, porque aún no está
-    /// ocioso o porque alguien sostiene el handle (una Task en vuelo lo fija
-    /// entero, ver [`Self::release`]).
+    /// Returns `true` if, on return, the file is free: it was just released,
+    /// or we didn't have it. `false` = it's still ours, either because it
+    /// isn't idle yet or because someone is holding the handle (an in-flight
+    /// Task pins it whole, see [`Self::release`]).
     ///
-    /// Lo que esto arregla es que un `ntc` que copió un fichero a las 09:00 se
-    /// quedaba `journal.db` hasta salir, así que `norte daemon run` y `norte
-    /// audit` no podían abrirlo en todo el día. La reapertura RELEE la cadena,
-    /// que es lo que hace que soltar sea seguro.
+    /// What this fixes is that an `ntc` that copied a file at 09:00 used to
+    /// keep `journal.db` until it exited, so `norte daemon run` and `norte
+    /// audit` couldn't open it all day. Reopening RE-READS the chain, which is
+    /// what makes releasing safe.
     ///
-    /// # Esto NO es cancel-safe, por lo mismo que [`Self::release`].
-    pub async fn release_if_idle(&self, ocioso: std::time::Duration) -> bool {
-        let mut v = self.estado.lock().await;
-        if v.handle.is_none() {
+    /// # This is NOT cancel-safe, for the same reason as [`Self::release`].
+    pub async fn release_if_idle(&self, idle_for: std::time::Duration) -> bool {
+        let mut w = self.window.lock().await;
+        if w.handle.is_none() {
             return true;
         }
-        // Sin sello de uso no se suelta: se acaba de adquirir por un camino
-        // que no pasó por `resolver_bajo_lock`, y tratarlo como ocioso sería
-        // soltar lo que alguien pidió hace un instante.
-        let ocioso_desde = v.ultimo_uso.filter(|t| t.elapsed() >= ocioso);
-        if ocioso_desde.is_none() {
+        // Without a usage stamp it isn't released: it was just acquired by a
+        // path that didn't go through `resolve_under_lock`, and treating it
+        // as idle would mean releasing something someone asked for a moment
+        // ago.
+        let idle_since = w.last_used.filter(|t| t.elapsed() >= idle_for);
+        if idle_since.is_none() {
             return false;
         }
-        Self::release_bajo_lock(&mut v).await
+        Self::release_under_lock(&mut w).await
     }
 
-    /// El cuerpo de [`Self::release`], con la ventana YA tomada.
-    async fn release_bajo_lock(v: &mut Ventana) -> bool {
-        let Some(handle) = v.handle.take() else {
-            v.ultimo_uso = None;
+    /// The body of [`Self::release`], with the window ALREADY held.
+    async fn release_under_lock(w: &mut OwnershipWindow) -> bool {
+        let Some(handle) = w.handle.take() else {
+            w.last_used = None;
             return true;
         };
         match Arc::try_unwrap(handle) {
             Ok(j) => {
-                // Cerrar de verdad, y esperar a que cierre: soltar el `Arc` y
-                // seguir dejaría el lock del fichero puesto un rato indefinido
-                // —`sqlx` cierra la conexión en su worker— y el siguiente en
-                // abrir se llevaría un `Busy` inventado por nosotros.
+                // Actually close it, and wait for it to close: dropping the
+                // `Arc` and moving on would leave the file's lock held for an
+                // indefinite while —`sqlx` closes the connection in its
+                // worker— and whoever opens next would get a `Busy` we made
+                // up ourselves.
                 //
-                // Con TOPE, y sosteniendo el lock de la ventana mientras tanto:
-                // `on_mutation` necesita ese mismo lock, así que un cierre que
-                // no volviera dejaría al proceso sin journalizar Y sin mutar,
-                // mudo. El plazo convierte el cuelgue en un estado degradado
-                // que además se dice.
-                if tokio::time::timeout(ESPERA_POR_EL_CIERRE, j.close())
-                    .await
-                    .is_err()
-                {
+                // With a CAP, and holding the window's lock the whole time:
+                // `on_mutation` needs that same lock, so a close that never
+                // returned would leave the process without journaling AND
+                // without mutating, mute. The timeout turns the hang into a
+                // degraded state that also gets reported.
+                if tokio::time::timeout(CLOSE_WAIT, j.close()).await.is_err() {
                     tracing::warn!(
-                        "el journal no terminó de cerrarse a tiempo: el fichero puede seguir \
-                         ocupado un rato más"
+                        "the journal didn't finish closing in time: the file may stay busy a \
+                         while longer"
                     );
                 }
-                v.ultimo_uso = None;
+                w.last_used = None;
                 true
             }
-            Err(vivo) => {
-                v.handle = Some(vivo);
+            Err(alive) => {
+                w.handle = Some(alive);
                 false
             }
         }
     }
 
-    /// Como [`Self::get`], pero SIN el freno: si ahora mismo no se tiene el
-    /// journal, se intenta abrir cueste lo que cueste
-    /// (`ESPERA_POR_EL_LOCK`).
+    /// Like [`Self::get`], but WITHOUT the brake: if the journal isn't
+    /// currently held, an open is attempted no matter what (`LOCK_WAIT`).
     ///
-    /// Para el llamante que va a enseñarle la respuesta a un humano y no puede
-    /// contestar desde un veredicto de hace medio minuto — hoy
-    /// [`crate::Engine::ensure_journal`], que es lo que `norte ai rename`
-    /// pregunta ANTES de pedir confirmación. Para una mutación cualquiera el
-    /// freno es justo lo que se quiere; aquí es lo que haría mentir a la
-    /// pregunta.
+    /// For the caller that is about to show the answer to a human and cannot
+    /// answer from a half-minute-old verdict — today
+    /// [`crate::Engine::ensure_journal`], which is what `norte ai rename` asks
+    /// BEFORE requesting confirmation. For an ordinary mutation the brake is
+    /// exactly what you want; here it's what would make the question lie.
     pub async fn acquire_now(&self) -> Option<Arc<crate::journal::SqliteJournal>> {
         self.resolve_now().await.ok()
     }
 
-    /// Como [`Self::resolve`], pero SIN el freno — y en UNA sección crítica.
+    /// Like [`Self::resolve`], but WITHOUT the brake — and in ONE critical
+    /// section.
     ///
-    /// Que sea una sola importa: soltar el lock para limpiar el veredicto y
-    /// volver a tomarlo deja un hueco en el que otra mutación puede fallar y
-    /// re-armar el freno, con lo que esto contestaría desde la caché que su
-    /// propio contrato promete saltarse.
+    /// Being a single one matters: releasing the lock to clear the verdict
+    /// and taking it again leaves a gap in which another mutation can fail
+    /// and re-arm the brake, which would make this answer from the very cache
+    /// its own contract promises to skip.
     ///
     /// # Errors
-    /// Las de [`Self::resolve`].
+    /// Same as [`Self::resolve`].
     pub async fn resolve_now(&self) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
-        let mut v = self.estado.lock().await;
-        v.ultimo_fallo = None;
-        self.resolver_bajo_lock(&mut v).await
+        let mut w = self.window.lock().await;
+        w.last_failure = None;
+        self.resolve_under_lock(&mut w).await
     }
 
-    /// El journal, o el MOTIVO de que no lo haya.
+    /// The journal, or the REASON there isn't one.
     ///
-    /// [`Self::get`] tira el motivo porque a un observer le da igual. Al gate
-    /// de mutaciones NO le da igual: `Busy` sigue adelante y `Failed` rehúsa
-    /// (#178), y ahí está toda la diferencia entre «hay un daemon vivo» y
-    /// «alguien con escritura en el directorio de estado desactivó el
-    /// registro».
+    /// [`Self::get`] discards the reason because an observer doesn't care.
+    /// The mutation gate does NOT: `Busy` carries on and `Failed` refuses
+    /// (#178), and that's the whole difference between "there's a live
+    /// daemon" and "someone with write access to the state directory
+    /// disabled recording".
     ///
-    /// Abre si hace falta y si el freno lo permite, exactamente como `get` — y
-    /// con su misma advertencia: **el [`Arc`] devuelto no debe sobrevivir a la
-    /// operación que lo pidió**, o [`Self::release`] se convierte en un no-op
-    /// permanente y silencioso.
+    /// Opens if needed and if the brake allows it, exactly like `get` — with
+    /// the same warning: **the returned [`Arc`] must not outlive the
+    /// operation that asked for it**, or [`Self::release`] turns into a
+    /// permanent, silent no-op.
     ///
     /// # Errors
-    /// [`NoJournal::Busy`] si el lock lo tiene otro proceso;
-    /// [`NoJournal::Failed`] con el fichero y el motivo para todo lo demás
-    /// (permisos, corrupción, una DB de una era anterior a esta cadena).
+    /// [`NoJournal::Busy`] if another process holds the lock;
+    /// [`NoJournal::Failed`] with the file and the reason for everything else
+    /// (permissions, corruption, a DB from an era before this chain).
     pub async fn resolve(&self) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
-        let mut v = self.estado.lock().await;
-        self.resolver_bajo_lock(&mut v).await
+        let mut w = self.window.lock().await;
+        self.resolve_under_lock(&mut w).await
     }
 
-    /// El cuerpo de [`Self::resolve`], con la ventana YA tomada.
-    async fn resolver_bajo_lock(
+    /// The body of [`Self::resolve`], with the window ALREADY held.
+    async fn resolve_under_lock(
         &self,
-        v: &mut Ventana,
+        w: &mut OwnershipWindow,
     ) -> Result<Arc<crate::journal::SqliteJournal>, NoJournal> {
-        if let Some(j) = &v.handle {
-            v.ultimo_uso = Some(std::time::Instant::now());
+        if let Some(j) = &w.handle {
+            w.last_used = Some(std::time::Instant::now());
             return Ok(Arc::clone(j));
         }
-        // El freno, y SOLO para `Busy`. Lo que el freno ahorra es la espera del
-        // lock (`ESPERA_POR_EL_LOCK`), y esa espera solo se paga cuando hay un
-        // lock que esperar: un `Failed` —no existe el directorio, no hay
-        // permisos, esto no es una base de datos— vuelve en el acto, así que
-        // frenarlo no ahorra nada y sí cuesta lo único que importa desde #178,
-        // que es CUÁNDO se entera la sesión de que el fichero ya está
-        // arreglado. Con el freno puesto, un `chmod` que devuelve los permisos
-        // dejaba hasta 30 s de mutaciones rehusadas sin forma de forzar el
-        // reintento desde la interfaz; sin él, la siguiente operación funciona.
-        // Lo mismo vale para un `Failed` TRANSITORIO (un `EMFILE` en un TUI con
-        // muchas conexiones), que es el caso en que 30 s de negativa serían
-        // puro daño.
-        if let Some((cuando, NoJournal::Busy)) = &v.ultimo_fallo
-            && cuando.elapsed() < self.freno
+        // The brake, and ONLY for `Busy`. What the brake saves is the lock
+        // wait (`LOCK_WAIT`), and that wait is only paid when there is a lock
+        // to wait for: a `Failed` —the directory doesn't exist, there are no
+        // permissions, this isn't a database— returns on the spot, so
+        // braking it saves nothing and does cost the one thing that matters
+        // since #178, which is WHEN the session finds out the file has
+        // already been fixed. With the brake in place, a `chmod` that
+        // restored permissions left up to 30 s of refused mutations with no
+        // way to force a retry from the interface; without it, the next
+        // operation works. The same goes for a TRANSIENT `Failed` (an
+        // `EMFILE` in a TUI with many connections), which is the case where
+        // 30 s of refusal would be pure harm.
+        if let Some((when, NoJournal::Busy)) = &w.last_failure
+            && when.elapsed() < self.retry_brake
         {
             return Err(NoJournal::Busy);
         }
-        self.intentos
+        self.open_attempts
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let r = match crate::journal::SqliteJournal::open_with_busy_timeout(
-            &self.path,
-            ESPERA_POR_EL_LOCK,
+        let result = match crate::journal::SqliteJournal::open_with_busy_timeout(
+            &self.path, LOCK_WAIT,
         )
         .await
         {
             Ok(j) => Ok(Arc::new(j)),
-            Err(e) if es_lock_ocupado(&e) => Err(NoJournal::Busy),
-            // El FICHERO va en el motivo, y no solo el error de `SQLite`: desde
-            // #178 esto no es un aviso, es lo que hay que arreglar para que la
-            // sesión vuelva a poder mutar, y «unable to open database file» sin
-            // un path delante no le dice a nadie qué tocar. `Path::display` es
-            // la conversión lossy EXPLÍCITA que pide la regla 1 — esto es texto
-            // para un humano y nadie lo reparsea.
-            Err(e) => Err(NoJournal::Failed(motivo_saneado(
+            Err(e) if is_lock_busy(&e) => Err(NoJournal::Busy),
+            // The FILE goes into the reason, and not just `SQLite`'s error:
+            // since #178 this isn't a warning, it's what has to be fixed for
+            // the session to be able to mutate again, and "unable to open
+            // database file" with no path in front tells nobody what to
+            // touch. `Path::display` is the EXPLICIT lossy conversion hard
+            // rule 1 calls for — this is text for a human and nobody
+            // reparses it.
+            Err(e) => Err(NoJournal::Failed(sanitized_reason(
                 &e.to_string(),
                 &self.path,
             ))),
         };
-        match &r {
+        match &result {
             Ok(j) => {
                 if let Some(tx) = self
                     .hooks
@@ -819,146 +834,155 @@ impl LazyJournal {
                 {
                     j.set_hook_sender(tx);
                 }
-                v.handle = Some(Arc::clone(j));
-                v.ultimo_fallo = None;
-                v.ocupado_desde = None;
-                self.anunciar(v, &JournalStatus::Recovered);
+                w.handle = Some(Arc::clone(j));
+                w.last_failure = None;
+                w.busy_since = None;
+                self.announce(w, &JournalStatus::Recovered);
             }
             Err(why) => {
-                let ahora = std::time::Instant::now();
-                v.ultimo_fallo = Some((ahora, why.clone()));
-                // El reloj del episodio (#203) es SOLO de `Busy`: un `Failed`
-                // no es un ocupante, es un fichero roto, y ya rehúsa la
-                // mutación por su cuenta desde #178.
-                let sospechoso = match why {
+                let now = std::time::Instant::now();
+                w.last_failure = Some((now, why.clone()));
+                // The episode clock (#203) is ONLY for `Busy`: a `Failed` is
+                // not an occupant, it's a broken file, and it already
+                // refuses the mutation on its own since #178.
+                let suspicious = match why {
                     NoJournal::Busy => {
-                        let desde = *v.ocupado_desde.get_or_insert(ahora);
-                        // El `connect` se paga SOLO pasado el plazo: en el caso
-                        // normal —un daemon vivo, que es la mayoría de los
-                        // `Busy`— este brazo no se toca nunca.
-                        desde.elapsed() >= self.sospecha && !self.presencia.any_daemon_listening()
+                        let since = *w.busy_since.get_or_insert(now);
+                        // The `connect` is only paid for once the delay has
+                        // passed: in the normal case —a live daemon, which is
+                        // most `Busy`s— this arm is never touched.
+                        since.elapsed() >= self.suspicion_delay
+                            && !self.presence.any_daemon_listening()
                     }
                     NoJournal::Failed(_) => {
-                        v.ocupado_desde = None;
+                        w.busy_since = None;
                         false
                     }
                 };
-                if sospechoso {
-                    self.anunciar(v, &JournalStatus::Squatted);
+                if suspicious {
+                    self.announce(w, &JournalStatus::Squatted);
                 } else {
-                    self.anunciar(v, &JournalStatus::Lost(why.clone()));
+                    self.announce(w, &JournalStatus::Lost(why.clone()));
                 }
             }
         }
-        r
+        result
     }
 
-    /// Emite una transición SI dice algo nuevo, y recuerda que la dijo.
+    /// Emits a transition IF it says something new, and remembers that it
+    /// said it.
     ///
-    /// Dos filtros, y los dos son la diferencia entre un indicador útil y uno
-    /// que se ignora: una pérdida no se repite mientras la CLASE no cambie
-    /// (con el freno, eso son dos mensajes por minuto durante horas), y una
-    /// recuperación no se emite si no había nada que recuperar — la PRIMERA
-    /// apertura es lo normal, no una noticia.
-    fn anunciar(&self, v: &mut Ventana, ev: &JournalStatus) {
-        if v.anunciado.as_ref().is_some_and(|ya| misma_clase(ya, ev)) {
-            return;
-        }
-        if matches!(ev, JournalStatus::Recovered)
-            && !matches!(v.anunciado, Some(JournalStatus::Lost(_)))
+    /// Two filters, and both are the difference between a useful indicator
+    /// and one that gets ignored: a loss isn't repeated as long as the CLASS
+    /// doesn't change (with the brake, that's two messages a minute for
+    /// hours), and a recovery isn't emitted if there was nothing to recover —
+    /// the FIRST open is normal, not news.
+    fn announce(&self, w: &mut OwnershipWindow, event: &JournalStatus) {
+        if w.announced
+            .as_ref()
+            .is_some_and(|already| same_class(already, event))
         {
-            v.anunciado = Some(ev.clone());
             return;
         }
-        v.anunciado = Some(ev.clone());
-        self.emitir(ev);
+        if matches!(event, JournalStatus::Recovered)
+            && !matches!(w.announced, Some(JournalStatus::Lost(_)))
+        {
+            w.announced = Some(event.clone());
+            return;
+        }
+        w.announced = Some(event.clone());
+        self.emit(event);
     }
 
-    /// Lleva la transición al sink, o al log si todavía no hay sink.
+    /// Carries the transition to the sink, or to the log if there's no sink
+    /// yet.
     ///
-    /// **Quien instala sink se hace cargo de la entrega**, y por eso el `warn!`
-    /// es el `else` y no un añadido: los dos frontends avisan por caminos
-    /// distintos —el TUI a la pantalla (no instala subscriber de `tracing`, así
-    /// que ahí un `warn!` se descarta mudo) y el CLI a stderr por su propio
-    /// sink, que llega diga lo que diga `RUST_LOG`— y emitir por los dos a la
-    /// vez le enseñaría al usuario del CLI la misma frase dos veces. El `warn!`
-    /// cubre al que no instala ninguno (un embebedor de la biblioteca, o una
-    /// mutación que se adelante al arranque del frontend): lo que no puede
-    /// pasar es que esto sea MUDO.
+    /// **Whoever installs a sink takes charge of delivery**, and that's why
+    /// the `warn!` is the `else` and not an addition: the two frontends warn
+    /// through different paths —the TUI to the screen (it installs no
+    /// `tracing` subscriber, so there a `warn!` gets silently discarded) and
+    /// the CLI to stderr through its own sink, which arrives whatever
+    /// `RUST_LOG` says— and emitting through both at once would show the CLI
+    /// user the same phrase twice. The `warn!` covers whoever installs
+    /// neither (a library embedder, or a mutation that runs ahead of the
+    /// frontend's startup): what cannot happen is for this to be MUTE.
     ///
     /// # Panics
-    /// Si el lock interno está envenenado (otro hilo hizo panic sosteniéndolo)
-    /// — irrecuperable, mismo criterio que el resto de locks del engine.
+    /// If the internal lock is poisoned (another thread panicked while
+    /// holding it) — unrecoverable, same criterion as the engine's other
+    /// locks.
     ///
-    /// Un `sink` que paniquee propaga desde aquí hasta el `on_mutation` y hace
-    /// fallar la Task de una mutación que YA se aplicó. Es responsabilidad de
-    /// quien lo implementa (ver [`JournalWarningSink`]); a cambio, un aviso
-    /// tragado en silencio sería peor.
-    fn emitir(&self, ev: &JournalStatus) {
-        let mut slot = self.sink.lock().expect("lock del sink sano");
-        match (&slot.sink, ev) {
+    /// A `sink` that panics propagates from here up to `on_mutation` and
+    /// fails the Task of a mutation that has ALREADY been applied. It's the
+    /// responsibility of whoever implements it (see [`JournalWarningSink`]);
+    /// in exchange, a warning swallowed in silence would be worse.
+    fn emit(&self, event: &JournalStatus) {
+        let mut slot = self.sink.lock().expect("sink lock is sound");
+        match (&slot.sink, event) {
             (Some(s), JournalStatus::Lost(why)) => s.on_no_journal(why),
             (Some(s), JournalStatus::Recovered) => s.on_journal_recovered(),
             (Some(s), JournalStatus::Squatted) => s.on_journal_squatted(),
             (None, JournalStatus::Lost(why)) => {
-                tracing::warn!(motivo = %why.text(), "sesión embebida SIN journal");
-                slot.pendiente = Some(why.clone());
+                tracing::warn!(reason = %why.text(), "embedded session WITHOUT a journal");
+                slot.pending = Some(why.clone());
             }
             (None, JournalStatus::Recovered) => {
-                tracing::info!("la sesión embebida volvió a tener journal");
-                slot.pendiente = None;
+                tracing::info!("the embedded session got its journal back");
+                slot.pending = None;
             }
-            // Sin sink, lo pendiente sigue siendo un `Busy`: es lo que un sink
-            // tardío tiene que ver, y `on_journal_squatted` cae por omisión en
-            // esa misma frase. Lo que sí sube de nivel es el LOG — este es el
-            // renglón que un operador busca cuando pregunta por qué no hay
-            // registro (#203).
+            // With no sink, what's pending stays a `Busy`: it's what a late
+            // sink has to see, and `on_journal_squatted` falls back by
+            // default to that same phrase. What DOES go up a level is the
+            // LOG — this is the line an operator looks for when asking why
+            // there's no recording (#203).
             (None, JournalStatus::Squatted) => {
                 tracing::warn!(
-                    "el journal lleva minutos ocupado y no hay daemon escuchando:                      alguien retiene `journal.db`"
+                    "the journal has been busy for minutes and there is no daemon listening: \
+                     someone is holding `journal.db`"
                 );
-                slot.pendiente = Some(NoJournal::Busy);
+                slot.pending = Some(NoJournal::Busy);
             }
         }
     }
 }
 
-/// A mano y no derivado: [`crate::journal::SqliteJournal`] no es `Debug` (lleva
-/// dentro el pool de `sqlx`), y lo único que un mensaje de test o de log
-/// necesita de este tipo es en qué punto está la decisión.
+/// By hand and not derived: [`crate::journal::SqliteJournal`] isn't `Debug`
+/// (it carries `sqlx`'s pool inside), and all a test or log message needs from
+/// this type is which point the decision is at.
 impl std::fmt::Debug for LazyJournal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // `try_lock`: formatear no puede esperar a que termine una apertura, y
-        // menos aún desde un `Drop` o un log de la propia apertura.
-        let estado = match self.estado.try_lock() {
-            Err(_) => "abriéndose".to_owned(),
-            Ok(v) => match (&v.handle, &v.ultimo_fallo) {
-                (Some(_), _) => "dueño".to_owned(),
-                (None, Some((_, why))) => format!("sin journal ({why:?})"),
-                (None, None) if self.attempted() => "soltado".to_owned(),
-                (None, None) => "sin abrir".to_owned(),
+        // `try_lock`: formatting cannot wait for an open to finish, even less
+        // so from a `Drop` or a log of the open itself.
+        let state = match self.window.try_lock() {
+            Err(_) => "opening".to_owned(),
+            Ok(w) => match (&w.handle, &w.last_failure) {
+                (Some(_), _) => "owner".to_owned(),
+                (None, Some((_, why))) => format!("no journal ({why:?})"),
+                (None, None) if self.attempted() => "released".to_owned(),
+                (None, None) => "unopened".to_owned(),
             },
         };
         f.debug_struct("LazyJournal")
             .field("path", &self.path)
-            .field("estado", &estado)
-            .field("intentos", &self.attempts())
+            .field("state", &state)
+            .field("attempts", &self.attempts())
             .finish_non_exhaustive()
     }
 }
 
 #[async_trait::async_trait]
 impl crate::observer::MutationObserver for LazyJournal {
-    /// La costura de la regla dura 4 en el proceso embebido, y el disparador de
-    /// la apertura.
+    /// The seam of hard rule 4 in the embedded process, and the trigger for
+    /// the open.
     ///
-    /// Sin journal devuelve `Ok(())`: la mutación YA OCURRIÓ (el observer se
-    /// llama después del efecto), así que fallar aquí no la desharía, solo
-    /// diría que falló algo que funcionó. Lo que NO es aceptable es que además
-    /// sea muda, y por eso el aviso está en `LazyJournal::resolve`, que avisa
-    /// antes de que este `Ok(())` vuelva — una vez por EPISODIO desde #179, no
-    /// una vez por sesión: la ventana se puede perder y recuperar varias veces
-    /// y el frontend tiene que enterarse de cada cambio.
+    /// Without a journal it returns `Ok(())`: the mutation has ALREADY
+    /// HAPPENED (the observer is called after the effect), so failing here
+    /// wouldn't undo it, it would only say that something that worked had
+    /// failed. What is NOT acceptable is for it to also be mute, and that's
+    /// why the warning lives in `LazyJournal::resolve`, which warns before
+    /// this `Ok(())` returns — once per EPISODE since #179, not once per
+    /// session: the window can be lost and recovered several times and the
+    /// frontend has to learn of every change.
     async fn on_mutation(
         &self,
         mutation: &crate::observer::Mutation<'_>,
@@ -972,38 +996,41 @@ impl crate::observer::MutationObserver for LazyJournal {
         }
     }
 
-    /// Fija el veredicto para toda una Task (#205): o el journal, o nada, pero
-    /// LO MISMO para todas sus mutaciones.
+    /// Fixes the verdict for an entire Task (#205): either the journal, or
+    /// nothing, but the SAME for all of its mutations.
     ///
-    /// Devolver el [`crate::journal::SqliteJournal`] en vez de a sí mismo es lo
-    /// que quita del medio a esta ventana durante la Task: el handle ya no se
-    /// vuelve a resolver, así que ni el reintento de #179 puede empezar a
-    /// registrar por el medio ni un `release` puede dejar de hacerlo. Y como el
-    /// `Arc` vive lo que vive la Task, `release` contesta `false` mientras
-    /// tanto — que es exactamente la precondición que le falta al temporizador
-    /// de ociosidad.
+    /// Returning the [`crate::journal::SqliteJournal`] instead of itself is
+    /// what takes this window out of the picture during the Task: the handle
+    /// no longer gets re-resolved, so neither can the #179 retry start
+    /// recording partway through, nor can a `release` stop doing so. And
+    /// since the `Arc` lives as long as the Task does, `release` answers
+    /// `false` in the meantime — which is exactly the precondition the
+    /// idleness timer is missing.
     ///
-    /// Sin journal se fija un no-op, y no `self`: si se devolviera `self`, cada
-    /// mutación volvería a preguntar y volveríamos a la mitad y mitad.
+    /// Without a journal a no-op is pinned, not `self`: if `self` were
+    /// returned, every mutation would ask again and we'd be back to half and
+    /// half.
     async fn pin_for_task(
         &self,
     ) -> Result<Option<Arc<dyn crate::observer::MutationObserver>>, norte_proto::Error> {
-        // `resolve` y no `get`, porque el MOTIVO decide (#178) y `get` lo tira.
-        // SIN brazo comodín: un motivo nuevo rompe la compilación en vez de
-        // colarse por «adelante sin registrar», igual que en el gate.
+        // `resolve` and not `get`, because the REASON decides (#178) and
+        // `get` discards it. NO catch-all arm: a new reason breaks the build
+        // instead of sneaking in as "go ahead unrecorded", same as at the
+        // gate.
         match self.resolve().await {
             Ok(j) => Ok(Some(j as Arc<dyn crate::observer::MutationObserver>)),
-            // Ocupado: la Task corre SIN registrar, entera. Es el caso benigno
-            // y el que no puede tumbar una sesión.
+            // Busy: the Task runs UNRECORDED, entirely. It's the benign case,
+            // the one that must not be able to take down a session.
             Err(NoJournal::Busy) => Ok(Some(Arc::new(crate::observer::NoopObserver))),
-            // Ilegible: se rehúsa aquí también, y no solo en el gate. Entre el
-            // gate y este punto cabe toda la cola del scheduler, y un fichero
-            // puede corromperse en ese rato; sin esto, la Task borraría un
-            // árbol entero en silencio. Todavía no ha ocurrido ningún efecto.
-            Err(NoJournal::Failed(motivo)) => {
+            // Unreadable: refused here too, and not only at the gate. Between
+            // the gate and this point the whole scheduler queue fits, and a
+            // file can become corrupted in that stretch; without this, the
+            // Task would delete an entire tree in silence. No effect has
+            // happened yet.
+            Err(NoJournal::Failed(reason)) => {
                 tracing::error!(
-                    motivo = %motivo,
-                    "Task rehusada al fijar su journal: no se puede abrir (#178)"
+                    reason = %reason,
+                    "Task refused while pinning its journal: cannot open (#178)"
                 );
                 Err(norte_proto::Error::JournalUnavailable)
             }
@@ -1011,208 +1038,213 @@ impl crate::observer::MutationObserver for LazyJournal {
     }
 }
 
-/// La sesión de UI de un proceso SIN daemon (L2).
+/// The UI session of a process WITHOUT a daemon (L2).
 ///
-/// El daemon guarda la pantalla en un `SessionStore` y la vuelca a
-/// `<state_dir>/session.json`. Un frontend embebido no tiene daemon, así que
-/// es su propio almacén: el mismo fichero y el MISMO lock, para que un
-/// embebido y un daemon —o dos embebidos— no se pisen la pantalla.
+/// The daemon keeps the screen in a `SessionStore` and dumps it to
+/// `<state_dir>/session.json`. An embedded frontend has no daemon, so it is
+/// its own store: the same file and the SAME lock, so that an embedded
+/// process and a daemon —or two embedded ones— don't step on each other's
+/// screen.
 ///
-/// Uno por proceso, y por eso es un `OnceLock`: dos almacenes vivos serían dos
-/// candidatos al mismo lock dentro del mismo proceso, y el segundo se vería
-/// suelto por culpa del primero.
+/// One per process, and that's why it's a `OnceLock`: two live stores would be
+/// two candidates for the same lock within the same process, and the second
+/// would see itself locked out because of the first.
 ///
-/// El `state_dir` se resuelve UNA vez, así que un test que llame aquí escribe
-/// el estado REAL del usuario y le deja la sesión tomada a la norte que tenga
-/// abierta: para aislarlo hay que poner `XDG_STATE_HOME` antes de la primera
-/// llamada (el daemon tiene `state_dir` en su config justo por esto). Un
-/// cambio de `HOME` a media vida del proceso tampoco se ve.
+/// `state_dir` is resolved ONCE, so a test that calls into here writes the
+/// user's REAL state and leaves the session taken away from whatever norte
+/// instance has it open: to isolate it you have to set `XDG_STATE_HOME`
+/// before the first call (the daemon has `state_dir` in its config for
+/// exactly this reason). A change to `HOME` halfway through the process's
+/// life isn't picked up either.
 static UI_SESSION: std::sync::OnceLock<EmbeddedSession> = std::sync::OnceLock::new();
 
-/// El almacén embebido: la sesión viva, dónde se escribe, y el derecho a
-/// escribirla.
+/// The embedded store: the live session, where it's written, and the right
+/// to write it.
 struct EmbeddedSession {
-    /// La sesión viva de ESTE proceso.
+    /// This process's live session.
     store: Arc<crate::ui_session::SessionStore>,
-    /// Dónde vive el estado, si hay dónde. Que se PUEDA escribir es otra cosa
-    /// y vive en [`EmbeddedSession::escritura`].
+    /// Where the state lives, if anywhere. Whether it CAN be written is
+    /// another matter, and lives in [`EmbeddedSession::write_right`].
     dir: Option<PathBuf>,
-    /// El derecho a escribir, que se puede conseguir MÁS TARDE.
+    /// The right to write, which can be acquired LATER.
     ///
-    /// No es del arranque, y esa era la mitad que faltaba (#234): la ventana
-    /// que arranca segunda no tiene el lock, la primera se cierra un rato
-    /// después, y con la decisión congelada esta ventana no volvía a escribir
-    /// en toda su vida — su pantalla se moría con ella aunque el fichero
-    /// estuviera libre desde hace horas.
-    escritura: std::sync::Mutex<Escritura>,
-    /// Serializa `take_dirty` + volcado.
+    /// It isn't fixed at startup, and that was the missing half (#234): the
+    /// window that starts second doesn't have the lock, the first one closes
+    /// a while later, and with the decision frozen this window would never
+    /// write again for its whole life — its screen would die with it even
+    /// though the file had been free for hours.
+    write_right: std::sync::Mutex<WriteRight>,
+    /// Serializes `take_dirty` + dump.
     ///
-    /// El daemon tiene UN escritor que espera cada volcado, así que sus
-    /// escrituras salen en orden por construcción. Aquí escribe quien llama, y
-    /// dos `session_put` a la vez pueden entrelazarse —A toma la revisión 1, B
-    /// toma la 2, B escribe, A escribe— y dejar en disco la VIEJA mientras la
-    /// memoria dice la nueva. Hoy solo llama la TUI y va en serie, así que
-    /// esto es el cierre de una puerta abierta, no un incendio apagado.
+    /// The daemon has ONE writer that waits for every dump, so its writes
+    /// come out in order by construction. Here whoever calls in writes, and
+    /// two `session_put`s at once can interleave —A takes revision 1, B takes
+    /// 2, B writes, A writes— and leave the OLD one on disk while memory says
+    /// the new one. Today only the TUI calls this and does so serially, so
+    /// this closes a door that's open, not a fire that's burning.
     writing: std::sync::Mutex<()>,
 }
 
-/// El estado del derecho a escribir, que se reintenta cada poco.
+/// The state of the write right, retried every so often.
 #[derive(Default)]
-struct Escritura {
-    /// El derecho, si se tiene.
+struct WriteRight {
+    /// The right, if held.
     lock: Option<crate::ui_session::disk::SessionLock>,
-    /// Ya se avisó de que no se puede tomar. Sin esto, una ventana suelta
-    /// contra un directorio de estado que no se deja abrir avisa cada treinta
-    /// segundos durante todo el día: un indicador que parpadea es un indicador
-    /// que nadie mira (#178).
-    avisado: bool,
-    /// El fichero lo escribió un binario más nuevo, así que este proceso se
-    /// RINDE: no se vuelve a intentar.
+    /// Already warned that it cannot be taken. Without this, a window that's
+    /// locked out against a state directory that won't open warns every
+    /// thirty seconds all day long: a blinking indicator is an indicator
+    /// nobody looks at (#178).
+    warned: bool,
+    /// The file was written by a newer binary, so this process GIVES UP: it
+    /// doesn't try again.
     ///
-    /// Reintentar tenía dos costes y ninguna ventaja: releer hasta un mega cada
-    /// treinta segundos para volver a rehusarlo, y un aviso por vuelta. El
-    /// arranque siguiente vuelve a mirar, que es cuando la respuesta puede
-    /// haber cambiado de verdad.
-    rendido: bool,
+    /// Retrying had two costs and no upside: re-reading up to a megabyte
+    /// every thirty seconds only to refuse it again, and a warning per round.
+    /// The next startup looks again, which is when the answer may actually
+    /// have changed.
+    given_up: bool,
 }
 
-/// El almacén de este proceso, abriéndolo la primera vez.
+/// This process's store, opened the first time.
 ///
-/// Síncrono a propósito: lo llaman los dos envoltorios de abajo desde DENTRO
-/// de un `spawn_blocking` (regla 2).
+/// Synchronous on purpose: the two wrappers below call it from INSIDE a
+/// `spawn_blocking` (rule 2).
 fn ui_session_blocking() -> &'static EmbeddedSession {
     UI_SESSION.get_or_init(|| {
         let Some(dir) = norte_config::dirs::state_dir() else {
-            // Sin directorio de estado —un entorno sin `HOME`— hay pantalla
-            // viva y no hay dónde guardarla. Es lo que ya pasaba antes de que
-            // existiera la sesión, no un fallo nuevo.
+            // No state directory —an environment without `HOME`— means there's
+            // a live screen and nowhere to save it. That's what already
+            // happened before the session existed, not a new failure.
             return EmbeddedSession {
                 store: Arc::new(crate::ui_session::SessionStore::default()),
                 dir: None,
-                escritura: std::sync::Mutex::new(Escritura::default()),
+                write_right: std::sync::Mutex::new(WriteRight::default()),
                 writing: std::sync::Mutex::new(()),
             };
         };
-        let lock = toma_el_lock(&dir, true);
-        let recuperada = crate::ui_session::disk::load_or_default(&dir);
+        let lock = take_the_lock(&dir, true);
+        let recovered = crate::ui_session::disk::load_or_default(&dir);
         EmbeddedSession {
             dir: Some(dir),
-            store: Arc::new(crate::ui_session::SessionStore::new(recuperada.session)),
-            // El derecho a escribir son DOS cosas: el lock, y que lo que había
-            // en disco no sea de un binario más nuevo.
-            escritura: std::sync::Mutex::new(Escritura {
-                lock: lock.filter(|_| recuperada.writable),
-                avisado: false,
-                rendido: !recuperada.writable,
+            store: Arc::new(crate::ui_session::SessionStore::new(recovered.session)),
+            // The right to write is TWO things: the lock, and that what was
+            // on disk isn't from a newer binary.
+            write_right: std::sync::Mutex::new(WriteRight {
+                lock: lock.filter(|_| recovered.writable),
+                warned: false,
+                given_up: !recovered.writable,
             }),
             writing: std::sync::Mutex::new(()),
         }
     })
 }
 
-/// Intenta el lock de escritura de `dir`. `avisa` decide si un fallo se cuenta:
-/// esto se reintenta cada treinta segundos y un aviso por vuelta es ruido, no
-/// información.
-fn toma_el_lock(dir: &Path, avisa: bool) -> Option<crate::ui_session::disk::SessionLock> {
+/// Attempts `dir`'s write lock. `warn_on_fail` decides whether a failure gets
+/// counted: this is retried every thirty seconds and a warning per round is
+/// noise, not information.
+fn take_the_lock(dir: &Path, warn_on_fail: bool) -> Option<crate::ui_session::disk::SessionLock> {
     crate::ui_session::disk::lock(dir).unwrap_or_else(|e| {
-        if avisa {
-            tracing::warn!(error = %e, "no se pudo tomar el lock de la sesión de UI");
+        if warn_on_fail {
+            tracing::warn!(error = %e, "could not take the UI session lock");
         }
         None
     })
 }
 
-/// ¿Puede este proceso escribir la sesión AHORA?
+/// Can this process write the session RIGHT NOW?
 ///
-/// Si ya tiene el lock, sí. Si no, se vuelve a intentar: la ventana que lo
-/// tenía puede haberse cerrado (#234). Al conseguirlo tarde se re-lee el
-/// fichero por dos cosas distintas y las dos importan:
+/// If it already has the lock, yes. If not, it tries again: the window that
+/// had it may have closed (#234). Getting it late re-reads the file for two
+/// different reasons, and both matter:
 ///
-/// - Si mientras corríamos lo escribió un binario MÁS NUEVO, no se pisa: se
-///   suelta el lock que acabamos de tomar y se sigue sin escribir.
-/// - Si lo escribió otra ventana de esta misma versión, su DOCUMENTO es el
-///   vigente y se adopta entero, cuerpo incluido. Quedarse solo con la revisión
-///   parecía suficiente y no lo era: el cliente recibía su propio cuerpo con el
-///   número del otro, su siguiente escritura encajaba sin conflicto, y lo que
-///   la otra ventana hubiera guardado desaparecía sin que nada lo notara. Con
-///   el cuerpo delante, el cliente decide qué conserva —él es el único que sabe
-///   leerlo— y de paso el número no va hacia atrás.
+/// - If a NEWER binary wrote it while we were running, don't step on it: the
+///   lock we just took is released and we carry on without writing.
+/// - If another window of this same version wrote it, its DOCUMENT is the
+///   current one and gets adopted whole, body included. Keeping only the
+///   revision seemed enough and it wasn't: the client would get its own body
+///   with the other one's number, its next write would land without
+///   conflict, and whatever the other window had saved would disappear
+///   without anything noticing. With the body in front, the client decides
+///   what to keep —it's the only one that knows how to read it— and the
+///   number doesn't go backwards either.
 ///
-/// Síncrono: lo llaman los dos envoltorios desde dentro de un `spawn_blocking`
-/// (regla 2).
-fn puede_escribir(s: &EmbeddedSession) -> bool {
+/// Synchronous: the two wrappers call it from inside a `spawn_blocking`
+/// (rule 2).
+fn can_write(s: &EmbeddedSession) -> bool {
     let Some(dir) = s.dir.as_ref() else {
         return false;
     };
-    let mut guarda = s
-        .escritura
+    let mut guard = s
+        .write_right
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if guarda.lock.is_some() {
+    if guard.lock.is_some() {
         return true;
     }
-    if guarda.rendido {
+    if guard.given_up {
         return false;
     }
-    let Some(lock) = toma_el_lock(dir, !guarda.avisado) else {
-        guarda.avisado = true;
+    let Some(lock) = take_the_lock(dir, !guard.warned) else {
+        guard.warned = true;
         return false;
     };
-    let recuperada = crate::ui_session::disk::load_or_default(dir);
-    if !recuperada.writable {
-        // Un binario más nuevo escribió mientras estábamos sueltos: se suelta
-        // el lock recién tomado y no se vuelve a intentar en todo el proceso.
+    let recovered = crate::ui_session::disk::load_or_default(dir);
+    if !recovered.writable {
+        // A newer binary wrote while we were locked out: the lock we just
+        // took is released and it isn't tried again for the rest of the
+        // process.
         drop(lock);
-        guarda.rendido = true;
+        guard.given_up = true;
         return false;
     }
-    s.store.adopt_from_disk(recuperada.session);
-    tracing::info!("la sesión de UI quedó libre: esta ventana vuelve a guardarla");
-    guarda.lock = Some(lock);
-    guarda.avisado = false;
+    s.store.adopt_from_disk(recovered.session);
+    tracing::info!("the UI session came free: this window is writing it again");
+    guard.lock = Some(lock);
+    guard.warned = false;
     true
 }
 
-/// La sesión guardada y si este proceso puede escribirla.
+/// The saved session and whether this process can write it.
 ///
-/// El `conn` que reclama la propiedad es el mismo para todo el proceso: en
-/// embebido no hay conexiones, hay UNA superficie.
+/// The `conn` that claims ownership is the same for the whole process: in
+/// embedded mode there are no connections, there is ONE surface.
 pub async fn session_get() -> (norte_proto::methods::Session, bool) {
     crate::blocking::spawn_blocking(|| {
         let s = ui_session_blocking();
-        let dueño = s.store.claim(0) && puede_escribir(s);
-        (s.store.get(), dueño)
+        let owner = s.store.claim(0) && can_write(s);
+        (s.store.get(), owner)
     })
     .await
-    // Un panic dentro del closure NO es «otra ventana tiene la sesión», que es
-    // lo que el frontend pinta con `false`: se dice, y luego se degrada.
+    // A panic inside the closure is NOT "another window has the session",
+    // which is what the frontend paints with `false`: it's reported, and then
+    // degraded.
     .unwrap_or_else(|e| {
-        tracing::warn!(error = %e, "la lectura de la sesión de UI se cayó");
+        tracing::warn!(error = %e, "reading the UI session crashed");
         (norte_proto::methods::Session::default(), false)
     })
 }
 
-/// Reemplaza la sesión y la vuelca, si este proceso es quien escribe.
+/// Replaces the session and dumps it, if this process is the writer.
 ///
-/// Un proceso SUELTO —el que no consiguió el lock— no escribe NI en memoria: se
-/// le contesta `PermissionDenied` antes de tocar el almacén. Aceptarlo en
-/// memoria y devolver una revisión nueva era prometerle que había guardado algo
-/// que no iba a ninguna parte; abrir una segunda ventana sigue sin costarle la
-/// pantalla a la primera, que es lo que importaba.
+/// A LOCKED-OUT process —one that didn't get the lock— doesn't write even in
+/// memory: it gets `PermissionDenied` before the store is touched. Accepting
+/// it in memory and returning a new revision would promise it had saved
+/// something that was going nowhere; opening a second window still doesn't
+/// cost the first one its screen, which is what mattered.
 ///
-/// **Solo para un humano.** El gate `Actor::User` de ADR 0059 lo hace el
-/// handler del daemon, y aquí no hay handler: esta función y su hermana son
-/// `pub`, así que quien las llame responde de que la superficie que hay
-/// detrás es una persona. Hoy no hay ninguna que no lo sea —ni MCP ni los
-/// plugins llegan al `Backend` embebido—, y añadir una es añadir ese gate.
+/// **For a human only.** ADR 0059's `Actor::User` gate is enforced by the
+/// daemon's handler, and there is no handler here: this function and its
+/// sibling are `pub`, so whoever calls them is responsible for the surface
+/// behind them being a person. Today none isn't —neither MCP nor plugins
+/// reach the embedded `Backend`— and adding one means adding that gate.
 ///
 /// # Errors
 ///
-/// [`norte_proto::Error::PermissionDenied`] si este proceso no es quien
-/// escribe (no tiene el lock, o el fichero es de un binario más nuevo),
-/// [`norte_proto::Error::Conflict`] con `StaleRevision` y
-/// [`norte_proto::Error::LimitExceeded`] con `LIMIT_SESSION_BODY`: las mismas
-/// tres negativas que da el daemon, para que el cliente no tenga dos caminos.
+/// [`norte_proto::Error::PermissionDenied`] if this process isn't the writer
+/// (doesn't have the lock, or the file is from a newer binary),
+/// [`norte_proto::Error::Conflict`] with `StaleRevision` and
+/// [`norte_proto::Error::LimitExceeded`] with `LIMIT_SESSION_BODY`: the same
+/// three refusals the daemon gives, so the client doesn't have two paths.
 pub async fn session_put(
     version: u32,
     revision: u64,
@@ -1220,12 +1252,13 @@ pub async fn session_put(
 ) -> Result<u64, norte_proto::Error> {
     crate::blocking::spawn_blocking(move || {
         let s = ui_session_blocking();
-        // No ser quien escribe se dice ANTES de tocar la memoria, y con la
-        // misma negativa que da el daemon: aceptar el `put` y devolver una
-        // revisión nueva le prometería al llamante que ha guardado algo que no
-        // va a llegar a ningún sitio. Aquí «dueño» es el lock, porque en
-        // embebido hay UNA superficie y no hay conexiones que se disputen nada.
-        if !puede_escribir(s) {
+        // Not being the writer is said BEFORE touching memory, with the same
+        // refusal the daemon gives: accepting the `put` and returning a new
+        // revision would promise the caller it had saved something that
+        // isn't going anywhere. Here "owner" means the lock, because in
+        // embedded mode there is ONE surface and no connections disputing
+        // anything.
+        if !can_write(s) {
             return Err(norte_proto::Error::PermissionDenied);
         }
         let Some(dir) = s.dir.as_ref() else {
@@ -1238,27 +1271,27 @@ pub async fn session_put(
             crate::ui_session::PutError::TooLarge { .. } => norte_proto::Error::LimitExceeded {
                 limit: norte_proto::Error::LIMIT_SESSION_BODY.to_owned(),
             },
-            // Un almacén embebido no se cierra —lo cierra el apagado de un
-            // daemon—, pero nombrarlo aquí es lo que hace que añadir un cierre
-            // en este brazo sea un error de compilación y no un silencio.
+            // An embedded store doesn't close —a daemon's shutdown is what
+            // closes it— but naming it here is what turns adding a close to
+            // this arm into a compile error instead of a silence.
             crate::ui_session::PutError::Sealed => norte_proto::Error::Cancelled,
-            // Mismo trato que en el daemon (#247): un esquema que este core no
-            // sabe leer no se escribe, porque escribirlo mata la persistencia
-            // desde el arranque siguiente.
+            // Same treatment as in the daemon (#247): a schema this core
+            // can't read isn't written, because writing it would kill
+            // persistence starting with the next launch.
             crate::ui_session::PutError::UnknownSchema { .. } => norte_proto::Error::Unsupported,
         })?;
-        // `take_dirty` y el volcado, bajo UN lock: es lo que hace que dos
-        // escrituras a la vez no dejen en disco la vieja.
-        let _turno = s
+        // `take_dirty` and the dump, under ONE lock: that's what keeps two
+        // simultaneous writes from leaving the OLD one on disk.
+        let _turn = s
             .writing
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(sesion) = s.store.take_dirty()
-            && let Err(e) = crate::ui_session::disk::write(dir, &sesion)
+        if let Some(session) = s.store.take_dirty()
+            && let Err(e) = crate::ui_session::disk::write(dir, &session)
         {
-            // Un volcado fallido no tumba nada, y se vuelve a marcar sucio
-            // para que el siguiente `put` lo reintente entero.
-            tracing::warn!(error = %e, "no se pudo escribir la sesión de UI; se reintenta");
+            // A failed dump doesn't bring anything down, and it's marked
+            // dirty again so the next `put` retries it whole.
+            tracing::warn!(error = %e, "could not write the UI session; retrying");
             s.store.mark_dirty();
         }
         Ok(rev)
@@ -1267,125 +1300,127 @@ pub async fn session_put(
     .unwrap_or(Err(norte_proto::Error::Internal { panic: true }))
 }
 
-/// El engine embebido de un frontend: journal perezoso sobre `state_dir`, y la
-/// memoria de anclas de UN cliente.
+/// A frontend's embedded engine: a lazy journal over `state_dir`, and ONE
+/// client's anchor memory.
 ///
-/// Es lo que llaman `norte-tui` y `norte-cli` en vez de `Engine::new()`. No
-/// abre nada todavía (ver [`LazyJournal`]), así que da igual que el comando
-/// acabe mutando o no — que es lo que quitó de en medio la lista de subcomandos
-/// que había que mantener a mano (#177).
+/// This is what `norte-tui` and `norte-cli` call instead of `Engine::new()`.
+/// It doesn't open anything yet (see [`LazyJournal`]), so it doesn't matter
+/// whether the command ends up mutating or not — which is what took out of
+/// the way the list of subcommands that had to be kept by hand (#177).
 ///
-/// **Aquí, y solo aquí, se instala [`crate::Engine::with_client_anchors`]**
-/// (#317). El ancla de ADR 0073 dice quién MIRÓ, y eso solo significa algo en
-/// un proceso con un cliente: el de un frontend. El engine del daemon se
-/// construye por otro camino (`Engine::with_journal`) y por tanto no la tiene,
-/// que es lo que impide que el listado de un cliente autorice la escritura de
-/// otro.
+/// **Here, and only here, [`crate::Engine::with_client_anchors`] is
+/// installed** (#317). ADR 0073's anchor says who LOOKED, and that only means
+/// something in a process with a client: a frontend's. The daemon's engine is
+/// built through another path (`Engine::with_journal`) and therefore doesn't
+/// have it, which is what keeps one client's listing from authorizing
+/// another's write.
 ///
-/// **Uno por proceso.** Cada llamada acuña un [`LazyJournal`] nuevo, o sea otro
-/// candidato a dueño del MISMO fichero: dos engines de este tipo vivos a la vez
-/// en un proceso acaban con el segundo viéndose `Busy` contra el lock del
-/// primero — un proceso que se niega a journalizar porque se lo impide él
-/// mismo. Hoy `norte-cli` tiene dos sitios donde se llama (`run` y `ai_cmd`) y
-/// son excluyentes porque `Cmd::Ai` sale antes por su propio brazo; si eso
-/// cambia, esto tiene que pasar a ser un `OnceLock` de proceso.
+/// **One per process.** Every call mints a new [`LazyJournal`], i.e. another
+/// candidate to own the SAME file: two engines of this kind alive at once in
+/// a process end with the second one seeing `Busy` against the first one's
+/// lock — a process refusing to journal because it's stopping itself.
+/// `norte-cli` currently has two call sites (`run` and `ai_cmd`) and they are
+/// mutually exclusive because `Cmd::Ai` exits earlier through its own branch;
+/// if that changes, this has to become a process-wide `OnceLock`.
 #[must_use]
 pub fn engine_in(state_dir: &Path) -> crate::Engine {
     crate::Engine::with_lazy_journal(Arc::new(LazyJournal::in_state_dir(state_dir)))
         .with_client_anchors()
 }
 
-/// ¿Dicen estas dos transiciones LO MISMO para quien las pinta?
+/// Do these two transitions say the SAME thing to whoever paints them?
 ///
-/// Por CLASE y no por valor, y la diferencia es una vía de spam: el texto de un
-/// [`NoJournal::Failed`] lo escribe en parte quien pueda escribir `journal.db`
-/// (`SQLite` interpola identificadores del fichero en su prosa), y desde #178
-/// ese motivo ya no lleva freno de reintento — se reabre en cada mutación
-/// rehusada. Comparando el `String` entero, un motivo que variase entre
-/// intentos daría un aviso por mutación: un indicador que parpadea es un
-/// indicador que se ignora, que es justo lo que #178 vino a arreglar.
+/// By CLASS and not by value, and the difference is an avenue for spam: the
+/// text of a [`NoJournal::Failed`] is partly written by whoever can write
+/// `journal.db` (`SQLite` interpolates identifiers from the file into its
+/// prose), and since #178 that reason no longer carries a retry brake — it
+/// reopens on every refused mutation. Comparing the whole `String`, a reason
+/// that varied between attempts would give a warning per mutation: a
+/// blinking indicator is an indicator that gets ignored, which is exactly
+/// what #178 came to fix.
 ///
-/// Lo que se pierde es poder decir «ahora falla por otra razón», y no importa:
-/// el indicador dice lo mismo en las dos («este journal no se puede abrir») y
-/// el detalle viaja en el error de cada mutación rehusada.
-fn misma_clase(a: &JournalStatus, b: &JournalStatus) -> bool {
+/// What's lost is being able to say "now it fails for another reason", and it
+/// doesn't matter: the indicator says the same thing in both cases ("this
+/// journal cannot be opened") and the detail travels in the error of every
+/// refused mutation.
+fn same_class(a: &JournalStatus, b: &JournalStatus) -> bool {
     use {JournalStatus as S, NoJournal as N};
     matches!(
         (a, b),
         (S::Recovered, S::Recovered)
             | (S::Lost(N::Busy), S::Lost(N::Busy))
             | (S::Lost(N::Failed(_)), S::Lost(N::Failed(_)))
-            // `Squatted` es su propia clase, y por eso SUBE desde un `Busy` ya
-            // anunciado en vez de callarse: la sesión lleva media hora viendo
-            // «no se está registrando» y lo que cambia ahora es que eso ya no
-            // tiene una explicación inocente. Bajar de vuelta a `Busy` sí se
-            // calla —un daemon que arranca no es una noticia mejor que la
-            // anterior, es la misma— y la única salida hacia arriba de este
-            // estado es `Recovered`.
+            // `Squatted` is its own class, and that's why it GOES UP from an
+            // already-announced `Busy` instead of staying quiet: the session
+            // has spent half an hour seeing "not being recorded" and what
+            // changes now is that it no longer has an innocent explanation.
+            // Going back down to `Busy` does stay quiet —a daemon starting up
+            // isn't better news than the last one, it's the same one— and
+            // the only way up out of this state is `Recovered`.
             | (S::Squatted, S::Squatted | S::Lost(N::Busy))
     )
 }
 
-/// Tope de la RAZÓN dentro de [`NoJournal::Failed`], en caracteres.
-const RAZON_MAX: usize = 160;
+/// Cap on the REASON inside [`NoJournal::Failed`], in characters.
+const REASON_MAX: usize = 160;
 
-/// Tope de la ruta que acompaña a esa razón, en caracteres, contados por la
-/// COLA.
+/// Cap on the path that accompanies that reason, in characters, counted from
+/// the TAIL.
 ///
-/// Dos topes y no uno, y el orden importa: con un solo tope sobre
-/// `"<ruta>: <razón>"`, un `NORTE_CONFIG_DIR` profundo se come el presupuesto y
-/// lo que se corta es la razón — o sea el POR QUÉ, que es lo único que
-/// distingue «el directorio no se puede escribir» de «esto no es una base de
-/// datos», y son arreglos distintos. Y de la ruta lo que sirve es el final
-/// (`…/norte/journal.db`), no el principio.
-const RUTA_MAX: usize = 80;
+/// Two caps and not one, and the order matters: with a single cap over
+/// `"<path>: <reason>"`, a deep `NORTE_CONFIG_DIR` eats the budget and what
+/// gets cut is the reason — i.e. the WHY, which is the only thing that tells
+/// apart "the directory cannot be written" from "this isn't a database", and
+/// those are different fixes. And of the path what's useful is the end
+/// (`…/norte/journal.db`), not the beginning.
+const PATH_MAX: usize = 80;
 
-/// El texto de un error de apertura, apto para una terminal y para un log.
+/// The text of an open error, fit for a terminal and for a log.
 ///
-/// Es «`<ruta>`: `<razón>`», con un presupuesto para cada mitad y las dos
-/// saneadas.
+/// It's "`<path>`: `<reason>`", with a budget for each half, and both
+/// sanitized.
 ///
-/// **Quien puede escribir `<state>/journal.db` escribe parte de esta frase.**
-/// La prosa de `SQLite` interpola identificadores del propio fichero
-/// («malformed database schema (<lo que ponga el atacante>) — …»), y de aquí va
-/// a la barra de estado del TUI, al stderr del CLI y al log: un byte de control
-/// ahí es una secuencia de escape en el terminal de quien mira. Se quitan los
-/// controles y se acota la longitud.
+/// **Whoever can write `<state>/journal.db` writes part of this phrase.**
+/// `SQLite`'s prose interpolates identifiers from the file itself
+/// ("malformed database schema (<whatever the attacker puts>) — …"), and from
+/// here it goes to the TUI's status bar, to the CLI's stderr and to the log:
+/// a control byte there is an escape sequence in whoever is looking's
+/// terminal. Controls are stripped and the length is capped.
 ///
-/// No sustituye a nada más: quien tiene esa escritura ya se cargó la integridad
-/// del journal, y desde #178 esa sesión además no muta. Esto solo impide que la
-/// avería se convierta en una inyección en la pantalla del operador.
-fn motivo_saneado(razon: &str, ruta: &std::path::Path) -> String {
+/// It doesn't replace anything else: whoever has that write access has
+/// already wrecked the journal's integrity, and since #178 that session also
+/// doesn't mutate. This only keeps the failure from turning into an
+/// injection on the operator's screen.
+fn sanitized_reason(reason: &str, path: &std::path::Path) -> String {
     format!(
         "{}: {}",
-        recorta(&saneado(&ruta.display().to_string()), RUTA_MAX, Cola::Final),
-        saneado_y_recortado(razon)
+        truncate(&sanitize(&path.display().to_string()), PATH_MAX, Edge::Tail),
+        sanitized_and_trimmed(reason)
     )
 }
 
-/// La razón, saneada y acotada por el principio.
-fn saneado_y_recortado(razon: &str) -> String {
-    recorta(&saneado(razon), RAZON_MAX, Cola::Principio)
+/// The reason, sanitized and capped from the beginning.
+fn sanitized_and_trimmed(reason: &str) -> String {
+    truncate(&sanitize(reason), REASON_MAX, Edge::Head)
 }
 
-/// Por qué punta se recorta.
+/// Which end gets trimmed.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Cola {
-    /// Se guarda el principio (una razón se lee de izquierda a derecha).
-    Principio,
-    /// Se guarda el FINAL (de una ruta lo que identifica es la cola).
-    Final,
+enum Edge {
+    /// The beginning is kept (a reason reads left to right).
+    Head,
+    /// The END is kept (what identifies a path is its tail).
+    Tail,
 }
 
-/// Quita lo que un terminal interpretaría en vez de pintar.
+/// Strips what a terminal would interpret instead of painting.
 ///
-/// Controles (que son secuencias de escape) y los reordenadores bidi de
-/// Unicode: los segundos no son `char::is_control` y reordenan lo que va
-/// DESPUÉS de ellos, así que un nombre con un `U+202E` dentro reescribe la
-/// frase entera del operador sin cambiar un byte de lo que dice.
-fn saneado(bruto: &str) -> String {
-    bruto
-        .chars()
+/// Controls (which are escape sequences) and Unicode's bidi reorderers: the
+/// latter aren't `char::is_control` and they reorder what comes AFTER them,
+/// so a name with a `U+202E` inside rewrites the operator's entire phrase
+/// without changing a single byte of what it says.
+fn sanitize(raw: &str) -> String {
+    raw.chars()
         .map(|c| {
             if c.is_control() || matches!(c, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
             {
@@ -1397,48 +1432,48 @@ fn saneado(bruto: &str) -> String {
         .collect()
 }
 
-/// Acota a `max` caracteres, marcando con `…` que se cortó.
-fn recorta(s: &str, max: usize, cola: Cola) -> String {
+/// Caps to `max` characters, marking with `…` that it was cut.
+fn truncate(s: &str, max: usize, edge: Edge) -> String {
     let n = s.chars().count();
     if n <= max {
         return s.to_owned();
     }
-    match cola {
-        Cola::Principio => s.chars().take(max).chain(std::iter::once('…')).collect(),
-        Cola::Final => std::iter::once('…')
+    match edge {
+        Edge::Head => s.chars().take(max).chain(std::iter::once('…')).collect(),
+        Edge::Tail => std::iter::once('…')
             .chain(s.chars().skip(n - max))
             .collect(),
     }
 }
 
-/// Si este error de apertura es «lo tiene otro», y no un problema de verdad.
+/// Whether this open error is "someone else has it", and not a real problem.
 ///
-/// Se mira el CÓDIGO de `SQLite`, no su prosa: `SQLITE_BUSY` (5),
-/// `SQLITE_LOCKED` (6) y `SQLITE_PROTOCOL` (15), tomando el byte bajo para que
-/// valgan también los extendidos (`SQLITE_BUSY_SNAPSHOT` = 261, …). El texto
-/// («database is locked») es de la capa de presentación de `sqlx` y nadie lo
-/// garantiza entre versiones; con la clasificación colgando de él, un bump que
-/// reformatee `Display` convertiría todos los `Busy` en `Failed` sin que ningún
-/// test se enterase.
+/// The `SQLite` CODE is checked, not its prose: `SQLITE_BUSY` (5),
+/// `SQLITE_LOCKED` (6) and `SQLITE_PROTOCOL` (15), taking the low byte so the
+/// extended ones count too (`SQLITE_BUSY_SNAPSHOT` = 261, …). The text
+/// ("database is locked") belongs to `sqlx`'s presentation layer and nobody
+/// guarantees it across versions; with the classification hanging off it, a
+/// bump that reformats `Display` would turn every `Busy` into `Failed`
+/// without any test noticing.
 ///
-/// El 15 está aquí desde #178 y por culpa de #178: es contención del protocolo
-/// de locking de WAL, su remedio documentado es REINTENTAR, y desde que
-/// `Failed` rehúsa la mutación, clasificarlo mal ya no cuesta una fila de
-/// journal — cuesta una operación negada por una carrera que se resuelve sola.
+/// The 15 is here since #178 and because of #178: it's WAL locking-protocol
+/// contention, its documented remedy is RETRY, and since `Failed` refuses the
+/// mutation, misclassifying it no longer costs a journal row — it costs an
+/// operation denied over a race that resolves itself.
 ///
-/// Lo que NO entra, y no por olvido: los sabores de lock de `SQLITE_IOERR`
-/// (`_LOCK` = 3850, `_BLOCKED` = 2826) y `SQLITE_READONLY_CANTLOCK` (520).
-/// Suenan transitorios y no lo son —un `fcntl` que falla sobre NFS, un fichero
-/// que de verdad es de solo lectura— y sus PRIMARIOS (10 y 8) son cajones
-/// enormes que se llevarían por delante media taxonomía de I/O. Un falso
-/// `Failed` cuesta una negativa que el usuario ve y puede reintentar; un falso
-/// `Busy` cuesta una mutación sin registrar que nadie ve.
+/// What is NOT included, and not by oversight: `SQLITE_IOERR`'s lock flavors
+/// (`_LOCK` = 3850, `_BLOCKED` = 2826) and `SQLITE_READONLY_CANTLOCK` (520).
+/// They sound transient and aren't —an `fcntl` failing over NFS, a file that
+/// is genuinely read-only— and their PRIMARIES (10 and 8) are huge drawers
+/// that would sweep away half the I/O taxonomy with them. A false `Failed`
+/// costs a refusal the user sees and can retry; a false `Busy` costs an
+/// unrecorded mutation that nobody sees.
 ///
-/// Deliberadamente ESTRECHO por lo mismo: ensanchar esto a «cualquier error»
-/// convertiría una DB corrupta o un directorio sin permisos en un `Busy`
-/// silencioso, o sea en una sesión sin registro que el operador creería
-/// registrada, justo en la máquina que más lo necesita.
-fn es_lock_ocupado(e: &crate::journal::JournalError) -> bool {
+/// Deliberately NARROW for the same reason: widening this to "any error"
+/// would turn a corrupt DB or a directory without permissions into a silent
+/// `Busy`, i.e. into an unrecorded session the operator would believe was
+/// recorded, on exactly the machine that needs it most.
+fn is_lock_busy(e: &crate::journal::JournalError) -> bool {
     let crate::journal::JournalError::Sqlx(sqlx::Error::Database(db)) = e else {
         return false;
     };
@@ -1451,86 +1486,87 @@ fn es_lock_ocupado(e: &crate::journal::JournalError) -> bool {
 mod tests {
     use super::*;
 
-    /// Un almacén embebido de laboratorio: sin el `OnceLock` del proceso, que
-    /// solo se puede inicializar una vez y apuntaría al estado real.
-    fn sesion_en(dir: &Path) -> EmbeddedSession {
+    /// A lab embedded store: without the process's `OnceLock`, which can only
+    /// be initialized once and would point at the real state.
+    fn session_in(dir: &Path) -> EmbeddedSession {
         EmbeddedSession {
             store: Arc::new(crate::ui_session::SessionStore::default()),
             dir: Some(dir.to_path_buf()),
-            escritura: std::sync::Mutex::new(Escritura::default()),
+            write_right: std::sync::Mutex::new(WriteRight::default()),
             writing: std::sync::Mutex::new(()),
         }
     }
 
-    /// **#234**: el derecho a escribir NO es del arranque. La ventana que
-    /// arrancó segunda vuelve a intentarlo, y cuando la primera se cierra,
-    /// escribe.
+    /// **#234**: the right to write is NOT fixed at startup. The window that
+    /// started second tries again, and when the first one closes, it writes.
     ///
-    /// Antes de esto la decisión se congelaba en el `OnceLock` del arranque: la
-    /// segunda ventana no guardaba nada en toda su vida aunque el fichero
-    /// llevara horas libre, y su pantalla se moría con ella.
+    /// Before this the decision was frozen in the startup `OnceLock`: the
+    /// second window never saved anything for its whole life even if the file
+    /// had been free for hours, and its screen died with it.
     #[test]
-    fn el_derecho_a_escribir_se_consigue_mas_tarde() {
+    fn the_right_to_write_is_acquired_later() {
         let d = tempfile::tempdir().expect("tmp");
-        let s = sesion_en(d.path());
-        // Otra ventana lo tiene.
-        let primera = crate::ui_session::disk::lock(d.path())
+        let s = session_in(d.path());
+        // Another window has it.
+        let first = crate::ui_session::disk::lock(d.path())
             .expect("lock")
-            .expect("libre");
-        assert!(!puede_escribir(&s), "con la dueña viva, no se escribe");
-        // La dueña se va.
-        drop(primera);
-        assert!(puede_escribir(&s), "y al irse, esta ventana sí");
-        assert!(puede_escribir(&s), "y no lo vuelve a pedir cada vez");
+            .expect("free");
+        assert!(!can_write(&s), "with the owner alive, it doesn't write");
+        // The owner leaves.
+        drop(first);
+        assert!(can_write(&s), "and once it leaves, this window does");
+        assert!(can_write(&s), "and it doesn't ask again every time");
     }
 
-    /// Al conseguirlo tarde se adopta la revisión del FICHERO: la otra ventana
-    /// siguió subiéndola mientras estábamos sueltos, y volcar la nuestra tal
-    /// cual la renumeraría hacia atrás.
+    /// Getting it late adopts the FILE's revision: the other window kept
+    /// raising it while we were locked out, and dumping ours as-is would
+    /// renumber it backwards.
     #[test]
-    fn al_tomarlo_tarde_se_adopta_la_revision_del_fichero() {
+    fn taking_it_late_adopts_the_files_revision() {
         let d = tempfile::tempdir().expect("tmp");
         crate::ui_session::disk::write(
             d.path(),
             &norte_proto::methods::Session {
                 version: crate::ui_session::disk::SCHEMA_VERSION,
                 revision: 42,
-                body: serde_json::json!({ "de": "la otra ventana" }),
+                body: serde_json::json!({ "from": "the other window" }),
             },
         )
-        .expect("escribe");
-        let s = sesion_en(d.path());
-        assert_eq!(s.store.get().revision, 0, "la nuestra empieza de cero");
-        assert!(puede_escribir(&s));
+        .expect("write");
+        let s = session_in(d.path());
+        assert_eq!(s.store.get().revision, 0, "ours starts at zero");
+        assert!(can_write(&s));
         assert_eq!(
             s.store.get().revision,
             42,
-            "la revisión del fichero no puede ir hacia atrás"
+            "the file's revision cannot go backwards"
         );
     }
 
-    /// Y si mientras estábamos sueltos escribió un binario MÁS NUEVO, no se
-    /// pisa: se suelta el lock recién tomado y se sigue sin escribir.
+    /// And if a NEWER binary wrote while we were locked out, it isn't
+    /// stepped on: the lock just taken is released and it carries on without
+    /// writing.
     #[test]
-    fn un_fichero_del_futuro_quita_el_derecho_que_se_acababa_de_tomar() {
+    fn a_file_from_the_future_takes_away_the_right_just_acquired() {
         let d = tempfile::tempdir().expect("tmp");
         crate::ui_session::disk::write(
             d.path(),
             &norte_proto::methods::Session {
                 version: crate::ui_session::disk::SCHEMA_VERSION + 1,
                 revision: 9,
-                body: serde_json::json!({ "de": "un binario más nuevo" }),
+                body: serde_json::json!({ "from": "a newer binary" }),
             },
         )
-        .expect("escribe");
-        let s = sesion_en(d.path());
-        assert!(!puede_escribir(&s));
-        // Y el lock queda LIBRE: no se retiene un derecho que no se va a usar.
+        .expect("write");
+        let s = session_in(d.path());
+        assert!(!can_write(&s));
+        // And the lock stays FREE: a right that isn't going to be used isn't
+        // held onto.
         assert!(
             crate::ui_session::disk::lock(d.path())
                 .expect("lock")
                 .is_some(),
-            "el lock se soltó"
+            "the lock was released"
         );
     }
 }

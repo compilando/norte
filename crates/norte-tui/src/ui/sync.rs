@@ -1,5 +1,5 @@
-//! La pantalla de sincronización: el reparto, el resumen, y la fila por paso con
-//! su estilo de deshacer.
+//! The sync screen: the layout, the summary, and the per-step row with its
+//! undo style.
 
 use norte_theme::Role;
 use ratatui::Frame;
@@ -14,13 +14,14 @@ use super::text::wrapped_rows;
 use crate::theme::TuiTheme;
 use norte_i18n::t;
 
-/// Pinta el panel de sincronización: el resumen del plan, sus pasos y la
-/// pregunta que falte.
+/// Paints the sync panel: the plan's summary, its steps and whatever
+/// question is pending.
 ///
-/// Todo lo que dice sale de [`norte_frontend::sync`] (regla dura 7): el
-/// resumen, las tres marcas de cada paso, qué devuelve el undo y la segunda
-/// pregunta. Aquí solo se reparte el sitio y se elige el color, y el color
-/// nunca es lo único que distingue nada (§17) — las marcas son glifos ASCII.
+/// Everything it says comes from [`norte_frontend::sync`] (hard rule 7): the
+/// summary, each step's three marks, what undo returns and the second
+/// question. Here only the room is allocated and the color chosen, and color
+/// is never the only thing that tells anything apart (§17) — the marks are
+/// ASCII glyphs.
 pub(crate) fn draw_sync(
     frame: &mut Frame<'_>,
     area: Rect,
@@ -29,30 +30,31 @@ pub(crate) fn draw_sync(
 ) {
     let (source_txt, source_hostile) =
         norte_frontend::path_display_with(&view.source_root, view.source_encoding);
-    // Con la reinterpretación del DESTINO, no la del origen: un share CP1251
-    // en el otro pane se pintaba `????` en el título aunque el lector hubiera
-    // pulsado `Alt+E` sobre él.
+    // With the DESTINATION's reinterpretation, not the source's: a CP1251
+    // share on the other pane was painted `????` in the title even if the
+    // reader had pressed `Alt+E` on it.
     let (dest_txt, dest_hostile) =
         norte_frontend::path_display_with(&view.dest_root, view.dest_encoding);
     let badge = |h: bool| if h { HOSTILE_BADGE } else { "" };
-    // El brazo `_` NO cae en «actualizar»: `SyncMode` es `#[non_exhaustive]`,
-    // y decir «esto no borra» de un modo que esta build no sabe nombrar es
-    // afirmar la mitad SEGURA de lo que hay que aprobar. Misma regla que
-    // `RelAnchor::Either` y `StepUndo::Unclear` en el mismo modelo.
-    // Por el compartido: esta decisión estaba escrita también en la GUI, con
-    // su misma regla de que el `_` NO cae a «update» (revisión de rama de C2,
-    // rust MAJOR-3).
+    // The `_` arm does NOT fall into "update": `SyncMode` is
+    // `#[non_exhaustive]`, and saying "this does not delete" of a mode this
+    // build cannot name is asserting the SAFE half of what has to be
+    // approved. Same rule as `RelAnchor::Either` and `StepUndo::Unclear` in
+    // the same model.
+    // Through the shared function: this decision was also written into the
+    // GUI, with the same rule that the `_` does NOT fall to "update" (C2
+    // branch review, rust MAJOR-3).
     let mode = norte_frontend::sync::mode_label(view.mode, norte_i18n::active());
-    // La FLECHA es el sentido, y es la mitad de lo que se aprueba: origen a la
-    // izquierda del `→`, destino a la derecha, siempre, sin depender de qué
-    // pane sea cuál.
+    // The ARROW is the direction, and it is half of what gets approved:
+    // source to the left of the `→`, destination to the right, always,
+    // regardless of which pane is which.
     //
-    // #185 cubre TAMBIÉN este título, y aquí es la línea que dice qué árbol se
-    // sobrescribe: las dos raíces van unidas en una sola cadena, así que un
-    // `→` dentro de un nombre finge la pareja, y una raíz de origen larga
-    // expulsa la de destino entera —sin `…`— porque el recorte del título del
-    // bloque es de ratatui. El panel de diferencias tiene la misma nota sobre
-    // su `↔`; la GUI cierra los dos con separadores estructurales.
+    // #185 covers this title TOO, and here it is the line that says which
+    // tree gets overwritten: the two roots go joined in a single string, so
+    // a `→` inside a name fakes the pair, and a long source root pushes out
+    // the whole destination one — with no `…` — because the block title's
+    // truncation is ratatui's. The differences panel has the same note
+    // about its `↔`; the GUI closes both with structural separators.
     let title = format!(
         " {} ({mode}) — {}{} → {}{} ",
         t("sync-title"),
@@ -79,9 +81,10 @@ pub(crate) fn draw_sync(
     if let Some(a) = summary_area {
         frame.render_widget(sync_summary(view, theme), a);
     }
-    // Los pasos se pintan LLEGANDO, no solo cerrados: mientras el plan viaja
-    // `SyncState::plan()` contesta `None` y el pie ya está contando «6 pasos»
-    // — un hueco vacío debajo era la pantalla contradiciéndose.
+    // Steps are painted AS THEY ARRIVE, not only once closed: while the plan
+    // is in transit `SyncState::plan()` answers `None` and the footer is
+    // already counting "6 steps" — an empty gap below was the screen
+    // contradicting itself.
     let steps = view.steps();
     if steps.is_empty() {
         frame.render_widget(
@@ -103,9 +106,9 @@ pub(crate) fn draw_sync(
             .plan()
             .map_or(0, norte_frontend::sync::SyncPlan::viewport_offset)
             .min(steps.len().saturating_sub(1));
-        // Solo se construye lo que cabe, por lo mismo que en el panel de
-        // diferencias: un plan puede tener cientos de miles de pasos y esto se
-        // repinta diez veces por segundo mientras siguen llegando.
+        // Only what fits is built, for the same reason as the differences
+        // panel: a plan can have hundreds of thousands of steps and this
+        // repaints ten times a second while more keep arriving.
         let rows: Vec<ListItem<'_>> = steps
             .iter()
             .skip(offset)
@@ -125,19 +128,19 @@ pub(crate) fn draw_sync(
         );
     }
     if let Some(a) = keys_area {
-        // La pregunta y CÓMO se contesta van en dos líneas, no en una: a 80
-        // columnas la pregunta sola ya llena la fila, y la versión unida se
-        // cortaba justo por donde decía qué tecla la contesta — que es la
-        // mitad que hace falta. Lo cazó el snapshot.
+        // The question and HOW it is answered go in two lines, not one: at
+        // 80 columns the question alone already fills the row, and the
+        // joined version was cut off right where it said which key answers
+        // it — which is the half that is needed. The snapshot caught it.
         //
-        // Qué línea toca lo decide `norte_frontend::sync::hint_id`, la
-        // COMPARTIDA (#161): este `match` tenía el brazo de `sync-hint`
-        // condicionado solo a `awaiting_approval()`, así que un plan cerrado
-        // pero NO aprobable —bloqueado por el daemon, o con la Task
-        // cancelada— seguía ofreciendo «a aprobar» encima de un pie que ya
-        // decía «este plan no se puede aprobar». Es el mismo desacuerdo que
-        // la revisión MAJOR-1 arregló entre el pie y la tecla; ahora hay UNA
-        // respuesta y la comparten los dos frontends.
+        // Which line applies is decided by `norte_frontend::sync::hint_id`,
+        // the SHARED one (#161): this `match` had the `sync-hint` arm
+        // conditioned only on `awaiting_approval()`, so a plan that was
+        // closed but NOT approvable — blocked by the daemon, or with its
+        // Task cancelled — kept offering "to approve" over a footer that
+        // already said "this plan cannot be approved." It is the same
+        // disagreement review MAJOR-1 fixed between the footer and the key;
+        // now there is ONE answer and both frontends share it.
         let id = norte_frontend::sync::hint_id(view);
         let lines = match &view.confirming {
             Some(c) => vec![
@@ -146,11 +149,12 @@ pub(crate) fn draw_sync(
             ],
             None => vec![Line::from(Span::styled(t(id), theme.role(Role::Info)))],
         };
-        // ENVUELTA, y el hueco lo reserva `sync_layout` con la misma cuenta:
-        // la frase creció al decir que un árbol se re-comprueba en el
-        // directorio y no por dentro, y sin envolver se cortaba justo antes
-        // del «¿Seguir?» — la pregunta desaparecía de la pantalla que la
-        // hace. Lo cazó el snapshot, otra vez.
+        // WRAPPED, and `sync_layout` reserves the gap with the same count:
+        // the sentence grew when it started saying that a tree is
+        // re-checked at the directory and not inside it, and without
+        // wrapping it was cut right before "Continue?" — the question
+        // disappeared from the very screen that asks it. Caught by the
+        // snapshot, again.
         frame.render_widget(
             Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false }),
             a,
@@ -158,13 +162,12 @@ pub(crate) fn draw_sync(
     }
 }
 
-/// Reparte el interior del marco del panel de sincronización: resumen, lista y
-/// teclas.
+/// Allocates the sync panel frame's interior: summary, list and keys.
 ///
-/// El resumen se lleva lo que sus líneas pidan, hasta un tercio del alto: son
-/// las frases que deciden la aprobación, y recortarlas a una sola línea es
-/// esconder justamente el «esto no se puede deshacer». Con el marco tan corto
-/// que no cabe nada, la LISTA se lo queda todo.
+/// The summary takes what its lines ask for, up to a third of the height:
+/// these are the sentences that decide the approval, and truncating them to
+/// a single line hides exactly the "this cannot be undone." With a frame so
+/// short nothing fits, the LIST keeps it all.
 pub(crate) fn sync_layout(
     outer: Rect,
     view: &crate::app::SyncView,
@@ -172,9 +175,9 @@ pub(crate) fn sync_layout(
     if outer.height < 5 {
         return (None, outer, None);
     }
-    // Las líneas se ENVUELVEN, así que el alto no es su número: a 80 columnas
-    // «el destino no tiene papelera: …» son dos filas, y reservar una la
-    // cortaba por la mitad. El snapshot es lo que lo destapó.
+    // Lines WRAP, so the height is not their count: at 80 columns "the
+    // destination has no trash: …" is two rows, and reserving one cut it in
+    // half. The snapshot is what uncovered it.
     let summary_height: u16 = view
         .state
         .plan()
@@ -183,15 +186,15 @@ pub(crate) fn sync_layout(
         .iter()
         .map(|l| wrapped_rows(l, outer.width))
         .sum();
-    // Hasta la MITAD del marco: son las frases que deciden la aprobación, y
-    // recortarlas para que quepan más pasos esconde justamente el «esto no se
-    // puede deshacer». Los pasos tienen barra; el resumen no.
+    // Up to HALF the frame: these are the sentences that decide approval,
+    // and truncating them to fit more steps hides exactly the "this cannot
+    // be undone." Steps have a scrollbar; the summary does not.
     let summary = summary_height.min((outer.height / 2).max(1));
-    // La segunda pregunta se lleva la pregunta ENVUELTA más la fila de la
-    // tecla que la contesta. Dos fijas no bastan: a 80 columnas la frase de un
-    // borrado irreversible son dos filas ella sola, y la de más abajo es la
-    // que dice «¿Seguir?». Acotada como el resumen —la mitad del marco—, y con
-    // el suelo en 2 para que la tecla no se quede nunca sin sitio.
+    // The second question takes the WRAPPED question plus the row for the
+    // key that answers it. Two fixed rows are not enough: at 80 columns an
+    // irreversible deletion's sentence is two rows by itself, and the one
+    // below is what says "Continue?" Bounded like the summary — half the
+    // frame — with a floor of 2 so the key never ends up with no room.
     let keys = view.confirming.as_ref().map_or(1, |c| {
         wrapped_rows(&c.text, outer.width)
             .saturating_add(1)
@@ -208,8 +211,8 @@ pub(crate) fn sync_layout(
     ((summary > 0).then(|| rows[0]), rows[1], Some(rows[2]))
 }
 
-/// El resumen del plan: lo que [`norte_frontend::sync::SyncPlan::summary_lines`]
-/// dijo, envuelto.
+/// The plan's summary: what
+/// [`norte_frontend::sync::SyncPlan::summary_lines`] said, wrapped.
 pub(crate) fn sync_summary(view: &crate::app::SyncView, theme: &TuiTheme) -> Paragraph<'static> {
     let lines: Vec<Line<'static>> = view
         .state
@@ -219,35 +222,37 @@ pub(crate) fn sync_summary(view: &crate::app::SyncView, theme: &TuiTheme) -> Par
         .into_iter()
         .map(|l| Line::from(Span::styled(l, theme.role(Role::Regular))))
         .collect();
-    // Envuelto y NO recortado a lo ancho: la primera línea es lo que el
-    // deshacer devuelve y la segunda de qué papelera se habla. Cortarlas deja
-    // al lector aprobando con media frase.
+    // Wrapped and NOT truncated to width: the first line is what undo
+    // returns and the second which trash is being talked about. Cutting
+    // them leaves the reader approving with half a sentence.
     Paragraph::new(lines).wrap(ratatui::widgets::Wrap { trim: false })
 }
 
-/// Una fila del panel: las tres marcas, la ruta y el tamaño.
+/// A panel row: the three marks, the path and the size.
 ///
-/// Las tres marcas son de columnas DISTINTAS y se separan, porque el alfabeto
-/// no es único entre ellas a propósito (`!` es `Certain` en una e
-/// `Irreversible` en otra): juntas se leerían como una palabra.
+/// The three marks belong to DIFFERENT columns and are kept apart, because
+/// the alphabet is deliberately not shared between them (`!` is `Certain` in
+/// one and `Irreversible` in another): together they would read as one
+/// word.
 pub(crate) fn sync_step_item(
     step: &norte_proto::methods::SyncStep,
     view: &crate::app::SyncView,
     width: usize,
     theme: &TuiTheme,
 ) -> ListItem<'static> {
-    // Las DOS reinterpretaciones, de una pieza: `render_step` lee cada ruta
-    // con la del lado del que cuelga (#152). Aquí se le pasaba solo la del
-    // ORIGEN y se recomponía `dest_rel` a mano — lo que dejaba el `rel` de un
-    // `DeleteTree`, que es una ruta del DESTINO, leído con el codepage del
-    // árbol que no se toca.
+    // Both reinterpretations, as one piece: `render_step` reads each path
+    // with the one from the side it hangs off (#152). Here only the
+    // SOURCE's was passed and `dest_rel` was rebuilt by hand — which left a
+    // `DeleteTree`'s `rel`, a DESTINATION path, read with the untouched
+    // tree's codepage.
     let cells = norte_frontend::sync::render_step(step, view.dest_trash(), view.encodings());
     let dest_rel = cells.dest_rel.clone();
-    // Las marcas, el ancla y el tamaño; lo que sobra es para la ruta.
-    // Ídem: tres copias de este match en esta rama, y la CLI sin ninguna.
+    // The marks, the anchor and the size; whatever is left goes to the
+    // path. Same story: three copies of this match in this branch, and the
+    // CLI has none.
     let anchor =
         norte_frontend::sync::anchor_label(cells.anchor, norte_i18n::active()).unwrap_or_default();
-    let tam = cells
+    let size_txt = cells
         .size
         .map(norte_frontend::human_bytes)
         .unwrap_or_default();
@@ -255,78 +260,79 @@ pub(crate) fn sync_step_item(
         "{} {} {} ",
         cells.glyphs.kind, cells.glyphs.confidence, cells.glyphs.undo
     );
-    // Por CELDAS y no por `char`s: un ancla o un tamaño con caracteres anchos
-    // presupuestaría de menos y la fila desbordaría el marco (#79).
+    // By CELLS and not by `char`s: an anchor or a size with wide characters
+    // would under-budget and the row would overflow the frame (#79).
     let path_w = width
-        .saturating_sub(marks.width() + anchor.width() + tam.width() + 2)
+        .saturating_sub(marks.width() + anchor.width() + size_txt.width() + 2)
         .max(1);
-    // La ortografía del DESTINO cuando la hay (#152): la escritura cae sobre
-    // ELLA, así que enseñar solo la del origen sería nombrar un fichero que no
-    // es el que se va a tocar. Quién decide que «la hay» es `render_step`, por
-    // BYTES y una sola vez para los tres frontends: aquí se comparaba el texto
-    // PINTADO, que es lossy, así que dos ficheros distintos con un byte
-    // inválido cada uno plegaban a uno solo y el campo desaparecía de la
-    // pantalla (auditoría de encoding MAJOR-1).
+    // The DESTINATION's spelling when there is one (#152): the write lands
+    // on IT, so showing only the source's would name a file that is not the
+    // one about to be touched. Who decides "there is one" is `render_step`,
+    // by BYTES and once for all three frontends: here the PAINTED text was
+    // being compared, which is lossy, so two different files each with one
+    // invalid byte folded into the same one and the field vanished from the
+    // screen (encoding audit MAJOR-1).
     //
-    // El badge va POR MITAD y no solo en la del origen: una ruta de origen
-    // limpia con una ortografía de destino hostil —el caso normal cuando solo
-    // el pane destino lleva override, porque reinterpretar siempre marca— se
-    // pintaba sin marca ninguna (auditoría de encoding MAJOR-3). El CLI ya lo
-    // hacía por mitades y la GUI también; esta era la única de las tres que no.
-    // #185, y aquí pesa más que en el panel de diferencias: las dos
-    // ortografías van UNIDAS por un `→` en la misma cadena, y `→` es un
-    // imprimible corriente que `display_name_with` no enmascara — o sea que un
-    // fichero llamado `a → b.txt` (corpus `arrow_join_spoof`) llega SIN badge
-    // y finge la pareja. La GUI lo cierra con un separador estructural (cada
-    // ortografía en su elemento); una `Line` de ratatui no tiene esa
-    // posibilidad, así que la decisión de diseño es la misma que #185 lista
-    // para el título del panel de diferencias.
+    // The badge goes PER HALF and not only on the source's: a clean source
+    // path with a hostile destination spelling — the normal case when only
+    // the destination pane carries an override, because reinterpreting
+    // always marks — was painted with no mark at all (encoding audit
+    // MAJOR-3). The CLI already did it per half and so did the GUI; this
+    // was the only one of the three that did not.
+    // #185, and here it weighs more than in the differences panel: the two
+    // spellings go JOINED by a `→` in the same string, and `→` is an
+    // ordinary printable that `display_name_with` does not mask — meaning a
+    // file called `a → b.txt` (corpus `arrow_join_spoof`) arrives with NO
+    // badge and fakes the pair. The GUI closes it with a structural
+    // separator (each spelling in its own element); a ratatui `Line` has no
+    // such option, so the design decision is the same one #185 lists for
+    // the differences panel's title.
     //
-    // Y los badges y el `→` van en SPANS PROPIOS, fuera de lo que se trunca
-    // (auditoría de encoding de la revisión de rama, MAJOR-4). Construirlos
-    // dentro de una sola cadena y pasarla por `middle_ellipsis` los ponía en
-    // el MEDIO, que es exactamente lo que esa función tira: a pane estrecho,
-    // `⚠ caf<FFFD>.txt → ⚠ caf<FFFD>2.txt` quedaba `⚠ caf…2.txt` y se leía
-    // como UN nombre truncado. El `…` dice «se cortó algo», no «la pareja se
-    // colapsó», y el campo que desaparecía es justo el que nombra el fichero
-    // sobre el que cae la escritura. Se trunca el TEXTO de cada mitad, nunca
-    // su marca ni el separador.
+    // And the badges and the `→` go in their OWN SPANS, outside what gets
+    // truncated (branch review encoding audit, MAJOR-4). Building them
+    // inside a single string and running it through `middle_ellipsis` put
+    // them in the MIDDLE, which is exactly what that function drops: on a
+    // narrow pane, `⚠ caf<FFFD>.txt → ⚠ caf<FFFD>2.txt` came out as
+    // `⚠ caf…2.txt` and read as ONE truncated name. The `…` says "something
+    // was cut," not "the pair collapsed," and the field that vanished is
+    // exactly the one naming the file the write lands on. The TEXT of each
+    // half is truncated, never its mark nor the separator.
     let path_style = theme.entry(&cells.rel.raw, norte_proto::EntryKind::File);
-    let badge_de = |d: &norte_frontend::sync::RelDisplay| {
+    let badge_of = |d: &norte_frontend::sync::RelDisplay| {
         if d.hostile { HOSTILE_BADGE } else { "" }
     };
     let mut spans = vec![Span::styled(marks, sync_undo_style(theme, cells.undo))];
     if let Some(d) = &dest_rel {
         const SEP: &str = " → ";
-        let fixed = badge_de(&cells.rel).width() + SEP.width() + badge_de(d).width();
+        let fixed = badge_of(&cells.rel).width() + SEP.width() + badge_of(d).width();
         let text_w = path_w.saturating_sub(fixed).max(2);
-        // Se reparte a la mitad: las dos ortografías valen lo mismo, y la
-        // del destino es la que dice dónde cae la escritura.
+        // Split in half: both spellings are worth the same, and the
+        // destination's is the one that says where the write lands.
         let half = (text_w / 2).max(1);
         spans.push(Span::styled(
-            badge_de(&cells.rel),
+            badge_of(&cells.rel),
             theme.role(Role::Warning),
         ));
         spans.push(Span::styled(
             norte_frontend::middle_ellipsis(&cells.rel.text, half),
             path_style,
         ));
-        // El separador con su propio rol: un `→` DENTRO de un nombre
-        // (corpus `arrow_join_spoof`) es texto de fichero y se pinta como
-        // tal, así que el de la pareja se distingue por estilo aunque los
-        // dos glifos sean el mismo. Es lo más que da una `Line` de
-        // ratatui; el separador estructural de verdad es lo que #185
-        // lista para esta misma clase de fila.
+        // The separator with its own role: a `→` INSIDE a name (corpus
+        // `arrow_join_spoof`) is file text and is painted as such, so the
+        // pair's real one is told apart by style even though the two
+        // glyphs are the same. It is the most a ratatui `Line` allows; the
+        // real structural separator is what #185 lists for this same class
+        // of row.
         spans.push(Span::styled(SEP, theme.role(Role::Info)));
-        spans.push(Span::styled(badge_de(d), theme.role(Role::Warning)));
+        spans.push(Span::styled(badge_of(d), theme.role(Role::Warning)));
         spans.push(Span::styled(
             norte_frontend::middle_ellipsis(&d.text, text_w - half),
             path_style,
         ));
     } else {
-        let fixed = badge_de(&cells.rel).width();
+        let fixed = badge_of(&cells.rel).width();
         spans.push(Span::styled(
-            badge_de(&cells.rel),
+            badge_of(&cells.rel),
             theme.role(Role::Warning),
         ));
         spans.push(Span::styled(
@@ -337,14 +343,14 @@ pub(crate) fn sync_step_item(
     if !anchor.is_empty() {
         spans.push(Span::styled(format!(" {anchor}"), theme.role(Role::Info)));
     }
-    if !tam.is_empty() {
-        spans.push(Span::styled(format!(" {tam}"), theme.role(Role::Info)));
+    if !size_txt.is_empty() {
+        spans.push(Span::styled(format!(" {size_txt}"), theme.role(Role::Info)));
     }
     ListItem::new(Line::from(spans))
 }
 
-/// El color de las marcas de un paso. El GLIFO ya lo distingue sin color
-/// ninguno (§17); esto solo lo refuerza para quien sí lo ve.
+/// A step's marks color. The GLYPH already tells it apart with no color at
+/// all (§17); this only reinforces it for whoever does see color.
 pub(crate) fn sync_undo_style(theme: &TuiTheme, undo: norte_frontend::sync::StepUndo) -> Style {
     use norte_frontend::sync::StepUndo as U;
     match undo {
@@ -354,13 +360,14 @@ pub(crate) fn sync_undo_style(theme: &TuiTheme, undo: norte_frontend::sync::Step
     }
 }
 
-/// El pie del panel de sincronización: en qué punto está el diálogo.
+/// The sync panel's footer: what point the dialog is at.
 ///
-/// La frase entera la compone [`norte_frontend::sync::status_line`],
-/// COMPARTIDA con la GUI desde #161 — aquí estaban sus ocho brazos, y uno de
-/// ellos es dónde «este plan se puede aprobar» llega a un humano como palabras.
-/// Aquí solo quedan los espacios: pegado al `└` se lee como parte del marco,
-/// igual que el pie del panel de diferencias.
+/// The whole sentence is composed by
+/// [`norte_frontend::sync::status_line`], SHARED with the GUI since #161 —
+/// its eight arms used to be here, and one of them is where "this plan can
+/// be approved" reaches a human as words. Only the spacing is left here:
+/// glued to the `└` it reads as part of the frame, same as the differences
+/// panel's footer.
 pub(crate) fn sync_status_line(view: &crate::app::SyncView) -> String {
     format!(
         " {} ",
@@ -373,12 +380,12 @@ mod sync_step_item_tests {
     use super::{HOSTILE_BADGE, TuiTheme, sync_step_item};
     use ratatui::widgets::ListItem;
 
-    /// El texto de CADA span, sin renderizar a buffer: aquí importa la
-    /// estructura de spans (qué es marca, qué es separador y qué es nombre),
-    /// que es justo lo que un buffer plano borra.
+    /// EACH span's text, without rendering to a buffer: what matters here
+    /// is the span structure (what is a mark, what is a separator and what
+    /// is a name), which is exactly what a flat buffer erases.
     fn spans(item: &ListItem<'_>) -> Vec<String> {
-        // `ListItem` no expone sus líneas; se reconstruye el mismo item.
-        // Se compara sobre el render, que es lo que el lector ve.
+        // `ListItem` does not expose its lines; the same item is rebuilt.
+        // Compared over the render, which is what the reader sees.
         use ratatui::buffer::Buffer;
         use ratatui::layout::Rect;
         use ratatui::widgets::{List, Widget as _};
@@ -392,29 +399,29 @@ mod sync_step_item_tests {
         ]
     }
 
-    fn vista() -> crate::app::SyncView {
+    fn view() -> crate::app::SyncView {
         crate::app::SyncView::new(
             norte_proto::TaskId::new(1),
             norte_proto::methods::SyncMode::Update,
-            norte_proto::VPath::parse("file:///origen").expect("vpath"),
-            norte_proto::VPath::parse("file:///destino").expect("vpath"),
+            norte_proto::VPath::parse("file:///source").expect("vpath"),
+            norte_proto::VPath::parse("file:///dest").expect("vpath"),
             None,
             None,
         )
     }
 
-    /// Un paso cuyas DOS ortografías son hostiles y largas.
-    fn paso_hostil() -> norte_proto::methods::SyncStep {
-        // Bytes inválidos: `render_step` los decodifica lossy y marca las dos
-        // mitades como hostiles, que es el caso normal cuando el pane destino
-        // lleva un override #57 y el origen no.
+    /// A step whose TWO spellings are hostile and long.
+    fn hostile_step() -> norte_proto::methods::SyncStep {
+        // Invalid bytes: `render_step` decodes them lossily and marks both
+        // halves as hostile, which is the normal case when the destination
+        // pane carries a #57 override and the source does not.
         let seg = |b: &[u8]| {
             norte_proto::methods::RelPath::new(vec![
-                norte_proto::Segment::new(b.to_vec()).expect("segmento"),
+                norte_proto::Segment::new(b.to_vec()).expect("segment"),
             ])
         };
-        let rel = seg(b"caf\xff_origen_largo.txt");
-        let dest = seg(b"caf\xfe_destino_largo.txt");
+        let rel = seg(b"caf\xff_long_source.txt");
+        let dest = seg(b"caf\xfe_long_dest.txt");
         norte_proto::methods::SyncStep {
             id: 1,
             kind: norte_proto::methods::SyncStepKind::Overwrite,
@@ -428,29 +435,29 @@ mod sync_step_item_tests {
         }
     }
 
-    /// Auditoría de encoding de la revisión de rama, MAJOR-4. El badge y el
-    /// `→` estaban DENTRO de la cadena que se trunca, y `middle_ellipsis` tira
-    /// el medio: a pane estrecho la fila quedaba `⚠ caf…largo.txt`, o sea un
-    /// nombre truncado. Desaparecían el separador de la pareja y la marca de
-    /// la ortografía del DESTINO — la que dice sobre qué fichero cae la
-    /// escritura— sin que nada dijera que la pareja se había colapsado.
+    /// Branch review encoding audit, MAJOR-4. The badge and the `→` were
+    /// INSIDE the string that gets truncated, and `middle_ellipsis` drops
+    /// the middle: on a narrow pane the row came out `⚠ caf…largo.txt`, that
+    /// is, a single truncated name. Both the pair's separator and the
+    /// DESTINATION spelling's mark — the one that says which file the write
+    /// lands on — vanished with nothing saying the pair had collapsed.
     #[test]
-    fn a_pane_estrecho_sobreviven_los_dos_badges_y_la_flecha() {
+    fn both_badges_and_the_arrow_survive_a_narrow_pane() {
         let theme = TuiTheme::default();
-        let v = vista();
-        let item = sync_step_item(&paso_hostil(), &v, 28, &theme);
+        let v = view();
+        let item = sync_step_item(&hostile_step(), &v, 28, &theme);
         let painted = spans(&item).join("");
         assert!(
             painted.contains('\u{2192}'),
-            "el separador de la pareja sobrevive al truncado: {painted:?}"
+            "the pair's separator survives truncation: {painted:?}"
         );
-        // El badge PEGADO a cada mitad, y no el recuento a secas: el glifo de
-        // confianza de la columna de marcas es el mismo carácter, así que
-        // contarlo suelto cuenta tres y no dice nada de dónde están.
+        // The badge GLUED to each half, not a bare count: the marks
+        // column's confidence glyph is the same character, so counting it
+        // loose counts three and says nothing about where they are.
         assert_eq!(
             painted.matches(&format!("{HOSTILE_BADGE}caf")).count(),
             2,
-            "las DOS mitades siguen marcadas, cada una en su sitio: {painted:?}"
+            "BOTH halves stay marked, each in its own spot: {painted:?}"
         );
     }
 }

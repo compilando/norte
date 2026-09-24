@@ -1,8 +1,8 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Solo lectura: la ventana todavía no muta (revisión de seguridad de la
-// tarea 3.3; el gate de salida de la fase 4 lo exige literalmente).
+// Read only: the window still does not mutate (task 3.3's security review;
+// phase 4's exit gate demands it literally).
 // ---------------------------------------------------------------------------
 
 pub(super) async fn host_solo_lectura(
@@ -33,45 +33,45 @@ pub(super) async fn host_solo_lectura(
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// En solo lectura, F8 no abre la confirmación de borrado: lo DICE.
+/// In read-only, F8 opens no delete confirmation: it SAYS so.
 ///
-/// Un frontend que no tiene todavía el camino seguro de la fase 5 no puede
-/// tener la tecla viva y el diálogo detrás; que la tecla exista en el preset
-/// no es permiso.
+/// A frontend that does not yet have phase 5's safe path cannot have the key
+/// alive with the dialog behind it; the key existing in the preset is not
+/// permission.
 #[tokio::test]
-async fn en_solo_lectura_borrar_no_abre_nada() {
+async fn in_read_only_delete_opens_nothing() {
     let backend = arbol();
     let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
-    let ack = h.dispatch(tecla("F8")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("F8")).await.expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
-        "F8 se responde, no se ejecuta: {ack:?}"
+        "F8 gets answered, not executed: {ack:?}"
     );
     asentar().await;
     assert!(
         backend.borrados.lock().expect("borrados").is_empty(),
-        "y no borra nada"
+        "and it deletes nothing"
     );
 }
 
-/// Lo mismo con crear directorio.
+/// Same with creating a directory.
 #[tokio::test]
-async fn en_solo_lectura_crear_no_crea() {
+async fn in_read_only_create_creates_nothing() {
     let backend = arbol();
     let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
-    let ack = h.dispatch(tecla("F7")).await.expect("host vivo");
+    let ack = h.dispatch(tecla("F7")).await.expect("host alive");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
     asentar().await;
     assert!(backend.creados.lock().expect("creados").is_empty());
 }
 
-/// Y una aprobación de policy no llega siquiera a plantearse: un renderer que
-/// no puede mutar tampoco puede aprobar que mute un agente.
+/// And a policy approval does not even get raised: a renderer that cannot
+/// mutate also cannot approve an agent mutating.
 #[tokio::test]
-async fn en_solo_lectura_no_hay_aprobaciones_que_responder() {
+async fn in_read_only_there_are_no_approvals_to_answer() {
     let backend = arbol();
     let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
     let ack = h
@@ -81,57 +81,57 @@ async fn en_solo_lectura_no_hay_aprobaciones_que_responder() {
             secret: None,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
             reason: StaleAction::Modal
         },
-        "no hay diálogo que responder"
+        "there is no dialog to answer"
     );
     assert!(
         backend.decisiones.lock().expect("decisiones").is_empty(),
-        "y ninguna decisión llegó al daemon"
+        "and no decision reached the daemon"
     );
 }
 
-/// En modo completo, la misma tecla SÍ abre la confirmación: el gate es una
-/// decisión de arranque, no una amputación del host.
+/// In full mode, the same key DOES open the confirmation: the gate is a
+/// startup decision, not an amputation of the host.
 #[tokio::test]
-async fn en_modo_completo_borrar_sigue_pidiendo_confirmacion() {
+async fn in_full_mode_delete_still_asks_for_confirmation() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host vivo");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    assert_eq!(dialogos.len(), 1);
+    h.dispatch(tecla("F8")).await.expect("host alive");
+    let dialogs = siguientes_dialogos(&mut sub).await;
+    assert_eq!(dialogs.len(), 1);
 }
 
 // ---------------------------------------------------------------------------
-// Los dos BLOCKER de la revisión.
+// The review's two BLOCKERs.
 // ---------------------------------------------------------------------------
 
-/// Navegar a un directorio grande trae el directorio ENTERO, no la primera
-/// página.
+/// Navigating to a large directory brings the WHOLE directory, not the first
+/// page.
 ///
-/// `aterriza_en` limpia el testigo al aterrizar la primera página, y la task
-/// de drenaje seguía mandando los lotes con ese mismo testigo: `aplicar_lote`
-/// los rechazaba todos. El arranque no lo veía porque `listar_inicial`
-/// restituye el testigo a mano.
+/// `aterriza_en` clears the witness when the first page lands, and the drain
+/// task kept sending its batches with that same witness: `aplicar_lote`
+/// rejected them all. Startup did not see it because `listar_inicial`
+/// restores the witness by hand.
 #[tokio::test]
-async fn navegar_a_un_directorio_grande_lo_trae_entero() {
+async fn navigating_to_a_large_directory_brings_it_whole() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"docs".to_vec(), true)]);
-    let muchas: Vec<(Vec<u8>, bool)> = (0..300)
+    let many: Vec<(Vec<u8>, bool)> = (0..300)
         .map(|i| (format!("f{i:04}.txt").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa/docs", muchas);
+    f.pon("mem:///casa/docs", many);
     let (h, snap) = host_arbol(Arc::new(f)).await;
     let docs = listado(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("docs está")
+        .expect("docs is there")
         .key;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Activate {
@@ -140,103 +140,105 @@ async fn navegar_a_un_directorio_grande_lo_trae_entero() {
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    // Cada vuelta es un viaje al actor: el relleno avanza entre foto y foto.
+    // Each round is a trip to the actor: the fill advances between one
+    // snapshot and the next.
     for _ in 0..2_000 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        if listado(&foto).total_rows == Some(300) {
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        if listado(&snap).total_rows == Some(300) {
             return;
         }
     }
-    panic!("el listado se quedó en la primera página: el relleno no aterriza");
+    panic!("the listing stayed on the first page: the fill never lands");
 }
 
-/// Una fila de una generación anterior NO se toca.
+/// A row from a previous generation is NOT touched.
 ///
-/// El contrato del bridge lo promete desde el principio («un doble click
-/// tardío no actúa sobre el fichero que ocupó esa fila DESPUÉS») y no había
-/// nada que lo implementara: las acciones no llevaban generación.
+/// The bridge's contract has promised this from the start ("a late double
+/// click does not act on the file that took that row's place AFTERWARD") and
+/// nothing implemented it: actions did not carry a generation.
 #[tokio::test]
-async fn una_fila_de_otra_generacion_no_se_marca() {
+async fn a_row_from_another_generation_does_not_get_marked() {
     let (h, snap) = host(vec!["a", "b", "c"]).await;
-    let vieja = listado(&snap).generation;
-    // Reordenar mueve TODAS las filas y sube la generación.
+    let old = listado(&snap).generation;
+    // Sorting moves ALL rows and bumps the generation.
     h.dispatch(UiAction::SortBy {
         slot_id: 1,
         column: "name".to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
     let ack = h
         .dispatch(UiAction::ToggleMark {
             slot_id: 1,
             key: RowKey(0),
-            generation: vieja,
+            generation: old,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
             reason: StaleAction::Generation
         },
-        "la clave era de la pantalla anterior: {ack:?}"
+        "the key was from the previous screen: {ack:?}"
     );
 }
 
-/// Y un rango con un extremo fuera de la ventana no se recorta: se rechaza.
+/// And a range with one end outside the window is not clamped: it is
+/// rejected.
 ///
-/// `PaneState::mark_range` recorta a propósito (su contrato), así que un
-/// `to: u64::MAX` marcaba el listado ENTERO — incluidas filas que el renderer
-/// nunca recibió— y lo marcado es la entrada de un borrado.
+/// `PaneState::mark_range` clamps on purpose (its contract), so a
+/// `to: u64::MAX` marked the WHOLE listing — rows the renderer never
+/// received included — and what is marked is a delete's input.
 #[tokio::test]
-async fn un_rango_desbordado_no_marca_el_listado_entero() {
+async fn an_overflowing_range_does_not_mark_the_whole_listing() {
     let (h, snap) = host(vec!["a", "b", "c", "d", "e"]).await;
-    let epoca = listado(&snap).generation;
+    let generation = listado(&snap).generation;
     let ack = h
         .dispatch(UiAction::MarkRange {
             slot_id: 1,
             from: RowKey(0),
             to: RowKey(u64::MAX),
-            generation: epoca,
+            generation,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Stale {
             reason: StaleAction::Generation
         },
-        "un extremo que no existe invalida el rango entero"
+        "an end that does not exist invalidates the whole range"
     );
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(listado(&foto).marks, 0, "y no marcó nada");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert_eq!(listado(&snap).marks, 0, "and it marked nothing");
 }
 
 // ---------------------------------------------------------------------------
-// El sondeo (revisión: rust M2/M3/m1, encoding M4).
+// Probing (review: rust M2/M3/m1, encoding M4).
 // ---------------------------------------------------------------------------
 
-/// Una ventana más alta que una tanda de sondeo se rellena ENTERA.
+/// A window taller than one probe batch fills up ENTIRELY.
 ///
-/// `MAX_SONDEOS` acota cada tanda, y no había nada que pidiera la siguiente:
-/// 200 filas con tamaño y el resto en blanco hasta que el usuario moviera
-/// algo. Un tope que no se re-arma es un tope silencioso.
+/// `MAX_SONDEOS` bounds each batch, and nothing requested the next one: 200
+/// rows with a size and the rest blank until the user moved something. A
+/// ceiling that does not rearm itself is a silent ceiling.
 #[tokio::test]
-async fn una_ventana_grande_se_sondea_en_tandas_hasta_el_final() {
+async fn a_large_window_gets_probed_in_batches_to_the_end() {
     let mut f = Falso {
         lazy: true,
         ..Falso::default()
     };
-    let muchas: Vec<(Vec<u8>, bool)> = (0..500)
+    let many: Vec<(Vec<u8>, bool)> = (0..500)
         .map(|i| (format!("f{i:04}.txt").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa", muchas);
+    f.pon("mem:///casa", many);
     let backend = Arc::new(f);
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     h.dispatch(UiAction::SetVisibleRange {
@@ -245,24 +247,26 @@ async fn una_ventana_grande_se_sondea_en_tandas_hasta_el_final() {
         count: 500,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    hasta(&backend, "las 500 entradas sondeadas", |f| {
+    hasta(&backend, "the 500 entries probed", |f| {
         (f.sondeos.lock().expect("sondeos").len() >= 500).then_some(())
     })
     .await;
 }
 
-/// Un sondeo que aterriza cuando el listado YA es otro no pega nada.
+/// A probe that lands when the listing is ALREADY another one sticks
+/// nothing.
 ///
-/// El guard miraba el testigo de la petición en vuelo, que tras aterrizar es
-/// `None` — así que valía cero y la comparación era siempre falsa. Lo que
-/// distingue un listado de otro es su ÉPOCA, que está definida siempre.
+/// The guard looked at the in-flight request's witness, which after landing
+/// is `None` — so it was worth zero and the comparison was always false.
+/// What tells one listing apart from another is its EPOCH, which is always
+/// defined.
 #[tokio::test]
-async fn un_sondeo_de_otro_listado_no_hidrata() {
+async fn a_probe_from_another_listing_does_not_hydrate() {
     let mut f = Falso {
         lazy: true,
-        // El stat tarda: da tiempo a navegar por debajo.
+        // The stat takes a while: there is time to navigate underneath.
         retraso_ms: 120,
         ..Falso::default()
     };
@@ -279,48 +283,49 @@ async fn un_sondeo_de_otro_listado_no_hidrata() {
         .find(|r| r.display_name == "docs")
         .expect("docs")
         .key;
-    // Navegar mientras el sondeo del listado anterior vuela.
+    // Navigate while the previous listing's probe is in flight.
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
-    // Lo que este caso pone en vuelo: el listado de casa, el sondeo del
-    // `a.txt` de FUERA —el que llega tarde y no debe hidratar— y el listado
-    // de docs. Se espera a que no quede ninguna volando.
-    hasta(&backend, "el sondeo tardío ya servido", |f| {
+    .expect("host alive");
+    // What this case puts in flight: casa's listing, the probe of the
+    // OUTER `a.txt` — the one that arrives late and must not hydrate — and
+    // docs's listing. It waits for none to still be in flight.
+    hasta(&backend, "the late probe already served", |f| {
         (f.listados() >= 2 && f.en_calma()).then_some(())
     })
     .await;
     asentar().await;
 
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    // El `a.txt` de DENTRO es otro fichero que el `a.txt` de fuera; lo que se
-    // comprueba es que la pantalla es coherente, no que tenga o no tamaño.
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    // The INNER `a.txt` is a different file from the outer `a.txt`; what is
+    // checked is that the screen is coherent, not whether it has a size or
+    // not.
     assert!(
-        listado(&foto).path_display.ends_with("/docs"),
-        "se navegó: {}",
-        listado(&foto).path_display
+        listado(&snap).path_display.ends_with("/docs"),
+        "it navigated: {}",
+        listado(&snap).path_display
     );
 }
 
-/// La hidratación casa por la ruta que se PIDIÓ, no por la que devuelve el
-/// provider.
+/// Hydration matches by the path that was REQUESTED, not the one the
+/// provider returns.
 ///
-/// Un HFS+ que devuelve NFD, un SMB que devuelve otra caja o un `stat` que
-/// sigue un enlace producen una respuesta cuya ruta no está en el listado.
-/// Como el path pedido ya quedó marcado como sondeado, la celda se quedaba en
-/// blanco para siempre.
+/// An HFS+ that returns NFD, an SMB that returns another case, or a `stat`
+/// that follows a link all produce a response whose path is not in the
+/// listing. Since the requested path was already marked as probed, the cell
+/// would stay blank forever.
 #[tokio::test]
-async fn un_provider_que_devuelve_otra_ortografia_no_deja_la_celda_en_blanco() {
+async fn a_provider_returning_another_spelling_does_not_leave_the_cell_blank() {
     let mut f = Falso {
         lazy: true,
-        // El stat contesta con el nombre en MAYÚSCULAS: otra ortografía de lo
-        // mismo, como haría un servidor sin distinción de caja.
+        // The stat answers with the name in UPPERCASE: another spelling of
+        // the same thing, like a case-insensitive server would.
         stat_grita: true,
         ..Falso::default()
     };
@@ -329,61 +334,61 @@ async fn un_provider_que_devuelve_otra_ortografia_no_deja_la_celda_en_blanco() {
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     for _ in 0..2_000 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let lleno = listado(&foto)
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let filled = listado(&snap)
             .rows
             .iter()
             .any(|r| r.cells.iter().any(|c| c.text.is_some()));
-        if lleno {
+        if filled {
             return;
         }
     }
-    panic!("la celda sigue en blanco: se casó por la ruta devuelta");
+    panic!("the cell is still blank: it matched by the returned path");
 }
 
 // ---------------------------------------------------------------------------
-// Nombres y texto (revisión de encoding).
+// Names and text (encoding review).
 // ---------------------------------------------------------------------------
 
-/// Lo que se teclea en el diálogo es lo que se crea, byte a byte.
+/// What is typed in the dialog is what gets created, byte for byte.
 ///
-/// El nombre viajaba por `clamp_display`, que recorta a 4 KiB y AÑADE `…`, y
-/// `Segment::new` acepta la elipsis: se creaba un directorio con un nombre
-/// que nadie tecleó. Es ADR 0061 en miniatura — un texto de pantalla que
-/// acaba siendo un nombre de fichero.
+/// The name used to travel through `clamp_display`, which trims to 4 KiB and
+/// ADDS `…`, and `Segment::new` accepts the ellipsis: a directory got created
+/// with a name nobody typed. It is ADR 0061 in miniature — screen text that
+/// ends up being a file name.
 #[tokio::test]
-async fn el_nombre_que_se_teclea_es_el_que_se_crea() {
+async fn the_name_that_is_typed_is_the_one_that_gets_created() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F7")).await.expect("host vivo");
+    h.dispatch(tecla("F7")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
 
-    // Un nombre con un carácter de control dentro: legal en Unix, y lo que
-    // se cree tiene que ser EXACTAMENTE eso.
-    let crudo = "caf\u{202e}e.txt";
+    // A name with a control character inside: legal on Unix, and what gets
+    // created has to be EXACTLY that.
+    let raw = "caf\u{202e}e.txt";
     h.dispatch(UiAction::DialogInput {
         id,
-        text: crudo.to_owned(),
+        text: raw.to_owned(),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    // Lo que se PINTA está enmascarado y se dice que lo está.
-    let pintado = siguientes_dialogos(&mut sub).await;
+    // What is PAINTED is masked and says so.
+    let painted = siguientes_dialogos(&mut sub).await;
     assert!(
-        pintado[0].input_hostile,
-        "un nombre con una marca de dirección se DICE: {:?}",
-        pintado[0].input
+        painted[0].input_hostile,
+        "a name with a direction mark SAYS so: {:?}",
+        painted[0].input
     );
     assert!(
-        !pintado[0]
+        !painted[0]
             .input
             .as_deref()
             .unwrap_or_default()
             .contains('\u{202e}'),
-        "y no se pinta crudo"
+        "and it is not painted raw"
     );
 
     h.dispatch(UiAction::Dialog {
@@ -392,31 +397,31 @@ async fn el_nombre_que_se_teclea_es_el_que_se_crea() {
         secret: None,
     })
     .await
-    .expect("host vivo");
-    let creados = hasta(&backend, "la creación encolada", |f| {
+    .expect("host alive");
+    let created = hasta(&backend, "the queued creation", |f| {
         let c = f.creados.lock().expect("creados").clone();
         (!c.is_empty()).then_some(c)
     })
     .await;
-    assert_eq!(creados.len(), 1, "se encoló una creación");
-    let nombre = creados[0]
+    assert_eq!(created.len(), 1, "one creation got queued");
+    let name = created[0]
         .file_name()
-        .expect("tiene nombre")
+        .expect("has a name")
         .as_bytes()
         .to_vec();
     assert_eq!(
-        nombre,
-        crudo.as_bytes(),
-        "lo creado son los bytes tecleados, no su proyección"
+        name,
+        raw.as_bytes(),
+        "what was created is the typed bytes, not their projection"
     );
 }
 
-/// Un nombre imposible se RECHAZA en vez de recortarse.
+/// An impossible name is REJECTED instead of trimmed.
 #[tokio::test]
-async fn un_nombre_desmesurado_no_se_recorta() {
+async fn an_oversized_name_does_not_get_trimmed() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F7")).await.expect("host vivo");
+    h.dispatch(tecla("F7")).await.expect("host alive");
     let id = siguientes_dialogos(&mut sub).await[0].id;
     let ack = h
         .dispatch(UiAction::DialogInput {
@@ -424,23 +429,23 @@ async fn un_nombre_desmesurado_no_se_recorta() {
             text: "a".repeat(5000),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
-        "se dice que no cabe: {ack:?}"
+        "it says it does not fit: {ack:?}"
     );
 }
 
-/// El id de una columna es una IDENTIDAD: viaja entero, y lo que se enmascara
-/// es la ETIQUETA.
+/// A column's id is an IDENTITY: it travels whole, and what gets masked is
+/// the LABEL.
 ///
-/// Enmascarar el id no es inyectivo. Dos columnas configuradas que solo se
-/// diferencien en un carácter invisible daban el MISMO id enmascarado, y la
-/// resolución del click hace `find`: pulsar la segunda ordenaba por la
-/// primera. Es la regla del ADR 0061 sobre una superficie que el ADR no
-/// cubría. Lo que el renderer PINTA es `label`; el id solo va en un `data-`.
+/// Masking the id is not injective. Two configured columns that only differ
+/// by an invisible character gave the SAME masked id, and the click's
+/// resolution does a `find`: pressing the second one sorted by the first.
+/// It is ADR 0061's rule over a surface the ADR did not cover. What the
+/// renderer PAINTS is `label`; the id only goes into a `data-` attribute.
 #[tokio::test]
-async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
+async fn two_columns_masked_the_same_are_still_two() {
     let backend = arbol();
     let (h, snap) = UiHost::start(UiHostOptions {
         backend,
@@ -458,11 +463,12 @@ async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        // Los dos ids se enmascaran a lo MISMO: U+200B y U+202E son los dos
-        // peligros de terminal y `display_name` los sustituye por U+FFFD.
-        // Van por `plugin:` y no por `attr:`: los `attr:` ya los filtra
-        // `is_valid_attr_id` —un id que no es legal en el wire tumbaría el
-        // listado entero— y los de plugin no los filtra nadie.
+        // Both ids mask to the SAME thing: U+200B and U+202E are the two
+        // terminal hazards and `display_name` replaces them with U+FFFD.
+        // They go through `plugin:` and not `attr:`: `attr:` ones are
+        // already filtered by `is_valid_attr_id` — an id that is not legal
+        // on the wire would take down the whole listing — and plugin ones
+        // are filtered by nobody.
         columns: columnas_de(&[
             "name",
             "plugin:acme.a\u{200b}b/x",
@@ -472,51 +478,52 @@ async fn dos_columnas_que_se_enmascaran_igual_siguen_siendo_dos() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     drop(h);
     let b = listado(&snap);
     let ids: Vec<&str> = b.columns.iter().map(|c| c.id.as_str()).collect();
-    assert_eq!(ids.len(), 3, "las tres columnas se pintan: {ids:?}");
+    assert_eq!(ids.len(), 3, "all three columns get painted: {ids:?}");
     assert_ne!(
         ids[1], ids[2],
-        "y siguen siendo DOS: enmascarar el id las fundía en una, y el `find` \
-         de la resolución habría ordenado siempre por la primera"
+        "and they are still TWO: masking the id merged them into one, and \
+         the resolution's `find` would have always sorted by the first one"
     );
     assert!(
         ids[1].contains('\u{200b}') && ids[2].contains('\u{202e}'),
-        "el id viaja ENTERO, que es lo que hace que case consigo mismo: {ids:?}"
+        "the id travels WHOLE, which is what makes it match itself: {ids:?}"
     );
-    // Lo que se PINTA sí va enmascarado.
+    // What is PAINTED does go masked.
     for c in &b.columns {
         assert!(
             !c.label.contains('\u{202e}') && !c.label.contains('\u{200b}'),
-            "la etiqueta va cruda: {:?}",
+            "the label goes through raw: {:?}",
             c.label
         );
     }
-    // Y la celda nombra su columna con la misma identidad.
-    let columnas_de_celdas: std::collections::BTreeSet<&str> = b
+    // And the cell names its column with the same identity.
+    let cell_columns: std::collections::BTreeSet<&str> = b
         .rows
         .iter()
         .flat_map(|f| f.cells.iter().map(|c| c.column.as_str()))
         .collect();
-    for c in &columnas_de_celdas {
+    for c in &cell_columns {
         assert!(
             ids.contains(c),
-            "una celda nombra una columna que no está en la cabecera: {c:?}"
+            "a cell names a column that is not in the header: {c:?}"
         );
     }
 }
 
-/// Una lectura del visor que llega tarde no abre nada.
+/// A viewer read that arrives late opens nothing.
 ///
-/// F3 sobre un fichero en un montaje lento, `esc`, y segundos después el
-/// visor aparecía solo — y como las teclas se enrutan por «hay visor», la
-/// siguiente tecla la interpretaba otro mapa sin que nadie lo pidiera.
+/// F3 on a file on a slow mount, `esc`, and seconds later the viewer showed
+/// up on its own — and since keys are routed by "there is a viewer", the
+/// next key was interpreted by a different map without anyone asking for
+/// it.
 #[tokio::test]
-async fn un_visor_que_llega_tarde_no_se_abre_solo() {
+async fn a_late_viewer_does_not_open_on_its_own() {
     let mut f = Falso {
-        // La lectura tarda; da tiempo a cerrar.
+        // The read takes a while; there is time to close.
         retraso_ms: 150,
         ..Falso::default()
     };
@@ -527,36 +534,36 @@ async fn un_visor_que_llega_tarde_no_se_abre_solo() {
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host vivo");
-    // Antes de que llegue el contenido, se cierra.
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
-    // La lectura tardía ya volvió: no queda ninguna en vuelo.
-    hasta(&backend, "la lectura tardía servida", |f| {
+    h.dispatch(tecla("F3")).await.expect("host alive");
+    // Before the content arrives, it is closed.
+    h.dispatch(tecla("Escape")).await.expect("host alive");
+    // The late read already came back: none is left in flight.
+    hasta(&backend, "the late read served", |f| {
         (f.servidos() >= 2 && f.en_calma()).then_some(())
     })
     .await;
     asentar().await;
 
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
     assert!(
-        foto.viewer.is_none(),
-        "el visor no se abre por su cuenta después de cerrarlo"
+        snap.viewer.is_none(),
+        "the viewer does not open on its own after closing it"
     );
 }
 
-/// Una disposición sin ningún listado se rechaza al ARRANCAR.
+/// A layout with no listing at all is rejected at STARTUP.
 ///
-/// Es #242 en esta superficie: no panicaba al arrancar sino en la primera
-/// tecla, dentro de la task del actor —sin log, sin caída visible— y la
-/// ventana se quedaba muerta contestando `Down` para siempre.
+/// It is #242 on this surface: it did not panic at startup but on the first
+/// keystroke, inside the actor's task — with no log, no visible crash — and
+/// the window stayed dead answering `Down` forever.
 #[tokio::test]
-async fn una_disposicion_sin_listado_no_arranca() {
-    let arbol_sin_listado = norte_frontend::layout::Node::slot(
+async fn a_layout_with_no_listing_does_not_start() {
+    let no_listing_tree = norte_frontend::layout::Node::slot(
         norte_frontend::layout::SlotId(1),
         norte_frontend::layout::KindId::new("status"),
     );
-    let salida = UiHost::start(UiHostOptions {
+    let outcome = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
         initial_dir_pedido: false,
@@ -565,7 +572,7 @@ async fn una_disposicion_sin_listado_no_arranca() {
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
-        layout: arbol_sin_listado,
+        layout: no_listing_tree,
         viewport: (120, 40),
         settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
@@ -579,21 +586,21 @@ async fn una_disposicion_sin_listado_no_arranca() {
     .await;
     assert!(
         matches!(
-            salida,
+            outcome,
             Err(norte_ui_host::controller::UiError::NoBrowserSlot)
         ),
-        "una pantalla sin listado no es una pantalla"
+        "a screen with no listing is not a screen"
     );
 }
 
-/// Las columnas se resuelven POR ESQUEMA, no una vez al arrancar.
+/// Columns resolve PER SCHEME, not once at startup.
 ///
-/// Con una lista resuelta en el arranque, `[ui.columns.schemes.sftp]` quedaba
-/// muerta: sus columnas no se pintaban y sus atributos no se pedían nunca,
-/// porque los que viajan en cada listado se habían congelado con los del
-/// esquema inicial.
+/// With a list resolved at startup, `[ui.columns.schemes.sftp]` stayed dead:
+/// its columns did not get painted and its attributes were never requested,
+/// because the ones that travel with each listing had frozen with the
+/// initial scheme's.
 #[tokio::test]
-async fn las_columnas_de_otro_esquema_no_estan_muertas() {
+async fn columns_from_another_scheme_are_not_dead() {
     let cfg = norte_config::ColumnsConfig {
         default_columns: Some(vec!["name".to_owned(), "size".to_owned()]),
         schemes: [(
@@ -629,7 +636,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     drop(h);
 
     let ids: Vec<&str> = listado(&snap)
@@ -640,7 +647,7 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
     assert_eq!(
         ids,
         vec!["name", "attr:mem.mode"],
-        "manda la configuración del esquema `mem`, no la de por defecto"
+        "it sends the `mem` scheme's configuration, not the default one's"
     );
     assert!(
         backend
@@ -649,16 +656,17 @@ async fn las_columnas_de_otro_esquema_no_estan_muertas() {
             .expect("attrs")
             .iter()
             .any(|a| a.iter().any(|id| id == "mem.mode")),
-        "y su atributo se PIDE en el listado"
+        "and its attribute IS requested in the listing"
     );
 }
 
-/// La ventana ajusta las columnas con la MISMA regla que el terminal: en un
-/// hueco estrecho con nombres largos cede la clase y la fecha pasa a corta,
-/// y en uno ancho no cede nada. Cabecera y celdas salen del mismo ajuste.
+/// The window adjusts columns with the SAME rule as the terminal: in a
+/// narrow slot with long names it gives up the class and the date goes
+/// short, and in a wide one it gives up nothing. Header and cells come from
+/// the same adjustment.
 #[tokio::test]
-async fn la_ventana_cede_columnas_para_leer_los_nombres() {
-    async fn arrancar(ancho: u16) -> norte_ui_host::ViewSnapshot {
+async fn the_window_gives_up_columns_to_read_the_names() {
+    async fn start(width: u16) -> norte_ui_host::ViewSnapshot {
         let mut f = Falso::default();
         f.pon(
             "mem:///casa",
@@ -688,7 +696,7 @@ async fn la_ventana_cede_columnas_para_leer_los_nombres() {
             keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
                 .expect("preset"),
             layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
-            viewport: (ancho, 40),
+            viewport: (width, 40),
             settings: ajustes_de_prueba(),
             paths: norte_ui_host::settings::HostPaths::default(),
             theme: norte_ui_host::pickers::HostTheme::default(),
@@ -699,28 +707,28 @@ async fn la_ventana_cede_columnas_para_leer_los_nombres() {
             log_ring: None,
         })
         .await
-        .expect("arranca");
+        .expect("starts");
         drop(h);
         snap
     }
 
-    let estrecho = Box::pin(arrancar(50)).await;
-    let b = listado(&estrecho);
+    let narrow = Box::pin(start(50)).await;
+    let b = listado(&narrow);
     let ids: Vec<&str> = b.columns.iter().map(|c| c.id.as_str()).collect();
-    assert_eq!(ids, ["name", "size", "mtime"], "la clase cede primero");
-    let fecha = b.columns.iter().find(|c| c.id == "mtime").expect("fecha");
+    assert_eq!(ids, ["name", "size", "mtime"], "the class gives up first");
+    let date = b.columns.iter().find(|c| c.id == "mtime").expect("date");
     assert_eq!(
-        fecha.width,
+        date.width,
         Some(norte_frontend::columns::COMPACT_WIDTH),
-        "y la fecha pasa a corta"
+        "and the date goes short"
     );
-    for fila in &b.rows {
-        let celdas: Vec<&str> = fila.cells.iter().map(|c| c.column.as_str()).collect();
-        assert_eq!(celdas, ["size", "mtime"], "las celdas siguen a la cabecera");
+    for row in &b.rows {
+        let cells: Vec<&str> = row.cells.iter().map(|c| c.column.as_str()).collect();
+        assert_eq!(cells, ["size", "mtime"], "cells follow the header");
     }
 
-    let ancho = Box::pin(arrancar(200)).await;
-    let ids: Vec<&str> = listado(&ancho)
+    let wide = Box::pin(start(200)).await;
+    let ids: Vec<&str> = listado(&wide)
         .columns
         .iter()
         .map(|c| c.id.as_str())
@@ -728,6 +736,6 @@ async fn la_ventana_cede_columnas_para_leer_los_nombres() {
     assert_eq!(
         ids,
         ["name", "size", "mtime", "kind"],
-        "con sitio no cede nada"
+        "with room it gives up nothing"
     );
 }

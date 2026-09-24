@@ -1,8 +1,8 @@
-//! Task `index.embed` (M4-IA-2, ADR 0031 A3): embeddings de los ficheros ya
-//! indexados. Filtra (`denied_prefixes`, heurística de texto, tamaño) ANTES de
-//! leer nada; lee prefijos acotados por el provider (regla 2); sha256 del
-//! prefijo decide re-embed; batches al proveedor con reintento acotado ante
-//! rate-limit. Cancelación cooperativa por fichero (regla 3).
+//! `index.embed` Task (M4-IA-2, ADR 0031 A3): embeddings for files already
+//! indexed. Filters (`denied_prefixes`, text heuristic, size) BEFORE reading
+//! anything; reads prefixes capped by the provider (rule 2); the prefix's
+//! sha256 decides whether to re-embed; batches to the provider with capped
+//! retry on rate-limit. Cooperative cancellation per file (rule 3).
 
 use std::sync::Arc;
 
@@ -13,17 +13,17 @@ use sha2::{Digest, Sha256};
 
 use crate::scheduler::TaskCtx;
 
-/// Bytes de prefijo que se embeben por fichero (v1, hard-coded — spec §IA-2).
+/// Prefix bytes embedded per file (v1, hard-coded — spec §IA-2).
 pub(crate) const EMBED_PREFIX_BYTES: u64 = 32 * 1024;
-/// Tamaño de batch hacia el proveedor (v1, hard-coded).
+/// Batch size toward the provider (v1, hard-coded).
 pub(crate) const EMBED_BATCH: usize = 16;
-/// Ficheros mayores se saltan (el prefijo de un binario gigante no es texto útil).
+/// Larger files are skipped (a giant binary's prefix isn't useful text).
 pub(crate) const EMBED_MAX_FILE_SIZE: u64 = 8 * 1024 * 1024;
-/// Reintentos ante `RateLimited` antes de fallar la task (spec: jamás cuelga).
+/// Retries on `RateLimited` before failing the task (spec: never hangs).
 pub(crate) const EMBED_RETRY_MAX: u32 = 3;
 
-/// Extensiones consideradas texto (heurística v1). Bytes, no strings: los
-/// nombres de fichero no son UTF-8 (regla 1).
+/// Extensions considered text (v1 heuristic). Bytes, not strings: filenames
+/// are not UTF-8 (rule 1).
 const EMBED_TEXT_EXTS: &[&[u8]] = &[
     b"txt", b"md", b"rst", b"org", b"tex", b"rs", b"py", b"js", b"ts", b"tsx", b"jsx", b"go",
     b"java", b"kt", b"rb", b"php", b"pl", b"lua", b"c", b"h", b"cpp", b"hpp", b"cc", b"hh", b"cs",
@@ -31,9 +31,9 @@ const EMBED_TEXT_EXTS: &[&[u8]] = &[
     b"css", b"sql", b"csv", b"ini", b"cfg", b"conf", b"log",
 ];
 
-/// ¿Candidato a embedding? Decide SIN leer el contenido (heurística v1 por
-/// extensión; sniffing de contenido es deuda declarada en la spec). Tamaño
-/// desconocido (`None`) pasa: la lectura posterior está acotada igualmente.
+/// An embedding candidate? Decided WITHOUT reading the content (v1
+/// extension heuristic; content sniffing is declared debt in the spec).
+/// Unknown size (`None`) passes: the later read is capped anyway.
 pub(crate) fn is_text_candidate(path: &VPath, size: Option<u64>) -> bool {
     if size.is_some_and(|s| s > EMBED_MAX_FILE_SIZE) {
         return false;
@@ -52,30 +52,30 @@ pub(crate) fn is_text_candidate(path: &VPath, size: Option<u64>) -> bool {
     EMBED_TEXT_EXTS.contains(&ext.to_ascii_lowercase().as_slice())
 }
 
-/// Similitud coseno. `None` si las dimensiones difieren, un vector es nulo o
-/// el resultado no es finito (cinturón: un `NaN` serializado por `serde_json`
-/// se vuelve `null` y envenena la respuesta entera en el cliente — el score
-/// del wire es SIEMPRE finito).
+/// Cosine similarity. `None` if the dimensions differ, a vector is null, or
+/// the result isn't finite (a belt: a `NaN` serialized by `serde_json`
+/// becomes `null` and poisons the whole response on the client — the
+/// wire's score is ALWAYS finite).
 ///
-/// Sin llamantes fuera de los tests desde #122 —la búsqueda pasa la norma ya
-/// hecha—, y se queda porque es la DEFINICIÓN contra la que se comprueba que
-/// el atajo no cambió ningún score.
+/// No callers outside the tests since #122 —search passes the norm
+/// already computed— and it stays because it's the DEFINITION the shortcut
+/// is checked against to confirm no score changed.
 #[cfg(test)]
 pub(crate) fn cosine(a: &[f32], b: &[f32]) -> Option<f32> {
     let na: f32 = a.iter().map(|x| x * x).sum();
     cosine_prenormed(a, na.sqrt(), b)
 }
 
-/// [`cosine`] con la norma de `a` YA calculada (#122).
+/// [`cosine`] with `a`'s norm ALREADY computed (#122).
 ///
-/// La búsqueda semántica puntúa la MISMA query contra cada vector guardado, y
-/// recalcular su norma por fila era un tercio de las multiplicaciones del
-/// barrido entero. El llamante ya la tiene: la calcula antes, para rechazar un
-/// vector de query de norma cero.
+/// Semantic search scores the SAME query against every stored vector, and
+/// recomputing its norm per row was a third of the whole sweep's
+/// multiplications. The caller already has it: it computes it beforehand,
+/// to reject a zero-norm query vector.
 ///
-/// `norm_a` se pasa como raíz, no como cuadrado, porque es lo que entra en el
-/// denominador — que una de las dos raíces esté hecha y la otra no es la mitad
-/// del ahorro y toda la confusión.
+/// `norm_a` is passed as the root, not squared, because that's what goes
+/// into the denominator — having one of the two roots done and not the
+/// other would be half the savings and all the confusion.
 pub(crate) fn cosine_prenormed(a: &[f32], norm_a: f32, b: &[f32]) -> Option<f32> {
     if a.len() != b.len() || a.is_empty() {
         return None;
@@ -86,7 +86,7 @@ pub(crate) fn cosine_prenormed(a: &[f32], norm_a: f32, b: &[f32]) -> Option<f32>
         nb += y * y;
     }
     let denom = norm_a * nb.sqrt();
-    // `>` es falso para 0.0 y para NaN: ambos casos ⇒ None.
+    // `>` is false for 0.0 and for NaN: both cases ⇒ None.
     if denom > 0.0 {
         let s = dot / denom;
         s.is_finite().then_some(s)
@@ -95,19 +95,19 @@ pub(crate) fn cosine_prenormed(a: &[f32], norm_a: f32, b: &[f32]) -> Option<f32>
     }
 }
 
-/// Un hit con su puntuación, ordenable, para el montículo acotado de la
-/// búsqueda semántica (#122).
+/// A hit with its score, orderable, for semantic search's capped heap
+/// (#122).
 ///
-/// `Ord` ES el orden del RESULTADO —score descendente y, a igualdad, path
-/// ascendente—, o sea que «mejor» es `Less`. Justo por eso `BinaryHeap`, que
-/// es un max-heap y saca el MAYOR, saca el PEOR de los `k` guardados: el único
-/// contra el que hay que comparar cada candidato nuevo. No hace falta
-/// invertir nada, y hacerlo —como estaba— pone el mejor en la cima y va
-/// tirando los buenos uno a uno.
+/// `Ord` IS the RESULT order —descending score and, on ties, ascending
+/// path—, i.e. "better" is `Less`. Exactly because of that, `BinaryHeap`,
+/// which is a max-heap and pops the LARGEST, pops the WORST of the `k`
+/// stored: the only one every new candidate needs to be compared against.
+/// Nothing needs inverting, and doing so —as it used to— puts the best on
+/// top and drops the good ones one by one.
 ///
-/// El desempate por path no es cosmético: sin él, dos ficheros con el mismo
-/// score salían en el orden en que `SQLite` los devolviera, y una búsqueda
-/// repetida podía contestar dos listas distintas.
+/// The path tiebreak isn't cosmetic: without it, two files with the same
+/// score came out in whatever order `SQLite` returned them, and a repeated
+/// search could answer with two different lists.
 #[derive(Debug, Clone)]
 pub(crate) struct Puntuado {
     pub score: f64,
@@ -115,102 +115,103 @@ pub(crate) struct Puntuado {
 }
 
 impl Puntuado {
-    /// El orden del RESULTADO: mejor primero.
-    fn mejor_primero(&self, otro: &Self) -> std::cmp::Ordering {
-        otro.score
+    /// The RESULT order: best first.
+    fn mejor_primero(&self, other: &Self) -> std::cmp::Ordering {
+        other
+            .score
             .total_cmp(&self.score)
-            .then_with(|| self.path.cmp(&otro.path))
+            .then_with(|| self.path.cmp(&other.path))
     }
 }
 
 impl PartialEq for Puntuado {
-    fn eq(&self, otro: &Self) -> bool {
-        self.mejor_primero(otro) == std::cmp::Ordering::Equal
+    fn eq(&self, other: &Self) -> bool {
+        self.mejor_primero(other) == std::cmp::Ordering::Equal
     }
 }
 
 impl Eq for Puntuado {}
 
 impl Ord for Puntuado {
-    fn cmp(&self, otro: &Self) -> std::cmp::Ordering {
-        // Sin invertir: ver la nota del tipo.
-        self.mejor_primero(otro)
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Not inverted: see the type's note.
+        self.mejor_primero(other)
     }
 }
 
 impl PartialOrd for Puntuado {
-    fn partial_cmp(&self, otro: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(otro))
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
 }
 
-/// Los `k` mejores de `candidatos`, en orden de resultado, en memoria O(k).
+/// The `k` best of `candidates`, in result order, in O(k) memory.
 ///
-/// Antes se puntuaba todo a un `Vec` del largo del índice, se ordenaba entero
-/// y se truncaba a `k <= 100`. El montículo hace la misma cuenta guardando
-/// como mucho `k`, que es lo que se va a devolver.
+/// It used to score everything into a `Vec` as long as the index, sort the
+/// whole thing, and truncate to `k <= 100`. The heap does the same math
+/// while storing at most `k`, which is what's going to be returned.
 pub(crate) fn mejores_k(
-    candidatos: impl Iterator<Item = Puntuado>,
+    candidates: impl Iterator<Item = Puntuado>,
     k: usize,
 ) -> Vec<(norte_proto::VPath, f64)> {
-    let mut monton: std::collections::BinaryHeap<Puntuado> =
+    let mut heap: std::collections::BinaryHeap<Puntuado> =
         std::collections::BinaryHeap::with_capacity(k);
-    for c in candidatos {
-        if monton.len() < k {
-            monton.push(c);
-        } else if let Some(peor) = monton.peek()
-            && c.mejor_primero(peor) == std::cmp::Ordering::Less
+    for c in candidates {
+        if heap.len() < k {
+            heap.push(c);
+        } else if let Some(worst) = heap.peek()
+            && c.mejor_primero(worst) == std::cmp::Ordering::Less
         {
-            // `Less` en el orden del resultado = MEJOR que el peor guardado.
-            monton.pop();
-            monton.push(c);
+            // `Less` in result order = BETTER than the worst one stored.
+            heap.pop();
+            heap.push(c);
         }
     }
-    let mut fuera = monton.into_vec();
-    fuera.sort_unstable_by(Puntuado::mejor_primero);
-    fuera.into_iter().map(|p| (p.path, p.score)).collect()
+    let mut out = heap.into_vec();
+    out.sort_unstable_by(Puntuado::mejor_primero);
+    out.into_iter().map(|p| (p.path, p.score)).collect()
 }
 
-/// Recorta `k` al rango del wire `[1, INDEX_SEMANTIC_MAX_K]`
+/// Clamps `k` to the wire range `[1, INDEX_SEMANTIC_MAX_K]`
 /// (`index.search_semantic`).
 pub(crate) fn clamp_k(k: u32) -> usize {
-    // Invariante: MAX_K=100 cabe en usize en cualquier plataforma.
+    // Invariant: MAX_K=100 fits in usize on any platform.
     usize::try_from(k.clamp(1, norte_proto::methods::INDEX_SEMANTIC_MAX_K))
-        .expect("MAX_K cabe en usize")
+        .expect("MAX_K fits in usize")
 }
 
-/// Mapea un [`norte_index::IndexError`] a la taxonomía del wire (mismo
-/// criterio que `index_build_as`: `BUSY`/`LOCKED` de `SQLite` ⇒ retryable).
+/// Maps a [`norte_index::IndexError`] to the wire's taxonomy (same
+/// criterion as `index_build_as`: `SQLite`'s `BUSY`/`LOCKED` ⇒ retryable).
 pub(crate) fn index_to_proto(e: &norte_index::IndexError) -> Error {
-    tracing::warn!(error = %e, "index.embed: error del índice");
+    tracing::warn!(error = %e, "index.embed: index error");
     Error::Io {
         retryable: e.is_retryable(),
     }
 }
 
-/// Lee los primeros [`EMBED_PREFIX_BYTES`] de `path` vía el provider. El
-/// `len` acota en el provider; el break + truncate son el cinturón por si
-/// alguno entrega de más (espejo de `handle_plugin_preview`).
+/// Reads the first [`EMBED_PREFIX_BYTES`] of `path` via the provider. `len`
+/// caps it at the provider; the break + truncate are the belt in case one
+/// delivers more (mirrors `handle_plugin_preview`).
 ///
-/// **Se vuelve a mirar QUÉ es antes de leerlo (#122).** El candidato viene de
-/// la fila que dejó `index.build`, y entre aquel build y este embed cabe una
-/// sustitución: quien pueda escribir en el árbol indexado cambia un `.txt` por
-/// un enlace a un fichero DENEGADO, y sus 32 KiB se iban al proveedor de
-/// embeddings — con lo que «ni un byte de un prefijo denegado se lee» dejaba
-/// de ser cierto. `Provider::stat` describe el ENLACE y jamás su destino, así
-/// que exigir `File` aquí cierra la puerta; lo que queda es la ventana entre
-/// este `stat` y el `read`, que es la mitigación estándar y no la ausencia de
-/// una.
+/// **What it is gets checked again before reading it (#122).** The
+/// candidate comes from the row `index.build` left behind, and between that
+/// build and this embed there's room for a substitution: whoever can write
+/// into the indexed tree swaps a `.txt` for a link to a DENIED file, and its
+/// 32 KiB would go to the embeddings provider — which would make "not a
+/// byte of a denied prefix is ever read" stop being true. `Provider::stat`
+/// describes the LINK and never its target, so requiring `File` here closes
+/// the door; what's left is the window between this `stat` and the `read`,
+/// which is the standard mitigation, not the absence of one.
 ///
-/// Lo que esto NO cubre, y hay que decirlo: un ENLACE DURO al fichero
-/// denegado. Tiene `kind = File` y una ruta que el filtro no reconoce, así que
-/// pasa sin carrera ninguna. Cerrarlo pide comparar inodos contra el conjunto
-/// denegado, que es otra cosa.
+/// What this does NOT cover, and it has to be said: a HARD LINK to the
+/// denied file. It has `kind = File` and a path the filter doesn't
+/// recognize, so it passes with no race at all. Closing that requires
+/// comparing inodes against the denied set, which is a different matter.
 async fn read_prefix(provider: &dyn Provider, path: &VPath) -> Result<Vec<u8>, Error> {
     if provider.stat(path).await?.kind != norte_proto::EntryKind::File {
         tracing::debug!(
             path = %crate::engine::span_path(path),
-            "index.embed: el candidato ya no es un fichero regular; no se lee"
+            "index.embed: the candidate is no longer a regular file; not reading it"
         );
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::TypeMismatch,
@@ -234,10 +235,10 @@ async fn read_prefix(provider: &dyn Provider, path: &VPath) -> Result<Vec<u8>, E
     Ok(bytes)
 }
 
-/// Envía `batch` al proveedor (con reintento acotado ante rate-limit) y
-/// persiste los vectores. Deja `batch` vacío al completar. La espera de
-/// reintento es cancel-aware (regla 3: el retry loop es un inner loop — un
-/// cancel no debe esperar hasta 30s a que venza el sleep).
+/// Sends `batch` to the provider (with capped retry on rate-limit) and
+/// persists the vectors. Leaves `batch` empty on completion. The retry wait
+/// is cancel-aware (rule 3: the retry loop is an inner loop — a cancel must
+/// not wait up to 30s for the sleep to expire).
 async fn flush_batch(
     embedder: &dyn norte_ai::AiProvider,
     index: &norte_index::Index,
@@ -256,9 +257,10 @@ async fn flush_batch(
             Err(norte_ai::AiError::RateLimited { retry_after })
                 if attempt + 1 < EMBED_RETRY_MAX =>
             {
-                // Espera acotada: lo que pida el server (clamp 30s) o 1s.
+                // Capped wait: whatever the server asks for (clamped to
+                // 30s) or 1s.
                 let secs = retry_after.unwrap_or(1).min(30);
-                tracing::debug!(attempt, secs, "proveedor rate-limited; reintentando");
+                tracing::debug!(attempt, secs, "provider rate-limited; retrying");
                 tokio::select! {
                     () = ctx.cancel.cancelled() => return Err(Error::Cancelled),
                     () = tokio::time::sleep(std::time::Duration::from_secs(secs)) => {}
@@ -269,26 +271,26 @@ async fn flush_batch(
         }
     };
     if vectors.len() != batch.len() {
-        // Proveedor mentiroso: dijo N entradas y devolvió otra cosa. Zipear a
-        // ciegas asociaría vectores a ficheros equivocados — mejor fallar.
-        // Mala conducta del PROVEEDOR (no un bug nuestro): taxonomía
-        // ProviderUnavailable, no retryable (repetir no lo arregla).
+        // Lying provider: it said N entries and returned something else.
+        // Zipping blindly would associate vectors with the wrong files —
+        // better to fail. This is PROVIDER misbehavior (not our bug):
+        // ProviderUnavailable taxonomy, not retryable (repeating won't fix it).
         tracing::warn!(
             expected = batch.len(),
             got = vectors.len(),
-            "index.embed: el proveedor devolvió un número de vectores inesperado"
+            "index.embed: the provider returned an unexpected number of vectors"
         );
         return Err(Error::ProviderUnavailable { retryable: false });
     }
-    // Misma clase de mentira que la de arriba, y por eso la misma taxonomía
-    // (#122): un vector de dimensión 0 no puntúa contra nada, pero guardado
-    // deja el fichero MARCADO como embebido —su hash coincide— y ningún
-    // `index.embed` posterior lo reintenta. `upsert_embedding` lo rechaza
-    // también, por si algún día alguien escribe por otro camino.
+    // Same class of lie as above, and hence the same taxonomy (#122): a
+    // zero-dimension vector scores against nothing, but stored it leaves the
+    // file MARKED as embedded —its hash matches— and no later `index.embed`
+    // retries it. `upsert_embedding` rejects it too, in case someone
+    // someday writes through another path.
     if let Some(i) = vectors.iter().position(Vec::is_empty) {
         tracing::warn!(
             file_id = batch.get(i).map(|(id, _, _)| *id),
-            "index.embed: el proveedor devolvió un vector de dimensión 0"
+            "index.embed: the provider returned a zero-dimension vector"
         );
         return Err(Error::ProviderUnavailable { retryable: false });
     }
@@ -302,12 +304,11 @@ async fn flush_batch(
     Ok(())
 }
 
-/// Cuerpo de la task `index.embed`: embebe los ficheros ya indexados de
-/// `root`. El filtrado (denied → heurística de texto) ocurre ANTES de leer
-/// ningún byte; el hash del prefijo decide si hay que re-embeber. Cancelable
-/// entre ficheros con [`Error::Cancelled`] — los batches ya persistidos se
-/// quedan (el índice es coherente en todo momento; el siguiente run los salta
-/// por hash).
+/// Body of the `index.embed` task: embeds the files already indexed under
+/// `root`. Filtering (denied → text heuristic) happens BEFORE reading any
+/// byte; the prefix hash decides whether re-embedding is needed. Cancelable
+/// between files with [`Error::Cancelled`] — batches already persisted stay
+/// (the index is coherent at all times; the next run skips them by hash).
 pub(crate) async fn embed_for_index(
     provider: Arc<dyn Provider>,
     embedder: norte_ai::SharedAiProvider,
@@ -322,46 +323,47 @@ pub(crate) async fn embed_for_index(
         .await
         .map_err(|e| index_to_proto(&e))?;
     if candidates.is_empty() {
-        // Defensa en profundidad: el engine ya pre-chequea esto en la
-        // respuesta (NotFound sin build previo); aquí cubre la carrera con
-        // un build concurrente que vació el root.
+        // Defense in depth: the engine already pre-checks this in the
+        // response (NotFound with no prior build); this covers the race
+        // with a concurrent build that emptied the root.
         return Err(Error::NotFound);
     }
-    // **Lo que ya está guardado y AHORA está denegado, se borra** (#122).
+    // **Whatever is already stored and is NOW denied gets deleted** (#122).
     //
-    // El filtro de abajo decide qué se lee, o sea que protege lo que todavía
-    // no se ha embebido. Un fichero que se embebió ANTES de que el usuario lo
-    // añadiera a `denied_prefixes` deja su vector ahí para siempre, y un
-    // vector es invertible a una aproximación del texto: la denegación nueva
-    // no se podía honrar sin borrar `index.db` entero.
+    // The filter below decides what gets read, i.e. it protects whatever
+    // hasn't been embedded yet. A file embedded BEFORE the user added it to
+    // `denied_prefixes` leaves its vector there forever, and a vector is
+    // invertible to an approximation of the text: the new denial couldn't
+    // be honored without deleting the whole `index.db`.
     //
-    // Va aquí, al principio de la task, porque el predicado ya está calculado
-    // y porque es el único momento en que alguien mira esta lista. No es un
-    // recolector de basura: es la denegación aplicándose hacia atrás.
+    // This goes here, at the start of the task, because the predicate is
+    // already computed and because this is the only moment anyone looks at
+    // this list. It's not a garbage collector: it's the denial applying
+    // backward.
     if !denied.is_empty() {
-        let guardados = index
+        let stored = index
             .embedded_files(&root)
             .await
             .map_err(|e| index_to_proto(&e))?;
-        let a_olvidar: Vec<i64> = guardados
+        let to_forget: Vec<i64> = stored
             .into_iter()
             .filter(|(_, p)| denied.iter().any(|d| crate::policy::is_under(d, p)))
             .map(|(id, _)| id)
             .collect();
-        if !a_olvidar.is_empty() {
-            let borrados = index
-                .forget_embeddings(&a_olvidar)
+        if !to_forget.is_empty() {
+            let forgotten = index
+                .forget_embeddings(&to_forget)
                 .await
                 .map_err(|e| index_to_proto(&e))?;
             tracing::info!(
-                borrados,
-                "index.embed: vectores de ficheros ahora denegados, olvidados (#122)"
+                forgotten,
+                "index.embed: vectors for now-denied files, forgotten (#122)"
             );
         }
     }
-    // Filtro ANTES de leer nada: primero denied_prefixes (ni un byte de un
-    // prefijo denegado se lee ni sale — spec §9), luego la heurística de
-    // texto/tamaño.
+    // Filter BEFORE reading anything: denied_prefixes first (not a byte of
+    // a denied prefix is ever read or comes out — spec §9), then the
+    // text/size heuristic.
     let work: Vec<norte_index::EmbedCandidate> = candidates
         .into_iter()
         .filter(|c| !denied.iter().any(|d| crate::policy::is_under(d, &c.path)))
@@ -383,16 +385,17 @@ pub(crate) async fn embed_for_index(
             p.entries_done += 1;
             p.current = Some(cand.path.clone());
         });
-        // Fichero ilegible: pudo morir entre el build y el embed — se salta
-        // (cuenta como examinado), no tumba la task. Al log (path redactado
-        // como los spans), jamás en silencio.
+        // Unreadable file: it may have died between the build and the
+        // embed — it's skipped (counts as examined), it doesn't bring down
+        // the task. To the log (path redacted like the spans), never
+        // silently.
         let bytes = match read_prefix(provider.as_ref(), &cand.path).await {
             Ok(b) => b,
             Err(e) => {
                 tracing::debug!(
                     error = %e,
                     path = %crate::engine::span_path(&cand.path),
-                    "index.embed: prefijo ilegible; se salta"
+                    "index.embed: unreadable prefix; skipping"
                 );
                 continue;
             }
@@ -402,7 +405,7 @@ pub(crate) async fn embed_for_index(
             .get(&cand.file_id)
             .is_some_and(|h| h.as_slice() == hash)
         {
-            continue; // sin cambios para este modelo: nada que re-embeber.
+            continue; // no change for this model: nothing to re-embed.
         }
         let text = String::from_utf8_lossy(&bytes).into_owned();
         batch.push((cand.file_id, text, hash));
@@ -410,8 +413,8 @@ pub(crate) async fn embed_for_index(
             flush_batch(embedder.as_ref(), &index, &model, &mut batch, ctx).await?;
         }
     }
-    // Chequeo también antes del flush final: un cancel llegado en la última
-    // vuelta no debe disparar un batch más hacia el proveedor.
+    // Also checked before the final flush: a cancel arriving on the last
+    // round must not trigger one more batch to the provider.
     if ctx.cancel.is_cancelled() {
         return Err(Error::Cancelled);
     }
@@ -424,28 +427,28 @@ mod tests {
     use super::*;
 
     fn vp(wire: &str) -> VPath {
-        VPath::parse(wire).expect("wire válido")
+        VPath::parse(wire).expect("valid wire")
     }
 
     #[test]
     fn text_heuristic_by_extension() {
-        // Extensión de texto conocida.
+        // Known text extension.
         assert!(is_text_candidate(&vp("mem:///a.txt"), Some(10)));
         // Case-insensitive.
         assert!(is_text_candidate(&vp("mem:///B.RS"), Some(10)));
-        // Binario conocido → no.
+        // Known binary → no.
         assert!(!is_text_candidate(&vp("mem:///c.bin"), Some(10)));
-        // Sin punto → no.
+        // No dot → no.
         assert!(!is_text_candidate(&vp("mem:///noext"), Some(10)));
-        // Sobre el tope de tamaño → no, aunque la extensión sea texto.
+        // Over the size cap → no, even if the extension is text.
         assert!(!is_text_candidate(
             &vp("mem:///big.txt"),
             Some(EMBED_MAX_FILE_SIZE + 1)
         ));
-        // Tamaño desconocido pasa (la lectura está acotada igualmente).
+        // Unknown size passes (the read is capped anyway).
         assert!(is_text_candidate(&vp("mem:///a.md"), None));
-        // Punto final (extensión vacía) → no.
-        assert!(!is_text_candidate(&vp("mem:///raro."), Some(10)));
+        // Trailing dot (empty extension) → no.
+        assert!(!is_text_candidate(&vp("mem:///weird."), Some(10)));
     }
 
     #[test]
@@ -456,17 +459,17 @@ mod tests {
         assert!((cosine(&q, &[-1.0, 0.0]).unwrap() + 1.0).abs() < 1e-6);
         let mid = cosine(&q, &[1.0, 1.0]).unwrap();
         assert!(mid > 0.0 && mid < 1.0);
-        // dim mismatch y vector nulo ⇒ None (se ignora, no rompe)
+        // dim mismatch and null vector ⇒ None (ignored, doesn't break)
         assert!(cosine(&q, &[1.0]).is_none());
         assert!(cosine(&q, &[0.0, 0.0]).is_none());
-        // no finito ⇒ None (cinturón: jamás un score NaN en el wire)
+        // not finite ⇒ None (belt: never a NaN score on the wire)
         assert!(cosine(&q, &[f32::NAN, 0.0]).is_none());
     }
 
-    /// La norma prehecha da EXACTAMENTE lo mismo que calcularla dentro: si no,
-    /// el ahorro habría cambiado los scores del wire.
+    /// The prenormed norm gives EXACTLY the same as computing it inline: if
+    /// not, the shortcut would have changed the wire's scores.
     #[test]
-    fn la_norma_prehecha_no_cambia_el_score() {
+    fn the_prenormed_norm_does_not_change_the_score() {
         let q = [0.3f32, -1.7, 2.0];
         let n = q.iter().map(|x| x * x).sum::<f32>().sqrt();
         for v in [
@@ -476,7 +479,7 @@ mod tests {
         ] {
             assert_eq!(cosine(&q, v), cosine_prenormed(&q, n, v), "{v:?}");
         }
-        // Y los rechazos siguen siendo rechazos.
+        // And rejections are still rejections.
         assert!(cosine_prenormed(&q, n, &[1.0, 0.0]).is_none());
         assert!(cosine_prenormed(&q, n, &[0.0, 0.0, 0.0]).is_none());
         assert!(cosine_prenormed(&q, n, &[f32::NAN, 0.0, 0.0]).is_none());
@@ -489,54 +492,55 @@ mod tests {
         }
     }
 
-    /// El montículo devuelve lo mismo que ordenar entero y truncar, que es lo
-    /// que hacía antes: la memoria baja, el resultado no se mueve.
+    /// The heap returns the same thing as sorting the whole thing and
+    /// truncating, which is what it used to do: memory goes down, the
+    /// result doesn't move.
     #[test]
-    fn el_monticulo_da_los_mismos_k_que_ordenar_entero() {
-        let todos = vec![
+    fn the_heap_gives_the_same_k_as_sorting_everything() {
+        let all = vec![
             puntuado("mem:///c.txt", 0.10),
             puntuado("mem:///a.txt", 0.90),
             puntuado("mem:///d.txt", 0.50),
             puntuado("mem:///b.txt", 0.99),
             puntuado("mem:///e.txt", -0.20),
         ];
-        let salida = mejores_k(todos.iter().cloned(), 3);
+        let out = mejores_k(all.iter().cloned(), 3);
         assert_eq!(
-            salida.iter().map(|(p, _)| p.to_wire()).collect::<Vec<_>>(),
+            out.iter().map(|(p, _)| p.to_wire()).collect::<Vec<_>>(),
             ["mem:///b.txt", "mem:///a.txt", "mem:///d.txt"]
         );
-        // Pedir más de los que hay devuelve todos, ordenados igual.
-        assert_eq!(mejores_k(todos.into_iter(), 100).len(), 5);
+        // Asking for more than there are returns all of them, in the same order.
+        assert_eq!(mejores_k(all.into_iter(), 100).len(), 5);
     }
 
-    /// A igualdad de score manda el PATH, y por eso la respuesta no depende
-    /// del orden en que `SQLite` devuelva las filas.
+    /// At equal score, the PATH decides, and that's why the answer doesn't
+    /// depend on the order `SQLite` returns the rows in.
     #[test]
-    fn a_igual_score_el_orden_es_estable() {
+    fn at_equal_score_the_order_is_stable() {
         let a = vec![
             puntuado("mem:///z.txt", 0.5),
             puntuado("mem:///a.txt", 0.5),
             puntuado("mem:///m.txt", 0.5),
         ];
-        let mut al_reves = a.clone();
-        al_reves.reverse();
-        let uno = mejores_k(a.into_iter(), 2);
-        let otro = mejores_k(al_reves.into_iter(), 2);
-        assert_eq!(uno, otro);
-        assert_eq!(uno[0].0.to_wire(), "mem:///a.txt");
+        let mut reversed = a.clone();
+        reversed.reverse();
+        let one = mejores_k(a.into_iter(), 2);
+        let other = mejores_k(reversed.into_iter(), 2);
+        assert_eq!(one, other);
+        assert_eq!(one[0].0.to_wire(), "mem:///a.txt");
     }
 
-    /// `k = 0` no puede llegar aquí (`clamp_k` lo sube a 1), pero el
-    /// montículo no debe explotar si algún día llega.
+    /// `k = 0` cannot reach here (`clamp_k` bumps it to 1), but the heap
+    /// must not explode if it ever does.
     #[test]
-    fn k_cero_no_devuelve_nada() {
+    fn zero_k_returns_nothing() {
         assert!(mejores_k([puntuado("mem:///a.txt", 1.0)].into_iter(), 0).is_empty());
     }
 
     #[test]
     fn clamp_k_pins_wire_bounds() {
-        assert_eq!(clamp_k(0), 1, "k=0 se recorta a 1");
-        assert_eq!(clamp_k(1000), 100, "tope superior = INDEX_SEMANTIC_MAX_K");
-        assert_eq!(clamp_k(50), 50, "dentro del rango pasa tal cual");
+        assert_eq!(clamp_k(0), 1, "k=0 is clamped to 1");
+        assert_eq!(clamp_k(1000), 100, "upper bound = INDEX_SEMANTIC_MAX_K");
+        assert_eq!(clamp_k(50), 50, "within range passes through unchanged");
     }
 }

@@ -1,5 +1,5 @@
-//! Codificación wire: los tipos que JSON no transporta tal cual (ADR 0001)
-//! y — desde M2 — el envelope JSON-RPC 2.0 con su framing (ADR 0011).
+//! Wire encoding: the types JSON does not transport as is (ADR 0001) and —
+//! since M2 — the JSON-RPC 2.0 envelope with its framing (ADR 0011).
 
 pub(crate) mod vpath_codec;
 

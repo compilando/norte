@@ -210,12 +210,12 @@ mod tests {
         layer
     }
 
-    /// #113: la ayuda F1 lista la sección de diálogos COMPLETA del efectivo
-    /// `dialog` — incluidos los verbos que los pies de overlay omiten por
-    /// espacio (reordenación del picker de columnas). Única superficie
-    /// in-app sin presupuesto de ancho.
+    /// #113: the F1 help lists the WHOLE dialog section of the `dialog`
+    /// effective — including the verbs the overlay footers omit for space
+    /// (the column picker's reordering). The only in-app surface with no
+    /// width budget.
     #[test]
-    fn la_ayuda_incluye_los_verbos_dialog() {
+    fn help_includes_the_dialog_verbs() {
         let (_, preset) = presets()
             .into_iter()
             .find(|(n, _)| *n == "orthodox")
@@ -232,19 +232,20 @@ mod tests {
         let all = flatten(&lines);
         assert!(
             all.contains(&t("help-section-dialog")),
-            "sección de diálogos presente: {all}"
+            "dialog section present: {all}"
         );
-        // El caso que parió #113: los verbos de reordenación del picker,
-        // filtrados de su pie (101 celdas > 80), aparecen AQUÍ con chord.
+        // The case that gave birth to #113: the picker's reordering verbs,
+        // filtered from its footer (101 cells > 80), appear HERE with a
+        // chord.
         assert!(
             all.contains(&t("dialog-cmd-move-up")),
-            "move-up aprendible desde la ayuda: {all}"
+            "move-up is learnable from help: {all}"
         );
         assert!(
             all.contains(&t("dialog-cmd-sort")),
-            "sort aprendible desde la ayuda: {all}"
+            "sort is learnable from help: {all}"
         );
-        // La nota de que cada overlay soporta su subconjunto acompaña.
+        // The note that each overlay supports its own subset comes along.
         assert!(all.contains(&t("help-dialog-note")));
     }
 
@@ -304,18 +305,17 @@ mod tests {
         build_effectives_sin(preset, "")
     }
 
-    /// Como [`build_effectives_of`], pero fingiendo que el TUI NO implementa
-    /// `ausente`.
+    /// Like [`build_effectives_of`], but pretending the TUI does NOT
+    /// implement `missing`.
     ///
-    /// Existe porque el test de la fila atenuada necesita que haya al menos
-    /// una atadura sin construir, y eso era un accidente: dependía de que
-    /// quedara algún comando del catálogo que ningún frontend hiciera. Al
-    /// cerrarse el último (`pane.copy-path`, #286) el test se quedó sin
-    /// sujeto y se puso rojo afirmando que ya no probaba nada — que es
-    /// exactamente lo que su propia aserción decía que pasaría. Lo que se
-    /// prueba es el PINTADO de una fila atenuada, así que el hueco se fabrica
-    /// en vez de esperarlo.
-    fn build_effectives_sin(preset: &str, ausente: &str) -> (Effective, Effective, Effective) {
+    /// Exists because the dimmed-row test needs at least one unbuilt binding,
+    /// and that used to be an accident: it depended on some catalogue command
+    /// being left that no frontend implemented. Once the last one closed
+    /// (`pane.copy-path`, #286) the test lost its subject and went red
+    /// asserting it no longer tested anything — exactly what its own
+    /// assertion said would happen. What is tested is the PAINTING of a
+    /// dimmed row, so the gap is manufactured instead of waited for.
+    fn build_effectives_sin(preset: &str, missing: &str) -> (Effective, Effective, Effective) {
         let (_, kf) = presets()
             .into_iter()
             .find(|(n, _)| *n == preset)
@@ -324,7 +324,7 @@ mod tests {
             .iter()
             .copied()
             .chain(DIALOG_COMMANDS.iter().copied())
-            .filter(|c| *c != ausente)
+            .filter(|c| *c != missing)
             .collect();
         let browse = Effective::build_for(&kf, &[], &known, Screen::Browse).unwrap();
         let viewer = Effective::build_for(&kf, &[], &known, Screen::Viewer).unwrap();
@@ -339,7 +339,7 @@ mod tests {
     /// already uses, checked here at the LINE'S OWN style
     /// (`Line::styled` sets it there, not per-span).
     #[test]
-    fn un_binding_no_construido_sale_atenuado_y_con_su_razon() {
+    fn an_unbuilt_binding_comes_out_dimmed_with_its_reason() {
         let (browse, viewer, dialog) = build_effectives_sin("total-commander", "pane.pack");
         let lines = build(&browse, &viewer, &dialog);
         let dimmed: Vec<&Line<'_>> = lines
@@ -366,7 +366,7 @@ mod tests {
     /// six lines — plus the dialog note). A `sheet_row_line` call dropped or
     /// doubled anywhere in `build`'s three loops fails here.
     #[test]
-    fn cada_fila_del_sheet_es_exactamente_una_linea_generada() {
+    fn every_sheet_row_is_exactly_one_generated_line() {
         for preset in ["orthodox", "total-commander", "vim", "krusader"] {
             let (browse, viewer, dialog) = build_effectives_of(preset);
             let rows = sheet(&[
@@ -545,9 +545,9 @@ mod tests {
         }
     }
 
-    /// Facts sin ningún impedimento: un fichero suelto en un directorio
-    /// escribible, con el otro pane igual.
-    fn facts_normales() -> norte_frontend::availability::Facts {
+    /// Facts with no impediment at all: a lone file in a writable directory,
+    /// same for the other pane.
+    fn normal_facts() -> norte_frontend::availability::Facts {
         norte_frontend::availability::Facts {
             enterable: true,
             viewable: true,
@@ -561,28 +561,30 @@ mod tests {
         }
     }
 
-    fn resolver_con(facts: norte_frontend::availability::Facts) -> TuiChords {
+    fn resolver_with(facts: norte_frontend::availability::Facts) -> TuiChords {
         orthodox_resolver().with_facts(facts)
     }
 
-    /// Antes de congelar nada, el resolver no atenúa: es el mismo fail-OPEN de
-    /// la tabla (`norte_frontend::availability::verdict`) aplicado a los hechos
-    /// — negar por no haber mirado sería peor que ofrecer y fallar honesto.
+    /// Before freezing anything, the resolver dims nothing: it is the same
+    /// fail-OPEN from the table (`norte_frontend::availability::verdict`)
+    /// applied to the facts — denying for not having looked would be worse
+    /// than offering and failing honestly.
     #[test]
-    fn sin_hechos_congelados_no_se_atenua_nada() {
+    fn with_no_frozen_facts_nothing_is_dimmed() {
         let r = orthodox_resolver();
         assert_eq!(r.availability("pane.copy"), Availability::Available);
         assert_eq!(r.availability("nav.enter"), Availability::Available);
         assert_eq!(r.availability("pane.view"), Availability::Available);
     }
 
-    /// H3d: la fila de un comando que no puede correr AHORA sale atenuada y
-    /// con su razón, en vez de prometer algo que la app va a rechazar.
+    /// H3d: the row of a command that cannot run RIGHT NOW comes out dimmed
+    /// with its reason, instead of promising something the app is going to
+    /// reject.
     #[test]
-    fn dentro_de_un_zip_copiar_hacia_aqui_esta_vetado() {
-        let r = resolver_con(norte_frontend::availability::Facts {
+    fn inside_a_zip_copying_here_is_forbidden() {
+        let r = resolver_with(norte_frontend::availability::Facts {
             dest_read_only: true,
-            ..facts_normales()
+            ..normal_facts()
         });
         assert_eq!(
             r.availability("pane.copy").reason(),
@@ -590,43 +592,44 @@ mod tests {
         );
     }
 
-    /// Y el caso que la fase existe para NO romper: un comando que sí puede
-    /// correr sigue disponible. Una ayuda que atenúa de más es tan inútil
-    /// como una que no atenúa nada.
+    /// And the case this phase exists to NOT break: a command that can run
+    /// stays available. Help that over-dims is as useless as one that dims
+    /// nothing.
     #[test]
-    fn lo_que_puede_correr_sigue_disponible() {
-        let r = resolver_con(facts_normales());
+    fn what_can_run_stays_available() {
+        let r = resolver_with(normal_facts());
         assert!(r.availability("pane.copy").is_available());
         assert!(r.availability("app.quit").is_available());
     }
 
-    /// Los hechos se CONGELAN al abrir: `with_facts` devuelve otro resolver en
-    /// vez de mutar el que la vista está usando, así que una página abierta no
-    /// puede cambiar de veredicto bajo el cursor del lector.
+    /// Facts are FROZEN on open: `with_facts` returns another resolver
+    /// instead of mutating the one the view is using, so an open page cannot
+    /// change verdict under the reader's cursor.
     #[test]
-    fn congelar_los_hechos_no_toca_el_resolver_de_partida() {
+    fn freezing_facts_does_not_touch_the_original_resolver() {
         let before = orthodox_resolver();
         let inside_a_zip = before.with_facts(norte_frontend::availability::Facts {
             source_read_only: true,
-            ..facts_normales()
+            ..normal_facts()
         });
         assert!(!inside_a_zip.availability("pane.delete").is_available());
         assert!(
             before.availability("pane.delete").is_available(),
-            "el resolver de partida siguió intacto"
+            "the original resolver stayed intact"
         );
-        // Y los chords viajan con la copia: congelar hechos no puede costar la
-        // tecla del lector.
+        // And the chords travel with the copy: freezing facts must not cost
+        // the reader's key.
         assert_eq!(inside_a_zip.chord("pane.copy"), before.chord("pane.copy"));
     }
 
-    /// H3e: la fila de un comando de un plugin APAGADO sale atenuada, con su
-    /// razón. Es el fallo de H3d en su forma nueva — sin el brazo `plugin:`,
-    /// la clave cae en el comodín fail-OPEN de la tabla y la fila se enciende
-    /// incondicionalmente sobre un `plugin.run_command` que va a rechazarla.
+    /// H3e: the row of a command from a DISABLED plugin comes out dimmed,
+    /// with its reason. It is H3d's bug in its new form — with no `plugin:`
+    /// arm, the key falls into the table's fail-OPEN wildcard and the row
+    /// lights up unconditionally over a `plugin.run_command` that is going to
+    /// reject it.
     #[test]
-    fn un_comando_de_plugin_apagado_llega_atenuado_a_la_pagina() {
-        let r = resolver_con(facts_normales())
+    fn a_disabled_plugins_command_reaches_the_page_dimmed() {
+        let r = resolver_with(normal_facts())
             .with_plugins(std::collections::BTreeSet::new(), HashMap::new());
         assert_eq!(
             r.availability("plugin:acme.ftp:sync").reason(),
@@ -635,33 +638,32 @@ mod tests {
     }
 
     #[test]
-    fn un_comando_de_plugin_encendido_no_se_atenua() {
-        let r = resolver_con(facts_normales()).with_plugins(
+    fn an_enabled_plugins_command_is_not_dimmed() {
+        let r = resolver_with(normal_facts()).with_plugins(
             ["acme.ftp".to_owned()].into_iter().collect(),
             HashMap::new(),
         );
         assert!(r.availability("plugin:acme.ftp:sync").is_available());
     }
 
-    /// La foto de plugins viaja con el congelado de hechos, y al revés: los
-    /// dos constructores se llaman en secuencia (`main::open_contextual_help`
-    /// congela y luego enchufa la foto) y `App::freeze_help_facts` vuelve a
-    /// congelar en cada refresco de panes. Si `with_facts` no arrastrara el
-    /// conjunto, ese re-congelado apagaría todas las filas de plugin a mitad
-    /// de lectura.
+    /// The plugin snapshot travels with the facts freeze, and vice versa: the
+    /// two constructors are called in sequence (`main::open_contextual_help`
+    /// freezes and then plugs in the snapshot) and `App::freeze_help_facts`
+    /// freezes again on every pane refresh. If `with_facts` did not carry the
+    /// set along, that re-freeze would turn off every plugin row mid-read.
     #[test]
-    fn congelar_los_hechos_no_pierde_la_foto_de_plugins() {
+    fn freezing_facts_does_not_lose_the_plugin_snapshot() {
         let r = orthodox_resolver()
             .with_plugins(
                 ["acme.ftp".to_owned()].into_iter().collect(),
                 HashMap::new(),
             )
-            .with_facts(facts_normales());
+            .with_facts(normal_facts());
         assert!(r.availability("plugin:acme.ftp:sync").is_available());
-        // Y al revés: la foto tomada después conserva los hechos.
-        let r = resolver_con(norte_frontend::availability::Facts {
+        // And vice versa: a snapshot taken afterward keeps the facts.
+        let r = resolver_with(norte_frontend::availability::Facts {
             dest_read_only: true,
-            ..facts_normales()
+            ..normal_facts()
         })
         .with_plugins(std::collections::BTreeSet::new(), HashMap::new());
         assert_eq!(
@@ -670,11 +672,11 @@ mod tests {
         );
     }
 
-    /// Sin foto (un resolver recién construido, o uno que un hot-reload
-    /// rehízo) NINGÚN plugin está activo: ofrecer una fila que
-    /// `plugin.run_command` rechazaría es el peor de los dos errores.
+    /// With no snapshot (a freshly built resolver, or one a hot-reload
+    /// rebuilt) NO plugin is active: offering a row that
+    /// `plugin.run_command` would reject is the worse of the two errors.
     #[test]
-    fn sin_foto_de_plugins_ninguna_fila_de_plugin_se_ofrece() {
+    fn with_no_plugin_snapshot_no_plugin_row_is_offered() {
         let r = orthodox_resolver();
         assert_eq!(
             r.availability("plugin:acme.ftp:sync").reason(),
@@ -682,7 +684,7 @@ mod tests {
         );
     }
 
-    /// Un mapa de títulos con la forma que sale de `plugin.list`.
+    /// A title map shaped like `plugin.list`'s output.
     fn titles(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
             .iter()
@@ -690,145 +692,148 @@ mod tests {
             .collect()
     }
 
-    fn resolver_con_titulos(pairs: &[(&str, &str)]) -> TuiChords {
-        resolver_con(facts_normales()).with_plugins(
+    fn resolver_with_titles(pairs: &[(&str, &str)]) -> TuiChords {
+        resolver_with(normal_facts()).with_plugins(
             ["org.norte.demo".to_owned()].into_iter().collect(),
             titles(pairs),
         )
     }
 
-    /// H3e: la fila de un comando de plugin lleva el NOMBRE que le da el
-    /// manifiesto, no su clave de despacho.
+    /// H3e: a plugin command's row carries the NAME the manifest gives it,
+    /// not its dispatch key.
     ///
-    /// El defecto se veía en pantalla: la página de `org.norte.demo` pintaba
-    /// `plugin:org.norte.demo:greet` donde el manifiesto dice «Greet the
-    /// world», y la paleta —mirando los mismos datos— pintaba el título. La
-    /// cadena es `render_command` → sin chord → `label_or_id` → `label` en
-    /// blanco → repliegue al id, y para una clave `plugin:` ese repliegue está
-    /// GARANTIZADO: el catálogo Fluent de la app no puede tener una entrada
-    /// para un comando que declaró un tercero.
+    /// The defect showed on screen: `org.norte.demo`'s page painted
+    /// `plugin:org.norte.demo:greet` where the manifest says "Greet the
+    /// world", and the palette — looking at the same data — painted the
+    /// title. The chain is `render_command` → no chord → `label_or_id` →
+    /// `label` blank → fallback to the id, and for a `plugin:` key that
+    /// fallback is GUARANTEED: the app's Fluent catalogue cannot have an
+    /// entry for a command a third party declared.
     #[test]
-    fn una_fila_de_plugin_lleva_el_nombre_del_manifiesto() {
-        let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")]);
+    fn a_plugin_row_carries_the_manifests_name() {
+        let r = resolver_with_titles(&[("plugin:org.norte.demo:greet", "Greet the world")]);
         assert_eq!(r.label("plugin:org.norte.demo:greet"), "Greet the world");
     }
 
-    /// Y la marca `{{cmd:…}}` en línea dice LO MISMO: `render_command` y
-    /// `rows_of` comparten `label_or_id` precisamente para que la prosa y la
-    /// fila de debajo no puedan nombrar un comando de dos maneras.
+    /// And the inline `{{cmd:…}}` mark says the SAME thing: `render_command`
+    /// and `rows_of` share `label_or_id` precisely so the prose and the row
+    /// below cannot name a command two different ways.
     #[test]
-    fn la_marca_en_linea_y_la_fila_dicen_lo_mismo() {
-        let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")]);
+    fn the_inline_mark_and_the_row_say_the_same_thing() {
+        let r = resolver_with_titles(&[("plugin:org.norte.demo:greet", "Greet the world")]);
         assert_eq!(
             render_command("plugin:org.norte.demo:greet", &r),
             CommandText::Name("Greet the world".to_owned()),
-            "sin chord (un comando de plugin no está en el keymap) la marca \
-             NOMBRA el comando, y lo nombra como el manifiesto"
+            "with no chord (a plugin command is not in the keymap) the mark \
+             NAMES the command, and names it as the manifest does"
         );
     }
 
-    /// Una clave que la foto no nombra conserva el comportamiento de hoy: se
-    /// repliega al id, JAMÁS a blanco. Una fila con su clave de despacho es
-    /// pobre; una fila sin texto ninguno es peor.
+    /// A key the snapshot does not name keeps today's behavior: it falls back
+    /// to the id, NEVER to blank. A row with its dispatch key is poor; a row
+    /// with no text at all is worse.
     #[test]
-    fn una_clave_sin_titulo_en_la_foto_sigue_pintando_su_id() {
-        let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")]);
+    fn a_key_with_no_title_in_the_snapshot_still_paints_its_id() {
+        let r = resolver_with_titles(&[("plugin:org.norte.demo:greet", "Greet the world")]);
         assert_eq!(
             render_command("plugin:org.norte.demo:otro", &r),
             CommandText::Name("plugin:org.norte.demo:otro".to_owned()),
-            "la fila sigue llevando su clave: pobre, pero legible — una fila \
-             sin texto ninguno sería peor"
+            "the row still carries its key: poor, but readable — a row with \
+             no text at all would be worse"
         );
     }
 
-    /// …y esa clave se entrega ENMASCARADA. El repliegue de
-    /// `norte_help::label_or_id` pinta el id crudo, y un id de plugin es texto
-    /// de tercero: hoy `is_own_command` ya rechaza una clave con controles o
-    /// bidi al PARSEAR, pero `Topic` es un struct con campos públicos y
-    /// `install_plugin_topic` no lo vuelve a comprobar. El pintor no puede
-    /// depender de un filtro que vive tres crates más allá.
+    /// …and that key is delivered MASKED. `norte_help::label_or_id`'s
+    /// fallback paints the raw id, and a plugin id is third-party text: today
+    /// `is_own_command` already rejects a key with controls or bidi at PARSE
+    /// time, but `Topic` is a struct with public fields and
+    /// `install_plugin_topic` does not check it again. The painter cannot
+    /// depend on a filter that lives three crates away.
     #[test]
-    fn una_clave_de_plugin_hostil_no_se_pinta_cruda() {
-        let r = resolver_con_titulos(&[]);
+    fn a_hostile_plugin_key_is_not_painted_raw() {
+        let r = resolver_with_titles(&[]);
         let hostile = "plugin:acme.ftp:\u{202E}x\u{200B}y";
         let painted = r.label(hostile);
         assert!(
             !painted.chars().any(norte_encoding::is_terminal_hazard),
-            "sin peligros de terminal: {painted:?}"
+            "no terminal hazards: {painted:?}"
         );
-        assert!(painted.contains('\u{FFFD}'), "anti-vacuidad: {painted:?}");
+        assert!(painted.contains('\u{FFFD}'), "anti-vacuity: {painted:?}");
         assert_eq!(
             render_command(hostile, &r),
             CommandText::Name(painted),
-            "y es lo que la cadena de `norte-help` acaba nombrando"
+            "and it is what norte-help's chain ends up naming"
         );
-        // Una clave MALFORMADA (que `plugin_of_command` rechaza) también: la
-        // pregunta «¿esto es texto de tercero?» es más laxa que «¿esto
-        // identifica un comando?», a propósito.
+        // A MALFORMED key (which `plugin_of_command` rejects) too: the
+        // question "is this third-party text?" is deliberately looser than
+        // "does this identify a command?".
         let malformed = r.label("plugin:\u{202E}");
         assert!(!malformed.chars().any(norte_encoding::is_terminal_hazard));
     }
 
-    /// Un título hostil llega ENMASCARADO y ACOTADO — el enmascarado ocurre en
-    /// el punto de entrada (`crate::app::plugin_label`), no al pintar, porque
-    /// este resolver entrega sus cadenas directas al pintor.
+    /// A hostile title arrives MASKED and BOUNDED — the masking happens at
+    /// the entry point (`crate::app::plugin_label`), not while painting,
+    /// because this resolver hands its strings straight to the painter.
     #[test]
-    fn un_titulo_hostil_llega_enmascarado_y_acotado() {
+    fn a_hostile_title_arrives_masked_and_bounded() {
         let hostile = format!("Gre\u{202E}et\u{200B}{}", "x".repeat(5_000));
-        let r = resolver_con_titulos(&[(
+        let r = resolver_with_titles(&[(
             "plugin:org.norte.demo:greet",
             &crate::app::plugin_label(&hostile),
         )]);
         let label = r.label("plugin:org.norte.demo:greet");
         assert!(
             !label.chars().any(norte_encoding::is_terminal_hazard),
-            "sin peligros de terminal: {label:?}"
+            "no terminal hazards: {label:?}"
         );
         assert!(
             label.chars().count() <= crate::app::PLUGIN_NAME_WIRE_CAP + 1,
-            "acotado (+1 por la marca de recorte): {} chars",
+            "bounded (+1 for the truncation mark): {} chars",
             label.chars().count()
         );
-        assert!(label.ends_with('…'), "y el recorte se MARCA: {label:?}");
-        assert!(label.contains('\u{FFFD}'), "anti-vacuidad: {label:?}");
+        assert!(
+            label.ends_with('…'),
+            "and the truncation is MARKED: {label:?}"
+        );
+        assert!(label.contains('\u{FFFD}'), "anti-vacuity: {label:?}");
     }
 
-    /// Un comando del binario NO se lee del mapa de plugins: su etiqueta sigue
-    /// saliendo del catálogo Fluent, pase lo que pase en el mapa.
+    /// A binary's own command is NOT read from the plugin map: its label
+    /// still comes from the Fluent catalogue, whatever the map says.
     ///
-    /// `App::freeze_help_plugins` no puede producir una clave así — pone el
-    /// prefijo él mismo — pero `with_plugins` es PÚBLICO y el mapa nace de
-    /// datos que cruzaron el wire, así que la guarda es estructural: la
-    /// etiqueta de un comando del binario no debe poder sobrescribirse ni en
-    /// principio. Este test pina la forma del fallo, no una instancia.
+    /// `App::freeze_help_plugins` cannot produce such a key — it sets the
+    /// prefix itself — but `with_plugins` is PUBLIC and the map is born from
+    /// data that crossed the wire, so the guard is structural: a binary
+    /// command's label must not be overridable even in principle. This test
+    /// pins the shape of the failure, not one instance of it.
     #[test]
-    fn un_comando_del_binario_no_se_lee_del_mapa_de_plugins() {
-        let r = resolver_con_titulos(&[("pane.copy", "IMPOSTOR")]);
+    fn a_binary_command_is_not_read_from_the_plugin_map() {
+        let r = resolver_with_titles(&[("pane.copy", "IMPOSTOR")]);
         assert_eq!(
             r.label("pane.copy"),
             norte_i18n::t_in(norte_i18n::Lang::En, "help-cmd-pane-copy"),
         );
         assert_ne!(r.label("pane.copy"), "IMPOSTOR");
-        // Y una clave `plugin:` MALFORMADA tampoco se lee del mapa:
-        // `plugin_of_command` la rechaza, igual que el brazo de disponibilidad
-        // la atenúa fail-closed. Una sola definición de «esto IDENTIFICA un
-        // comando». Cae al repliegue seguro, que devuelve la propia clave
-        // enmascarada — jamás el título que el mapa pretendía asociarle.
-        let r = resolver_con_titulos(&[("plugin:", "IMPOSTOR"), ("plugin:x", "IMPOSTOR")]);
+        // And a MALFORMED `plugin:` key is not read from the map either:
+        // `plugin_of_command` rejects it, same as the availability arm dims
+        // it fail-closed. One single definition of "this IDENTIFIES a
+        // command". It falls to the safe fallback, which returns the key
+        // itself, masked — never the title the map tried to associate with
+        // it.
+        let r = resolver_with_titles(&[("plugin:", "IMPOSTOR"), ("plugin:x", "IMPOSTOR")]);
         assert_eq!(r.label("plugin:"), "plugin:");
         assert_eq!(r.label("plugin:x"), "plugin:x");
     }
 
-    /// Los títulos viajan con el re-congelado de hechos, como el conjunto de
-    /// activos: el embudo de refresco (`main::after_panes_refresh`) los pisaría
-    /// si no, y una página abierta perdería los nombres de sus filas a mitad de
-    /// lectura.
+    /// Titles travel with the facts re-freeze, like the active set: the
+    /// refresh funnel (`main::after_panes_refresh`) would otherwise override
+    /// them, and an open page would lose its rows' names mid-read.
     #[test]
-    fn recongelar_los_hechos_no_pierde_los_titulos() {
-        let r = resolver_con_titulos(&[("plugin:org.norte.demo:greet", "Greet the world")])
+    fn refreezing_facts_does_not_lose_the_titles() {
+        let r = resolver_with_titles(&[("plugin:org.norte.demo:greet", "Greet the world")])
             .with_facts(norte_frontend::availability::Facts {
                 dest_read_only: true,
-                ..facts_normales()
+                ..normal_facts()
             });
         assert_eq!(r.label("plugin:org.norte.demo:greet"), "Greet the world");
     }

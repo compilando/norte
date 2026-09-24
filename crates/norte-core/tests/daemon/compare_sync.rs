@@ -1,8 +1,8 @@
 use super::*;
 
-// ---------- fs.compare (C6 del plan de comparación de directorios) ----------
+// ---------- fs.compare (C6 of the directory-comparison plan) ----------
 
-/// Params de `fs.compare` con los criterios por defecto (sin hash).
+/// `fs.compare` params with the default criteria (no hash).
 pub(super) fn compare_params(left: &str, right: &str) -> methods::FsCompareParams {
     methods::FsCompareParams {
         left: vp(left),
@@ -15,10 +15,10 @@ pub(super) fn compare_params(left: &str, right: &str) -> methods::FsCompareParam
     }
 }
 
-/// Drena `compare.rows` + `task.progress` de una comparación hasta su
-/// terminal. Mismo criterio que [`drain_search`]: tras el terminal aún se
-/// vacía brevemente lo ya encolado (las dos bombas son tasks distintas).
-/// Devuelve los LOTES y el estado terminal.
+/// Drains `compare.rows` + `task.progress` of a comparison up to its
+/// terminal. Same criterion as [`drain_search`]: after the terminal,
+/// whatever was already queued is still briefly drained (the two pumps are
+/// different tasks). Returns the BATCHES and the terminal state.
 pub(super) async fn drain_compare(
     c: &mut Client,
     task_id: u64,
@@ -35,7 +35,7 @@ pub(super) async fn drain_compare(
             Ok(Some(n)) => n,
             Ok(None) => break,
             Err(_) => {
-                assert!(terminal.is_some(), "timeout esperando la comparación");
+                assert!(terminal.is_some(), "timeout waiting for the comparison");
                 break;
             }
         };
@@ -53,16 +53,13 @@ pub(super) async fn drain_compare(
             }
         }
     }
-    (
-        batches,
-        terminal.expect("estado terminal de la comparación"),
-    )
+    (batches, terminal.expect("the comparison's terminal state"))
 }
 
-/// Round-trip por el socket: las filas llegan en lotes ACOTADOS por
-/// `COMPARE_ROWS_MAX_BATCH`, coalescidos, y la Task acaba `Completed`.
+/// Round-trip over the socket: rows arrive in batches CAPPED by
+/// `COMPARE_ROWS_MAX_BATCH`, coalesced, and the Task ends up `Completed`.
 #[tokio::test]
-async fn fs_compare_round_trip_en_lotes_acotados() {
+async fn fs_compare_round_trip_in_capped_batches() {
     let d = spawn_daemon(None).await;
     d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
     d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
@@ -82,25 +79,25 @@ async fn fs_compare_round_trip_en_lotes_acotados() {
         batches
             .iter()
             .all(|b| b.rows.len() <= methods::COMPARE_ROWS_MAX_BATCH),
-        "lote por encima del tope"
+        "batch above the cap"
     );
     let rows: usize = batches.iter().map(|b| b.rows.len()).sum();
-    assert_eq!(rows, 600, "una fila por pareja");
-    assert!(batches.len() < 600, "una frame por fila no es coalescer");
+    assert_eq!(rows, 600, "one row per pair");
+    assert!(batches.len() < 600, "one frame per row is not coalescing");
     assert!(
         batches
             .iter()
             .flat_map(|b| &b.rows)
             .all(|r| r.sides_are_consistent() && r.reason_is_consistent()),
-        "el daemon no puede emitir filas incoherentes"
+        "the daemon cannot emit inconsistent rows"
     );
 }
 
-/// `follow_symlinks: true` es `-32602`: el motor acepta el campo y lo IGNORA,
-/// y servir en silencio un recorrido distinto del pedido es peor que no
-/// ofrecerlo.
+/// `follow_symlinks: true` is `-32602`: the engine accepts the field and
+/// IGNORES it, and silently serving a different walk than the one requested
+/// is worse than not offering it.
 #[tokio::test]
-async fn fs_compare_follow_symlinks_es_invalid_params() {
+async fn fs_compare_follow_symlinks_is_invalid_params() {
     let d = spawn_daemon(None).await;
     d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
     d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
@@ -111,43 +108,44 @@ async fn fs_compare_follow_symlinks_es_invalid_params() {
     let err = c
         .call::<_, FsTaskResult>(methods::FS_COMPARE, &p)
         .await
-        .expect_err("rechazada");
+        .expect_err("rejected");
     match err {
         ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS),
-        other => panic!("esperaba Rpc INVALID_PARAMS, fue {other:?}"),
+        other => panic!("expected Rpc INVALID_PARAMS, got {other:?}"),
     }
 }
 
-/// Un lado MAL ESCRITO es `-32602` por el socket, no «ningún lado».
+/// A MISSPELLED side is `-32602` over the socket, not "no side".
 ///
-/// Quien lo rechaza es el TIPO (`DescendSide` no tiene `serde(other)`), no un
-/// `if` del handler: `parse_params` no llega a construir la petición. El test
-/// vive aquí igualmente porque lo que hay que garantizar es la respuesta que ve
-/// el cliente, y porque si alguien ablandara el tipo a `Side` —que sí degrada—
-/// este test es el que se pone rojo. `"unknown"` va en la lista a propósito: es
-/// el valor que `Side` aceptaría y que significa «ningún lado».
+/// What rejects it is the TYPE (`DescendSide` has no `serde(other)`), not a
+/// handler `if`: `parse_params` never gets to build the request. The test
+/// still lives here because what has to be guaranteed is the response the
+/// client sees, and because if someone softened the type to `Side` — which
+/// does degrade — this is the test that would go red. `"unknown"` is in the
+/// list on purpose: it is the value `Side` would accept and that means "no
+/// side".
 #[tokio::test]
-async fn fs_compare_un_lado_mal_escrito_es_invalid_params() {
+async fn fs_compare_a_misspelled_side_is_invalid_params() {
     let d = spawn_daemon(None).await;
     d.mem.mkdir(&vp("mem:///l")).await.expect("mkdir l");
     d.mem.mkdir(&vp("mem:///r")).await.expect("mkdir r");
     let c = connected_client(&d).await;
 
-    for malo in ["lft", "unknown", "both"] {
+    for bad in ["lft", "unknown", "both"] {
         let err = c
             .call::<_, FsTaskResult>(
                 methods::FS_COMPARE,
                 &serde_json::json!({
                     "left": "mem:///l",
                     "right": "mem:///r",
-                    "descend_orphans": malo,
+                    "descend_orphans": bad,
                 }),
             )
             .await
-            .expect_err("rechazada");
+            .expect_err("rejected");
         match err {
-            ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS, "{malo}"),
-            other => panic!("esperaba Rpc INVALID_PARAMS para {malo}, fue {other:?}"),
+            ClientError::Rpc(rpc) => assert_eq!(rpc.code, codes::INVALID_PARAMS, "{bad}"),
+            other => panic!("expected Rpc INVALID_PARAMS for {bad}, got {other:?}"),
         }
     }
 }
@@ -165,12 +163,13 @@ pub(super) fn sync_params(source: &str, dest: &str) -> methods::SyncPlanParams {
     }
 }
 
-/// Drena `sync.steps` + `sync.plan_done` + `task.progress` de un plan hasta su
-/// terminal. Devuelve los lotes EN ORDEN, el cierre (si lo hubo) y el estado.
+/// Drains `sync.steps` + `sync.plan_done` + `task.progress` of a plan up to
+/// its terminal. Returns the batches IN ORDER, the close (if there was one)
+/// and the state.
 ///
-/// El orden importa y por eso no se descarta: `sync.plan_done` CIERRA el plan, y
-/// un lote después de él sería un cliente aprobando un hash de un plan que
-/// todavía estaba llegando.
+/// The order matters and that is why it is not discarded: `sync.plan_done`
+/// CLOSES the plan, and a batch after it would be a client approving the hash
+/// of a plan that was still arriving.
 pub(super) async fn drain_sync(
     c: &mut Client,
     task_id: u64,
@@ -182,14 +181,14 @@ pub(super) async fn drain_sync(
     let mut batches = Vec::new();
     let mut done: Option<methods::SyncPlanDone> = None;
     let mut terminal = None;
-    let mut progreso = None;
+    let mut progress = None;
     loop {
         let next = tokio::time::timeout(Duration::from_secs(10), c.notification()).await;
         let n = match next {
             Ok(Some(n)) => n,
             Ok(None) => break,
             Err(_) => {
-                assert!(terminal.is_some(), "timeout esperando el plan");
+                assert!(terminal.is_some(), "timeout waiting for the plan");
                 break;
             }
         };
@@ -199,7 +198,7 @@ pub(super) async fn drain_sync(
             if b.task_id.get() == task_id {
                 assert!(
                     done.is_none(),
-                    "un sync.steps DESPUÉS del sync.plan_done: el cierre tiene que ser el último"
+                    "a sync.steps AFTER sync.plan_done: the close has to be last"
                 );
                 batches.push(b);
             }
@@ -207,44 +206,45 @@ pub(super) async fn drain_sync(
             let d: methods::SyncPlanDone =
                 serde_json::from_value(n.params.expect("params")).expect("SyncPlanDone");
             if d.task_id.get() == task_id {
-                assert!(done.is_none(), "dos cierres para un plan");
+                assert!(done.is_none(), "two closes for one plan");
                 done = Some(d);
             }
         } else if n.method == methods::TASK_PROGRESS {
             let p: TaskProgress =
                 serde_json::from_value(n.params.expect("params")).expect("TaskProgress");
             if p.task_id.get() == task_id && p.state.is_terminal() {
-                // El contrato de progreso de una Task `SyncPlan`, tal y como lo
-                // publica su rustdoc: cuenta PASOS y no bytes, y `entries_done`
-                // es la ÚNICA señal con la que un cliente detecta un `sync.steps`
-                // perdido. Sin esto, las dos frases son solo prosa.
+                // The progress contract of a `SyncPlan` Task, as its rustdoc
+                // publishes it: counts STEPS and not bytes, and
+                // `entries_done` is the ONLY signal a client has to detect a
+                // lost `sync.steps`. Without this, the two sentences are
+                // just prose.
                 assert_eq!(p.kind, norte_proto::TaskKind::SyncPlan);
-                assert_eq!(p.bytes_done, 0, "planificar no escribe un byte");
-                assert!(p.current.is_none(), "ninguna ruta al broadcast");
-                progreso = Some(p.entries_done);
+                assert_eq!(p.bytes_done, 0, "planning does not write a byte");
+                assert!(p.current.is_none(), "no path in the broadcast");
+                progress = Some(p.entries_done);
                 terminal = Some(p.state);
-                // El cierre puede ir DETRÁS del terminal: se sigue drenando
-                // hasta que el timeout corto de arriba dice que no queda nada.
+                // The close can come AFTER the terminal: draining continues
+                // until the short timeout above says nothing is left.
             }
         }
     }
-    if let (Some(entries), Some(TaskState::Completed)) = (progreso, terminal.as_ref()) {
-        let vistos: u64 = batches
+    if let (Some(entries), Some(TaskState::Completed)) = (progress, terminal.as_ref()) {
+        let seen: u64 = batches
             .iter()
-            .map(|b| u64::try_from(b.steps.len()).expect("cabe"))
+            .map(|b| u64::try_from(b.steps.len()).expect("fits"))
             .sum();
         assert_eq!(
-            entries, vistos,
-            "entries_done tiene que cuadrar con los pasos entregados"
+            entries, seen,
+            "entries_done has to match the delivered steps"
         );
     }
-    (batches, done, terminal.expect("estado terminal del plan"))
+    (batches, done, terminal.expect("the plan's terminal state"))
 }
 
-/// Round-trip por el socket: los pasos llegan en lotes acotados y el
-/// `sync.plan_done` los CIERRA — nunca al revés.
+/// Round-trip over the socket: the steps arrive in capped batches and
+/// `sync.plan_done` CLOSES them — never the other way around.
 #[tokio::test]
-async fn sync_plan_round_trip_pasos_y_despues_el_cierre() {
+async fn sync_plan_round_trip_steps_and_then_the_close() {
     let d = spawn_daemon(None).await;
     d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
     d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
@@ -263,21 +263,21 @@ async fn sync_plan_round_trip_pasos_y_despues_el_cierre() {
         batches
             .iter()
             .all(|b| b.steps.len() <= methods::SYNC_STEPS_MAX_BATCH),
-        "lote por encima del tope"
+        "batch above the cap"
     );
     let steps: usize = batches.iter().map(|b| b.steps.len()).sum();
     assert_eq!(steps, 600);
-    assert!(batches.len() < 600, "una frame por paso no es coalescer");
-    let done = done.expect("el plan cerró");
+    assert!(batches.len() < 600, "one frame per step is not coalescing");
+    let done = done.expect("the plan closed");
     assert_eq!(done.counts.copy, 600);
     assert!(done.executable);
     assert_eq!(done.plan_hash.as_str().len(), methods::PLAN_HASH_LEN);
 }
 
-/// Los dos campos de `compare` que no son del llamante, y el tope de `include`:
-/// `-32602` SIN crear Task.
+/// The two `compare` fields that are not the caller's, and the `include`
+/// cap: `-32602` WITHOUT creating a Task.
 #[tokio::test]
-async fn sync_plan_params_que_no_son_del_llamante_son_invalid_params() {
+async fn sync_plan_params_that_are_not_the_callers_are_invalid_params() {
     let d = spawn_daemon(None).await;
     d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
     d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
@@ -299,10 +299,10 @@ async fn sync_plan_params_que_no_son_del_llamante_son_invalid_params() {
     assert_invalid_params(c.call::<_, FsTaskResult>(methods::SYNC_PLAN, &p).await);
 }
 
-/// Raíces solapadas: categoría del wire (`OverlappingRoots`), no `-32602`, y con
-/// la relación dentro — un frontend pinta las tres distinto.
+/// Overlapping roots: a wire category (`OverlappingRoots`), not `-32602`, and
+/// with the relation inside — a frontend paints the three differently.
 #[tokio::test]
-async fn sync_plan_raices_solapadas_viajan_con_su_relacion() {
+async fn sync_plan_overlapping_roots_travel_with_their_relation() {
     let d = spawn_daemon(None).await;
     d.mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
     d.mem.mkdir(&vp("mem:///a/sub")).await.expect("mkdir sub");
@@ -311,7 +311,7 @@ async fn sync_plan_raices_solapadas_viajan_con_su_relacion() {
     let err = c
         .call::<_, FsTaskResult>(methods::SYNC_PLAN, &sync_params("mem:///a", "mem:///a/sub"))
         .await
-        .expect_err("solapadas");
+        .expect_err("overlapping");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(
@@ -320,77 +320,74 @@ async fn sync_plan_raices_solapadas_viajan_con_su_relacion() {
                     relation: norte_proto::RootOverlap::DestInsideSource
                 })
             ),
-            "fue {:?}",
+            "was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Un hash que este daemon no emitió jamás es `PlanStale`: no existe plan vivo
-/// con ese nombre, y esa es la única cosa que la respuesta dice.
+/// A hash this daemon never issued is `PlanStale`: no live plan exists with
+/// that name, and that is the only thing the answer says.
 #[tokio::test]
-async fn sync_apply_de_un_hash_que_nadie_emitio_es_plan_stale() {
+async fn sync_apply_of_a_hash_nobody_issued_is_plan_stale() {
     let d = spawn_daemon_journal().await;
     let c = connected_client(&d).await;
 
-    let inventado =
-        methods::PlanHash::parse(&"0".repeat(methods::PLAN_HASH_LEN)).expect("hex válido");
+    let made_up = methods::PlanHash::parse(&"0".repeat(methods::PLAN_HASH_LEN)).expect("valid hex");
     let err = c
         .call::<_, FsTaskResult>(
             methods::SYNC_APPLY,
-            &methods::SyncApplyParams {
-                plan_hash: inventado,
-            },
+            &methods::SyncApplyParams { plan_hash: made_up },
         )
         .await
-        .expect_err("nadie emitió ese plan");
+        .expect_err("nobody issued that plan");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PlanStale)),
-            "PlanStale, fue {:?}",
+            "PlanStale, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Un hash MALFORMADO muere en el deserializador (`-32602`) y no se disfraza de
-/// `PlanStale`: «esto no es un hash» y «el mundo se movió» son hechos distintos,
-/// y contestar el segundo a quien mandó el primero le miente sobre el estado del
-/// mundo.
+/// A MALFORMED hash dies in the deserializer (`-32602`) and does not disguise
+/// itself as `PlanStale`: "this is not a hash" and "the world moved" are
+/// different facts, and answering the second to whoever sent the first lies
+/// to it about the state of the world.
 #[tokio::test]
-async fn sync_apply_con_hash_malformado_es_invalid_params_y_no_plan_stale() {
+async fn sync_apply_with_a_malformed_hash_is_invalid_params_and_not_plan_stale() {
     let d = spawn_daemon_journal().await;
     let c = connected_client(&d).await;
 
-    // Ni hexadecimal, ni de la longitud correcta, ni en minúsculas: las tres
-    // formas de no ser un `PlanHash`.
-    for basura in [
+    // Not hexadecimal, not the right length, not lowercase: the three ways
+    // of not being a `PlanHash`.
+    for garbage in [
         serde_json::json!({"plan_hash": "nope"}),
         serde_json::json!({"plan_hash": "0".repeat(methods::PLAN_HASH_LEN - 1)}),
         serde_json::json!({"plan_hash": "A".repeat(methods::PLAN_HASH_LEN)}),
         serde_json::json!({}),
     ] {
         assert_invalid_params(
-            c.call::<_, FsTaskResult>(methods::SYNC_APPLY, &basura)
+            c.call::<_, FsTaskResult>(methods::SYNC_APPLY, &garbage)
                 .await,
         );
     }
 }
 
-/// El plan de OTRA conexión es `PlanStale`, no una categoría propia: el plan
-/// está atado a la conexión que lo produjo, y contestar algo distinto de «no hay
-/// plan vivo con ese hash» construiría un oráculo de existencia sobre los planes
-/// ajenos — que son autorizaciones de escritura.
+/// ANOTHER connection's plan is `PlanStale`, not its own category: the plan
+/// is tied to the connection that produced it, and answering anything other
+/// than "no live plan with that hash" would build an existence oracle over
+/// other connections' plans — which are write authorizations.
 #[tokio::test]
-async fn sync_apply_de_un_plan_de_otra_conexion_es_plan_stale() {
+async fn sync_apply_of_another_connections_plan_is_plan_stale() {
     let d = spawn_daemon_journal().await;
-    let mut duena = connected_client(&d).await;
-    let done = plan_sobre(&d, &mut duena).await;
-    let ajena = connected_client(&d).await;
+    let mut owner = connected_client(&d).await;
+    let done = plan_over(&d, &mut owner).await;
+    let other = connected_client(&d).await;
 
-    let err = ajena
+    let err = other
         .call::<_, FsTaskResult>(
             methods::SYNC_APPLY,
             &methods::SyncApplyParams {
@@ -398,17 +395,18 @@ async fn sync_apply_de_un_plan_de_otra_conexion_es_plan_stale() {
             },
         )
         .await
-        .expect_err("el plan no es suyo");
+        .expect_err("the plan is not theirs");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PlanStale)),
-            "PlanStale, fue {:?}",
+            "PlanStale, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
-    // Y la dueña sí puede: el rechazo era de la conexión, no del plan.
-    let _: FsTaskResult = duena
+    // And the owner CAN: the rejection was about the connection, not the
+    // plan.
+    let _: FsTaskResult = owner
         .call(
             methods::SYNC_APPLY,
             &methods::SyncApplyParams {
@@ -416,17 +414,17 @@ async fn sync_apply_de_un_plan_de_otra_conexion_es_plan_stale() {
             },
         )
         .await
-        .expect("su propio plan sí");
+        .expect("its own plan does work");
 }
 
-/// Un plan se aprueba UNA vez: al terminar la aplicación —en cualquier estado—
-/// el plan retenido se ha ido, así que el mismo hash ya no ejecuta nada. Sin
-/// esto, un hash filtrado sería una autorización de escritura reutilizable.
+/// A plan is approved ONCE: once the application finishes — in any state —
+/// the retained plan is gone, so the same hash no longer runs anything.
+/// Without this, a leaked hash would be a reusable write authorization.
 #[tokio::test]
-async fn el_spool_se_gasta_en_cuanto_la_aplicacion_termina() {
+async fn the_spool_is_spent_as_soon_as_the_application_finishes() {
     let d = spawn_daemon_journal().await;
     let mut c = connected_client(&d).await;
-    let done = plan_sobre(&d, &mut c).await;
+    let done = plan_over(&d, &mut c).await;
 
     let task: FsTaskResult = c
         .call(
@@ -436,7 +434,7 @@ async fn el_spool_se_gasta_en_cuanto_la_aplicacion_termina() {
             },
         )
         .await
-        .expect("sync.apply aceptado");
+        .expect("sync.apply accepted");
     assert_eq!(wait_terminal(&c, task.task_id).await, TaskState::Completed);
 
     let err = c
@@ -447,13 +445,13 @@ async fn el_spool_se_gasta_en_cuanto_la_aplicacion_termina() {
             },
         )
         .await
-        .expect_err("un plan se aprueba una vez");
+        .expect_err("a plan is approved once");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PlanStale)),
-            "PlanStale, fue {:?}",
+            "PlanStale, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }

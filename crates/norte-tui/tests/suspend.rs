@@ -123,10 +123,10 @@ fn every_hostile_name_survives_as_a_cwd_and_is_masked_on_screen() {
         // (a) The bytes reach `current_dir` untouched — no lossy hop.
         let native = norte_vfs_local::vpath_to_native(&dir)
             .unwrap_or_else(|e| panic!("{}: local path expected: {e}", name.id));
-        let esperado: Vec<u8> = b"/tmp/".iter().copied().chain(name.bytes.clone()).collect();
+        let expected: Vec<u8> = b"/tmp/".iter().copied().chain(name.bytes.clone()).collect();
         assert_eq!(
             native.as_os_str().as_bytes(),
-            esperado.as_slice(),
+            expected.as_slice(),
             "{}: the cwd must be the name's bytes, not a decoding of them ({})",
             name.id,
             name.why
@@ -144,7 +144,7 @@ fn every_hostile_name_survives_as_a_cwd_and_is_masked_on_screen() {
         // (c) What a human is shown carries no terminal hazard. This is the
         //     line `msg-shell-remote` interpolates, and it lands on a
         //     terminal norte has already released.
-        let (text, _hostil) = norte_frontend::path_display(&dir);
+        let (text, _hostile) = norte_frontend::path_display(&dir);
         assert!(
             !text.chars().any(norte_encoding::is_terminal_hazard),
             "{}: a hazard reached the status bar: {text:?} ({})",

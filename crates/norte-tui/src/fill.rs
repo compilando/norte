@@ -1,18 +1,20 @@
-//! El canal por el que un listado paginado va llegando, uno por HUECO.
+//! The channel a paginated listing arrives through, one per SLOT.
 //!
-//! Un dir de 100k entradas no se lista de una vez: el proveedor lo va dando y
-//! un drenador coalesce lotes de [`FILL_BATCH`] —o parciales cada
-//! [`FILL_INTERVAL`], para que un listado remoto lento se vea avanzar— y los
-//! manda por este canal. [`apply_fill_msg`] es quien los aplica.
+//! A dir with 100k entries is not listed all at once: the provider hands it
+//! out gradually and a drainer coalesces batches of [`FILL_BATCH`] — or
+//! partial ones every [`FILL_INTERVAL`], so a slow remote listing is seen to
+//! progress — and sends them over this channel. [`apply_fill_msg`] is who
+//! applies them.
 //!
-//! Un `Fill` por hueco y no uno global: con un solo hueco, cualquier `cd` que
-//! empieza un listado nuevo dejaba colgado a quien estuviera drenando — y
-//! `pane.mirror` es UNA tecla sin cambio de foco, así que el pane que se queda
-//! a medias bajo un «cargando…» permanente es justo el que se está mirando.
+//! One `Fill` per slot and not a global one: with a single slot, any `cd`
+//! that starts a new listing dropped whoever was draining — and
+//! `pane.mirror` is ONE keystroke with no change of focus, so the pane left
+//! half-listed under a permanent "loading…" is exactly the one being looked
+//! at.
 //!
-//! Vivía en el root del binario `ntc`, un crate DISTINTO de esta lib, repartido
-//! en cuatro sitios: las dos constantes arriba, los dos tipos en medio, y
-//! `spawn_fill` a diez mil líneas de distancia.
+//! Used to live in the `ntc` binary's root, a crate DIFFERENT from this lib,
+//! spread across four places: the two constants above, the two types in the
+//! middle, and `spawn_fill` ten thousand lines away.
 
 use futures::StreamExt as _;
 use norte_core::backend::EntryStream;
@@ -23,22 +25,24 @@ use norte_proto::Entry;
 use crate::app::App;
 use crate::probes::Probed;
 
-/// Lote que el drenador coalesce antes de enviar (evita un re-sort por
-/// entrada; el re-sort completo lo hace [`crate::app::Pane::extend_listing`]). Un dir de
-/// 100k son ~24 lotes ⇒ ~24 re-sorts de tamaño creciente durante el fill; el
-/// merge incremental (claves persistidas) es la optimización diferida a issue.
+/// Batch the drainer coalesces before sending (avoids a re-sort per entry;
+/// the full re-sort is done by [`crate::app::Pane::extend_listing`]). A dir
+/// of 100k is ~24 batches ⇒ ~24 growing re-sorts during the fill; the
+/// incremental merge (persisted keys) is the optimization deferred to an
+/// issue.
 pub const FILL_BATCH: usize = 4096;
-/// El drenador vacía un lote PARCIAL cada tanto (además de al llenarlo): en un
-/// listado remoto lento (páginas por RTT) el usuario ve progreso y el
-/// contador `cargando… (n)` avanza en vez de saltar de 4096 en 4096.
+/// The drainer flushes a PARTIAL batch every so often (besides when it
+/// fills up): on a slow remote listing (pages per RTT) the user sees
+/// progress and the "loading… (n)" counter advances instead of jumping by
+/// 4096 at a time.
 pub const FILL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
-/// Mensaje del drenador de un listado paginado al run loop.
+/// Message from a paginated listing's drainer to the run loop.
 pub enum FillMsg {
-    /// Un lote más de entradas para el pane.
+    /// One more batch of entries for the pane.
     Batch(Vec<Entry>),
-    /// El listado se cortó a mitad (error del provider/daemon): no es
-    /// silencioso (la UI avisa y limpia el `loading`).
+    /// The listing was cut off midway (a provider/daemon error): not
+    /// silent (the UI warns and clears the `loading` state).
     Failed,
 }
 
@@ -58,17 +62,17 @@ pub enum FillMsg {
 /// change of focus, so the pane left half-listed under a permanent
 /// «cargando…» is the one the reader is looking at.
 pub struct Fill {
-    /// Los lotes que el drenador va coalesciendo. Soltar el `Fill` cierra el
-    /// canal, que es cómo se cancela un listado a medias (regla 3).
+    /// The batches the drainer is coalescing. Dropping the `Fill` closes the
+    /// channel, which is how a half-done listing gets cancelled (rule 3).
     pub rx: tokio::sync::mpsc::Receiver<FillMsg>,
 }
 
-/// Núcleo del ritual post-refresh (#117 review, #118): suelta el drenador
-/// paginado SOLO si su pane fue re-listado de verdad (soltarlo a ciegas tras
-/// un Esc a medias dejaría el pane colgado en `loading` para siempre, #78) e
-/// invalida la dedup de la sonda #52 (un listado nuevo re-lazifica las
-/// entries). Cuerpo ÚNICO para `after_panes_refresh` (run loop) y el brazo
-/// `Cd::Refreshed` de `apply_cd` (Ctrl+R vía `dispatch`).
+/// Core of the post-refresh ritual (#117 review, #118): releases the
+/// paginated drainer ONLY if its pane was really re-listed (releasing it
+/// blindly after a half-done Esc would leave the pane hanging in `loading`
+/// forever, #78) and invalidates probe #52's dedup (a new listing re-lazifies
+/// the entries). SINGLE body for `after_panes_refresh` (run loop) and the
+/// `Cd::Refreshed` arm of `apply_cd` (Ctrl+R via `dispatch`).
 pub fn release_refreshed_fill(
     panes: &crate::panel::PaneSlots,
     refreshed: &[bool],
@@ -84,18 +88,18 @@ pub fn release_refreshed_fill(
     last_probed.clear();
 }
 
-/// Aplica un mensaje del drenador de paginación (ADR 0017) al pane. Si el pane
-/// pasó a modo virtual de búsqueda (Alt+F7 sobre un dir aún paginándose,
-/// review MAJOR T6), el fill quedó OBSOLETO —`begin_search` vació las
-/// entries— y su drenador alimentaría el listado REAL como si fueran hits (el
-/// propio root de la búsqueda colándose entre resultados): se suelta el fill y
-/// se DESCARTA el lote. Cinturón simétrico al drain-guard de `drain_search`;
-/// el tirante es soltar el fill en `launch_search`.
+/// Applies a pagination drainer's message (ADR 0017) to the pane. If the pane
+/// switched to virtual search mode (Alt+F7 over a dir still paginating,
+/// review MAJOR T6), the fill became STALE — `begin_search` emptied the
+/// entries — and its drainer would feed the REAL listing as if they were hits
+/// (the search's own root sneaking in among the results): the fill is
+/// released and the batch is DISCARDED. A belt symmetric to `drain_search`'s
+/// drain-guard; the suspender is releasing the fill in `launch_search`.
 pub fn apply_fill_msg(app: &mut App, fill: &mut BySlot<Fill>, slot: SlotId, msg: Option<FillMsg>) {
-    // El lote va a SU hueco, no a una posición. Si ese hueco ya no existe
-    // —se cerró el panel, se cerró la pestaña— el lote se TIRA: aplicarlo a
-    // quien ocupe ahora esa posición sería pintar en un listado las entradas
-    // de otro directorio, y nada lo diría.
+    // The batch goes to ITS slot, not to a position. If that slot no longer
+    // exists — the pane was closed, the tab was closed — the batch is
+    // DROPPED: applying it to whoever now occupies that position would paint
+    // another directory's entries into a listing, and nothing would say so.
     let Some(pane) = app.panes.browser_mut(slot) else {
         fill.remove(slot);
         return;
@@ -118,21 +122,22 @@ pub fn apply_fill_msg(app: &mut App, fill: &mut BySlot<Fill>, slot: SlotId, msg:
     }
 }
 
-/// Arranca el drenador del RESTO del listado: envía lotes coalescidos al run
-/// loop, que los aplica con [`crate::app::Pane::extend_listing`]. Soltar el `rx` (un cd
-/// nuevo DEL MISMO PANE) mata el drenador en su próximo envío → suelta el
-/// stream (regla 3). Sin `pane`: quién lo recibe lo decide el hueco donde el
-/// run loop lo archive (ver [`Fill`]).
+/// Starts the drainer for the REST of the listing: sends coalesced batches to
+/// the run loop, which applies them with [`crate::app::Pane::extend_listing`].
+/// Dropping the `rx` (a new cd for the SAME PANE) kills the drainer on its
+/// next send → releases the stream (rule 3). No `pane`: who receives it is
+/// decided by the slot the run loop files it under (see [`Fill`]).
 #[must_use]
 pub fn spawn_fill(mut stream: EntryStream) -> Fill {
-    // Bounded a 1: el drenador no corre por delante del run loop más de un
-    // lote (backpressure); el pico de memoria es un lote, no todo el dir.
+    // Bounded at 1: the drainer does not run more than one batch ahead of the
+    // run loop (backpressure); the memory peak is one batch, not the whole
+    // dir.
     let (tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
     tokio::spawn(async move {
         let mut batch = Vec::with_capacity(FILL_BATCH);
         let mut flush = tokio::time::interval(FILL_INTERVAL);
         flush.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        flush.tick().await; // consume el tick inmediato del interval
+        flush.tick().await; // consumes the interval's immediate tick
         loop {
             tokio::select! {
                 item = stream.next() => match item {
@@ -144,7 +149,7 @@ pub fn spawn_fill(mut stream: EntryStream) -> Fill {
                                 .await
                                 .is_err()
                         {
-                            return; // el run loop soltó el rx (cd nuevo)
+                            return; // the run loop dropped the rx (new cd)
                         }
                     }
                     Some(Err(_)) => {
@@ -155,11 +160,11 @@ pub fn spawn_fill(mut stream: EntryStream) -> Fill {
                         if !batch.is_empty() {
                             let _ = tx.send(FillMsg::Batch(batch)).await;
                         }
-                        return; // fin: drop(tx) cierra el canal → finish_listing
+                        return; // done: drop(tx) closes the channel → finish_listing
                     }
                 },
                 _ = flush.tick() => {
-                    // Vacía un lote PARCIAL (progreso en streams lentos).
+                    // Flushes a PARTIAL batch (progress on slow streams).
                     if !batch.is_empty()
                         && tx
                             .send(FillMsg::Batch(std::mem::take(&mut batch)))
@@ -182,7 +187,7 @@ mod search_fill_tests {
     use norte_proto::{Entry, EntryKind, Segment, VPath};
 
     fn vp(w: &str) -> VPath {
-        VPath::parse(w).expect("wire de test")
+        VPath::parse(w).expect("test wire")
     }
 
     fn file(dir: &VPath, name: &str) -> Entry {
@@ -195,24 +200,25 @@ mod search_fill_tests {
         }
     }
 
-    /// review MAJOR T6: un dir grande PAGINÁNDOSE (fill vivo) + `Alt+F7` sobre
-    /// ese pane → `begin_search` lo marca virtual y lo vacía; un lote POSTERIOR
-    /// del drenador del listado REAL jamás debe entrar en el pane virtual (se
-    /// colaría como hit — el propio root de la búsqueda entre los resultados).
+    /// review MAJOR T6: a large dir still PAGINATING (live fill) + `Alt+F7`
+    /// on that pane → `begin_search` marks it virtual and empties it; a LATER
+    /// batch from the REAL listing's drainer must never enter the virtual
+    /// pane (it would sneak in as a hit — the search's own root among the
+    /// results).
     #[test]
-    fn fill_no_contamina_el_pane_virtual() {
+    fn fill_does_not_contaminate_the_virtual_pane() {
         let root = vp("file:///d");
         let mut app = App::new(
             Pane::new(root.clone(), vec![]),
             Pane::new(root.clone(), vec![]),
         );
-        // Relleno paginado vivo del pane 0 (dir aún cargándose).
+        // Live paginated fill for pane 0 (dir still loading).
         let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
         let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
         fill.insert(crate::panel::SLOT_LEFT, Fill { rx });
-        // Alt+F7 sobre el pane 0: pasa a virtual y se vacía.
+        // Alt+F7 on pane 0: switches to virtual and empties it.
         app.panes[0].begin_search(root.clone());
-        // Llega un lote del drenador del listado REAL.
+        // A batch from the REAL listing's drainer arrives.
         apply_fill_msg(
             &mut app,
             &mut fill,
@@ -224,28 +230,25 @@ mod search_fill_tests {
         );
         assert!(
             app.panes[0].entries().is_empty(),
-            "el listado real NO entra en el pane virtual"
+            "the real listing does NOT enter the virtual pane"
         );
         assert!(
             fill.get(crate::panel::SLOT_LEFT).is_none(),
-            "el fill obsoleto se suelta"
+            "the stale fill is released"
         );
-        assert!(
-            app.panes[0].virtual_search,
-            "el pane sigue en modo búsqueda"
-        );
+        assert!(app.panes[0].virtual_search, "the pane stays in search mode");
     }
 
-    /// Un lote que llega para un hueco que YA NO EXISTE se tira.
+    /// A batch that arrives for a slot that NO LONGER EXISTS is dropped.
     ///
-    /// Es el fallo que paga el refactor de P6. Con el relleno archivado por
-    /// POSICIÓN, el lote de un panel cerrado se aplicaba a quien ocupara esa
-    /// posición al llegar: el lector veía crecer un listado con las entradas
-    /// de otro directorio, sin que nada lo dijera y sin que ninguna suite
-    /// verde lo viera, porque el listado seguía llegando — solo que al sitio
-    /// que no era.
+    /// This is the bug the P6 refactor pays for. With the fill filed by
+    /// POSITION, a closed pane's batch used to be applied to whoever occupied
+    /// that position when it arrived: the reader watched a listing grow with
+    /// another directory's entries, with nothing saying so and no green suite
+    /// catching it, because the listing kept arriving — just at the wrong
+    /// place.
     #[test]
-    fn un_lote_para_un_hueco_cerrado_se_tira() {
+    fn a_batch_for_a_closed_slot_is_dropped() {
         let root = vp("mem:///d");
         let mut app = App::new(
             Pane::new(root.clone(), vec![file(&root, "a")]),
@@ -261,17 +264,17 @@ mod search_fill_tests {
             &mut app,
             &mut fill,
             ghost,
-            Some(FillMsg::Batch(vec![file(&root, "de-otro-sitio")])),
+            Some(FillMsg::Batch(vec![file(&root, "from-elsewhere")])),
         );
 
         assert_eq!(
             app.panes[0].entries().len(),
             before,
-            "el listado visible no recibe entradas de un panel cerrado"
+            "the visible listing receives no entries from a closed pane"
         );
         assert!(
             fill.get(ghost).is_none(),
-            "y el hueco fantasma se suelta en vez de quedarse drenando"
+            "and the ghost slot is released instead of left draining"
         );
     }
 }

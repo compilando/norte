@@ -1,13 +1,14 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Disposiciones: redimensionar, igualar y elegir.
+// Layouts: resizing, equalizing and picking.
 // ---------------------------------------------------------------------------
 
-/// Corre un comando por la PALETA, que es otra puerta al mismo catálogo.
+/// Runs a command through the PALETTE, which is another door to the same
+/// catalogue.
 ///
-/// Ninguno de los comandos de disposición lo ata un preset de fábrica, así
-/// que este es el camino por el que llegan hoy.
+/// None of the layout commands is bound by a factory preset, so this is the
+/// path they arrive by today.
 pub(super) async fn por_la_paleta(h: &UiHost, sub: &mut norte_ui_host::UiSubscription, cmd: &str) {
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "p".to_owned(),
@@ -17,31 +18,32 @@ pub(super) async fn por_la_paleta(h: &UiHost, sub: &mut norte_ui_host::UiSubscri
         meta: false,
     }))
     .await
-    .expect("host vivo");
-    let _ = siguiente_paleta(sub).await.expect("la paleta abre");
+    .expect("host alive");
+    let _ = siguiente_paleta(sub).await.expect("the palette opens");
     for c in cmd.chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
 }
 
-/// **Con la navegación sincronizada puesta, los dos huecos andan juntos.**
+/// **With synchronized navigation on, both slots move together.**
 ///
-/// Y el eco NO entra en el rastro del hueco espejado: viaja como
-/// `Trail::Seed`, que es lo que impide que su «atrás» cuente un paso que el
-/// lector no dio ahí — y, de paso, lo que corta la recursión.
+/// And the echo does NOT enter the mirrored slot's trail: it travels as
+/// `Trail::Seed`, which is what keeps its "back" from counting a step the
+/// reader did not take there — and, along the way, what cuts the recursion.
 #[tokio::test]
-async fn con_la_navegacion_sincronizada_los_dos_huecos_andan_juntos() {
-    // `orthodox` y no la disposición de partida: hacen falta DOS listados,
-    // porque sin hueco destino no hay a quién espejar.
+async fn with_synchronized_navigation_both_slots_move_together() {
+    // `orthodox` and not the starting layout: TWO listings are needed,
+    // because with no target slot there is nobody to mirror.
     let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
 
-    // Encender NO mueve nada: alinea la siguiente navegación, no la actual.
+    // Turning it on does NOT move anything: it lines up the next navigation,
+    // not the current one.
     por_la_paleta(&h, &mut sub, "sync-nav").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let antes: Vec<String> = foto
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let before: Vec<String> = snap
         .slots
         .iter()
         .filter_map(|s| match s {
@@ -49,13 +51,13 @@ async fn con_la_navegacion_sincronizada_los_dos_huecos_andan_juntos() {
             _ => None,
         })
         .collect();
-    assert_eq!(antes.len(), 2, "la disposición de partida son dos listados");
-    assert_eq!(antes[0], antes[1], "y arrancan en el mismo sitio");
+    assert_eq!(before.len(), 2, "the starting layout is two listings");
+    assert_eq!(before[0], before[1], "and they start in the same place");
 
-    // Ahora una navegación del hueco activo: entra en `docs`.
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
-    let despues = foto_hasta(&h, &mut sub, "los dos listados se movieron", |foto| {
-        let rutas: Vec<String> = foto
+    // Now a navigation of the active slot: it enters `docs`.
+    h.dispatch(tecla("Enter")).await.expect("host alive");
+    let after = foto_hasta(&h, &mut sub, "both listings moved", |snap| {
+        let paths: Vec<String> = snap
             .slots
             .iter()
             .filter_map(|s| match s {
@@ -63,16 +65,16 @@ async fn con_la_navegacion_sincronizada_los_dos_huecos_andan_juntos() {
                 _ => None,
             })
             .collect();
-        (rutas.len() == 2 && rutas[0] != antes[0] && rutas[1] != antes[1]).then_some(rutas)
+        (paths.len() == 2 && paths[0] != before[0] && paths[1] != before[1]).then_some(paths)
     })
     .await;
     assert_eq!(
-        despues[0], despues[1],
-        "el destino repitió la navegación del activo: {despues:?}"
+        after[0], after[1],
+        "the target repeated the active slot's navigation: {after:?}"
     );
 }
 
-/// El ancho de un hueco en la foto.
+/// A slot's width in the snapshot.
 pub(super) fn ancho_de(snap: &norte_ui_host::ViewSnapshot, slot: u32) -> u16 {
     snap.layout
         .placements
@@ -81,130 +83,127 @@ pub(super) fn ancho_de(snap: &norte_ui_host::ViewSnapshot, slot: u32) -> u16 {
         .map_or(0, |p| p.width)
 }
 
-/// Crecer ensancha el hueco con el FOCO, y encoger lo devuelve.
+/// Growing widens the FOCUSED slot, and shrinking returns it.
 #[tokio::test]
-async fn crecer_y_encoger_mueven_el_hueco_enfocado() {
-    // Una disposición con DOS listados: redimensionar reparte entre
-    // hermanos, y con un hueco solo no hay a quién quitarle.
+async fn growing_and_shrinking_move_the_focused_slot() {
+    // A layout with TWO listings: resizing splits between siblings, and
+    // with only one slot there is nobody to take from.
     let (h, snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    let activo = snap
+    let active = snap
         .layout
         .placements
         .iter()
         .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
         .map(|p| p.slot_id)
-        .expect("hay un hueco activo");
-    let antes = ancho_de(&snap, activo);
+        .expect("there is an active slot");
+    let before = ancho_de(&snap, active);
 
     por_la_paleta(&h, &mut sub, "layout.grow").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let crecido = siguiente_foto(&mut sub).await;
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let grown = siguiente_foto(&mut sub).await;
     assert!(
-        ancho_de(&crecido, activo) > antes,
-        "creció: {} → {}",
-        antes,
-        ancho_de(&crecido, activo)
+        ancho_de(&grown, active) > before,
+        "it grew: {} → {}",
+        before,
+        ancho_de(&grown, active)
     );
 
     por_la_paleta(&h, &mut sub, "layout.shrink").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let vuelto = siguiente_foto(&mut sub).await;
-    assert_eq!(ancho_de(&vuelto, activo), antes, "y encoger lo devuelve");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let back = siguiente_foto(&mut sub).await;
+    assert_eq!(ancho_de(&back, active), before, "and shrinking returns it");
 }
 
-/// Igualar deja a los hermanos con el mismo peso.
+/// Equalizing leaves siblings with the same weight.
 #[tokio::test]
-async fn igualar_reparte_a_partes_iguales() {
+async fn equalizing_splits_evenly() {
     let (h, snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    let activo = snap
+    let active = snap
         .layout
         .placements
         .iter()
         .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
         .map(|p| p.slot_id)
-        .expect("hay un hueco activo");
+        .expect("there is an active slot");
 
-    // Se desequilibra y se vuelve a igualar.
+    // It gets unbalanced and then equalized again.
     for _ in 0..3 {
         por_la_paleta(&h, &mut sub, "layout.grow").await;
     }
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let torcido = ancho_de(&siguiente_foto(&mut sub).await, activo);
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let skewed = ancho_de(&siguiente_foto(&mut sub).await, active);
 
     por_la_paleta(&h, &mut sub, "layout.equalize").await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let igualado = ancho_de(&siguiente_foto(&mut sub).await, activo);
-    assert!(igualado < torcido, "igualar deshace el desequilibrio");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let equalized = ancho_de(&siguiente_foto(&mut sub).await, active);
+    assert!(equalized < skewed, "equalizing undoes the imbalance");
 }
 
-/// El selector ofrece las cinco de fábrica con su vista previa, y elegir una
-/// CAMBIA la pantalla.
+/// The picker offers the five factory ones with their preview, and choosing
+/// one CHANGES the screen.
 #[tokio::test]
-async fn elegir_una_disposicion_cambia_la_pantalla() {
+async fn picking_a_layout_changes_the_screen() {
     let (h, snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
-    let huecos_antes = snap.slots.len();
+    let slots_before = snap.slots.len();
 
     por_la_paleta(&h, &mut sub, "layout.pick").await;
     let mut v = None;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        if let Some(l) = foto.layouts.clone() {
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        if let Some(l) = snap.layouts.clone() {
             v = Some(l);
             break;
         }
     }
-    let picker = v.expect("el selector abre");
+    let picker = v.expect("the picker opens");
     assert_eq!(
         picker.rows.len(),
         norte_frontend::layout::presets::NAMES.len(),
-        "las cinco de fábrica, y ninguna del usuario en este host"
+        "the five factory ones, and none of the user's on this host"
     );
     assert!(picker.rows.iter().all(|r| r.factory));
     assert!(
         !picker.preview.is_empty(),
-        "y la elegida enseña su FORMA, pintada por el mismo motor que reparte"
+        "and the chosen one shows its SHAPE, painted by the same engine that splits"
     );
-    let anchos: std::collections::BTreeSet<usize> =
+    let widths: std::collections::BTreeSet<usize> =
         picker.preview.iter().map(|l| l.chars().count()).collect();
-    assert_eq!(anchos.len(), 1, "la miniatura es un rectángulo: {anchos:?}");
+    assert_eq!(widths.len(), 1, "the thumbnail is a rectangle: {widths:?}");
 
-    // La disposición `full` tiene más huecos que `simple`.
+    // The `full` layout has more slots than `simple`.
     let i = picker
         .rows
         .iter()
         .position(|r| r.name == "full")
-        .expect("`full` está");
+        .expect("`full` is there");
     h.dispatch(UiAction::LayoutActivateRow {
-        row: u32::try_from(i).expect("cabe"),
+        row: u32::try_from(i).expect("fits"),
     })
     .await
-    .expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let despues = siguiente_foto(&mut sub).await;
-    assert!(despues.layouts.is_none(), "el selector se cierra al elegir");
+    .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let after = siguiente_foto(&mut sub).await;
+    assert!(after.layouts.is_none(), "the picker closes on choosing");
     assert!(
-        despues.slots.len() > huecos_antes,
-        "y la pantalla es otra: {} → {}",
-        huecos_antes,
-        despues.slots.len()
+        after.slots.len() > slots_before,
+        "and the screen is different: {} → {}",
+        slots_before,
+        after.slots.len()
     );
     assert!(
-        despues
-            .slots
-            .iter()
-            .any(|s| matches!(s, SlotView::Places(_))),
-        "con la barra lateral que `full` coloca"
+        after.slots.iter().any(|s| matches!(s, SlotView::Places(_))),
+        "with the side bar `full` places"
     );
 }
 
-/// Una disposición del usuario que no parsea se OFRECE, sin vista previa y
-/// diciendo por qué, y elegirla no cambia la pantalla.
+/// A user layout that fails to parse is OFFERED, with no preview and saying
+/// why, and choosing it does not change the screen.
 #[tokio::test]
-async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
+async fn a_broken_layout_shows_and_does_not_apply() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
         initial_dir: dir(),
@@ -229,61 +228,62 @@ async fn una_disposicion_rota_se_ve_y_no_se_aplica() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
 
     por_la_paleta(&h, &mut sub, "layout.pick").await;
     let mut picker = None;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         if let Some(l) = siguiente_foto(&mut sub).await.layouts.clone() {
             picker = Some(l);
             break;
         }
     }
-    let picker = picker.expect("el selector abre");
+    let picker = picker.expect("the picker opens");
     let i = picker
         .rows
         .iter()
         .position(|r| r.name == "mia")
-        .expect("la del usuario se OFRECE aunque no parsee");
-    assert!(picker.rows[i].broken, "y se dice que está rota");
+        .expect("the user's one is OFFERED even though it fails to parse");
+    assert!(picker.rows[i].broken, "and it is said to be broken");
     assert!(!picker.rows[i].factory);
 
     let ack = h
         .dispatch(UiAction::LayoutActivateRow {
-            row: u32::try_from(i).expect("cabe"),
+            row: u32::try_from(i).expect("fits"),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, norte_ui_host::ActionAck::Unavailable { .. }),
-        "elegirla NO cambia la pantalla por un fichero roto: {ack:?}"
+        "choosing it does NOT change the screen over a broken file: {ack:?}"
     );
 }
 
-/// Una disposición cuyo REPARTO no coloca ningún listado no puede dejar al
-/// host sin huecos.
+/// A layout whose SPLIT places no listing at all cannot leave the host with
+/// no slots.
 ///
-/// `validate` garantiza que el árbol TENGA un `browser`, no que el reparto lo
-/// COLOQUE: un `Tabs` cuyo activo es otro kind manda el listado a `hidden`, y
-/// un split todo-ponderado que no quepa hace lo mismo con todos menos el hijo
-/// 0. Sembrar los huecos desde `placements` en vez de desde el árbol vaciaba
-/// el mapa, y la siguiente tecla moría en el `expect` de `hueco()` —dentro de
-/// la task del actor, sin log y sin caída visible, dejando la ventana muerta
-/// contestando `Down` para siempre. Es la forma de #242 en esta superficie.
+/// `validate` guarantees the tree HAS a `browser`, not that the split PLACES
+/// it: a `Tabs` whose active one is another kind sends the listing to
+/// `hidden`, and an all-weighted split that does not fit does the same to
+/// all but child 0. Seeding the slots from `placements` instead of from the
+/// tree emptied the map, and the next keystroke died in `hueco()`'s
+/// `expect` — inside the actor's task, with no log and no visible crash,
+/// leaving the window dead answering `Down` forever. It is #242's shape on
+/// this surface.
 #[tokio::test]
-async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
+async fn a_layout_that_hides_the_listing_leaves_the_slot_alive() {
     use norte_frontend::layout::{KindId, Node, SlotId};
-    let escondida = Node::Tabs {
+    let hidden = Node::Tabs {
         children: vec![
             Node::slot(SlotId(9), KindId::new("metadata")),
             Node::slot(SlotId(1), KindId::browser()),
         ],
         active: 0,
     };
-    norte_frontend::layout::validate(&escondida)
-        .expect("el árbol es VÁLIDO: tiene un browser, aunque el reparto no lo coloque");
+    norte_frontend::layout::validate(&hidden)
+        .expect("the tree is VALID: it has a browser, even if the split does not place it");
 
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol(),
@@ -301,7 +301,7 @@ async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: vec![norte_frontend::layout_picker::UserLayout {
             name: std::ffi::OsString::from("escondida"),
-            tree: Ok(escondida),
+            tree: Ok(hidden),
         }],
         columns: norte_ui_host::columnas_por_defecto(),
         effects: norte_ui_host::commands::Efectos::Completo,
@@ -309,41 +309,42 @@ async fn una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
 
     por_la_paleta(&h, &mut sub, "layout.pick").await;
     let mut picker = None;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         if let Some(l) = siguiente_foto(&mut sub).await.layouts.clone() {
             picker = Some(l);
             break;
         }
     }
-    let picker = picker.expect("el selector abre");
+    let picker = picker.expect("the picker opens");
     let i = picker
         .rows
         .iter()
         .position(|r| r.name == "escondida")
-        .expect("la del usuario está");
+        .expect("the user's one is there");
     h.dispatch(UiAction::LayoutActivateRow {
-        row: u32::try_from(i).expect("cabe"),
+        row: u32::try_from(i).expect("fits"),
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    // La tecla que mataba: cualquiera que toque el hueco activo.
+    // The keystroke that used to kill it: any one that touches the active
+    // slot.
     h.dispatch(tecla("Down"))
         .await
-        .expect("el host sigue VIVO tras elegir una disposición que esconde el listado");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let despues = siguiente_foto(&mut sub).await;
+        .expect("the host stays ALIVE after picking a layout that hides the listing");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let after = siguiente_foto(&mut sub).await;
     assert!(
-        despues
+        after
             .slots
             .iter()
             .any(|s| matches!(s, SlotView::Metadata(_))),
-        "y la pantalla es la que se pidió: la pestaña activa es la ficha"
+        "and the screen is the one that was requested: the active tab is the sheet"
     );
 }

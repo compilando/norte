@@ -1,27 +1,27 @@
-//! El área de renombrado y organización de [`Backend`](super::Backend): el
-//! lote revisable de `fs.rename_batch*`, y los planes de IA `ai.rename_plan`
-//! / `ai.organize_plan` con su aplicación (`organize`).
+//! [`Backend`](super::Backend)'s rename and organize area: the reviewable
+//! `fs.rename_batch*` batch, and the `ai.rename_plan` / `ai.organize_plan`
+//! AI plans with their application (`organize`).
 
 use norte_proto::{Error, TaskId, VPath};
 
 use super::{AI_CALL_TIMEOUT, Backend, TaskRef};
 
 impl Backend {
-    /// El plan REVISABLE de un lote de renames dentro de `dir` (spec §17, ADR
-    /// 0042). NO muta nada: ni Task, ni journal.
+    /// The REVIEWABLE plan for a batch of renames inside `dir` (spec §17,
+    /// ADR 0042). Mutates NOTHING: no Task, no journal.
     ///
-    /// Lo que se manda es INTENCIÓN — parejas de nombres base. El orden, los
-    /// temporales y los veredictos los decide el core (regla dura 7), y el
-    /// `plan_hash` que vuelve es el que hay que devolver a
-    /// [`Backend::rename_batch`] para ejecutar EXACTAMENTE lo que se enseñó.
+    /// What's sent is INTENT — pairs of base names. The order, the
+    /// temporaries and the verdicts are decided by the core (hard rule 7),
+    /// and the returned `plan_hash` is what has to be given back to
+    /// [`Backend::rename_batch`] to execute EXACTLY what was shown.
     ///
     /// # Errors
-    /// [`Error::InvalidPath`] si un nombre no es una entrada de directorio
-    /// legal o si hay más de `FS_RENAME_BATCH_MAX_PAIRS` parejas;
-    /// [`Error::Unsupported`] sin provider o con uno de solo lectura;
-    /// [`Error::LimitExceeded`] en un directorio inabarcable;
-    /// [`Error::PolicyDenied`] del gate de lectura (remoto, agente sin scope);
-    /// taxonomía del protocolo.
+    /// [`Error::InvalidPath`] if a name isn't a legal directory entry or if
+    /// there are more than `FS_RENAME_BATCH_MAX_PAIRS` pairs;
+    /// [`Error::Unsupported`] with no provider or with a read-only one;
+    /// [`Error::LimitExceeded`] on an unmanageable directory;
+    /// [`Error::PolicyDenied`] from the read gate (remote, a scopeless
+    /// agent); protocol taxonomy.
     pub async fn rename_batch_plan(
         &self,
         dir: &VPath,
@@ -38,23 +38,23 @@ impl Backend {
         }
     }
 
-    /// Ejecuta el lote aprobado como UNA Task y UNA unidad deshacible del
-    /// journal (spec §17, ADR 0042).
+    /// Executes the approved batch as ONE Task and ONE undoable journal
+    /// unit (spec §17, ADR 0042).
     ///
-    /// `plan_hash` es el token de FRESCURA de [`Backend::rename_batch_plan`],
-    /// atado al directorio. El core re-planifica el directorio TAL COMO ESTÁ
-    /// AHORA y compara: si derivó, esto es [`Error::PlanStale`] y no se toca
-    /// nada. No es una prueba de aprobación —el digest es público y calculable
-    /// sin haber pedido el plan—: garantiza QUÉ se ejecuta, no que alguien lo
-    /// mirara. El informe de lo que
-    /// pasó se pide con [`Backend::rename_batch_report`] — la Task terminal
-    /// cuenta la causa, no lo que se quedó a medias.
+    /// `plan_hash` is [`Backend::rename_batch_plan`]'s FRESHNESS token,
+    /// bound to the directory. The core re-plans the directory AS IT
+    /// STANDS NOW and compares: if it drifted, this is [`Error::PlanStale`]
+    /// and nothing is touched. It isn't proof of approval —the digest is
+    /// public and computable without ever having requested the plan—: it
+    /// guarantees WHAT runs, not that someone looked at it. What happened is
+    /// requested with [`Backend::rename_batch_report`] — the terminal Task
+    /// tells the cause, not what was left half-done.
     ///
     /// # Errors
-    /// [`Error::PlanStale`] si el directorio derivó desde el plan;
-    /// [`Error::PlanNotExecutable`] si el plan aprobado tenía colisiones;
-    /// [`Error::PolicyDenied`] del gate de mutación; más las de
-    /// [`Backend::rename_batch_plan`].
+    /// [`Error::PlanStale`] if the directory drifted since the plan;
+    /// [`Error::PlanNotExecutable`] if the approved plan had collisions;
+    /// [`Error::PolicyDenied`] from the mutation gate; plus
+    /// [`Backend::rename_batch_plan`]'s.
     pub async fn rename_batch(
         &self,
         dir: &VPath,
@@ -65,8 +65,9 @@ impl Backend {
             Self::Embedded(engine) => {
                 let raw = crate::rename::pairs_from_wire(pairs);
                 let (handle, _report) = engine.rename_batch(dir, &raw, plan_hash).await?;
-                // El informe queda en el anillo del engine, que es de donde lo
-                // lee `rename_batch_report`: los dos brazos se piden igual.
+                // The report stays in the engine's ring, which is where
+                // `rename_batch_report` reads it from: both arms are
+                // requested the same way.
                 Ok(TaskRef::from_handle(&handle))
             }
             #[cfg(unix)]
@@ -77,19 +78,19 @@ impl Backend {
         }
     }
 
-    /// El informe de un lote ya lanzado (`fs.rename_batch_report`, 0.36.0):
-    /// cuántos pasos se aplicaron, cuántos se deshicieron y —lo que ningún
-    /// error pelado puede decir— QUÉ paso se quedó aplicado y bajo qué nombre.
+    /// The report for an already-launched batch (`fs.rename_batch_report`,
+    /// 0.36.0): how many steps applied, how many were undone and —what no
+    /// bare error can say— WHICH step stayed applied and under what name.
     ///
-    /// Míralo también cuando la Task diga `cancelled`: cancelar un lote lo
-    /// deshace, y un rollback también puede atascarse.
+    /// Check it too when the Task says `cancelled`: cancelling a batch
+    /// undoes it, and a rollback can get stuck too.
     ///
     /// # Errors
-    /// [`Error::NotFound`] si ese `task_id` nunca fue un lote de este proceso
-    /// o si el anillo ya lo desalojó — y el brazo remoto contesta lo MISMO,
-    /// porque el daemon manda esa categoría y no un `-32602` sin taxonomía;
-    /// [`Error::Unsupported`] contra un daemon N-1 que no conoce el método;
-    /// taxonomía del protocolo.
+    /// [`Error::NotFound`] if that `task_id` was never a batch of this
+    /// process or if the ring already evicted it — and the remote arm
+    /// answers the SAME thing, because the daemon sends that category and
+    /// not an untaxonomized `-32602`; [`Error::Unsupported`] against an N-1
+    /// daemon that doesn't know the method; protocol taxonomy.
     pub async fn rename_batch_report(
         &self,
         task_id: TaskId,
@@ -98,8 +99,8 @@ impl Backend {
             Self::Embedded(engine) => engine
                 .rename_batch_report(task_id)
                 .map(|(_owner, r)| crate::rename::report_to_proto(&r))
-                // Embebido no hay actor que comprobar: este `Backend` ES el
-                // humano en proceso (mismo criterio que
+                // Embedded has no actor to check: this `Backend` IS the
+                // human in-process (same criterion as
                 // `plugins_set_approval`).
                 .ok_or(Error::NotFound),
             #[cfg(unix)]
@@ -107,21 +108,22 @@ impl Backend {
         }
     }
 
-    /// Plan de rename revisable de `dir` vía IA (M4-IA, ADR 0031). NO muta:
-    /// aplicarlo es un lote, [`Backend::rename_batch_plan`] y después
-    /// [`Backend::rename_batch`] (así lo hacen la TUI, la ventana y la CLI). AMBOS brazos
-    /// están acotados por `AI_CALL_TIMEOUT` (2 min): un endpoint de proveedor en
-    /// dead-air jamás cuelga el frontend embebido ni el remoto.
+    /// `dir`'s reviewable rename plan via AI (M4-IA, ADR 0031). Mutates
+    /// NOTHING: applying it is a batch, [`Backend::rename_batch_plan`] and
+    /// then [`Backend::rename_batch`] (that's how the TUI, the window and
+    /// the CLI do it). BOTH arms are bounded by `AI_CALL_TIMEOUT` (2 min): a
+    /// provider endpoint gone dead-air never hangs the embedded or the
+    /// remote frontend.
     ///
     /// # Errors
-    /// [`Error::Unsupported`] sin proveedor de IA; [`Error::PolicyDenied`]
-    /// del gate de IA (off, local-only, denied prefix);
-    /// [`Error::ProviderUnavailable`] (retryable) al agotar el timeout;
-    /// taxonomía del protocolo para fallos del proveedor.
-    /// `names` son los basenames MARCADOS (#121). Vacío = el directorio
-    /// entero, que es lo que este método hacía: con la selección de primera
-    /// clase, pedir un plan sobre cinco ficheros mandaba los mil del
-    /// directorio al proveedor.
+    /// [`Error::Unsupported`] with no AI provider; [`Error::PolicyDenied`]
+    /// from the AI gate (off, local-only, denied prefix);
+    /// [`Error::ProviderUnavailable`] (retryable) when the timeout runs
+    /// out; protocol taxonomy for provider failures.
+    /// `names` are the MARKED basenames (#121). Empty = the whole directory,
+    /// which is what this method used to do: with first-class selection,
+    /// requesting a plan over five files used to send the directory's
+    /// thousand to the provider.
     pub async fn ai_rename_plan(
         &self,
         dir: &VPath,
@@ -143,12 +145,12 @@ impl Backend {
         }
     }
 
-    /// Plan de ORGANIZAR por IA (0.77.0, fase 8): revisable, no muta nada.
+    /// The AI ORGANIZE plan (0.77.0, phase 8): reviewable, mutates nothing.
     ///
     /// # Errors
-    /// `Unsupported` sin proveedor; el gate de IA con su motivo; la taxonomía
-    /// del protocolo. `ProviderUnavailable` al agotar el timeout, como su
-    /// hermano.
+    /// `Unsupported` with no provider; the AI gate with its reason; protocol
+    /// taxonomy. `ProviderUnavailable` when the timeout runs out, like its
+    /// sibling.
     pub async fn ai_organize_plan(
         &self,
         dir: &VPath,
@@ -163,8 +165,9 @@ impl Backend {
                 )
                 .await
                 .map_err(|_| Error::ProviderUnavailable { retryable: true })??;
-                // El token viaja CON el plan (ver `organize::plan_hash`): sin
-                // él el modal abriría sobre algo que no se puede aprobar.
+                // The token travels WITH the plan (see `organize::plan_hash`):
+                // without it the modal would open over something that
+                // cannot be approved.
                 let plan_hash = if plan.moves.is_empty() {
                     None
                 } else {
@@ -181,12 +184,12 @@ impl Backend {
         }
     }
 
-    /// Aplica un plan de organizar (0.77.0, fase 8): crea las carpetas y
-    /// mueve, como UN lote deshacible.
+    /// Applies an organize plan (0.77.0, phase 8): creates the folders and
+    /// moves, as ONE undoable batch.
     ///
     /// # Errors
-    /// `PlanStale` si el token no es el del plan revisado; `InvalidPath` si
-    /// algún destino se sale del directorio; la taxonomía del protocolo.
+    /// `PlanStale` if the token isn't the reviewed plan's; `InvalidPath` if
+    /// some destination escapes the directory; protocol taxonomy.
     pub async fn organize(
         &self,
         dir: &VPath,

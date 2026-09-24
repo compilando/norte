@@ -1,39 +1,39 @@
-//! Abrir la ayuda congela los hechos del contexto: el overlay pinta lo que
-//! era cierto al abrirlo, no lo que sea cierto mientras está abierto.
+//! Opening help freezes the context facts: the overlay paints what was
+//! true when it opened, not whatever is true while it stays open.
 
 use norte_help::ChordResolver as _;
 use norte_proto::VPath;
 use norte_tui::app::{App, Pane};
 use norte_tui::overlays::open_contextual_help;
 
-/// Abrir la ayuda CONGELA los hechos del contexto (H3d).
+/// Opening help FREEZES the context facts (H3d).
 ///
-/// El resto de la cadena —la tabla compartida, el resolver, el pintor de la
-/// razón— tiene sus propios tests y seguiría VERDE con esta llamada
-/// borrada: el overlay se pintaría contra el resolver permisivo del
-/// arranque y ninguna fila se atenuaría jamás. Este test es el único que
-/// mira el eslabón.
+/// The rest of the chain —the shared table, the resolver, the reason
+/// painter— has its own tests and would stay GREEN with this call
+/// removed: the overlay would paint against the permissive startup
+/// resolver and no row would ever be dimmed. This test is the only one
+/// that looks at this link.
 ///
-/// Se abre desde dentro de un zip (`READ_ONLY` por el scheme, ADR 0018) con
-/// los dos panes ahí: sin destino escribible, `pane.copy` no puede correr.
+/// Opened from inside a zip (`READ_ONLY` via the scheme, ADR 0018) with
+/// both panes there: with no writable destination, `pane.copy` cannot run.
 #[test]
-fn abrir_la_ayuda_congela_los_hechos_del_contexto() {
-    let inside = VPath::parse("zip+file:///a.zip/!").expect("wire de test");
+fn opening_help_freezes_the_context_facts() {
+    let inside = VPath::parse("zip+file:///a.zip/!").expect("test wire");
     let mut app = App::new(
         Pane::new(inside.clone(), Vec::new()),
         Pane::new(inside, Vec::new()),
     );
     assert!(
         app.help_chords.availability("pane.copy").is_available(),
-        "antes de abrir, el resolver del arranque no atenúa nada"
+        "before opening, the startup resolver dims nothing"
     );
 
     open_contextual_help(&mut app, norte_help::Lang::En, &[], None);
 
-    assert!(app.help.is_some(), "el overlay se abrió");
+    assert!(app.help.is_some(), "the overlay opened");
     assert_eq!(
         app.help_chords.availability("pane.copy").reason(),
         Some(norte_help::Reason::ReadOnlyBackend),
-        "la ayuda tiene que saber que está dentro de un archivo"
+        "help must know it is inside an archive"
     );
 }

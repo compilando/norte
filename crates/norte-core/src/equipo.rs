@@ -1,20 +1,22 @@
-//! Equipar un engine: las piezas que lleva TODO engine de norte, sea el del
-//! daemon o uno embebido en un frontend.
+//! Equipping an engine: the pieces that EVERY norte engine carries, whether
+//! it's the daemon's or one embedded in a frontend.
 //!
-//! Vivía copiado en cuatro sitios —el arranque del daemon, la TUI embebida, la
-//! CLI embebida y `norte ai rename`—, y la IA en los cuatro (regla 7). Las
-//! copias ya habían divergido: una se callaba lo que otra avisaba, y cada una
-//! decidía por su cuenta qué pasaba si `[ai]` no cargaba. Aquí se decide una
-//! vez.
+//! It used to live copied in four places —the daemon's startup, the embedded
+//! TUI, the embedded CLI and `norte ai rename`—, and the AI part in all four
+//! (rule 7). The copies had already diverged: one stayed quiet about what
+//! another warned about, and each decided on its own what happened if
+//! `[ai]` failed to load. It's decided once, here.
 //!
-//! Como [`crate::daemon::componer()`], esto COMPONE y no habla: lo que hay que
-//! saber vuelve como [`Aviso`], y lo pinta quien equipa, en su canal (stderr en
-//! la CLI, el log en la TUI, que tiene la pantalla tomada).
+//! Like [`crate::daemon::componer()`], this COMPOSES and does not speak:
+//! whatever needs to be known comes back as [`Aviso`], and whoever equips
+//! paints it, on their own channel (stderr in the CLI, the log in the TUI,
+//! which has the screen taken).
 //!
-//! Lo que NO está aquí, y por qué: el journal y la policy (el daemon los
-//! instala con el engine, embebido los decide `embedded::engine_in`), el índice
-//! (consume el engine, `with_index`), el spool (solo quien sincroniza) y los
-//! límites de `[archive]` (el daemon los exige, un frontend los degrada: ver
+//! What is NOT here, and why: the journal and the policy (the daemon
+//! installs them with the engine, embedded decides them via
+//! `embedded::engine_in`), the index (consumes the engine, `with_index`),
+//! the spool (only whoever syncs), and the `[archive]` limits (the daemon
+//! requires them, a frontend degrades them: see
 //! [`crate::archive_config::aplicar`]).
 
 use std::path::Path;
@@ -24,114 +26,115 @@ use norte_vfs::Provider;
 
 use crate::Engine;
 
-/// Algo que quien arranca debe saber y que NO impide arrancar.
+/// Something whoever starts up should know, and that does NOT prevent
+/// starting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Aviso {
-    /// Se barrieron `n` planes de sincronización huérfanos.
+    /// `n` orphaned sync plans were swept.
     SpoolsBarridos(usize),
-    /// El barrido se llevó unos y otros no se dejaron borrar.
+    /// The sweep took some and others refused to be deleted.
     SpoolsAMedias {
-        /// Barridos.
+        /// Swept.
         removed: usize,
-        /// Los que se resistieron.
+        /// The ones that resisted.
         failed: usize,
-        /// Dónde.
+        /// Where.
         dir: std::path::PathBuf,
     },
-    /// El barrido no pudo ni empezar.
+    /// The sweep could not even start.
     SpoolsSinBarrer {
-        /// Dónde.
+        /// Where.
         dir: std::path::PathBuf,
-        /// Por qué.
+        /// Why.
         error: String,
     },
-    /// Sin índice de búsqueda: `index.*` contestará `Unsupported`.
+    /// No search index: `index.*` will answer `Unsupported`.
     SinIndice(String),
-    /// El proveedor de IA de renombrado no está disponible.
+    /// The rename AI provider is not available.
     IaNoDisponible(String),
-    /// Lo que dijo la instalación del proveedor de embeddings.
+    /// What the embeddings provider's installation said.
     IaEmbeddings(String),
-    /// `[ai]` no es válido.
+    /// `[ai]` is not valid.
     IaInvalida(String),
-    /// `[ai]` no se pudo leer.
+    /// `[ai]` could not be read.
     IaNoCargo(String),
-    /// `[archive]` no se pudo leer: se sigue con los límites por defecto.
+    /// `[archive]` could not be read: continuing with the default limits.
     ArchivoInvalido(String),
 }
 
-/// El texto para un LOG, sin traducir: quien lo pinta para una persona
-/// (la CLI) usa su propio catálogo de Fluent.
+/// The text for a LOG, untranslated: whoever paints it for a person (the
+/// CLI) uses their own Fluent catalog.
 impl std::fmt::Display for Aviso {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SpoolsBarridos(n) => write!(f, "barridos {n} planes de sync huérfanos"),
+            Self::SpoolsBarridos(n) => write!(f, "swept {n} orphaned sync plans"),
             Self::SpoolsAMedias {
                 removed,
                 failed,
                 dir,
             } => write!(
                 f,
-                "barridos {removed} planes de sync huérfanos y {failed} no se dejaron borrar en {}",
+                "swept {removed} orphaned sync plans and {failed} refused to be deleted in {}",
                 dir.display()
             ),
             Self::SpoolsSinBarrer { dir, error } => {
-                write!(f, "no se pudo barrer {}: {error}", dir.display())
+                write!(f, "could not sweep {}: {error}", dir.display())
             }
-            Self::SinIndice(e) => write!(f, "índice no disponible: {e}"),
-            Self::IaNoDisponible(e) => write!(f, "proveedor de IA no disponible: {e}"),
+            Self::SinIndice(e) => write!(f, "index not available: {e}"),
+            Self::IaNoDisponible(e) => write!(f, "AI provider not available: {e}"),
             Self::IaEmbeddings(w) => f.write_str(w),
-            Self::IaInvalida(e) => write!(f, "[ai] inválido: {e}"),
-            Self::IaNoCargo(e) => write!(f, "la carga de [ai] falló: {e}"),
-            Self::ArchivoInvalido(e) => write!(f, "[archive] no se pudo leer: {e}"),
+            Self::IaInvalida(e) => write!(f, "[ai] invalid: {e}"),
+            Self::IaNoCargo(e) => write!(f, "loading [ai] failed: {e}"),
+            Self::ArchivoInvalido(e) => write!(f, "[archive] could not be read: {e}"),
         }
     }
 }
 
-/// Lo que quedó puesto, más lo que hay que decir.
+/// What ended up set, plus what has to be said.
 #[derive(Debug, Default)]
 pub struct Equipado {
-    /// Lo que no impidió equipar pero hay que contar.
+    /// What did not prevent equipping but has to be reported.
     pub avisos: Vec<Aviso>,
-    /// Si quedó instalado un proveedor de IA de RENOMBRADO. Quien lo exige
-    /// (`norte ai rename`) lo mira aquí; sin configurar no es un aviso,
-    /// porque la IA es opt-in.
+    /// Whether a RENAME AI provider ended up installed. Whoever requires it
+    /// (`norte ai rename`) checks this; unconfigured is not a warning,
+    /// because AI is opt-in.
     pub ia_renombrado: bool,
 }
 
-/// Qué proveedores de IA instalar. Cada uno resuelve SU secreto (keyring,
-/// quizá con un diálogo del sistema), así que se instala solo lo que se va a
-/// usar: `norte ai rename` no tiene por qué desbloquear la clave de los
-/// embeddings.
+/// Which AI providers to install. Each one resolves ITS OWN secret (keyring,
+/// maybe with a system dialog), so only what will actually be used gets
+/// installed: `norte ai rename` has no reason to unlock the embeddings key.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Ia {
-    /// El de renombrado (`rename_provider`).
+    /// The rename one (`rename_provider`).
     pub renombrado: bool,
-    /// El de embeddings (`embed_provider`).
+    /// The embeddings one (`embed_provider`).
     pub embeddings: bool,
 }
 
 impl Ia {
-    /// Nada: ni se lee `[ai]`.
+    /// Nothing: `[ai]` isn't even read.
     pub const NADA: Self = Self {
         renombrado: false,
         embeddings: false,
     };
-    /// Los dos: un engine de larga vida (el daemon, la TUI) sirve todo.
+    /// Both: a long-lived engine (the daemon, the TUI) serves everything.
     pub const TODA: Self = Self {
         renombrado: true,
         embeddings: true,
     };
 }
 
-/// Equipa `engine` con el proveedor local, el conector de conexiones remotas
-/// y los proveedores de IA de `[ai]` que pida `ia`.
+/// Equips `engine` with the local provider, the remote connection connector,
+/// and the `[ai]` providers `ia` asks for.
 ///
-/// `config_dir` es de donde salen las conexiones y los secretos de los
-/// proveedores. `[ai]` en sí se lee de las capas estándar del usuario. La IA
-/// es opt-in y JAMÁS falla aquí: lo que no se pudo instalar es un [`Aviso`].
+/// `config_dir` is where the connections and the providers' secrets come
+/// from. `[ai]` itself is read from the user's standard layers. AI is
+/// opt-in and NEVER fails here: whatever could not be installed is an
+/// [`Aviso`].
 #[tracing::instrument(skip_all, fields(renombrado = ia.renombrado, embeddings = ia.embeddings))]
 pub async fn equipar(engine: &Engine, config_dir: &Path, ia: Ia) -> Equipado {
-    let mut hecho = Equipado::default();
+    let mut done = Equipado::default();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::os_root()) as Arc<dyn Provider>
     );
@@ -139,7 +142,7 @@ pub async fn equipar(engine: &Engine, config_dir: &Path, ia: Ia) -> Equipado {
         config_dir.to_path_buf(),
     )));
     if ia == Ia::NADA {
-        return hecho;
+        return done;
     }
     match crate::blocking::spawn_blocking(crate::ai::AiConfig::load).await {
         Ok(Ok(config)) => {
@@ -149,9 +152,9 @@ pub async fn equipar(engine: &Engine, config_dir: &Path, ia: Ia) -> Equipado {
                 match crate::ai::resolve_and_build(&pcfg, config_dir.to_path_buf()).await {
                     Ok(provider) => {
                         engine.set_ai_provider(provider);
-                        hecho.ia_renombrado = true;
+                        done.ia_renombrado = true;
                     }
-                    Err(e) => hecho.avisos.push(Aviso::IaNoDisponible(e)),
+                    Err(e) => done.avisos.push(Aviso::IaNoDisponible(e)),
                 }
             }
             if ia.embeddings
@@ -159,23 +162,23 @@ pub async fn equipar(engine: &Engine, config_dir: &Path, ia: Ia) -> Equipado {
                     crate::ai::install_embed_provider(engine, &config, config_dir.to_path_buf())
                         .await
             {
-                hecho.avisos.push(Aviso::IaEmbeddings(w));
+                done.avisos.push(Aviso::IaEmbeddings(w));
             }
             engine.set_ai_config(config);
         }
-        Ok(Err(e)) => hecho.avisos.push(Aviso::IaInvalida(e.to_string())),
-        Err(e) => hecho.avisos.push(Aviso::IaNoCargo(e.to_string())),
+        Ok(Err(e)) => done.avisos.push(Aviso::IaInvalida(e.to_string())),
+        Err(e) => done.avisos.push(Aviso::IaNoCargo(e.to_string())),
     }
-    hecho
+    done
 }
 
-/// Abre el índice de búsqueda de `config_dir` y se lo pone a `engine`; si no
-/// abre, devuelve el engine sin él y el [`Aviso`].
-pub async fn con_indice(engine: Engine, config_dir: &Path, avisos: &mut Vec<Aviso>) -> Engine {
+/// Opens `config_dir`'s search index and sets it on `engine`; if it doesn't
+/// open, returns the engine without it plus the [`Aviso`].
+pub async fn con_indice(engine: Engine, config_dir: &Path, warnings: &mut Vec<Aviso>) -> Engine {
     match crate::Index::open(&config_dir.join("index.db")).await {
         Ok(idx) => engine.with_index(Arc::new(idx)),
         Err(e) => {
-            avisos.push(Aviso::SinIndice(e.to_string()));
+            warnings.push(Aviso::SinIndice(e.to_string()));
             engine
         }
     }
@@ -185,28 +188,29 @@ pub async fn con_indice(engine: Engine, config_dir: &Path, avisos: &mut Vec<Avis
 mod tests {
     use super::{Aviso, Ia, con_indice, equipar};
 
-    /// Sin IA no se toca `[ai]`: ni aviso ni proveedor. Es lo que paga un
-    /// `norte ls`, y tiene que ser nada.
+    /// Without AI, `[ai]` isn't touched: no warning, no provider. That's
+    /// what a `norte ls` costs, and it has to be nothing.
     #[tokio::test]
-    async fn sin_ia_no_hay_avisos_ni_proveedor() {
+    async fn no_ai_means_no_warnings_and_no_provider() {
         let dir = tempfile::tempdir().expect("tempdir");
         let engine = crate::Engine::new();
-        let hecho = equipar(&engine, dir.path(), Ia::NADA).await;
-        assert!(hecho.avisos.is_empty());
-        assert!(!hecho.ia_renombrado);
+        let done = equipar(&engine, dir.path(), Ia::NADA).await;
+        assert!(done.avisos.is_empty());
+        assert!(!done.ia_renombrado);
     }
 
-    /// Un índice que no abre no impide seguir: vuelve el engine y el aviso.
+    /// An index that fails to open does not prevent continuing: the engine
+    /// and the warning come back.
     #[tokio::test]
-    async fn un_indice_que_no_abre_es_un_aviso() {
+    async fn an_index_that_fails_to_open_is_a_warning() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // Un DIRECTORIO donde tendría que ir el fichero: no se puede abrir.
+        // A DIRECTORY where the file should go: it cannot be opened.
         std::fs::create_dir(dir.path().join("index.db")).expect("mkdir");
-        let mut avisos = Vec::new();
-        let _engine = con_indice(crate::Engine::new(), dir.path(), &mut avisos).await;
+        let mut warnings = Vec::new();
+        let _engine = con_indice(crate::Engine::new(), dir.path(), &mut warnings).await;
         assert!(
-            matches!(avisos.as_slice(), [Aviso::SinIndice(_)]),
-            "{avisos:?}"
+            matches!(warnings.as_slice(), [Aviso::SinIndice(_)]),
+            "{warnings:?}"
         );
     }
 }

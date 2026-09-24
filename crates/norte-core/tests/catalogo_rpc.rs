@@ -1,350 +1,355 @@
-//! Cada método del catálogo LLEGA a las superficies que le tocan (ADR 0089).
+//! Every catalogue method REACHES the surfaces it should (ADR 0089).
 //!
-//! El catálogo (`norte_proto::catalog`) dice qué métodos existen. Aquí se le
-//! pregunta a cada superficie si está: el reparto del daemon, el cliente
-//! remoto, y el agregado del schema.
+//! The catalogue (`norte_proto::catalog`) says which methods exist. Here each
+//! surface is asked whether it has it: the daemon's dispatch, the remote
+//! client, and the schema's aggregate.
 //!
-//! Vive en `norte-core` y no en `norte-proto` porque es aquí donde se pueden
-//! leer los tres ficheros. Se leen como TEXTO a propósito: comprobarlo con
-//! tipos exigiría que el reparto plano del daemon dejara de ser plano, y ese
-//! reparto es deliberado — un `match` de cien brazos donde cada brazo se lee
-//! entero es mejor que diez capas que hay que recorrer para saber qué hace
-//! `fs.stat`. Lo que faltaba no era estructura, era que olvidar uno se notara.
+//! It lives in `norte-core` and not in `norte-proto` because this is where
+//! the three files can be read. They are read as TEXT on purpose: checking it
+//! with types would require the daemon's flat dispatch to stop being flat,
+//! and that flatness is deliberate — a hundred-arm `match` where each arm
+//! reads whole is better than ten layers you have to walk through to know
+//! what `fs.stat` does. What was missing was not structure, it was that
+//! forgetting one would show.
 //!
-//! Lo que este test NO puede decir es si el brazo hace lo correcto. Dice que
-//! existe. Es exactamente la clase de olvido que se colaba.
+//! What this test CANNOT say is whether the arm does the right thing. It says
+//! it exists. That is exactly the class of oversight that was slipping
+//! through.
 
 use norte_proto::catalog::{CATALOGO, Kind, MethodInfo, Shape};
 
-/// Lee un fichero del workspace desde la raíz del crate.
-fn fuente(rel: &str) -> String {
-    let ruta = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
-    std::fs::read_to_string(&ruta).unwrap_or_else(|e| panic!("se lee {}: {e}", ruta.display()))
+/// Reads a workspace file from the crate's root.
+fn source(rel: &str) -> String {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(rel);
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display()))
 }
 
-/// El nombre de la constante a partir del de wire (`fs.stat` → `FS_STAT`).
+/// The constant's name from the wire one (`fs.stat` → `FS_STAT`).
 ///
-/// Se busca la CONSTANTE y no la cadena: el daemon y el cliente nombran
-/// `methods::FS_STAT`, nunca `"fs.stat"` a pelo, y buscar la cadena daría
-/// falsos negativos en todos ellos.
-fn constante_de(m: &MethodInfo) -> String {
+/// The CONSTANT is looked up, not the string: the daemon and the client name
+/// `methods::FS_STAT`, never the bare `"fs.stat"`, and looking up the string
+/// would give false negatives across the board.
+fn constant_of(m: &MethodInfo) -> String {
     m.name.replace('.', "_").to_uppercase()
 }
 
-/// ¿Aparece `methods::K` como identificador COMPLETO?
+/// Does `methods::K` appear as a WHOLE identifier?
 ///
-/// No con `contains`, que era el fallo: `methods::SYNC_PLAN` es subcadena de
-/// `methods::SYNC_PLAN_DONE`, así que borrar el brazo de `sync.plan` dejaba el
-/// test verde. Le pasaba a unos quince métodos —todos los que tienen una
-/// constante hermana más larga: `FS_CHECKSUM`/`_REPORT`,
-/// `PLUGIN_PREVIEW`/`_STYLED`, `FS_READ`/`FS_READ_MAX_CHUNK`…— o sea que la
-/// comprobación era indicativa y no falsable justo donde más falta hacía.
-fn nombra(src: &str, k: &str) -> bool {
-    let aguja = format!("methods::{k}");
-    src.match_indices(&aguja).any(|(i, _)| {
-        let siguiente = src[i + aguja.len()..].chars().next();
-        !siguiente.is_some_and(|c| c.is_alphanumeric() || c == '_')
+/// Not with `contains`, which was the bug: `methods::SYNC_PLAN` is a
+/// substring of `methods::SYNC_PLAN_DONE`, so deleting `sync.plan`'s arm left
+/// the test green. It happened to about fifteen methods — all the ones with a
+/// longer sibling constant: `FS_CHECKSUM`/`_REPORT`,
+/// `PLUGIN_PREVIEW`/`_STYLED`, `FS_READ`/`FS_READ_MAX_CHUNK`… — meaning the
+/// check was indicative and not falsifiable exactly where it mattered most.
+fn names(src: &str, k: &str) -> bool {
+    let needle = format!("methods::{k}");
+    src.match_indices(&needle).any(|(i, _)| {
+        let next = src[i + needle.len()..].chars().next();
+        !next.is_some_and(|c| c.is_alphanumeric() || c == '_')
     })
 }
 
-/// ¿Tiene BRAZO de reparto (`methods::K =>`)?
+/// Does it have a dispatch ARM (`methods::K =>`)?
 ///
-/// Es lo que distingue una petición de una notificación en el daemon, y lo
-/// que impide que el nombre cuente por aparecer en un doc-comment o en la
-/// lista de cancelables. `RPC_CANCEL` estaba catalogado como petición y no
-/// tiene brazo: con esta comprobación habría salido rojo el primer día.
-fn tiene_brazo(src: &str, k: &str) -> bool {
-    let aguja = format!("methods::{k}");
-    src.match_indices(&aguja).any(|(i, _)| {
-        let resto = src[i + aguja.len()..].trim_start();
-        resto.starts_with("=>")
+/// This is what tells a request apart from a notification in the daemon, and
+/// what stops the name from counting just because it appears in a doc comment
+/// or in the list of cancelables. `RPC_CANCEL` was catalogued as a request
+/// and has no arm: with this check it would have gone red on day one.
+fn has_arm(src: &str, k: &str) -> bool {
+    let needle = format!("methods::{k}");
+    src.match_indices(&needle).any(|(i, _)| {
+        let rest = src[i + needle.len()..].trim_start();
+        rest.starts_with("=>")
     })
 }
 
-/// El texto del BRAZO de reparto de `k`: desde `methods::K =>` hasta el
-/// principio del brazo siguiente.
+/// The text of `k`'s dispatch ARM: from `methods::K =>` to the start of the
+/// next arm.
 ///
-/// Trocear por brazos es lo que hace `shape` falsable. Sin esto era el único
-/// campo del catálogo que nadie comprobaba — y mintió el primer día:
-/// `index.build` estaba declarado `Direct` con `IndexBuildResult` cuando el
-/// daemon registra una Task y contesta `FsTaskResult`.
-fn brazo_de<'a>(src: &'a str, k: &str) -> Option<&'a str> {
-    let aguja = format!("methods::{k}");
-    let inicio = src
-        .match_indices(&aguja)
-        .find(|(i, _)| src[i + aguja.len()..].trim_start().starts_with("=>"))?
+/// Slicing by arms is what makes `shape` falsifiable. Without this it was the
+/// only catalogue field nobody checked — and it lied on day one: `index.build`
+/// was declared `Direct` with `IndexBuildResult` when the daemon registers a
+/// Task and answers `FsTaskResult`.
+fn arm_of<'a>(src: &'a str, k: &str) -> Option<&'a str> {
+    let needle = format!("methods::{k}");
+    let start = src
+        .match_indices(&needle)
+        .find(|(i, _)| src[i + needle.len()..].trim_start().starts_with("=>"))?
         .0;
-    let resto = &src[inicio + aguja.len()..];
-    // El brazo acaba en lo PRIMERO de estas tres: el siguiente `methods::… =>`,
-    // el brazo comodín, o el final de la función. Sin las dos últimas, el
-    // último brazo de cada `match` se tragaba el resto del fichero y arrastraba
-    // el `FsTaskResult` de cualquier función de más abajo — que es como
-    // `connection.provide_secret` y `plugin.set_config` salieron marcados sin
-    // registrar nada.
-    let siguiente_brazo = resto.match_indices("methods::").find(|(i, _)| {
-        let tras = &resto[*i + "methods::".len()..];
-        let ident: String = tras
+    let rest = &src[start + needle.len()..];
+    // The arm ends at the FIRST of these three: the next `methods::… =>`, the
+    // wildcard arm, or the function's end. Without the last two, the last arm
+    // of every `match` swallowed the rest of the file and dragged in the
+    // `FsTaskResult` of any function further down — which is how
+    // `connection.provide_secret` and `plugin.set_config` came out marked
+    // without registering anything.
+    let next_arm = rest.match_indices("methods::").find(|(i, _)| {
+        let after = &rest[*i + "methods::".len()..];
+        let ident: String = after
             .chars()
             .take_while(|c| c.is_alphanumeric() || *c == '_')
             .collect();
         !ident.is_empty()
-            && resto[*i + "methods::".len() + ident.len()..]
+            && rest[*i + "methods::".len() + ident.len()..]
                 .trim_start()
                 .starts_with("=>")
     });
-    let fin = [
-        siguiente_brazo.map(|(i, _)| i),
-        resto.find("other =>"),
-        resto.find("\n}"),
+    let end = [
+        next_arm.map(|(i, _)| i),
+        rest.find("other =>"),
+        rest.find("\n}"),
     ]
     .into_iter()
     .flatten()
     .min()
-    .unwrap_or(resto.len());
-    Some(&resto[..fin])
+    .unwrap_or(rest.len());
+    Some(&rest[..end])
 }
 
-/// El cuerpo de la función a la que un brazo DELEGA, si delega.
+/// The body of the function an arm DELEGATES to, if it delegates.
 ///
-/// Casi todos los brazos son una línea que llama a un `handle_…`, así que
-/// mirar solo el brazo no dice si registra una Task. Sin seguir la delegación,
-/// la comprobación de abajo solo puede fallar en un sentido — que es como se
-/// quedó la primera versión.
-fn cuerpo_delegado<'a>(src: &'a str, brazo: &str) -> Option<&'a str> {
-    let nombre: String = brazo
+/// Almost every arm is a single line calling a `handle_…`, so looking only at
+/// the arm does not say whether it registers a Task. Without following the
+/// delegation, the check below can only fail in one direction — which is how
+/// the first version was left.
+fn delegated_body<'a>(src: &'a str, arm: &str) -> Option<&'a str> {
+    let name: String = arm
         .match_indices("handle_")
-        .chain(brazo.match_indices("dispatch_"))
+        .chain(arm.match_indices("dispatch_"))
         .map(|(i, _)| {
-            brazo[i..]
+            arm[i..]
                 .chars()
                 .take_while(|c| c.is_alphanumeric() || *c == '_')
                 .collect::<String>()
         })
         .next()?;
-    for prefijo in ["async fn ", "fn "] {
-        let aguja = format!("{prefijo}{nombre}");
-        if let Some(i) = src.find(&aguja) {
-            let resto = &src[i..];
-            // Hasta el siguiente item de nivel 0.
-            let fin = resto[1..].find("\n}\n").map_or(resto.len(), |j| j + 1 + 3);
-            return Some(&resto[..fin]);
+    for prefix in ["async fn ", "fn "] {
+        let needle = format!("{prefix}{name}");
+        if let Some(i) = src.find(&needle) {
+            let rest = &src[i..];
+            // Up to the next top-level item.
+            let end = rest[1..].find("\n}\n").map_or(rest.len(), |j| j + 1 + 3);
+            return Some(&rest[..end]);
         }
     }
     None
 }
 
-/// **Un método `Task` o `Stream` registra una Task; uno `Direct` no.**
+/// **A `Task` or `Stream` method registers a Task; a `Direct` one does not.**
 ///
-/// Es la comprobación que hace de `shape` algo que se puede desmentir, y
-/// desmiente en los DOS sentidos: declararse `Direct` y registrar una Task, y
-/// declararse `Task` sin registrar ninguna. La primera versión solo miraba el
-/// primero, así que `shape` seguía pudiendo mentir con el gate verde — que es
-/// exactamente lo que este catálogo existe para impedir.
+/// This is the check that makes `shape` something that can be disproven, and
+/// it disproves it in BOTH directions: declaring `Direct` and registering a
+/// Task, and declaring `Task` without registering any. The first version only
+/// looked at the former, so `shape` could still lie with the gate green —
+/// which is exactly what this catalogue exists to prevent.
 #[test]
-fn el_shape_del_catalogo_casa_con_lo_que_hace_el_daemon() {
-    let src = fuente("src/daemon/server.rs");
-    // `register_task` y `FsTaskResult` son las dos formas en que un handler
-    // devuelve un `task_id`. Un `task_id` suelto NO cuenta: hay métodos
-    // directos que lo RECIBEN como parámetro (`task.cancel`, los informes).
-    let registra = |t: &str| t.contains("FsTaskResult") || t.contains("register_task");
+fn the_catalogues_shape_matches_what_the_daemon_does() {
+    let src = source("src/daemon/server.rs");
+    // `register_task` and `FsTaskResult` are the two ways a handler returns a
+    // `task_id`. A bare `task_id` does NOT count: there are direct methods
+    // that RECEIVE it as a parameter (`task.cancel`, the reports).
+    let registers = |t: &str| t.contains("FsTaskResult") || t.contains("register_task");
 
-    let mut mal = Vec::new();
+    let mut bad = Vec::new();
     for m in CATALOGO.iter().filter(|m| m.kind == Kind::Request) {
-        let Some(brazo) = brazo_de(&src, &constante_de(m)) else {
-            continue; // Lo cubre `el_daemon_reparte_todas_las_peticiones`.
+        let Some(arm) = arm_of(&src, &constant_of(m)) else {
+            continue; // Covered by `the_daemon_dispatches_every_request`.
         };
-        let delegado = cuerpo_delegado(&src, brazo);
-        let es_task = registra(brazo) || delegado.is_some_and(registra);
-        let declarado_task = matches!(m.shape, Shape::Task | Shape::Stream);
+        let delegate = delegated_body(&src, arm);
+        let is_task = registers(arm) || delegate.is_some_and(registers);
+        let declared_task = matches!(m.shape, Shape::Task | Shape::Stream);
 
-        match (es_task, declarado_task) {
-            (true, false) => mal.push(format!("{} dice Direct y registra una Task", m.name)),
-            (false, true) => mal.push(format!(
-                "{} dice {:?} y no registra ninguna Task",
+        match (is_task, declared_task) {
+            (true, false) => bad.push(format!("{} says Direct and registers a Task", m.name)),
+            (false, true) => bad.push(format!(
+                "{} says {:?} and registers no Task",
                 m.name, m.shape
             )),
             _ => {}
         }
     }
     assert!(
-        mal.is_empty(),
-        "el catálogo no dice lo que hace el daemon: {mal:?}"
+        bad.is_empty(),
+        "the catalogue does not say what the daemon does: {bad:?}"
     );
 }
 
-/// Los métodos que una superficie no tiene por qué nombrar, con su motivo.
+/// The methods a surface has no reason to name, with its reason.
 ///
-/// Una lista de excepciones es una deuda: cada entrada dice por qué NO se
-/// comprueba algo, y sin motivo escrito no entra.
-struct Excepcion {
-    metodo: &'static str,
-    motivo: &'static str,
+/// A list of exceptions is debt: each entry says WHY something is not
+/// checked, and without a written reason it does not go in.
+struct Exception {
+    method: &'static str,
+    reason: &'static str,
 }
 
-/// **El reparto del daemon nombra todas las peticiones.**
+/// **The daemon's dispatch names every request.**
 #[test]
-fn el_daemon_reparte_todas_las_peticiones() {
-    let src = fuente("src/daemon/server.rs");
-    // Las notificaciones no se reparten: las EMITE el daemon, y también
-    // aparecen en este fichero, así que se comprueban igual más abajo.
-    let mut faltan = Vec::new();
+fn the_daemon_dispatches_every_request() {
+    let src = source("src/daemon/server.rs");
+    // Notifications are not dispatched: the daemon EMITS them, and they also
+    // appear in this file, so they are checked the same way further below.
+    let mut missing = Vec::new();
     for m in CATALOGO.iter().filter(|m| m.kind == Kind::Request) {
-        if !tiene_brazo(&src, &constante_de(m)) {
-            faltan.push(m.name);
+        if !has_arm(&src, &constant_of(m)) {
+            missing.push(m.name);
         }
     }
     assert!(
-        faltan.is_empty(),
-        "peticiones que el daemon no reparte: {faltan:?}.\n\
-         Un método declarado que el daemon no atiende contesta \
-         METHOD_NOT_FOUND a un cliente que lo cree soportado."
+        missing.is_empty(),
+        "requests the daemon does not dispatch: {missing:?}.\n\
+         A declared method the daemon does not serve answers \
+         METHOD_NOT_FOUND to a client that believes it is supported."
     );
 }
 
-/// **Y una notificación NO tiene brazo de reparto.**
+/// **And a notification does NOT have a dispatch arm.**
 ///
-/// La otra mitad, que es la que ata `kind` en vez de dejarlo a mi palabra: si
-/// algo catalogado como notificación se repartiera como petición, o al revés,
-/// una de las dos comprobaciones se cae. Es lo que cazó que `rpc.cancel`
-/// estuviera catalogado como petición.
+/// The other half, the one that ties `kind` down instead of leaving it to my
+/// word: if something catalogued as a notification were dispatched as a
+/// request, or the other way around, one of the two checks falls. This is
+/// what caught `rpc.cancel` being catalogued as a request.
 #[test]
-fn una_notificacion_no_se_reparte_como_peticion() {
-    let src = fuente("src/daemon/server.rs");
-    let mut sobran = Vec::new();
+fn a_notification_is_not_dispatched_as_a_request() {
+    let src = source("src/daemon/server.rs");
+    let mut extra = Vec::new();
     for m in CATALOGO.iter().filter(|m| m.kind == Kind::Notification) {
-        if tiene_brazo(&src, &constante_de(m)) {
-            sobran.push(m.name);
+        if has_arm(&src, &constant_of(m)) {
+            extra.push(m.name);
         }
     }
     assert!(
-        sobran.is_empty(),
-        "catalogadas como notificación pero el daemon las reparte como \
-         petición: {sobran:?}. Una de las dos cosas es mentira."
+        extra.is_empty(),
+        "catalogued as a notification but the daemon dispatches them as a \
+         request: {extra:?}. One of the two things is a lie."
     );
 }
 
-/// **El daemon emite todas las notificaciones que el catálogo declara.**
+/// **The daemon emits every notification the catalogue declares.**
 #[test]
-fn el_daemon_emite_todas_las_notificaciones() {
+fn the_daemon_emits_every_notification() {
     let src = [
-        fuente("src/daemon/server.rs"),
-        fuente("src/daemon/mod.rs"),
-        fuente("src/engine.rs"),
-        // `rpc.cancel` la manda el CLIENTE al soltar una petición, no el
-        // daemon: es la única notificación que va en esa dirección.
-        fuente("../norte-client/src/remote/calls.rs"),
+        source("src/daemon/server.rs"),
+        source("src/daemon/mod.rs"),
+        source("src/engine.rs"),
+        // `rpc.cancel` is sent by the CLIENT when dropping a request, not by
+        // the daemon: it is the only notification that goes in that direction.
+        source("../norte-client/src/remote/calls.rs"),
     ]
     .join("\n");
-    let mut faltan = Vec::new();
+    let mut missing = Vec::new();
     for m in CATALOGO.iter().filter(|m| m.kind == Kind::Notification) {
-        if !nombra(&src, &constante_de(m)) {
-            faltan.push(m.name);
+        if !names(&src, &constant_of(m)) {
+            missing.push(m.name);
         }
     }
     assert!(
-        faltan.is_empty(),
-        "notificaciones que nadie emite: {faltan:?}.\n\
-         Una notificación declarada que no se manda es una pantalla que espera \
-         algo que no va a llegar."
+        missing.is_empty(),
+        "notifications nobody emits: {missing:?}.\n\
+         A declared notification that is never sent is a screen waiting for \
+         something that will never arrive."
     );
 }
 
-/// **El cliente remoto sabe pedir todo lo que el catálogo declara.**
+/// **The remote client knows how to request everything the catalogue
+/// declares.**
 ///
-/// Es la superficie que más silenciosamente se olvida: el daemon atiende el
-/// método, el schema lo publica, y la ventana no tiene por dónde llamarlo.
+/// This is the surface that is most silently forgotten: the daemon serves the
+/// method, the schema publishes it, and the window has no way to call it.
 #[test]
-fn el_cliente_remoto_sabe_pedirlo_todo() {
-    // Los CUATRO ficheros del cliente remoto. Leer solo dos hacía que la
-    // comprobación de excepciones caducas mintiera: afirmaba que el cliente
-    // no pedía `rpc.cancel` cuando lo manda en `calls.rs`.
+fn the_remote_client_knows_how_to_ask_for_everything() {
+    // The FOUR files of the remote client. Reading only two made the
+    // stale-exceptions check lie: it claimed the client did not request
+    // `rpc.cancel` when it sends it in `calls.rs`.
     let src = [
-        fuente("../norte-client/src/remote/mod.rs"),
-        fuente("../norte-client/src/remote/paging.rs"),
-        fuente("../norte-client/src/remote/calls.rs"),
-        fuente("../norte-client/src/remote/routes.rs"),
+        source("../norte-client/src/remote/mod.rs"),
+        source("../norte-client/src/remote/paging.rs"),
+        source("../norte-client/src/remote/calls.rs"),
+        source("../norte-client/src/remote/routes.rs"),
     ]
     .join("\n");
 
-    // El cliente NO es el daemon: hay métodos que por diseño no le tocan.
-    let excepciones = [
-        Excepcion {
-            metodo: "daemon.shutdown",
-            motivo: "apagar el daemon es un acto del CLI, no del SDK que lo usa",
+    // The client is NOT the daemon: some methods by design are not its concern.
+    let exceptions = [
+        Exception {
+            method: "daemon.shutdown",
+            reason: "shutting down the daemon is an act of the CLI, not of the SDK that uses it",
         },
-        Excepcion {
-            metodo: "policy.request_scope",
-            motivo: "lo pide un AGENTE por MCP, no una ventana",
+        Exception {
+            method: "policy.request_scope",
+            reason: "an AGENT asks for it over MCP, not a window",
         },
-        Excepcion {
-            // Lo destapó este test en su primera pasada, y resultó no ser un
-            // olvido: se concede desde el TERMINAL (`norte policy grant`,
-            // `norte-cli/src/main.rs`), con el cliente de bajo nivel del
-            // daemon y no con el SDK. Que el hueco existiera a propósito no
-            // estaba escrito en ninguna parte; ahora sí.
-            metodo: "policy.grant_scope",
-            motivo: "conceder un scope a un agente es un acto deliberado del \
-                     CLI; ninguna ventana lo ofrece",
+        Exception {
+            // This test uncovered it on its first pass, and it turned out not
+            // to be an oversight: it is granted from the TERMINAL
+            // (`norte policy grant`, `norte-cli/src/main.rs`), with the
+            // daemon's low-level client and not the SDK. That the gap existed
+            // on purpose was not written anywhere; now it is.
+            method: "policy.grant_scope",
+            reason: "granting a scope to an agent is a deliberate act of the \
+                     CLI; no window offers it",
         },
     ];
 
-    let mut faltan = Vec::new();
+    let mut missing = Vec::new();
     for m in CATALOGO.iter().filter(|m| m.kind == Kind::Request) {
-        if excepciones.iter().any(|e| e.metodo == m.name) {
+        if exceptions.iter().any(|e| e.method == m.name) {
             continue;
         }
-        if !nombra(&src, &constante_de(m)) {
-            faltan.push(m.name);
+        if !names(&src, &constant_of(m)) {
+            missing.push(m.name);
         }
     }
     assert!(
-        faltan.is_empty(),
-        "peticiones que el cliente remoto no sabe hacer: {faltan:?}.\n\
-         Si es a propósito, entra en `excepciones` CON su motivo; si no, es un \
-         método que el daemon atiende y por el que ningún frontend puede \
-         preguntar."
+        missing.is_empty(),
+        "requests the remote client does not know how to make: {missing:?}.\n\
+         If it is on purpose, it goes into `exceptions` WITH its reason; if \
+         not, it is a method the daemon serves that no frontend can ask for."
     );
 
-    // Una excepción que ya no hace falta es deuda que se queda: si el cliente
-    // aprendió a pedirlo, se quita de la lista.
-    for e in &excepciones {
-        let Some(m) = norte_proto::catalog::buscar(e.metodo) else {
-            panic!("la excepción `{}` nombra un método que no existe", e.metodo);
+    // An exception that is no longer needed is debt that lingers: if the
+    // client learned to ask for it, it comes off the list.
+    for e in &exceptions {
+        let Some(m) = norte_proto::catalog::buscar(e.method) else {
+            panic!(
+                "the exception `{}` names a method that does not exist",
+                e.method
+            );
         };
         assert!(
-            !nombra(&src, &constante_de(m)),
-            "`{}` está exceptuado ({}) pero el cliente SÍ lo pide: quita la excepción",
-            e.metodo,
-            e.motivo
+            !names(&src, &constant_of(m)),
+            "`{}` is exempted ({}) but the client DOES request it: remove the exception",
+            e.method,
+            e.reason
         );
     }
 }
 
-/// **Los tipos del catálogo están en el agregado del schema.**
+/// **The catalogue's types are in the schema's aggregate.**
 ///
-/// El schema publicado se genera de un `struct` con un campo por tipo de
-/// wire, escrito a mano. Un método nuevo cuyo `Params` no entre ahí queda
-/// fuera del schema publicado sin que nada se ponga rojo.
+/// The published schema is generated from a hand-written `struct` with one
+/// field per wire type. A new method whose `Params` does not go in there is
+/// left out of the published schema without anything going red.
 #[test]
-fn los_tipos_del_catalogo_estan_en_el_schema() {
-    let src = fuente("../norte-proto/tests/schema.rs");
-    let mut faltan = Vec::new();
+fn the_catalogues_types_are_in_the_schema() {
+    let src = source("../norte-proto/tests/schema.rs");
+    let mut missing = Vec::new();
     for m in CATALOGO {
         for ty in [m.params(), m.result()].into_iter().flatten() {
-            // `methods::FsStatParams` → `FsStatParams`, que es como el
-            // agregado lo nombra (con o sin prefijo de módulo).
-            let corto = ty.rsplit("::").next().unwrap_or(ty).trim();
-            if !src.contains(corto) {
-                faltan.push(format!("{} → {corto}", m.name));
+            // `methods::FsStatParams` → `FsStatParams`, which is how the
+            // aggregate names it (with or without the module prefix).
+            let short = ty.rsplit("::").next().unwrap_or(ty).trim();
+            if !src.contains(short) {
+                missing.push(format!("{} → {short}", m.name));
             }
         }
     }
-    faltan.sort();
-    faltan.dedup();
+    missing.sort();
+    missing.dedup();
     assert!(
-        faltan.is_empty(),
-        "tipos del catálogo que no entran en el agregado del schema: {faltan:?}.\n\
-         Lo que no está en `ProtocolSchema` no sale publicado, y quien \
-         implemente el protocolo desde el schema no sabrá que existe."
+        missing.is_empty(),
+        "catalogue types not in the schema's aggregate: {missing:?}.\n\
+         What is not in `ProtocolSchema` is not published, and whoever \
+         implements the protocol from the schema will not know it exists."
     );
 }

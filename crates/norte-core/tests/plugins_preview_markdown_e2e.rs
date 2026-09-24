@@ -15,7 +15,7 @@ fn plugin_dir() -> PathBuf {
 
 fn build_plugin() -> Option<PathBuf> {
     if !target_installed("wasm32-wasip2") {
-        eprintln!("SKIP: target wasm32-wasip2 no instalado");
+        eprintln!("SKIP: target wasm32-wasip2 not installed");
         return None;
     }
     let target_dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("wasm-guests");

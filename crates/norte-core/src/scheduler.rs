@@ -1,7 +1,8 @@
-//! Scheduler de tasks (spec §4, §10): toda operación larga es una Task con
-//! `CancellationToken` cooperativo y progreso coalescido. Cola por prioridad
-//! (`BinaryHeap`) + `Semaphore` por provider; un panic dentro de una task se
-//! supervisa → `Failed{Internal{panic}}` y el proceso sigue (spec §17.7).
+//! Task scheduler (spec §4, §10): every long operation is a Task with a
+//! cooperative `CancellationToken` and coalesced progress. Priority queue
+//! (`BinaryHeap`) + per-provider `Semaphore`; a panic inside a task is
+//! supervised → `Failed{Internal{panic}}` and the process keeps going (spec
+//! §17.7).
 
 use std::collections::{BinaryHeap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -16,35 +17,35 @@ use tracing::Instrument as _;
 
 use crate::progress::ProgressReporter;
 
-/// Prioridad de una task; a igual prioridad, FIFO por orden de entrada.
+/// A task's priority; at equal priority, FIFO by arrival order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub enum Priority {
-    /// Trabajo de fondo (indexado, hashes).
+    /// Background work (indexing, hashes).
     Low,
-    /// Operaciones normales de usuario.
+    /// Normal user operations.
     #[default]
     Normal,
-    /// Interactivo urgente (el usuario está mirando).
+    /// Urgent interactive (the user is watching).
     High,
 }
 
-/// La puerta de PAUSA de una task (ADR 0147): cerrada = pausada.
+/// A task's PAUSE gate (ADR 0147): closed = paused.
 ///
-/// Cooperativa, como la cancelación: la task solo se para en sus
-/// [`TaskCtx::checkpoint`], que están en el bucle por chunk de una copia en
-/// streaming y entre entrada y entrada de copiar, mover y borrar. Una copia
-/// servidor-a-servidor o por `copy_file_range` no tiene chunks, así que se
-/// para al acabar el fichero en curso, no antes.
+/// Cooperative, like cancellation: the task only stops at its
+/// [`TaskCtx::checkpoint`]s, which sit in the per-chunk loop of a streaming
+/// copy and between entries when copying, moving and deleting. A
+/// server-to-server copy or one done via `copy_file_range` has no chunks, so
+/// it stops when the file in progress finishes, not before.
 ///
-/// Clonable: la comparten el cuerpo, el [`TaskHandle`] y quien la pause
-/// desde fuera. Pausar o reanudar dos veces no es un error.
+/// Clonable: shared by the body, the [`TaskHandle`] and whoever pauses it
+/// from outside. Pausing or resuming twice is not an error.
 ///
 /// ```
 /// use norte_core::PauseGate;
 /// let g = PauseGate::default();
 /// assert!(!g.is_paused());
 /// g.pause();
-/// assert!(g.clone().is_paused(), "los clones comparten la puerta");
+/// assert!(g.clone().is_paused(), "clones share the gate");
 /// g.resume();
 /// assert!(!g.is_paused());
 /// ```
@@ -58,68 +59,68 @@ impl Default for PauseGate {
 }
 
 impl PauseGate {
-    /// Cierra la puerta: la task se parará en su próximo punto de control.
+    /// Closes the gate: the task will stop at its next checkpoint.
     pub fn pause(&self) {
         self.0.send_replace(true);
     }
 
-    /// Abre la puerta: la task pausada sigue.
+    /// Opens the gate: a paused task continues.
     pub fn resume(&self) {
         self.0.send_replace(false);
     }
 
-    /// Si está cerrada.
+    /// Whether it's closed.
     #[must_use]
     pub fn is_paused(&self) -> bool {
         *self.0.borrow()
     }
 }
 
-/// Por dónde entra una task: en paralelo —hasta cuatro por scheme— o a la
-/// COLA, donde van de una en una (ADR 0149).
+/// How a task enters: in parallel —up to four per scheme— or into the
+/// QUEUE, where they go one at a time (ADR 0149).
 ///
-/// La cola es UNA y global, no una por dispositivo: es la de Total Commander
-/// y la de Krusader, y es la que se puede explicar. Cuatro copias al mismo
-/// disco mecánico son más lentas que cuatro seguidas, y esa es toda la
-/// razón por la que existe.
+/// The queue is ONE, global, not one per device: it's Total Commander's and
+/// Krusader's, and it's the one that can be explained. Four copies to the
+/// same mechanical disk are slower than four in sequence, and that's the
+/// entire reason it exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Lane {
-    /// Hasta cuatro por scheme, como siempre.
+    /// Up to four per scheme, as always.
     #[default]
     Paralelo,
-    /// De una en una, en el orden en que entraron.
+    /// One at a time, in arrival order.
     Cola,
 }
 
-/// La clave de la cola en serie. No es un scheme y no puede serlo: si lo
-/// fuera, un provider llamado así compartiría hueco con ella.
-const COLA: &str = "\u{0}cola";
+/// The key for the serial queue. Not a scheme, and it can't be one: if it
+/// were, a provider by that name would share a slot with it.
+const QUEUE: &str = "\u{0}queue";
 
-/// Contexto que recibe el cuerpo de una task: cancelación cooperativa
-/// (chequéala en el inner loop, regla dura 3), pausa y emisor de progreso.
+/// The context a task's body receives: cooperative cancellation (check it in
+/// the inner loop, hard rule 3), pause, and the progress emitter.
 pub struct TaskCtx {
-    /// Token de cancelación; el cuerpo debe observarlo con frecuencia.
+    /// Cancellation token; the body must observe it frequently.
     pub cancel: CancellationToken,
-    /// La puerta de pausa; el cuerpo la respeta con [`Self::checkpoint`].
+    /// The pause gate; the body honors it via [`Self::checkpoint`].
     pub pause: PauseGate,
-    /// Emisor de progreso coalescido.
+    /// Coalesced progress emitter.
     pub progress: Arc<ProgressReporter>,
-    /// Origen de las mutaciones de esta task (default `User`; los agentes lo
-    /// fijan vía MCP en M3-4). Lo consume el journal.
+    /// The source of this task's mutations (default `User`; agents set it
+    /// via MCP in M3-4). Consumed by the journal.
     pub actor: crate::journal::Actor,
 }
 
 impl TaskCtx {
-    /// Punto de control: `Err(Cancelled)` si la task se canceló, y si está
-    /// PAUSADA espera aquí —publicando `Paused`, y `Running` al seguir—
-    /// hasta que se reanude o se cancele.
+    /// Checkpoint: `Err(Cancelled)` if the task was cancelled, and if it is
+    /// PAUSED it waits here —publishing `Paused`, and `Running` when it
+    /// continues— until it's resumed or cancelled.
     ///
-    /// Cancelar una task pausada funciona: la espera escucha también al
-    /// token, y vuelve con `Cancelled` para que el cuerpo limpie como en
-    /// cualquier otra cancelación.
+    /// Cancelling a paused task works: the wait also listens to the token,
+    /// and returns with `Cancelled` so the body can clean up as with any
+    /// other cancellation.
     ///
     /// # Errors
-    /// [`Error::Cancelled`] si se canceló antes o durante la pausa.
+    /// [`Error::Cancelled`] if cancelled before or during the pause.
     pub async fn checkpoint(&self) -> Result<(), Error> {
         if self.cancel.is_cancelled() {
             return Err(Error::Cancelled);
@@ -131,14 +132,14 @@ impl TaskCtx {
         let mut rx = self.pause.0.subscribe();
         tokio::select! {
             () = self.cancel.cancelled() => {
-                // Mientras el cuerpo limpia se ve lo mismo que en cualquier
-                // cancelación —en marcha hasta el desenlace—, no «pausada».
+                // While the body cleans up it looks the same as any other
+                // cancellation —running until the outcome—, not "paused".
                 self.progress.update(|p| p.state = TaskState::Running);
                 return Err(Error::Cancelled);
             }
-            // `wait_for` solo falla si el emisor cae, y el emisor lo tiene
-            // este mismo contexto: no puede caer mientras se espera.
-            _ = rx.wait_for(|pausada| !*pausada) => {}
+            // `wait_for` only fails if the sender drops, and this same
+            // context holds the sender: it cannot drop while this waits.
+            _ = rx.wait_for(|paused| !*paused) => {}
         }
         if self.cancel.is_cancelled() {
             return Err(Error::Cancelled);
@@ -148,12 +149,12 @@ impl TaskCtx {
     }
 }
 
-/// El cuerpo de una task: una factoría que recibe su [`TaskCtx`] y devuelve
-/// el future a ejecutar. `Ok(())` → `Completed`; `Err(Cancelled)` →
-/// `Cancelled`; otro `Err` → `Failed{error}`.
+/// A task's body: a factory that receives its [`TaskCtx`] and returns the
+/// future to run. `Ok(())` → `Completed`; `Err(Cancelled)` → `Cancelled`;
+/// any other `Err` → `Failed{error}`.
 pub type TaskBody = Box<dyn FnOnce(TaskCtx) -> BoxFuture<'static, Result<(), Error>> + Send>;
 
-/// Handle de una task viva: observar progreso, cancelar, esperar el final.
+/// Handle to a live task: watch progress, cancel, wait for the end.
 pub struct TaskHandle {
     id: TaskId,
     progress: watch::Receiver<TaskProgress>,
@@ -162,37 +163,38 @@ pub struct TaskHandle {
 }
 
 impl TaskHandle {
-    /// Id de la task.
+    /// The task's id.
     #[must_use]
     pub fn id(&self) -> TaskId {
         self.id
     }
 
-    /// Receptor de snapshots de progreso (siempre contiene el último).
+    /// Receiver for progress snapshots (always holds the latest).
     #[must_use]
     pub fn progress(&self) -> watch::Receiver<TaskProgress> {
         self.progress.clone()
     }
 
-    /// Pide cancelación cooperativa (la task decide cuándo parar limpio).
+    /// Requests cooperative cancellation (the task decides when to stop
+    /// cleanly).
     pub fn cancel(&self) {
         self.cancel.cancel();
     }
 
-    /// Clona el token de cancelación (para cancelar desde otra task, p. ej.
-    /// un manejador de señales).
+    /// Clones the cancellation token (to cancel from another task, e.g. a
+    /// signal handler).
     #[must_use]
     pub fn cancel_token(&self) -> CancellationToken {
         self.cancel.clone()
     }
 
-    /// La puerta de pausa de la task (ADR 0147).
+    /// The task's pause gate (ADR 0147).
     #[must_use]
     pub fn pause_gate(&self) -> PauseGate {
         self.pause.clone()
     }
 
-    /// Espera el estado terminal y lo devuelve.
+    /// Waits for the terminal state and returns it.
     pub async fn join(mut self) -> TaskState {
         loop {
             let state = self.progress.borrow().state.clone();
@@ -200,8 +202,8 @@ impl TaskHandle {
                 return state;
             }
             if self.progress.changed().await.is_err() {
-                // Emisor caído sin terminal: solo posible si el scheduler
-                // murió; repórtalo como panic interno.
+                // Sender dropped without a terminal state: only possible if
+                // the scheduler died; report it as an internal panic.
                 return TaskState::Failed {
                     error: Error::Internal { panic: true },
                 };
@@ -216,10 +218,11 @@ struct QueuedJob {
     seq: u64,
     body: TaskBody,
     ctx: TaskCtx,
-    /// `task{task_id, kind, provider}`, hijo de lo que estuviera abierto al
-    /// hacer `submit` — la petición `rpc` en el daemon (ADR 0127). Viaja con
-    /// el JOB y no con el runner, porque el runner saca del heap el que la
-    /// prioridad diga, que no tiene por qué ser el que él empujó.
+    /// `task{task_id, kind, provider}`, a child of whatever was open at
+    /// `submit` time — the daemon's `rpc` request (ADR 0127). Travels with
+    /// the JOB and not with the runner, because the runner pops whichever
+    /// one priority dictates off the heap, which need not be the one it
+    /// pushed.
     span: tracing::Span,
 }
 
@@ -236,7 +239,7 @@ impl PartialOrd for QueuedJob {
 }
 impl Ord for QueuedJob {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Max-heap: prioridad mayor primero; a igualdad, seq menor primero.
+        // Max-heap: higher priority first; ties broken by lower seq first.
         self.priority
             .cmp(&other.priority)
             .then_with(|| other.seq.cmp(&self.seq))
@@ -248,51 +251,52 @@ struct ProviderQueue {
     heap: Mutex<BinaryHeap<QueuedJob>>,
 }
 
-/// Scheduler de tasks del core. Barato de clonar vía `Arc` interno.
+/// The core's task scheduler. Cheap to clone via an internal `Arc`.
 pub struct Scheduler {
     inner: Arc<SchedulerInner>,
 }
 
 struct SchedulerInner {
     next_id: AtomicU64,
-    /// Concurrencia máxima por provider (spec §4: N pequeño, ≤4).
+    /// Max concurrency per provider (spec §4: small N, ≤4).
     per_provider_permits: usize,
     queues: Mutex<HashMap<String, Arc<ProviderQueue>>>,
 }
 
-/// Origen NO-cero de la secuencia de ids de task (#278).
+/// NON-zero origin for the task id sequence (#278).
 ///
-/// Un relevo del daemon —`daemon.going_away { reconnect: true }`— es un evento
-/// PREVISTO: sin esto, el proceso nuevo reparte los mismos ids que el viejo y
-/// un frontend con un informe en vuelo acierta por colisión sobre la fila
-/// equivocada. `daemon/approvals.rs` ya se sembraba así, con el mismo
-/// argumento escrito; las tasks no.
+/// A daemon handover —`daemon.going_away { reconnect: true }`— is an
+/// EXPECTED event: without this, the new process hands out the same ids as
+/// the old one and a frontend with a report in flight matches, by
+/// collision, the wrong row. `daemon/approvals.rs` already seeded itself
+/// this way, with the same argument written down; tasks did not.
 ///
-/// La diferencia con `approvals.rs` es el TECHO, y es la razón de que esto no
-/// sea una copia de aquella función: un `task_id` viaja al renderer dentro de
-/// `TaskView`, o sea JSON que lee JavaScript, donde el último entero exacto es
-/// 2^53. La semilla en nanosegundos de `approvals` vale allí porque un id de
-/// aprobación NO cruza ese puente; aquí pasaría de 2^53 y dos ids distintos
-/// colapsarían en el mismo `Number`, que es peor que la colisión que arregla.
+/// The difference from `approvals.rs` is the CEILING, and it's why this
+/// isn't a copy of that function: a `task_id` travels to the renderer
+/// inside a `TaskView`, i.e. JSON that JavaScript reads, where the largest
+/// exact integer is 2^53. The nanosecond seed `approvals` uses is fine
+/// there because an approval id never crosses that bridge; here it would
+/// exceed 2^53 and two different ids would collapse into the same
+/// `Number`, which is worse than the collision it fixes.
 ///
-/// Así que milisegundos truncados a 40 bits: hasta ~1,1e12, lo que deja ~9e15
-/// de recorrido por debajo de 2^53 para el `fetch_add`. El truncado da la
-/// vuelta cada ~34 años, y la unicidad DENTRO del proceso la sigue dando el
-/// contador, no el reloj. Separación best-effort, como la de `approvals`: dos
-/// arranques en el mismo milisegundo colisionan, y eso no pasa.
+/// So: milliseconds truncated to 40 bits: up to ~1.1e12, leaving ~9e15 of
+/// headroom below 2^53 for the `fetch_add`. The truncation wraps around
+/// every ~34 years, and uniqueness WITHIN the process is still given by the
+/// counter, not the clock. Best-effort separation, like `approvals`'s: two
+/// startups in the same millisecond collide, and that doesn't happen.
 fn semilla_de_ids() -> u64 {
-    /// 40 bits: ~1,1e12 ms, tres órdenes de magnitud por debajo de 2^53.
+    /// 40 bits: ~1.1e12 ms, three orders of magnitude below 2^53.
     const MASCARA: u64 = (1 << 40) - 1;
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(0));
-    // El 1 de siempre como suelo: un reloj a cero no debe devolver la
-    // secuencia a un origen que ya se repartió.
+    // The usual 1 as a floor: a clock at zero must not send the sequence
+    // back to an origin that was already handed out.
     (millis & MASCARA).max(1)
 }
 
 impl Scheduler {
-    /// Scheduler con `permits` tasks concurrentes por provider (cap a 4).
+    /// A scheduler with `permits` concurrent tasks per provider (capped at 4).
     #[must_use]
     pub fn new(permits: usize) -> Self {
         Self {
@@ -304,16 +308,16 @@ impl Scheduler {
         }
     }
 
-    /// Encola una task para `provider_key` y devuelve su handle. El cuerpo
-    /// corre cuando le toque (prioridad + semáforo).
+    /// Enqueues a task for `provider_key` and returns its handle. The body
+    /// runs when its turn comes (priority + semaphore).
     ///
-    /// `provider_key` es el SCHEME (`file`, `sftp`…), nunca una clave con
-    /// autoridad: va tal cual al span `task` del log (ADR 0127), y una
-    /// autoridad puede llevar `user:pass@`.
+    /// `provider_key` is the SCHEME (`file`, `sftp`…), never a key carrying
+    /// authority: it goes as-is into the log's `task` span (ADR 0127), and
+    /// an authority can carry `user:pass@`.
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento de un lock interno
-    /// (otro hilo panicó con él tomado), que ya sería un bug del core.
+    /// Never in practice: only from poisoning of an internal lock (another
+    /// thread panicked while holding it), which would already be a core bug.
     #[must_use]
     pub fn submit(
         &self,
@@ -326,10 +330,10 @@ impl Scheduler {
         self.submit_en(Lane::Paralelo, provider_key, kind, priority, actor, body)
     }
 
-    /// Como [`Self::submit`], eligiendo por dónde entra (ADR 0149).
+    /// Like [`Self::submit`], choosing how it enters (ADR 0149).
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento de un lock interno.
+    /// Never in practice: only from poisoning of an internal lock.
     pub fn submit_en(
         &self,
         lane: Lane,
@@ -341,11 +345,11 @@ impl Scheduler {
     ) -> TaskHandle {
         let seq = self.inner.next_id.fetch_add(1, Ordering::Relaxed);
         let id = TaskId::new(seq);
-        // Ids y tipos, nunca rutas ni parámetros (ADR 0127). `provider` es el
-        // SCHEME que pasan todos los llamadores, no `Engine::provider_key`
-        // (que lleva la autoridad, y con ella un posible `user:pass@`).
-        // `actor` es lo que más correlaciona el trabajo de un agente: su
-        // sesión es un id, como el de la tarea.
+        // Ids and types, never paths or parameters (ADR 0127). `provider`
+        // is the SCHEME every caller passes, not `Engine::provider_key`
+        // (which carries the authority, and with it a possible
+        // `user:pass@`). `actor` is what correlates an agent's work the
+        // most: its session is an id, just like the task's.
         let span = tracing::info_span!(
             "task",
             task_id = %id,
@@ -362,17 +366,18 @@ impl Scheduler {
             cancel: cancel.clone(),
             pause: pause.clone(),
             progress: Arc::clone(&reporter),
-            // El actor real lo fija el llamante (M3-3): `User` en el camino
-            // humano, `Agent{session}` en el agéntico. Alimenta el journal.
+            // The real actor is set by the caller (M3-3): `User` on the
+            // human path, `Agent{session}` on the agentic one. Feeds the
+            // journal.
             actor,
         };
         let queue = match lane {
             Lane::Paralelo => self.queue_for(provider_key),
-            Lane::Cola => self.queue_for(COLA),
+            Lane::Cola => self.queue_for(QUEUE),
         };
         {
-            // Invariante: nadie panica con el lock tomado.
-            let mut heap = queue.heap.lock().expect("heap lock sano");
+            // Invariant: nobody panics with the lock held.
+            let mut heap = queue.heap.lock().expect("heap lock sound");
             heap.push(QueuedJob {
                 id,
                 priority,
@@ -383,27 +388,29 @@ impl Scheduler {
             });
         }
 
-        // Un runner por submit; CUÁL job corre lo decide el heap (prioridad).
+        // One runner per submit; WHICH job runs is decided by the heap
+        // (priority).
         //
-        // RAÍZ (ADR 0127): el runner NO debe heredar el span de este
-        // `submit`, porque no corre necesariamente el job que este `submit`
-        // empujó. Cada job trae su propio span y se instrumenta con él abajo.
+        // ROOT (ADR 0127): the runner must NOT inherit this `submit`'s
+        // span, because it doesn't necessarily run the job this `submit`
+        // pushed. Each job carries its own span and is instrumented with
+        // it below.
         let runner_queue = Arc::clone(&queue);
         crate::blocking::spawn_raiz(async move {
             let _permit = runner_queue
                 .sem
                 .acquire()
                 .await
-                .expect("semáforo jamás se cierra");
+                .expect("semaphore never closes");
             let job = {
-                let mut heap = runner_queue.heap.lock().expect("heap lock sano");
+                let mut heap = runner_queue.heap.lock().expect("heap lock sound");
                 heap.pop()
             };
             let Some(job) = job else {
-                // Imposible: cada runner corresponde a un push. Defensivo.
+                // Impossible: every runner corresponds to a push. Defensive.
                 return;
             };
-            // `tokio::spawn` no hereda el span de nadie: se lo pone el JOB.
+            // `tokio::spawn` inherits nobody's span: the JOB provides its own.
             let span = job.span.clone();
             run_job(job).instrument(span).await;
         });
@@ -416,74 +423,75 @@ impl Scheduler {
         }
     }
 
-    /// Sube o baja una task que AÚN NO EMPEZÓ dentro de la cola en serie
-    /// (ADR 0149). `false` si ya corría, si no está en la cola, o si ya
-    /// estaba en la punta hacia donde se la mueve.
+    /// Moves a task that HAS NOT STARTED YET up or down within the serial
+    /// queue (ADR 0149). `false` if it was already running, if it's not in
+    /// the queue, or if it was already at the end it's being moved toward.
     ///
-    /// Reordena por la CLAVE de orden, no por el sitio en el montón: se
-    /// intercambia el `seq` con el vecino, que es lo que decide quién sale
-    /// antes a igual prioridad.
+    /// Reorders by the order KEY, not by its slot in the heap: the `seq` is
+    /// swapped with its neighbor, which is what decides who goes out first
+    /// at equal priority.
     ///
     /// # Panics
-    /// Nunca en la práctica: solo por envenenamiento de un lock interno.
+    /// Never in practice: only from poisoning of an internal lock.
     #[must_use]
-    pub fn mover_en_cola(&self, id: TaskId, arriba: bool) -> bool {
-        let queue = self.queue_for(COLA);
-        let mut heap = queue.heap.lock().expect("heap lock sano");
+    pub fn mover_en_cola(&self, id: TaskId, up: bool) -> bool {
+        let queue = self.queue_for(QUEUE);
+        let mut heap = queue.heap.lock().expect("heap lock sound");
         let mut jobs = std::mem::take(&mut *heap).into_vec();
-        // Por orden de salida: prioridad primero, y a igual prioridad el
-        // `seq` más bajo.
+        // By exit order: priority first, and at equal priority the lowest
+        // `seq`.
         jobs.sort_by_key(|j| (std::cmp::Reverse(j.priority), j.seq));
         let Some(pos) = jobs.iter().position(|j| j.id == id) else {
             *heap = jobs.into_iter().collect();
             return false;
         };
-        let otro = if arriba {
+        let other = if up {
             pos.checked_sub(1)
         } else {
             (pos + 1 < jobs.len()).then_some(pos + 1)
         };
-        let movido = if let Some(otro) = otro {
-            let (a, b) = (jobs[pos].seq, jobs[otro].seq);
+        let moved = if let Some(other) = other {
+            let (a, b) = (jobs[pos].seq, jobs[other].seq);
             jobs[pos].seq = b;
-            jobs[otro].seq = a;
+            jobs[other].seq = a;
             true
         } else {
             false
         };
         *heap = jobs.into_iter().collect();
-        movido
+        moved
     }
 
     fn queue_for(&self, provider_key: &str) -> Arc<ProviderQueue> {
-        let mut queues = self.inner.queues.lock().expect("queues lock sano");
-        // La cola en serie tiene UN hueco (ADR 0149); lo demás, los permisos
-        // por scheme de siempre.
-        let permisos = if provider_key == COLA {
+        let mut queues = self.inner.queues.lock().expect("queues lock sound");
+        // The serial queue has ONE slot (ADR 0149); everything else gets
+        // the usual per-scheme permits.
+        let permits = if provider_key == QUEUE {
             1
         } else {
             self.inner.per_provider_permits
         };
         Arc::clone(queues.entry(provider_key.to_owned()).or_insert_with(|| {
             Arc::new(ProviderQueue {
-                sem: Arc::new(Semaphore::new(permisos)),
+                sem: Arc::new(Semaphore::new(permits)),
                 heap: Mutex::new(BinaryHeap::new()),
             })
         }))
     }
 }
 
-/// Ejecuta un job supervisado: panic → `Failed{Internal{panic}}`, jamás tumba
-/// el proceso; el estado terminal SIEMPRE se publica.
+/// Runs a supervised job: panic → `Failed{Internal{panic}}`, never brings
+/// down the process; the terminal state is ALWAYS published.
 async fn run_job(job: QueuedJob) {
     let QueuedJob { body, ctx, .. } = job;
     let progress = Arc::clone(&ctx.progress);
     progress.update(|p| p.state = TaskState::Running);
-    // Una task pausada ANTES de empezar no empieza: espera aquí, y un cuerpo
-    // sin puntos de control propios también respeta la pausa al arrancar.
-    // Si la cancelan mientras espera, el cuerpo corre IGUAL: es él quien
-    // sabe limpiar y contar lo que no hizo (un informe marcado incompleto),
-    // y lo hace al ver el token, como con cualquier otra cancelación.
+    // A task paused BEFORE it starts does not start: it waits here, and a
+    // body with no checkpoints of its own also honors the pause at
+    // startup. If it's cancelled while waiting, the body runs ANYWAY: it's
+    // the one that knows how to clean up and account for what it didn't do
+    // (a report marked incomplete), and it does so on seeing the token,
+    // like with any other cancellation.
     if ctx.pause.is_paused() {
         let _ = ctx.checkpoint().await;
     }
@@ -496,7 +504,7 @@ async fn run_job(job: QueuedJob) {
         Ok(Err(Error::Cancelled)) => TaskState::Cancelled,
         Ok(Err(error)) => TaskState::Failed { error },
         Err(_panic) => {
-            tracing::error!("panic capturado en task supervisada");
+            tracing::error!("panic caught in a supervised task");
             TaskState::Failed {
                 error: Error::Internal { panic: true },
             }

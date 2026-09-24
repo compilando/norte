@@ -206,9 +206,9 @@ pub fn plugin_label(raw: &str) -> String {
 /// use norte_frontend::help_badge::plugin_label_flagged;
 ///
 /// assert_eq!(plugin_label_flagged("fs-read"), ("fs-read".to_owned(), false));
-/// let (texto, enmascarado) = plugin_label_flagged("net\u{202e}");
-/// assert!(enmascarado, "un override bidi se dice");
-/// assert!(!texto.contains('\u{202e}'));
+/// let (text, masked) = plugin_label_flagged("net\u{202e}");
+/// assert!(masked, "a bidi override is reported");
+/// assert!(!text.contains('\u{202e}'));
 /// ```
 #[must_use]
 pub fn plugin_label_flagged(raw: &str) -> (String, bool) {
@@ -289,28 +289,28 @@ mod tests {
     }
 
     #[test]
-    fn el_corpus_trae_su_propio_publisher_de_doble_ancho() {
-        // La misma propiedad que el test de arriba, pero con el adversario que
-        // ya vive en el corpus canónico (`name_max_255_multibyte`: あ hasta el
-        // tope de 255 bytes) en vez de con un `repeat` inventado aquí. Un
-        // publisher no es un nombre de fichero, pero el defecto es el mismo —
-        // celdas, no chars — y compartir la fixture es lo que hace que quien
-        // toque el presupuesto de una superficie se entere de la otra.
+    fn the_corpus_carries_its_own_double_width_publisher() {
+        // The same property as the test above, but with the adversary that
+        // already lives in the canonical corpus (`name_max_255_multibyte`: あ
+        // up to the 255-byte cap) instead of a `repeat` invented here. A
+        // publisher is not a file name, but the defect is the same — cells,
+        // not chars — and sharing the fixture is what makes whoever touches
+        // one surface's budget find out about the other.
         let wide = norte_testkit::corpus::hostile_names()
             .into_iter()
             .find(|n| n.id == "name_max_255_multibyte")
-            .expect("la fixture vive en el corpus canónico");
-        let wide = String::from_utf8(wide.bytes).expect("la fixture es UTF-8");
+            .expect("the fixture lives in the canonical corpus");
+        let wide = String::from_utf8(wide.bytes).expect("the fixture is UTF-8");
         assert!(
             cells(&wide) > MAX_BADGE_CELLS,
-            "si la fixture cupiera, este test no probaría nada ({} celdas)",
+            "if the fixture fit, this test would prove nothing ({} cells)",
             cells(&wide)
         );
         let badge = plugin_badge(Some(&wide), true, false, Lang::En)
             .expect("a plugin topic always has a badge");
         assert!(
             badge.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
-            "la bandera del host sobrevive al publisher ancho: {badge}"
+            "the host's flag survives the wide publisher: {badge}"
         );
         assert!(cells(&badge) <= MAX_BADGE_CELLS, "{}", cells(&badge));
     }

@@ -1,12 +1,12 @@
-//! Tipos de transferencia (ADR 0005/0009, spec §5): rango de lectura y
-//! políticas de copy y delete. Viajan en los params de
-//! `fs.copy`/`fs.move`/`fs.delete` y en la API del trait `Provider`.
+//! Transfer types (ADR 0005/0009, spec §5): read range and copy/delete
+//! policies. They travel in the params of `fs.copy`/`fs.move`/`fs.delete` and
+//! in the `Provider` trait's API.
 
 use serde::{Deserialize, Serialize};
 
-/// Rango de bytes de una lectura: `offset` inicial y longitud opcional
-/// (`None` = hasta EOF). Lo exigen el resume de M2 (`.norte-partial` +
-/// offset) y el viewer (lectura parcial de archivos grandes).
+/// Byte range of a read: starting `offset` and optional length (`None` = to
+/// EOF). Required by M2's resume (`.norte-partial` + offset) and the viewer
+/// (partial reads of large files).
 ///
 /// ```
 /// use norte_proto::ByteRange;
@@ -16,19 +16,18 @@ use serde::{Deserialize, Serialize};
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ByteRange {
-    /// Primer byte a leer (0 = principio).
+    /// First byte to read (0 = start).
     pub offset: u64,
-    /// Cuántos bytes leer; `None` = hasta el final del archivo.
+    /// How many bytes to read; `None` = to the end of the file.
     pub len: Option<u64>,
 }
 
-/// Qué hacer cuando el destino de una copia/movimiento ya existe
-/// (spec §5; semánticas exactas en ADR 0005).
+/// What to do when the destination of a copy/move already exists (spec §5;
+/// exact semantics in ADR 0005).
 ///
-/// El engine de M1 trata [`Ask`](Self::Ask) como [`Fail`](Self::Fail): la
-/// resolución interactiva por archivo llega con los diálogos del TUI
-/// (fase 5). Un core viejo que no conozca una política nueva DEBE fallar el
-/// request, jamás adivinar.
+/// M1's engine treats [`Ask`](Self::Ask) as [`Fail`](Self::Fail): interactive
+/// per-file resolution arrives with the TUI's dialogs (phase 5). An old core
+/// that does not know a new policy MUST fail the request, never guess.
 ///
 /// ```
 /// use norte_proto::CollisionPolicy;
@@ -40,29 +39,29 @@ pub struct ByteRange {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CollisionPolicy {
-    /// La colisión es error: `Conflict` y la task falla (default).
+    /// The collision is an error: `Conflict` and the task fails (default).
     #[default]
     Fail,
-    /// Preguntar por archivo (TUI, fase 5). El engine M1 lo trata como
+    /// Ask per file (TUI, phase 5). The M1 engine treats it as
     /// [`Fail`](Self::Fail).
     Ask,
-    /// No copiar la entrada en conflicto; la task termina `Completed`.
+    /// Do not copy the conflicting entry; the task ends `Completed`.
     Skip,
-    /// Reemplazar el destino (remove + write, dos mutaciones en el journal;
-    /// tipo contra tipo distinto sigue siendo `Conflict`).
+    /// Replace the destination (remove + write, two journal mutations; type
+    /// against a different type is still a `Conflict`).
     Overwrite,
-    /// Buscar nombre libre: sufijo ` (n)` antes de la última extensión,
-    /// n = 1..=1000; agotado → `Conflict`.
+    /// Look for a free name: a ` (n)` suffix before the last extension,
+    /// n = 1..=1000; exhausted → `Conflict`.
     RenameAuto,
-    /// Reemplazar solo si el origen es más nuevo (`mtime`); si no, saltar.
-    /// Sin mtime comparable en cualquiera de los dos → `Conflict`.
+    /// Replace only if the source is newer (`mtime`); otherwise skip. With no
+    /// comparable mtime on either side → `Conflict`.
     Newer,
 }
 
-/// Qué hacer con los symlinks al copiar (spec §17.9; ADR 0005).
+/// What to do with symlinks when copying (spec §17.9; ADR 0005).
 ///
-/// En M1, [`Follow`](Self::Follow) sobre un symlink a DIRECTORIO devuelve
-/// `Unsupported` (seguir dirs exige detección de ciclos — M2).
+/// In M1, [`Follow`](Self::Follow) on a symlink to a DIRECTORY returns
+/// `Unsupported` (following dirs requires cycle detection — M2).
 ///
 /// ```
 /// use norte_proto::SymlinkPolicy;
@@ -74,17 +73,17 @@ pub enum CollisionPolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymlinkPolicy {
-    /// Copiar el CONTENIDO apuntado. Symlink a dir: `Unsupported` en M1.
+    /// Copy the pointed-to CONTENT. Symlink to a dir: `Unsupported` in M1.
     Follow,
-    /// Recrear el symlink en el destino, bytes del target intactos
-    /// (default: lo que hace `cp -a`).
+    /// Recreate the symlink at the destination, target bytes untouched
+    /// (default: what `cp -a` does).
     #[default]
     Preserve,
-    /// No copiar symlinks (contados como saltados).
+    /// Do not copy symlinks (counted as skipped).
     Skip,
 }
 
-/// Reanudación de una transferencia interrumpida (ADR 0012, spec §5).
+/// Resuming an interrupted transfer (ADR 0012, spec §5).
 ///
 /// ```
 /// use norte_proto::ResumePolicy;
@@ -96,18 +95,18 @@ pub enum SymlinkPolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResumePolicy {
-    /// Sin reanudación: cancelar/fallar deja el destino LIMPIO (contrato
-    /// de M1). Default — cero sorpresas para quien no lo pide.
+    /// No resuming: cancelling/failing leaves the destination CLEAN (M1's
+    /// contract). Default — zero surprises for whoever does not ask for it.
     #[default]
     Off,
-    /// Reanudar: cancelar o un fallo transitorio CONSERVA el
-    /// `.norte-partial`; la próxima copia del mismo `src→dst` continúa
-    /// desde donde iba (`already` del provider, ADR 0012).
+    /// Resume: cancelling or a transient failure KEEPS the
+    /// `.norte-partial`; the next copy of the same `src→dst` continues from
+    /// where it was (the provider's `already`, ADR 0012).
     On,
 }
 
-/// Cómo verificar el `.norte-partial` antes de reanudar sobre él
-/// (ADR 0012). Solo aplica con [`ResumePolicy::On`].
+/// How to verify the `.norte-partial` before resuming onto it (ADR 0012).
+/// Only applies with [`ResumePolicy::On`].
 ///
 /// ```
 /// use norte_proto::VerifyPolicy;
@@ -119,23 +118,24 @@ pub enum ResumePolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum VerifyPolicy {
-    /// Solo longitud: si el parcial es más largo que el origen se descarta
-    /// y se empieza de cero. Barato (default).
+    /// Length only: if the partial is longer than the source it is discarded
+    /// and started from scratch. Cheap (default).
     #[default]
     Length,
-    /// Además, el hash de `origen[..already]` debe coincidir con el del
-    /// parcial; si no, se descarta. Relee `already` bytes de ambos lados.
+    /// Additionally, the hash of `source[..already]` must match the
+    /// partial's; if not, it is discarded. Rereads `already` bytes on both
+    /// sides.
     Hash,
 }
 
-/// Cómo borrar (ADR 0009). El default del WIRE es el seguro:
-/// [`Trash`](Self::Trash). El engine JAMÁS degrada solo — pedir `Trash`
-/// sin capability `TRASH` es `Unsupported` y el frontend decide con el
-/// usuario informado.
+/// How to delete (ADR 0009). The WIRE's default is the safe one:
+/// [`Trash`](Self::Trash). The engine NEVER degrades on its own — asking for
+/// `Trash` without the `TRASH` capability is `Unsupported` and the frontend
+/// decides with the user informed.
 ///
-/// SKEW: un core anterior a 0.3 IGNORA `mode` (tolerancia de structs,
-/// ADR 0004) y borra PERMANENTE — condiciona `Trash` a la capability
-/// `TRASH` (que un core viejo jamás anuncia), NUNCA a tu versión.
+/// SKEW: a core older than 0.3 IGNORES `mode` (struct tolerance, ADR 0004)
+/// and deletes PERMANENTLY — condition `Trash` on the `TRASH` capability
+/// (which an old core never announces), NEVER on your version.
 ///
 /// ```
 /// use norte_proto::DeleteMode;
@@ -147,9 +147,9 @@ pub enum VerifyPolicy {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeleteMode {
-    /// A la papelera del provider (recuperable).
+    /// To the provider's trash (recoverable).
     #[default]
     Trash,
-    /// Borrado permanente (elección EXPLÍCITA).
+    /// Permanent deletion (an EXPLICIT choice).
     Permanent,
 }

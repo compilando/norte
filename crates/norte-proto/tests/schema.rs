@@ -142,18 +142,19 @@ struct ProtocolSchema {
     plugin_list_params: PluginListParams,
     plugin_list_result: PluginListResult,
     plugin_notice: PluginNotice,
-    // `PanelEvent` tampoco es alcanzable, y por lo mismo que `PanelFrame`:
-    // va APLANADO dentro de los params, y el generador no arrastra lo que
-    // `flatten` esconde. Sin esta línea el artefacto publicaría un método
-    // cuya petición no describe del todo.
+    // `PanelEvent` is not reachable either, and for the same reason as
+    // `PanelFrame`: it goes FLATTENED inside the params, and the generator
+    // does not pull in what `flatten` hides. Without this line the artifact
+    // would publish a method whose request it does not fully describe.
     panel_event: methods::PanelEvent,
-    // Sin `panel_span`: un tramo de panel es un `SpanWire`, el mismo que el
-    // de una preview estilada, y ese ya está en el artefacto.
+    // No `panel_span`: a panel span is a `SpanWire`, the same one a styled
+    // preview uses, and that one is already in the artifact.
     //
-    // `PanelFrame` no es alcanzable desde el resultado: viaja con
-    // `#[serde(flatten)]` dentro de `PluginPanelRenderResult`, y el generador
-    // no lo arrastra. Se declara aquí, como cualquier otro tipo de primer
-    // nivel, o el artefacto publicaría un método cuya respuesta no describe.
+    // `PanelFrame` is not reachable from the result: it travels with
+    // `#[serde(flatten)]` inside `PluginPanelRenderResult`, and the generator
+    // does not pull it in. It is declared here, like any other top-level
+    // type, or the artifact would publish a method whose response it does
+    // not describe.
     panel_frame: methods::PanelFrame,
     plugin_panel_info: methods::PluginPanelInfo,
     plugin_panel_render_params: methods::PluginPanelRenderParams,
@@ -250,22 +251,24 @@ struct ProtocolSchema {
 }
 
 #[test]
-fn el_schema_del_protocolo_no_diverge() {
+fn the_protocol_schema_does_not_diverge() {
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
     let json = format!("{}\n", serde_json::to_string_pretty(&schema).unwrap());
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/schema/proto.schema.json");
     if std::env::var_os("NORTE_UPDATE_SCHEMA").is_some() {
-        std::fs::write(&path, &json).expect("escribir proto.schema.json");
+        std::fs::write(&path, &json).expect("write proto.schema.json");
         return;
     }
-    let publicado = std::fs::read_to_string(&path)
+    let published = std::fs::read_to_string(&path)
         .unwrap_or_else(|_| {
-            panic!("falta docs/schema/proto.schema.json: regenera con NORTE_UPDATE_SCHEMA=1")
+            panic!(
+                "docs/schema/proto.schema.json is missing: regenerate with NORTE_UPDATE_SCHEMA=1"
+            )
         })
         .replace("\r\n", "\n");
     assert_eq!(
-        publicado, json,
-        "docs/schema/proto.schema.json divergió del código: regenera con \
+        published, json,
+        "docs/schema/proto.schema.json diverged from the code: regenerate with \
          NORTE_UPDATE_SCHEMA=1 cargo test -p norte-proto --features schema --test schema"
     );
 }
@@ -278,12 +281,12 @@ fn el_schema_del_protocolo_no_diverge() {
 /// appear in the generated `$defs`; scanning the source turns that omission
 /// into a red test instead of a stale schema.
 #[test]
-fn todo_tipo_con_schema_esta_en_el_artefacto() {
+fn every_type_with_a_schema_is_in_the_artifact() {
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
     let defs = schema
         .get("$defs")
         .and_then(serde_json::Value::as_object)
-        .expect("el schema raíz tiene $defs");
+        .expect("the root schema has $defs");
 
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
@@ -291,7 +294,7 @@ fn todo_tipo_con_schema_esta_en_el_artefacto() {
 
     let mut declared: Vec<String> = Vec::new();
     for file in &files {
-        let text = std::fs::read_to_string(file).expect("leer fuente");
+        let text = std::fs::read_to_string(file).expect("read source");
         let lines: Vec<&str> = text.lines().collect();
         for (i, line) in lines.iter().enumerate() {
             if line.contains("derive(schemars::JsonSchema)") {
@@ -316,15 +319,15 @@ fn todo_tipo_con_schema_esta_en_el_artefacto() {
     }
     assert!(
         declared.len() >= 90,
-        "el escáner no encontró los tipos con schema (halló {}): ¿cambió el formato del derive?",
+        "the scanner did not find the types with a schema (found {}): did the derive's format change?",
         declared.len()
     );
 
     let missing: Vec<&String> = declared.iter().filter(|n| !defs.contains_key(*n)).collect();
     assert!(
         missing.is_empty(),
-        "tipos con derive `schema` ausentes del artefacto (no alcanzables desde \
-         ProtocolSchema — añádelos como campo): {missing:?}"
+        "types with a `schema` derive missing from the artifact (unreachable from \
+         ProtocolSchema — add them as a field): {missing:?}"
     );
 }
 
@@ -334,109 +337,108 @@ fn todo_tipo_con_schema_esta_en_el_artefacto() {
 /// every variant, so requiring the two key sets to be equal turns "added a
 /// variant, forgot the schema" into a red test.
 #[test]
-fn el_schema_de_attr_value_cubre_las_etiquetas_de_la_golden() {
+fn the_attr_value_schema_covers_the_golden_s_tags() {
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
     let props = schema
         .pointer("/$defs/AttrValue/properties")
         .and_then(serde_json::Value::as_object)
-        .expect("AttrValue tiene properties en el artefacto");
-    let del_schema: std::collections::BTreeSet<&str> = props.keys().map(String::as_str).collect();
+        .expect("AttrValue has properties in the artifact");
+    let from_schema: std::collections::BTreeSet<&str> = props.keys().map(String::as_str).collect();
 
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/types/attr_value.json");
-    let raw = std::fs::read_to_string(&fixture).expect("leer attr_value.json");
-    let casos: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&raw).expect("fixture JSON válida");
-    let de_la_golden: std::collections::BTreeSet<&str> = casos
+    let raw = std::fs::read_to_string(&fixture).expect("read attr_value.json");
+    let cases: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).expect("valid JSON fixture");
+    let from_golden: std::collections::BTreeSet<&str> = cases
         .values()
-        .map(|caso| {
-            let obj = caso
-                .as_object()
-                .expect("cada caso es un objeto de una clave");
-            assert_eq!(obj.len(), 1, "un AttrValue emite EXACTAMENTE una clave");
-            obj.keys().next().expect("la clave").as_str()
+        .map(|case| {
+            let obj = case.as_object().expect("each case is a one-key object");
+            assert_eq!(obj.len(), 1, "an AttrValue emits EXACTLY one key");
+            obj.keys().next().expect("the key").as_str()
         })
         .collect();
 
     assert_eq!(
-        del_schema, de_la_golden,
-        "las properties de $defs/AttrValue y las etiquetas de attr_value.json deben coincidir"
+        from_schema, from_golden,
+        "$defs/AttrValue's properties and attr_value.json's tags must match"
     );
 }
 
-/// (0.36.0) Mismo mecanismo que el test de arriba, para
-/// [`RenameCollisionKind`]. El `check_family` de `golden_types.rs` NO cubre
-/// este fallo: compara las fixtures contra una lista de casos Rust escrita a
-/// mano, así que una variante NUEVA sin fixture y sin caso deja los dos lados
-/// de acuerdo y el test verde. El artefacto, en cambio, se genera del tipo, así
-/// que cruzarlo contra la golden convierte «añadí un veredicto, olvidé
-/// congelarlo» en rojo.
+/// (0.36.0) Same mechanism as the test above, for [`RenameCollisionKind`].
+/// `golden_types.rs`'s `check_family` does NOT catch this failure: it compares
+/// the fixtures against a hand-written list of Rust cases, so a NEW variant
+/// with no fixture and no case leaves both sides agreeing and the test green.
+/// The artifact, by contrast, is generated from the type, so crossing it
+/// against the golden turns "added a verdict, forgot to freeze it" into red.
 ///
-/// `unknown` queda fuera a propósito: es el fallback de deserialización
-/// (`serde(other)`), el core JAMÁS lo emite y por eso no le corresponde
-/// fixture — pinearlo obligaría a congelar un valor que no existe en el wire.
+/// `unknown` is left out on purpose: it is the deserialization fallback
+/// (`serde(other)`), the core NEVER emits it and so it is not owed a
+/// fixture — pinning it would mean freezing a value that does not exist on
+/// the wire.
 #[test]
-fn el_schema_de_rename_collision_kind_cubre_los_veredictos_de_la_golden() {
+fn the_rename_collision_kind_schema_covers_the_golden_s_verdicts() {
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
-    let variantes = schema
+    let variants = schema
         .pointer("/$defs/RenameCollisionKind/oneOf")
         .and_then(serde_json::Value::as_array)
-        .expect("RenameCollisionKind es un oneOf en el artefacto");
-    let del_schema: std::collections::BTreeSet<&str> = variantes
+        .expect("RenameCollisionKind is a oneOf in the artifact");
+    let from_schema: std::collections::BTreeSet<&str> = variants
         .iter()
         .filter_map(|v| v.get("const").and_then(serde_json::Value::as_str))
         .filter(|v| *v != "unknown")
         .collect();
     assert!(
-        !del_schema.is_empty(),
-        "¿cambió la forma del enum en el artefacto?"
+        !from_schema.is_empty(),
+        "did the enum's shape in the artifact change?"
     );
 
     let fixture =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/types/rename_collision.json");
-    let raw = std::fs::read_to_string(&fixture).expect("leer rename_collision.json");
-    let casos: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&raw).expect("fixture JSON válida");
-    let de_la_golden: std::collections::BTreeSet<&str> = casos
+    let raw = std::fs::read_to_string(&fixture).expect("read rename_collision.json");
+    let cases: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).expect("valid JSON fixture");
+    let from_golden: std::collections::BTreeSet<&str> = cases
         .values()
-        .map(|caso| {
-            caso.get("kind")
+        .map(|case| {
+            case.get("kind")
                 .and_then(serde_json::Value::as_str)
-                .expect("cada colisión lleva su veredicto")
+                .expect("every collision carries its verdict")
         })
         .collect();
 
     assert_eq!(
-        del_schema, de_la_golden,
-        "todo veredicto que el core puede emitir necesita fixture en \
-         rename_collision.json (y al revés)"
+        from_schema, from_golden,
+        "every verdict the core can emit needs a fixture in \
+         rename_collision.json (and vice versa)"
     );
 }
 
-/// (0.41.0, #178) El mismo mecanismo, para LA TAXONOMÍA DE ERRORES entera.
+/// (0.41.0, #178) The same mechanism, for the WHOLE ERROR TAXONOMY.
 ///
-/// Es la familia a la que más le hacía falta y la única que no lo tenía. Un
-/// bump que añade categoría —0.36.0 dos, 0.40.0 una, 0.41.0 una— toca tres
-/// sitios que nada ata entre sí: la variante, el caso Rust de `golden_error` y
-/// la fixture. `check_family` cruza los dos ÚLTIMOS, así que olvidar los dos a
-/// la vez deja los dos lados de acuerdo y el test verde, con una categoría que
-/// el core emite y ninguna golden congela. El artefacto se genera del TIPO, así
-/// que cruzarlo contra la fixture cierra el triángulo.
+/// This is the family that needed it most and the only one that did not have
+/// it. A bump that adds a category — two in 0.36.0, one in 0.40.0, one in
+/// 0.41.0 — touches three places nothing ties together: the variant, the
+/// Rust case in `golden_error`, and the fixture. `check_family` crosses the
+/// LAST two, so forgetting both at once leaves both sides agreeing and the
+/// test green, with a category the core emits and no golden freezing. The
+/// artifact is generated from the TYPE, so crossing it against the fixture
+/// closes the triangle.
 ///
-/// [`Error`] va con tag INTERNO (`#[serde(tag = "kind")]`), no como los enums
-/// de token suelto de los dos tests de abajo: sus `const` no viven en
-/// `oneOf[].const` sino en `oneOf[].properties.kind.const`. De ahí que sea un
-/// test propio y no una fila más de la tabla.
+/// [`Error`] carries an INTERNAL tag (`#[serde(tag = "kind")]`), not like the
+/// plain-token enums of the two tests below: its `const`s do not live at
+/// `oneOf[].const` but at `oneOf[].properties.kind.const`. Hence its own test
+/// instead of one more row in the table below.
 ///
-/// `unknown` queda fuera, como en sus hermanos: es el fallback de
-/// `serde(other)` y el core JAMÁS lo emite.
+/// `unknown` is left out, like its siblings: it is `serde(other)`'s fallback
+/// and the core NEVER emits it.
 #[test]
-fn el_schema_de_la_taxonomia_de_errores_cubre_la_golden() {
+fn the_error_taxonomy_schema_covers_the_golden() {
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
-    let variantes = schema
+    let variants = schema
         .pointer("/$defs/Error/oneOf")
         .and_then(serde_json::Value::as_array)
-        .expect("Error es un oneOf en el artefacto");
-    let del_schema: std::collections::BTreeSet<&str> = variantes
+        .expect("Error is a oneOf in the artifact");
+    let from_schema: std::collections::BTreeSet<&str> = variants
         .iter()
         .filter_map(|v| {
             v.pointer("/properties/kind/const")
@@ -445,154 +447,154 @@ fn el_schema_de_la_taxonomia_de_errores_cubre_la_golden() {
         .filter(|v| *v != "unknown")
         .collect();
     assert!(
-        !del_schema.is_empty(),
-        "¿cambió la forma de Error en el artefacto? (tag interno: /properties/kind/const)"
+        !from_schema.is_empty(),
+        "did Error's shape in the artifact change? (internal tag: /properties/kind/const)"
     );
 
     let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/types/error.json");
-    let raw = std::fs::read_to_string(&fixture).expect("leer error.json");
-    let casos: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_str(&raw).expect("fixture JSON válida");
-    let de_la_golden: std::collections::BTreeSet<&str> = casos
+    let raw = std::fs::read_to_string(&fixture).expect("read error.json");
+    let cases: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(&raw).expect("valid JSON fixture");
+    let from_golden: std::collections::BTreeSet<&str> = cases
         .values()
-        .map(|caso| {
-            caso.get("kind")
+        .map(|case| {
+            case.get("kind")
                 .and_then(serde_json::Value::as_str)
-                .expect("cada error de la fixture lleva su categoría")
+                .expect("every error in the fixture carries its category")
         })
         .collect();
 
     assert_eq!(
-        del_schema, de_la_golden,
-        "toda categoría que el core puede emitir necesita fixture en error.json (y al revés)"
+        from_schema, from_golden,
+        "every category the core can emit needs a fixture in error.json (and vice versa)"
     );
 }
 
-/// (0.40.0, ADR 0049) El mismo mecanismo que el test de
-/// [`RenameCollisionKind`], para el vocabulario de la sincronización: TODO
-/// token que el core puede emitir necesita fixture, y al revés.
+/// (0.40.0, ADR 0049) The same mechanism as the [`RenameCollisionKind`] test,
+/// for the synchronization vocabulary: EVERY token the core can emit needs a
+/// fixture, and vice versa.
 ///
-/// Importa más aquí que en ninguna otra familia: estos enums crecen a lo largo
-/// de trece tareas más de este mismo plan, y `check_family` no caza la
-/// variante nueva sin fixture —compara las fixtures contra una lista de casos
-/// Rust escrita a mano, así que olvidar las dos deja los dos lados de acuerdo—.
-/// El artefacto, en cambio, se genera del tipo.
+/// This matters more here than in any other family: these enums grow across
+/// thirteen more tasks of this same plan, and `check_family` does not catch a
+/// new variant with no fixture — it compares the fixtures against a
+/// hand-written list of Rust cases, so forgetting both leaves both sides
+/// agreeing. The artifact, by contrast, is generated from the type.
 ///
-/// `unknown` queda fuera en todos los casos: es el fallback de `serde(other)`,
-/// el core JAMÁS lo emite y congelarlo sería congelar un valor que no existe en
-/// el wire.
+/// `unknown` is left out in every case: it is `serde(other)`'s fallback, the
+/// core NEVER emits it, and freezing it would mean freezing a value that does
+/// not exist on the wire.
 #[test]
-fn el_schema_del_vocabulario_de_sync_cubre_las_goldens() {
+fn the_sync_vocabulary_schema_covers_the_goldens() {
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
-    // (tipo, fichero, prefijo de fixture, clave). El PREFIJO acota el barrido:
-    // `methods.json` es heterogéneo y su clave `mode` también la usa
-    // `fs.delete`, que no tiene nada que ver con un modo de sincronización.
-    for (tipo, fixture, prefijo, campo) in [
+    // (type, file, fixture prefix, field). The PREFIX bounds the sweep:
+    // `methods.json` is heterogeneous and its `mode` key is also used by
+    // `fs.delete`, which has nothing to do with a sync mode.
+    for (kind, fixture, prefix, field) in [
         ("SyncStepKind", "sync_step.json", "", "kind"),
         ("StepReversal", "sync_step.json", "", "reversal"),
         ("SyncReason", "sync_step.json", "", "reason"),
         ("SyncBlockerKind", "sync_blocker.json", "", "kind"),
         ("SyncFailureCause", "methods.json", "sync_", "cause"),
         ("SyncMode", "methods.json", "sync_", "mode"),
-        // El prefijo es `sync_` y no `sync_plan_done` desde 0.42.0: la papelera
-        // del destino viaja también en el INFORME (#170), y el barrido tiene
-        // que ver los dos sitios — si un día divergieran, el que se quedara
-        // corto de valores rompería aquí.
+        // The prefix is `sync_` and not `sync_plan_done` since 0.42.0: the
+        // destination's trash also travels in the REPORT (#170), and the
+        // sweep has to see both places — if they ever diverged, whichever one
+        // fell short of values would break here.
         ("DestTrash", "methods.json", "sync_", "dest_trash"),
         ("OnUnknown", "methods.json", "sync_", "on_unknown"),
         ("RootOverlap", "error.json", "overlapping_roots", "relation"),
-        // (0.45.0) La taxonomía de conflictos no estaba cruzada, y por eso
-        // `escapes_root` pudo llegar al schema sin fixture: `check_family`
-        // compara contra una lista escrita a mano, así que olvidarse en los dos
-        // sitios a la vez deja el test verde.
+        // (0.45.0) The conflict taxonomy was not cross-checked, and that is
+        // how `escapes_root` reached the schema with no fixture:
+        // `check_family` compares against a hand-written list, so forgetting
+        // it in both places at once leaves the test green.
         ("ConflictKind", "error.json", "conflict_", "conflict"),
-        // (0.42.0, #152) De la familia de COMPARACIÓN, y aquí por el mismo
-        // mecanismo: es el vocabulario que un plan de sincronización tiene que
-        // leer para no escribir sobre un fichero que solo empareja por una
-        // descomposición singleton de NFC.
+        // (0.42.0, #152) From the COMPARISON family, and here by the same
+        // mechanism: it is the vocabulary a sync plan has to read so as not
+        // to write over a file that only pairs through an NFC singleton
+        // decomposition.
         ("PairTransform", "compare_row.json", "", "paired_under"),
     ] {
-        let variantes = schema
-            .pointer(&format!("/$defs/{tipo}/oneOf"))
+        let variants = schema
+            .pointer(&format!("/$defs/{kind}/oneOf"))
             .and_then(serde_json::Value::as_array)
-            .unwrap_or_else(|| panic!("{tipo} es un oneOf en el artefacto"));
-        let del_schema: std::collections::BTreeSet<&str> = variantes
+            .unwrap_or_else(|| panic!("{kind} is a oneOf in the artifact"));
+        let from_schema: std::collections::BTreeSet<&str> = variants
             .iter()
             .filter_map(|v| v.get("const").and_then(serde_json::Value::as_str))
             .filter(|v| *v != "unknown")
             .collect();
         assert!(
-            !del_schema.is_empty(),
-            "[{tipo}] ¿cambió la forma del enum en el artefacto?"
+            !from_schema.is_empty(),
+            "[{kind}] did the enum's shape in the artifact change?"
         );
 
         let path = Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("tests/golden/types")
             .join(fixture);
-        let raw = std::fs::read_to_string(&path).expect("leer la fixture");
-        let casos: serde_json::Map<String, serde_json::Value> =
-            serde_json::from_str(&raw).expect("fixture JSON válida");
-        // El campo puede ser opcional (`reversal`, `reason`) y puede vivir
-        // ANIDADO (`cause`, dentro de la lista de fallos del informe): lo que se
-        // cruza es el conjunto de valores que las fixtures llegan a enseñar,
-        // esté donde esté.
-        let mut de_la_golden = std::collections::BTreeSet::new();
-        for (nombre, caso) in &casos {
-            if nombre.starts_with(prefijo) {
-                recoge_valores(caso, campo, &mut de_la_golden);
+        let raw = std::fs::read_to_string(&path).expect("read the fixture");
+        let cases: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&raw).expect("valid JSON fixture");
+        // The field can be optional (`reversal`, `reason`) and can live
+        // NESTED (`cause`, inside the report's list of failures): what is
+        // crossed is the set of values the fixtures show anywhere, wherever
+        // they live.
+        let mut from_golden = std::collections::BTreeSet::new();
+        for (name, case) in &cases {
+            if name.starts_with(prefix) {
+                collect_values(case, field, &mut from_golden);
             }
         }
 
         assert_eq!(
-            del_schema, de_la_golden,
-            "[{tipo}] todo valor que el core puede emitir necesita fixture en \
-             {fixture} (y al revés)"
+            from_schema, from_golden,
+            "[{kind}] every value the core can emit needs a fixture in \
+             {fixture} (and vice versa)"
         );
     }
 }
 
-/// (rust-review MINOR 5) El artefacto es lo único que un implementador de
-/// TERCEROS lee: si `Entry.attrs` fuese un `object` abierto, le estaría
-/// diciendo que 100 claves arbitrarias son legales. Las restricciones del tipo
-/// tienen que viajar en el schema, y los números tienen que venir de las
-/// MISMAS constantes que aplica el deserializador.
+/// (rust-review MINOR 5) The artifact is the only thing a THIRD-PARTY
+/// implementer reads: if `Entry.attrs` were an open `object`, it would be
+/// telling them that 100 arbitrary keys are legal. The type's constraints
+/// have to travel in the schema, and the numbers have to come from the SAME
+/// constants the deserializer applies.
 ///
-/// El `pattern` es la traducción ECMA-262 de [`is_valid_attr_id`]: uno o más
-/// segmentos `[a-z0-9_-]` separados por puntos, con al menos un punto. `$` sin
-/// flag `m` ancla al final de la cadena, así que no admite el `\n` final que
-/// sí colaría en otros dialectos. La función es la verdad; este test falla si
-/// alguien mueve una sin la otra.
+/// The `pattern` is the ECMA-262 translation of [`is_valid_attr_id`]: one or
+/// more `[a-z0-9_-]` segments separated by dots, with at least one dot. `$`
+/// with no `m` flag anchors to the end of the string, so it does not admit
+/// the trailing `\n` other dialects would let through. The function is the
+/// source of truth; this test fails if someone moves one without the other.
 #[test]
-fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
+fn the_entry_attrs_schema_carries_the_type_s_caps() {
     use norte_proto::attrs::{ATTR_ID_MAX, ATTRS_MAX_REQUEST};
 
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
     let attrs = schema
         .pointer("/$defs/Entry/properties/attrs")
-        .expect("Entry.attrs está en el artefacto");
+        .expect("Entry.attrs is in the artifact");
 
     assert_eq!(
         attrs
             .get("maxProperties")
             .and_then(serde_json::Value::as_u64),
         Some(ATTRS_MAX_REQUEST as u64),
-        "el tope del mapa viaja en el schema"
+        "the map's cap travels in the schema"
     );
-    let nombres = attrs
+    let names = attrs
         .get("propertyNames")
-        .expect("las claves están restringidas, no son un string cualquiera");
+        .expect("keys are restricted, not a plain string");
     assert_eq!(
-        nombres.get("maxLength").and_then(serde_json::Value::as_u64),
+        names.get("maxLength").and_then(serde_json::Value::as_u64),
         Some(ATTR_ID_MAX as u64)
     );
     assert_eq!(
-        nombres.get("pattern").and_then(serde_json::Value::as_str),
+        names.get("pattern").and_then(serde_json::Value::as_str),
         Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
-        "el patrón es la traducción ECMA-262 de is_valid_attr_id"
+        "the pattern is the ECMA-262 translation of is_valid_attr_id"
     );
 
-    // Muestreo de acuerdo patrón ⇄ función: lo que el schema declara legal lo
-    // acepta el validador, y lo que declara ilegal lo rechaza.
+    // Sample check pattern ⇄ function agreement: what the schema declares
+    // legal the validator accepts, and what it declares illegal it rejects.
     for legal in [
         "posix.mode",
         "s3.storage_class",
@@ -601,7 +603,7 @@ fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
     ] {
         assert!(norte_proto::attrs::is_valid_attr_id(legal));
     }
-    for ilegal in [
+    for illegal in [
         "mode",
         "MODE",
         "../etc/passwd",
@@ -609,190 +611,192 @@ fn el_schema_de_entry_attrs_lleva_los_topes_del_tipo() {
         ".mode",
         "a..b",
         "",
-        // Segmento que no empieza por letra (0.30.0): forma de argv y forma
-        // de float, que aguas abajo se leen como otra cosa.
+        // A segment that does not start with a letter (0.30.0): argv-shaped
+        // and float-shaped, which downstream are read as something else.
         "-x.y",
         "0.0",
         "9-9.9-9",
         "__.__",
     ] {
-        assert!(!norte_proto::attrs::is_valid_attr_id(ilegal));
+        assert!(!norte_proto::attrs::is_valid_attr_id(illegal));
     }
 }
 
-/// (0.30.0, ADR 0039) Mismo criterio que el test anterior, para los tres campos
-/// de método: el artefacto es lo único que lee un implementador de TERCEROS, y
-/// un `array` abierto le diría que 100 ids arbitrarios son legales. Los topes
-/// vienen de las MISMAS constantes que aplica el código.
+/// (0.30.0, ADR 0039) Same criterion as the previous test, for the method's
+/// three fields: the artifact is the only thing a THIRD-PARTY implementer
+/// reads, and an open `array` would tell them 100 arbitrary ids are legal.
+/// The caps come from the SAME constants the code applies.
 ///
-/// El catálogo lleva `maxItems`; la forma de su ELEMENTO viaja en
-/// `$defs/AttrInfo`, que restringe `id` (patrón + longitud) y `label`
-/// (longitud) — las MISMAS reglas que aplica `sanitize_catalog` al decodificar.
-/// Las dos PETICIONES restringen el ítem en el propio campo, porque ahí un id
-/// mal formado es `-32602` y el schema tiene que decirlo.
+/// The catalog carries `maxItems`; its ELEMENT's shape travels in
+/// `$defs/AttrInfo`, which restricts `id` (pattern + length) and `label`
+/// (length) — the SAME rules `sanitize_catalog` applies on decode. The two
+/// REQUESTS restrict the item on the field itself, because there a malformed
+/// id is `-32602` and the schema has to say so.
 #[test]
-fn el_schema_de_los_campos_de_metodo_lleva_los_topes_del_tipo() {
+fn the_method_field_schemas_carry_the_type_s_caps() {
     use norte_proto::attrs::{
         ATTR_ID_MAX, ATTR_LABEL_MAX, ATTRS_MAX_ADVERTISED, ATTRS_MAX_REQUEST,
     };
 
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
 
-    // El descriptor anunciado: id con forma y tope, label con tope.
+    // The advertised descriptor: id with shape and cap, label with a cap.
     let id = schema
         .pointer("/$defs/AttrInfo/properties/id")
-        .expect("AttrInfo.id está en el artefacto");
+        .expect("AttrInfo.id is in the artifact");
     assert_eq!(
         id.get("maxLength").and_then(serde_json::Value::as_u64),
         Some(ATTR_ID_MAX as u64),
-        "el tope del id viaja en el schema"
+        "the id's cap travels in the schema"
     );
     assert_eq!(
         id.get("pattern").and_then(serde_json::Value::as_str),
         Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
-        "el patrón es el MISMO que el de Entry.attrs"
+        "the pattern is the SAME as Entry.attrs's"
     );
     assert_eq!(
         schema
             .pointer("/$defs/AttrInfo/properties/label/maxLength")
             .and_then(serde_json::Value::as_u64),
         Some(ATTR_LABEL_MAX as u64),
-        "el tope del label viaja en el schema (y `sanitize_catalog` lo recorta)"
+        "the label's cap travels in the schema (and `sanitize_catalog` trims it)"
     );
 
-    let catalogo = schema
+    let catalog = schema
         .pointer("/$defs/FsCapabilitiesResult/properties/attrs")
-        .expect("FsCapabilitiesResult.attrs está en el artefacto");
+        .expect("FsCapabilitiesResult.attrs is in the artifact");
     assert_eq!(
-        catalogo.get("maxItems").and_then(serde_json::Value::as_u64),
+        catalog.get("maxItems").and_then(serde_json::Value::as_u64),
         Some(ATTRS_MAX_ADVERTISED as u64),
-        "el tope del catálogo viaja en el schema"
+        "the catalog's cap travels in the schema"
     );
     assert_eq!(
-        catalogo
+        catalog
             .pointer("/items/$ref")
             .and_then(serde_json::Value::as_str),
         Some("#/$defs/AttrInfo"),
-        "el elemento es un AttrInfo, no un objeto libre"
+        "the element is an AttrInfo, not a free-form object"
     );
 
-    for tipo in ["FsListParams", "FsStatParams"] {
-        let pedido = schema
-            .pointer(&format!("/$defs/{tipo}/properties/attrs"))
-            .unwrap_or_else(|| panic!("{tipo}.attrs está en el artefacto"));
+    for kind in ["FsListParams", "FsStatParams"] {
+        let requested = schema
+            .pointer(&format!("/$defs/{kind}/properties/attrs"))
+            .unwrap_or_else(|| panic!("{kind}.attrs is in the artifact"));
         assert_eq!(
-            pedido.get("maxItems").and_then(serde_json::Value::as_u64),
+            requested
+                .get("maxItems")
+                .and_then(serde_json::Value::as_u64),
             Some(ATTRS_MAX_REQUEST as u64),
-            "[{tipo}] el tope de ids pedidos viaja en el schema"
+            "[{kind}] the requested-ids cap travels in the schema"
         );
-        let item = pedido.get("items").unwrap_or_else(|| {
-            panic!("[{tipo}] los ids están restringidos, no son un string cualquiera")
-        });
+        let item = requested
+            .get("items")
+            .unwrap_or_else(|| panic!("[{kind}] ids are restricted, not a plain string"));
         assert_eq!(
             item.get("maxLength").and_then(serde_json::Value::as_u64),
             Some(ATTR_ID_MAX as u64),
-            "[{tipo}] longitud máxima del id"
+            "[{kind}] the id's maximum length"
         );
         assert_eq!(
             item.get("pattern").and_then(serde_json::Value::as_str),
             Some(r"^[a-z][a-z0-9_-]*(\.[a-z][a-z0-9_-]*)+$"),
-            "[{tipo}] el patrón es el MISMO que el de Entry.attrs \
-             (traducción ECMA-262 de is_valid_attr_id)"
+            "[{kind}] the pattern is the SAME as Entry.attrs's \
+             (ECMA-262 translation of is_valid_attr_id)"
         );
     }
 }
 
-/// (0.36.0) Mismo criterio que el test de los campos de `attrs`: el artefacto
-/// es lo único que lee un implementador de TERCEROS, y un `array` sin techo le
-/// diría que un lote de un millón de renames es legal. Aquí importa más que en
-/// `attrs`, porque pasarse NO se recorta — es `-32602`, la petición entera —,
-/// así que un cliente que no conozca el número manda algo que el daemon tira.
+/// (0.36.0) Same criterion as the `attrs` fields test: the artifact is the
+/// only thing a THIRD-PARTY implementer reads, and a ceiling-less `array`
+/// would tell them a batch of a million renames is legal. It matters more
+/// here than in `attrs`, because going over is NOT trimmed — it is
+/// `-32602`, the whole request — so a client that does not know the number
+/// sends something the daemon throws away.
 ///
-/// Los números salen de las MISMAS constantes que aplica el código, y el patrón
-/// del hash sale del `JsonSchema` de [`PlanHash`], que a su vez lo construye
-/// desde `PLAN_HASH_LEN`: una sola fuente para el validador y para el contrato.
+/// The numbers come from the SAME constants the code applies, and the hash's
+/// pattern comes from [`PlanHash`]'s `JsonSchema`, which in turn builds it
+/// from `PLAN_HASH_LEN`: a single source for the validator and the contract.
 #[test]
-fn el_schema_del_batch_de_renames_lleva_los_topes_del_tipo() {
+fn the_rename_batch_schema_carries_the_type_s_caps() {
     use norte_proto::methods::{FS_RENAME_BATCH_MAX_PAIRS, PLAN_HASH_LEN};
 
     let schema = serde_json::to_value(schemars::schema_for!(ProtocolSchema)).unwrap();
 
-    for tipo in ["FsRenameBatchPlanParams", "FsRenameBatchParams"] {
+    for kind in ["FsRenameBatchPlanParams", "FsRenameBatchParams"] {
         let pairs = schema
-            .pointer(&format!("/$defs/{tipo}/properties/pairs"))
-            .unwrap_or_else(|| panic!("{tipo}.pairs está en el artefacto"));
+            .pointer(&format!("/$defs/{kind}/properties/pairs"))
+            .unwrap_or_else(|| panic!("{kind}.pairs is in the artifact"));
         assert_eq!(
             pairs.get("maxItems").and_then(serde_json::Value::as_u64),
             Some(FS_RENAME_BATCH_MAX_PAIRS as u64),
-            "[{tipo}] el tope de parejas viaja en el schema"
+            "[{kind}] the pair cap travels in the schema"
         );
         assert_eq!(
             pairs
                 .pointer("/items/$ref")
                 .and_then(serde_json::Value::as_str),
             Some("#/$defs/RenamePair"),
-            "[{tipo}] el elemento es un RenamePair, no un objeto libre"
+            "[{kind}] the element is a RenamePair, not a free-form object"
         );
     }
 
-    // El hash lleva su forma en el TIPO, así que los dos campos son un `$ref`
-    // y las restricciones viven una sola vez.
+    // The hash carries its shape in the TYPE, so both fields are a `$ref`
+    // and the constraints live in exactly one place.
     let hash = schema
         .pointer("/$defs/PlanHash")
-        .expect("PlanHash está en el artefacto");
+        .expect("PlanHash is in the artifact");
     assert_eq!(
         hash.get("pattern").and_then(serde_json::Value::as_str),
         Some(format!("^[0-9a-f]{{{PLAN_HASH_LEN}}}$").as_str()),
-        "el patrón es la traducción ECMA-262 de PlanHash::parse"
+        "the pattern is the ECMA-262 translation of PlanHash::parse"
     );
-    for tope in ["minLength", "maxLength"] {
+    for cap in ["minLength", "maxLength"] {
         assert_eq!(
-            hash.get(tope).and_then(serde_json::Value::as_u64),
+            hash.get(cap).and_then(serde_json::Value::as_u64),
             Some(PLAN_HASH_LEN as u64),
-            "[{tope}] la longitud EXACTA viaja en el schema"
+            "[{cap}] the EXACT length travels in the schema"
         );
     }
-    for tipo in ["FsRenameBatchPlanResult", "FsRenameBatchParams"] {
+    for kind in ["FsRenameBatchPlanResult", "FsRenameBatchParams"] {
         assert_eq!(
             schema
-                .pointer(&format!("/$defs/{tipo}/properties/plan_hash/$ref"))
+                .pointer(&format!("/$defs/{kind}/properties/plan_hash/$ref"))
                 .and_then(serde_json::Value::as_str),
             Some("#/$defs/PlanHash"),
-            "[{tipo}] plan_hash es el tipo con patrón, no un string cualquiera"
+            "[{kind}] plan_hash is the type with a pattern, not a plain string"
         );
     }
 }
 
-/// Recoge, en profundidad, todo valor de tipo string que cuelgue de la clave
-/// `campo`. Las fixtures anidan (un informe lleva sus fallos en una lista), así
-/// que un cruce que solo mirase el primer nivel dejaría enums enteros sin
-/// vigilar.
-fn recoge_valores<'a>(
-    valor: &'a serde_json::Value,
-    campo: &str,
+/// Collects, in depth, every string-typed value hanging off the `field` key.
+/// Fixtures nest (a report carries its failures in a list), so a crosscheck
+/// that only looked at the first level would leave whole enums unwatched.
+fn collect_values<'a>(
+    value: &'a serde_json::Value,
+    field: &str,
     out: &mut std::collections::BTreeSet<&'a str>,
 ) {
-    match valor {
+    match value {
         serde_json::Value::Object(map) => {
             for (k, v) in map {
-                if k == campo
+                if k == field
                     && let Some(s) = v.as_str()
                 {
                     out.insert(s);
                 }
-                recoge_valores(v, campo, out);
+                collect_values(v, field, out);
             }
         }
         serde_json::Value::Array(items) => {
             for v in items {
-                recoge_valores(v, campo, out);
+                collect_values(v, field, out);
             }
         }
         _ => {}
     }
 }
 
-/// Recoge `.rs` bajo `dir` (incluye `src/wire/`).
+/// Collects `.rs` files under `dir` (includes `src/wire/`).
 fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
@@ -807,7 +811,7 @@ fn collect_rs(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// Nombre en `pub struct NAME` / `pub enum NAME`, si la línea lo es.
+/// Name in `pub struct NAME` / `pub enum NAME`, if the line is one.
 fn pub_type_name(line: &str) -> Option<String> {
     let trimmed = line.trim_start();
     let rest = trimmed

@@ -1,19 +1,19 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// «Ir a cualquier sitio» en la ventana (#357, fase 6).
+// "Go anywhere" in the window (#357, phase 6).
 // ---------------------------------------------------------------------------
 
-/// Espera la siguiente actualización que traiga «ir a».
-async fn siguiente_ir_a(
+/// Waits for the next update that carries "goto".
+async fn next_goto(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> Option<norte_ui_host::dto::GotoView> {
     for _ in 0..20 {
-        let siguiente = tokio::time::timeout(ESPERA_MAX, sub.recv())
+        let next = tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("una actualización antes del plazo")
-            .expect("el host sigue vivo");
-        if let Update::Message(m) = siguiente
+            .expect("an update before the deadline")
+            .expect("the host is still alive");
+        if let Update::Message(m) = next
             && let UiUpdate::Patch(p) = &m.payload
         {
             for c in &p.changes {
@@ -23,7 +23,7 @@ async fn siguiente_ir_a(
             }
         }
     }
-    panic!("no llegó ninguna actualización con «ir a»");
+    panic!("no update with \"goto\" ever arrived");
 }
 
 fn ctrl_g() -> UiAction {
@@ -36,8 +36,8 @@ fn ctrl_g() -> UiAction {
     })
 }
 
-/// Las filas que se pintan, sin las cabeceras.
-fn filas(v: &norte_ui_host::dto::GotoView) -> Vec<&str> {
+/// The rows that get painted, without the headers.
+fn rows(v: &norte_ui_host::dto::GotoView) -> Vec<&str> {
     v.lines
         .iter()
         .filter_map(|l| match l {
@@ -47,129 +47,130 @@ fn filas(v: &norte_ui_host::dto::GotoView) -> Vec<&str> {
         .collect()
 }
 
-/// `ctrl+g` abre «ir a», y teclear una RUTA la ofrece arriba; `Enter` va ahí.
+/// `ctrl+g` opens "goto", and typing a PATH offers it at the top; `Enter`
+/// goes there.
 ///
-/// La ruta tecleada es la única fila que no sale de una lista, y la decisión
-/// de qué cuenta como ruta y a dónde lleva es la del modelo compartido: la
-/// misma que en la TUI.
+/// The typed path is the only row that does not come from a list, and the
+/// decision of what counts as a path and where it leads belongs to the
+/// shared model: the same as in the TUI.
 #[tokio::test]
-async fn una_ruta_tecleada_se_ofrece_y_enter_va_ahi() {
+async fn a_typed_path_is_offered_and_enter_goes_there() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
-    h.dispatch(ctrl_g()).await.expect("host vivo");
-    let abierta = siguiente_ir_a(&mut sub).await.expect("«ir a» abre");
-    assert!(abierta.query.is_empty(), "arranca sin consulta");
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    let opened = next_goto(&mut sub).await.expect("\"goto\" opens");
+    assert!(opened.query.is_empty(), "starts with no query");
 
     for c in "mem:///casa/docs".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    let v = foto.goto.expect("sigue abierta");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    let v = snap.goto.expect("still open");
     assert_eq!(
-        filas(&v).first().copied(),
+        rows(&v).first().copied(),
         Some("mem:///casa/docs"),
-        "la ruta tecleada va la primera: {:?}",
+        "the typed path goes first: {:?}",
         v.lines
     );
     assert!(
         matches!(
             v.lines
-                .get(usize::try_from(v.cursor.expect("cursor")).expect("índice")),
+                .get(usize::try_from(v.cursor.expect("cursor")).expect("index")),
             Some(norte_ui_host::dto::GotoLineView::Row { .. })
         ),
-        "el cursor está en una fila, nunca en una cabecera"
+        "the cursor is on a row, never on a header"
     );
 
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     for _ in 0..30 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        assert!(foto.goto.is_none(), "«ir a» se cierra al confirmar");
-        if listado(&foto).path_display.ends_with("docs") {
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        assert!(snap.goto.is_none(), "\"goto\" closes on confirm");
+        if listado(&snap).path_display.ends_with("docs") {
             return;
         }
         tokio::task::yield_now().await;
     }
-    panic!("Enter no llevó el panel a la ruta tecleada");
+    panic!("Enter did not take the pane to the typed path");
 }
 
-/// Un COMANDO se corre desde «ir a» por el mismo camino que una tecla: sus
-/// filas son las de la paleta de esta ventana.
+/// A COMMAND runs from "goto" through the same path as a keystroke: its rows
+/// are this window's palette's.
 #[tokio::test]
-async fn un_comando_se_corre_como_su_tecla() {
+async fn a_command_runs_like_its_key() {
     let (h, snap) = host_arbol(arbol()).await;
-    let cursor_antes = listado(&snap).cursor;
+    let cursor_before = listado(&snap).cursor;
     let mut sub = h.subscribe();
-    h.dispatch(ctrl_g()).await.expect("host vivo");
-    let _ = siguiente_ir_a(&mut sub).await;
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    let _ = next_goto(&mut sub).await;
     for c in "cursor.bottom".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let v = siguiente_foto(&mut sub).await.goto.expect("abierta");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let v = siguiente_foto(&mut sub).await.goto.expect("open");
     assert!(
         v.lines.iter().any(|l| matches!(
             l,
             norte_ui_host::dto::GotoLineView::Header { title } if title == "Comandos"
         )),
-        "los comandos salen con su cabecera: {:?}",
+        "commands come out with their header: {:?}",
         v.lines
     );
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.goto.is_none(), "se cierra");
-    assert_ne!(listado(&foto).cursor, cursor_antes, "y el comando corrió");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.goto.is_none(), "closes");
+    assert_ne!(listado(&snap).cursor, cursor_before, "and the command ran");
 }
 
-/// Una RUTA tecleada no se le pregunta al índice semántico, y una palabra sí.
+/// A typed PATH is never asked of the semantic index, but a word is.
 ///
-/// Mandar `/home/u/secreto` a un proveedor de embeddings —quizá remoto— es
-/// mandarle el nombre de un directorio del lector, y una ruta no es una
-/// consulta de significado.
+/// Sending `/home/u/secreto` to an embeddings provider — maybe a remote one —
+/// is sending it the reader's directory name, and a path is not a
+/// meaning query.
 #[tokio::test]
-async fn una_ruta_tecleada_no_va_al_indice() {
+async fn a_typed_path_does_not_go_to_the_index() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(ctrl_g()).await.expect("host vivo");
-    let _ = siguiente_ir_a(&mut sub).await;
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    let _ = next_goto(&mut sub).await;
     for c in "/casa/secreto".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
-    h.dispatch(ctrl_g()).await.expect("host vivo");
+    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(ctrl_g()).await.expect("host alive");
     for c in "facturas".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host vivo");
+        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
     }
-    let pedidas = backend
-        .hasta("una pregunta al índice", |f| {
+    let requested = backend
+        .hasta("a query to the index", |f| {
             let p = f.semanticas_pedidas.lock().expect("semánticas").clone();
             (!p.is_empty()).then_some(p)
         })
         .await;
     assert!(
-        pedidas.iter().all(|(q, _)| !q.starts_with('/')),
-        "ninguna ruta fue al índice: {pedidas:?}"
+        requested.iter().all(|(q, _)| !q.starts_with('/')),
+        "no path went to the index: {requested:?}"
     );
 }
 
-/// `Escape` cierra sin ir a ninguna parte.
+/// `Escape` closes without going anywhere.
 #[tokio::test]
-async fn escape_cierra_sin_ir_a_ninguna_parte() {
+async fn escape_closes_without_going_anywhere() {
     let (h, snap) = host_arbol(arbol()).await;
-    let antes = listado(&snap).path_display.clone();
+    let before = listado(&snap).path_display.clone();
     let mut sub = h.subscribe();
-    h.dispatch(ctrl_g()).await.expect("host vivo");
-    let _ = siguiente_ir_a(&mut sub).await;
-    h.dispatch(tecla("/")).await.expect("host vivo");
-    let _ = siguiente_ir_a(&mut sub).await;
-    h.dispatch(tecla("Escape")).await.expect("host vivo");
-    // Una foto y no el siguiente parche: las conexiones contestan en
-    // segundo plano y su parche puede llegar entre medias.
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let foto = siguiente_foto(&mut sub).await;
-    assert!(foto.goto.is_none(), "se cierra");
-    assert_eq!(listado(&foto).path_display, antes, "y no navegó");
+    h.dispatch(ctrl_g()).await.expect("host alive");
+    let _ = next_goto(&mut sub).await;
+    h.dispatch(tecla("/")).await.expect("host alive");
+    let _ = next_goto(&mut sub).await;
+    h.dispatch(tecla("Escape")).await.expect("host alive");
+    // A snapshot and not the next patch: connections answer in the
+    // background and their patch can arrive in between.
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = siguiente_foto(&mut sub).await;
+    assert!(snap.goto.is_none(), "closes");
+    assert_eq!(listado(&snap).path_display, before, "and did not navigate");
 }

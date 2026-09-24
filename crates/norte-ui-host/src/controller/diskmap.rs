@@ -1,27 +1,29 @@
-//! El mapa de disco, en la ventana (fase 4).
+//! The disk map, in the window (phase 4).
 //!
-//! El estado del mapa es el COMPARTIDO (`norte_frontend::diskmap`), el mismo
-//! que usa el terminal: qué directorio se describe, lo medido y cuál es el hijo
-//! elegido. Y el reparto en rectángulos es el compartido también
-//! (`norte_frontend::treemap::squarify`). Lo de aquí es el CABLEADO: pedir la
-//! medida, aterrizarla y resolver un clic.
+//! The map's state is the SHARED one (`norte_frontend::diskmap`), the same
+//! the terminal uses: which directory is described, what was measured, and
+//! which child is chosen. And the layout into rectangles is shared too
+//! (`norte_frontend::treemap::squarify`). What is here is the WIRING:
+//! requesting the measurement, landing it, and resolving a click.
 //!
-//! El molde es el del panel de plugin, a propósito: un estado por hueco, una
-//! petición viva con su testigo, y una respuesta que llega con otro testigo se
-//! tira. Lo que cambia es qué se pide —una medida, no un marco— y que aquí lo
-//! que se conserva entre repintados es lo MEDIDO, que cuesta minutos.
+//! The mold is the plugin panel's, on purpose: one state per slot, one live
+//! request with its token, and a response that arrives with another token is
+//! discarded. What changes is what is requested — a measurement, not a
+//! frame — and that here what is kept between repaints is what was MEASURED,
+//! which costs minutes.
 //!
-//! # Por qué reparte el HOST y no el renderer
-//! Un treemap calculado dos veces son dos treemaps distintos en cuanto alguien
-//! toque un redondeo, y entonces el rectángulo que se pinta y el que resuelve
-//! un clic dejan de ser el mismo — o sea, pulsas uno y se abre el de al lado.
-//! Misma regla que el panel de plugin (ADR 0077), y aquí con más motivo: lo que
-//! hay al otro lado de un clic es un fichero.
+//! # Why the HOST lays out and not the renderer
+//! A treemap computed twice is two different treemaps the moment someone
+//! touches a rounding, and then the rectangle that is painted and the one
+//! that resolves a click stop being the same one — i.e. you press one and the
+//! one next to it opens. Same rule as the plugin panel (ADR 0077), and here
+//! with more reason: what is on the other side of a click is a file.
 //!
-//! # El mapa NO sigue al cursor
-//! Su firma es el DIRECTORIO, no la fila. Por eso está en `NO_SIGUEN` y por eso
-//! mover el cursor no vuelve a medir: sondear por cursor convertiría bajar por
-//! un `$HOME` en una tormenta de medidas de minutos.
+//! # The map does NOT follow the cursor
+//! Its signature is the DIRECTORY, not the row. That is why it is in
+//! `NO_SIGUEN`, and why moving the cursor does not re-measure: probing per
+//! cursor would turn going down a `$HOME` into a storm of minutes-long
+//! measurements.
 
 use std::sync::Arc;
 
@@ -34,83 +36,86 @@ use crate::backend::HostBackend;
 use crate::bridge::{BridgeEnvelope, clamp_display};
 use crate::dto::UiUpdate;
 
-/// El kind que ocupa un hueco de mapa de disco.
+/// The kind that occupies a disk-map slot.
 pub(super) const KIND: &str = "disk-map";
 
-/// Lo que un hueco de mapa tiene AHORA y lo que está pidiendo.
+/// What a map slot has NOW and what it is requesting.
 #[derive(Default)]
 pub(super) struct EstadoMapa {
-    /// Lo medido, con su directorio y su elección. El estado COMPARTIDO.
+    /// What was measured, with its directory and its selection. The SHARED
+    /// state.
     pub(super) mapa: norte_frontend::diskmap::DiskMap,
-    /// El directorio de la última medida pedida —o intentada y fallida—.
+    /// The directory of the last measurement requested — or attempted and
+    /// failed.
     ///
-    /// Las dos cosas en un campo porque contestan la misma pregunta: ¿hace
-    /// falta pedir esto? Sin anotar el intento fallido, un directorio que no se
-    /// deja medir se repide tras cada mensaje del actor.
+    /// Both things in one field because they answer the same question: does
+    /// this need requesting? Without noting the failed attempt, a directory
+    /// that cannot be measured would be retried after every actor message.
     pub(super) pedido: Option<VPath>,
-    /// La petición en vuelo, con su testigo.
+    /// The request in flight, with its token.
     pub(super) en_vuelo: Option<(RequestToken, VPath)>,
 }
 
 impl Estado {
-    /// Qué directorio debería estar describiendo el mapa del hueco `slot`.
+    /// Which directory the map in slot `slot` should be describing.
     ///
-    /// El vínculo se resuelve con el motor compartido, igual que el preview, la
-    /// hoja y el panel de plugin: un hueco seguido que muere degrada al rol
-    /// `active`. Devuelve también el HUECO, porque el clic navega ESE listado y
-    /// no el del mapa.
+    /// The link is resolved with the shared engine, same as the preview, the
+    /// viewer, and the plugin panel: a followed slot that dies degrades to
+    /// the `active` role. It also returns the SLOT, because the click
+    /// navigates THAT listing, not the map's.
     fn seguido_de_mapa(&self, slot: SlotId) -> Option<(u32, VPath)> {
         let mut diags = Vec::new();
-        let seguido =
+        let followed =
             norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active))
                 .unwrap_or(SlotId(self.activo()));
-        let SlotId(id) = seguido;
-        let hueco = self.huecos.get(&id)?;
-        Some((id, hueco.pane.dir().clone()))
+        let SlotId(id) = followed;
+        let slot_state = self.huecos.get(&id)?;
+        Some((id, slot_state.pane.dir().clone()))
     }
 
-    /// Pide la medida de los mapas colocados cuyo directorio cambió.
+    /// Requests the measurement for placed maps whose directory changed.
     ///
-    /// Se llama tras CADA mensaje del actor, como sus vecinos, así que lo
-    /// primero es salir barato cuando no hay nada que hacer: recorrer el árbol
-    /// para descubrir que no hay ningún mapa se paga en cada tecla de cada
-    /// sesión que no lo usa.
+    /// It is called after EVERY actor message, like its neighbours, so the
+    /// first thing is to bail out cheaply when there is nothing to do:
+    /// walking the tree to discover there is no map at all is paid on every
+    /// keystroke of every session that does not use it.
     pub(super) fn sondear_mapas(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let huecos: Vec<SlotId> = self
+        let slots: Vec<SlotId> = self
             .reparto
             .placements
             .iter()
             .filter(|(slot, _)| kind_de(&self.arbol, *slot).is_some_and(|k| k.as_str() == KIND))
             .map(|(slot, _)| *slot)
             .collect();
-        if huecos.is_empty() && self.mapas.is_empty() {
+        if slots.is_empty() && self.mapas.is_empty() {
             return Vec::new();
         }
-        // Un hueco que ya no existe no guarda nada: un `SlotId` se reutiliza, y
-        // sin podar, el mapa de un hueco nuevo heredaría lo medido del anterior
-        // — los tamaños de otro directorio, bajo este título.
-        let vivos: Vec<u32> = huecos.iter().map(|SlotId(id)| *id).collect();
-        self.mapas.retain(|id, _| vivos.contains(id));
+        // A slot that no longer exists keeps nothing: a `SlotId` gets reused,
+        // and without pruning, a new slot's map would inherit the previous
+        // one's measurement — another directory's sizes, under this title.
+        let alive: Vec<u32> = slots.iter().map(|SlotId(id)| *id).collect();
+        self.mapas.retain(|id, _| alive.contains(id));
 
-        for slot in huecos {
+        for slot in slots {
             let SlotId(id) = slot;
             let Some((_, dir)) = self.seguido_de_mapa(slot) else {
                 continue;
             };
-            let est = self.mapas.entry(id).or_default();
-            if est.pedido.as_ref() == Some(&dir) || est.en_vuelo.is_some() {
+            let state = self.mapas.entry(id).or_default();
+            if state.pedido.as_ref() == Some(&dir) || state.en_vuelo.is_some() {
                 continue;
             }
-            // Apuntar OLVIDA lo medido: el mapa del directorio anterior bajo el
-            // título del nuevo es la respuesta equivocada durante justo el rato
-            // que dura la medida, que es cuando alguien lo mira.
-            if est.mapa.dir() != Some(&dir) {
-                est.mapa.apuntar(dir.clone());
+            // Pointing at it FORGETS what was measured: the previous
+            // directory's map under the new one's title is the wrong answer
+            // for exactly the while the measurement lasts, which is when
+            // someone is looking at it.
+            if state.mapa.dir() != Some(&dir) {
+                state.mapa.apuntar(dir.clone());
             }
             self.token += 1;
             let token = RequestToken(self.token);
@@ -118,28 +123,30 @@ impl Estado {
 
             let params = norte_proto::methods::FsDirUsageParams {
                 path: dir.clone(),
-                // Un nivel: es lo que pinta un mapa, y es lo único que el
-                // servidor sirve hoy. Pedir más se RECHAZA (ADR 0117).
+                // One level: that is what a map paints, and it is the only
+                // thing the server serves today. Asking for more is REJECTED
+                // (ADR 0117).
                 depth: 1,
             };
             let backend = Arc::clone(backend);
-            let buzon = buzon.clone();
+            let mailbox = mailbox.clone();
             tokio::spawn(async move {
-                // El plazo gobierna el LANZAMIENTO, no la medida: `fs.dir_usage`
-                // devuelve la Task en cuanto la encola, y medir un `$HOME`
-                // puede tardar minutos. Un plazo sobre la medida la mataría
-                // justo en los árboles para los que existe.
-                let lanzada =
+                // The deadline governs the LAUNCH, not the measurement:
+                // `fs.dir_usage` returns the Task as soon as it is queued,
+                // and measuring a `$HOME` can take minutes. A deadline on the
+                // measurement would kill it exactly on the trees for which it
+                // exists.
+                let launched =
                     match tokio::time::timeout(super::PLAZO_PLUGINS, backend.dir_usage(params))
                         .await
                     {
                         Ok(r) => r,
                         Err(_) => Err(norte_proto::Error::ProviderUnavailable { retryable: true }),
                     };
-                let task = match lanzada {
+                let task = match launched {
                     Ok(t) => t,
                     Err(e) => {
-                        let _ = buzon
+                        let _ = mailbox
                             .send(Mensaje::MapaContenido(Box::new((id, token, Err(e)))))
                             .await;
                         return;
@@ -147,25 +154,26 @@ impl Estado {
                 };
                 let task_id = task.id;
                 let mut prog = task.progress;
-                // El informe solo es DEFINITIVO cuando la Task es terminal.
-                // Pedirlo antes daría medio mapa sin decir que lo es, y medio
-                // mapa se lee como un directorio pequeño.
+                // The report is only DEFINITIVE once the Task is terminal.
+                // Requesting it earlier would give half a map without saying
+                // it is half, and half a map reads as a small directory.
                 while !prog.borrow().state.is_terminal() {
                     if prog.changed().await.is_err() {
                         break;
                     }
                 }
-                let estado = prog.borrow().state.clone();
-                let res = if estado.is_terminal() {
+                let state_now = prog.borrow().state.clone();
+                let res = if state_now.is_terminal() {
                     backend
                         .dir_usage_report(task_id)
                         .await
-                        .map(|informe| (estado, informe))
+                        .map(|report| (state_now, report))
                 } else {
-                    // El canal murió sin llegar a terminal: el daemon se cayó.
+                    // The channel died without reaching terminal: the daemon
+                    // went down.
                     Err(norte_proto::Error::ProviderUnavailable { retryable: true })
                 };
-                let _ = buzon
+                let _ = mailbox
                     .send(Mensaje::MapaContenido(Box::new((id, token, res))))
                     .await;
             });
@@ -173,13 +181,13 @@ impl Estado {
         Vec::new()
     }
 
-    /// Aterriza una medida: se enseña si el testigo es el de la última petición
-    /// de ESE hueco, y se tira si no.
+    /// Lands a measurement: it is shown if the token is that of THAT slot's
+    /// last request, and discarded otherwise.
     ///
-    /// **Y se comprueba el DIRECTORIO además del testigo.** Medir tarda, y en
-    /// ese rato el panel puede estar apuntando a otro sitio: un informe
-    /// aterrizado sin mirarlo pintaría los tamaños de un directorio bajo el
-    /// título de otro.
+    /// **And the DIRECTORY is checked in addition to the token.** Measuring
+    /// takes a while, and in that time the panel may be pointing elsewhere: a
+    /// report landed without checking would paint one directory's sizes
+    /// under another one's title.
     pub(super) fn aterrizar_mapa(
         &mut self,
         slot: u32,
@@ -192,23 +200,26 @@ impl Estado {
             norte_proto::Error,
         >,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let est = self.mapas.get_mut(&slot)?;
-        if est.en_vuelo.as_ref().map(|(t, _)| *t) != Some(token) {
+        let state = self.mapas.get_mut(&slot)?;
+        if state.en_vuelo.as_ref().map(|(t, _)| *t) != Some(token) {
             return None;
         }
-        let (_, dir) = est.en_vuelo.take()?;
-        // El intento queda anotado pase lo que pase: sin esto, un directorio
-        // que no se deja medir se repide tras cada mensaje del actor.
-        est.pedido = Some(dir.clone());
-        if est.mapa.dir() != Some(&dir) {
-            return None; // llegó tarde: el panel ya está en otro sitio
+        let (_, dir) = state.en_vuelo.take()?;
+        // The attempt is recorded no matter what: without this, a directory
+        // that cannot be measured would be retried after every actor
+        // message.
+        state.pedido = Some(dir.clone());
+        if state.mapa.dir() != Some(&dir) {
+            return None; // arrived late: the panel is already somewhere else
         }
-        let (estado, informe) = match res {
-            Ok(par) => par,
+        let (task_state, report) = match res {
+            Ok(pair) => pair,
             Err(e) => {
-                // El motivo acaba en el TÍTULO del panel, así que va traducido
-                // al idioma de la sesión y acotado, como el de la búsqueda.
-                est.mapa
+                // The reason ends up in the panel's TITLE, so it goes
+                // translated to the session's language and clamped, like
+                // search's.
+                state
+                    .mapa
                     .fallo(clamp_display(norte_frontend::error::error_category_in(
                         self.lang, &e,
                     )));
@@ -216,32 +227,34 @@ impl Estado {
                 return Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))));
             }
         };
-        let completa = estado == norte_proto::TaskState::Completed;
-        est.mapa.aterrizar(informe, completa);
+        let complete = task_state == norte_proto::TaskState::Completed;
+        state.mapa.aterrizar(report, complete);
         let snap = self.snapshot();
         Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
     }
 
-    /// Un clic sobre un rectángulo: entra en ese hijo.
+    /// A click on a rectangle: enters that child.
     ///
-    /// Se resuelve contra el MISMO reparto que se pintó —`vista_de_mapa` usa el
-    /// tamaño de dentro del borde y esto también—, así que el rectángulo que se
-    /// ve y el que responde son el mismo por construcción.
+    /// It is resolved against the SAME layout that was painted —
+    /// `vista_de_mapa` uses the size inside the border and so does this — so
+    /// the rectangle that is seen and the one that answers are the same one
+    /// by construction.
     ///
-    /// **Sin `zona_puede`**: ese filtro existe porque en un panel de plugin la
-    /// etiqueta y el comando los elige un tercero y nada los ata. Aquí los pone
-    /// `squarify`, así que filtrarlos sería protegerse de uno mismo.
+    /// **Without `zona_puede`**: that filter exists because in a plugin panel
+    /// the label and the command are chosen by a third party and nothing
+    /// binds them together. Here `squarify` sets them, so filtering them
+    /// would be guarding against oneself.
     pub(super) fn clic_en_mapa(
         &mut self,
         slot: u32,
         row: u16,
         col: u16,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Mensaje>,
     ) -> (crate::bridge::ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Un hueco ESCONDIDO conserva su mapa, así que sus zonas seguirían
-        // resolviéndose aunque nadie las vea. El renderer no pinta lo
-        // escondido, luego un clic ahí no viene de una persona.
+        // A HIDDEN slot keeps its map, so its zones would keep resolving even
+        // though nobody sees them. The renderer does not paint what is
+        // hidden, so a click there does not come from a person.
         if self.oculto(slot) {
             return (Self::obsoleta(crate::StaleAction::Generation), Vec::new());
         }
@@ -254,86 +267,89 @@ impl Estado {
         else {
             return (self.aplicada(), Vec::new());
         };
-        let elegido = self.mapas.get(&slot).and_then(|e| {
-            let marco = norte_frontend::treemap::squarify(&e.mapa.informe().children, cols, rows);
-            let arg = marco.hit_at(row, col)?.arg.clone()?;
+        let chosen = self.mapas.get(&slot).and_then(|e| {
+            let frame = norte_frontend::treemap::squarify(&e.mapa.informe().children, cols, rows);
+            let arg = frame.hit_at(row, col)?.arg.clone()?;
             let seg = norte_proto::Segment::parse_wire(&arg).ok()?;
-            // Solo un DIRECTORIO se abre: el mapa enseña las dos cosas, y
-            // «entrar» en un fichero no es navegar.
-            let hijo = e.mapa.informe().children.iter().find(|c| c.name == seg)?;
-            (hijo.kind == norte_proto::EntryKind::Dir).then_some(seg)
+            // Only a DIRECTORY opens: the map shows both kinds, and
+            // "entering" a file is not navigating.
+            let child = e.mapa.informe().children.iter().find(|c| c.name == seg)?;
+            (child.kind == norte_proto::EntryKind::Dir).then_some(seg)
         });
-        let Some(seg) = elegido else {
-            // Una celda sin rectángulo, o un fichero: no pasa nada, y no es un
-            // error del lector.
+        let Some(seg) = chosen else {
+            // A cell with no rectangle, or a file: nothing happens, and it is
+            // not a reader error.
             return (self.aplicada(), Vec::new());
         };
-        // Señalar TAMBIÉN elige: el teclado y el ratón dejan el mapa en el
-        // mismo sitio, que es lo que hace que pulsar y luego usar las flechas
-        // siga desde donde estabas.
+        // Pointing ALSO selects: keyboard and mouse leave the map in the same
+        // place, which is what makes clicking and then using the arrows
+        // continue from where you were.
         if let Some(e) = self.mapas.get_mut(&slot) {
             e.mapa.elegir(&seg);
         }
-        let Some((destino_slot, dir)) = self.seguido_de_mapa(SlotId(slot)) else {
+        let Some((target_slot, dir)) = self.seguido_de_mapa(SlotId(slot)) else {
             return (self.aplicada(), Vec::new());
         };
-        let destino = dir.join(seg);
-        // Navegar el LISTADO seguido, no el mapa: el mapa señala, y el `cd` va
-        // por donde va cualquier otro (ADR 0077). `Record` porque esto es un
-        // movimiento que pidió el lector: entra en el rastro y poda el forward.
+        let target = dir.join(seg);
+        // Navigate the FOLLOWED listing, not the map: the map points, and the
+        // `cd` goes the same way as any other (ADR 0077). `Record` because
+        // this is a move the reader asked for: it enters the trail and prunes
+        // forward.
         let updates = self.navegar_hueco(
-            destino_slot,
-            &destino,
+            target_slot,
+            &target,
             norte_frontend::nav::Trail::Record,
             backend,
-            buzon,
+            mailbox,
         );
         (self.aplicada(), updates)
     }
 
-    /// Proyecta el mapa de disco de un hueco a lo que el renderer pinta.
+    /// Projects a slot's disk map into what the renderer paints.
     ///
-    /// El marco se reparte con el tamaño de DENTRO del borde, igual que la
-    /// firma de un panel de plugin: quien describe el contenido no sabe dónde
-    /// cayó su hueco, así que la cuenta la hace quien pinta — y aquí el host
-    /// pinta y resuelve, de modo que las dos cuentas son la misma.
+    /// The frame is laid out with the size INSIDE the border, same as a
+    /// plugin panel's signature: whoever describes the content does not know
+    /// where its slot landed, so the one who paints does the math — and here
+    /// the host paints and resolves, so the two computations are the same
+    /// one.
     ///
-    /// Sin hueco colocado no hay tamaño, y entonces no hay mapa: se manda vacío
-    /// con su título, como un panel cuyo primer marco no ha llegado.
+    /// Without a placed slot there is no size, and then there is no map: an
+    /// empty one is sent with its title, like a panel whose first frame has
+    /// not arrived yet.
     pub(super) fn vista_de_mapa(&self, id: u32) -> crate::dto::DiskMapSlotView {
-        let est = self.mapas.get(&id);
-        // El título es el NOMBRE del directorio que se describe, no su ruta: el
-        // hueco es estrecho y la ruta entera no cabe. Sale de un nombre de
-        // fichero, así que se enmascara como cualquier otro.
-        let (title, title_hostile) = est.and_then(|e| e.mapa.dir()).map_or_else(
+        let state = self.mapas.get(&id);
+        // The title is the NAME of the directory being described, not its
+        // path: the slot is narrow and the whole path does not fit. It comes
+        // from a file name, so it is masked like any other.
+        let (title, title_hostile) = state.and_then(|e| e.mapa.dir()).map_or_else(
             || (String::new(), false),
             |d| {
                 d.file_name().map_or_else(
-                    // La raíz de un provider no tiene nombre base: se dice con
-                    // su esquema en vez de dejar el título en blanco.
+                    // A provider's root has no base name: it is said with its
+                    // scheme instead of leaving the title blank.
                     || (d.scheme().to_owned(), false),
                     |n| norte_frontend::display_name(n.as_bytes()),
                 )
             },
         );
 
-        let celdas = self
+        let cells = self
             .reparto
             .placements
             .iter()
             .find(|(SlotId(s), _)| *s == id)
             .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)));
 
-        let (lines, hits) = match (est, celdas) {
+        let (lines, hits) = match (state, cells) {
             (Some(e), Some((cols, rows))) => {
-                let marco =
+                let frame =
                     norte_frontend::treemap::squarify(&e.mapa.informe().children, cols, rows);
-                let lines = marco
+                let lines = frame
                     .lines
                     .iter()
-                    .map(|linea| linea.iter().map(super::views::span_view).collect())
+                    .map(|line| line.iter().map(super::views::span_view).collect())
                     .collect();
-                let hits = marco
+                let hits = frame
                     .hits
                     .iter()
                     .map(|h| crate::dto::HitView {
@@ -353,7 +369,7 @@ impl Estado {
             title_hostile,
             lines,
             hits,
-            measuring: est.is_some_and(|e| e.en_vuelo.is_some()),
+            measuring: state.is_some_and(|e| e.en_vuelo.is_some()),
         }
     }
 }

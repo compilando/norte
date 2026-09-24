@@ -26,11 +26,11 @@ mod macos;
 #[cfg(windows)]
 mod windows;
 
-/// El plazo compartido, ahora en `norte-vfs` (#213): lo necesitan también los
-/// providers —`capabilities_at` sondea el filesystem de cualquier ruta que le
-/// nombren— y dos copias que puedan divergir en si el hilo es DESACOPLADO son
-/// exactamente el fallo del que protege. La prosa de por qué un hilo suelto y
-/// no el pool de tokio vive con la función.
+/// The shared deadline, now in `norte-vfs` (#213): the providers need it too
+/// —`capabilities_at` probes the filesystem of whatever path it's named—
+/// and two copies that could diverge on whether the thread is DETACHED are
+/// exactly the failure this guards against. The prose on why a loose thread
+/// and not the tokio pool lives with the function.
 pub(crate) use norte_vfs::deadline::blocking_with_deadline;
 
 /// Converts a mount point's raw bytes to a `file://` [`VPath`], via
@@ -184,10 +184,10 @@ pub const PSEUDO_FS: &[&str] = &[
     "binfmt_misc",
     "efivarfs",
     "nsfs",
-    // Los FUSE que monta el ESCRITORIO en `/run/user/<uid>`, no una persona:
-    // el portal de documentos de Flatpak y el puente de gvfs. Contestan 0
-    // bytes y salían en la barra de sitios como «0B libres». Un FUSE que sí
-    // se monta a propósito (`fuse.sshfs`, `fuse.rclone`) no está aquí.
+    // The FUSE mounts the DESKTOP mounts in `/run/user/<uid>`, not a person:
+    // Flatpak's document portal and the gvfs bridge. They answer 0 bytes and
+    // used to show up in the places bar as "0B free". A FUSE that IS mounted
+    // on purpose (`fuse.sshfs`, `fuse.rclone`) is not here.
     "fuse.portal",
     "fuse.gvfsd-fuse",
 ];

@@ -1,18 +1,18 @@
-//! La línea de tiempo del journal en la TUI (fase 7 del programa WOW): el
-//! hueco, lo que se pinta en él y qué pasa al deshacer hasta un punto.
+//! The journal's timeline in the TUI (phase 7 of the WOW program): the slot,
+//! what gets painted in it, and what happens when undoing to a point.
 //!
-//! El MODELO —qué es una fila, qué agrupa un lote, qué corte conserva la
-//! fila señalada y cuántas entradas se va a llevar— vive en
-//! [`norte_frontend::timeline`], compartido con la ventana. Aquí está lo que
-//! sólo este frontend sabe: dónde cae el hueco, cómo se pinta un punto y qué
-//! tecla hace qué.
+//! The MODEL — what a row is, what a batch groups, what cut preserves the
+//! flagged row, and how many entries it will carry — lives in
+//! [`norte_frontend::timeline`], shared with the window. What is here is what
+//! only this frontend knows: where the slot lands, how a point is painted,
+//! and which key does what.
 
-/// El `kind` del hueco, tal y como lo declara el registro compartido.
+/// The slot's `kind`, exactly as the shared registry declares it.
 pub const KIND: &str = "timeline";
 
-/// Cuántas filas se piden por página.
+/// How many rows are requested per page.
 ///
-/// Muy por debajo del tope del protocolo (200): esto es una pantalla que se
-/// lee, y lo que no quepa se pide al llegar abajo. Pedir la página máxima de
-/// entrada sería traer doscientas filas para enseñar diez.
+/// Well under the protocol's cap (200): this is a screen meant to be read,
+/// and whatever does not fit is requested on reaching the bottom. Requesting
+/// the maximum page on entry would fetch two hundred rows to show ten.
 pub const POR_PAGINA: u32 = 50;

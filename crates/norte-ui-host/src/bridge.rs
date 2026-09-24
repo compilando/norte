@@ -1,671 +1,698 @@
-//! El sobre en el que viaja TODO lo que cruza al renderer, y sus topes.
+//! The envelope EVERYTHING that crosses to the renderer travels in, and its
+//! caps.
 //!
-//! Un renderer —una webview, un shell Flutter, un test headless— no comparte
-//! memoria con el host: recibe mensajes. Este módulo dice cómo son esos
-//! mensajes y qué se le exige a cada uno, que es lo que hace que un renderer
-//! escrito por otro no pueda interpretar medio mensaje y seguir como si nada.
+//! A renderer —a webview, a Flutter shell, a headless test— shares no
+//! memory with the host: it receives messages. This module says what those
+//! messages look like and what is required of each, which is what stops a
+//! renderer written by someone else from interpreting half a message and
+//! carrying on as if nothing happened.
 
 use serde::{Deserialize, Serialize};
 
-/// Versión del contrato del bridge.
+/// Bridge contract version.
 ///
-/// No es la del protocolo del daemon: son dos fronteras distintas y se mueven
-/// por motivos distintos. Un renderer que no reconoce esta versión NO
-/// interpreta el mensaje: enseña una pantalla de incompatibilidad (ADR 0066).
+/// Not the daemon protocol's: they are two different boundaries and move
+/// for different reasons. A renderer that does not recognize this version
+/// does NOT interpret the message: it shows an incompatibility screen (ADR
+/// 0066).
 ///
-/// **La regla de cuándo se mueve el número está en el ADR 0068**, sección
-/// «And the version rule, written down», y es de UN SOLO NIVEL: cualquier
-/// cambio de forma —también uno puramente aditivo— sube el número, y no hay
-/// nivel compatible. Es deliberado y tiene precondiciones escritas: un nivel
-/// compatible solo es honesto si un peer viejo puede decodificar un payload
-/// nuevo, lo que exige `#[serde(default)]` en cada campo añadido y un
-/// renderer que se resincronice ante un parche que no conoce en vez de
-/// tirarlo. Ninguna de las dos se cumple hoy, y poner los `default` sin la
-/// otra dejaría que un payload viejo decodificara como uno nuevo con la
-/// pantalla a medias — que es peor que una que dice que no sabe leerla.
-/// Reabrir la regla es un ADR nuevo, no un parche aquí.
+/// **The rule for when the number moves is in ADR 0068**, section "And the
+/// version rule, written down", and it is SINGLE-LEVEL: any shape change
+/// —even a purely additive one— bumps the number, and there is no
+/// compatible level. This is deliberate and has written preconditions: a
+/// compatible level is only honest if an old peer can decode a new payload,
+/// which requires `#[serde(default)]` on every added field and a renderer
+/// that resyncs on a patch it does not know instead of dropping it. Neither
+/// holds today, and adding the `default`s without the other would let an
+/// old payload decode as a new one with the screen half-done — which is
+/// worse than one that says it cannot read it. Reopening the rule is a new
+/// ADR, not a patch here.
 ///
-/// - **50**: un fragmento de preview lleva FONDO (`SpanView::bg`, proto
-///   0.66.0, D4): el previewer de imagen pinta medios bloques con dos píxeles
-///   por celda, y sin fondo la mitad de la imagen no existe. Y el host manda
-///   al previewer el ancho del visor en celdas para que encoja a medida.
-/// - **49**: el visor lleva los FRAGMENTOS de una preview de plugin
-///   (`ViewerView::styled`): texto, rol del tema o color propio, una entrada
-///   por fila de `lines`. La TUI pintaba roles y colores desde ADR 0037 y la
-///   ventana los aplanaba a texto; ahora los dos frontends enseñan lo mismo.
-/// - **48**: el panel de registro lee TAMBIÉN el del daemon (#328). El hueco
-///   dice qué fuente se está enseñando (`source_mode`), si hay de verdad una
-///   segunda que ofrecer (`sources_available`) y qué hay que decir sobre ella
-///   (`source_note`); cada línea dice de qué proceso salió, y `log_cycle_source`
-///   recorre las tres.
-/// - **47**: un hueco en ERROR se puede reintentar por si solo
-///   (`refresh_slot`). El caso corriente al reabrir es una conexion remota que
-///   pide su contrasena, y sin nada que pulsar la unica salida era navegar a
-///   otro sitio para poder volver.
-/// - **46**: la pantalla puede llevar el PANEL DE REGISTRO (#326): la ventana
-///   visible del anillo en memoria, con su nivel, su filtro y si sigue el
-///   final. Dice de qué PROCESO son las líneas, porque la ventana arranca su
-///   propio daemon y las suyas no son las de él.
-/// - **45**: un diálogo puede pedir una CONTRASEÑA (#327). El campo se marca
-///   como secreto y lo que viaja del host al renderer son PUNTOS, jamás el
-///   texto: el renderer no lo pinta, no lo resiembra y no lo puede registrar.
-/// - **44**: el renderer puede ARRASTRAR el borde entre dos huecos. Manda
-///   dónde está el puntero en celdas de layout; qué pareja se reparte y
-///   cuánto le toca a cada uno lo decide el host, que es quien tiene el
-///   reparto y los mínimos.
-/// - **43**: la pantalla puede llevar el selector de PERFILES (ADR 0079), con
-///   el activo marcado, lo que no carga dicho por su motivo, y los dos avisos
-///   que la spec pide por su nombre: qué otra cosa se llama igual y qué perfil
-///   no puede guardar estado.
-/// - **42**: la pantalla del tema ELIGE: lleva la lista de temas y el cursor,
-///   y moverse por ella previsualiza en vivo. Antes solo enseñaba el que
-///   había, porque quien hospeda resolvía el tema una vez al arrancar; ahora
-///   el host se lo dice por el canal nativo y el catálogo vuelve a cruzar.
-/// - **41**: la pantalla lleva la BARRA DE MENÚS —los títulos, el menú
-///   desplegado y sus entradas con su atajo— y el renderer puede desplegar,
-///   señalar, ejecutar y cerrar. Los menús son `norte_frontend::menu`, el
-///   mismo modelo que pinta el TUI.
-/// - **25**: la revisión de un plan dice lo que le faltaba para poder
-///   aprobarse a conciencia: cuánto se ve de cuánto hay y cuántos renombrados
-///   hará DE VERDAD —los dos ya traducidos, porque el catálogo no sustituye
-///   variables—, si hay un nombre alterado FUERA de la ventana, y si el
-///   lector ha recorrido el plan entero. Y se puede contestar con el ratón.
-/// - **36**: un listado dice cuántas entradas está APARTANDO por ocultas, de
-///   forma permanente y no como mensaje que la siguiente tecla pisa. Un
-///   listado que enseña menos de lo que hay no puede quedarse mudo (#107,
+/// - **50**: a preview span carries a BACKGROUND (`SpanView::bg`, proto
+///   0.66.0, D4): the image previewer paints half-blocks with two pixels
+///   per cell, and without a background half the image does not exist. And
+///   the host tells the previewer the viewer's width in cells so it can
+///   shrink to fit.
+/// - **49**: the viewer carries the SPANS of a plugin preview
+///   (`ViewerView::styled`): text, theme role or its own color, one entry
+///   per `lines` row. The TUI painted roles and colors since ADR 0037 and
+///   the window flattened them to text; now both frontends show the same
+///   thing.
+/// - **48**: the log panel ALSO reads the daemon's (#328). The slot says
+///   which source is being shown (`source_mode`), whether there really is
+///   a second one to offer (`sources_available`) and what to say about it
+///   (`source_note`); each line says which process it came from, and
+///   `log_cycle_source` cycles through the three.
+/// - **47**: a slot in ERROR can be retried on its own (`refresh_slot`).
+///   The common case on reopening is a remote connection asking for its
+///   password, and with nothing to press the only way out was navigating
+///   elsewhere to be able to come back.
+/// - **46**: the screen can carry the LOG PANEL (#326): the in-memory
+///   ring's visible window, with its level, its filter and whether it
+///   follows the end. Says which PROCESS the lines are from, because the
+///   window starts its own daemon and its lines are not that daemon's.
+/// - **45**: a dialog can ask for a PASSWORD (#327). The field is marked
+///   secret and what travels from host to renderer is DOTS, never the
+///   text: the renderer does not paint it, does not re-seed it and cannot
+///   log it.
+/// - **44**: the renderer can DRAG the border between two slots. It sends
+///   where the pointer is in layout cells; which pair splits and how much
+///   each gets is decided by the host, which has the split and the
+///   minimums.
+/// - **43**: the screen can carry the PROFILE picker (ADR 0079), with the
+///   active one marked, what fails to load stated with its reason, and the
+///   two warnings the spec asks for by name: what else is called the same
+///   and which profile cannot save state.
+/// - **42**: the theme screen CHOOSES: it carries the theme list and the
+///   cursor, and moving through it previews live. It used to show only the
+///   one already set, because the host resolved the theme once at
+///   startup; now the host tells it over the native channel and the
+///   catalogue crosses again.
+/// - **41**: the screen carries the MENU BAR —the titles, the open menu and
+///   its entries with their shortcut— and the renderer can open, point,
+///   run and close. Menus are `norte_frontend::menu`, the same model the
+///   TUI paints.
+/// - **25**: a plan's review says what it was missing to be approved
+///   knowingly: how much is shown out of how much there is and how many
+///   renames it will ACTUALLY do —both already translated, because the
+///   catalogue does not substitute variables—, whether there is an altered
+///   name OUTSIDE the window, and whether the reader has walked the whole
+///   plan. And it can be answered with the mouse.
+/// - **36**: a listing says how many entries it is HIDING because they are
+///   hidden, permanently and not as a message the next key overwrites. A
+///   listing that shows less than there is must not go silent (#107,
 ///   #293).
-/// - **35**: la disposición lleva sus grupos de PESTAÑAS —qué hay detrás de
-///   lo que se pinta, con el rótulo de cada una y su bandera—, porque una
-///   pestaña inactiva no se coloca y sin esto la ventana enseñaba la de
-///   delante sin decir que había otras abiertas.
-/// - **34**: el panel de agentes lleva GENERACIÓN —la lista se reordena sola,
-///   así que un clic tiene que decir contra cuál habla—, cuántas sesiones se
-///   han olvidado por el tope, qué decir cuando está vacío (que no es siempre
-///   lo mismo), y si una sesión ya tiene un deshacer en marcha.
-/// - **33**: la ventana lleva las sesiones de AGENTE que ha visto pedir
-///   permiso, con cuántas pidió cada una y cuántas se le aprobaron desde
-///   aquí. Es de donde sale el operando del deshacer de una sesión entera
-///   (#276): elegido de una lista, jamás tecleado.
-/// - **32**: lo que las revisiones de la 6.4 cambiaron de forma: la salida de
-///   un comando viaja por LÍNEAS y con una bandera por cadena —quién, qué y lo
-///   impreso, cada uno con la suya, más el id reverse-DNS de la extensión—, y
-///   una fila de la paleta dice si lo pintado difiere de lo que declara quien
-///   la aporta.
-/// - **31**: el gestor de extensiones GOBIERNA: la ficha lleva el editor de
-///   `[config]` (qué clave está elegida, qué se está tecleando y qué claves
-///   este build sabe editar), los comandos que aporta la extensión, y la
-///   salida del último que se ejecutó.
-/// - **30**: el panel de sincronización APLICA: la segunda pregunta, los
-///   fallos del informe y el acuse de la cancelación cruzan, y el ancla de una
-///   ruta puede valer `either`. Un renderer de 29 leería `undefined` donde
-///   ahora hay una lista.
-/// - **29**: la pantalla puede llevar un PLAN de sincronización: sus pasos con
-///   la perspectiva del deshacer, su resumen, lo que lo bloquea y si se puede
-///   aprobar.
-/// - **28**: la pantalla puede llevar el panel de DIFERENCIAS: filas
-///   emparejadas por el core, sus filtros por categoría y una ventana de las
-///   que se ven.
-/// - **27**: una búsqueda puede ser SEMÁNTICA, y entonces sus filas llevan
-///   cuánto se parecen.
-/// - **26**: lo que se enmascara se DICE también en los avisos persistentes,
-///   en el diagnóstico de una disposición, en el nombre de un kind sin
-///   proyectar, en las claves de efectos de un tema y en la etiqueta de una
-///   tecla; y una aprobación dice qué pide, quién lo pide y hasta cuándo, en
-///   campos propios.
-/// - **24**: la pantalla puede llevar un PLAN DE RENOMBRADO en revisión: las
-///   parejas que el modelo propone (de nombre a nombre, cada uno entero y por
-///   separado — nunca concatenados con una flecha), el veredicto del core y
-///   sus colisiones. Llega en dos tiempos: primero el plan, y el veredicto
-///   después, porque comprobarlo contra el directorio es otro viaje.
-/// - **23**: un diálogo deja de ser texto plano. Su cuerpo son LÍNEAS
-///   ([`crate::dto::DialogLine`]), cada una diciendo si lo pintado difiere de
-///   lo real; el DESTINO viaja en su propio campo y no como una línea con una
-///   flecha, porque un directorio puede llamarse `docs → /casa/BORRAR` y esa
-///   flecha es legítima; y si el cuerpo enseña menos elementos de los que la
-///   operación toca, lo dice. Una task dice también si el fichero que lleva
-///   en curso se pinta distinto de lo que es.
-/// - **22**: el visor dice si lo que enseña es una IMAGEN pintable y cuánto
-///   dice medir, o por qué se niega a pintarla. Sus bytes NO viajan en la
-///   foto: se piden aparte (ADR 0069).
-/// - **21**: el visor dice si lo que enseña lo produjo un PLUGIN, y si la
-///   decodificación que se le dio fue con pérdida.
-/// - **20**: la pantalla puede llevar el SELECTOR DE COLUMNAS: qué se pinta,
-///   en qué orden, con qué formato y sobre qué esquema.
-/// - **19**: un listado dice cuántas entradas se SALTÓ el provider.
-/// - **18**: una fila puede llevar la INSIGNIA que un plugin le puso, con el
-///   rol del tema con el que pintarla, y una columna `plugin:` trae su valor.
-///   Se piden solo para la VENTANA visible.
-/// - **17**: la barra lateral y el selector llevan GENERACIÓN, y un click con
-///   una que no case se rechaza. Rompe: los volúmenes llegan de una tarea de
-///   fondo y se insertan en medio de la lista, así que un índice desnudo
-///   podía navegar a un sitio que nadie pulsó.
-/// - **16**: la pantalla puede llevar una BÚSQUEDA por el subárbol, con sus
-///   hallazgos llegando en lotes mientras corre.
-/// - **15**: la pantalla puede llevar el SELECTOR DE DISPOSICIONES, con la
-///   forma de cada una pintada por el mismo motor que reparte la de verdad.
-/// - **14**: un hueco puede ser la BARRA LATERAL DE SITIOS.
-/// - **13**: un hueco puede ser la HOJA DE ATRIBUTOS o el PANEL DE PROCESOS,
-///   en vez de un rectángulo gris con el nombre de su tipo.
-/// - **12**: la pantalla puede llevar el TEMA por dentro (rol a rol, con los
-///   efectos que este renderer no pinta) y el SELECTOR DE VOLÚMENES.
-/// - **11**: la pantalla puede llevar el GESTOR DE EXTENSIONES en solo
-///   lectura: qué hay instalado, qué pide cada una y qué se le ha
-///   configurado.
-/// - **10**: la pantalla puede llevar los AJUSTES en solo lectura: el
-///   registro compartido con su valor efectivo, y dónde vive cada cosa.
-/// - **9**: la pantalla puede llevar la AYUDA: el corpus en bloques cerrados,
-///   con sus marcas vivas ya resueltas contra el keymap del lector, y la hoja
-///   de teclado generada del mapa efectivo.
-/// - **8**: la pantalla puede llevar la PALETA de comandos.
-/// - **7**: un prefijo a medias lleva sus CONTINUACIONES (qué teclas siguen,
-///   qué hace cada una y cuáles no se pueden hacer aquí).
-/// - **6**: las cabeceras y el visor viajan como PARCHE, y el renderer
-///   declara cuántas líneas caben en el visor.
-/// - **5**: toda acción que nombra una fila lleva TAMBIÉN la generación en
-///   la que el renderer la vio, y el host la compara con la época del
-///   listado. Sin ese par la clave es un índice, y un índice de la pantalla
-///   anterior nombra otro fichero.
-/// - **4**: la pantalla puede llevar un VISOR (texto decodificado en líneas,
-///   o hexadecimal si el contenido es binario).
-/// - **3**: cada listado lleva sus CABECERAS (etiqueta traducida, columna
-///   que ordena y sentido), y se puede pedir orden por columna.
-/// - **2**: el snapshot lleva el reparto de la pantalla
-///   ([`crate::dto::LayoutView`]) y va COMPLETO (diálogos y tablero
-///   incluidos); un cambio de foco viaja como parche y no como foto.
-/// - **1**: el contrato inicial de la fase 2.
+/// - **35**: the layout carries its TAB groups —what is behind what is
+///   painted, with each one's label and its flag—, because an inactive tab
+///   is not painted and without this the window showed the front one
+///   without saying there were others open.
+/// - **34**: the agents panel carries a GENERATION —the list reorders
+///   itself, so a click has to say which one it is speaking against—, how
+///   many sessions have been forgotten because of the cap, what to say
+///   when it is empty (which is not always the same thing), and whether a
+///   session already has an undo in progress.
+/// - **33**: the window carries the AGENT sessions it has seen ask for
+///   permission, with how many each one asked for and how many were
+///   approved from here. It is where the operand for undoing a whole
+///   session comes from (#276): chosen from a list, never typed.
+/// - **32**: what 6.4's reviews changed in shape: a command's output
+///   travels by LINE and with a flag per string —who, what and what was
+///   printed, each with its own—, plus the extension's reverse-DNS id, and
+///   a palette row says whether what is painted differs from what whoever
+///   contributes it declares.
+/// - **31**: the extension manager GOVERNS: the detail card carries the
+///   `[config]` editor (which key is chosen, what is being typed and which
+///   keys this build knows how to edit), the commands the extension
+///   contributes, and the output of the last one run.
+/// - **30**: the sync panel APPLIES: the second question, the report's
+///   failures and the cancellation's ack cross, and a path's anchor can be
+///   `either`. A renderer at 29 would read `undefined` where there is now
+///   a list.
+/// - **29**: the screen can carry a sync PLAN: its steps with the undo
+///   perspective, its summary, what blocks it and whether it can be
+///   approved.
+/// - **28**: the screen can carry the DIFFERENCES panel: rows paired by
+///   the core, its per-category filters and a window of the visible ones.
+/// - **27**: a search can be SEMANTIC, and then its rows carry how similar
+///   they are.
+/// - **26**: what is masked is also STATED in persistent notices, in a
+///   layout's diagnostics, in an unprojected kind's name, in a theme's
+///   effect keys and in a key's label; and an approval says what it asks
+///   for, who asks and until when, in its own fields.
+/// - **24**: the screen can carry a RENAME PLAN under review: the pairs the
+///   model proposes (from name to name, each whole and separate — never
+///   concatenated with an arrow), the core's verdict and its collisions.
+///   Arrives in two steps: first the plan, then the verdict afterward,
+///   because checking it against the directory is another trip.
+/// - **23**: a dialog stops being plain text. Its body is LINES
+///   ([`crate::dto::DialogLine`]), each saying whether what is painted
+///   differs from the real thing; the DESTINATION travels in its own field
+///   and not as a line with an arrow, because a directory can be named
+///   `docs → /home/DELETE` and that arrow is legitimate; and if the body
+///   shows fewer items than the operation touches, it says so. A task also
+///   says whether the file it is currently on paints differently from what
+///   it is.
+/// - **22**: the viewer says whether what it shows is a paintable IMAGE and
+///   how big it says it measures, or why it refuses to paint it. Its bytes
+///   do NOT travel in the snapshot: they are requested separately (ADR
+///   0069).
+/// - **21**: the viewer says whether what it shows was produced by a
+///   PLUGIN, and whether the decoding it was given was lossy.
+/// - **20**: the screen can carry the COLUMN PICKER: what is painted, in
+///   what order, with what format and against which scheme.
+/// - **19**: a listing says how many entries the provider SKIPPED.
+/// - **18**: a row can carry the BADGE a plugin put on it, with the theme
+///   role to paint it with, and a `plugin:` column brings its value. Only
+///   requested for the visible WINDOW.
+/// - **17**: the sidebar and the picker carry a GENERATION, and a click
+///   with a mismatched one is rejected. Breaking: volumes arrive from a
+///   background task and are inserted into the middle of the list, so a
+///   bare index could navigate to somewhere nobody clicked.
+/// - **16**: the screen can carry a subtree SEARCH, with its hits arriving
+///   in batches as it runs.
+/// - **15**: the screen can carry the LAYOUT PICKER, with each layout's
+///   shape painted by the same engine that does the real split.
+/// - **14**: a slot can be the PLACES SIDEBAR.
+/// - **13**: a slot can be the ATTRIBUTE SHEET or the PROCESSES PANEL,
+///   instead of a gray rectangle with its type's name.
+/// - **12**: the screen can carry the THEME from the inside (role by role,
+///   with the effects this renderer does not paint) and the VOLUME
+///   PICKER.
+/// - **11**: the screen can carry the EXTENSION MANAGER read-only: what is
+///   installed, what each one asks for and what has been configured on it.
+/// - **10**: the screen can carry SETTINGS read-only: the shared catalogue
+///   with its effective value, and where each thing lives.
+/// - **9**: the screen can carry HELP: the corpus in closed blocks, with
+///   its live marks already resolved against the reader's keymap, and the
+///   keyboard sheet generated from the effective map.
+/// - **8**: the screen can carry the command PALETTE.
+/// - **7**: a half-typed prefix carries its CONTINUATIONS (which keys
+///   follow, what each does and which cannot be done here).
+/// - **6**: headers and the viewer travel as a PATCH, and the renderer
+///   declares how many lines fit in the viewer.
+/// - **5**: every action that names a row ALSO carries the generation in
+///   which the renderer saw it, and the host compares it to the listing's
+///   epoch. Without that pair the key is an index, and an index from the
+///   previous screen names a different file.
+/// - **4**: the screen can carry a VIEWER (decoded text in lines, or
+///   hexadecimal if the content is binary).
+/// - **3**: every listing carries its HEADERS (translated label, sort
+///   column and direction), and sorting by column can be requested.
+/// - **2**: the snapshot carries the screen's split
+///   ([`crate::dto::LayoutView`]) and goes FULL (dialogs and the board
+///   included); a focus change travels as a patch and not a snapshot.
+/// - **1**: phase 2's initial contract.
 ///
-/// - **51**: el snapshot lleva la BARRA DE PANELES (#324): botones derivados
-///   del registro de kinds, con estado y novedad, y una acción por índice
-///   para pulsarlos. Va también como parche (`ViewChange::PanelBar`) en
-///   cualquier envío que la cambie.
-/// - **52**: la SALIDA DE UN PROGRAMA (#312): lo que imprimió un programa
-///   que quien hospeda corrió esperándolo —el comparador de dos ficheros—,
-///   como foto y como parche, y la acción con la que quien hospeda la
-///   devuelve.
-/// - **53**: el renderer declara cuántas COLUMNAS tiene el cuerpo del visor
-///   (`SetViewerCols`), como ya declaraba las filas: es el ancho que el
-///   previewer recibe.
-/// - **54**: un diálogo de transferencia dice en qué punto está la
-///   COMPROBACIÓN DE SU DESTINO ([`crate::dto::DestCheckView`]): si cabe
-///   (#149) y si sabe sujetar sus escrituras (#164). Sube el número aunque el
-///   campo lleve `serde(default)`, y esa es la razón de subirlo: un renderer
-///   viejo emparejado con este host no conoce el campo, no pintaría la línea
-///   de #164 y no lo diría — y la ausencia de esa línea SIGNIFICA que el
-///   destino confina. El webview va embebido en el binario, así que ese
-///   emparejamiento es lo que sale de olvidarse de `just link-gui`.
-/// - **55**: la cabecera de un listado lleva las CUATRO marcas que le
-///   faltaban y que el terminal tiene desde siempre: que se está rellenando
-///   —y cuántas van—, que los nombres se reinterpretan (#57), que un refresco
-///   se comió marcas, y cuántas hay marcadas y cuánto pesan. Todas bajo la
-///   misma regla: un listado que enseña menos de lo que hay, o que no enseña
-///   lo que hay, jamás es silencioso.
-/// - **56**: un hueco que está CARGANDO dice a dónde va (#323). El cuerpo
-///   sigue enseñando el listado anterior hasta que llegue el nuevo —a
-///   propósito, para que un fallo deje al lector donde estaba—, y sin el
-///   destino esa mezcla no se puede leer. El umbral de 250 ms lo pone el
-///   renderer, que es donde un retardo puramente visual no cuesta nada.
-/// - **57**: el parche del tablero de tasks lleva TAMBIÉN qué fila del panel
-///   de procesos está elegida. Viaja con el tablero por lo mismo que
-///   `total_rows` viaja con las filas de un listado: es la extensión de lo que
-///   va al lado y las dos se mueven a la vez. Una task que caduca a los diez
-///   segundos quita una fila y desplaza el resto, y antes ese cursor solo
-///   viajaba en la foto entera — o sea que el panel resaltaba la fila N, que
-///   ya era otra tarea o ninguna, mientras la tecla de cancelar actuaba sobre
-///   la que el host tiene acotada. Resaltar una y parar otra es la avería.
-/// - **58**: un diálogo con la lista recortada dice si alguna de las que NO
-///   enseña se pintaría alterada. El badge de una ruta visible dice «lo que
-///   lees no son los bytes que hay»; sobre lo recortado no se puede decir eso
-///   —no está delante—, pero sí que ahí fuera hay algo así, que es lo que
-///   decide si merece la pena ampliar antes de aprobar. El terminal lo decía
-///   en su resumen desde siempre y esta ventana no, sobre las mismas rutas.
-/// - **59**: el visor dice cuánto hay A LO ANCHO (`total_cols`) y por dónde va
-///   (`first_col`). El visor no envuelve, así que sin esto un HTML minificado
-///   se pintaba recortado y la ventana no tenía con qué dibujar una barra
-///   horizontal: un fichero cortado por la derecha se leía como un fichero
-///   corto. Las `lines` ya vienen recortadas —el recorte lo hace el modelo
-///   compartido, una sola vez— y estos dos campos son la otra mitad: qué se ve
-///   y cuánto hay. Con ellos llega `viewer_scroll`, que es la RUEDA sobre el
-///   visor: una rueda no es una tecla, y fabricar flechas para expresarla
-///   dejaba el gesto atado a que nadie reatara esas flechas.
-/// - **60**: los ajustes (F11) se ESCRIBEN desde la ventana. `SettingsView`
-///   pierde `read_only`, que era una promesa de fase 4 y ya no es verdad; y
-///   llega `settings_activate`, el doble clic sobre una fila, que hace lo que
-///   `enter`: girar lo que gira y pedir en un diálogo lo que se teclea. El
-///   editor es el compartido con el terminal (`norte_frontend::settings`), y
-///   lo escrito se relee y se aplica por el mismo camino que un cambio de
-///   perfil.
-/// - **61**: el gestor de extensiones (F12) se GOBIERNA con el ratón.
-///   Llegan `extension_govern` —aprobar o revocar, encender o apagar, y
-///   desinstalar (ADR 0104), la fila señalada y el mismo camino que el
-///   verbo del teclado, preguntas incluidas— y `extension_help`, la página
-///   de ayuda de una extensión. Ningún DTO cambia: lo que la ventana pinta
-///   con botones ya viajaba.
-/// - **62**: la columna de iconos (ADR 0105). `RowView` gana `icon` e
-///   `icon_hostile`: lo que un decorador de hueco `icon` puso, a la
-///   IZQUIERDA del nombre; la insignia sigue a la derecha, y los dos
-///   coexisten. `BrowserSlotView` y el parche `rows` ganan `icon_column`:
-///   si la columna está abierta lo decide el host desde el listado entero,
-///   no el renderer desde las filas que ve, o desplazarse a una página sin
-///   iconos la cerraría y correría todos los nombres.
-/// - **63**: la ola de usabilidad (spec 2026-09-10), en UN salto.
-///   `PaletteRowView.recent`: la fila va arriba por ser de las últimas
-///   lanzadas, solo con la consulta vacía. `PanelBarView.names`: si los
-///   botones enseñan su nombre (`[ui] panel_bar_style`) o solo la letra.
-///   `BrowserSlotView.footer` y `BrowserHeader.footer`: el pie del listado
-///   (cuentas, marcado, espacio libre), ya redactado; vacío con
-///   `[ui] pane_footer` apagado. `ViewSnapshot.key_bar` y el cambio
-///   `key_bar`: la barra de teclas de función, derivada del keymap de la
-///   pantalla que tiene el teclado; `key_bar_activate` la pulsa y el host
-///   sintetiza la tecla. `StatusView.notices_unread`: avisos que caducaron
-///   (`[ui] notice_seconds`) sin que nadie abriera el registro; la
-///   insignia abre el registro por su botón de la barra de paneles.
-///   `ViewSnapshot.wizard`, el cambio `wizard` y las acciones `wizard_open`
-///   y `wizard_activate_row`: el asistente de primer arranque, que el
-///   renderer pide cuando el catálogo dice `first_run` y el host escribe
-///   por el camino de los ajustes.
-/// - **64**: anchos de columna (spec 2026-09-11, V2). `ColumnHeader` gana
-///   `width` —el ancho FIJO en celdas que `[ui.columns] spec.width`
-///   configura, `None` para `auto`/`flex`— y `align`, la alineación
-///   configurada, la misma que el terminal aplica. Llega `resize_column`:
-///   arrastrar el borde de una cabecera fija el ancho de esa columna en
-///   memoria y en el `norte.toml`, y vuelve la cabecera de todos los
-///   huecos, porque el ancho es de la columna y no del hueco.
-/// - **65**: migas e indicador de espacio (spec 2026-09-11, V5).
-///   `BrowserSlotView` y `BrowserHeader` ganan `path_segments` —la raíz y
-///   un tramo por directorio, cada uno enmascarado— y `used_ratio`, cuánto
-///   del volumen está ocupado. Llega `breadcrumb_activate { slot_id,
-///   depth, generation }`: navega al directorio con los primeros `depth`
-///   tramos, por profundidad y no por nombre, porque un tramo enmascarado
-///   no vuelve a ser un nombre; con la generación del listado que pintó
-///   las migas, para que una miga rancia no se reinterprete sobre otra
-///   ruta. `ColumnHeader.width` de la columna `name` pasa a ser su suelo.
-/// - **66**: el tema colorea las ENTRADAS (spec 2026-09-11). `RowView` gana
-///   `name_color` —el `#rrggbb` que `[files.ext]` (gana) o `[files.kind]`
-///   dan al nombre, vacío si el tema no dice nada— y `name_bold`,
-///   `name_dim`, `name_italic`, `name_underline`. Viajan RESUELTOS y no como
-///   nombre de regla porque las extensiones son un conjunto ABIERTO: un tema
-///   colorea las que quiera, así que el renderer no puede tener clases para
-///   ellas, al revés que con `badge_role`. Cierra una divergencia con el
-///   terminal que llevaba desde que existe la ventana: `[files.kind]` y
-///   `[files.ext]` —la mitad de lo que declara un fichero de tema— no se
-///   pintaban, y un listado monocromo no se lee como un tema pobre, se lee
-///   como un tema roto.
+/// - **51**: the snapshot carries the PANE BAR (#324): buttons derived from
+///   the kind registry, with state and novelty, and one action by index to
+///   press them. Also travels as a patch (`ViewChange::PanelBar`) in any
+///   send that changes it.
+/// - **52**: A PROGRAM'S OUTPUT (#312): what a program the host ran and
+///   waited for printed —the two-file comparer—, as a snapshot and as a
+///   patch, and the action the host uses to send it back.
+/// - **53**: the renderer declares how many COLUMNS the viewer's body has
+///   (`SetViewerCols`), as it already declared the rows: it is the width
+///   the previewer receives.
+/// - **54**: a transfer dialog says where its DESTINATION CHECK stands
+///   ([`crate::dto::DestCheckView`]): whether it fits (#149) and whether it
+///   knows how to hold its writes (#164). The number goes up even though
+///   the field carries `serde(default)`, and that is the reason to bump
+///   it: an old renderer paired with this host does not know the field,
+///   would not paint #164's line and would not say so — and that line's
+///   absence MEANS the destination confines. The webview is embedded in
+///   the binary, so that pairing is what comes of forgetting `just
+///   link-gui`.
+/// - **55**: a listing's header carries the FOUR marks it was missing that
+///   the terminal has always had: that it is filling in —and how many are
+///   left—, that names are reinterpreted (#57), that a refresh ate marks,
+///   and how many are marked and how much they weigh. All under the same
+///   rule: a listing that shows less than there is, or that does not show
+///   what there is, is never silent.
+/// - **56**: a slot that is LOADING says where it is going (#323). The body
+///   keeps showing the previous listing until the new one arrives —on
+///   purpose, so a failure leaves the reader where they were—, and without
+///   the destination that mix cannot be read. The 250 ms threshold is set
+///   by the renderer, which is where a purely visual delay costs nothing.
+/// - **57**: the task board's patch ALSO carries which row of the processes
+///   panel is selected. Travels with the board for the same reason
+///   `total_rows` travels with a listing's rows: it is the extension of
+///   whatever sits next to it and both move together. A task that expires
+///   after ten seconds removes a row and shifts the rest, and before that
+///   cursor only traveled in the whole snapshot — meaning the panel
+///   highlighted row N, which was already another task or none, while the
+///   cancel key acted on the one the host has pinned. Highlighting one and
+///   stopping another is the bug.
+/// - **58**: a dialog with a trimmed list says whether any of the ones it
+///   does NOT show would paint altered. A visible path's badge says "what
+///   you read is not the bytes that are there"; about what is trimmed that
+///   cannot be said —it is not in front of you— but it can say there is
+///   something like that out there, which is what decides whether it is
+///   worth expanding before approving. The terminal has always said so in
+///   its summary and this window did not, about the same paths.
+/// - **59**: the viewer says how much there is SIDEWAYS (`total_cols`) and
+///   where it is (`first_col`). The viewer does not wrap, so without this
+///   a minified HTML painted clipped and the window had nothing to draw a
+///   horizontal bar with: a file cut off on the right read as a short
+///   file. `lines` already arrive clamped —the clamping is done once by
+///   the shared model— and these two fields are the other half: what is
+///   visible and how much there is. `viewer_scroll` arrives with them,
+///   which is the WHEEL over the viewer: a wheel is not a key, and
+///   manufacturing arrows to express it left the gesture dependent on
+///   nobody having rebound those arrows.
+/// - **60**: settings (F11) are WRITTEN from the window. `SettingsView`
+///   loses `read_only`, which was a phase 4 promise and is no longer true;
+///   and `settings_activate` arrives, the double click on a row, which
+///   does what `enter` does: cycling whatever cycles and asking in a
+///   dialog for whatever is typed. The editor is the one shared with the
+///   terminal (`norte_frontend::settings`), and what is written is
+///   re-read and applied through the same path as a profile change.
+/// - **61**: the extension manager (F12) is GOVERNED with the mouse.
+///   `extension_govern` arrives —approve or revoke, turn on or off, and
+///   uninstall (ADR 0104), the pointed-to row and the same path as the
+///   keyboard verb, questions included— and `extension_help`, an
+///   extension's help page. No DTO changes: what the window paints with
+///   buttons already traveled.
+/// - **62**: the icon column (ADR 0105). `RowView` gains `icon` and
+///   `icon_hostile`: what a slot's `icon` decorator set, to the LEFT of
+///   the name; the badge still sits on the right, and both coexist.
+///   `BrowserSlotView` and the `rows` patch gain `icon_column`: whether the
+///   column is open is decided by the host from the whole listing, not by
+///   the renderer from the rows it sees, or scrolling to a page with no
+///   icons would close it and shift every name.
+/// - **63**: the usability wave (spec 2026-09-10), in ONE jump.
+///   `PaletteRowView.recent`: the row goes to the top for being one of the
+///   last launched, only with an empty query. `PanelBarView.names`:
+///   whether the buttons show their name (`[ui] panel_bar_style`) or just
+///   the letter. `BrowserSlotView.footer` and `BrowserHeader.footer`: the
+///   listing's footer (counts, marked, free space), already composed;
+///   empty with `[ui] pane_footer` off. `ViewSnapshot.key_bar` and the
+///   `key_bar` change: the function-key bar, derived from the keymap of
+///   the screen holding the keyboard; `key_bar_activate` presses it and
+///   the host synthesizes the key. `StatusView.notices_unread`: notices
+///   that expired (`[ui] notice_seconds`) without anyone opening the log;
+///   the badge opens the log through its pane-bar button.
+///   `ViewSnapshot.wizard`, the `wizard` change and the `wizard_open` and
+///   `wizard_activate_row` actions: the first-run wizard, which the
+///   renderer requests when the catalogue says `first_run` and the host
+///   writes through the settings path.
+/// - **64**: column widths (spec 2026-09-11, V2). `ColumnHeader` gains
+///   `width` —the FIXED width in cells `[ui.columns] spec.width`
+///   configures, `None` for `auto`/`flex`— and `align`, the configured
+///   alignment, the same one the terminal applies. `resize_column`
+///   arrives: dragging a header's edge fixes that column's width in
+///   memory and in `norte.toml`, and every slot's header comes back,
+///   because the width belongs to the column and not the slot.
+/// - **65**: breadcrumbs and a space indicator (spec 2026-09-11, V5).
+///   `BrowserSlotView` and `BrowserHeader` gain `path_segments` —the root
+///   and one segment per directory, each masked— and `used_ratio`, how
+///   much of the volume is used. `breadcrumb_activate { slot_id, depth,
+///   generation }` arrives: navigates to the directory with the path's
+///   first `depth` segments, by depth and not by name, because a masked
+///   segment is not a name again; with the generation of the listing that
+///   painted the breadcrumbs, so a stale breadcrumb is not reinterpreted
+///   over a different path. The `name` column's `ColumnHeader.width`
+///   becomes its floor.
+/// - **66**: the theme colors ENTRIES (spec 2026-09-11). `RowView` gains
+///   `name_color` —the `#rrggbb` `[files.ext]` (wins) or `[files.kind]`
+///   gives the name, empty if the theme says nothing— and `name_bold`,
+///   `name_dim`, `name_italic`, `name_underline`. They travel RESOLVED and
+///   not as a rule name because extensions are an OPEN set: a theme
+///   colors whichever it likes, so the renderer cannot have classes for
+///   them, unlike `badge_role`. Closes a divergence from the terminal that
+///   had existed since the window did: `[files.kind]` and `[files.ext]`
+///   —half of what a theme file declares— went unpainted, and a
+///   monochrome listing does not read as a poor theme, it reads as a
+///   broken one.
 ///
-///   De los seis atributos de `norte_theme::Style` cruzan CUATRO. `bg` y
-///   `reverse` se quedan fuera a propósito: el fondo de una fila ya lo
-///   disputan el cursor, el hover y la marca, y un quinto dueño dejaría que
-///   el tema tapase dónde está el cursor. Un tema que pinte `bg` en
-///   `[files.ext]` lo verá en el terminal y no aquí, y eso está escrito
-///   también en `docs/theming.md`.
-/// - **67**: el esquema del escritorio cruza. Llega `set_color_scheme {
-///   dark }`, que el renderer manda al arrancar y en cada cambio de
-///   `prefers-color-scheme`.
+///   Of `norte_theme::Style`'s six attributes, FOUR cross. `bg` and
+///   `reverse` stay out on purpose: a row's background is already
+///   contested by the cursor, the hover and the mark, and a fifth owner
+///   would let the theme hide where the cursor is. A theme that paints
+///   `bg` in `[files.ext]` will see it in the terminal and not here, and
+///   that is also written in `docs/theming.md`.
+/// - **67**: the desktop's scheme crosses. `set_color_scheme { dark }`
+///   arrives, sent by the renderer on startup and on every
+///   `prefers-color-scheme` change.
 ///
-///   Hace falta por el puente 66 y no antes: las VARIABLES CSS de la
-///   variante (V6) las enchufa el renderer por su cuenta y de forma
-///   síncrona, para no parpadear con la paleta equivocada, así que hasta
-///   ahora el host no necesitaba saber el esquema. Con el color de la
-///   entrada cocido en la fila sí: con `theme_dark = "vscode-dark"` y
-///   `theme_light = "vscode-light"`, pasar el escritorio a claro repintaba
-///   el cromo con la variante clara y dejaba los NOMBRES con los colores de
-///   la oscura — `dir` en #4daafc sobre blanco, 2,6:1, por debajo del suelo
-///   que esos presets prometen en su cabecera.
+///   Needed as of bridge 66 and not before: the variant's CSS VARIABLES
+///   (V6) are plugged in by the renderer on its own and synchronously, to
+///   avoid a flash of the wrong palette, so until now the host did not
+///   need to know the scheme. With the entry's color baked into the row it
+///   does: with `theme_dark = "vscode-dark"` and `theme_light =
+///   "vscode-light"`, switching the desktop to light repainted the chrome
+///   with the light variant and left the NAMES with the dark one's colors
+///   — `dir` in #4daafc on white, 2.6:1, below the floor those presets
+///   promise in their own header.
 ///
-///   La regla «la variante de ese lado si la hay, y `theme` si no» queda
-///   escrita en los dos lados (`themeFor` en `ui/src/main.ts`,
-///   `HostTheme::para_esquema` en Rust) porque cada uno necesita una cosa
-///   distinta —variables el renderer, `Theme` entero el host, que es el
-///   único que puede resolver `[files.ext]`—. Lo que impide que diverjan es
-///   `la_regla_de_variante_es_la_del_renderer`, que pinea los tres casos.
-/// - **68**: llega `menu_toggle`, el Alt pulsado y soltado solo. Pliega el
-///   menú abierto o lo abre como `app.menu`, y no hace nada con una pantalla
-///   que se queda las teclas delante. Cruza como acción propia porque un
-///   modificador solo no es un chord del keymap.
-/// - **69**: la pantalla de inicio y lo que una task tarda (spec
-///   2026-09-15, ADR 0115). Tres formas nuevas, todas aditivas:
-///   `ViewSnapshot.splash` (con su `ViewChange::Splash`), `TaskView.rate` y
-///   `TaskView.eta`, y `RowView.progress`.
+///   The rule "that side's variant if there is one, and `theme` if not" is
+///   written on both sides (`themeFor` in `ui/src/main.ts`,
+///   `HostTheme::for_scheme` in Rust) because each needs a different
+///   thing —variables for the renderer, the whole `Theme` for the host,
+///   the only one that can resolve `[files.ext]`. What keeps them from
+///   drifting apart is `the_variant_rule_is_the_renderers`, which
+///   pins the three cases.
+/// - **68**: `menu_toggle` arrives, Alt pressed and released alone. It
+///   collapses the open menu or opens it like `app.menu`, and does nothing
+///   with a screen holding the keys in front. Crosses as its own action
+///   because a lone modifier is not a keymap chord.
+/// - **69**: the startup screen and how long a task takes (spec 2026-09-15,
+///   ADR 0115). Three new shapes, all additive: `ViewSnapshot.splash`
+///   (with its `ViewChange::Splash`), `TaskView.rate` and `TaskView.eta`,
+///   and `RowView.progress`.
 ///
-///   El ritmo NO viene del wire: `TaskProgress` dice cuánto va hecho y no a
-///   qué velocidad, así que lo estima cada frontend de sus propias fotos
-///   (`norte_frontend::tasks::Rate`). Cruza ya formateado —`"12,3 MiB/s"`,
-///   `"1m 04s"`— y no como números porque el renderer no tiene el locale ni
-///   las unidades, y dos frontends redondeando por su cuenta divergen en la
-///   última cifra sin que nada lo cace.
+///   The rate does NOT come from the wire: `TaskProgress` says how much is
+///   done and not at what speed, so each frontend estimates it from its
+///   own snapshots (`norte_frontend::tasks::Rate`). It crosses already
+///   formatted —`"12.3 MiB/s"`, `"1m 04s"`— and not as numbers because the
+///   renderer has neither the locale nor the units, and two frontends
+///   rounding on their own diverge in the last digit without anything
+///   catching it.
 ///
-///   `RowView.progress` es la barra DENTRO de la fila del listado: la task
-///   dice qué fichero lleva entre manos, y esa fila es la que el lector está
-///   mirando. Es `Option` porque una fila sin task detrás no tiene barra, que
-///   es casi todas.
-/// - **70**: el panel que pinta un PLUGIN (fase 3, proto 0.74.0). Llega
-///   `SlotView::Panel` con `PanelSlotView`: el `title` —el `<kind>` que
-///   declaró el plugin, sin prefijo—, las `lines` que su guest describió
-///   (tramos `SpanView`, los mismos que una preview estilada) y los `hits`,
-///   las zonas pulsables. Un `HitView` lleva `row`/`col`/`width` y **no lleva
-///   su comando**: el renderer manda la CELDA con la acción `panel_click
-///   { slot_id, row, col }` y el host resuelve contra el marco que él tiene
-///   qué zona era y qué comando le toca, filtrado por
-///   `norte_frontend::frame::zona_puede`. Un comando que viajara por el cable
-///   sería un comando que puede mandar cualquiera que hable con el renderer,
-///   y el plugin elige la etiqueta Y el comando sin que nada los ate.
-///   `lines` vacío es el panel que todavía no tiene marco —la primera
-///   petición en vuelo, o un plugin que falló—: se pinta su borde con su
-///   título, nunca un hueco mudo.
-/// - **71**: el mapa de disco (fase 4, proto 0.75.0). Llega
-///   `SlotView::DiskMap` con `DiskMapSlotView`: las `lines` del treemap ya
-///   repartido y sus `hits`, con la misma forma que un panel de plugin y por
-///   la misma razón — el reparto lo hace el host con
-///   `norte_frontend::treemap::squarify`, porque un treemap calculado dos
-///   veces son dos treemaps distintos en cuanto alguien toque un redondeo.
+///   `RowView.progress` is the bar INSIDE the listing's row: the task says
+///   which file it is currently on, and that row is the one the reader is
+///   looking at. It is `Option` because a row with no task behind it has
+///   no bar, which is almost all of them.
+/// - **70**: the panel a PLUGIN paints (phase 3, proto 0.74.0).
+///   `SlotView::Panel` arrives with `PanelSlotView`: the `title` —the
+///   `<kind>` the plugin declared, with no prefix—, the `lines` its guest
+///   described (`SpanView` spans, the same as a styled preview) and the
+///   `hits`, the clickable zones. A `HitView` carries `row`/`col`/`width`
+///   and **does not carry its command**: the renderer sends the CELL with
+///   the `panel_click { slot_id, row, col }` action and the host resolves
+///   against the frame it holds which zone it was and which command
+///   applies, filtered by `norte_frontend::frame::zona_puede`. A command
+///   traveling over the wire would be a command anyone talking to the
+///   renderer could send, and the plugin chooses the label AND the
+///   command with nothing tying them together. Empty `lines` is the panel
+///   that does not have a frame yet —the first request in flight, or a
+///   plugin that failed—: its border is painted with its title, never a
+///   silent gap.
+/// - **71**: the disk map (phase 4, proto 0.75.0). `SlotView::DiskMap`
+///   arrives with `DiskMapSlotView`: the treemap's already-laid-out
+///   `lines` and its `hits`, in the same shape as a plugin panel and for
+///   the same reason — the layout is done by the host with
+///   `norte_frontend::treemap::squarify`, because a treemap computed twice
+///   is two different treemaps the moment someone touches a rounding.
 ///
-///   Un `HitView` sigue sin llevar su destino: el renderer manda la CELDA
-///   (`panel_click`) y el host resuelve contra SU marco en qué hijo cayó. Aquí
-///   eso importa más que en un panel de plugin, porque lo que se resuelve es
-///   el NOMBRE de un fichero: si cruzara por el cable, sería un nombre que
-///   puede mandar cualquiera que hable con el renderer, y además tendría que
-///   viajar enmascarado —que es lo que se pinta— y volver reversible, que son
-///   dos formas distintas de la misma cadena.
+///   A `HitView` still carries no destination: the renderer sends the CELL
+///   (`panel_click`) and the host resolves against ITS frame which child
+///   was hit. Here that matters more than in a plugin panel, because what
+///   is resolved is a file's NAME: if it crossed the wire, it would be a
+///   name anyone talking to the renderer could send, and it would also
+///   have to travel masked —which is what is painted— and come back
+///   reversible, which are two different shapes of the same string.
 ///
-///   `measuring` dice si la medida sigue en marcha: un mapa a medias sin
-///   decirlo se lee como un directorio pequeño.
-/// - **72**: la revisión de ORGANIZAR (fase 8, proto 0.77.0). Llega
-///   `OrganizeView`, gemela de `AiRenameView` con dos diferencias que vienen
-///   de lo mismo — aquí lo que cambia es la FORMA del directorio:
+///   `measuring` says whether the measurement is still in progress: a
+///   half-done map that does not say so reads as a small directory.
+/// - **72**: the ORGANIZE review (phase 8, proto 0.77.0). `OrganizeView`
+///   arrives, twin to `AiRenameView` with two differences that come from
+///   the same thing — here what changes is the directory's SHAPE:
 ///
-///   El cuerpo es un ÁRBOL (`OrganizeLineView`: `depth`, el nombre saneado
-///   con su marca, y un `kind` de tres valores) y no una lista de parejas.
-///   Cuarenta filas `a.pdf → facturas/2026/a.pdf` no dejan ver cuántas
-///   carpetas aparecen ni qué acaba dentro de cada una, que es exactamente lo
-///   que se está aprobando. El `kind` viaja como DATO y no resuelto a un
-///   color: un tema monocromo necesita poder marcar de otra forma una carpeta
-///   que se va a crear.
+///   The body is a TREE (`OrganizeLineView`: `depth`, the sanitized name
+///   with its mark, and a three-value `kind`) and not a list of pairs.
+///   Forty rows of `a.pdf → invoices/2026/a.pdf` do not let you see how
+///   many folders appear or what ends up inside each one, which is exactly
+///   what is being approved. `kind` travels as DATA and not resolved to a
+///   color: a monochrome theme needs to be able to mark a folder that is
+///   about to be created some other way.
 ///
-///   Y no hay veredicto que esperar. El token del plan viaja CON el plan
-///   (`AiOrganizePlanResult::plan_hash`), así que esta pantalla nace
-///   aprobable en vez de abrir en `Pending` — lo que se pierde a cambio es el
-///   campo `status`, que aquí no diría nada.
+///   And there is no verdict to wait for. The plan's token travels WITH
+///   the plan (`AiOrganizePlanResult::plan_hash`), so this screen is born
+///   approvable instead of opening in `Pending` — what is given up in
+///   exchange is the `status` field, which here would say nothing.
 ///
-///   `organize_scroll { down }` existe aparte de las teclas porque aprobar
-///   exige haber llegado al final: sin un gesto para recorrer, la pantalla
-///   era una que un lector con el ratón no podía aprobar nunca.
-/// - **73**: `handoff_failed { no_terminal }` (fase 9, enmienda de la ADR
-///   0123). La manda el hilo de los efectos nativos cuando la terminal de un
-///   relevo NO se abrió, para que la ventana se quede, recupere la sesión y
-///   lo diga. Antes la ventana lanzaba el emulador y se olvidaba: ni se
-///   cerraba al conseguirlo ni se enteraba de no conseguirlo, y se quedaba
-///   diciendo «entregando la pantalla…» con la sesión ya soltada.
+///   `organize_scroll { down }` exists in addition to the keys because
+///   approving requires having reached the end: without a gesture to walk
+///   it, the screen was one a mouse-only reader could never approve.
+/// - **73**: `handoff_failed { no_terminal }` (phase 9, ADR 0123
+///   amendment). Sent by the native-effects thread when a handoff's
+///   terminal did NOT open, so the window stays, recovers the session and
+///   says so. The window used to launch the emulator and forget about it:
+///   it neither closed on success nor learned of failure, and stayed
+///   saying "handing off the screen…" with the session already released.
 ///
-///   Sin texto libre: un bool y no un motivo, porque cualquiera que hable con
-///   el host puede mandar la acción, y un motivo escrito por quien la manda
-///   sería un mensaje que el host pintaría sin haberlo escrito. Y sólo hace
-///   algo con un relevo EN CURSO; fuera de él es una acción obsoleta.
-/// - 74: `MenuItemView` gana `section` y `role` (ADR 0125): los menús van en
-///   secciones, con rótulo o sin él, y una entrada dice si borra o si la hace
-///   una IA. `chord` vacío en vez de `—` cuando no hay atajo.
-/// - 75: `HelpSpanView::Link` gana `action`, el índice de la fila de
-///   `HelpView::actions` que lo sigue: un `[[enlace]]` de la prosa se pulsa.
-///   Un índice y no el id del tema, que es una clave que el renderer no
-///   necesita.
-/// - 76: `HelpView::scroll`, la petición de desplazar el cuerpo de la ayuda.
-///   Las teclas que desplazan pasan por el keymap del lector en el host; antes
-///   el renderer las atendía como teclas fijas y un reatado no llegaba.
-/// - 77: «ir a cualquier sitio» (#357): `ViewSnapshot::goto` y
-///   `ViewChange::Goto` con `GotoView` —consulta, líneas (cabecera de sección
-///   o fila, cada fila con su `hostile`), cursor y el texto de vacío—. Las
-///   secciones de conexiones y del índice llegan en un parche aparte cuando
-///   contestan, sin mover el cursor.
-/// - 78: la línea de tiempo del journal (#359): `SlotView::Timeline` con
-///   `TimelineSlotView` —filas ya pintables (hora, actor para el color,
-///   verbo, ruta con su `hostile`, cola traducida), cursor, texto de vacío y
-///   el pie con lo que se llevaría un `Enter`—. Un lote es UNA fila.
-/// - 79: una extensión que no cargó es una fila del gestor (ADR 0113; se
-///   escribió como el 69 en una rama que llegó a `main` después del 78).
-///   `ExtensionErrorView` lleva `id` —el de su directorio, si se llama como
-///   uno— y el cursor de `ExtensionsView` sigue detrás de `rows` por
-///   `errors`. `extension_select_row` y `extension_govern` nombran esas filas
-///   por la misma cuenta, y sobre una rota el único cambio que se atiende es
-///   `uninstall`. ADR 0104 lo había dejado escrito como hueco: el handler la
-///   borraba y la ventana no tenía cómo pedírselo.
-/// - 80: el «pijama» del listado (spec 2026-09-20): `View::row_stripes` dice
-///   si las filas impares van sobre una banda. Cruza como booleano y no como
-///   color porque el color ya cruza: es el rol `stripe` del tema, que viaja
-///   con los demás en `--stripe-bg`. Un renderer viejo lo ignora y pinta el
-///   listado de siempre, que es exactamente el defecto.
+///   No free text: a bool and not a reason, because anyone talking to the
+///   host can send the action, and a reason written by whoever sends it
+///   would be a message the host would paint without having written it.
+///   And it only does something with a handoff IN PROGRESS; outside of
+///   one it is a stale action.
+/// - 74: `MenuItemView` gains `section` and `role` (ADR 0125): menus go in
+///   sections, with or without a label, and an entry says whether it
+///   deletes or whether an AI does it. Empty `chord` instead of `—` when
+///   there is no shortcut.
+/// - 75: `HelpSpanView::Link` gains `action`, the index of the
+///   `HelpView::actions` row it follows: a prose `[[link]]` can be
+///   clicked. An index and not the topic's id, which is a key the
+///   renderer does not need.
+/// - 76: `HelpView::scroll`, the request to scroll help's body. The keys
+///   that scroll go through the reader's keymap in the host; the renderer
+///   used to handle them as fixed keys and a rebind never reached them.
+/// - 77: "go anywhere" (#357): `ViewSnapshot::goto` and `ViewChange::Goto`
+///   with `GotoView` —query, lines (section header or row, each row with
+///   its `hostile`), cursor and the empty-state text. The connections and
+///   index sections arrive in a separate patch when they answer, without
+///   moving the cursor.
+/// - 78: the journal timeline (#359): `SlotView::Timeline` with
+///   `TimelineSlotView` —already-paintable rows (time, actor for the
+///   color, verb, path with its `hostile`, translated tail), cursor,
+///   empty-state text and the footer with what an `Enter` would do. A
+///   batch is ONE row.
+/// - 79: an extension that failed to load is a row of the manager (ADR
+///   0113; written like #69 on a branch that reached `main` after 78).
+///   `ExtensionErrorView` carries `id` —its directory's, if it is named
+///   like one— and `ExtensionsView`'s cursor keeps following `rows` with
+///   `errors`. `extension_select_row` and `extension_govern` name those
+///   rows by the same count, and on a broken one the only change handled
+///   is `uninstall`. ADR 0104 had left it written as a gap: the handler
+///   deleted it and the window had no way to ask for it.
+/// - 80: the listing's "stripes" (spec 2026-09-20): `View::row_stripes`
+///   says whether odd rows sit on a band. Crosses as a boolean and not a
+///   color because the color already crosses: it is the theme's `stripe`
+///   role, which travels with the rest in `--stripe-bg`. An old renderer
+///   ignores it and paints the listing as always, which is exactly the
+///   default.
 ///
-///   Y el ZOOM del visor de imágenes: `ViewerView::image_zoom`, el
-///   porcentaje de lo que la imagen ocuparía AJUSTADA. Porcentaje y no
-///   píxeles porque quien sabe cuánto es «ajustada» es el renderer, que es
-///   quien tiene el hueco; el host lleva la cuenta de los peldaños. Con
-///   `serde(default)` a 100, que es ajustada: un host anterior no lo manda y
-///   el renderer pinta lo que pintaba.
-/// - 81: los ajustes, por secciones. `SettingsView` gana `index` —todas las
-///   secciones que esta superficie tiene, con cuántas filas se ven de cada
-///   una—, `query`, `shown` y `total`; `SettingRowView` gana `modified`, el
-///   punto de «esto no es de fábrica», que se calcula contra el valor por
-///   defecto y no contra «hay una clave en tu fichero». `sections` deja de
-///   ser una lista de dos —General y las rutas— y pasa a llevar una por
-///   sección con filas que enseñar.
+///   And the image viewer's ZOOM: `ViewerView::image_zoom`, the percentage
+///   of what the image would occupy FITTED. Percentage and not pixels
+///   because the one that knows how much "fitted" is is the renderer,
+///   which has the slot; the host keeps count of the steps. With
+///   `serde(default)` at 100, which is fitted: an earlier host does not
+///   send it and the renderer paints what it painted.
+/// - 81: settings, by section. `SettingsView` gains `index` —every section
+///   this surface has, with how many rows of each are visible—, `query`,
+///   `shown` and `total`; `SettingRowView` gains `modified`, the point of
+///   "this is not the factory value", computed against the default value
+///   and not against "there is a key in your file". `sections` stops
+///   being a list of two —General and the paths— and carries one per
+///   section that has rows to show.
 ///
-///   El índice viaja APARTE de `sections` porque una sección que el filtro
-///   vació sigue en el índice, apagada, y no tiene nada que pintar debajo:
-///   un índice que cambia de largo mientras escribes no vale como mapa.
+///   The index travels SEPARATELY from `sections` because a section the
+///   filter emptied stays in the index, dimmed, with nothing to paint
+///   underneath: an index that changes length while you type is no good
+///   as a map.
 ///
-///   Y tres acciones: `settings_query` (el texto ENTERO del buscador, no la
-///   tecla — las imprimibles no llegan al host, que es por lo que esta
-///   pantalla no tuvo filtro hasta ahora), `settings_jump_section` (por la
-///   clave ESTABLE de la sección, para que el salto no dependa del idioma) y
-///   `settings_reset` (quitar la clave de la capa de escritura).
-/// - 82: `SettingsView.focus` —`"index"` o `"list"`—, qué mitad de esa
-///   pantalla tiene el teclado. `tab` la cambia, como en la ayuda, y los DOS
-///   cursores se pintan siempre: el que no lo tiene, apagado (ADR 0128).
-///   Sin este campo el renderer solo puede pintar uno, que es justo lo que
-///   hace que no se sepa dónde está el foco. Un renderer anterior lo ignora
-///   y pinta lo que pintaba — el índice a ratón, la lista con su cursor.
-/// - 83: los CONTROLES de los ajustes. `SettingRowView` gana `control`
-///   —`toggle`, `choice`, `number`, `text`, `args`—, `choices` con los
-///   valores admitidos y `min`/`max` de un número. Sin esto el renderer no
-///   puede pintar un interruptor: solo le llegaba el valor como texto, y la
-///   clase de un ajuste no se adivina mirando la palabra `true`.
+///   And three actions: `settings_query` (the search box's WHOLE text, not
+///   the key — printable ones never reach the host, which is why this
+///   screen had no filter until now), `settings_jump_section` (by the
+///   section's STABLE key, so the jump does not depend on the language)
+///   and `settings_reset` (removing the key from the write layer).
+/// - 82: `SettingsView.focus` —`"index"` or `"list"`—, which half of that
+///   screen has the keyboard. `tab` changes it, as in help, and BOTH
+///   cursors are always painted: the one without it, dimmed (ADR 0128).
+///   Without this field the renderer can only paint one, which is exactly
+///   what makes it impossible to know where focus is. An earlier renderer
+///   ignores it and paints what it painted — the index by mouse, the list
+///   with its cursor.
+/// - 83: settings CONTROLS. `SettingRowView` gains `control` —`toggle`,
+///   `choice`, `number`, `text`, `args`—, `choices` with the accepted
+///   values and a number's `min`/`max`. Without this the renderer cannot
+///   paint a toggle: only the value arrived as text, and a setting's class
+///   is not guessed by looking at the word `true`.
 ///
-///   Las listas VIVAS —los temas instalados, los presets— llegan ya
-///   resueltas dentro de `choices`, así que el renderer no distingue una
-///   lista del catálogo de una que cambia en caliente.
+///   LIVE lists —installed themes, presets— arrive already resolved
+///   inside `choices`, so the renderer does not tell a catalogue list
+///   apart from one that changes on the fly.
 ///
-///   Y la acción `settings_set { id, value }`: PONE un valor en vez de
-///   ciclarlo. `settings_activate` sigue siendo lo que hace Enter, pero con
-///   un desplegable de diez temas elegir el séptimo serían siete viajes y
-///   seis escrituras en el `norte.toml`. Va por ID y no por fila porque un
-///   control tarda lo que tarda el lector en soltarlo, y el filtro de detrás
-///   puede haber cambiado qué filas hay.
+///   And the `settings_set { id, value }` action: SETS a value instead of
+///   cycling it. `settings_activate` is still what Enter does, but with a
+///   ten-theme dropdown choosing the seventh would be seven trips and six
+///   writes to `norte.toml`. Goes by ID and not by row because a control
+///   takes as long as the reader takes to release it, and the filter
+///   behind it may have changed which rows there are.
 ///
-///   Y `default`, el valor DE FÁBRICA de cada fila: lo que un campo vacío
-///   enseña como marcador. «Vacío» no es un hueco, es ese valor, y decir
-///   cuál informa — una frase que diga que lo hay ocupa el sitio del dato
-///   sin darlo.
-/// - **84**: la ventana deja la barra de teclas (spec 2026-09-21). Se van
-///   `ViewSnapshot.key_bar`, el cambio `key_bar` y la acción
-///   `key_bar_activate`, con `KeyBarView` y `KeyCellView`. La barra de
-///   F1–F10 es de la herencia del terminal; la ventana tiene menú, paleta y
-///   barra de actividad, y la fila de celdas era lo que más pesaba en la
-///   pantalla y lo que menos decía. `[ui] key_bar` sigue gobernando la TUI.
-///   Y la barra de paneles puede ser la barra de actividad (ADR 0131):
-///   `PanelBarView.vertical` (`[ui] panel_bar_position` ya resuelta) y
-///   `PanelButtonView.count`, la cifra de su insignia.
-/// - **85**: la barra de estado por elementos (ADR 0132).
-///   `ViewSnapshot.status_items` y el cambio `status_items`: la mitad
-///   derecha, ya redactada, recortada por prioridad y en el orden de
-///   `[ui] status_items`. La acción `status_item_activate { id }` pulsa uno,
-///   por ID porque la lista se mueve con el cursor.
-/// - **86**: botones de disposición y de pestañas (ADR 0133).
-///   `ViewSnapshot.layout_buttons` (`ChromeButtonView`: id, nombre, atajo)
-///   y la acción `layout_button_activate { id }`; la acción
-///   `tab_action { slot_id, verb: "new" | "close" }`, que elige la pestaña
-///   y corre la orden, como el `[+]`/`[x]` de la TUI.
-/// - **87**: las unidades de la barra de sitios (captura del 2026-09-21).
-///   `PlaceRowView::Drive.label` pasa a ser el nombre CORTO
-///   (`places::drive_name`, el de la TUI) y gana `mount` —el montaje
-///   entero, para el título—, `free` —el libre corto de la columna
-///   derecha— y `kind`, que elige el icono.
-/// - **88**: los paneles de un mismo borde se agrupan en pestañas (ADR
-///   0134). `TabGroupView.panels`: el grupo es de paneles, no de listados,
-///   y no lleva `+`. El rótulo de una pestaña de panel es su nombre de la
-///   barra de paneles, no el id del kind.
-/// - **89**: la regla de marcas (ADR 0135). `BrowserSlotView.mark_ruler` y
-///   `ViewChange::BrowserHeader.mark_ruler`: qué tramos del listado, de
-///   `MARK_RULER_SPANS`, llevan alguna marca.
-/// - **90**: mover un panel arrastrándolo (ADR 0138). La acción
-///   `move_slot { slot_id, target, zone }`, con `zone` uno de `left`,
-///   `right`, `top`, `bottom` o `center`.
-/// - **91**: un diálogo puede ser un FORMULARIO. `DialogView.fields`, una
-///   lista genérica de `DialogFieldView` (texto, interruptor o ciclo), y la
-///   acción `dialog_field { id, field, value }` para tocarlos. Ausente y
-///   vacío = el diálogo de siempre, así que el JSON de uno sin formulario es
-///   byte a byte el de 90. El primero que lo usa es la búsqueda de la
-///   ventana, que pedía un glob y nada más mientras el terminal ofrecía
-///   siete campos (protocolo 0.81.0).
-/// - **92**: la barra de progreso ligera (ADR 0146).
-///   `StatusItemView.progress` (`StatusProgressView`: `percent` y `phase`)
-///   en el item `tasks`: el renderer pinta la barra DETRÁS del texto, con el
-///   ancho de `BAR_CELLS` celdas. Ausente = sin barra, así que el JSON de
-///   cualquier otro item es byte a byte el de 91.
-/// - **93**: una task se puede pausar (ADR 0147). `TaskStateView` gana
-///   `paused`: viva y parada. Antes el host la pintaba como `running`, que
-///   es justo lo que no está haciendo.
-/// - **94**: la línea fina de progreso de un hueco (ADR 0148).
-///   `BrowserSlotView.progress` y el cambio `slot_progress { slot_id,
-///   progress }`: lo que está llegando A ESE directorio, para pintar dos
-///   píxeles en su borde sin reenviar el listado.
-/// - **95**: el panel de terminal (#362). `SlotView::Terminal`
-///   (`TerminalSlotView`: filas de `TerminalSpanView`, cursor y `no_shell`).
-///   Lo que cruza son FILAS YA PINTADAS y no los bytes del pty: la emulación
-///   la hace `norte-term` del lado del host, la misma que usa la terminal, así
-///   que los dos frontends enseñan lo mismo por construcción. Sus colores
-///   viajan SIN resolver —`indexed` sigue siendo un índice— porque qué azul es
-///   el «color 4» lo decide la paleta de quien pinta, no el host.
+///   And `default`, each row's FACTORY value: what an empty field shows as
+///   a placeholder. "Empty" is not a gap, it is that value, and saying
+///   which one informs — a sentence saying there is one takes the data's
+///   place without giving it.
+/// - **84**: the window drops the function-key bar (spec 2026-09-21).
+///   `ViewSnapshot.key_bar`, the `key_bar` change and the
+///   `key_bar_activate` action are gone, with `KeyBarView` and
+///   `KeyCellView`. The F1–F10 bar is inherited from the terminal; the
+///   window has a menu, a palette and an activity bar, and the cell row
+///   was the heaviest thing on screen and the one that said the least.
+///   `[ui] key_bar` still governs the TUI. And the pane bar can be the
+///   activity bar (ADR 0131): `PanelBarView.vertical` (`[ui]
+///   panel_bar_position` already resolved) and `PanelButtonView.count`,
+///   its badge's number.
+/// - **85**: the status bar by items (ADR 0132). `ViewSnapshot.status_items`
+///   and the `status_items` change: the right half, already composed,
+///   trimmed by priority and in `[ui] status_items`'s order. The
+///   `status_item_activate { id }` action presses one, by ID because the
+///   list moves with the cursor.
+/// - **86**: layout and tab buttons (ADR 0133). `ViewSnapshot.layout_buttons`
+///   (`ChromeButtonView`: id, name, shortcut) and the
+///   `layout_button_activate { id }` action; the `tab_action { slot_id,
+///   verb: "new" | "close" }` action, which chooses the tab and runs the
+///   command, like the TUI's `[+]`/`[x]`.
+/// - **87**: places-bar drives (2026-09-21 capture). `PlaceRowView::Drive.label`
+///   becomes the SHORT name (`places::drive_name`, the TUI's) and gains
+///   `mount` —the whole mount point, for the title—, `free` —the right
+///   column's short free-space— and `kind`, which chooses the icon.
+/// - **88**: panels on the same edge group into tabs (ADR 0134).
+///   `TabGroupView.panels`: the group is of panels, not listings, and
+///   carries no `+`. A panel tab's label is its name from the pane bar,
+///   not the kind's id.
+/// - **89**: the mark ruler (ADR 0135). `BrowserSlotView.mark_ruler` and
+///   `ViewChange::BrowserHeader.mark_ruler`: which segments of the
+///   listing, out of `MARK_RULER_SPANS`, carry any mark.
+/// - **90**: moving a slot by dragging it (ADR 0138). The `move_slot {
+///   slot_id, target, zone }` action, with `zone` one of `left`, `right`,
+///   `top`, `bottom` or `center`.
+/// - **91**: a dialog can be a FORM. `DialogView.fields`, a generic list of
+///   `DialogFieldView` (text, toggle or cycle), and the `dialog_field {
+///   id, field, value }` action to touch them. Absent and empty = the
+///   usual dialog, so a formless one's JSON is byte for byte the same as
+///   90's. The first to use it is the window's search, which used to ask
+///   for a glob and nothing else while the terminal offered seven fields
+///   (protocol 0.81.0).
+/// - **92**: the lightweight progress bar (ADR 0146). `StatusItemView.progress`
+///   (`StatusProgressView`: `percent` and `phase`) in the `tasks` item: the
+///   renderer paints the bar BEHIND the text, `BAR_CELLS` cells wide.
+///   Absent = no bar, so any other item's JSON is byte for byte 91's.
+/// - **93**: a task can be paused (ADR 0147). `TaskStateView` gains
+///   `paused`: alive and stopped. The host used to paint it as `running`,
+///   which is exactly what it is not doing.
+/// - **94**: a slot's thin progress line (ADR 0148). `BrowserSlotView.progress`
+///   and the `slot_progress { slot_id, progress }` change: what is
+///   arriving at THAT directory, to paint two pixels on its border
+///   without resending the listing.
+/// - **95**: the terminal panel (#362). `SlotView::Terminal`
+///   (`TerminalSlotView`: `TerminalSpanView` rows, cursor and
+///   `no_shell`). What crosses is ALREADY-PAINTED ROWS and not the pty's
+///   bytes: the emulation is done by `norte-term` on the host side, the
+///   same one the terminal uses, so both frontends show the same thing by
+///   construction. Its colors travel UNRESOLVED —`indexed` stays an
+///   index— because which blue "color 4" is is decided by the palette of
+///   whoever paints, not the host.
 pub const BRIDGE_VERSION: u32 = 95;
 
-/// Tope de una cadena que cruza al renderer, en bytes.
+/// Cap on a string that crosses to the renderer, in bytes.
 ///
-/// Todo lo pintable está acotado en Rust y no en el renderer: un nombre
-/// hostil de 700 KB no puede convertirse en el problema de quien pinta.
+/// Everything paintable is clamped in Rust and not in the renderer: a 700
+/// KB hostile name cannot become whoever paints it problem.
 pub const MAX_STRING_BYTES: usize = 4096;
 
-/// Filas que puede llevar UN mensaje.
+/// Rows ONE message can carry.
 pub const MAX_ROWS_PER_BATCH: usize = 2048;
 
-/// Avisos vivos a la vez; los más viejos se caen.
+/// Live notices at once; the oldest fall off.
 pub const MAX_NOTICES: usize = 32;
 
-/// Tasks proyectadas a la vez.
+/// Tasks projected at once.
 pub const MAX_TASKS: usize = 256;
 
-/// Tasks RETENIDAS a la vez, proyectadas o no (#271).
+/// Tasks RETAINED at once, projected or not (#271).
 ///
-/// [`MAX_TASKS`] acota lo que cruza el puente; esto acota lo que el host
-/// guarda. No son el mismo número porque no son la misma pregunta: una fila
-/// que se cae de la proyección sigue teniendo un progreso que bombear y un
-/// directorio que relistar cuando termine, y tirarla por no caber en la
-/// pantalla perdería el refresco.
+/// [`MAX_TASKS`] caps what crosses the bridge; this caps what the host
+/// keeps. They are not the same number because they are not the same
+/// question: a row that falls out of the projection still has progress to
+/// pump and a directory to re-list when it finishes, and dropping it for
+/// not fitting on screen would lose the refresh.
 ///
-/// El desalojo de `registrar_task` solo puede tirar tasks TERMINALES, así que
-/// sin este segundo tope un lote de tres mil copias encoladas —ninguna
-/// terminal todavía— retenía las tres mil. 512 es lo que un daemon acepta
-/// vivas a la vez (`MAX_LIVE_TASKS`), o sea el techo real del otro lado.
+/// `registrar_task`'s eviction can only drop TERMINAL tasks, so without
+/// this second cap a batch of three thousand queued copies —none terminal
+/// yet— retained all three thousand. 512 is what a daemon accepts alive at
+/// once (`MAX_LIVE_TASKS`), that is, the real ceiling on the other side.
 pub const MAX_TASKS_RETAINED: usize = 512;
 
-/// Entradas que admite UNA transferencia (#271).
+/// Entries ONE transfer accepts (#271).
 ///
-/// `pane.copy` opera sobre las marcas, y marcar no tiene tope: un lote se
-/// encolaba entero y se descubría el límite cuando el daemon empezaba a
-/// rechazar por `MAX_LIVE_TASKS`, o sea a mitad, con la mitad hecha y sin
-/// nada que dijera dónde se cortó. Decirlo ANTES es más honesto que
-/// descubrirlo a medias.
+/// `pane.copy` operates on the marks, and marking has no cap: a batch used
+/// to be queued whole and the limit was discovered when the daemon started
+/// rejecting on `MAX_LIVE_TASKS`, that is, halfway through, with half done
+/// and nothing saying where it was cut off. Saying it BEFOREHAND is more
+/// honest than discovering it halfway.
 pub const MAX_TRANSFER_BATCH: usize = 512;
 
-/// Diálogos apilados a la vez.
+/// Dialogs stacked at once.
 ///
-/// La pila era de gestos humanos y por eso no tenía techo. Desde la tarea 5.3
-/// la alimenta el WIRE: una aprobación por cada op de agente, y un informe
-/// por cada lote o undo terminal que dejó algo a medias —también los de otro
-/// cliente de la misma sesión—. Otro frontend corriendo doscientos lotes
-/// atascados apilaba doscientos diálogos, cada uno pidiendo dos respuestas, y
-/// cada parche de diálogos CLONA la pila entera.
+/// The stack used to be of human gestures and that is why it had no
+/// ceiling. Since task 5.3 the WIRE feeds it: one approval per agent op,
+/// and one report per batch or terminal undo that left something half
+/// done —including another client's, on the same session. Another
+/// frontend running two hundred stuck batches stacked two hundred
+/// dialogs, each asking two questions, and every dialog patch CLONES the
+/// whole stack.
 ///
-/// Ocho es lo que una persona puede contestar sin perder el hilo; al llegar
-/// al techo se cae el más viejo NO reconocido —lo que nadie ha llegado a
-/// mirar— y jamás el de arriba, que es el que se está contestando.
+/// Eight is what a person can answer without losing track; on hitting the
+/// ceiling the oldest UNACKNOWLEDGED one falls —whichever nobody has
+/// gotten to look at yet— and never the top one, which is the one being
+/// answered.
 pub const MAX_DIALOGS: usize = 8;
 
-/// Bytes de una previsualización que cruzan al renderer.
+/// Bytes of a preview that cross to the renderer.
 pub const MAX_PREVIEW_BYTES: usize = 256 * 1024;
 
-/// Identidad de UNA instancia del host.
+/// Identity of ONE host instance.
 ///
-/// Ordena todo lo demás: una `sequence` solo significa algo dentro de la
-/// instancia que la emitió, y una acción que llega con otra instancia es de
-/// una vida anterior del host (un reattach tras reiniciar) y no muta nada.
+/// Orders everything else: a `sequence` only means something within the
+/// instance that emitted it, and an action arriving with a different
+/// instance is from an earlier life of the host (a reattach after a
+/// restart) and mutates nothing.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct InstanceId(String);
 
 impl InstanceId {
-    /// Construye la identidad. La fabrica el host al arrancar.
+    /// Builds the identity. Manufactured by the host on startup.
     #[must_use]
     pub fn new(raw: impl Into<String>) -> Self {
         Self(raw.into())
     }
 
-    /// La cadena opaca.
+    /// The opaque string.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 }
 
-/// La clave de una FILA, opaca para el renderer.
+/// A ROW's key, opaque to the renderer.
 ///
-/// Solo vale dentro de `(instancia, hueco, generación)`. Cuando el host
-/// re-lista, la generación sube: un click que llega con la anterior se
-/// responde [`StaleAction::Generation`] y no hace nada. Es lo que impide que
-/// un doble click tardío actúe sobre el fichero que ocupó esa fila DESPUÉS.
+/// Only valid within `(instance, slot, generation)`. When the host
+/// re-lists, the generation goes up: a click arriving with the previous
+/// one is answered [`StaleAction::Generation`] and does nothing. This is
+/// what stops a late double click from acting on the file that took that
+/// row's place AFTERWARD.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RowKey(pub u64);
 
-/// La identidad de un diálogo abierto.
+/// The identity of an open dialog.
 ///
-/// Confirmar es idempotente por esto: un segundo `Confirm` con el mismo id no
-/// vuelve a lanzar la operación, y uno con un id viejo no cierra el diálogo
-/// que hay AHORA.
+/// Confirming is idempotent because of this: a second `Confirm` with the
+/// same id does not re-launch the operation, and one with an old id does
+/// not close the dialog that is open NOW.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ModalId(pub u64);
 
-/// El testigo de una petición en vuelo.
+/// The token for a request in flight.
 ///
-/// NO cruza al renderer: es la contabilidad interna del host para descartar
-/// en Rust la respuesta de algo que ya no interesa. Vive en este módulo por
-/// vecindad histórica, y se queda porque moverlo sería un cambio de nombres
-/// sin lector; que no está en el cable lo dice el corpus, donde no aparece.
+/// Does NOT cross to the renderer: it is the host's internal bookkeeping
+/// to discard, in Rust, the response to something no longer of interest.
+/// Lives in this module out of historical proximity, and stays because
+/// moving it would be a renaming with no reader; that it is not on the
+/// wire is stated by the corpus, where it does not appear.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RequestToken(pub u64);
 
-/// El sobre de todo mensaje del host hacia el renderer.
+/// The envelope of every message from the host to the renderer.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BridgeEnvelope<T> {
-    /// Versión del contrato ([`BRIDGE_VERSION`]).
+    /// Contract version ([`BRIDGE_VERSION`]).
     pub bridge_version: u32,
-    /// Quién emite.
+    /// Who emits it.
     pub instance_id: InstanceId,
-    /// Orden dentro de esta instancia. Empieza en 0 y no salta.
+    /// Order within this instance. Starts at 0 and never skips.
     pub sequence: u64,
-    /// Lo que se envía.
+    /// What is sent.
     pub payload: T,
 }
 
 impl<T> BridgeEnvelope<T> {
-    /// Mete `payload` en un sobre de ESTA versión.
+    /// Puts `payload` into an envelope of THIS version.
     pub fn new(instance_id: InstanceId, sequence: u64, payload: T) -> Self {
         Self {
             bridge_version: BRIDGE_VERSION,
@@ -675,10 +702,10 @@ impl<T> BridgeEnvelope<T> {
         }
     }
 
-    /// ¿Puede este renderer interpretar el sobre?
+    /// Can this renderer interpret the envelope?
     ///
-    /// Es una pregunta de todo o nada a propósito: media interpretación de un
-    /// contrato que no se conoce es peor que una pantalla que lo dice.
+    /// An all-or-nothing question on purpose: half an interpretation of a
+    /// contract it does not know is worse than a screen that says so.
     ///
     /// ```
     /// use norte_ui_host::{BridgeEnvelope, InstanceId, BRIDGE_VERSION};
@@ -686,7 +713,7 @@ impl<T> BridgeEnvelope<T> {
     /// let mut e = BridgeEnvelope::new(InstanceId::new("host-1"), 0, 7u32);
     /// assert!(e.is_supported());
     /// e.bridge_version = BRIDGE_VERSION + 1;
-    /// assert!(!e.is_supported(), "una versión futura NO se interpreta");
+    /// assert!(!e.is_supported(), "a future version is NOT interpreted");
     /// ```
     #[must_use]
     pub fn is_supported(&self) -> bool {
@@ -694,63 +721,65 @@ impl<T> BridgeEnvelope<T> {
     }
 }
 
-/// Por qué una acción no hizo nada, sin que sea un error.
+/// Why an action did nothing, without it being an error.
 ///
-/// Las tres son carreras normales entre un renderer que pinta y un host que
-/// ya cambió de estado, y ninguna es culpa de nadie: se responden y se
-/// ignoran.
+/// All three are normal races between a renderer that paints and a host
+/// that has already changed state, and none is anyone's fault: they are
+/// answered and ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StaleAction {
-    /// La acción venía de OTRA instancia del host.
+    /// The action came from ANOTHER host instance.
     ///
-    /// RESERVADA: hoy es inalcanzable, porque las acciones viajan sin sobre
-    /// y por tanto sin instancia. Un renderer que sobreviva a un reinicio del
-    /// host es la situación que la justifica, y entonces habrá que envolver
-    /// también la dirección de entrada. Se declara para que el renderer que
-    /// la reciba algún día ya sepa qué significa.
+    /// RESERVED: unreachable today, because actions travel without an
+    /// envelope and therefore without an instance. A renderer that
+    /// survives a host restart is the situation that justifies it, and
+    /// then the inbound direction will need wrapping too. Declared so a
+    /// renderer that receives it someday already knows what it means.
     Instance,
-    /// La fila (o el hueco) es de una generación anterior: hubo un re-listado.
+    /// The row (or the slot) is from an earlier generation: there was a
+    /// re-list.
     Generation,
-    /// El diálogo al que responde ya no está abierto.
+    /// The dialog it answers is no longer open.
     Modal,
 }
 
-/// La respuesta a una acción.
+/// The answer to an action.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "status")]
 pub enum ActionAck {
-    /// Aplicada. `sequence` es la primera actualización que la refleja.
+    /// Applied. `sequence` is the first update that reflects it.
     Applied {
-        /// La actualización en la que se verá.
+        /// The update in which it will be seen.
         sequence: u64,
     },
-    /// No se aplicó, y no pasa nada: ver [`StaleAction`].
+    /// Not applied, and nothing is wrong: see [`StaleAction`].
     Stale {
-        /// Cuál de las tres carreras fue.
+        /// Which of the three races it was.
         reason: StaleAction,
     },
-    /// La acción no está disponible AHORA (comando atenuado, sin permiso,
-    /// sin conexión). Lleva la clave Fluent del motivo, no la frase: quien
-    /// traduce es el renderer con el catálogo del host.
+    /// The action is not available RIGHT NOW (dimmed command, no
+    /// permission, no connection). Carries the reason's Fluent key, not
+    /// the sentence: the renderer does the translating with the host's
+    /// catalogue.
     Unavailable {
-        /// Clave Fluent del porqué.
+        /// Fluent key for the reason.
         reason_key: String,
     },
 }
 
-/// Recorta una cadena al tope del bridge sin partir un clúster.
+/// Clamps a string to the bridge's cap without splitting a cluster.
 ///
-/// Se DICE (`…`), que es la misma regla que el resto del proyecto aplica a lo
-/// pintable: nunca se pierde algo en silencio.
+/// It is STATED (`…`), the same rule the rest of the project applies to
+/// anything paintable: nothing is ever lost silently.
 ///
 /// ```
 /// use norte_ui_host::bridge::{clamp_display, MAX_STRING_BYTES};
 ///
-/// // Lo que cabe viaja intacto.
+/// // What fits travels intact.
 /// assert_eq!(clamp_display("café.txt".to_owned()), "café.txt");
 ///
-/// // Lo que no, se recorta Y se marca.
+/// // What does not is clamped AND marked.
 /// let largo = clamp_display("a".repeat(MAX_STRING_BYTES * 2));
 /// assert!(largo.len() <= MAX_STRING_BYTES);
 /// assert!(largo.ends_with('…'));
@@ -760,10 +789,11 @@ pub fn clamp_display(s: String) -> String {
     if s.len() <= MAX_STRING_BYTES {
         return s;
     }
-    // El recorte es el COMPARTIDO. Una frontera de carácter no basta: corta
-    // dentro de un clúster y deja una marca combinante huérfana que se
-    // compone con el `…`. Esa regla ya estaba resuelta y probada contra el
-    // corpus en `norte-frontend`; tener aquí una segunda era tener dos.
+    // The clamp is the SHARED one. A character boundary is not enough: it
+    // can cut inside a cluster and leave an orphaned combining mark that
+    // composes with the `…`. That rule was already solved and tested
+    // against the corpus in `norte-frontend`; having a second one here
+    // would be having two.
     norte_frontend::display::ellipsis_at_bytes(&s, MAX_STRING_BYTES)
 }
 
@@ -772,33 +802,33 @@ mod tests {
     use super::*;
 
     #[test]
-    fn un_sobre_de_otra_version_no_se_interpreta() {
+    fn an_envelope_from_another_version_is_not_interpreted() {
         let mut e = BridgeEnvelope::new(InstanceId::new("i"), 0, 7u32);
         assert!(e.is_supported());
         e.bridge_version = BRIDGE_VERSION + 1;
-        assert!(!e.is_supported(), "una versión futura NO se interpreta");
+        assert!(!e.is_supported(), "a future version is NOT interpreted");
     }
 
     #[test]
-    fn una_cadena_larga_se_recorta_y_se_dice() {
-        let larga = "a".repeat(MAX_STRING_BYTES * 2);
-        let out = clamp_display(larga);
+    fn a_long_string_is_clamped_and_stated() {
+        let long = "a".repeat(MAX_STRING_BYTES * 2);
+        let out = clamp_display(long);
         assert!(out.len() <= MAX_STRING_BYTES);
-        assert!(out.ends_with('…'), "el recorte se ve");
+        assert!(out.ends_with('…'), "the clamp is visible");
     }
 
-    /// El recorte jamás parte un carácter multibyte por la mitad.
+    /// The clamp never splits a multibyte character in half.
     #[test]
-    fn el_recorte_respeta_los_caracteres() {
-        let larga = "é".repeat(MAX_STRING_BYTES);
-        let out = clamp_display(larga);
+    fn the_clamp_respects_characters() {
+        let long = "é".repeat(MAX_STRING_BYTES);
+        let out = clamp_display(long);
         assert!(out.len() <= MAX_STRING_BYTES);
         assert!(std::str::from_utf8(out.as_bytes()).is_ok());
     }
 
-    /// Una cadena que ya cabe no se toca (ni se le añade el aviso).
+    /// A string that already fits is untouched (and gets no marker added).
     #[test]
-    fn lo_que_cabe_viaja_intacto() {
+    fn what_fits_travels_intact() {
         let s = String::from("café.txt");
         assert_eq!(clamp_display(s.clone()), s);
     }

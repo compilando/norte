@@ -1,7 +1,7 @@
-//! Integración `Engine::dir_size_as` (#139): cuánto ocupa un árbol, contado
-//! como Task cancelable, con el TOTAL en el progreso y no en un tipo nuevo.
+//! `Engine::dir_size_as` integration (#139): how much a tree occupies, counted
+//! as a cancelable Task, with the TOTAL in the progress and not in a new type.
 //!
-//! `MemProvider` in-memory → determinista, sin tocar disco.
+//! In-memory `MemProvider` → deterministic, without touching disk.
 
 use std::sync::Arc;
 
@@ -13,11 +13,11 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, bytes: usize) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::from(vec![b'x'; bytes]))
         .await
         .expect("chunk");
@@ -41,63 +41,64 @@ fn params(paths: &[&str]) -> FsDirSizeParams {
     }
 }
 
-/// Lo que la feature promete: el tamaño de un árbol entero, con sus
-/// subdirectorios, en el progreso de la Task. Nada de tipos nuevos — el último
-/// snapshot ES el resultado.
+/// What the feature promises: the size of a whole tree, subdirectories
+/// included, in the Task's progress. No new types — the last snapshot IS the
+/// result.
 #[tokio::test]
-async fn el_total_de_un_arbol_viaja_en_el_progreso() {
+async fn the_total_of_a_tree_travels_in_the_progress() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///raiz").await;
-    mkdir(&mem, "mem:///raiz/sub").await;
-    write_file(&mem, "mem:///raiz/a", 10).await;
-    write_file(&mem, "mem:///raiz/sub/b", 32).await;
-    write_file(&mem, "mem:///raiz/sub/c", 8).await;
+    mkdir(&mem, "mem:///root").await;
+    mkdir(&mem, "mem:///root/sub").await;
+    write_file(&mem, "mem:///root/a", 10).await;
+    write_file(&mem, "mem:///root/sub/b", 32).await;
+    write_file(&mem, "mem:///root/sub/c", 8).await;
 
     let handle = engine
-        .dir_size_as(params(&["mem:///raiz"]), Actor::User)
+        .dir_size_as(params(&["mem:///root"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
     let p = prog.borrow().clone();
     assert_eq!(p.bytes_done, 50, "10 + 32 + 8");
-    assert_eq!(p.entries_done, 4, "tres ficheros y el subdirectorio");
+    assert_eq!(p.entries_done, 4, "three files and the subdirectory");
     assert_eq!(
         p.bytes_total,
         Some(50),
-        "al terminar, el total es lo contado"
+        "when finished, the total is what was counted"
     );
     assert_eq!(p.entries_total, Some(4));
 }
 
-/// Medir un FICHERO suelto es una pregunta legítima: cuenta su tamaño y no
-/// recorre nada.
+/// Measuring a LONE file is a legitimate question: it counts its own size and
+/// walks nothing.
 #[tokio::test]
-async fn un_fichero_suelto_cuenta_su_propio_tamano() {
+async fn a_lone_file_counts_its_own_size() {
     let (engine, mem) = setup();
-    write_file(&mem, "mem:///solo", 7).await;
+    write_file(&mem, "mem:///alone", 7).await;
     let handle = engine
-        .dir_size_as(params(&["mem:///solo"]), Actor::User)
+        .dir_size_as(params(&["mem:///alone"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(prog.borrow().bytes_done, 7);
     assert_eq!(prog.borrow().entries_done, 1);
 }
 
-/// VARIAS raíces suman UN número: lo que el humano tiene marcado es una
-/// selección, y la pregunta que hace es «¿cuánto ocupa TODO esto?».
-/// Dos raíces que se solapan se RECHAZAN, como en `fs.compare` y `sync.plan`
-/// (#247).
+/// SEVERAL roots add up to ONE number: what the human has marked is a
+/// selection, and the question being asked is "how much does ALL of this
+/// occupy?" Two roots that overlap are REJECTED, as in `fs.compare` and
+/// `sync.plan` (#247).
 ///
-/// Sin esto, `["mem:///p", "mem:///p/sub"]` contaba `sub` DOS veces y devolvía
-/// un número mayor que el sitio que ocupa — lo contrario de lo que el método
-/// existe para contestar («¿cabe esto en el destino?»). Se rechaza en vez de
-/// deduplicar: una selección de panel no anida nunca (son hermanos), así que
-/// unas raíces anidadas vienen de un guion, y ahí un error es una respuesta.
+/// Without this, `["mem:///p", "mem:///p/sub"]` counted `sub` TWICE and
+/// returned a number bigger than what the place occupies — the opposite of
+/// what the method exists to answer ("does this fit at the destination?"). It
+/// is rejected instead of deduplicated: a pane's selection is never nested
+/// (they are siblings), so nested roots come from a script, and there an
+/// error is an answer.
 #[tokio::test]
-async fn dos_raices_que_se_solapan_se_rechazan() {
+async fn two_overlapping_roots_are_rejected() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
@@ -109,18 +110,18 @@ async fn dos_raices_que_se_solapan_se_rechazan() {
         .dir_size_as(params(&["mem:///p", "mem:///p/sub"]), Actor::User)
         .await
     else {
-        panic!("unas raíces anidadas no pueden lanzarse")
+        panic!("nested roots cannot be launched")
     };
     assert!(
         matches!(err, ProtoError::OverlappingRoots { .. }),
-        "y lo dice por su nombre: {err:?}"
+        "and it says so by name: {err:?}"
     );
-    // La misma raíz dos veces es el mismo problema con otra cara.
+    // The same root twice is the same problem wearing a different face.
     let Err(err) = engine
         .dir_size_as(params(&["mem:///p", "mem:///p"]), Actor::User)
         .await
     else {
-        panic!("la misma raíz dos veces tampoco")
+        panic!("the same root twice, neither")
     };
     assert!(
         matches!(err, ProtoError::OverlappingRoots { .. }),
@@ -129,74 +130,78 @@ async fn dos_raices_que_se_solapan_se_rechazan() {
 }
 
 #[tokio::test]
-async fn varias_raices_dan_un_solo_total() {
+async fn several_roots_give_a_single_total() {
     let (engine, mem) = setup();
     mkdir(&mem, "mem:///a").await;
     mkdir(&mem, "mem:///b").await;
-    write_file(&mem, "mem:///a/uno", 5).await;
-    write_file(&mem, "mem:///b/dos", 6).await;
+    write_file(&mem, "mem:///a/one", 5).await;
+    write_file(&mem, "mem:///b/two", 6).await;
     let handle = engine
         .dir_size_as(params(&["mem:///a", "mem:///b"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
     assert_eq!(prog.borrow().bytes_done, 11);
 }
 
-/// Sin rutas no hay petición, y se rechaza ANTES de crear Task alguna: es un
-/// error del REQUEST, no el fallo de algo ya lanzado.
+/// Without paths there is no request, and it is rejected BEFORE creating any
+/// Task: it is a REQUEST error, not the failure of something already launched.
 #[tokio::test]
-async fn sin_rutas_no_se_crea_task() {
+async fn no_paths_creates_no_task() {
     let (engine, _mem) = setup();
     let Err(err) = engine.dir_size_as(params(&[]), Actor::User).await else {
-        panic!("medir la nada no es una petición");
+        panic!("measuring nothing is not a request");
     };
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
 }
 
-/// Regla 3: el recuento se cancela limpiamente, y el estado lo dice.
+/// Rule 3: the count cancels cleanly, and the state says so.
 #[tokio::test]
-async fn contar_se_cancela_y_lo_dice() {
+async fn counting_cancels_and_says_so() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///grande").await;
+    mkdir(&mem, "mem:///big").await;
     for i in 0..400 {
-        write_file(&mem, &format!("mem:///grande/f{i}"), 4).await;
+        write_file(&mem, &format!("mem:///big/f{i}"), 4).await;
     }
     let handle = engine
-        .dir_size_as(params(&["mem:///grande"]), Actor::User)
+        .dir_size_as(params(&["mem:///big"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     handle.cancel();
     assert_eq!(handle.join().await, TaskState::Cancelled);
 }
 
-/// Una raíz que no existe no tumba el recuento de las demás: una selección de
-/// veinte carpetas no se pierde por una. Lo que sale es el tamaño de lo que se
-/// pudo leer, que es la respuesta honesta a una pregunta que ya no puede ser
-/// exacta.
+/// A root that does not exist does not bring down the count of the others: a
+/// selection of twenty folders is not lost over one. What comes out is the
+/// size of what could be read, which is the honest answer to a question that
+/// can no longer be exact.
 #[tokio::test]
-async fn una_raiz_ilegible_no_tumba_el_recuento() {
+async fn an_unreadable_root_does_not_bring_down_the_count() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///buena").await;
-    write_file(&mem, "mem:///buena/x", 9).await;
+    mkdir(&mem, "mem:///good").await;
+    write_file(&mem, "mem:///good/x", 9).await;
     let handle = engine
-        .dir_size_as(params(&["mem:///no-existe", "mem:///buena"]), Actor::User)
+        .dir_size_as(
+            params(&["mem:///does-not-exist", "mem:///good"]),
+            Actor::User,
+        )
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
     assert_eq!(
         handle.join().await,
         TaskState::Completed,
-        "la que falta no es un fallo de la Task"
+        "the missing one is not a failure of the Task"
     );
     assert_eq!(prog.borrow().bytes_done, 9);
 }
 
-/// Un directorio no suma bytes y sí se cuenta: el número de abajo dice cuántas
-/// cosas hay, y el de arriba cuánto ocupan las que ocupan algo.
+/// A directory adds no bytes and IS counted: the bottom number says how many
+/// things there are, and the top one how much the ones that occupy something
+/// occupy.
 #[tokio::test]
-async fn una_entrada_sin_tamano_se_cuenta_y_no_suma() {
+async fn an_entry_with_no_size_is_counted_and_adds_nothing() {
     let (engine, mem) = setup();
     mkdir(&mem, "mem:///d").await;
     mkdir(&mem, "mem:///d/sub").await;
@@ -204,23 +209,24 @@ async fn una_entrada_sin_tamano_se_cuenta_y_no_suma() {
     let handle = engine
         .dir_size_as(params(&["mem:///d"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(prog.borrow().bytes_done, 3, "el dir no suma bytes");
-    assert_eq!(prog.borrow().entries_done, 2, "pero sí se cuenta");
+    assert_eq!(prog.borrow().bytes_done, 3, "the dir adds no bytes");
+    assert_eq!(prog.borrow().entries_done, 2, "but it is counted");
 }
 
-/// Un provider PEREZOSO: su listado no trae tamaños (`None`), como el local
-/// real (#52 — `readdir` da el tipo y nada más), y solo `stat` los sabe.
-struct Perezoso {
+/// A LAZY provider: its listing carries no sizes (`None`), like the real local
+/// one (#52 — `readdir` gives the kind and nothing else), and only `stat`
+/// knows them.
+struct Lazy {
     inner: Arc<MemProvider>,
-    /// Cuántos `stat` se pidieron: lo que demuestra que la hidratación existe.
+    /// How many `stat`s were asked for: what proves hydration exists.
     stats: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[async_trait::async_trait]
-impl Provider for Perezoso {
+impl Provider for Lazy {
     fn scheme(&self) -> &str {
         self.inner.scheme()
     }
@@ -266,17 +272,17 @@ impl Provider for Perezoso {
     }
 }
 
-/// **La regresión que encontró pilotar la TUI de verdad**: contra el provider
-/// local, un listado NO trae tamaños (#52), así que sumar lo que venía en el
-/// listado daba «0 B» para un árbol entero — la respuesta más equivocada
-/// posible a la única pregunta que se hizo. Se piden con `stat`, como hace
-/// `du` y como hace la hidratación de una copia.
+/// **The regression that piloting the real TUI found**: against the local
+/// provider, a listing carries NO sizes (#52), so summing what came in the
+/// listing gave "0 B" for a whole tree — the most wrong possible answer to the
+/// one question being asked. Sizes are requested with `stat`, as `du` does and
+/// as a copy's hydration does.
 #[tokio::test]
-async fn con_un_listado_perezoso_los_tamanos_se_piden() {
+async fn with_a_lazy_listing_the_sizes_are_requested() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
     let stats = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    engine.register_provider(Arc::new(Perezoso {
+    engine.register_provider(Arc::new(Lazy {
         inner: Arc::clone(&mem),
         stats: Arc::clone(&stats),
     }) as Arc<dyn Provider>);
@@ -288,72 +294,73 @@ async fn con_un_listado_perezoso_los_tamanos_se_piden() {
     let handle = engine
         .dir_size_as(params(&["mem:///p"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
-    assert_eq!(prog.borrow().bytes_done, 123, "los tamaños se pidieron");
+    assert_eq!(prog.borrow().bytes_done, 123, "the sizes were requested");
     assert_eq!(prog.borrow().entries_done, 3);
     assert!(
         stats.load(std::sync::atomic::Ordering::Relaxed) >= 2,
-        "un stat por fichero sin tamaño"
+        "one stat per file without a size"
     );
 }
 
-/// Un subárbol ilegible se CUENTA y viaja (#251).
+/// An unreadable subtree gets COUNTED and travels (#251).
 ///
-/// Antes iba a un contador local, salía por un `tracing::info!` y el snapshot
-/// terminal decía `Completed` con un total seguro y demasiado pequeño. Y esta
-/// es la dirección peligrosa del error: el método existe para contestar
-/// «¿cabe esto en el destino?», así que un número silenciosamente corto dice
-/// que sí a una copia que se queda sin sitio a mitad.
+/// It used to go to a local counter, come out through a `tracing::info!`, and
+/// the terminal snapshot said `Completed` with a safe total that was too
+/// small. And this is the dangerous direction for the error: the method
+/// exists to answer "does this fit at the destination?", so a silently short
+/// number says yes to a copy that runs out of room halfway.
 ///
-/// Con el campo, quien pinte dice «al menos X». Es el gemelo del `confidence`
-/// que `fs.compare` le da a cada fila, y por el mismo motivo: un recuento sin
-/// él no puede decir que es una cota inferior.
+/// With the field, whoever paints it says "at least X". It is the twin of the
+/// `confidence` `fs.compare` gives each row, and for the same reason: a count
+/// without it cannot say it is a lower bound.
 #[tokio::test]
-async fn un_subarbol_ilegible_se_cuenta_y_viaja_en_el_progreso() {
+async fn an_unreadable_subtree_is_counted_and_travels_in_the_progress() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///raiz").await;
-    mkdir(&mem, "mem:///raiz/prohibido").await;
-    write_file(&mem, "mem:///raiz/a", 10).await;
-    write_file(&mem, "mem:///raiz/prohibido/secreto", 1000).await;
-    mem.faults().fail_list_at(&vp("mem:///raiz/prohibido"));
+    mkdir(&mem, "mem:///root").await;
+    mkdir(&mem, "mem:///root/forbidden").await;
+    write_file(&mem, "mem:///root/a", 10).await;
+    write_file(&mem, "mem:///root/forbidden/secret", 1000).await;
+    mem.faults().fail_list_at(&vp("mem:///root/forbidden"));
 
     let handle = engine
-        .dir_size_as(params(&["mem:///raiz"]), Actor::User)
+        .dir_size_as(params(&["mem:///root"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
-    // No falla: contar lo que se puede leer es la respuesta útil. Lo que no
-    // puede es callarse lo que no leyó.
+    // Does not fail: counting what can be read is the useful answer. What it
+    // cannot do is stay quiet about what it did not read.
     assert_eq!(handle.join().await, TaskState::Completed);
     let p = prog.borrow().clone();
     assert_eq!(
         p.bytes_done, 10,
-        "los 1000 del subárbol prohibido no entran"
+        "the 1000 from the forbidden subtree do not go in"
     );
     assert_eq!(
         p.unreadable,
         Some(1),
-        "y el snapshot terminal DICE que hubo uno que no se pudo leer"
+        "and the terminal snapshot SAYS there was one that could not be read"
     );
 }
 
-/// Y el caso corriente sigue diciendo cero, que es lo que hace legible al
-/// campo: si estuviera a uno por defecto, «al menos X» se pintaría siempre.
+/// And the ordinary case still says zero, which is what makes the field
+/// legible: if it defaulted to one, "at least X" would always be painted.
 #[tokio::test]
-async fn un_arbol_entero_legible_no_declara_ilegibles() {
+async fn a_whole_readable_tree_declares_no_unreadables() {
     let (engine, mem) = setup();
-    mkdir(&mem, "mem:///todo").await;
-    write_file(&mem, "mem:///todo/a", 4).await;
+    mkdir(&mem, "mem:///everything").await;
+    write_file(&mem, "mem:///everything/a", 4).await;
     let handle = engine
-        .dir_size_as(params(&["mem:///todo"]), Actor::User)
+        .dir_size_as(params(&["mem:///everything"]), Actor::User)
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = handle.progress();
     assert_eq!(handle.join().await, TaskState::Completed);
-    // `Some(0)`, no `None`: «los conté y no hubo ninguno» es una respuesta, y
-    // `None` —«quien lo emite no cuenta esto»— sería otra distinta. Un cliente
-    // que las confunda pinta «al menos X» sobre un total que sí es exacto.
+    // `Some(0)`, not `None`: "I counted and there were none" is one answer,
+    // and `None` — "whoever emits this does not count it" — would be another.
+    // A client that confuses them paints "at least X" over a total that IS
+    // exact.
     assert_eq!(prog.borrow().unreadable, Some(0));
 }

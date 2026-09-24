@@ -1,11 +1,11 @@
 use super::*;
 
-/// M3-3b Task 2: el actor lo fija la conexión. Un cliente-agente sin scope ve
-/// su `fs.copy` denegado por policy (taxonomía `PolicyDenied`, NO
-/// `PermissionDenied`) y el FS queda intacto; un cliente humano (sin
-/// `agent_session`) copia sin gate.
+/// M3-3b Task 2: the actor is fixed by the connection. An agent client with
+/// no scope sees its `fs.copy` denied by policy (`PolicyDenied` taxonomy, NOT
+/// `PermissionDenied`) and the FS stays intact; a human client (no
+/// `agent_session`) copies with no gate.
 #[tokio::test]
-async fn agente_sin_scope_ve_policy_denied_humano_copia() {
+async fn an_agent_with_no_scope_sees_policy_denied_a_human_copies() {
     let d = spawn_daemon_policy().await;
     write_file(&d.mem, "mem:///src.txt", b"hola").await;
     let copy = |from: &str, to: &str| FsCopyParams {
@@ -19,65 +19,64 @@ async fn agente_sin_scope_ve_policy_denied_humano_copia() {
         queued: false,
     };
 
-    // Agente sin scope: denegado por policy, sin tocar el FS.
+    // Agent with no scope: denied by policy, without touching the FS.
     let agent = connected_agent(&d, "s1").await;
     let err = agent
         .call::<_, FsTaskResult>(methods::FS_COPY, &copy("mem:///src.txt", "mem:///a.txt"))
         .await
-        .expect_err("agente sin scope: denegado");
+        .expect_err("agent with no scope: denied");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert!(
                 matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-                "PolicyDenied out-of-scope, fue {:?}",
+                "PolicyDenied out-of-scope, was {:?}",
                 rpc.data
             );
         }
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
     assert!(
         matches!(
             d.mem.stat(&vp("mem:///a.txt")).await,
             Err(norte_proto::Error::NotFound)
         ),
-        "el gate PRE-efecto no tocó el destino"
+        "the PRE-effect gate did not touch the destination"
     );
 
-    // Humano (sin agent_session): copia aceptada, la Task se encola.
+    // Human (no agent_session): copy accepted, the Task gets queued.
     let human = connected_client(&d).await;
     let res: FsTaskResult = human
         .call(methods::FS_COPY, &copy("mem:///src.txt", "mem:///h.txt"))
         .await
-        .expect("humano copia sin gate");
+        .expect("a human copies with no gate");
     assert!(res.task_id.get() > 0);
 }
 
-/// V2 (#131, `host.volumes`): mismo criterio server-side que
-/// `agente_sin_scope_ve_policy_denied_humano_copia`, para una operación SIN
-/// concepto de scope — la tabla de montaje no es un path bajo el árbol de
-/// nadie, así que un agente la ve vedada CATEGÓRICAMENTE (nunca
-/// `out-of-scope`: no hay scope que pedir para esto, y pedirle uno no
-/// cambiaría la respuesta). `PolicyDenied` con la categoría gruesa
-/// `not-approved` del vocabulario cerrado — mismo criterio que
-/// `ai.rename_plan`/`index.embed`/`index.search_semantic` — jamás un fallo de
-/// transporte que distinga "vedado" de "no implementado". Un daemon SIN
-/// `ScopedPolicy` instalada (`spawn_daemon` liso) basta: el gate de
-/// `host.volumes` no pasa por el engine ni por `policy.toml`, es una
-/// comprobación de actor pura ANTES del parseo de params (security review
-/// V2, MAJOR aplicado: el gate corría después de `parse_params`, así que un
-/// agente con params inválidos veía `INVALID_PARAMS` en vez de
-/// `PolicyDenied` — un oráculo que el agente controla con la forma de su
-/// propia petición).
-/// `connection.list` es SOLO del humano (#264), por lo mismo que
-/// `host.volumes`: la lista nombra los servidores del usuario, y un scope de
-/// rutas no lo necesita para nada.
+/// V2 (#131, `host.volumes`): the same server-side criterion as
+/// `an_agent_with_no_scope_sees_policy_denied_a_human_copies`, for an
+/// operation with NO concept of scope — the mount table is not a path under
+/// anyone's tree, so an agent sees it forbidden CATEGORICALLY (never
+/// `out-of-scope`: there is no scope to ask for here, and asking for one
+/// would not change the answer). `PolicyDenied` with the coarse `not-approved`
+/// category from the closed vocabulary — same criterion as
+/// `ai.rename_plan`/`index.embed`/`index.search_semantic` — never a transport
+/// failure that distinguishes "forbidden" from "not implemented". A daemon
+/// with NO `ScopedPolicy` installed (a plain `spawn_daemon`) is enough:
+/// `host.volumes`'s gate does not go through the engine nor `policy.toml`, it
+/// is a pure actor check BEFORE parsing the params (security review V2,
+/// MAJOR applied: the gate used to run after `parse_params`, so an agent with
+/// invalid params saw `INVALID_PARAMS` instead of `PolicyDenied` — an oracle
+/// the agent controls with the shape of its own request).
+/// `connection.list` is human-ONLY (#264), for the same reason as
+/// `host.volumes`: the list names the user's servers, and a path scope has no
+/// use for it at all.
 ///
-/// Y el gate corre ANTES del parseo, así que un agente ve lo mismo mande lo
-/// que mande — no puede distinguir «vedado» de «params malos» fuzzeando la
-/// forma de su propia petición.
+/// And the gate runs BEFORE parsing, so an agent sees the same thing no
+/// matter what it sends — it cannot distinguish "forbidden" from "bad params"
+/// by fuzzing the shape of its own request.
 #[tokio::test]
-async fn connection_list_es_solo_del_humano() {
+async fn connection_list_is_human_only() {
     let d = spawn_daemon(None).await;
 
     let agent = connected_agent(&d, "s1").await;
@@ -89,88 +88,93 @@ async fn connection_list_es_solo_del_humano() {
         let err = agent
             .call::<_, methods::ConnectionListResult>(methods::CONNECTION_LIST, &params)
             .await
-            .expect_err("un agente no lista conexiones");
+            .expect_err("an agent does not list connections");
         match err {
             ClientError::Rpc(rpc) => assert!(
                 matches!(
                     rpc.data,
                     Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
                 ),
-                "vedado pase lo que pase, fue {:?}",
+                "forbidden no matter what, was {:?}",
                 rpc.data
             ),
-            other => panic!("esperaba Rpc, fue {other:?}"),
+            other => panic!("expected Rpc, got {other:?}"),
         }
     }
 
-    // El humano SÍ, y sin params: la ausencia se acepta (ADR 0004). Y la
-    // lista es la del tempdir del daemon, no la de la máquina (#365): antes
-    // esto leía el `~/.config/norte` de quien corriera la suite, y bastaba
-    // que tuviera una conexión que norte no supiera leer para ponerlo rojo.
+    // The human DOES, and with no params: absence is accepted (ADR 0004).
+    // And the list is the daemon's tempdir's, not the machine's (#365): this
+    // used to read whoever ran the suite's `~/.config/norte`, and it was
+    // enough for them to have a connection norte could not read to turn it
+    // red.
     let human = connected_client(&d).await;
     let r: methods::ConnectionListResult = human
         .call(methods::CONNECTION_LIST, &serde_json::Value::Null)
         .await
-        .expect("el humano lista sin gate");
+        .expect("the human lists with no gate");
     assert!(
         r.connections.is_empty() && r.unusable.is_empty(),
-        "el daemon de un test no tiene conexiones configuradas, las tenga \
-         quien las tenga en su casa: {r:?}"
+        "a test's daemon has no connections configured, no matter who has \
+         some at home: {r:?}"
     );
 }
 
-/// **Una entrada que el daemon no sabe leer no esconde a las demás** (#365).
+/// **An entry the daemon cannot read does not hide the others** (#365).
 ///
-/// El fallo que lo destapó era doble y cada mitad tapaba a la otra: el test
-/// leía la config REAL de la máquina, y una sola entrada inservible hacía
-/// fallar `connection.list` entera. La segunda mitad es la que le cuesta algo
-/// a un lector — pierde la lista de TODAS sus conexiones por una, con un error
-/// que no nombra ninguna y no apunta a nada que pueda arreglar.
+/// The failure that uncovered this was twofold and each half hid the other:
+/// the test read the machine's REAL config, and a single unusable entry made
+/// the whole `connection.list` fail. The second half is the one that costs a
+/// reader something — it loses the list of ALL its connections over one,
+/// with an error that names none and points at nothing it can fix.
 #[tokio::test]
-async fn connection_list_no_se_cae_por_una_entrada_mala() {
+async fn connection_list_does_not_fail_over_one_bad_entry() {
     let d = spawn_daemon(None).await;
-    // El daemon resuelve su `connections.toml` bajo su raíz de config, que en
-    // un test es su tempdir: por eso esto se puede escribir.
+    // The daemon resolves its `connections.toml` under its config root,
+    // which in a test is its tempdir: that is why this can be written.
     std::fs::write(
         d.config_dir().join("connections.toml"),
         "[connections.buena]\nurl = \"sftp://servidor.example/datos\"\n\
          \n[connections.rota]\nurl = \"sftp://otro.example/\"\npassword = \"no va aquí\"\n",
     )
-    .expect("escribir");
+    .expect("write");
 
     let human = connected_client(&d).await;
     let r: methods::ConnectionListResult = human
         .call(methods::CONNECTION_LIST, &serde_json::Value::Null)
         .await
-        .expect("una entrada mala ya no tira la llamada");
+        .expect("a bad entry no longer aborts the call");
 
-    assert_eq!(r.connections.len(), 1, "la buena se lista: {r:?}");
+    assert_eq!(r.connections.len(), 1, "the good one is listed: {r:?}");
     assert_eq!(r.connections[0].name, "buena");
-    assert_eq!(r.unusable.len(), 1, "y la mala sale aparte: {r:?}");
+    assert_eq!(
+        r.unusable.len(),
+        1,
+        "and the bad one comes out separately: {r:?}"
+    );
     assert_eq!(
         r.unusable[0].name, "rota",
-        "nombrada, o el aviso no sirve de nada"
+        "named, or the notice is useless"
     );
     assert!(
         r.unusable[0].reason.contains("password"),
-        "y con el motivo, que es lo accionable: {}",
+        "and with the reason, which is the actionable part: {}",
         r.unusable[0].reason
     );
 }
 
 #[tokio::test]
-async fn agente_ve_policy_denied_en_host_volumes_humano_lo_lista() {
+async fn an_agent_sees_policy_denied_on_host_volumes_a_human_lists_it() {
     let d = spawn_daemon(None).await;
     let params = methods::HostVolumesParams {
         include_pseudo: false,
     };
 
-    // Agente (con `agent_session`, sin scope alguno): vedado.
+    // Agent (with `agent_session`, no scope at all): forbidden.
     let agent = connected_agent(&d, "s1").await;
     let err = agent
         .call::<_, methods::HostVolumesResult>(methods::HOST_VOLUMES, &params)
         .await
-        .expect_err("agente: host.volumes vedado");
+        .expect_err("agent: host.volumes forbidden");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
@@ -179,24 +183,24 @@ async fn agente_ve_policy_denied_en_host_volumes_humano_lo_lista() {
                     rpc.data,
                     Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
                 ),
-                "PolicyDenied not-approved, fue {:?}",
+                "PolicyDenied not-approved, was {:?}",
                 rpc.data
             );
         }
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 
-    // Agente con params MAL FORMADOS (`include_pseudo` no es un bool): SIGUE
-    // viendo `PolicyDenied`, no `INVALID_PARAMS` — el gate corre antes de
-    // que el parseo pueda fallar, así que la respuesta no depende de nada
-    // que el agente controle con la forma de su petición.
+    // An agent with MALFORMED params (`include_pseudo` is not a bool): STILL
+    // sees `PolicyDenied`, not `INVALID_PARAMS` — the gate runs before
+    // parsing can even fail, so the answer does not depend on anything the
+    // agent controls with the shape of its request.
     let err = agent
         .call::<_, methods::HostVolumesResult>(
             methods::HOST_VOLUMES,
             &serde_json::json!({"include_pseudo": "no-es-un-bool"}),
         )
         .await
-        .expect_err("agente: params inválidos siguen vedados, no INVALID_PARAMS");
+        .expect_err("agent: invalid params are still forbidden, not INVALID_PARAMS");
     match err {
         ClientError::Rpc(rpc) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
@@ -205,62 +209,62 @@ async fn agente_ve_policy_denied_en_host_volumes_humano_lo_lista() {
                     rpc.data,
                     Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
                 ),
-                "PolicyDenied not-approved incluso con params inválidos, fue {:?}",
+                "PolicyDenied not-approved even with invalid params, was {:?}",
                 rpc.data
             );
         }
-        other => panic!("esperaba Rpc con PolicyDenied, fue {other:?}"),
+        other => panic!("expected Rpc with PolicyDenied, got {other:?}"),
     }
 
-    // Humano (sin `agent_session`): lista sin gate. La máquina de test corre
-    // Linux de verdad, así que la raíz `/` tiene que aparecer — mismo criterio
-    // que `enumerate_finds_the_real_root_filesystem` en `norte-core::volumes`.
+    // Human (no `agent_session`): lists with no gate. The test machine runs
+    // real Linux, so the `/` root has to show up — same criterion as
+    // `enumerate_finds_the_real_root_filesystem` in `norte-core::volumes`.
     let human = connected_client(&d).await;
     let res: methods::HostVolumesResult = human
         .call(methods::HOST_VOLUMES, &params)
         .await
-        .expect("humano: host.volumes sin gate");
+        .expect("human: host.volumes with no gate");
     assert!(
         res.volumes.iter().any(|v| v.mount.to_wire() == "file:///"),
-        "se esperaba encontrar la raíz entre {:?}",
+        "expected to find the root among {:?}",
         res.volumes
     );
 
-    // Humano con params AUSENTES (`null`): se aceptan como el default (ADR
-    // 0004), mismo patrón que `task.list`/`plugin.list` — un `bool` con
-    // default no es "sin params legales" cuando el cliente omite el objeto
-    // entero.
+    // Human with ABSENT params (`null`): accepted as the default (ADR 0004),
+    // same pattern as `task.list`/`plugin.list` — a `bool` with a default is
+    // not "no legal params" when the client omits the whole object.
     let res_null: methods::HostVolumesResult = human
         .call(methods::HOST_VOLUMES, &serde_json::Value::Null)
         .await
-        .expect("humano: host.volumes con params null (ADR 0004)");
+        .expect("human: host.volumes with null params (ADR 0004)");
     assert!(
         res_null
             .volumes
             .iter()
             .any(|v| v.mount.to_wire() == "file:///"),
-        "params null debe comportarse como include_pseudo: false por default"
+        "null params must behave like include_pseudo: false by default"
     );
 }
 
-/// M4 (ADR 0034, review BLOCKER): `index.build` e `index.query` gatean la
-/// LECTURA por actor igual que `fs.search`. Un agente sin scope NO puede caminar
-/// un árbol arbitrario (cuyos paths saldrían por `task.progress`) ni consultar el
-/// índice — ambos devuelven `PolicyDenied out-of-scope`. El gate corre ANTES del
-/// engine, así que no importa que el daemon de test no tenga índice instalado.
+/// M4 (ADR 0034, BLOCKER review): `index.build` and `index.query` gate READS
+/// by actor just like `fs.search`. A scopeless agent CANNOT walk an arbitrary
+/// tree (whose paths would go out via `task.progress`) nor query the
+/// index — both return `PolicyDenied out-of-scope`. The gate runs BEFORE the
+/// engine, so it does not matter that the test daemon has no index
+/// installed.
 #[tokio::test]
-async fn agente_sin_scope_no_puede_index_build_ni_query() {
+async fn a_scopeless_agent_cannot_index_build_nor_query() {
     let d = spawn_daemon_policy().await;
     let agent = connected_agent(&d, "s1").await;
     let assert_denied = |err: ClientError| match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     };
-    // index.build fuera de scope → denegado (jamás camina el árbol).
+    // index.build out of scope → denied (never walks the tree).
     let err = agent
         .call::<_, FsTaskResult>(
             methods::INDEX_BUILD,
@@ -269,9 +273,9 @@ async fn agente_sin_scope_no_puede_index_build_ni_query() {
             },
         )
         .await
-        .expect_err("index.build sin scope denegado");
+        .expect_err("index.build with no scope denied");
     assert_denied(err);
-    // index.query fuera de scope → denegado.
+    // index.query out of scope → denied.
     let err = agent
         .call::<_, methods::IndexQueryResult>(
             methods::INDEX_QUERY,
@@ -282,27 +286,26 @@ async fn agente_sin_scope_no_puede_index_build_ni_query() {
             },
         )
         .await
-        .expect_err("index.query sin scope denegado");
+        .expect_err("index.query with no scope denied");
     assert_denied(err);
 }
 
-/// M3-3b Task 3: round-trip de scope. Un agente pide (`request_scope`) — sin
-/// concesión su copia dentro sigue denegada —; un humano concede
-/// #132, y lo encontró `protocol-guardian`: **`archive.pack` no puede ser un
-/// lavadero.**
+/// M3-3b Task 3: scope round-trip. An agent requests (`request_scope`) —
+/// without a grant its copy inside is still denied —; a human grants
+/// #132, and `protocol-guardian` found it: **`archive.pack` cannot be a
+/// laundering service.**
 ///
-/// El gate de lectura mira la RAÍZ de la petición y nada más, así que un
-/// agente con un scope legítimo sobre un árbol grande podía empaquetarlo
-/// entero —directorio de estado del daemon incluido: `journal.db`,
-/// `secrets.age`, `connections.toml`— y luego leerse el archivo entrada por
-/// entrada, sobre un fichero que está en su propio scope. Un `fs.read` de
-/// cualquiera de esos ficheros se deniega; el empaquetado los blanqueaba
-/// todos.
+/// The read gate looks only at the request's ROOT and nothing else, so an
+/// agent with a legitimate scope over a big tree could pack it whole — the
+/// daemon's state directory included: `journal.db`, `secrets.age`,
+/// `connections.toml` — and then read the archive entry by entry, over a
+/// file that is within its own scope. An `fs.read` of any of those files is
+/// denied; packing used to launder all of them.
 ///
-/// Lo que cierra el agujero son las MISMAS exclusiones que ya usan `fs.search`
-/// y `fs.compare` (`policy::walk_exclusions`), aplicadas al recorrido.
+/// What closes the hole are the SAME exclusions `fs.search` and `fs.compare`
+/// already use (`policy::walk_exclusions`), applied to the walk.
 #[tokio::test]
-async fn un_agente_no_empaqueta_lo_que_no_puede_recorrer() {
+async fn an_agent_does_not_pack_what_it_cannot_walk() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/visible.txt", b"esto se ve").await;
@@ -331,7 +334,7 @@ async fn un_agente_no_empaqueta_lo_que_no_puede_recorrer() {
         .await
         .expect("grant_scope");
 
-    // Dentro del scope, empaquetar procede: el gate NO es un «no» a todo.
+    // Inside the scope, packing proceeds: the gate is NOT a blanket "no".
     let ok: FsTaskResult = agent
         .call(
             methods::ARCHIVE_PACK,
@@ -344,10 +347,11 @@ async fn un_agente_no_empaqueta_lo_que_no_puede_recorrer() {
             },
         )
         .await
-        .expect("dentro del scope se empaqueta");
+        .expect("inside the scope it packs");
     assert!(ok.task_id.get() > 0);
 
-    // Y FUERA no: una fuente sin scope se deniega antes de crear Task alguna.
+    // And OUTSIDE it does not: a source with no scope is denied before
+    // creating any Task at all.
     let err = agent
         .call::<_, FsTaskResult>(
             methods::ARCHIVE_PACK,
@@ -360,21 +364,21 @@ async fn un_agente_no_empaqueta_lo_que_no_puede_recorrer() {
             },
         )
         .await
-        .expect_err("fuera del scope no");
+        .expect_err("outside the scope, no");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { .. })),
-            "PolicyDenied, fue {:?}",
+            "PolicyDenied, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// (`grant_scope`) y entonces la copia DENTRO del scope procede, pero FUERA
-/// sigue denegada. Prueba que el registro es el MISMO que consulta el gate.
+/// (`grant_scope`) and then the copy INSIDE the scope proceeds, but OUTSIDE
+/// it is still denied. Proves the registry is the SAME one the gate consults.
 #[tokio::test]
-async fn scope_request_grant_abre_la_frontera_y_solo_dentro() {
+async fn scope_request_grant_opens_the_border_and_only_inside() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -391,15 +395,15 @@ async fn scope_request_grant_abre_la_frontera_y_solo_dentro() {
     let assert_out_of_scope = |err: ClientError| match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     };
 
     let agent = connected_agent(&d, "s1").await;
 
-    // 1) Pide scope para su propia sesión: queda pendiente.
+    // 1) Requests scope for its own session: it stays pending.
     let req: RequestScopeResult = agent
         .call(
             methods::POLICY_REQUEST_SCOPE,
@@ -413,17 +417,17 @@ async fn scope_request_grant_abre_la_frontera_y_solo_dentro() {
         .await
         .expect("request_scope");
 
-    // 2) Sin concesión, la copia DENTRO sigue denegada (frontera cerrada).
+    // 2) With no grant, the copy INSIDE is still denied (border closed).
     let err = agent
         .call::<_, FsTaskResult>(
             methods::FS_COPY,
             &copy("mem:///proj/src.txt", "mem:///proj/dst.txt"),
         )
         .await
-        .expect_err("pendiente aún no concede");
+        .expect_err("pending, not yet granted");
     assert_out_of_scope(err);
 
-    // 3) Un humano concede la petición.
+    // 3) A human grants the request.
     let human = connected_client(&d).await;
     let _grant: GrantScopeResult = human
         .call(
@@ -435,32 +439,32 @@ async fn scope_request_grant_abre_la_frontera_y_solo_dentro() {
         .await
         .expect("grant_scope");
 
-    // 4) Ahora la copia DENTRO del scope procede (frontera + regla allow).
+    // 4) Now the copy INSIDE the scope proceeds (border + allow rule).
     let ok: FsTaskResult = agent
         .call(
             methods::FS_COPY,
             &copy("mem:///proj/src.txt", "mem:///proj/dst.txt"),
         )
         .await
-        .expect("dentro del scope procede");
+        .expect("inside the scope it proceeds");
     assert!(ok.task_id.get() > 0);
 
-    // 5) Pero FUERA del scope sigue denegada (la concesión no es un cheque en
-    //    blanco: solo abre `mem:///proj`).
+    // 5) But OUTSIDE the scope it is still denied (the grant is not a blank
+    //    check: it only opens `mem:///proj`).
     let err_out = agent
         .call::<_, FsTaskResult>(
             methods::FS_COPY,
             &copy("mem:///proj/src.txt", "mem:///out.txt"),
         )
         .await
-        .expect_err("fuera del scope");
+        .expect_err("outside the scope");
     assert_out_of_scope(err_out);
 }
 
-/// El canal de peticiones tiene sub-cap POR CONEXIÓN: una sola sesión que pide
-/// sin que nadie conceda no agota el tope global de las demás.
+/// The request channel has a PER-CONNECTION sub-cap: one session requesting
+/// with nobody granting does not exhaust the others' global cap.
 #[tokio::test]
-async fn request_scope_sub_cap_por_conexion() {
+async fn request_scope_has_a_per_connection_sub_cap() {
     let d = spawn_daemon_policy().await;
     let agent = connected_agent(&d, "s1").await;
     let req = || RequestScopeParams {
@@ -469,25 +473,25 @@ async fn request_scope_sub_cap_por_conexion() {
         ops: vec!["copy".into()],
         ttl_ms: 60_000,
     };
-    // MAX_PENDING_SCOPE_PER_CONN (16) peticiones entran; la 17ª es OVERLOADED.
+    // MAX_PENDING_SCOPE_PER_CONN (16) requests get in; the 17th is OVERLOADED.
     for i in 0..16 {
         let _: RequestScopeResult = agent
             .call(methods::POLICY_REQUEST_SCOPE, &req())
             .await
-            .unwrap_or_else(|e| panic!("petición {i} dentro del cap: {e:?}"));
+            .unwrap_or_else(|e| panic!("request {i} within the cap: {e:?}"));
     }
     let err = agent
         .call::<_, RequestScopeResult>(methods::POLICY_REQUEST_SCOPE, &req())
         .await
-        .expect_err("supera el sub-cap");
+        .expect_err("exceeds the sub-cap");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::OVERLOADED));
 }
 
-/// Una petición de scope sin conceder muere con la conexión que la creó: no
-/// sobrevive a su peticionario (anti-fuga del canal global). Tras desconectar
-/// el agente, conceder ese `request_id` es `INVALID_PARAMS`.
+/// An ungranted scope request dies with the connection that created it: it
+/// does not outlive its requester (anti-leak of the global channel). After
+/// the agent disconnects, granting that `request_id` is `INVALID_PARAMS`.
 #[tokio::test]
-async fn pending_scope_se_limpia_al_desconectar_el_agente() {
+async fn a_pending_scope_is_cleaned_up_when_the_agent_disconnects() {
     let d = spawn_daemon_policy().await;
     let request_id = {
         let agent = connected_agent(&d, "s1").await;
@@ -504,35 +508,37 @@ async fn pending_scope_se_limpia_al_desconectar_el_agente() {
             .await
             .expect("request_scope");
         r.request_id
-        // `agent` se dropea aquí: su mitad de escritura cierra, el daemon ve
-        // EOF y ejecuta la limpieza de sus pendientes.
+        // `agent` is dropped here: its write half closes, the daemon sees
+        // EOF and runs the cleanup of its pending entries.
     };
-    // La limpieza es asíncrona del lado del daemon: se PREGUNTA hasta que la
-    // pendiente no está, en vez de dormir un margen y afirmar. Un margen fijo
-    // es una apuesta sobre la máquina; esto falla diciendo qué esperaba.
+    // The cleanup is asynchronous on the daemon's side: it is POLLED until
+    // the pending entry is gone, instead of sleeping a margin and asserting.
+    // A fixed margin is a bet on the machine; this fails saying what it
+    // expected.
     let human = connected_client(&d).await;
-    hasta!("la pendiente del agente muerto se limpia", {
+    until!("the dead agent's pending entry is cleaned up", {
         let r = human
             .call::<_, GrantScopeResult>(
                 methods::POLICY_GRANT_SCOPE,
                 &GrantScopeParams { request_id },
             )
             .await;
-        // La condición ES la aserción: se sale del bucle solo con el error
-        // TIPADO que se espera. Cualquier otra cosa —éxito, u otro código—
-        // sigue dando vueltas y acaba en el fallo con nombre del plazo, que
-        // dice qué se esperaba en vez de dónde reventó.
+        // The condition IS the assertion: the loop only exits with the
+        // expected TYPED error. Anything else — success, or another code —
+        // keeps looping and ends up in the deadline's named failure, which
+        // says what was expected instead of where it blew up.
         matches!(&r, Err(ClientError::Rpc(rpc)) if rpc.code == codes::INVALID_PARAMS)
     });
 }
 
-/// Un agente no puede pedir scope para OTRA sesión (la identidad la fija la
-/// conexión, no el cuerpo); y un humano no puede pedir scope (no se sandboxea).
+/// An agent cannot request scope for ANOTHER session (identity is fixed by
+/// the connection, not the body); and a human cannot request scope (not
+/// sandboxed).
 #[tokio::test]
-async fn request_scope_rechaza_sesion_ajena_y_no_agente() {
+async fn request_scope_rejects_another_session_and_a_non_agent() {
     let d = spawn_daemon_policy().await;
 
-    // Agente s1 pidiendo para s2 → INVALID_PARAMS (no falsea su identidad).
+    // Agent s1 requesting for s2 → INVALID_PARAMS (cannot fake its identity).
     let agent = connected_agent(&d, "s1").await;
     let err = agent
         .call::<_, RequestScopeResult>(
@@ -545,10 +551,10 @@ async fn request_scope_rechaza_sesion_ajena_y_no_agente() {
             },
         )
         .await
-        .expect_err("sesión ajena");
+        .expect_err("another session");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 
-    // Humano (sin agent_session) pidiendo scope → INVALID_REQUEST.
+    // A human (no agent_session) requesting scope → INVALID_REQUEST.
     let human = connected_client(&d).await;
     let err2 = human
         .call::<_, RequestScopeResult>(
@@ -561,17 +567,17 @@ async fn request_scope_rechaza_sesion_ajena_y_no_agente() {
             },
         )
         .await
-        .expect_err("humano no pide scope");
+        .expect_err("a human does not request scope");
     assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 }
 
-/// Un agente no puede CONCEDER (grant es acto humano); y conceder un
-/// `request_id` desconocido es `INVALID_PARAMS`.
+/// An agent cannot GRANT (granting is a human act); and granting an unknown
+/// `request_id` is `INVALID_PARAMS`.
 #[tokio::test]
-async fn grant_scope_es_humano_y_id_desconocido_falla() {
+async fn grant_scope_is_human_and_an_unknown_id_fails() {
     let d = spawn_daemon_policy().await;
 
-    // Agente intentando conceder → INVALID_REQUEST.
+    // Agent trying to grant → INVALID_REQUEST.
     let agent = connected_agent(&d, "s1").await;
     let err = agent
         .call::<_, GrantScopeResult>(
@@ -579,10 +585,10 @@ async fn grant_scope_es_humano_y_id_desconocido_falla() {
             &GrantScopeParams { request_id: 0 },
         )
         .await
-        .expect_err("agente no concede");
+        .expect_err("an agent does not grant");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 
-    // Humano concediendo un id que no existe → INVALID_PARAMS.
+    // A human granting an id that does not exist → INVALID_PARAMS.
     let human = connected_client(&d).await;
     let err2 = human
         .call::<_, GrantScopeResult>(
@@ -590,7 +596,7 @@ async fn grant_scope_es_humano_y_id_desconocido_falla() {
             &GrantScopeParams { request_id: 999 },
         )
         .await
-        .expect_err("id desconocido");
+        .expect_err("unknown id");
     assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
@@ -609,8 +615,8 @@ pub(super) fn copy_params(from: &str, to: &str) -> FsCopyParams {
     }
 }
 
-/// Concede a la sesión del `agent` un scope de `copy` sobre `mem:///proj` con
-/// el round-trip del wire (request + grant): el camino real, no un atajo.
+/// Grants the `agent`'s session a `copy` scope over `mem:///proj` with the
+/// wire's round-trip (request + grant): the real path, not a shortcut.
 pub(super) async fn grant_copy_scope(agent: &Client, human: &Client, session: &str) {
     let req: RequestScopeResult = agent
         .call(
@@ -635,40 +641,40 @@ pub(super) async fn grant_copy_scope(agent: &Client, human: &Client, session: &s
         .expect("grant_scope");
 }
 
-/// Siguiente `policy.approval_required` del stream de notificaciones (ignora
-/// `task.progress` intercaladas), con tope de espera.
+/// Next `policy.approval_required` from the notification stream (ignores
+/// interleaved `task.progress`), with a wait cap.
 pub(super) async fn next_approval(human: &mut Client) -> PolicyApprovalRequired {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let n = human.notification().await.expect("canal de notifs vivo");
+            let n = human.notification().await.expect("notif channel alive");
             if n.method == methods::POLICY_APPROVAL_REQUIRED {
                 return serde_json::from_value::<PolicyApprovalRequired>(
-                    n.params.expect("la notif lleva params"),
+                    n.params.expect("the notif carries params"),
                 )
-                .expect("shape de PolicyApprovalRequired");
+                .expect("PolicyApprovalRequired shape");
             }
         }
     })
     .await
-    .expect("policy.approval_required llega")
+    .expect("policy.approval_required arrives")
 }
 
 pub(super) fn assert_not_approved(err: ClientError) {
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
-            "PolicyDenied not-approved, fue {:?}",
+            "PolicyDenied not-approved, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// E2E del Ask (M3-3b Task 4): la copia del agente bajo regla `ask` se
-/// suspende, el humano recibe `policy.approval_required` con el contexto (op,
-/// sesión, rutas) y su `policy.decide approve` la desbloquea.
+/// The Ask's E2E (M3-3b Task 4): an agent's copy under an `ask` rule
+/// suspends, the human receives `policy.approval_required` with the context
+/// (op, session, paths) and its `policy.decide approve` unblocks it.
 #[tokio::test]
-async fn ask_aprobado_desbloquea_la_copia() {
+async fn an_approved_ask_unblocks_the_copy() {
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -676,8 +682,8 @@ async fn ask_aprobado_desbloquea_la_copia() {
     let mut human = connected_client(&d).await;
     grant_copy_scope(&agent, &human, "s1").await;
 
-    // La copia queda suspendida en el Ask: vive en su propia task. Solo
-    // retiene el dispatch de SU conexión — el humano sigue atendido.
+    // The copy stays suspended in the Ask: it lives in its own task. It only
+    // holds up ITS OWN connection's dispatch — the human is still served.
     let copy = tokio::spawn(async move {
         agent
             .call::<_, FsTaskResult>(
@@ -693,7 +699,7 @@ async fn ask_aprobado_desbloquea_la_copia() {
     assert!(
         notif.paths.iter().any(|p| p.contains("src.txt"))
             && notif.paths.iter().any(|p| p.contains("dst.txt")),
-        "las rutas de display viajan: {:?}",
+        "the display paths travel: {:?}",
         notif.paths
     );
 
@@ -710,14 +716,14 @@ async fn ask_aprobado_desbloquea_la_copia() {
     let res = copy
         .await
         .expect("join")
-        .expect("aprobada, la copia procede");
+        .expect("approved, the copy proceeds");
     assert!(res.task_id.get() > 0);
 }
 
-/// `policy.decide approve=false` deniega: la copia responde `PolicyDenied`
-/// `not-approved` y el destino queda intacto (gate PRE-efecto).
+/// `policy.decide approve=false` denies: the copy answers `PolicyDenied`
+/// `not-approved` and the destination stays intact (PRE-effect gate).
 #[tokio::test]
-async fn ask_denegado_es_policy_denied_sin_tocar_el_fs() {
+async fn a_denied_ask_is_policy_denied_with_no_fs_touched() {
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -744,19 +750,20 @@ async fn ask_denegado_es_policy_denied_sin_tocar_el_fs() {
         )
         .await
         .expect("decide deny");
-    assert_not_approved(copy.await.expect("join").expect_err("denegada"));
+    assert_not_approved(copy.await.expect("join").expect_err("denied"));
     assert!(
         matches!(
             d.mem.stat(&vp("mem:///proj/dst.txt")).await,
             Err(norte_proto::Error::NotFound)
         ),
-        "el destino no se tocó"
+        "the destination was not touched"
     );
 
-    // Re-decidir el mismo id: la decisión lo consumió. Y desde #279 el motivo
-    // VIAJA — `already-decided`, no un `INVALID_PARAMS` mudo—: con dos
-    // ventanas abiertas eso es exactamente lo que ha pasado, y decirle a quien
-    // pulsó «tu clic no llegó» le manda a reintentar algo ya decidido.
+    // Re-deciding the same id: the decision consumed it. And since #279 the
+    // reason TRAVELS — `already-decided`, not a silent `INVALID_PARAMS` —:
+    // with two windows open that is exactly what happened, and telling
+    // whoever clicked "your click didn't get through" sends them to retry
+    // something already decided.
     let err = human
         .call::<_, PolicyDecideResult>(
             methods::POLICY_DECIDE,
@@ -766,18 +773,18 @@ async fn ask_denegado_es_policy_denied_sin_tocar_el_fs() {
             },
         )
         .await
-        .expect_err("id ya decidido");
+        .expect_err("id already decided");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::ApprovalGone { ref reason }) if reason == "already-decided"),
-            "tenía que decir cuál de las tres, fue {:?}",
+            "it had to say which of the three, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 
-    // Y un id que este daemon no ha emitido nunca es OTRA cosa: un modal
-    // rancio de antes de un reinicio, no una carrera entre ventanas.
+    // And an id this daemon never issued is a DIFFERENT thing: a stale modal
+    // from before a restart, not a race between windows.
     let err = human
         .call::<_, PolicyDecideResult>(
             methods::POLICY_DECIDE,
@@ -787,21 +794,22 @@ async fn ask_denegado_es_policy_denied_sin_tocar_el_fs() {
             },
         )
         .await
-        .expect_err("id que no existe");
+        .expect_err("id that does not exist");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::ApprovalGone { ref reason }) if reason == "unknown"),
-            "un id jamás emitido es `unknown`, fue {:?}",
+            "an id never issued is `unknown`, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Sin decisión, el TTL vence y deniega (`not-approved`): un humano ausente no
-/// deja la operación colgada. La notificación anuncia el TTL real.
+/// With no decision, the TTL expires and denies (`not-approved`): an absent
+/// human does not leave the operation hanging. The notification announces
+/// the real TTL.
 #[tokio::test]
-async fn ask_sin_decision_vence_por_ttl() {
+async fn an_ask_with_no_decision_expires_by_ttl() {
     let d = spawn_daemon_ask(Duration::from_millis(200)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -818,16 +826,16 @@ async fn ask_sin_decision_vence_por_ttl() {
             .await
     });
     let notif = next_approval(&mut human).await;
-    assert_eq!(notif.ttl_ms, 200, "el TTL anunciado es el del router");
-    // Nadie decide: vence.
-    assert_not_approved(copy.await.expect("join").expect_err("TTL vencido"));
+    assert_eq!(notif.ttl_ms, 200, "the announced TTL is the router's");
+    // Nobody decides: it expires.
+    assert_not_approved(copy.await.expect("join").expect_err("expired TTL"));
 }
 
-/// `policy.pending` resync: un frontend que conecta DESPUÉS del broadcast ve
-/// la pendiente. Y los roles se respetan: un agente ni decide ni lista
-/// (`INVALID_REQUEST`) — jamás se auto-aprueba.
+/// `policy.pending` resync: a frontend that connects AFTER the broadcast sees
+/// the pending entry. And the roles are respected: an agent neither decides
+/// nor lists (`INVALID_REQUEST`) — it never self-approves.
 #[tokio::test]
-async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
+async fn pending_resync_and_an_agent_neither_decides_nor_lists() {
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -845,7 +853,7 @@ async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
     });
     let notif = next_approval(&mut human).await;
 
-    // Un frontend NUEVO (conectó tras el broadcast) resincroniza por pending.
+    // A NEW frontend (connected after the broadcast) resyncs via pending.
     let late = connected_client(&d).await;
     let listed: PolicyPendingResult = late
         .call(methods::POLICY_PENDING, &serde_json::json!({}))
@@ -856,7 +864,7 @@ async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
     assert_eq!(listed.pending[0].op, "copy");
     assert_eq!(listed.pending[0].session.as_deref(), Some("s1"));
 
-    // Otra conexión de agente: ni decide ni lista (INVALID_REQUEST).
+    // Another agent connection: neither decides nor lists (INVALID_REQUEST).
     let agent2 = connected_agent(&d, "s2").await;
     let err = agent2
         .call::<_, PolicyDecideResult>(
@@ -867,19 +875,19 @@ async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
             },
         )
         .await
-        .expect_err("un agente no decide");
+        .expect_err("an agent does not decide");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
     let err2 = agent2
         .call::<_, PolicyPendingResult>(methods::POLICY_PENDING, &serde_json::json!({}))
         .await
-        .expect_err("un agente no lista");
+        .expect_err("an agent does not list");
     assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 
-    // Decidir un id que este daemon no ha emitido nunca. Desde #279 lo DICE:
-    // `unknown`, no «ya se decidió». La secuencia arranca en una semilla del
-    // reloj precisamente para que un modal rancio no acierte por colisión, así
-    // que un 9999 cae por debajo del primer id posible — y eso es exactamente
-    // lo que hay que saber distinguir.
+    // Deciding an id this daemon never issued. Since #279 it SAYS SO:
+    // `unknown`, not "already decided". The sequence starts at a clock-seed
+    // precisely so a stale modal cannot match by collision, so a 9999 falls
+    // below the first possible id — and that is exactly the distinction it
+    // has to make.
     let err3 = human
         .call::<_, PolicyDecideResult>(
             methods::POLICY_DECIDE,
@@ -889,17 +897,17 @@ async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
             },
         )
         .await
-        .expect_err("id desconocido");
+        .expect_err("unknown id");
     match err3 {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::ApprovalGone { ref reason }) if reason == "unknown"),
-            "un id fuera del rango emitido es `unknown`, fue {:?}",
+            "an id outside the issued range is `unknown`, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba ApprovalGone, fue {other:?}"),
+        other => panic!("expected ApprovalGone, got {other:?}"),
     }
 
-    // Desbloquea y cierra: denegada, y la lista queda vacía.
+    // Unblocks and closes: denied, and the list is left empty.
     let _: PolicyDecideResult = human
         .call(
             methods::POLICY_DECIDE,
@@ -910,24 +918,25 @@ async fn pending_resync_y_un_agente_ni_decide_ni_lista() {
         )
         .await
         .expect("decide deny");
-    assert_not_approved(copy.await.expect("join").expect_err("denegada"));
+    assert_not_approved(copy.await.expect("join").expect_err("denied"));
     let listed: PolicyPendingResult = late
         .call(methods::POLICY_PENDING, &serde_json::json!({}))
         .await
-        .expect("policy.pending vacío");
+        .expect("empty policy.pending");
     assert!(listed.pending.is_empty());
 }
 
-/// `policy.approval_required` va SOLO a conexiones humanas (security MAJOR-1):
-/// un agente suscrito no debe enumerar pasivamente rutas/ops de OTRAS sesiones
-/// — mismo criterio que el gate User-only de `policy.pending`.
+/// `policy.approval_required` goes ONLY to human connections (security
+/// MAJOR-1): a subscribed agent must not passively enumerate OTHER sessions'
+/// paths/ops — same criterion as `policy.pending`'s User-only gate.
 #[tokio::test]
-async fn approval_required_no_se_difunde_a_agentes() {
+async fn approval_required_is_not_broadcast_to_agents() {
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
     let agent = connected_agent(&d, "s1").await;
-    // El espía conecta ANTES del Ask: su suscripción ya existe al difundir.
+    // The spy connects BEFORE the Ask: its subscription already exists when
+    // broadcasting.
     let mut spy = connected_agent(&d, "s2").await;
     let mut human = connected_client(&d).await;
     grant_copy_scope(&agent, &human, "s1").await;
@@ -940,12 +949,12 @@ async fn approval_required_no_se_difunde_a_agentes() {
             )
             .await
     });
-    // El humano SÍ la recibe (prueba de que el broadcast ya salió)…
+    // The human DOES receive it (proof that the broadcast already went out)…
     let notif = next_approval(&mut human).await;
-    // …y al agente espía no le llega en un margen holgado posterior.
+    // …and the spy agent does not get it within a generous later margin.
     let leaked = tokio::time::timeout(Duration::from_millis(400), async {
         loop {
-            let n = spy.notification().await.expect("canal de notifs vivo");
+            let n = spy.notification().await.expect("notif channel alive");
             if n.method == methods::POLICY_APPROVAL_REQUIRED {
                 return;
             }
@@ -953,9 +962,9 @@ async fn approval_required_no_se_difunde_a_agentes() {
     })
     .await
     .is_ok();
-    assert!(!leaked, "un agente jamás ve el approval_required de otro");
+    assert!(!leaked, "an agent never sees another's approval_required");
 
-    // Cierra: deniega y desbloquea la copia suspendida.
+    // Closes: denies and unblocks the suspended copy.
     let _: PolicyDecideResult = human
         .call(
             methods::POLICY_DECIDE,
@@ -966,12 +975,13 @@ async fn approval_required_no_se_difunde_a_agentes() {
         )
         .await
         .expect("decide deny");
-    assert_not_approved(copy.await.expect("join").expect_err("denegada"));
+    assert_not_approved(copy.await.expect("join").expect_err("denied"));
 }
 
-/// Un AGENTE no releva, igual que no apaga: es un acto de gobierno humano.
+/// An AGENT does not hand over, just as it does not shut down: it is a human
+/// governance act.
 #[tokio::test]
-async fn un_agente_no_puede_relevar() {
+async fn an_agent_cannot_hand_over() {
     let d = spawn_daemon(None).await;
     let c = connected_agent(&d, "sesion-de-prueba").await;
     let err = c
@@ -983,7 +993,7 @@ async fn un_agente_no_puede_relevar() {
             },
         )
         .await
-        .expect_err("un agente no");
+        .expect_err("an agent may not");
     assert!(
         matches!(&err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST),
         "{err:?}"
@@ -991,31 +1001,34 @@ async fn un_agente_no_puede_relevar() {
 }
 
 #[tokio::test]
-async fn daemon_se_apaga_solo_por_inactividad() {
-    // Idle holgado (1,2 s): una CI congelada no puede apagar el daemon
-    // antes de que el cliente llegue a conectar (m3 del rust-reviewer).
+async fn the_daemon_shuts_down_only_from_idleness() {
+    // Generous idle (1.2s): a frozen CI must not be able to shut the daemon
+    // down before the client manages to connect (rust-reviewer m3).
     let d = spawn_daemon(Some(Duration::from_millis(1200))).await;
     {
-        // Una conexión breve: mientras vive, no hay apagado.
+        // A brief connection: while it is alive, no shutdown.
         //
-        // Otro temporizador DEL SISTEMA BAJO PRUEBA: hay que pasar del plazo
-        // de inactividad (1,2 s) para poder afirmar que NO se apagó. Es una
-        // aserción negativa sobre un plazo ajeno, así que no hay condición que
-        // sondear: la prueba es que a los 1,5 s siga vivo.
+        // Another timer OF THE SYSTEM UNDER TEST: it has to go past the
+        // idleness span (1.2s) to be able to assert it did NOT shut down. It
+        // is a negative assertion about someone else's deadline, so there is
+        // no condition to poll: the proof is that at 1.5s it is still alive.
         let _c = connected_client(&d).await;
         tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert!(!d.run.is_finished(), "con cliente vivo no se apaga");
+        assert!(
+            !d.run.is_finished(),
+            "with a live client it does not shut down"
+        );
     }
-    // Cliente fuera: el idle timeout dispara.
+    // Client gone: the idle timeout fires.
     let joined = tokio::time::timeout(Duration::from_secs(5), d.run)
         .await
-        .expect("idle shutdown antes del timeout")
-        .expect("join limpio");
-    joined.expect("apagado sin error");
+        .expect("idle shutdown before the timeout")
+        .expect("clean join");
+    joined.expect("shutdown with no error");
 }
 
 #[tokio::test]
-async fn dos_daemons_no_comparten_socket() {
+async fn two_daemons_do_not_share_a_socket() {
     let d = spawn_daemon(None).await;
     let engine = Arc::new(Engine::new());
     let err = Daemon::bind(
@@ -1029,14 +1042,14 @@ async fn dos_daemons_no_comparten_socket() {
         },
     )
     .await
-    .expect_err("el socket está vivo");
+    .expect_err("the socket is alive");
     assert!(matches!(err, DaemonError::AlreadyRunning), "{err:?}");
 }
 
-// ---------- seguridad del socket ----------
+// ---------- socket security ----------
 
 #[tokio::test]
-async fn bind_rechaza_dir_symlink() {
+async fn bind_rejects_a_symlinked_dir() {
     let dir = tempfile::tempdir().expect("tempdir");
     let real = dir.path().join("real");
     std::fs::create_dir(&real).expect("mkdir");
@@ -1054,12 +1067,12 @@ async fn bind_rechaza_dir_symlink() {
         },
     )
     .await
-    .expect_err("dir symlink rechazado");
+    .expect_err("symlinked dir rejected");
     assert!(matches!(err, DaemonError::InsecureDir { .. }), "{err:?}");
 }
 
 #[tokio::test]
-async fn bind_endurece_el_modo_del_dir_y_del_socket() {
+async fn bind_hardens_the_dirs_and_the_sockets_mode() {
     use std::os::unix::fs::PermissionsExt;
     let dir = tempfile::tempdir().expect("tempdir");
     let sock_dir = dir.path().join("laxo");
@@ -1068,17 +1081,17 @@ async fn bind_endurece_el_modo_del_dir_y_del_socket() {
 
     let d = spawn_daemon_at(sock_dir.join("d.sock")).await;
     let md = std::fs::metadata(&sock_dir).expect("stat dir");
-    assert_eq!(md.permissions().mode() & 0o777, 0o700, "dir endurecido");
+    assert_eq!(md.permissions().mode() & 0o777, 0o700, "dir hardened");
     let md = std::fs::metadata(&d.socket).expect("stat socket");
     assert_eq!(md.permissions().mode() & 0o777, 0o600, "socket 0600");
     let _ = d;
 }
 
-// ---------- M3-4 T4: journal en el daemon + policy.undo_session ----------
+// ---------- M3-4 T4: journal in the daemon + policy.undo_session ----------
 
-/// Daemon con JOURNAL (in-memory) + `ScopedPolicy` con regla `allow` + registro
-/// de scopes compartido — el escenario del daemon real de M3-4 (dueño único
-/// del journal, ADR 0024).
+/// A daemon with a (in-memory) JOURNAL + `ScopedPolicy` with an `allow` rule +
+/// a shared scope registry — the real M3-4 daemon's scenario (sole owner of
+/// the journal, ADR 0024).
 pub(super) async fn spawn_daemon_journal() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -1117,8 +1130,8 @@ pub(super) async fn spawn_daemon_journal() -> TestDaemon {
     }
 }
 
-/// Espera el estado terminal de `task_id` vía `task.list` (resync retiene
-/// desenlaces recientes), con tope.
+/// Waits for `task_id`'s terminal state via `task.list` (resync retains
+/// recent outcomes), with a cap.
 pub(super) async fn wait_terminal(
     c: &Client,
     task_id: norte_proto::TaskId,
@@ -1136,22 +1149,22 @@ pub(super) async fn wait_terminal(
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "la task {task_id:?} nunca terminó"
+            "task {task_id:?} never finished"
         );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
 }
 
-/// M3-4 T4: un humano deshace por el wire la sesión completa de un agente.
-/// El agente (con scope+allow) copia; `policy.undo_session` la revierte
-/// aunque el agente ya no tenga scope (ejecutor=User).
+/// M3-4 T4: a human undoes an agent's whole session over the wire. The agent
+/// (with scope+allow) copies; `policy.undo_session` reverts it even though
+/// the agent no longer has scope (executor=User).
 #[tokio::test]
-async fn policy_undo_session_revierte_lo_del_agente() {
+async fn policy_undo_session_reverts_the_agents_work() {
     let d = spawn_daemon_journal().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
 
-    // Scope efímero por wire y copia del agente.
+    // Ephemeral scope over the wire and the agent's copy.
     let agent = connected_agent(&d, "s1").await;
     let human = connected_client(&d).await;
     let req: RequestScopeResult = agent
@@ -1190,14 +1203,14 @@ async fn policy_undo_session_revierte_lo_del_agente() {
             },
         )
         .await
-        .expect("copia del agente");
+        .expect("the agent's copy");
     assert_eq!(
         wait_terminal(&human, copied.task_id).await,
         norte_proto::TaskState::Completed
     );
     assert!(d.mem.stat(&vp("mem:///proj/dst.txt")).await.is_ok());
 
-    // El humano deshace la sesión del agente.
+    // The human undoes the agent's session.
     let undone: methods::PolicyUndoSessionResult = human
         .call(
             methods::POLICY_UNDO_SESSION,
@@ -1216,18 +1229,19 @@ async fn policy_undo_session_revierte_lo_del_agente() {
             d.mem.stat(&vp("mem:///proj/dst.txt")).await,
             Err(norte_proto::Error::NotFound)
         ),
-        "la copia del agente se revirtió"
+        "the agent's copy was reverted"
     );
     assert!(
         d.mem.stat(&vp("mem:///proj/src.txt")).await.is_ok(),
-        "el original intacto"
+        "the original is intact"
     );
 }
 
-/// Roles y validación de `policy.undo_session`: un agente no lo llama
-/// (`INVALID_REQUEST`) y una sesión con formato ilegal es `INVALID_PARAMS`.
+/// `policy.undo_session`'s roles and validation: an agent does not call it
+/// (`INVALID_REQUEST`) and a session with an illegal format is
+/// `INVALID_PARAMS`.
 #[tokio::test]
-async fn policy_undo_session_roles_y_validacion() {
+async fn policy_undo_session_roles_and_validation() {
     let d = spawn_daemon_journal().await;
     let agent = connected_agent(&d, "s1").await;
     let err = agent
@@ -1238,7 +1252,7 @@ async fn policy_undo_session_roles_y_validacion() {
             },
         )
         .await
-        .expect_err("un agente no deshace sesiones por esta vía");
+        .expect_err("an agent does not undo sessions this way");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 
     let human = connected_client(&d).await;
@@ -1250,14 +1264,14 @@ async fn policy_undo_session_roles_y_validacion() {
             },
         )
         .await
-        .expect_err("sesión ilegal");
+        .expect_err("illegal session");
     assert!(matches!(err2, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
-/// Un AGENTE (conexión con `agent_session`) NO puede aprobar un plugin:
-/// consentir capabilities es acto humano de seguridad → `INVALID_REQUEST`.
+/// An AGENT (a connection with `agent_session`) CANNOT approve a plugin:
+/// consenting to capabilities is a human security act → `INVALID_REQUEST`.
 #[tokio::test]
-async fn plugin_set_approval_agente_es_invalid_request() {
+async fn plugin_set_approval_by_an_agent_is_invalid_request() {
     let d = spawn_daemon_plugins().await;
     let agent = connected_agent(&d, "claude-01").await;
     let err = agent
@@ -1270,22 +1284,22 @@ async fn plugin_set_approval_agente_es_invalid_request() {
             },
         )
         .await
-        .expect_err("un agente no aprueba plugins");
+        .expect_err("an agent does not approve plugins");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 
-    // Y no tocó el estado: sigue sin aprobar para un humano.
+    // And it did not touch the state: still unapproved for a human.
     let human = connected_client(&d).await;
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
-    assert!(!list.plugins[0].approved, "el rechazo no dejó rastro");
+    assert!(!list.plugins[0].approved, "the rejection left no trace");
 }
 
-/// Aprobar un id DESCONOCIDO es `INVALID_PARAMS` (no se ensucia el estado con
-/// plugins fantasma).
+/// Approving an UNKNOWN id is `INVALID_PARAMS` (state is not dirtied with
+/// phantom plugins).
 #[tokio::test]
-async fn plugin_set_approval_id_desconocido_es_invalid_params() {
+async fn plugin_set_approval_of_an_unknown_id_is_invalid_params() {
     let d = spawn_daemon_plugins().await;
     let human = connected_client(&d).await;
     let err = human
@@ -1298,20 +1312,21 @@ async fn plugin_set_approval_id_desconocido_es_invalid_params() {
             },
         )
         .await
-        .expect_err("id desconocido");
+        .expect_err("unknown id");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
-/// El ancla que el humano LEYÓ es la que se concede (#282).
+/// The anchor the human READ is the one that grants (#282).
 ///
-/// El daemon anclaba el digest que ÉL tenía al escribir, no el que se enseñó,
-/// así que entre el `plugin.list` que vio el humano y el `set_approval` que
-/// confirma cabía un `plugin.toml` distinto. Con `expected_digest` el daemon
-/// rehúsa, y con la variante que significa «vuelve a leerlo»: NO
-/// `INVALID_PARAMS`, que es el código de «ese plugin no existe» y dejaría a un
-/// cliente sin poder distinguir las dos cosas.
+/// The daemon used to anchor the digest IT had at write time, not the one
+/// shown, so between the `plugin.list` the human saw and the confirming
+/// `set_approval`, a different `plugin.toml` could fit. With
+/// `expected_digest` the daemon refuses, and with the variant that means
+/// "read it again": NOT `INVALID_PARAMS`, which is the code for "that plugin
+/// does not exist" and would leave a client unable to distinguish the two
+/// things.
 #[tokio::test]
-async fn plugin_set_approval_con_ancla_rancia_se_rehusa() {
+async fn plugin_set_approval_with_a_stale_anchor_is_refused() {
     let d = spawn_daemon_plugins().await;
     let human = connected_client(&d).await;
     let err = human
@@ -1324,25 +1339,26 @@ async fn plugin_set_approval_con_ancla_rancia_se_rehusa() {
             },
         )
         .await
-        .expect_err("un ancla que no casa no concede");
+        .expect_err("an anchor that does not match does not grant");
     assert!(
         matches!(&err, ClientError::Rpc(rpc) if rpc.code != codes::INVALID_PARAMS),
-        "un ancla rancia y un id desconocido no pueden compartir código: {err:?}"
+        "a stale anchor and an unknown id cannot share a code: {err:?}"
     );
 
-    // Y no concedió nada: la comprobación tiene que ser fail-closed.
+    // And it granted nothing: the check has to be fail-closed.
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
-    assert!(!list.plugins[0].approved, "el rechazo no dejó rastro");
+    assert!(!list.plugins[0].approved, "the rejection left no trace");
 }
 
-/// REVOCAR no comprueba el ancla, y es deliberado: quitar un permiso no
-/// concede nada, y rehusar la revocación por un ancla rancia dejaría vivo
-/// justo el permiso que alguien intenta quitar.
+/// REVOKING does not check the anchor, and that is deliberate: taking away a
+/// permission grants nothing, and refusing the revocation over a stale
+/// anchor would keep alive exactly the permission someone is trying to take
+/// away.
 #[tokio::test]
-async fn revocar_no_se_rehusa_por_un_ancla_rancia() {
+async fn revoking_is_not_refused_over_a_stale_anchor() {
     let d = spawn_daemon_plugins().await;
     let human = connected_client(&d).await;
     let _: methods::PluginSetApprovalResult = human
@@ -1355,7 +1371,7 @@ async fn revocar_no_se_rehusa_por_un_ancla_rancia() {
             },
         )
         .await
-        .expect("aprobada primero");
+        .expect("approved first");
 
     let _: methods::PluginSetApprovalResult = human
         .call(
@@ -1367,21 +1383,21 @@ async fn revocar_no_se_rehusa_por_un_ancla_rancia() {
             },
         )
         .await
-        .expect("revocar no mira el ancla");
+        .expect("revoking does not look at the anchor");
 
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
-    assert!(!list.plugins[0].approved, "la revocación se aplicó");
+    assert!(!list.plugins[0].approved, "the revocation applied");
 }
 
-/// Un id DESCONOCIDO con ancla sigue siendo `INVALID_PARAMS`: `manifest_digest`
-/// devuelve `None` para los dos casos, y contestar «el manifiesto cambió» a
-/// quien nombró un plugin que no existe es un diagnóstico equivocado sobre el
-/// error más común de un cliente mal escrito.
+/// An UNKNOWN id with an anchor is still `INVALID_PARAMS`: `manifest_digest`
+/// returns `None` for both cases, and answering "the manifest changed" to
+/// whoever named a plugin that does not exist is the wrong diagnosis for a
+/// badly-written client's most common mistake.
 #[tokio::test]
-async fn un_id_desconocido_con_ancla_no_se_confunde_con_una_rancia() {
+async fn an_unknown_id_with_an_anchor_is_not_confused_with_a_stale_one() {
     let d = spawn_daemon_plugins().await;
     let human = connected_client(&d).await;
     let err = human
@@ -1394,14 +1410,14 @@ async fn un_id_desconocido_con_ancla_no_se_confunde_con_una_rancia() {
             },
         )
         .await
-        .expect_err("id desconocido");
+        .expect_err("unknown id");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS));
 }
 
-/// Mismo criterio que `plugin.list`: leer documentación no consiente nada, así
-/// que un AGENTE también puede pedir la página.
+/// Same criterion as `plugin.list`: reading documentation consents to
+/// nothing, so an AGENT can also ask for the page.
 #[tokio::test]
-async fn plugin_help_esta_abierto_a_un_agente() {
+async fn plugin_help_is_open_to_an_agent() {
     let d = spawn_daemon_help_plugin(|_root, plugin_dir| {
         std::fs::write(plugin_dir.join("help.md"), "# Demo\n").expect("write help.md");
     })
@@ -1415,16 +1431,16 @@ async fn plugin_help_esta_abierto_a_un_agente() {
             },
         )
         .await
-        .expect("un agente puede leer la página de un plugin");
+        .expect("an agent can read a plugin's page");
     assert!(help.markdown.contains("Demo"));
 }
 
-/// Un AGENTE (conexión con `agent_session`) NO puede cambiar un ajuste de
-/// plugin: es dato de USUARIO, mismo criterio que
-/// `plugin_set_approval_agente_es_invalid_request` → `INVALID_REQUEST`, y
-/// NO deja rastro (el humano sigue viendo el default).
+/// An AGENT (a connection with `agent_session`) CANNOT change a plugin
+/// setting: it is USER data, same criterion as
+/// `plugin_set_approval_by_an_agent_is_invalid_request` → `INVALID_REQUEST`,
+/// and it leaves NO trace (the human still sees the default).
 #[tokio::test]
-async fn plugin_set_config_agente_es_invalid_request() {
+async fn plugin_set_config_by_an_agent_is_invalid_request() {
     let d = spawn_daemon_config_plugin().await;
     let agent = connected_agent(&d, "claude-01").await;
     let err = agent
@@ -1437,7 +1453,7 @@ async fn plugin_set_config_agente_es_invalid_request() {
             },
         )
         .await
-        .expect_err("un agente no cambia ajustes de plugin");
+        .expect_err("an agent does not change plugin settings");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 
     let human = connected_client(&d).await;
@@ -1453,37 +1469,37 @@ async fn plugin_set_config_agente_es_invalid_request() {
     assert_eq!(
         res.keys.iter().find(|k| k.key == "greeting").unwrap().value,
         "hola",
-        "el rechazo no dejó rastro"
+        "the rejection left no trace"
     );
 }
 
-/// TOML deliberadamente inválido: el descubridor debe reportarlo en `errors`,
-/// no tumbar el catálogo. Un `[[[` sin cerrar no parsea.
+/// Deliberately invalid TOML: the discoverer must report it in `errors`, not
+/// bring down the catalogue. An unclosed `[[[` does not parse.
 pub(super) const BROKEN_MANIFEST: &str = "no es toml [[[";
 
-/// Daemon apuntado a un `cfg` sembrado con un plugin VÁLIDO (`org.norte.demo`)
-/// y uno ROTO (`rota`, TOML inválido). Devuelve también la ruta `cfg` para
-/// poder abrir un `PluginRegistry` fresco sobre ella y comprobar persistencia.
+/// A daemon pointed at a `cfg` seeded with a VALID plugin (`org.norte.demo`)
+/// and a BROKEN one (`rota`, invalid TOML). Also returns the `cfg` path so a
+/// fresh `PluginRegistry` can be opened over it to check persistence.
 pub(super) async fn spawn_daemon_plugins_ok_y_roto() -> (TestDaemon, PathBuf) {
     spawn_daemon_plugins_con(&[]).await
 }
 
-/// Como [`spawn_daemon_plugins_ok_y_roto`], más los `(id, manifiesto)` que
-/// se pasen, sembrados ANTES de arrancar: el daemon descubre una vez, al
-/// arrancar, y un test sobre su registro en memoria tiene que sembrar antes.
+/// Like [`spawn_daemon_plugins_ok_y_roto`], plus whatever `(id, manifest)`
+/// pairs are passed, seeded BEFORE starting up: the daemon discovers once, at
+/// startup, and a test on its in-memory registry has to seed beforehand.
 pub(super) async fn spawn_daemon_plugins_con(extra: &[(&str, &str)]) -> (TestDaemon, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
     let cfg = dir.path().join("cfg");
     let ok_dir = cfg.join("plugins").join("org.norte.demo");
-    let rota_dir = cfg.join("plugins").join("rota");
+    let broken_dir = cfg.join("plugins").join("rota");
     std::fs::create_dir_all(&ok_dir).expect("mkdir ok");
-    std::fs::create_dir_all(&rota_dir).expect("mkdir rota");
-    std::fs::write(ok_dir.join("plugin.toml"), DEMO_MANIFEST).expect("write manifest ok");
-    std::fs::write(rota_dir.join("plugin.toml"), BROKEN_MANIFEST).expect("write manifest roto");
-    for (id, manifiesto) in extra {
+    std::fs::create_dir_all(&broken_dir).expect("mkdir broken");
+    std::fs::write(ok_dir.join("plugin.toml"), DEMO_MANIFEST).expect("write ok manifest");
+    std::fs::write(broken_dir.join("plugin.toml"), BROKEN_MANIFEST).expect("write broken manifest");
+    for (id, manifest) in extra {
         let d = cfg.join("plugins").join(id);
         std::fs::create_dir_all(&d).expect("mkdir extra");
-        std::fs::write(d.join("plugin.toml"), manifiesto).expect("write manifest extra");
+        std::fs::write(d.join("plugin.toml"), manifest).expect("write extra manifest");
     }
 
     let socket = dir.path().join("d.sock");
@@ -1512,43 +1528,52 @@ pub(super) async fn spawn_daemon_plugins_con(extra: &[(&str, &str)]) -> (TestDae
     (d, cfg)
 }
 
-/// E2E de cierre M4-P3: round-trip COMPLETO del gestor de extensiones por el
-/// wire — descubrimiento (válido + roto), consentimiento humano (aprobar +
-/// activar), y persistencia DURABLE releída por un `PluginRegistry` FRESCO
-/// (sin daemon). Ata catálogo + estado + errores enmascarados en un solo flujo.
+/// M4-P3's closing E2E: a COMPLETE round-trip of the extension manager over
+/// the wire — discovery (valid + broken), human consent (approve +
+/// enable), and DURABLE persistence re-read by a FRESH `PluginRegistry` (no
+/// daemon). Ties together catalogue + state + masked errors in a single
+/// flow.
 #[tokio::test]
-async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
-    // `cfg` es la raíz de config, sembrada con un plugin válido y uno roto.
+async fn the_plugin_manager_e2e_lists_governs_and_persists() {
+    // `cfg` is the config root, seeded with a valid plugin and a broken one.
     let (d, cfg) = spawn_daemon_plugins_ok_y_roto().await;
 
-    // 1) plugin.list: un válido descubierto (sin aprobar/activar, capability
-    //    fs-read visible) y un roto reportado por su BASENAME (jamás la ruta
-    //    absoluta, que filtraría el home del usuario a un agente).
+    // 1) plugin.list: a valid one discovered (unapproved/disabled, fs-read
+    //    capability visible) and a broken one reported by its BASENAME
+    //    (never the absolute path, which would leak the user's home to an
+    //    agent).
     let human = connected_client(&d).await;
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
-    assert_eq!(list.plugins.len(), 1, "solo el válido carga");
+    assert_eq!(list.plugins.len(), 1, "only the valid one loads");
     let p = &list.plugins[0];
     assert_eq!(p.id, "org.norte.demo");
-    assert!(!p.approved, "nace sin aprobar");
-    assert!(!p.enabled, "nace sin activar");
+    assert!(!p.approved, "born unapproved");
+    assert!(!p.enabled, "born disabled");
     assert!(
         p.capabilities.iter().any(|c| c == "fs-read"),
-        "la capability declarada se expone como badge: {:?}",
+        "the declared capability is exposed as a badge: {:?}",
         p.capabilities
     );
-    assert_eq!(list.errors.len(), 1, "el roto se reporta, no desaparece");
+    assert_eq!(
+        list.errors.len(),
+        1,
+        "the broken one is reported, not hidden"
+    );
     let broken = &list.errors[0];
-    assert_eq!(broken.dir, "rota", "solo el basename, no la ruta absoluta");
+    assert_eq!(
+        broken.dir, "rota",
+        "only the basename, not the absolute path"
+    );
     assert!(
         !broken.dir.contains('/'),
-        "el dir reportado nunca es una ruta: {}",
+        "the reported dir is never a path: {}",
         broken.dir
     );
 
-    // 2) El humano aprueba y activa por el wire.
+    // 2) The human approves and enables over the wire.
     let _: methods::PluginSetApprovalResult = human
         .call(
             methods::PLUGIN_SET_APPROVAL,
@@ -1559,7 +1584,7 @@ async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
             },
         )
         .await
-        .expect("aprobar");
+        .expect("approve");
     let _: methods::PluginSetEnabledResult = human
         .call(
             methods::PLUGIN_SET_ENABLED,
@@ -1569,36 +1594,36 @@ async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
             },
         )
         .await
-        .expect("activar");
+        .expect("enable");
 
-    // 3) plugin.list lo refleja en el MISMO daemon.
+    // 3) plugin.list reflects it on the SAME daemon.
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
-        .expect("plugin.list tras consentir");
-    assert!(list.plugins[0].approved, "aprobado se refleja");
-    assert!(list.plugins[0].enabled, "activado se refleja");
+        .expect("plugin.list after consenting");
+    assert!(list.plugins[0].approved, "approved is reflected");
+    assert!(list.plugins[0].enabled, "enabled is reflected");
 
-    // 4) PERSISTENCIA DURABLE: un registro FRESCO abierto directamente sobre
-    //    `cfg` (sin daemon) recuerda ambos flags → se escribió
-    //    `cfg/plugins-state.toml` de verdad.
-    let fresco = norte_core::PluginRegistry::discover(&cfg).expect("discover fresco");
-    let persistido = fresco.list();
-    assert_eq!(persistido.plugins.len(), 1);
+    // 4) DURABLE PERSISTENCE: a FRESH registry opened directly over `cfg`
+    //    (no daemon) remembers both flags → `cfg/plugins-state.toml` was
+    //    really written.
+    let fresh = norte_core::PluginRegistry::discover(&cfg).expect("fresh discover");
+    let persisted = fresh.list();
+    assert_eq!(persisted.plugins.len(), 1);
     assert!(
-        persistido.plugins[0].approved,
-        "approved persistió en plugins-state.toml"
+        persisted.plugins[0].approved,
+        "approved persisted in plugins-state.toml"
     );
     assert!(
-        persistido.plugins[0].enabled,
-        "enabled persistió en plugins-state.toml"
+        persisted.plugins[0].enabled,
+        "enabled persisted in plugins-state.toml"
     );
     assert!(
         cfg.join("plugins-state.toml").exists(),
-        "el estado se escribió a disco"
+        "the state was written to disk"
     );
 
-    // 5) Un AGENTE no puede aprobar (acto humano de seguridad → INVALID_REQUEST).
+    // 5) An AGENT cannot approve (a human security act → INVALID_REQUEST).
     let agent = connected_agent(&d, "s1").await;
     let err = agent
         .call::<_, methods::PluginSetApprovalResult>(
@@ -1610,22 +1635,22 @@ async fn plugin_gestor_e2e_lista_gobierna_y_persiste() {
             },
         )
         .await
-        .expect_err("un agente no gobierna consentimiento");
+        .expect_err("an agent does not govern consent");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 }
 
-/// `plugin.uninstall` (0.71.0, ADR 0104): borra el directorio, retira el
-/// consentimiento y —lo que la CLI no podía— lo olvida en el registro EN
-/// MEMORIA del daemon, que hasta aquí seguía listando lo borrado hasta
-/// reiniciar. Un agente no puede; un id que no está, tampoco.
+/// `plugin.uninstall` (0.71.0, ADR 0104): deletes the directory, withdraws
+/// consent and — what the CLI could not do — forgets it in the daemon's
+/// IN-MEMORY registry, which until now kept listing the deleted plugin until
+/// a restart. An agent cannot; an id that is not there, either.
 #[tokio::test]
 #[expect(
     clippy::too_many_lines,
-    reason = "seis pasos sobre el MISMO daemon: partirlos es perder el registro en memoria que se prueba"
+    reason = "six steps over the SAME daemon: splitting them would lose the in-memory registry being tested"
 )]
-async fn plugin_uninstall_por_el_wire_borra_olvida_y_retira_el_consentimiento() {
-    // Y un roto con id VÁLIDO, para el paso 5: `rota` no es un id y no se
-    // puede nombrar por el wire.
+async fn plugin_uninstall_over_the_wire_deletes_forgets_and_withdraws_consent() {
+    // And a broken one with a VALID id, for step 5: `rota` is not an id and
+    // cannot be named over the wire.
     let (d, cfg) = spawn_daemon_plugins_con(&[("org.norte.rota", BROKEN_MANIFEST)]).await;
     let human = connected_client(&d).await;
     let _: methods::PluginSetApprovalResult = human
@@ -1638,10 +1663,11 @@ async fn plugin_uninstall_por_el_wire_borra_olvida_y_retira_el_consentimiento() 
             },
         )
         .await
-        .expect("aprobar");
+        .expect("approve");
 
-    // 1) Un AGENTE no desinstala: retirar un consentimiento es tan del humano
-    //    como darlo, y borrar ficheros de su configuración, más.
+    // 1) An AGENT does not uninstall: withdrawing a consent is as much the
+    //    human's as giving it, and deleting files from their configuration,
+    //    even more so.
     let agent = connected_agent(&d, "s1").await;
     let err = agent
         .call::<_, methods::PluginUninstallResult>(
@@ -1651,14 +1677,14 @@ async fn plugin_uninstall_por_el_wire_borra_olvida_y_retira_el_consentimiento() 
             },
         )
         .await
-        .expect_err("un agente no desinstala");
+        .expect_err("an agent does not uninstall");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
     assert!(
         cfg.join("plugins").join("org.norte.demo").is_dir(),
-        "y el directorio sigue"
+        "and the directory is still there"
     );
 
-    // 2) El humano sí, y el informe dice que había consentimiento.
+    // 2) The human does, and the report says there was consent.
     let r: methods::PluginUninstallResult = human
         .call(
             methods::PLUGIN_UNINSTALL,
@@ -1668,49 +1694,49 @@ async fn plugin_uninstall_por_el_wire_borra_olvida_y_retira_el_consentimiento() 
         )
         .await
         .expect("desinstalar");
-    assert!(r.was_approved, "tenía consentimiento, y se dice");
+    assert!(r.was_approved, "it had consent, and it says so");
     assert!(
         !cfg.join("plugins").join("org.norte.demo").exists(),
-        "el directorio se borró"
+        "the directory was deleted"
     );
 
-    // 3) El MISMO daemon ya no lo lista: el registro en memoria lo olvidó.
+    // 3) The SAME daemon no longer lists it: the in-memory registry forgot it.
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
-        .expect("plugin.list tras desinstalar");
+        .expect("plugin.list after uninstalling");
     assert!(
         list.plugins.iter().all(|p| p.id != "org.norte.demo"),
-        "sigue listado tras desinstalar: {:?}",
+        "still listed after uninstalling: {:?}",
         list.plugins.iter().map(|p| &p.id).collect::<Vec<_>>()
     );
 
-    // 4) Y el consentimiento se fue con él: un plugin instalado después bajo
-    //    el mismo id nace sin aprobar.
+    // 4) And consent left with it: a plugin installed later under the same
+    //    id is born unapproved.
     let ok_dir = cfg.join("plugins").join("org.norte.demo");
-    std::fs::create_dir_all(&ok_dir).expect("mkdir de nuevo");
+    std::fs::create_dir_all(&ok_dir).expect("mkdir again");
     std::fs::write(ok_dir.join("plugin.toml"), DEMO_MANIFEST).expect("write manifest");
-    let fresco = norte_core::PluginRegistry::discover(&cfg).expect("discover fresco");
-    let reinstalado = fresco
+    let fresh = norte_core::PluginRegistry::discover(&cfg).expect("fresh discover");
+    let reinstalled = fresh
         .list()
         .plugins
         .into_iter()
         .find(|p| p.id == "org.norte.demo")
-        .expect("vuelve a descubrirse");
-    assert!(!reinstalado.approved, "nace sin aprobar");
-    assert!(!reinstalado.enabled, "y apagado");
+        .expect("discovered again");
+    assert!(!reinstalled.approved, "born unapproved");
+    assert!(!reinstalled.enabled, "and disabled");
 
-    // 5) Un plugin ROTO —listado en `errors`, no en `plugins`— se desinstala
-    //    igual, y el MISMO daemon deja de anunciarlo como «no cargó»: el
-    //    cadáver salía de `plugins` y se quedaba en `errors`.
-    let rota = cfg.join("plugins").join("org.norte.rota");
+    // 5) A BROKEN plugin — listed in `errors`, not in `plugins` — uninstalls
+    //    just the same, and the SAME daemon stops advertising it as "failed
+    //    to load": the corpse used to leave `plugins` and stay in `errors`.
+    let broken = cfg.join("plugins").join("org.norte.rota");
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
     assert!(
         list.errors.iter().any(|e| e.dir == "org.norte.rota"),
-        "el daemon lo anuncia como roto: {:?}",
+        "the daemon advertises it as broken: {:?}",
         list.errors
     );
     let r: methods::PluginUninstallResult = human
@@ -1721,20 +1747,20 @@ async fn plugin_uninstall_por_el_wire_borra_olvida_y_retira_el_consentimiento() 
             },
         )
         .await
-        .expect("desinstalar un roto");
-    assert!(!r.was_approved, "un roto nunca tuvo consentimiento");
-    assert!(!rota.exists(), "y su directorio se borró");
+        .expect("uninstall a broken one");
+    assert!(!r.was_approved, "a broken one never had consent");
+    assert!(!broken.exists(), "and its directory was deleted");
     let list: methods::PluginListResult = human
         .call(methods::PLUGIN_LIST, &methods::PluginListParams {})
         .await
         .expect("plugin.list");
     assert!(
         list.errors.iter().all(|e| e.dir != "org.norte.rota"),
-        "un roto desinstalado no se sigue anunciando: {:?}",
+        "an uninstalled broken one is no longer advertised: {:?}",
         list.errors
     );
 
-    // 6) Lo que no está, o no es un id, es INVALID_PARAMS — nunca una ruta.
+    // 6) What is not there, or is not an id, is INVALID_PARAMS — never a path.
     for id in ["org.norte.nunca", "../fuera"] {
         let err = human
             .call::<_, methods::PluginUninstallResult>(
@@ -1742,7 +1768,7 @@ async fn plugin_uninstall_por_el_wire_borra_olvida_y_retira_el_consentimiento() 
                 &methods::PluginUninstallParams { id: id.into() },
             )
             .await
-            .expect_err("no está");
+            .expect_err("not there");
         assert!(
             matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_PARAMS),
             "{id}"
@@ -1750,13 +1776,13 @@ async fn plugin_uninstall_por_el_wire_borra_olvida_y_retira_el_consentimiento() 
     }
 }
 
-// ---------- #66: gate de actor en task.* y connection.trust_host_key ----------
+// ---------- #66: actor gate on task.* and connection.trust_host_key ----------
 
-/// `task.list` de un AGENTE solo muestra SUS tasks: las del humano (vivas o
-/// recientes) llevan `current` con paths ajenos (NOTA-1 del security-reviewer
-/// en M3-4 T5). El humano sigue viéndolo TODO.
+/// An AGENT's `task.list` only shows ITS OWN tasks: the human's (live or
+/// recent) carry `current` with other actors' paths (security-reviewer
+/// NOTE-1 in M3-4 T5). The human still sees EVERYTHING.
 #[tokio::test]
-async fn task_list_de_agente_solo_muestra_sus_tasks() {
+async fn an_agents_task_list_only_shows_its_own_tasks() {
     let d = spawn_daemon(None).await;
     write_file(&d.mem, "mem:///humano.bin", &vec![0xAA; 3000]).await;
     write_file(&d.mem, "mem:///agente.bin", &vec![0xBB; 3000]).await;
@@ -1778,7 +1804,7 @@ async fn task_list_de_agente_solo_muestra_sus_tasks() {
             },
         )
         .await
-        .expect("copia del humano");
+        .expect("the human's copy");
     drain_task(&mut human, ht.task_id.get()).await;
 
     let at: FsTaskResult = agent
@@ -1796,33 +1822,34 @@ async fn task_list_de_agente_solo_muestra_sus_tasks() {
             },
         )
         .await
-        .expect("copia del agente");
+        .expect("the agent's copy");
     drain_task(&mut agent, at.task_id.get()).await;
 
-    let del_humano: methods::TaskListResult = human
+    let humans_list: methods::TaskListResult = human
         .call(methods::TASK_LIST, &methods::TaskListParams {})
         .await
-        .expect("task.list humano");
-    let ids: Vec<u64> = del_humano.tasks.iter().map(|t| t.task_id.get()).collect();
-    assert!(ids.contains(&ht.task_id.get()), "el humano ve su task");
-    assert!(ids.contains(&at.task_id.get()), "el humano ve TODO");
+        .expect("the human's task.list");
+    let ids: Vec<u64> = humans_list.tasks.iter().map(|t| t.task_id.get()).collect();
+    assert!(ids.contains(&ht.task_id.get()), "the human sees its task");
+    assert!(ids.contains(&at.task_id.get()), "the human sees EVERYTHING");
 
-    let del_agente: methods::TaskListResult = agent
+    let agents_list: methods::TaskListResult = agent
         .call(methods::TASK_LIST, &methods::TaskListParams {})
         .await
-        .expect("task.list agente");
-    let ids: Vec<u64> = del_agente.tasks.iter().map(|t| t.task_id.get()).collect();
-    assert!(ids.contains(&at.task_id.get()), "el agente ve la SUYA");
+        .expect("the agent's task.list");
+    let ids: Vec<u64> = agents_list.tasks.iter().map(|t| t.task_id.get()).collect();
+    assert!(ids.contains(&at.task_id.get()), "the agent sees its OWN");
     assert!(
         !ids.contains(&ht.task_id.get()),
-        "el agente NO observa las tasks del humano (paths en `current`)"
+        "the agent does NOT observe the human's tasks (paths in `current`)"
     );
 }
 
-/// `connection.trust_host_key` es una decisión de confianza HUMANA (como
-/// `grant_scope`/`decide`/`undo_session`): un agente no bendice fingerprints.
+/// `connection.trust_host_key` is a HUMAN trust decision (like
+/// `grant_scope`/`decide`/`undo_session`): an agent does not bless
+/// fingerprints.
 #[tokio::test]
-async fn trust_host_key_de_agente_es_invalid_request() {
+async fn trust_host_key_by_an_agent_is_invalid_request() {
     let d = spawn_daemon(None).await;
     let agent = connected_agent(&d, "sess-tofu").await;
     let err = agent
@@ -1836,15 +1863,15 @@ async fn trust_host_key_de_agente_es_invalid_request() {
             },
         )
         .await
-        .expect_err("un agente no acepta host keys");
+        .expect_err("an agent does not accept host keys");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 }
 
-/// #325: teclear una contraseña es un acto HUMANO. Un agente que pudiera
-/// inyectar credenciales de sesión elegiría con qué identidad actúa el
-/// usuario en el host remoto, así que el gate es el mismo que el del TOFU.
+/// #325: typing a password is a HUMAN act. An agent that could inject
+/// session credentials would be choosing which identity the user acts under
+/// on the remote host, so the gate is the same as TOFU's.
 #[tokio::test]
-async fn provide_secret_de_agente_es_invalid_request() {
+async fn provide_secret_by_an_agent_is_invalid_request() {
     let d = spawn_daemon(None).await;
     let agent = connected_agent(&d, "sess-secreto").await;
     let err = agent
@@ -1856,15 +1883,15 @@ async fn provide_secret_de_agente_es_invalid_request() {
             },
         )
         .await
-        .expect_err("un agente no entrega secretos de conexión");
+        .expect_err("an agent does not provide connection secrets");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 }
 
-/// El broadcast de `task.progress` es el MISMO leak que `task.list`: una
-/// conexión de agente no recibe el progreso (con `current`) de tasks ajenas.
-/// Otro humano sí lo sigue viendo (base de la fase 3).
+/// `task.progress`'s broadcast is the SAME leak as `task.list`: an agent
+/// connection does not receive the progress (with `current`) of other
+/// actors' tasks. Another human does keep seeing it (phase 3's basis).
 #[tokio::test]
-async fn progreso_de_task_humana_no_llega_a_conexiones_agente() {
+async fn a_humans_task_progress_does_not_reach_agent_connections() {
     let d = spawn_daemon(None).await;
     write_file(&d.mem, "mem:///src.bin", &vec![0x11; 2000]).await;
     let human = connected_client(&d).await;
@@ -1886,23 +1913,24 @@ async fn progreso_de_task_humana_no_llega_a_conexiones_agente() {
             },
         )
         .await
-        .expect("fs.copy del humano");
-    // El otro humano drena hasta el terminal: en ese punto TODOS los frames
-    // de la task ya se difundieron (try_send síncrono en el mismo instante).
+        .expect("the human's fs.copy");
+    // The other human drains up to the terminal: at that point EVERY frame of
+    // the task has already been broadcast (synchronous try_send at the same
+    // instant).
     let seen = drain_task(&mut human2, task.task_id.get()).await;
     assert_eq!(seen.last().expect("terminal").state, TaskState::Completed);
-    let colado = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
+    let leaked = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
     assert!(
-        colado.is_err(),
-        "un agente no recibe task.progress de tasks ajenas: {colado:?}"
+        leaked.is_err(),
+        "an agent does not receive task.progress of other actors' tasks: {leaked:?}"
     );
 }
 
-/// `daemon.shutdown` también es acto humano: sin este gate, un agente
-/// bypasea el de `task.cancel` (el hard-shutdown cancela TODAS las tasks)
-/// y tumba el daemon de la sesión (MAJOR del security-reviewer en #66).
+/// `daemon.shutdown` is also a human act: without this gate, an agent
+/// bypasses `task.cancel`'s (a hard shutdown cancels EVERY task) and takes
+/// down the session's daemon (security-reviewer MAJOR in #66).
 #[tokio::test]
-async fn daemon_shutdown_de_agente_es_invalid_request() {
+async fn daemon_shutdown_by_an_agent_is_invalid_request() {
     let d = spawn_daemon(None).await;
     let agent = connected_agent(&d, "sess-apagon").await;
     let err = agent
@@ -1914,9 +1942,9 @@ async fn daemon_shutdown_de_agente_es_invalid_request() {
             },
         )
         .await
-        .expect_err("un agente no apaga el daemon");
+        .expect_err("an agent does not shut down the daemon");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
-    // El daemon sigue vivo y sirviendo.
+    // The daemon is still alive and serving.
     let c = connected_client(&d).await;
     let _: FsListResult = c
         .call(
@@ -1929,15 +1957,15 @@ async fn daemon_shutdown_de_agente_es_invalid_request() {
             },
         )
         .await
-        .expect("el daemon no se apagó");
+        .expect("the daemon did not shut down");
 }
 
 // ---------- #71: policy.undo_report ----------
 
-/// `policy.undo_report` es SOLO-User (misma barrera que el undo que lo
-/// genera): el informe lleva seq del journal y motivo de bloqueo.
+/// `policy.undo_report` is User-ONLY (same barrier as the undo that
+/// generates it): the report carries a journal seq and a block reason.
 #[tokio::test]
-async fn undo_report_de_agente_es_invalid_request() {
+async fn undo_report_by_an_agent_is_invalid_request() {
     let d = spawn_daemon(None).await;
     let agent = connected_agent(&d, "sess-report").await;
     let err = agent
@@ -1948,23 +1976,23 @@ async fn undo_report_de_agente_es_invalid_request() {
             },
         )
         .await
-        .expect_err("un agente no lee informes de undo");
+        .expect_err("an agent does not read undo reports");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::INVALID_REQUEST));
 }
 
-// ---------- #70: topes por clase (reserva para el humano) ----------
+// ---------- #70: per-class caps (reserved for the human) ----------
 
-/// Los desenlaces de un AGENTE ocupan como mucho la mitad del anillo
-/// `recent`: una ráfaga de tasks triviales de agente NO expulsa los
-/// terminales del humano del resync de `task.list` (#70).
+/// An AGENT's outcomes occupy at most half of the `recent` ring: a burst of
+/// trivial agent tasks does NOT evict the human's terminals from
+/// `task.list`'s resync (#70).
 #[tokio::test]
-async fn terminales_de_agente_no_desplazan_los_del_humano() {
+async fn an_agents_terminals_do_not_displace_the_humans() {
     let d = spawn_daemon(None).await;
     write_file(&d.mem, "mem:///h.bin", &[0xAA; 100]).await;
     let mut human = connected_client(&d).await;
     let mut agent = connected_agent(&d, "sess-ruido").await;
 
-    // 1) El humano completa UNA task.
+    // 1) The human completes ONE task.
     let ht: FsTaskResult = human
         .call(
             methods::FS_COPY,
@@ -1980,10 +2008,10 @@ async fn terminales_de_agente_no_desplazan_los_del_humano() {
             },
         )
         .await
-        .expect("copia humana");
+        .expect("human copy");
     drain_task(&mut human, ht.task_id.get()).await;
 
-    // 2) El agente completa MÁS tasks que el anillo entero (64).
+    // 2) The agent completes MORE tasks than the whole ring (64).
     for i in 0..70u32 {
         let at: FsTaskResult = agent
             .call(
@@ -2000,36 +2028,36 @@ async fn terminales_de_agente_no_desplazan_los_del_humano() {
                 },
             )
             .await
-            .expect("copia del agente");
+            .expect("the agent's copy");
         drain_task(&mut agent, at.task_id.get()).await;
     }
 
-    // 3) El terminal del humano SIGUE en su resync.
+    // 3) The human's terminal is STILL in its resync.
     let listed: methods::TaskListResult = human
         .call(methods::TASK_LIST, &methods::TaskListParams {})
         .await
         .expect("task.list");
     assert!(
         listed.tasks.iter().any(|t| t.task_id == ht.task_id),
-        "el ruido del agente no expulsa el desenlace del humano"
+        "the agent's noise does not evict the human's outcome"
     );
 }
 
-/// Las tasks VIVAS de agentes tienen sub-tope: aunque lo agoten, el humano
-/// sigue pudiendo encolar (#70). El agente que se pasa recibe OVERLOADED.
+/// Agents' LIVE tasks have a sub-cap: even if they exhaust it, the human can
+/// still queue (#70). The agent that oversteps receives OVERLOADED.
 #[tokio::test]
-async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
+async fn agents_live_tasks_do_not_exhaust_the_humans_quota() {
     let d = spawn_daemon(None).await;
     write_file(&d.mem, "mem:///src.bin", &[0xBB; 100]).await;
-    // Las tasks del agente quedan vivas: la primera bloqueada en latencia,
-    // el resto encoladas en el scheduler (registradas = vivas).
+    // The agent's tasks stay alive: the first one blocked on latency, the
+    // rest queued in the scheduler (registered = alive).
     d.mem
         .faults()
         .set_latency_per_op(Some(Duration::from_mins(2)));
     let human = connected_client(&d).await;
     let agent = connected_agent(&d, "sess-gloton").await;
 
-    // El agente encola hasta su sub-tope (384): todas aceptadas.
+    // The agent queues up to its sub-cap (384): all accepted.
     for i in 0..384u32 {
         let _: FsTaskResult = agent
             .call(
@@ -2046,15 +2074,15 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
                 },
             )
             .await
-            .unwrap_or_else(|e| panic!("copia {i} del agente aceptada: {e:?}"));
+            .unwrap_or_else(|e| panic!("the agent's copy {i} accepted: {e:?}"));
     }
-    // La 385ª del agente: OVERLOADED (su clase está llena).
+    // The agent's 385th: OVERLOADED (its class is full).
     let err = agent
         .call::<_, FsTaskResult>(
             methods::FS_COPY,
             &FsCopyParams {
                 from: vp("mem:///src.bin"),
-                to: vp("mem:///glotón.bin"),
+                to: vp("mem:///glutton.bin"),
                 on_collision: norte_proto::CollisionPolicy::default(),
                 symlinks: norte_proto::SymlinkPolicy::default(),
                 resume: norte_proto::ResumePolicy::default(),
@@ -2064,10 +2092,10 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
             },
         )
         .await
-        .expect_err("el sub-tope de agentes corta");
+        .expect_err("the agent sub-cap cuts it off");
     assert!(matches!(err, ClientError::Rpc(rpc) if rpc.code == codes::OVERLOADED));
 
-    // El humano SIGUE pudiendo encolar: su reserva no se toca.
+    // The human CAN STILL queue: its reserve is not touched.
     let _: FsTaskResult = human
         .call(
             methods::FS_COPY,
@@ -2083,18 +2111,18 @@ async fn tasks_vivas_de_agente_no_agotan_el_cupo_del_humano() {
             },
         )
         .await
-        .expect("la reserva del humano sobrevive al agente glotón");
+        .expect("the human's reserve survives the greedy agent");
 }
 
-// ---------- #64: muerte del peer durante un Ask suspendido ----------
+// ---------- #64: peer death during a suspended Ask ----------
 
-/// #64: la MUERTE del peticionario cancela su Ask suspendido — la pendiente
-/// NO queda zombi hasta el TTL. El dispatch se racea contra la vida del
-/// socket: al morir el peer se dropea el future del gate y su guard RAII
-/// retira la pendiente del router.
+/// #64: the requester's DEATH cancels its suspended Ask — the pending entry
+/// does NOT stay a zombie until the TTL. The dispatch races against the
+/// socket's life: when the peer dies, the gate's future is dropped and its
+/// RAII guard removes the pending entry from the router.
 #[tokio::test]
-async fn muerte_del_peer_cancela_su_ask_suspendido() {
-    // TTL LARGO a propósito: solo la muerte del peer puede limpiar a tiempo.
+async fn a_peers_death_cancels_its_suspended_ask() {
+    // LONG TTL on purpose: only the peer's death can clean up in time.
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -2121,14 +2149,14 @@ async fn muerte_del_peer_cancela_su_ask_suspendido() {
             .pending
             .iter()
             .any(|p| p.approval_id == notif.approval_id),
-        "la pendiente existe mientras el peticionario vive"
+        "the pending entry exists while the requester is alive"
     );
 
-    // Muere el peticionario: abortar la task dropea su Client → EOF.
+    // The requester dies: aborting the task drops its Client → EOF.
     copy.abort();
     let _ = copy.await;
 
-    // La pendiente desaparece PRONTO — no a los 30s del TTL.
+    // The pending entry disappears SOON — not at the TTL's 30s.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
         let listed: PolicyPendingResult = human
@@ -2144,27 +2172,28 @@ async fn muerte_del_peer_cancela_su_ask_suspendido() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "pendiente ZOMBI: la muerte del peer no canceló su Ask (#64)"
+            "ZOMBIE pending entry: the peer's death did not cancel its Ask (#64)"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    // Y el destino jamás se tocó (el gate murió ANTES del efecto).
+    // And the destination was never touched (the gate died BEFORE the effect).
     assert!(matches!(
         d.mem.stat(&vp("mem:///proj/dst.txt")).await,
         Err(Error::NotFound)
     ));
 }
 
-// ---------- #72: rpc.cancel de un tools/call suspendido en un Ask ----------
+// ---------- #72: rpc.cancel of a tools/call suspended in an Ask ----------
 
-/// #72: el agente RETIRA (rpc.cancel) su propia fs.copy suspendida en un Ask —
-/// el daemon dispara el token de esa request en vuelo, dropea el dispatch
-/// (gate PRE-efecto: su guard limpia la pendiente), responde `Error::Cancelled`
-/// y JAMÁS aprueba (fail-closed). A diferencia de la muerte del peer (#64), la
-/// conexión del agente SIGUE VIVA y usable tras la retirada.
+/// #72: the agent WITHDRAWS (rpc.cancel) its own `fs.copy` suspended in an
+/// Ask — the daemon fires that in-flight request's token, drops the dispatch
+/// (PRE-effect gate: its guard cleans up the pending entry), answers
+/// `Error::Cancelled` and NEVER approves (fail-closed). Unlike the peer's
+/// death (#64), the agent's connection STAYS ALIVE and usable after the
+/// withdrawal.
 #[tokio::test]
-async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
-    // TTL LARGO: solo el rpc.cancel puede retirar el Ask a tiempo.
+async fn rpc_cancel_withdraws_the_suspended_ask_without_killing_the_connection() {
+    // LONG TTL: only the rpc.cancel can withdraw the Ask in time.
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -2172,8 +2201,9 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
     let mut human = connected_client(&d).await;
     grant_copy_scope(&agent, &human, "s1").await;
 
-    // El agente lanza fs.copy y captura el id JSON-RPC asignado (el que un
-    // rpc.cancel debe apuntar). `call_tracked` invoca `on_id` ANTES de esperar.
+    // The agent launches fs.copy and captures the assigned JSON-RPC id (the
+    // one an rpc.cancel has to target). `call_tracked` invokes `on_id`
+    // BEFORE waiting.
     let id_slot = Arc::new(std::sync::Mutex::new(None::<u64>));
     let agent_copy = Arc::clone(&agent);
     let slot = Arc::clone(&id_slot);
@@ -2187,7 +2217,8 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
             .await
     });
 
-    // El humano ve el Ask: la pendiente existe mientras la copia se suspende.
+    // The human sees the Ask: the pending entry exists while the copy is
+    // suspended.
     let notif = next_approval(&mut human).await;
     let listed: PolicyPendingResult = human
         .call(methods::POLICY_PENDING, &serde_json::json!({}))
@@ -2198,11 +2229,11 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
             .pending
             .iter()
             .any(|p| p.approval_id == notif.approval_id),
-        "la pendiente existe mientras la copia se suspende"
+        "the pending entry exists while the copy is suspended"
     );
 
-    // El agente RETIRA su request suspendida (rpc.cancel, best-effort notify).
-    let id = esperar_id(&id_slot).await;
+    // The agent WITHDRAWS its suspended request (rpc.cancel, best-effort notify).
+    let id = wait_for_id(&id_slot).await;
     agent
         .notify(
             methods::RPC_CANCEL,
@@ -2212,17 +2243,17 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
         )
         .expect("rpc.cancel notify");
 
-    // La fs.copy responde Error::Cancelled (jamás aprobada: fail-closed).
-    let res = copy.await.expect("join de la copia");
+    // The fs.copy answers Error::Cancelled (never approved: fail-closed).
+    let res = copy.await.expect("copy join");
     match res {
         Err(ClientError::Rpc(rpc)) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert_eq!(rpc.data, Some(Error::Cancelled));
         }
-        other => panic!("esperaba Cancelled, fue {other:?}"),
+        other => panic!("expected Cancelled, got {other:?}"),
     }
 
-    // La pendiente se retira PRONTO — no a los 30s del TTL.
+    // The pending entry is removed SOON — not at the TTL's 30s.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
         let listed: PolicyPendingResult = human
@@ -2238,19 +2269,19 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "pendiente ZOMBI: el rpc.cancel no retiró el Ask (#72)"
+            "ZOMBIE pending entry: the rpc.cancel did not withdraw the Ask (#72)"
         );
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
-    // El destino jamás se tocó (el gate murió ANTES del efecto).
+    // The destination was never touched (the gate died BEFORE the effect).
     assert!(matches!(
         d.mem.stat(&vp("mem:///proj/dst.txt")).await,
         Err(Error::NotFound)
     ));
 
-    // La conexión del agente SIGUE VIVA tras el rpc.cancel (≠ muerte del peer):
-    // otra request se atiende con normalidad.
+    // The agent's connection STAYS ALIVE after the rpc.cancel (≠ peer death):
+    // another request is served normally.
     let st: FsStatResult = agent
         .call(
             methods::FS_STAT,
@@ -2260,17 +2291,17 @@ async fn rpc_cancel_retira_el_ask_suspendido_sin_matar_la_conexion() {
             },
         )
         .await
-        .expect("la conexión sigue viva tras el rpc.cancel");
+        .expect("the connection is still alive after the rpc.cancel");
     assert_eq!(st.entry.size, Some(4));
 }
 
-/// #72 (carrera A): el `rpc.cancel` GANA a un `policy.decide` posterior. El
-/// agente retira su fs.copy suspendida; cuando el humano intenta aprobarla
-/// después, la pendiente ya no existe → `policy.decide` responde
-/// `INVALID_PARAMS` (no un ok silencioso) y el destino jamás se toca.
+/// #72 (race A): `rpc.cancel` WINS over a later `policy.decide`. The agent
+/// withdraws its suspended fs.copy; when the human later tries to approve it,
+/// the pending entry no longer exists → `policy.decide` answers
+/// `INVALID_PARAMS` (not a silent ok) and the destination is never touched.
 #[tokio::test]
-async fn cancel_gana_a_un_decide_posterior() {
-    // TTL LARGO: solo el rpc.cancel puede retirar el Ask a tiempo.
+async fn cancel_wins_over_a_later_decide() {
+    // LONG TTL: only the rpc.cancel can withdraw the Ask in time.
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -2291,11 +2322,11 @@ async fn cancel_gana_a_un_decide_posterior() {
             .await
     });
 
-    // El humano ve el Ask (la copia está suspendida): sincroniza la carrera.
+    // The human sees the Ask (the copy is suspended): synchronizes the race.
     let notif = next_approval(&mut human).await;
 
-    // ACCIÓN 1 (única "primera"): el agente RETIRA la request suspendida.
-    let id = esperar_id(&id_slot).await;
+    // ACTION 1 (the one "first"): the agent WITHDRAWS the suspended request.
+    let id = wait_for_id(&id_slot).await;
     agent
         .notify(
             methods::RPC_CANCEL,
@@ -2305,21 +2336,22 @@ async fn cancel_gana_a_un_decide_posterior() {
         )
         .expect("rpc.cancel notify");
 
-    // La fs.copy responde Cancelled (fail-closed: jamás aprobada).
-    match copy.await.expect("join de la copia") {
+    // The fs.copy answers Cancelled (fail-closed: never approved).
+    match copy.await.expect("copy join") {
         Err(ClientError::Rpc(rpc)) => {
             assert_eq!(rpc.code, codes::APP_ERROR);
             assert_eq!(rpc.data, Some(Error::Cancelled));
         }
-        other => panic!("esperaba Cancelled, fue {other:?}"),
+        other => panic!("expected Cancelled, got {other:?}"),
     }
 
-    // ACCIÓN 2 (llega TARDE): el humano intenta aprobar la ya-retirada. La
-    // pendiente no existe → error, jamás un ok silencioso. Y desde #279 dice
-    // cuál de las tres formas: `already-decided`, porque ese id SÍ existió y
-    // alguien lo resolvió —aquí, el propio peticionario retirándolo—. Lo que
-    // no puede contestar es `unknown`, que mandaría a quien pulsó a buscar un
-    // daemon reiniciado que no existe.
+    // ACTION 2 (arrives LATE): the human tries to approve the already-
+    // withdrawn one. The pending entry does not exist → error, never a
+    // silent ok. And since #279 it says which of the three forms:
+    // `already-decided`, because that id DID exist and someone resolved it —
+    // here, the requester itself withdrawing it. What it must not answer is
+    // `unknown`, which would send whoever clicked off looking for a
+    // restarted daemon that does not exist.
     let decide: Result<PolicyDecideResult, ClientError> = human
         .call(
             methods::POLICY_DECIDE,
@@ -2332,25 +2364,25 @@ async fn cancel_gana_a_un_decide_posterior() {
     match decide {
         Err(ClientError::Rpc(rpc)) => assert!(
             matches!(rpc.data, Some(Error::ApprovalGone { ref reason }) if reason == "already-decided"),
-            "decide sobre una pendiente retirada tiene que decir que ya se resolvió, fue {:?}",
+            "deciding over a withdrawn pending entry has to say it was already resolved, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba ApprovalGone, fue {other:?}"),
+        other => panic!("expected ApprovalGone, got {other:?}"),
     }
 
-    // El destino jamás se ejecutó.
+    // The destination was never executed.
     assert!(matches!(
         d.mem.stat(&vp("mem:///proj/dst.txt")).await,
         Err(Error::NotFound)
     ));
 }
 
-/// #72 (carrera B): el `policy.decide` GANA a un `rpc.cancel` posterior. El
-/// humano aprueba antes de que llegue la retirada; la copia procede como Task
-/// gobernada y el `rpc.cancel` de la request YA resuelta es un no-op benigno
-/// que no perturba la conexión del agente.
+/// #72 (race B): `policy.decide` WINS over a later `rpc.cancel`. The human
+/// approves before the withdrawal arrives; the copy proceeds as a governed
+/// Task and the `rpc.cancel` of the ALREADY resolved request is a benign
+/// no-op that does not disturb the agent's connection.
 #[tokio::test]
-async fn decide_gana_a_un_cancel_posterior() {
+async fn decide_wins_over_a_later_cancel() {
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -2371,7 +2403,7 @@ async fn decide_gana_a_un_cancel_posterior() {
             .await
     });
 
-    // El humano ve el Ask y APRUEBA (acción "primera").
+    // The human sees the Ask and APPROVES (the "first" action).
     let notif = next_approval(&mut human).await;
     let _: PolicyDecideResult = human
         .call(
@@ -2384,16 +2416,16 @@ async fn decide_gana_a_un_cancel_posterior() {
         .await
         .expect("decide approve");
 
-    // Aprobada → la copia procede: joins Ok con task_id asignado.
+    // Approved → the copy proceeds: joins Ok with an assigned task_id.
     let res = copy
         .await
-        .expect("join de la copia")
-        .expect("aprobada, la copia procede");
+        .expect("copy join")
+        .expect("approved, the copy proceeds");
     assert!(res.task_id.get() > 0);
 
-    // ACCIÓN 2 (llega TARDE): rpc.cancel de la request YA resuelta. No-op
-    // benigno — NO debe perturbar la conexión del agente.
-    let id = esperar_id(&id_slot).await;
+    // ACTION 2 (arrives LATE): rpc.cancel of the ALREADY resolved request.
+    // Benign no-op — must NOT disturb the agent's connection.
+    let id = wait_for_id(&id_slot).await;
     agent
         .notify(
             methods::RPC_CANCEL,
@@ -2403,7 +2435,8 @@ async fn decide_gana_a_un_cancel_posterior() {
         )
         .expect("rpc.cancel notify");
 
-    // La conexión del agente sigue viva y atiende: prueba del no-op benigno.
+    // The agent's connection is still alive and serving: proof of the benign
+    // no-op.
     let st: FsStatResult = agent
         .call(
             methods::FS_STAT,
@@ -2413,18 +2446,18 @@ async fn decide_gana_a_un_cancel_posterior() {
             },
         )
         .await
-        .expect("la conexión sigue viva tras el rpc.cancel de una request resuelta");
+        .expect("the connection is still alive after the rpc.cancel of a resolved request");
     assert_eq!(st.entry.size, Some(4));
 }
 
-/// #72 (backpressure/anti-DoS, MAJOR del security-reviewer): mientras una
-/// fs.copy está SUSPENDIDA en un Ask, el agente hace pipeline de varias
-/// requests más. El inner loop las bufferiza (`pending_frames`) SIN perderlas;
-/// cuando el Ask se retira (rpc.cancel), TODAS se procesan tras el desenlace,
-/// en el mismo orden de llegada (dispatch serial). Prueba que el búfer de
-/// diferidos drena FIFO y que ninguna request queda huérfana.
+/// #72 (backpressure/anti-DoS, security-reviewer MAJOR): while an fs.copy is
+/// SUSPENDED in an Ask, the agent pipelines several more requests. The inner
+/// loop buffers them (`pending_frames`) WITHOUT losing them; when the Ask is
+/// withdrawn (rpc.cancel), ALL of them are processed after the outcome, in
+/// the same arrival order (serial dispatch). Proves the deferred buffer
+/// drains FIFO and that no request is left orphaned.
 #[tokio::test]
-async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
+async fn frames_pipelined_during_an_ask_are_processed_after_the_outcome() {
     let d = spawn_daemon_ask(Duration::from_secs(30)).await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -2432,7 +2465,7 @@ async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
     let mut human = connected_client(&d).await;
     grant_copy_scope(&agent, &human, "s1").await;
 
-    // Lanza la copia y captura su id; se suspende en el Ask.
+    // Launches the copy and captures its id; it suspends in the Ask.
     let id_slot = Arc::new(std::sync::Mutex::new(None::<u64>));
     let agent_copy = Arc::clone(&agent);
     let slot = Arc::clone(&id_slot);
@@ -2446,10 +2479,11 @@ async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
             .await
     });
     let _notif = next_approval(&mut human).await;
-    let copy_id = esperar_id(&id_slot).await;
+    let copy_id = wait_for_id(&id_slot).await;
 
-    // Con la copia suspendida, el agente pipelinea 5 fs.stat: el daemon las
-    // lee del socket y las difiere (no las despacha hasta que el Ask resuelva).
+    // With the copy suspended, the agent pipelines 5 fs.stat calls: the
+    // daemon reads them off the socket and defers them (does not dispatch
+    // them until the Ask resolves).
     let mut pipelined = Vec::new();
     for _ in 0..5u32 {
         let a = Arc::clone(&agent);
@@ -2464,18 +2498,20 @@ async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
             .await
         }));
     }
-    // Deja que los 5 frames lleguen al daemon (se bufferizan tras la copia).
+    // Lets the 5 frames reach the daemon (they get buffered behind the copy).
     //
-    // ESTE `sleep` se queda y no hay forma de afinarlo: lo que se espera es
-    // que el daemon los haya LEÍDO y DIFERIDO, y diferir es exactamente no
-    // contestar nada — no hay observable que sondear. Sostiene el SIGNIFICADO
-    // del test, no su corrección: sin él, un frame que no hubiera llegado
-    // antes del cancel se despacharía por el camino normal y el test pasaría
-    // sin haber ejercitado el diferido. Quitarlo no lo pone rojo; lo vacía.
+    // THIS `sleep` stays and there is no way to sharpen it: what is being
+    // waited for is that the daemon has READ and DEFERRED them, and
+    // deferring is exactly not answering anything — there is no observable
+    // to poll. It holds up the test's MEANING, not its correctness: without
+    // it, a frame that had not arrived before the cancel would be dispatched
+    // through the normal path and the test would pass without having
+    // exercised the deferral. Removing it does not turn it red; it empties
+    // it.
     tokio::time::sleep(Duration::from_millis(100)).await;
 
-    // El agente retira la copia → se libera el dispatch; los 5 stats diferidos
-    // se procesan a continuación.
+    // The agent withdraws the copy → the dispatch is freed; the 5 deferred
+    // stats are processed right after.
     agent
         .notify(
             methods::RPC_CANCEL,
@@ -2486,23 +2522,23 @@ async fn frames_pipelined_durante_un_ask_se_procesan_tras_el_desenlace() {
         .expect("rpc.cancel notify");
 
     assert!(matches!(
-        copy.await.expect("join copia"),
+        copy.await.expect("copy join"),
         Err(ClientError::Rpc(rpc)) if rpc.data == Some(Error::Cancelled)
     ));
-    // Ninguno de los 5 diferidos se perdió: todos responden Ok.
+    // None of the 5 deferred ones was lost: all answer Ok.
     for (i, h) in pipelined.into_iter().enumerate() {
         let st = h
             .await
-            .expect("join stat")
-            .unwrap_or_else(|e| panic!("stat diferido {i} debía responder Ok: {e:?}"));
+            .expect("stat join")
+            .unwrap_or_else(|e| panic!("deferred stat {i} should have answered Ok: {e:?}"));
         assert_eq!(st.entry.size, Some(4));
     }
 }
 
-/// Gate de lectura de agentes: sin scope, `fs.search` es `PolicyDenied`
-/// out-of-scope; con un scope concedido que cubre el root, procede.
+/// Agents' read gate: with no scope, `fs.search` is `PolicyDenied`
+/// out-of-scope; with a granted scope that covers the root, it proceeds.
 #[tokio::test]
-async fn agente_fuera_de_scope_no_busca() {
+async fn a_scopeless_agent_does_not_search() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/a.rs", b"x").await;
@@ -2546,19 +2582,19 @@ async fn agente_fuera_de_scope_no_busca() {
         .await
         .expect("grant_scope");
 
-    // 3) Ahora la búsqueda bajo el scope procede.
+    // 3) Now the search under the scope proceeds.
     let task: FsTaskResult = agent
         .call(methods::FS_SEARCH, &search_by_name("mem:///proj", "*.rs"))
         .await
-        .expect("con scope busca");
+        .expect("with scope, it searches");
     let (hits, state) = drain_search(&mut agent, task.task_id.get()).await;
     assert_eq!(state, TaskState::Completed);
     assert_eq!(hits.len(), 1);
 }
 
-/// Un scope que cubre `mem:///a` NO habilita buscar en `mem:///b`.
+/// A scope that covers `mem:///a` does NOT enable searching in `mem:///b`.
 #[tokio::test]
-async fn agente_scope_no_cubre_root() {
+async fn an_agents_scope_does_not_cover_the_root() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
     d.mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
@@ -2587,26 +2623,26 @@ async fn agente_scope_no_cubre_root() {
         .await
         .expect("grant_scope");
 
-    // Scope en /a, búsqueda en /b → out-of-scope.
+    // Scope on /a, search on /b → out-of-scope.
     let err = agent
         .call::<_, FsTaskResult>(methods::FS_SEARCH, &search_by_name("mem:///b", "*"))
         .await
-        .expect_err("scope /a no cubre /b");
+        .expect_err("scope /a does not cover /b");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// El gate: comparar LEE dos árboles, así que un agente necesita scope vivo
-/// sobre AMBAS raíces. Con una sola no basta, y la denegación dice únicamente
-/// la categoría gruesa.
+/// The gate: comparing READS two trees, so an agent needs live scope over
+/// BOTH roots. One alone is not enough, and the denial says only the coarse
+/// category.
 #[tokio::test]
-async fn fs_compare_agente_necesita_scope_en_ambas_raices() {
+async fn fs_compare_an_agent_needs_scope_on_both_roots() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     d.mem
@@ -2616,49 +2652,49 @@ async fn fs_compare_agente_necesita_scope_en_ambas_raices() {
     d.mem.mkdir(&vp("mem:///otro")).await.expect("mkdir otro");
     let agent = connected_agent(&d, "s1").await;
     let human = connected_client(&d).await;
-    grant_copy_scope(&agent, &human, "s1").await; // scope sobre mem:///proj
+    grant_copy_scope(&agent, &human, "s1").await; // scope over mem:///proj
 
-    // La raíz derecha cae fuera del scope → denegado.
+    // The right root falls outside the scope → denied.
     let err = agent
         .call::<_, FsTaskResult>(
             methods::FS_COMPARE,
             &compare_params("mem:///proj", "mem:///otro"),
         )
         .await
-        .expect_err("la derecha está fuera de scope");
+        .expect_err("the right one is out of scope");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
-    // Y en el otro sentido tampoco: el gate mira las DOS, no la primera.
+    // And the other way around either: the gate looks at BOTH, not the first.
     let err = agent
         .call::<_, FsTaskResult>(
             methods::FS_COMPARE,
             &compare_params("mem:///otro", "mem:///proj"),
         )
         .await
-        .expect_err("la izquierda está fuera de scope");
-    assert!(matches!(err, ClientError::Rpc(_)), "fue {err:?}");
+        .expect_err("the left one is out of scope");
+    assert!(matches!(err, ClientError::Rpc(_)), "was {err:?}");
 
-    // Las dos bajo el scope → procede.
+    // Both under the scope → proceeds.
     let _: FsTaskResult = agent
         .call(
             methods::FS_COMPARE,
             &compare_params("mem:///proj", "mem:///proj/sub"),
         )
         .await
-        .expect("ambas bajo el scope");
+        .expect("both under the scope");
 }
 
-/// El rung de hash LEE CONTENIDO, y un scope que solo concede `mkdir` cubre la
-/// lectura de estructura pero no el manejo de bytes: la comparación barata
-/// pasa y la hasheada no.
+/// The hash rung READS CONTENT, and a scope that only grants `mkdir` covers
+/// reading structure but not handling bytes: the cheap comparison passes and
+/// the hashed one does not.
 #[tokio::test]
-async fn fs_compare_el_rung_de_hash_exige_scope_de_contenido() {
+async fn fs_compare_the_hash_rung_demands_content_scope() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///data")).await.expect("mkdir data");
     d.mem.mkdir(&vp("mem:///data/l")).await.expect("mkdir l");
@@ -2668,7 +2704,7 @@ async fn fs_compare_el_rung_de_hash_exige_scope_de_contenido() {
     let agent = connected_agent(&d, "s1").await;
     let human = connected_client(&d).await;
 
-    // Scope de SOLO `mkdir` sobre mem:///data: lectura sí, contenido no.
+    // A `mkdir`-ONLY scope over mem:///data: reading yes, content no.
     let req: RequestScopeResult = agent
         .call(
             methods::POLICY_REQUEST_SCOPE,
@@ -2691,38 +2727,38 @@ async fn fs_compare_el_rung_de_hash_exige_scope_de_contenido() {
         .await
         .expect("grant_scope");
 
-    // Barata: pasa (el gate de lectura es op-independiente).
+    // Cheap: passes (the read gate is op-independent).
     let _: FsTaskResult = agent
         .call(
             methods::FS_COMPARE,
             &compare_params("mem:///data/l", "mem:///data/r"),
         )
         .await
-        .expect("sin hash procede");
+        .expect("with no hash it proceeds");
 
-    // Con hash: denegada — leer estructura no es leer bytes.
+    // With hash: denied — reading structure is not reading bytes.
     let mut p = compare_params("mem:///data/l", "mem:///data/r");
     p.criteria.hash = true;
     let err = agent
         .call::<_, FsTaskResult>(methods::FS_COMPARE, &p)
         .await
-        .expect_err("el hash exige scope de contenido");
+        .expect_err("the hash demands content scope");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Y el lado que PERMITE, que es el que de verdad puede romperse en silencio:
-/// con un scope de `copy` sobre la raíz, las DOS puertas (lectura + contenido)
-/// se componen y la comparación hasheada procede hasta terminar. Sin este
-/// test, un `content_gate` que denegara siempre pasaría el de arriba.
+/// And the side that ALLOWS, which is the one that can really break silently:
+/// with a `copy` scope over the root, the TWO doors (read + content) compose
+/// and the hashed comparison proceeds to completion. Without this test, a
+/// `content_gate` that always denied would pass the one above.
 #[tokio::test]
-async fn fs_compare_con_scope_de_copy_el_hash_procede() {
+async fn fs_compare_with_a_copy_scope_the_hash_proceeds() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     d.mem.mkdir(&vp("mem:///proj/l")).await.expect("mkdir l");
@@ -2731,14 +2767,14 @@ async fn fs_compare_con_scope_de_copy_el_hash_procede() {
     write_file(&d.mem, "mem:///proj/r/a.txt", b"x").await;
     let mut agent = connected_agent(&d, "s1").await;
     let human = connected_client(&d).await;
-    grant_copy_scope(&agent, &human, "s1").await; // scope `copy` sobre /proj
+    grant_copy_scope(&agent, &human, "s1").await; // `copy` scope over /proj
 
     let mut p = compare_params("mem:///proj/l", "mem:///proj/r");
     p.criteria.hash = true;
     let task: FsTaskResult = agent
         .call(methods::FS_COMPARE, &p)
         .await
-        .expect("con scope de copy el hash procede");
+        .expect("with a copy scope the hash proceeds");
     let (batches, state) = drain_compare(&mut agent, task.task_id.get()).await;
     assert_eq!(state, TaskState::Completed);
     let rows: Vec<_> = batches.into_iter().flat_map(|b| b.rows).collect();
@@ -2747,11 +2783,11 @@ async fn fs_compare_con_scope_de_copy_el_hash_procede() {
     assert_eq!(rows[0].criterion, methods::CompareCriterion::Hash);
 }
 
-/// El gate: planificar LEE dos árboles, así que un agente necesita scope vivo
-/// sobre AMBAS raíces — y el gate va ANTES de validar params, así que unos
-/// params malos tampoco le dicen nada.
+/// The gate: planning READS two trees, so an agent needs live scope over
+/// BOTH roots — and the gate runs BEFORE validating params, so bad params
+/// tell it nothing either.
 #[tokio::test]
-async fn sync_plan_agente_necesita_scope_en_ambas_raices() {
+async fn sync_plan_an_agent_needs_scope_on_both_roots() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir proj");
     d.mem
@@ -2763,7 +2799,7 @@ async fn sync_plan_agente_necesita_scope_en_ambas_raices() {
     d.mem.mkdir(&vp("mem:///otro")).await.expect("mkdir otro");
     let agent = connected_agent(&d, "s1").await;
     let human = connected_client(&d).await;
-    grant_copy_scope(&agent, &human, "s1").await; // scope sobre mem:///proj
+    grant_copy_scope(&agent, &human, "s1").await; // scope over mem:///proj
 
     for p in [
         sync_params("mem:///proj", "mem:///otro"),
@@ -2772,48 +2808,48 @@ async fn sync_plan_agente_necesita_scope_en_ambas_raices() {
         let err = agent
             .call::<_, FsTaskResult>(methods::SYNC_PLAN, &p)
             .await
-            .expect_err("una de las dos está fuera de scope");
+            .expect_err("one of the two is out of scope");
         match err {
             ClientError::Rpc(rpc) => assert!(
                 matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-                "PolicyDenied out-of-scope, fue {:?}",
+                "PolicyDenied out-of-scope, was {:?}",
                 rpc.data
             ),
-            other => panic!("esperaba Rpc, fue {other:?}"),
+            other => panic!("expected Rpc, got {other:?}"),
         }
     }
 
-    // El gate va PRIMERO: unos params imposibles siguen contestando denegado, no
-    // «además tu petición estaba mal».
+    // The gate goes FIRST: impossible params still answer denied, not
+    // "and on top of that your request was wrong".
     let mut p = sync_params("mem:///otro", "mem:///proj");
     p.compare.follow_symlinks = true;
     let err = agent
         .call::<_, FsTaskResult>(methods::SYNC_PLAN, &p)
         .await
-        .expect_err("fuera de scope");
+        .expect_err("out of scope");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { .. })),
-            "el gate va antes que la validación de params, fue {:?}",
+            "the gate goes before params validation, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 
-    // Con las dos bajo el scope, procede.
+    // With both under the scope, it proceeds.
     let _: FsTaskResult = agent
         .call(
             methods::SYNC_PLAN,
             &sync_params("mem:///proj/l", "mem:///proj/r"),
         )
         .await
-        .expect("ambas bajo el scope");
+        .expect("both under the scope");
 }
 
-/// El rung de hash LEE CONTENIDO también aquí: un scope que solo concede
-/// `mkdir` planifica barato y no hasheado.
+/// The hash rung READS CONTENT here too: a scope that only grants `mkdir`
+/// plans cheaply and unhashed.
 #[tokio::test]
-async fn sync_plan_el_rung_de_hash_exige_scope_de_contenido() {
+async fn sync_plan_the_hash_rung_demands_content_scope() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///data")).await.expect("mkdir data");
     d.mem.mkdir(&vp("mem:///data/l")).await.expect("mkdir l");
@@ -2858,26 +2894,26 @@ async fn sync_plan_el_rung_de_hash_exige_scope_de_contenido() {
     let err = agent
         .call::<_, FsTaskResult>(methods::SYNC_PLAN, &p)
         .await
-        .expect_err("el hash exige scope de contenido");
+        .expect_err("the hash demands content scope");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// Asevera un `-32602` (params que el server rehúsa sin crear Task).
+/// Asserts a `-32602` (params the server refuses without creating a Task).
 pub(super) fn assert_invalid_params<T: std::fmt::Debug>(r: Result<T, ClientError>) {
     match r {
         Err(ClientError::Rpc(rpc)) => assert_eq!(rpc.code, codes::INVALID_PARAMS, "{rpc:?}"),
-        other => panic!("esperaba INVALID_PARAMS, fue {other:?}"),
+        other => panic!("expected INVALID_PARAMS, got {other:?}"),
     }
 }
 
-/// Asevera que una lectura da `PolicyDenied` out-of-scope (helper de #80).
+/// Asserts that a read gives `PolicyDenied` out-of-scope (#80 helper).
 pub(super) async fn assert_read_denied(
     agent: &Client,
     method: &str,
@@ -2886,28 +2922,28 @@ pub(super) async fn assert_read_denied(
     let err = agent
         .call::<_, serde_json::Value>(method, params)
         .await
-        .expect_err("sin scope no lee");
+        .expect_err("with no scope it does not read");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "{method}: PolicyDenied out-of-scope, fue {:?}",
+            "{method}: PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("{method}: esperaba Rpc, fue {other:?}"),
+        other => panic!("{method}: expected Rpc, got {other:?}"),
     }
 }
 
-/// #80: las LECTURAS (`list`/`read`/`stat`/`capabilities`) gatean por scope
-/// para agentes, igual que las mutaciones. Sin scope da `PolicyDenied`; con un
-/// scope que cubre la raíz (op-independiente: un grant de `copy` basta) da OK.
+/// #80: READS (`list`/`read`/`stat`/`capabilities`) gate by scope for agents,
+/// just like mutations. With no scope, `PolicyDenied`; with a scope that
+/// covers the root (op-independent: a `copy` grant is enough), OK.
 #[tokio::test]
-async fn agente_sin_scope_no_lee_y_con_scope_si() {
+async fn a_scopeless_agent_does_not_read_with_scope_it_does() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/a.txt", b"hola").await;
     let agent = connected_agent(&d, "s1").await;
 
-    // 1) Sin scope: los cuatro reads denegados.
+    // 1) With no scope: all four reads denied.
     assert_read_denied(
         &agent,
         methods::FS_LIST,
@@ -2946,11 +2982,11 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
     )
     .await;
 
-    // 2) Un humano concede scope sobre mem:///proj (op copy — cubre lectura).
+    // 2) A human grants scope over mem:///proj (op copy — covers reads).
     let human = connected_client(&d).await;
     grant_copy_scope(&agent, &human, "s1").await;
 
-    // 3) Ahora los cuatro reads proceden.
+    // 3) Now the four reads proceed.
     let list: FsListResult = agent
         .call(
             methods::FS_LIST,
@@ -2962,7 +2998,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
             },
         )
         .await
-        .expect("con scope lista");
+        .expect("with scope, it lists");
     assert_eq!(list.entries.len(), 1);
     let stat: FsStatResult = agent
         .call(
@@ -2973,7 +3009,7 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
             },
         )
         .await
-        .expect("con scope statea");
+        .expect("with scope, it stats");
     assert_eq!(stat.entry.size, Some(4));
     let read: methods::FsReadResult = agent
         .call(
@@ -2984,8 +3020,8 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
             },
         )
         .await
-        .expect("con scope lee");
-    assert!(!read.content_b64.is_empty(), "leyó algo con scope");
+        .expect("with scope, it reads");
+    assert!(!read.content_b64.is_empty(), "read something with scope");
     let _caps: methods::FsCapabilitiesResult = agent
         .call(
             methods::FS_CAPABILITIES,
@@ -2994,15 +3030,15 @@ async fn agente_sin_scope_no_lee_y_con_scope_si() {
             },
         )
         .await
-        .expect("con scope capabilities");
+        .expect("with scope, capabilities");
 }
 
-/// #80 (bypass CRÍTICO cerrado): `plugin.preview` LEE el archivo con la
-/// autoridad del daemon — sin gate sería la puerta lateral a `fs.read`. Un
-/// agente sin scope no previsualiza; con scope, procede (sin previewer casando
-/// = `None`, no error, pero PASA el gate).
+/// #80 (CRITICAL bypass closed): `plugin.preview` READS the file with the
+/// daemon's authority — without a gate it would be the side door to
+/// `fs.read`. A scopeless agent does not preview; with scope, it proceeds
+/// (no matching previewer = `None`, not an error, but it PASSES the gate).
 #[tokio::test]
-async fn agente_sin_scope_no_preview() {
+async fn a_scopeless_agent_does_not_preview() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/nota.txt", b"secreto").await;
@@ -3019,7 +3055,8 @@ async fn agente_sin_scope_no_preview() {
 
     let human = connected_client(&d).await;
     grant_copy_scope(&agent, &human, "s1").await;
-    // Con scope: pasa el gate (sin previewer instalado → preview None, no error).
+    // With scope: passes the gate (no previewer installed → preview None, not
+    // an error).
     let res: methods::PluginPreviewResult = agent
         .call(
             methods::PLUGIN_PREVIEW,
@@ -3028,14 +3065,14 @@ async fn agente_sin_scope_no_preview() {
             },
         )
         .await
-        .expect("con scope el gate deja pasar");
+        .expect("with scope, the gate lets it through");
     assert!(res.preview.is_none());
 }
 
-/// #80: un HUMANO (User) lee sin scope — no se sandboxea, simetría con las
-/// mutaciones (User = allow-all).
+/// #80: a HUMAN (User) reads with no scope — not sandboxed, symmetric with
+/// mutations (User = allow-all).
 #[tokio::test]
-async fn humano_lee_sin_scope() {
+async fn a_human_reads_with_no_scope() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///x")).await.expect("mkdir");
     write_file(&d.mem, "mem:///x/f.txt", b"hi").await;
@@ -3052,17 +3089,17 @@ async fn humano_lee_sin_scope() {
             },
         )
         .await
-        .expect("humano lista sin scope");
+        .expect("a human lists with no scope");
     assert_eq!(list.entries.len(), 1);
 }
 
-// ---------- #44: connection.degraded (solo humanos) ----------
+// ---------- #44: connection.degraded (humans only) ----------
 
-/// Provider remoto trivial: responde a CUALQUIER path con un directorio. Es el
-/// stand-in de la sesión establecida por el conector falso (mismo criterio que
-/// el `EcoProvider` de `connect.rs`); su único cometido es que el connect
-/// TENGA ÉXITO — el resultado del `fs.stat` no importa, sí que el aviso se haya
-/// difundido antes del response.
+/// A trivial remote provider: answers ANY path with a directory. It is the
+/// stand-in for the session the fake connector establishes (same criterion
+/// as `connect.rs`'s `EcoProvider`); its only job is for the connect to
+/// SUCCEED — the `fs.stat` result does not matter, that the notice was
+/// broadcast before the response does.
 pub(super) struct EcoProvider;
 
 #[async_trait]
@@ -3109,8 +3146,9 @@ impl Provider for EcoProvider {
     }
 }
 
-/// Conector falso que SIEMPRE degrada: cada connect devuelve un provider vivo
-/// ([`EcoProvider`]) más un aviso `TlsAuthRejected` para `backup.example`.
+/// A fake connector that ALWAYS degrades: every connect returns a live
+/// provider ([`EcoProvider`]) plus a `TlsAuthRejected` warning for
+/// `backup.example`.
 pub(super) struct DegradingConnector {
     mem: Arc<MemProvider>,
 }
@@ -3122,8 +3160,8 @@ impl norte_core::connect::RemoteConnector for DegradingConnector {
         scheme: &str,
         _authority: &str,
     ) -> Result<norte_core::connect::Connected, norte_core::connect::DialError> {
-        // El provider vivo responde `stat`; `mem` queda como testigo de que el
-        // conector puede sostener uno propio si hiciera falta.
+        // The live provider answers `stat`; `mem` stays as a witness that the
+        // connector can hold its own if it ever needed to.
         let _ = &self.mem;
         Ok(norte_core::connect::Connected {
             provider: Arc::new(EcoProvider) as Arc<dyn Provider>,
@@ -3147,8 +3185,8 @@ impl norte_core::connect::RemoteConnector for DegradingConnector {
     }
 }
 
-/// Daemon cuyo engine tiene inyectado un [`DegradingConnector`]: cualquier
-/// acceso a `ftp://backup.example/…` establece una sesión degradada.
+/// A daemon whose engine has a [`DegradingConnector`] injected: any access to
+/// `ftp://backup.example/…` establishes a degraded session.
 pub(super) async fn spawn_daemon_degrading() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -3179,37 +3217,38 @@ pub(super) async fn spawn_daemon_degrading() -> TestDaemon {
     }
 }
 
-/// Siguiente `connection.degraded` del stream (ignora otras notifs), con tope.
+/// Next `connection.degraded` in the stream (ignores other notifs), with a cap.
 pub(super) async fn next_degraded(c: &mut Client) -> ConnectionDegraded {
     tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let n = c.notification().await.expect("canal de notifs vivo");
+            let n = c.notification().await.expect("notif channel alive");
             if n.method == methods::CONNECTION_DEGRADED {
                 return serde_json::from_value::<ConnectionDegraded>(
-                    n.params.expect("la notif lleva params"),
+                    n.params.expect("the notif carries params"),
                 )
-                .expect("shape de ConnectionDegraded");
+                .expect("ConnectionDegraded shape");
             }
         }
     })
     .await
-    .expect("connection.degraded llega")
+    .expect("connection.degraded arrives")
 }
 
-/// #44: al degradarse una sesión remota, el humano recibe `connection.degraded`
-/// (scheme/host/reason del vocabulario cerrado); una conexión de agente NO —
-/// es info de seguridad para el usuario, no para el agente (mismo criterio que
-/// `policy.*`).
+/// #44: when a remote session degrades, the human receives
+/// `connection.degraded` (scheme/host/reason from the closed vocabulary); an
+/// agent connection does NOT — it is security info for the user, not for the
+/// agent (same criterion as `policy.*`).
 #[tokio::test]
-async fn degradacion_de_conexion_solo_a_humanos() {
+async fn connection_degradation_only_to_humans() {
     let d = spawn_daemon_degrading().await;
     let mut human = connected_client(&d).await;
     let mut agent = connected_agent(&d, "s1").await;
 
-    // El humano dispara el connect perezoso a la sesión degradada. El aviso se
-    // difunde de forma SÍNCRONA dentro del dispatch, ANTES de escribir el
-    // response de este `fs.stat`: cuando el `call` retorna, el broadcast ya
-    // ocurrió (mismo argumento que `progreso_de_task_humana_no_llega_a_...`).
+    // The human triggers the lazy connect to the degraded session. The notice
+    // is broadcast SYNCHRONOUSLY inside the dispatch, BEFORE writing this
+    // `fs.stat`'s response: by the time `call` returns, the broadcast has
+    // already happened (same argument as
+    // `a_humans_task_progress_does_not_reach_agent_connections`).
     let _stat: FsStatResult = human
         .call(
             methods::FS_STAT,
@@ -3219,7 +3258,7 @@ async fn degradacion_de_conexion_solo_a_humanos() {
             },
         )
         .await
-        .expect("fs.stat dispara el connect degradado");
+        .expect("fs.stat triggers the degraded connect");
 
     let deg = next_degraded(&mut human).await;
     assert_eq!(deg.scheme, "ftp");
@@ -3227,18 +3266,18 @@ async fn degradacion_de_conexion_solo_a_humanos() {
     assert_eq!(deg.reason, "tls-auth-rejected");
     assert_eq!(deg.detail, None);
 
-    // El agente NO la recibe. El broadcast fue síncrono y previo al response ya
-    // recibido: no queda ningún camino diferido que se la entregue tarde → un
-    // tope corto sin frame es robusto (no flaky).
-    let colado = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
+    // The agent does NOT receive it. The broadcast was synchronous and prior
+    // to the response already received: no deferred path is left to deliver
+    // it late → a short cap with no frame is robust (not flaky).
+    let leaked = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
     assert!(
-        colado.is_err(),
-        "un agente no recibe connection.degraded: {colado:?}"
+        leaked.is_err(),
+        "an agent does not receive connection.degraded: {leaked:?}"
     );
 }
 
-/// Conector que SIEMPRE falla con causa contable (#322), y con userinfo en la
-/// authority para probar que no sale.
+/// A connector that ALWAYS fails with an accountable cause (#322), and with
+/// userinfo in the authority to prove it does not leak.
 pub(super) struct FailingConnector;
 
 #[async_trait]
@@ -3270,7 +3309,7 @@ impl norte_core::connect::RemoteConnector for FailingConnector {
     }
 }
 
-/// Daemon cuyo engine no puede conectar con nada remoto.
+/// A daemon whose engine cannot connect to anything remote.
 pub(super) async fn spawn_daemon_failing() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -3299,18 +3338,19 @@ pub(super) async fn spawn_daemon_failing() -> TestDaemon {
     }
 }
 
-/// #322: el humano recibe `connection.failed` con el motivo; el agente NO.
+/// #322: the human receives `connection.failed` with the reason; the agent
+/// does NOT.
 ///
-/// Y cruza el socket de verdad, que es la mitad que ninguna prueba de unidad
-/// cubre: el marco se codifica, se difunde y el SDK del otro lado lo decodea.
-/// Un error de dedo en la comparación del método sería invisible sin esto.
+/// And it crosses a real socket, which is the half no unit test covers: the
+/// frame is encoded, broadcast and the SDK on the other side decodes it. A
+/// typo in the method comparison would be invisible without this.
 #[tokio::test]
-async fn fallo_de_conexion_solo_a_humanos_y_sin_userinfo() {
+async fn connection_failure_only_to_humans_and_with_no_userinfo() {
     let d = spawn_daemon_failing().await;
     let mut human = connected_client(&d).await;
     let mut agent = connected_agent(&d, "s1").await;
 
-    // Con USUARIO en la authority: lo que va delante del `@` no puede salir.
+    // With a USER in the authority: what goes before the `@` must not leak.
     let err = human
         .call::<_, FsStatResult>(
             methods::FS_STAT,
@@ -3320,59 +3360,60 @@ async fn fallo_de_conexion_solo_a_humanos_y_sin_userinfo() {
             },
         )
         .await
-        .expect_err("el connect falla");
+        .expect_err("the connect fails");
     let _ = err;
 
-    let fallo = tokio::time::timeout(Duration::from_secs(5), async {
+    let failure = tokio::time::timeout(Duration::from_secs(5), async {
         loop {
-            let n = human.notification().await.expect("canal de notifs vivo");
+            let n = human.notification().await.expect("notif channel alive");
             if n.method == methods::CONNECTION_FAILED {
                 return serde_json::from_value::<norte_proto::methods::ConnectionFailed>(
-                    n.params.expect("la notif lleva params"),
+                    n.params.expect("the notif carries params"),
                 )
-                .expect("shape de ConnectionFailed");
+                .expect("ConnectionFailed shape");
             }
         }
     })
     .await
-    .expect("connection.failed llega");
+    .expect("connection.failed arrives");
 
-    assert_eq!(fallo.scheme, "sftp");
+    assert_eq!(failure.scheme, "sftp");
     assert_eq!(
-        fallo.host, "maquina.example",
-        "el userinfo NO sale (regla 10)"
+        failure.host, "maquina.example",
+        "the userinfo does NOT leak (rule 10)"
     );
-    assert!(!fallo.host.contains('@'), "ni rastro de alice");
-    assert_eq!(fallo.reason, "secret-empty");
-    assert_eq!(fallo.conn.as_deref(), Some("rosetta"));
-    assert!(fallo.detail.is_some());
+    assert!(!failure.host.contains('@'), "not a trace of alice");
+    assert_eq!(failure.reason, "secret-empty");
+    assert_eq!(failure.conn.as_deref(), Some("rosetta"));
+    assert!(failure.detail.is_some());
 
-    // El agente no la recibe: es una frase para leer, y un agente decide por
-    // categoría — que ya le llega en el error de su operación.
-    let colado = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
+    // The agent does not receive it: it is a sentence to read, and an agent
+    // decides by category — which already reaches it in its operation's
+    // error.
+    let leaked = tokio::time::timeout(Duration::from_millis(200), agent.notification()).await;
     assert!(
-        colado.is_err(),
-        "un agente no recibe connection.failed: {colado:?}"
+        leaked.is_err(),
+        "an agent does not receive connection.failed: {leaked:?}"
     );
 }
 
-/// **`ai.rename_plan` le contesta lo MISMO a un agente pase lo que pase**
-/// (#122): la IA es solo del humano, y el gate va ANTES del parseo.
+/// **`ai.rename_plan` answers an agent the SAME no matter what** (#122): AI is
+/// human-only, and the gate goes BEFORE parsing.
 ///
-/// Antes contestaba `out-of-scope` a quien estaba fuera y `not-approved` a
-/// quien estaba dentro, y comprobaba el tamaño de la instrucción y la validez
-/// de los params antes que nada. O sea que un método VEDADO respondía cosas
-/// distintas según lo que el agente mandara: eso es un oráculo sobre el árbol
-/// del humano —«¿existe este directorio?», «¿lo cubre mi scope?»— servido por
-/// una puerta que se supone cerrada.
+/// It used to answer `out-of-scope` to whoever was outside and `not-approved`
+/// to whoever was inside, and checked the instruction's size and the params'
+/// validity before anything else. So a FORBIDDEN method answered different
+/// things depending on what the agent sent: that is an oracle about the
+/// human's tree — "does this directory exist?", "does my scope cover it?" —
+/// served through a door that is supposed to be closed.
 ///
-/// Se afirman los dos agentes juntos a propósito: lo que hay que sostener no
-/// es una categoría concreta, es que **las dos respuestas sean iguales**.
+/// Both agents are asserted together on purpose: what has to hold is not a
+/// specific category, it is that **the two answers are the same**.
 #[tokio::test]
-async fn ai_rename_plan_le_dice_lo_mismo_a_todo_agente() {
+async fn ai_rename_plan_tells_every_agent_the_same_thing() {
     let d = spawn_daemon_policy().await;
-    let sin_scope = connected_agent(&d, "s1").await;
-    let err_sin = sin_scope
+    let no_scope = connected_agent(&d, "s1").await;
+    let err_without = no_scope
         .call::<_, methods::AiRenamePlanResult>(
             methods::AI_RENAME_PLAN,
             &methods::AiRenamePlanParams {
@@ -3382,12 +3423,12 @@ async fn ai_rename_plan_le_dice_lo_mismo_a_todo_agente() {
             },
         )
         .await
-        .expect_err("agente denegado");
+        .expect_err("agent denied");
 
-    // El mismo agente, ahora CON scope de lectura vivo sobre otro directorio.
+    // The same agent, now WITH a live read scope over another directory.
     let human = connected_client(&d).await;
-    grant_copy_scope(&sin_scope, &human, "s1").await;
-    let err_con = sin_scope
+    grant_copy_scope(&no_scope, &human, "s1").await;
+    let err_with = no_scope
         .call::<_, methods::AiRenamePlanResult>(
             methods::AI_RENAME_PLAN,
             &methods::AiRenamePlanParams {
@@ -3397,27 +3438,27 @@ async fn ai_rename_plan_le_dice_lo_mismo_a_todo_agente() {
             },
         )
         .await
-        .expect_err("agente denegado igual");
+        .expect_err("agent denied the same");
 
-    for (quien, err) in [("sin scope", err_sin), ("con scope", err_con)] {
+    for (who, err) in [("no scope", err_without), ("with scope", err_with)] {
         match err {
             ClientError::Rpc(rpc) => assert!(
                 matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
-                "[{quien}] tenía que ser `not-approved` y fue {:?}",
+                "[{who}] had to be `not-approved` and was {:?}",
                 rpc.data
             ),
-            other => panic!("[{quien}] esperaba Rpc, fue {other:?}"),
+            other => panic!("[{who}] expected Rpc, got {other:?}"),
         }
     }
 }
 
-/// MINOR-1 (security review M4-IA): la IA es SOLO para el humano — un agente
-/// CON scope de lectura VIVO pasa el `read_gate` pero se deniega igualmente
-/// (`not-approved`, vocabulario cerrado): no quema cuota del proveedor ni
-/// empuja basenames + instrucción fuera de la máquina sin rastro (el path de
-/// lectura no journaliza).
+/// MINOR-1 (security review M4-IA): AI is human-ONLY — an agent WITH a live
+/// read scope passes `read_gate` but is denied just the same
+/// (`not-approved`, closed vocabulary): it does not burn the provider's quota
+/// nor push basenames + instruction off the machine with no trace (the read
+/// path does not journal).
 #[tokio::test]
-async fn agente_con_scope_tampoco_puede_ai_rename_plan() {
+async fn an_agent_with_scope_still_cannot_ai_rename_plan() {
     let d = spawn_daemon_policy().await;
     let agent = connected_agent(&d, "s1").await;
     let human = connected_client(&d).await;
@@ -3432,28 +3473,28 @@ async fn agente_con_scope_tampoco_puede_ai_rename_plan() {
             },
         )
         .await
-        .expect_err("agente con scope: la IA sigue vedada");
+        .expect_err("agent with scope: AI is still forbidden");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
-            "PolicyDenied not-approved, fue {:?}",
+            "PolicyDenied not-approved, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
 // ---------- index.embed / index.search_semantic (M4-IA-2) ----------
 
-/// Daemon con índice en memoria + proveedor de embeddings fake (M4-IA-2):
-/// `[ai]` habilitado con un proveedor `fake` declarado como `embed_provider`.
-/// `delay` retrasa cada `embed` para dejar la request EN VUELO (rpc.cancel).
+/// A daemon with an in-memory index + a fake embeddings provider (M4-IA-2):
+/// `[ai]` enabled with a `fake` provider declared as `embed_provider`.
+/// `delay` delays every `embed` to leave the request IN FLIGHT (rpc.cancel).
 pub(super) async fn spawn_daemon_embed(delay: Option<Duration>) -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let index = norte_core::Index::open_memory()
         .await
-        .expect("index memoria");
+        .expect("in-memory index");
     let engine = Arc::new(Engine::new().with_index(Arc::new(index)));
     let mem = Arc::new(MemProvider::new());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
@@ -3494,22 +3535,22 @@ pub(super) async fn spawn_daemon_embed(delay: Option<Duration>) -> TestDaemon {
     }
 }
 
-/// M4-IA-2 security: los embeddings son SOLO para el humano — una conexión de
-/// agente ve `PolicyDenied not-approved` en `index.embed` Y en
-/// `index.search_semantic` ANTES de cualquier gate de lectura o engine (los
-/// prefijos de contenido / la query saldrían del proceso, mismo criterio que
+/// M4-IA-2 security: embeddings are human-ONLY — an agent connection sees
+/// `PolicyDenied not-approved` on `index.embed` AND on
+/// `index.search_semantic` BEFORE any read gate or engine (the content
+/// prefixes / the query would leave the process, the same criterion as
 /// `ai.rename_plan`).
 #[tokio::test]
-async fn agente_no_puede_embed_ni_semantic() {
+async fn an_agent_cannot_embed_nor_semantic() {
     let d = spawn_daemon_embed(None).await;
     let agent = connected_agent(&d, "s1").await;
     let assert_not_approved = |err: ClientError| match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
-            "PolicyDenied not-approved, fue {:?}",
+            "PolicyDenied not-approved, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     };
     let err = agent
         .call::<_, FsTaskResult>(
@@ -3519,7 +3560,7 @@ async fn agente_no_puede_embed_ni_semantic() {
             },
         )
         .await
-        .expect_err("agente: index.embed vedado");
+        .expect_err("agent: index.embed forbidden");
     assert_not_approved(err);
     let err = agent
         .call::<_, methods::IndexSearchSemanticResult>(
@@ -3531,29 +3572,30 @@ async fn agente_no_puede_embed_ni_semantic() {
             },
         )
         .await
-        .expect_err("agente: index.search_semantic vedado");
+        .expect_err("agent: index.search_semantic forbidden");
     assert_not_approved(err);
 }
 
-/// El veto al agente precede al PARSEO de params (security audit M4-IA-2): con
-/// params MALFORMADOS la respuesta sigue siendo `PolicyDenied not-approved` y
-/// nunca `INVALID_PARAMS`. Así el agente no distingue "schema malo" de
-/// "vedado" — nada de lo que envía cambia lo que ve.
+/// The veto to an agent precedes the PARSING of params (security audit
+/// M4-IA-2): with MALFORMED params the response is still
+/// `PolicyDenied not-approved`, never `INVALID_PARAMS`. So the agent cannot
+/// distinguish "bad schema" from "forbidden" — nothing it sends changes what
+/// it sees.
 #[tokio::test]
-async fn agente_con_params_malformados_ve_policy_denied_no_invalid_params() {
+async fn an_agent_with_malformed_params_sees_policy_denied_not_invalid_params() {
     let d = spawn_daemon_embed(None).await;
     let agent = connected_agent(&d, "s1").await;
     let assert_not_approved = |err: ClientError| match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"),
-            "PolicyDenied not-approved (nunca INVALID_PARAMS), fue {rpc:?}"
+            "PolicyDenied not-approved (never INVALID_PARAMS), was {rpc:?}"
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     };
     let err = agent
         .call::<_, serde_json::Value>(methods::INDEX_EMBED, &serde_json::json!({ "root": 42 }))
         .await
-        .expect_err("agente: index.embed vedado pese a params malos");
+        .expect_err("agent: index.embed forbidden despite bad params");
     assert_not_approved(err);
     let err = agent
         .call::<_, serde_json::Value>(
@@ -3561,19 +3603,19 @@ async fn agente_con_params_malformados_ve_policy_denied_no_invalid_params() {
             &serde_json::json!({ "query": [] }),
         )
         .await
-        .expect_err("agente: index.search_semantic vedado pese a params malos");
+        .expect_err("agent: index.search_semantic forbidden despite bad params");
     assert_not_approved(err);
 }
 
-/// #80: `fs.rename_batch_plan` es una LECTURA de directorio disfrazada — sus
-/// veredictos dicen qué nombres existen —, así que pasa por el mismo
-/// `read_gate` que `fs.list`. Un agente sin scope recibe `PolicyDenied`, jamás
-/// un plan, y jamás la diferencia entre «ese fichero está» y «no está».
+/// #80: `fs.rename_batch_plan` is a directory READ in disguise — its
+/// verdicts say which names exist —, so it goes through the same `read_gate`
+/// as `fs.list`. A scopeless agent gets `PolicyDenied`, never a plan, and
+/// never the difference between "that file is there" and "it is not".
 #[tokio::test]
-async fn agente_sin_scope_no_puede_rename_batch_plan() {
+async fn a_scopeless_agent_cannot_rename_batch_plan() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
-    write_file(&d.mem, "mem:///proj/secreto.txt", b"x").await;
+    write_file(&d.mem, "mem:///proj/secret.txt", b"x").await;
     let agent = connected_agent(&d, "s1").await;
 
     let err = agent
@@ -3581,109 +3623,109 @@ async fn agente_sin_scope_no_puede_rename_batch_plan() {
             methods::FS_RENAME_BATCH_PLAN,
             &methods::FsRenameBatchPlanParams {
                 dir: vp("mem:///proj"),
-                pairs: vec![pair(b"secreto.txt", b"otro.txt")],
+                pairs: vec![pair(b"secret.txt", b"other.txt")],
             },
         )
         .await
-        .expect_err("agente sin scope denegado");
+        .expect_err("scopeless agent denied");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 
-    // Y el veredicto es el MISMO para un nombre que no existe: el error no
-    // distingue lo que hay dentro del directorio de lo que no.
+    // And the verdict is the SAME for a name that does not exist: the error
+    // does not distinguish what is inside the directory from what is not.
     let err = agent
         .call::<_, methods::FsRenameBatchPlanResult>(
             methods::FS_RENAME_BATCH_PLAN,
             &methods::FsRenameBatchPlanParams {
                 dir: vp("mem:///proj"),
-                pairs: vec![pair(b"no-existe.txt", b"otro.txt")],
+                pairs: vec![pair(b"does-not-exist.txt", b"other.txt")],
             },
         )
         .await
-        .expect_err("agente sin scope denegado");
+        .expect_err("scopeless agent denied");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
 }
 
-/// #80 en el gemelo que MUTA, que es donde el oráculo era peor: ejecutar
-/// empieza por planificar, y el `plan_hash` es determinista y calculable
-/// offline — sin este gate, un agente sin scope mandaría el hash de la
-/// hipótesis «X existe» y distinguiría la denegación (existía) de `PlanStale`
-/// (no existía), un bit exacto por petición. Con él, las CUATRO combinaciones
-/// (directorio que está / que no está, hash que casa / que no) contestan lo
-/// mismo.
+/// #80 on the twin that MUTATES, which is where the oracle was worse:
+/// executing starts by planning, and `plan_hash` is deterministic and
+/// computable offline — without this gate, a scopeless agent would send the
+/// hash of the hypothesis "X exists" and would distinguish the denial (it
+/// existed) from `PlanStale` (it did not), an exact bit per request. With it,
+/// all FOUR combinations (directory present / absent, hash matching / not)
+/// answer the same thing.
 #[tokio::test]
-async fn agente_sin_scope_no_puede_rename_batch_ni_como_oraculo() {
+async fn a_scopeless_agent_cannot_rename_batch_nor_use_it_as_an_oracle() {
     let d = spawn_daemon_policy().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
-    write_file(&d.mem, "mem:///proj/secreto.txt", b"x").await;
+    write_file(&d.mem, "mem:///proj/secret.txt", b"x").await;
     let agent = connected_agent(&d, "s1").await;
 
-    let ceros = methods::PlanHash::parse(&"0".repeat(64)).expect("hash");
-    let unos = methods::PlanHash::parse(&"1".repeat(64)).expect("hash");
-    let casos = [
-        // (directorio, nombre de origen): existe/no existe, en las dos
-        // combinaciones que el oráculo usaría para separar los mundos.
-        (vp("mem:///proj"), b"secreto.txt".to_vec()),
-        (vp("mem:///proj"), b"no-existe.txt".to_vec()),
-        (vp("mem:///no-hay"), b"secreto.txt".to_vec()),
+    let zeros = methods::PlanHash::parse(&"0".repeat(64)).expect("hash");
+    let ones = methods::PlanHash::parse(&"1".repeat(64)).expect("hash");
+    let cases = [
+        // (directory, source name): exists/does not exist, in the two
+        // combinations the oracle would use to tell the worlds apart.
+        (vp("mem:///proj"), b"secret.txt".to_vec()),
+        (vp("mem:///proj"), b"does-not-exist.txt".to_vec()),
+        (vp("mem:///no-such-dir"), b"secret.txt".to_vec()),
     ];
-    let mut respuestas = Vec::new();
-    for (dir, from) in casos {
-        for hash in [&ceros, &unos] {
+    let mut responses = Vec::new();
+    for (dir, from) in cases {
+        for hash in [&zeros, &ones] {
             let err = agent
                 .call::<_, FsTaskResult>(
                     methods::FS_RENAME_BATCH,
                     &methods::FsRenameBatchParams {
                         dir: dir.clone(),
-                        pairs: vec![pair(&from, b"otro.txt")],
+                        pairs: vec![pair(&from, b"other.txt")],
                         plan_hash: hash.clone(),
                     },
                 )
                 .await
-                .expect_err("agente sin scope denegado");
+                .expect_err("scopeless agent denied");
             match err {
                 ClientError::Rpc(rpc) => {
                     assert!(
                         matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-                        "PolicyDenied out-of-scope, fue {:?}",
+                        "PolicyDenied out-of-scope, was {:?}",
                         rpc.data
                     );
-                    respuestas.push((rpc.code, rpc.message));
+                    responses.push((rpc.code, rpc.message));
                 }
-                other => panic!("esperaba Rpc, fue {other:?}"),
+                other => panic!("expected Rpc, got {other:?}"),
             }
         }
     }
     assert!(
-        respuestas.windows(2).all(|w| w[0] == w[1]),
-        "las seis respuestas tienen que ser LA MISMA: {respuestas:?}",
+        responses.windows(2).all(|w| w[0] == w[1]),
+        "all six responses have to be THE SAME: {responses:?}",
     );
-    // Y no se tocó nada.
-    assert!(d.mem.stat(&vp("mem:///proj/secreto.txt")).await.is_ok());
+    // And nothing was touched.
+    assert!(d.mem.stat(&vp("mem:///proj/secret.txt")).await.is_ok());
 }
 
-/// Un agente puede LEER los dos árboles (su scope los cubre: `covers_read` es
-/// membresía de raíz, sin mirar la op) y por tanto puede PLANIFICAR — pero
-/// aplicar escribe, y su scope no trae `copy`. El gate corre sobre las raíces
-/// que salen del plan, al aplicar, y deniega.
+/// An agent can READ both trees (its scope covers them: `covers_read` is root
+/// membership, without looking at the op) and can therefore PLAN — but
+/// applying writes, and its scope does not carry `copy`. The gate runs over
+/// the roots that come out of the plan, on apply, and denies.
 ///
-/// Que planifique y no pueda aplicar es exactamente el reparto que se busca: el
-/// plan no muta nada, la aplicación sí.
+/// That it can plan but not apply is exactly the split being sought: the
+/// plan mutates nothing, applying does.
 #[tokio::test]
-async fn aplicar_sin_permiso_de_escritura_sobre_el_destino_se_deniega() {
+async fn applying_with_no_write_permission_on_the_destination_is_denied() {
     let d = spawn_daemon_journal().await;
     d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
     d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
@@ -3691,8 +3733,8 @@ async fn aplicar_sin_permiso_de_escritura_sobre_el_destino_se_deniega() {
 
     let human = connected_client(&d).await;
     let mut agent = connected_agent(&d, "s-sync").await;
-    // Scope sobre la raíz de los dos árboles, pero SOLO para `mkdir`: leer entra
-    // (la lectura es membresía de raíz), copiar no.
+    // Scope over the root of both trees, but ONLY for `mkdir`: reading is in
+    // (reading is root membership), copying is not.
     let req: RequestScopeResult = agent
         .call(
             methods::POLICY_REQUEST_SCOPE,
@@ -3718,10 +3760,10 @@ async fn aplicar_sin_permiso_de_escritura_sobre_el_destino_se_deniega() {
     let task: FsTaskResult = agent
         .call(methods::SYNC_PLAN, &sync_params("mem:///s", "mem:///d"))
         .await
-        .expect("planificar es leer, y leer sí puede");
+        .expect("planning is reading, and reading it can");
     let (_batches, done, state) = drain_sync(&mut agent, task.task_id.get()).await;
     assert_eq!(state, TaskState::Completed);
-    let done = done.expect("el plan cerró");
+    let done = done.expect("the plan closed");
 
     let err = agent
         .call::<_, FsTaskResult>(
@@ -3731,34 +3773,34 @@ async fn aplicar_sin_permiso_de_escritura_sobre_el_destino_se_deniega() {
             },
         )
         .await
-        .expect_err("escribir no está en su scope");
+        .expect_err("writing is not in its scope");
     match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(rpc.data, Some(Error::PolicyDenied { ref rule }) if rule == "out-of-scope"),
-            "PolicyDenied out-of-scope, fue {:?}",
+            "PolicyDenied out-of-scope, was {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     }
-    // Y el destino sigue vacío: el gate corre ANTES de tocar un byte.
+    // And the destination stays empty: the gate runs BEFORE touching a byte.
     assert!(
         d.mem.stat(&vp("mem:///d/a.txt")).await.is_err(),
-        "un plan denegado no escribe"
+        "a denied plan writes nothing"
     );
 }
 
-/// Un agente no tiene pantalla que guardar: `session.*` es `INVALID_REQUEST`,
-/// el mismo criterio que `daemon.shutdown` y `policy.pending`.
+/// An agent has no screen to save: `session.*` is `INVALID_REQUEST`, the same
+/// criterion as `daemon.shutdown` and `policy.pending`.
 #[tokio::test]
-async fn session_es_de_humanos() {
+async fn session_is_human_only() {
     let d = spawn_daemon(None).await;
-    let agente = connected_agent(&d, "a1").await;
-    let err = agente
+    let agent = connected_agent(&d, "a1").await;
+    let err = agent
         .call::<_, methods::SessionGetResult>(methods::SESSION_GET, &serde_json::json!({}))
         .await
-        .expect_err("un agente no lee la pantalla de nadie");
+        .expect_err("an agent does not read anyone's screen");
     assert_rpc_code(&err, codes::INVALID_REQUEST);
-    let err = agente
+    let err = agent
         .call::<_, methods::SessionPutResult>(
             methods::SESSION_PUT,
             &methods::SessionPutParams {
@@ -3768,102 +3810,102 @@ async fn session_es_de_humanos() {
             },
         )
         .await
-        .expect_err("ni la escribe");
+        .expect_err("nor does it write it");
     assert_rpc_code(&err, codes::INVALID_REQUEST);
 }
 
-/// Un agente no lee el registro del daemon: lleva rutas, nombres de conexión y
-/// actividad de OTRAS sesiones, o sea un oráculo de existencia fuera de su
-/// scope. Y se le dice que está vedado, no que está vacío.
+/// An agent does not read the daemon's log: it carries paths, connection
+/// names and activity of OTHER sessions — an existence oracle outside its
+/// scope. And it is told it is forbidden, not that it is empty.
 ///
-/// Con anillo montado a propósito: así lo que refusa es el gate de actor y no
-/// la ausencia de registro, que contestaría otra cosa.
+/// With the ring deliberately mounted: that way what refuses is the actor
+/// gate and not the absence of a log, which would answer something else.
 #[tokio::test]
-async fn un_agente_no_lee_el_registro() {
-    let (d, anillo) = spawn_daemon_con_anillo().await;
-    let _guard = hacia_el_anillo(&anillo);
+async fn an_agent_does_not_read_the_log() {
+    let (d, ring) = spawn_daemon_with_ring().await;
+    let _guard = toward_the_ring(&ring);
     let agent = connected_agent(&d, "a1").await;
 
-    let vedado = |err: ClientError| match err {
+    let forbidden = |err: ClientError| match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(
                 rpc.data,
                 Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
             ),
-            "vedado, no vacío ni mal-formado: {:?}",
+            "forbidden, not empty nor malformed: {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     };
 
-    // Y pase lo que pase con los params: el gate corre ANTES del parseo, así
-    // que un agente no distingue «vedado» de «params malos» fuzzeando su
-    // propia petición — ni siquiera el `max: 0` que a un humano le daría
+    // And whatever happens with the params: the gate runs BEFORE parsing, so
+    // an agent cannot distinguish "forbidden" from "bad params" by fuzzing
+    // its own request — not even the `max: 0` that would give a human
     // INVALID_PARAMS.
     for params in [
         serde_json::json!({ "cursor": null, "max": 10 }),
         serde_json::json!({ "max": 0 }),
-        serde_json::json!({ "algo": "que no existe" }),
+        serde_json::json!({ "something": "that does not exist" }),
         serde_json::Value::Null,
     ] {
-        vedado(
+        forbidden(
             agent
                 .call::<_, methods::LogTailResult>(methods::LOG_TAIL, &params)
                 .await
-                .expect_err("un agente no lee el registro"),
+                .expect_err("an agent does not read the log"),
         );
     }
-    vedado(
+    forbidden(
         agent
             .call::<_, methods::LogLevelResult>(
                 methods::LOG_LEVEL,
                 &serde_json::json!({ "level": "debug" }),
             )
             .await
-            .expect_err("un agente no sube la verbosidad de un trabajo ajeno"),
+            .expect_err("an agent does not raise the verbosity of someone else's job"),
     );
 }
 
-/// Un agente no lee la línea de tiempo NI deshace hasta un punto (fase 7).
+/// An agent does not read the timeline NOR undo to a point (phase 7).
 ///
-/// El journal es la lista completa de lo que se ha tocado en la máquina, con
-/// origen y destino: para un agente con scope acotado es un oráculo de
-/// existencia sobre todo lo que hay fuera de su recinto, y además le enseña
-/// lo que hicieron las demás sesiones. Y `undo_after` revierte trabajo del
-/// HUMANO — un agente que pudiera pedirlo borraría la huella de lo suyo.
+/// The journal is the complete list of everything touched on the machine,
+/// with source and destination: for an agent with a bounded scope it is an
+/// existence oracle over everything outside its enclosure, and it also shows
+/// what the other sessions did. And `undo_after` reverts the HUMAN's work —
+/// an agent that could request it would erase the trace of its own actions.
 ///
-/// Se comprueba lo mismo que en el registro y por el mismo motivo: que está
-/// VEDADO y no vacío, y que el gate corre ANTES del parseo, para que un
-/// agente no pueda distinguir «prohibido» de «params malos» probando formas.
+/// The same thing is checked as in the log and for the same reason: that it
+/// is FORBIDDEN and not empty, and that the gate runs BEFORE parsing, so an
+/// agent cannot distinguish "forbidden" from "bad params" by probing shapes.
 #[tokio::test]
-async fn un_agente_no_lee_la_linea_de_tiempo_ni_deshace() {
+async fn an_agent_does_not_read_the_timeline_nor_undo() {
     let d = spawn_daemon(None).await;
     let agent = connected_agent(&d, "a1").await;
 
-    let vedado = |err: ClientError| match err {
+    let forbidden = |err: ClientError| match err {
         ClientError::Rpc(rpc) => assert!(
             matches!(
                 rpc.data,
                 Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved"
             ),
-            "vedado, no vacío ni mal-formado: {:?}",
+            "forbidden, not empty nor malformed: {:?}",
             rpc.data
         ),
-        other => panic!("esperaba Rpc, fue {other:?}"),
+        other => panic!("expected Rpc, got {other:?}"),
     };
 
     for params in [
         serde_json::json!({ "limit": 10 }),
         serde_json::json!({ "limit": 0 }),
         serde_json::json!({ "before_seq": 3, "limit": 5, "actor_kind": "user" }),
-        serde_json::json!({ "algo": "que no existe" }),
+        serde_json::json!({ "something": "that does not exist" }),
         serde_json::Value::Null,
     ] {
-        vedado(
+        forbidden(
             agent
                 .call::<_, methods::JournalListResult>(methods::JOURNAL_LIST, &params)
                 .await
-                .expect_err("un agente no lee el journal"),
+                .expect_err("an agent does not read the journal"),
         );
     }
 
@@ -3872,23 +3914,24 @@ async fn un_agente_no_lee_la_linea_de_tiempo_ni_deshace() {
         serde_json::json!({ "seq": -1 }),
         serde_json::Value::Null,
     ] {
-        vedado(
+        forbidden(
             agent
                 .call::<_, methods::PolicyUndoSessionResult>(methods::JOURNAL_UNDO_AFTER, &params)
                 .await
-                .expect_err("un agente no deshace el trabajo del humano"),
+                .expect_err("an agent does not undo the human's work"),
         );
     }
 }
 
-/// #294 — el SDK RETIENE la versión que el peer declaró en el handshake.
+/// #294 — the SDK RETAINS the version the peer declared during the handshake.
 ///
-/// Sin ella un cliente no puede saber que la comprobación que acaba de pedir
-/// no se hizo: manda `expected_digest` (#282), un daemon viejo lo ignora como
-/// manda ADR 0004, concede sin comprobar, y nada se lo dice. El
-/// `InitializeResult` se tiraba, que es una respuesta ya pagada.
+/// Without it a client cannot know that the check it just requested was not
+/// performed: it sends `expected_digest` (#282), an old daemon ignores it as
+/// ADR 0004 dictates, grants without checking, and nothing tells the client.
+/// The `InitializeResult` was being discarded, and it is an answer already
+/// paid for.
 #[tokio::test]
-async fn el_sdk_retiene_la_version_del_peer() {
+async fn the_sdk_retains_the_peers_version() {
     let d = spawn_daemon_plugins().await;
     let backend = norte_client::RemoteBackend::connect(
         d.socket.clone(),
@@ -3899,22 +3942,22 @@ async fn el_sdk_retiene_la_version_del_peer() {
         },
     )
     .await
-    .expect("conecta");
+    .expect("connects");
 
     assert_eq!(
         backend.peer_protocol_version().as_deref(),
         Some(norte_proto::PROTOCOL_VERSION),
-        "la versión del handshake es la que el daemon declara"
+        "the handshake version is the one the daemon declares"
     );
 
-    // Y con ella el ancla SÍ se manda: este daemon la entiende.
+    // And with it the anchor IS sent: this daemon understands it.
     let list = backend.plugins_list().await.expect("plugin.list");
-    let ancla = list.plugins[0]
+    let anchor = list.plugins[0]
         .manifest_digest
         .clone()
-        .expect("el catálogo trae el ancla");
+        .expect("the catalog carries the anchor");
     backend
-        .plugins_set_approval("org.norte.demo", true, Some(&ancla))
+        .plugins_set_approval("org.norte.demo", true, Some(&anchor))
         .await
-        .expect("un peer 0.53 comprueba el ancla y concede");
+        .expect("a 0.53 peer checks the anchor and grants");
 }

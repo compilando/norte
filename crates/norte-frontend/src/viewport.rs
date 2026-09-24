@@ -1,37 +1,36 @@
-//! La ventana visible de una lista larga, y la única regla que la mueve.
+//! The visible window of a long list, and the one rule that moves it.
 //!
-//! Vive aparte porque la comparten TRES listas —el listado de ficheros, el
-//! panel de diferencias y los pasos de un plan de sincronización— y las tres
-//! tenían el mismo defecto: el desplazamiento se deducía del cursor
-//! (`selected - (alto-1)`), así que pasada la primera pantalla el cursor
-//! quedaba clavado en la última fila y el contenido se movía en cada
-//! pulsación. Una regla escrita tres veces es una regla que se arregla una vez
-//! y sigue mal en las otras dos.
+//! It lives apart because THREE lists share it — the file listing, the diff
+//! pane and a sync plan's steps — and all three had the same defect: the
+//! scroll offset was derived from the cursor (`selected - (height-1)`), so
+//! past the first screen the cursor stayed PINNED to the last row and the
+//! content moved on every keystroke. A rule written three times is a rule
+//! that gets fixed once and stays wrong in the other two.
 
-/// La ventana que hay que pintar: la anterior, arrastrada lo justo para que
-/// `cursor` quepa.
+/// The window that must be painted: the previous one, dragged just enough for
+/// `cursor` to fit.
 ///
-/// Pura y probada aparte porque es la regla entera: el cursor se mueve DENTRO
-/// de la ventana, y solo cuando se sale la ventana le sigue, una fila por
-/// fila. Los dos clamps de después importan tanto como eso — una ventana que
-/// sobrevive a un listado más corto enseñaría blanco debajo de filas que
-/// existen.
+/// Pure and tested apart because it is the whole rule: the cursor moves
+/// INSIDE the window, and only when it steps outside does the window follow
+/// it, one row at a time. The two clamps below matter just as much — a window
+/// that survives a shorter list would paint blank space below rows that
+/// exist.
 #[must_use]
-pub fn sticky_offset(previo: usize, cursor: usize, total: usize, rows: usize) -> usize {
+pub fn sticky_offset(previous: usize, cursor: usize, total: usize, rows: usize) -> usize {
     if rows == 0 || total == 0 {
         return 0;
     }
-    // Nunca más allá de lo que hay: al encoger el listado (o crecer la
-    // terminal) la ventana se re-encuadra sin tocar el cursor.
-    let tope = total.saturating_sub(rows);
-    let mut off = previo.min(tope);
+    // Never past what there is: when the list shrinks (or the terminal
+    // grows) the window re-frames itself without touching the cursor.
+    let cap = total.saturating_sub(rows);
+    let mut off = previous.min(cap);
     let cursor = cursor.min(total - 1);
     if cursor < off {
-        // Se salió por arriba: la ventana empieza en él.
+        // Stepped out above: the window starts at it.
         off = cursor;
     } else if cursor >= off + rows {
-        // Por abajo: él queda en la ÚLTIMA fila, que es lo que hace que bajar
-        // desde el borde mueva exactamente una fila.
+        // Below: it lands on the LAST row, which is what makes moving down
+        // from the edge shift exactly one row.
         off = cursor + 1 - rows;
     }
     off
@@ -41,43 +40,47 @@ pub fn sticky_offset(previo: usize, cursor: usize, total: usize, rows: usize) ->
 mod tests {
     use super::*;
 
-    /// #108 L7: `set_sort` re-ordena en sitio, re-ancla el cursor por PATH
-    /// y no toca las marcas (van por identidad); `extend` bajo el spec
-    /// activo mergea en el orden nuevo.
-    /// La ventana pegajosa, que es la regla entera del scroll del listado.
+    /// #108 L7: `set_sort` re-sorts in place, re-anchors the cursor by PATH
+    /// and does not touch the marks (they go by identity); `extend` under the
+    /// active spec merges into the new order.
+    // TODO(translation): review — this line does not describe the test below
+    // it (sticky_offset has nothing to do with set_sort/marks); kept as
+    // found, translated as is.
+    /// The sticky window, which is the whole rule for the listing's scroll.
     ///
-    /// Lo que se rompió y por qué se nota: el offset se deducía del cursor
-    /// (`selected - (alto-1)`), o sea que pasada la primera pantalla el cursor
-    /// vivía CLAVADO en la última fila y cada pulsación movía el contenido.
-    /// Al volver hacia arriba la lista bajaba con él y el cursor no se
-    /// despegaba nunca del borde — que es exactamente lo que se siente raro.
+    /// What broke and why it is noticeable: the offset was derived from the
+    /// cursor (`selected - (height-1)`), meaning that past the first screen
+    /// the cursor lived PINNED to the last row and every keystroke moved the
+    /// content. Scrolling back up, the list came down with it and the cursor
+    /// never came unstuck from the edge — which is exactly what feels wrong.
     #[test]
-    fn la_ventana_solo_se_mueve_cuando_el_cursor_toca_un_borde() {
-        // Diez filas de ventana sobre cien.
-        // Bajar DENTRO no la mueve.
+    fn window_only_moves_when_the_cursor_touches_an_edge() {
+        // Ten rows of window over a hundred.
+        // Moving down INSIDE does not move it.
         assert_eq!(sticky_offset(0, 5, 100, 10), 0);
-        assert_eq!(sticky_offset(0, 9, 100, 10), 0, "la última fila visible");
-        // Tocar el borde inferior la mueve UNA fila.
+        assert_eq!(sticky_offset(0, 9, 100, 10), 0, "the last visible row");
+        // Touching the bottom edge moves it ONE row.
         assert_eq!(sticky_offset(0, 10, 100, 10), 1);
-        // Y subir dentro de la ventana tampoco la mueve: el cursor sube solo.
+        // And moving up inside the window does not move it either: the
+        // cursor moves up on its own.
         assert_eq!(sticky_offset(20, 25, 100, 10), 20);
-        assert_eq!(sticky_offset(20, 20, 100, 10), 20, "la primera visible");
-        // Hasta tocar el borde superior.
+        assert_eq!(sticky_offset(20, 20, 100, 10), 20, "the first visible row");
+        // Until it touches the top edge.
         assert_eq!(sticky_offset(20, 19, 100, 10), 19);
-        // Un salto largo (Home/End, un hit de búsqueda) reencuadra de golpe.
+        // A long jump (Home/End, a search hit) re-frames in one go.
         assert_eq!(sticky_offset(20, 0, 100, 10), 0);
         assert_eq!(sticky_offset(20, 99, 100, 10), 90);
     }
 
-    /// Y no sobrevive a un listado que encoge ni a una terminal que crece: una
-    /// ventana más allá del final pinta blanco debajo de filas que existen.
+    /// And it does not survive a list that shrinks or a terminal that grows:
+    /// a window past the end paints blank space below rows that exist.
     #[test]
-    fn la_ventana_se_reencuadra_sin_mover_el_cursor() {
-        // El listado pasa de 100 a 12 filas con la ventana en 90.
-        assert_eq!(sticky_offset(90, 5, 12, 10), 2, "tope = total - alto");
-        // La terminal crece: cabe todo y no hay nada que desplazar.
+    fn window_reframes_without_moving_the_cursor() {
+        // The list goes from 100 to 12 rows with the window at 90.
+        assert_eq!(sticky_offset(90, 5, 12, 10), 2, "cap = total - height");
+        // The terminal grows: everything fits and there is nothing to shift.
         assert_eq!(sticky_offset(90, 5, 12, 20), 0);
-        // Casos límite: sin filas o sin ventana, no hay desplazamiento.
+        // Edge cases: no rows or no window, no offset.
         assert_eq!(sticky_offset(7, 3, 0, 10), 0);
         assert_eq!(sticky_offset(7, 3, 100, 0), 0);
     }

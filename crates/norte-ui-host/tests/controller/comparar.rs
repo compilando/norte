@@ -1,18 +1,18 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Comparar directorios (tarea 6.2).
+// Comparing directories (task 6.2).
 // ---------------------------------------------------------------------------
 
-/// Espera la siguiente actualización con el panel de diferencias.
+/// Waits for the next update with the diff panel.
 pub(super) async fn siguiente_comparacion(
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) -> Option<norte_ui_host::dto::CompareView> {
     for _ in 0..40 {
         match tokio::time::timeout(ESPERA_MAX, sub.recv())
             .await
-            .expect("llega")
-            .expect("el host sigue vivo")
+            .expect("arrives")
+            .expect("the host is still alive")
         {
             Update::Message(m) => {
                 if let UiUpdate::Patch(p) = &m.payload {
@@ -26,17 +26,17 @@ pub(super) async fn siguiente_comparacion(
             Update::Lagged => {}
         }
     }
-    panic!("no llegó ninguna actualización con comparación");
+    panic!("no update with a comparison ever arrived");
 }
 
-/// Una fila comparada, con lo mínimo para pintarla.
+/// A compared row, with the bare minimum to paint it.
 pub(super) fn fila_comparada(
     id: u64,
-    izquierda: Option<&str>,
-    derecha: Option<&str>,
+    left: Option<&str>,
+    right: Option<&str>,
     verdict: norte_proto::methods::CompareVerdict,
 ) -> norte_proto::methods::CompareRow {
-    let entrada = |wire: &str| norte_proto::Entry {
+    let entry = |wire: &str| norte_proto::Entry {
         path: VPath::parse(wire).expect("vpath"),
         kind: norte_proto::EntryKind::File,
         size: Some(10),
@@ -45,8 +45,8 @@ pub(super) fn fila_comparada(
     };
     norte_proto::methods::CompareRow {
         id,
-        left: izquierda.map(entrada),
-        right: derecha.map(entrada),
+        left: left.map(entry),
+        right: right.map(entry),
         verdict,
         criterion: norte_proto::methods::CompareCriterion::Size,
         confidence: norte_proto::methods::CompareConfidence::Certain,
@@ -57,12 +57,12 @@ pub(super) fn fila_comparada(
     }
 }
 
-/// Comparar los dos paneles abre el panel de diferencias con lo que el core
-/// contestó, sin volver a emparejar nada aquí.
+/// Comparing the two panes opens the diff panel with what the core answered,
+/// without pairing anything again here.
 #[tokio::test]
-async fn comparar_los_dos_paneles_abre_el_panel_de_diferencias() {
-    let falso = arbol_como_falso();
-    *falso.filas_comparadas.lock().expect("filas") = Some(vec![
+async fn comparing_the_two_panes_opens_the_diff_panel() {
+    let fake = arbol_como_falso();
+    *fake.filas_comparadas.lock().expect("filas") = Some(vec![
         fila_comparada(
             1,
             Some("mem:///casa/notas.txt"),
@@ -76,44 +76,39 @@ async fn comparar_los_dos_paneles_abre_el_panel_de_diferencias() {
             norte_proto::methods::CompareVerdict::OnlyLeft,
         ),
     ]);
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
     separar_los_paneles(&h, &mut sub).await;
 
     ejecutar_por_paleta(&h, &mut sub, "pane.compare-dirs").await;
 
-    let mut vista = siguiente_comparacion(&mut sub).await.expect("abre");
+    let mut view = siguiente_comparacion(&mut sub).await.expect("opens");
     for _ in 0..20 {
-        if !vista.rows.is_empty() {
+        if !view.rows.is_empty() {
             break;
         }
-        vista = siguiente_comparacion(&mut sub)
-            .await
-            .expect("sigue abierta");
+        view = siguiente_comparacion(&mut sub).await.expect("still open");
     }
-    assert_eq!(vista.rows.len(), 2, "{vista:?}");
-    assert_eq!(vista.total, 2);
-    // Los veredictos y las categorías salen del modelo COMPARTIDO, ya
-    // traducidos: el renderer no decide qué es «igual».
-    assert_eq!(vista.rows[0].category, "same");
-    assert_eq!(vista.rows[1].category, "only-left");
-    assert!(
-        vista.rows[1].right.is_none(),
-        "un huérfano no tiene derecha"
-    );
-    // Y se pidió comparar los dos directorios de verdad.
-    let pedidas = backend.comparaciones.lock().expect("comparaciones").clone();
-    assert_eq!(pedidas.len(), 1);
-    assert_ne!(pedidas[0].0, pedidas[0].1);
+    assert_eq!(view.rows.len(), 2, "{view:?}");
+    assert_eq!(view.total, 2);
+    // Verdicts and categories come from the SHARED model, already
+    // translated: the renderer does not decide what "same" is.
+    assert_eq!(view.rows[0].category, "same");
+    assert_eq!(view.rows[1].category, "only-left");
+    assert!(view.rows[1].right.is_none(), "an orphan has no right side");
+    // And it did request comparing the two real directories.
+    let requested = backend.comparaciones.lock().expect("comparaciones").clone();
+    assert_eq!(requested.len(), 1);
+    assert_ne!(requested[0].0, requested[0].1);
 }
 
-/// Un filtro esconde una categoría entera, y NO renumera: la selección sigue
-/// nombrando la misma fila.
+/// A filter hides a whole category, and does NOT renumber: the selection
+/// still names the same row.
 #[tokio::test]
-async fn un_filtro_esconde_una_categoria_y_no_renumera() {
-    let falso = arbol_como_falso();
-    *falso.filas_comparadas.lock().expect("filas") = Some(vec![
+async fn a_filter_hides_a_category_and_does_not_renumber() {
+    let fake = arbol_como_falso();
+    *fake.filas_comparadas.lock().expect("filas") = Some(vec![
         fila_comparada(
             1,
             Some("mem:///casa/notas.txt"),
@@ -127,87 +122,83 @@ async fn un_filtro_esconde_una_categoria_y_no_renumera() {
             norte_proto::methods::CompareVerdict::OnlyLeft,
         ),
     ]);
-    let (h, _snap) = host_con_layout(Arc::new(falso), "orthodox", (200, 60)).await;
+    let (h, _snap) = host_con_layout(Arc::new(fake), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
     separar_los_paneles(&h, &mut sub).await;
     ejecutar_por_paleta(&h, &mut sub, "pane.compare-dirs").await;
-    let mut vista = siguiente_comparacion(&mut sub).await.expect("abre");
+    let mut view = siguiente_comparacion(&mut sub).await.expect("opens");
     for _ in 0..20 {
-        if vista.rows.len() == 2 {
+        if view.rows.len() == 2 {
             break;
         }
-        vista = siguiente_comparacion(&mut sub)
-            .await
-            .expect("sigue abierta");
+        view = siguiente_comparacion(&mut sub).await.expect("still open");
     }
 
     h.dispatch(UiAction::CompareSelectRow { id: 2 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     h.dispatch(UiAction::CompareToggleFilter {
         category: "same".to_owned(),
     })
     .await
-    .expect("host vivo");
-    // Hay parches en cola (la selección produjo el suyo): se lee hasta el que
-    // ya trae el filtro puesto.
-    let mut filtrada = siguiente_comparacion(&mut sub)
-        .await
-        .expect("sigue abierta");
+    .expect("host alive");
+    // There are patches queued (the selection produced its own): it reads
+    // until the one that already carries the filter set.
+    let mut filtered = siguiente_comparacion(&mut sub).await.expect("still open");
     for _ in 0..20 {
-        if filtrada.rows.len() == 1 {
+        if filtered.rows.len() == 1 {
             break;
         }
-        filtrada = siguiente_comparacion(&mut sub)
-            .await
-            .expect("sigue abierta");
+        filtered = siguiente_comparacion(&mut sub).await.expect("still open");
     }
-    assert_eq!(filtrada.rows.len(), 1, "la categoría escondida no viaja");
     assert_eq!(
-        filtrada.selected,
+        filtered.rows.len(),
+        1,
+        "the hidden category does not travel"
+    );
+    assert_eq!(
+        filtered.selected,
         Some(2),
-        "y la selección sigue siendo suya"
+        "and the selection is still its own"
     );
     assert!(
-        filtrada
+        filtered
             .filters
             .iter()
             .any(|f| f.id == "same" && f.hidden && f.count == 1),
-        "el filtro dice cuántas esconde: {:?}",
-        filtrada.filters
+        "the filter says how many it hides: {:?}",
+        filtered.filters
     );
 }
 
-/// Abrir una fila navega al lado ACTIVO, y una fila cuyo lado activo está
-/// vacío no cae al otro lado.
+/// Opening a row navigates to the ACTIVE side, and a row whose active side
+/// is empty does not fall back to the other side.
 #[tokio::test]
-async fn abrir_un_huerfano_por_el_lado_vacio_no_cae_al_otro() {
-    let falso = arbol_como_falso();
-    *falso.filas_comparadas.lock().expect("filas") = Some(vec![fila_comparada(
+async fn opening_an_orphan_on_its_empty_side_does_not_fall_back() {
+    let fake = arbol_como_falso();
+    *fake.filas_comparadas.lock().expect("filas") = Some(vec![fila_comparada(
         1,
         None,
         Some("mem:///casa/docs/a.md"),
         norte_proto::methods::CompareVerdict::OnlyRight,
     )]);
-    let (h, _snap) = host_con_layout(Arc::new(falso), "orthodox", (200, 60)).await;
+    let (h, _snap) = host_con_layout(Arc::new(fake), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
     separar_los_paneles(&h, &mut sub).await;
     ejecutar_por_paleta(&h, &mut sub, "pane.compare-dirs").await;
-    let mut vista = siguiente_comparacion(&mut sub).await.expect("abre");
+    let mut view = siguiente_comparacion(&mut sub).await.expect("opens");
     for _ in 0..20 {
-        if !vista.rows.is_empty() {
+        if !view.rows.is_empty() {
             break;
         }
-        vista = siguiente_comparacion(&mut sub)
-            .await
-            .expect("sigue abierta");
+        view = siguiente_comparacion(&mut sub).await.expect("still open");
     }
 
-    // El lado activo es el IZQUIERDO, y esta fila no tiene izquierda.
+    // The active side is the LEFT one, and this row has no left.
     let ack = h
         .dispatch(UiAction::CompareActivateRow { id: 1 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert_eq!(
         ack,
         ActionAck::Unavailable {
@@ -217,31 +208,32 @@ async fn abrir_un_huerfano_por_el_lado_vacio_no_cae_al_otro() {
     );
 }
 
-/// Deja los dos paneles en directorios DISTINTOS: comparar dos veces el mismo
-/// no es una comparación, y el host lo rehúsa antes de encolar nada.
+/// Leaves both panes in DIFFERENT directories: comparing the same one with
+/// itself twice is not a comparison, and the host refuses it before queuing
+/// anything.
 pub(super) async fn separar_los_paneles(
     h: &UiHost,
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) {
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
-        .expect("host vivo");
-    // La primera fila es el directorio `docs`: los directorios van primero.
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+        .expect("host alive");
+    // The first row is the `docs` directory: directories come first.
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     for _ in 0..20 {
-        let foto = {
-            h.dispatch(UiAction::Resync).await.expect("host vivo");
+        let snap = {
+            h.dispatch(UiAction::Resync).await.expect("host alive");
             siguiente_foto(sub).await
         };
-        let en_docs = foto.slots.iter().any(|s| match s {
+        let in_docs = snap.slots.iter().any(|s| match s {
             SlotView::Browser(b) => b.path_display.ends_with("/casa/docs"),
             _ => false,
         });
-        if en_docs {
+        if in_docs {
             break;
         }
     }
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
-        .expect("host vivo");
+        .expect("host alive");
 }

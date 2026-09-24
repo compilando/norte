@@ -1,9 +1,9 @@
-//! Integración `Engine::set_mode` (#314): cambiar permisos POSIX es una
-//! MUTACIÓN, con todo lo que eso arrastra — journal con reversa, política, y
-//! una Task cancelable.
+//! `Engine::set_mode` integration (#314): changing POSIX permissions is a
+//! MUTATION, with everything that drags along — a journal with a reversal,
+//! policy, and a cancelable Task.
 //!
-//! `MemProvider` in-memory → determinista, sin tocar disco. Publica
-//! `posix.mode` y lo escribe, que es lo que hace comprobable el undo.
+//! In-memory `MemProvider` → deterministic, without touching disk. It
+//! publishes `posix.mode` and writes it, which is what makes undo checkable.
 
 use std::sync::Arc;
 
@@ -16,11 +16,11 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::from_static(b"x")).await.expect("chunk");
     sink.commit().await.expect("commit");
 }
@@ -35,14 +35,18 @@ async fn setup() -> (Engine, Arc<MemProvider>, Arc<SqliteJournal>) {
     (engine, mem, journal)
 }
 
-/// El modo que `p` tiene AHORA, leído por el atributo que el provider publica.
-async fn modo(mem: &MemProvider, wire: &str) -> u32 {
+/// The mode `p` has RIGHT NOW, read from the attribute the provider publishes.
+async fn mode(mem: &MemProvider, wire: &str) -> u32 {
     let req = norte_vfs::AttrRequest::sanitized(vec!["posix.mode".to_owned()]);
     let opt = norte_vfs::ListOptions { attrs: req };
     let e = mem.stat_with(&vp(wire), &opt).await.expect("stat");
-    match e.attrs.get("posix.mode").expect("el provider lo publica") {
-        norte_proto::AttrValue::Uint(m) => u32::try_from(*m).expect("cabe"),
-        otro => panic!("posix.mode no es un uint: {otro:?}"),
+    match e
+        .attrs
+        .get("posix.mode")
+        .expect("the provider publishes it")
+    {
+        norte_proto::AttrValue::Uint(m) => u32::try_from(*m).expect("fits"),
+        other => panic!("posix.mode is not a uint: {other:?}"),
     }
 }
 
@@ -55,8 +59,8 @@ fn params(paths: &[&str], mode: u32) -> FsSetModeParams {
     }
 }
 
-/// El mismo, recursivo y con el modo de los directorios aparte (#315).
-fn params_recursivos(paths: &[&str], mode: u32, dir_mode: Option<u32>) -> FsSetModeParams {
+/// The same, recursive and with the directories' mode set apart (#315).
+fn recursive_params(paths: &[&str], mode: u32, dir_mode: Option<u32>) -> FsSetModeParams {
     FsSetModeParams {
         recursive: true,
         dir_mode,
@@ -71,9 +75,9 @@ async fn run_undo(engine: &Engine, actor: Actor) -> (TaskState, UndoReport) {
     (state, r)
 }
 
-/// Lo básico: cambia el modo de un lote, y el listado lo dice.
+/// The basics: changes a batch's mode, and the listing shows it.
 #[tokio::test]
-async fn cambia_el_modo_de_un_lote() {
+async fn changes_a_batchs_mode() {
     let (engine, mem, _j) = setup().await;
     write_file(&mem, "mem:///a.sh").await;
     write_file(&mem, "mem:///b.sh").await;
@@ -81,43 +85,43 @@ async fn cambia_el_modo_de_un_lote() {
     let h = engine
         .set_mode(params(&["mem:///a.sh", "mem:///b.sh"], 0o755))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(modo(&mem, "mem:///a.sh").await, 0o755);
-    assert_eq!(modo(&mem, "mem:///b.sh").await, 0o755);
+    assert_eq!(mode(&mem, "mem:///a.sh").await, 0o755);
+    assert_eq!(mode(&mem, "mem:///b.sh").await, 0o755);
 }
 
-/// **La reversa es el modo ANTERIOR**, y deshacer lo devuelve. Sin esto, un
-/// cambio de permisos sería la única mutación de norte sin vuelta atrás, y no
-/// hay ninguna razón para que lo sea: los doce bits de antes caben en el
-/// journal.
+/// **The reversal is the PREVIOUS mode**, and undoing returns it. Without
+/// this, a permission change would be the only norte mutation with no way
+/// back, and there is no reason for it to be: the previous twelve bits fit in
+/// the journal.
 #[tokio::test]
-async fn deshacer_devuelve_los_permisos_de_antes() {
+async fn undoing_returns_the_previous_permissions() {
     let (engine, mem, _j) = setup().await;
     write_file(&mem, "mem:///a.sh").await;
-    let antes = modo(&mem, "mem:///a.sh").await;
+    let before = mode(&mem, "mem:///a.sh").await;
 
     let h = engine
         .set_mode(params(&["mem:///a.sh"], 0o700))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(modo(&mem, "mem:///a.sh").await, 0o700);
+    assert_eq!(mode(&mem, "mem:///a.sh").await, 0o700);
 
     let (state, r) = run_undo(&engine, Actor::User).await;
     assert_eq!(state, TaskState::Completed);
     assert_eq!(r.undone, 1);
     assert_eq!(
-        modo(&mem, "mem:///a.sh").await,
-        antes,
-        "el undo devuelve el modo que tenía, no uno inventado"
+        mode(&mem, "mem:///a.sh").await,
+        before,
+        "undo returns the mode it had, not a made-up one"
     );
 }
 
-/// Un lote deja UNA entrada por ruta, así que deshacer un lote de tres las
-/// deshace las tres — y no «el lote», que no existe como cosa.
+/// A batch leaves ONE entry per path, so undoing a batch of three undoes all
+/// three — and not "the batch", which does not exist as a thing.
 #[tokio::test]
-async fn un_lote_deja_una_entrada_por_ruta() {
+async fn a_batch_leaves_one_entry_per_path() {
     let (engine, mem, _j) = setup().await;
     for n in ["a", "b", "c"] {
         write_file(&mem, &format!("mem:///{n}.sh")).await;
@@ -128,330 +132,346 @@ async fn un_lote_deja_una_entrada_por_ruta() {
             0o750,
         ))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
 
     let (state, r) = run_undo(&engine, Actor::User).await;
     assert_eq!(state, TaskState::Completed);
-    assert_eq!(r.undone, 3, "una entrada por ruta, y las tres se deshacen");
-    assert_eq!(modo(&mem, "mem:///a.sh").await, 0o644);
-    assert_eq!(modo(&mem, "mem:///c.sh").await, 0o644);
+    assert_eq!(r.undone, 3, "one entry per path, and all three are undone");
+    assert_eq!(mode(&mem, "mem:///a.sh").await, 0o644);
+    assert_eq!(mode(&mem, "mem:///c.sh").await, 0o644);
 }
 
-/// Regla 3: se cancela limpiamente y el estado lo dice.
+/// Rule 3: it cancels cleanly and the state says so.
 #[tokio::test]
-async fn cambiar_permisos_se_cancela_y_lo_dice() {
+async fn changing_permissions_cancels_and_says_so() {
     let (engine, mem, _j) = setup().await;
-    let mut rutas = Vec::new();
+    let mut paths = Vec::new();
     for i in 0..400 {
         let wire = format!("mem:///f{i}");
         write_file(&mem, &wire).await;
-        rutas.push(wire);
+        paths.push(wire);
     }
-    let refs: Vec<&str> = rutas.iter().map(String::as_str).collect();
-    let h = engine.set_mode(params(&refs, 0o600)).await.expect("lanza");
+    let refs: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let h = engine
+        .set_mode(params(&refs, 0o600))
+        .await
+        .expect("launches");
     h.cancel();
     assert_eq!(h.join().await, TaskState::Cancelled);
 }
 
-/// Sin rutas no hay petición, y se rechaza ANTES de crear Task alguna: es un
-/// error del REQUEST, no el fallo de algo ya lanzado.
+/// Without paths there is no request, and it is rejected BEFORE creating any
+/// Task: it is a REQUEST error, not the failure of something already launched.
 #[tokio::test]
-async fn sin_rutas_no_se_crea_task() {
+async fn no_paths_creates_no_task() {
     let (engine, _mem, _j) = setup().await;
     let Err(err) = engine.set_mode(params(&[], 0o644)).await else {
-        panic!("cambiarle el modo a nada no es una petición");
+        panic!("changing the mode of nothing is not a request");
     };
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
 }
 
-/// Los bits que NO son de permiso dicen de qué clase es el nodo, y eso no se
-/// cambia. Se rechazan en vez de recortarse: recortar dejaría un permiso que
-/// nadie pidió, y encima con cara de haber obedecido.
+/// The bits that are NOT permission bits say what kind the node is, and that
+/// is not changed. They are rejected instead of trimmed: trimming would leave
+/// a permission nobody asked for, and with the face of having obeyed on top.
 #[tokio::test]
-async fn un_modo_con_bits_de_clase_se_rechaza() {
+async fn a_mode_with_class_bits_is_rejected() {
     let (engine, mem, _j) = setup().await;
     write_file(&mem, "mem:///a.sh").await;
-    // 0o100644: fichero regular + 644. El de arriba es el que sobra.
+    // 0o100644: regular file + 644. The one above is what is extra.
     let Err(err) = engine.set_mode(params(&["mem:///a.sh"], 0o100_644)).await else {
-        panic!("los bits de clase no son un permiso que fijar");
+        panic!("the class bits are not a permission to set");
     };
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
     assert_eq!(
-        modo(&mem, "mem:///a.sh").await,
+        mode(&mem, "mem:///a.sh").await,
         0o644,
-        "y no se ha tocado nada"
+        "and nothing was touched"
     );
 }
 
-/// Por encima del tope se RECHAZA, no se recorta: media selección con los
-/// permisos de antes y sin decir cuál es lo que este rechazo evita.
+/// Above the cap it is REJECTED, not trimmed: half a selection with the old
+/// permissions and no way to say which one this rejection avoids.
 #[tokio::test]
-async fn por_encima_del_tope_se_rechaza() {
+async fn above_the_cap_it_is_rejected() {
     let (engine, _mem, _j) = setup().await;
     let n = norte_proto::methods::FS_SET_MODE_MAX_PATHS + 1;
-    let muchas: Vec<VPath> = (0..n).map(|i| vp(&format!("mem:///f{i}"))).collect();
+    let many: Vec<VPath> = (0..n).map(|i| vp(&format!("mem:///f{i}"))).collect();
     let Err(err) = engine
         .set_mode(FsSetModeParams {
-            paths: muchas,
+            paths: many,
             mode: 0o644,
             recursive: false,
             dir_mode: None,
         })
         .await
     else {
-        panic!("por encima del tope tiene que rechazarse");
+        panic!("above the cap has to be rejected");
     };
     assert!(matches!(err, ProtoError::InvalidPath), "{err:?}");
 }
 
-/// **setuid y setgid, solo a mano** (ADR 0081).
+/// **setuid and setgid, only by hand** (ADR 0081).
 ///
-/// No porque esos bits sean el peligro —un `chmod 0777` sobre `~/.ssh` hace
-/// mucho más daño y no lleva ninguno—, sino porque son los que quien aprueba
-/// NO PUEDE VER: la petición de aprobación lleva la op y las rutas, no el
-/// modo. El humano sí los fija, desde un diálogo que sí los enseña.
+/// Not because those bits are the danger — a `chmod 0777` over `~/.ssh` does
+/// much more harm and carries neither — but because they are the ones whoever
+/// approves CANNOT SEE: the approval request carries the op and the paths, not
+/// the mode. The human does set them, from a dialog that does show them.
 #[tokio::test]
-async fn setuid_y_setgid_no_los_pone_un_agente() {
+async fn setuid_and_setgid_are_not_set_by_an_agent() {
     let (engine, mem, _j) = setup().await;
     write_file(&mem, "mem:///a.sh").await;
-    let agente = Actor::Agent {
+    let agent = Actor::Agent {
         session: "s1".into(),
     };
-    for especial in [0o4755, 0o2755, 0o6755] {
+    for special in [0o4755, 0o2755, 0o6755] {
         let Err(err) = engine
-            .set_mode_as(params(&["mem:///a.sh"], especial), agente.clone())
+            .set_mode_as(params(&["mem:///a.sh"], special), agent.clone())
             .await
         else {
-            panic!("{especial:o} lo tiene que rehusar para un agente");
+            panic!("{special:o} has to be refused for an agent");
         };
         assert!(matches!(err, ProtoError::PolicyDenied { .. }), "{err:?}");
     }
-    assert_eq!(modo(&mem, "mem:///a.sh").await, 0o644, "y no tocó nada");
+    assert_eq!(
+        mode(&mem, "mem:///a.sh").await,
+        0o644,
+        "and it touched nothing"
+    );
 
-    // El sticky (0o1000) NO entra en esa cuenta: no otorga privilegio de
-    // nadie, y en un directorio es lo que hace que `/tmp` funcione.
+    // The sticky bit (0o1000) does NOT count among those: it grants nobody a
+    // privilege, and on a directory it is what makes `/tmp` work.
     let h = engine
-        .set_mode_as(params(&["mem:///a.sh"], 0o1755), agente)
+        .set_mode_as(params(&["mem:///a.sh"], 0o1755), agent)
         .await
-        .expect("el sticky no es un bit de privilegio");
+        .expect("sticky is not a privilege bit");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(modo(&mem, "mem:///a.sh").await, 0o1755);
+    assert_eq!(mode(&mem, "mem:///a.sh").await, 0o1755);
 }
 
-/// **Un SYMLINK no se toca**, y esto no es remilgo.
+/// **A SYMLINK is not touched**, and this is not squeamishness.
 ///
-/// `chmod(2)` SIGUE el enlace mientras que el `stat` con el que se lee la
-/// reversa NO lo sigue (lstat, contrato del trait). Así que el modo guardado
-/// como «el de antes» sería el del ENLACE —`0o777` siempre en Linux— y
-/// deshacer dejaría el DESTINO abierto a todo el mundo. Y hay algo peor que la
-/// reversa: el destino puede estar fuera del scope que alguien aprobó, así que
-/// un chmod sobre un enlace es una escritura que se sale de su raíz.
+/// `chmod(2)` FOLLOWS the link while the `stat` used to read the reversal does
+/// NOT follow it (lstat, the trait's contract). So the mode saved as "the
+/// previous one" would be the LINK's — always `0o777` on Linux — and undoing
+/// would leave the DESTINATION wide open. And there is something worse than
+/// the reversal: the destination can be outside the scope someone approved, so
+/// a chmod on a link is a write that escapes its root.
 #[tokio::test]
-async fn un_symlink_no_se_toca() {
+async fn a_symlink_is_not_touched() {
     let (engine, mem, _j) = setup().await;
     write_file(&mem, "mem:///real.txt").await;
     mem.symlink(
-        &vp("mem:///enlace"),
+        &vp("mem:///link"),
         b"real.txt",
         norte_vfs::SymlinkKind::File,
     )
     .await
-    .expect("enlace");
+    .expect("link");
 
     let h = engine
-        .set_mode(params(&["mem:///enlace"], 0o777))
+        .set_mode(params(&["mem:///link"], 0o777))
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = h.progress();
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(
-        modo(&mem, "mem:///real.txt").await,
+        mode(&mem, "mem:///real.txt").await,
         0o644,
-        "el destino del enlace conserva sus permisos"
+        "the link's target keeps its permissions"
     );
-    // Y el progreso lo cuenta como no hecha, que es lo que el frontend dice.
+    // And the progress counts it as not done, which is what the frontend says.
     assert_eq!(prog.borrow().unreadable, Some(1));
 }
 
-/// **Recursivo: la carpeta y lo que tiene dentro** (#315).
+/// **Recursive: the folder and what is inside it** (#315).
 ///
-/// Es el hueco que la ADR 0081 aplazó a propósito: `fs.set_mode` cambiaba
-/// EXACTAMENTE las rutas que se le daban, y los tres gestores de referencia
-/// ofrecen «aplicar a subcarpetas» desde su diálogo de propiedades.
+/// This is the gap ADR 0081 deliberately postponed: `fs.set_mode` changed
+/// EXACTLY the paths given to it, and the three reference managers offer
+/// "apply to subfolders" from their properties dialog.
 #[tokio::test]
-async fn recursivo_cambia_la_carpeta_y_lo_que_tiene_dentro() {
+async fn recursive_changes_the_folder_and_what_is_inside_it() {
     let (engine, mem, _j) = setup().await;
-    mem.mkdir(&vp("mem:///arbol")).await.expect("arbol");
-    mem.mkdir(&vp("mem:///arbol/sub")).await.expect("sub");
-    write_file(&mem, "mem:///arbol/a.txt").await;
-    write_file(&mem, "mem:///arbol/sub/b.txt").await;
+    mem.mkdir(&vp("mem:///tree")).await.expect("tree");
+    mem.mkdir(&vp("mem:///tree/sub")).await.expect("sub");
+    write_file(&mem, "mem:///tree/a.txt").await;
+    write_file(&mem, "mem:///tree/sub/b.txt").await;
 
     let h = engine
-        .set_mode(params_recursivos(&["mem:///arbol"], 0o600, None))
+        .set_mode(recursive_params(&["mem:///tree"], 0o600, None))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
     for p in [
-        "mem:///arbol",
-        "mem:///arbol/sub",
-        "mem:///arbol/a.txt",
-        "mem:///arbol/sub/b.txt",
+        "mem:///tree",
+        "mem:///tree/sub",
+        "mem:///tree/a.txt",
+        "mem:///tree/sub/b.txt",
     ] {
-        assert_eq!(modo(&mem, p).await, 0o600, "{p}");
+        assert_eq!(mode(&mem, p).await, 0o600, "{p}");
     }
 }
 
-/// **Y el modo de los DIRECTORIOS puede ser otro**, que es lo que evita dejar
-/// el árbol inutilizable: `chmod -R 644` le quita el bit de ejecución a las
-/// carpetas y en una carpeta sin `x` no se puede ni entrar.
+/// **And the mode of DIRECTORIES can be different**, which is what avoids
+/// leaving the tree unusable: `chmod -R 644` strips the execute bit from
+/// folders, and a folder without `x` cannot even be entered.
 #[tokio::test]
-async fn el_modo_de_los_directorios_va_aparte() {
+async fn the_mode_of_directories_is_set_apart() {
     let (engine, mem, _j) = setup().await;
-    mem.mkdir(&vp("mem:///arbol")).await.expect("arbol");
-    mem.mkdir(&vp("mem:///arbol/sub")).await.expect("sub");
-    write_file(&mem, "mem:///arbol/a.txt").await;
+    mem.mkdir(&vp("mem:///tree")).await.expect("tree");
+    mem.mkdir(&vp("mem:///tree/sub")).await.expect("sub");
+    write_file(&mem, "mem:///tree/a.txt").await;
 
     let h = engine
-        .set_mode(params_recursivos(&["mem:///arbol"], 0o644, Some(0o755)))
+        .set_mode(recursive_params(&["mem:///tree"], 0o644, Some(0o755)))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(modo(&mem, "mem:///arbol").await, 0o755, "la raíz es un dir");
-    assert_eq!(modo(&mem, "mem:///arbol/sub").await, 0o755);
-    assert_eq!(modo(&mem, "mem:///arbol/a.txt").await, 0o644);
+    assert_eq!(mode(&mem, "mem:///tree").await, 0o755, "the root is a dir");
+    assert_eq!(mode(&mem, "mem:///tree/sub").await, 0o755);
+    assert_eq!(mode(&mem, "mem:///tree/a.txt").await, 0o644);
 }
 
-/// Sin `recursive`, un directorio cambia el SUYO y nada más: es el
-/// comportamiento de 0.60, y lo que un cliente que no manda el campo espera.
+/// Without `recursive`, a directory changes ITS OWN mode and nothing else:
+/// this is the 0.60 behavior, and what a client that does not send the field
+/// expects.
 #[tokio::test]
-async fn sin_recursivo_un_directorio_no_arrastra_su_contenido() {
+async fn without_recursive_a_directory_does_not_drag_its_content() {
     let (engine, mem, _j) = setup().await;
-    mem.mkdir(&vp("mem:///arbol")).await.expect("arbol");
-    write_file(&mem, "mem:///arbol/a.txt").await;
-    let antes = modo(&mem, "mem:///arbol/a.txt").await;
+    mem.mkdir(&vp("mem:///tree")).await.expect("tree");
+    write_file(&mem, "mem:///tree/a.txt").await;
+    let before = mode(&mem, "mem:///tree/a.txt").await;
 
     let h = engine
-        .set_mode(params(&["mem:///arbol"], 0o700))
+        .set_mode(params(&["mem:///tree"], 0o700))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(modo(&mem, "mem:///arbol").await, 0o700);
+    assert_eq!(mode(&mem, "mem:///tree").await, 0o700);
     assert_eq!(
-        modo(&mem, "mem:///arbol/a.txt").await,
-        antes,
-        "lo de dentro no se toca"
+        mode(&mem, "mem:///tree/a.txt").await,
+        before,
+        "what is inside is not touched"
     );
 }
 
-/// Cada nodo del árbol deja su entrada de journal con su reversa, así que el
-/// undo devuelve el árbol ENTERO a lo que era (regla dura 4).
+/// Every node in the tree leaves its journal entry with its reversal, so undo
+/// returns the WHOLE tree to what it was (hard rule 4).
 #[tokio::test]
-async fn deshacer_un_recursivo_devuelve_el_arbol_entero() {
+async fn undoing_a_recursive_returns_the_whole_tree() {
     let (engine, mem, _j) = setup().await;
-    mem.mkdir(&vp("mem:///arbol")).await.expect("arbol");
-    write_file(&mem, "mem:///arbol/a.txt").await;
-    write_file(&mem, "mem:///arbol/b.txt").await;
-    let antes: Vec<u32> = {
+    mem.mkdir(&vp("mem:///tree")).await.expect("tree");
+    write_file(&mem, "mem:///tree/a.txt").await;
+    write_file(&mem, "mem:///tree/b.txt").await;
+    let before: Vec<u32> = {
         let mut v = Vec::new();
-        for p in ["mem:///arbol", "mem:///arbol/a.txt", "mem:///arbol/b.txt"] {
-            v.push(modo(&mem, p).await);
+        for p in ["mem:///tree", "mem:///tree/a.txt", "mem:///tree/b.txt"] {
+            v.push(mode(&mem, p).await);
         }
         v
     };
 
     let h = engine
-        .set_mode(params_recursivos(&["mem:///arbol"], 0o600, Some(0o700)))
+        .set_mode(recursive_params(&["mem:///tree"], 0o600, Some(0o700)))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    let (estado, informe) = run_undo(&engine, Actor::User).await;
-    assert_eq!(estado, TaskState::Completed);
-    assert_eq!(informe.undone, 3, "los tres nodos: {informe:?}");
-    for (p, m) in ["mem:///arbol", "mem:///arbol/a.txt", "mem:///arbol/b.txt"]
+    let (state, report) = run_undo(&engine, Actor::User).await;
+    assert_eq!(state, TaskState::Completed);
+    assert_eq!(report.undone, 3, "the three nodes: {report:?}");
+    for (p, m) in ["mem:///tree", "mem:///tree/a.txt", "mem:///tree/b.txt"]
         .into_iter()
-        .zip(antes)
+        .zip(before)
     {
-        assert_eq!(modo(&mem, p).await, m, "{p} volvió a lo que era");
+        assert_eq!(mode(&mem, p).await, m, "{p} went back to what it was");
     }
 }
 
-/// Las entradas de un recursivo comparten LOTE: fueron una acción del humano,
-/// y cien mil entradas que nadie puede volver a juntar se leen como cien mil
-/// acciones (#315).
+/// A recursive's entries share a BATCH: they were one action by the human, and
+/// a hundred thousand entries nobody can put back together read as a hundred
+/// thousand actions (#315).
 #[tokio::test]
-async fn las_entradas_de_un_recursivo_comparten_lote() {
+async fn a_recursives_entries_share_a_batch() {
     let (engine, mem, journal) = setup().await;
-    mem.mkdir(&vp("mem:///arbol")).await.expect("arbol");
-    write_file(&mem, "mem:///arbol/a.txt").await;
-    write_file(&mem, "mem:///arbol/b.txt").await;
+    mem.mkdir(&vp("mem:///tree")).await.expect("tree");
+    write_file(&mem, "mem:///tree/a.txt").await;
+    write_file(&mem, "mem:///tree/b.txt").await;
 
     let h = engine
-        .set_mode(params_recursivos(&["mem:///arbol"], 0o600, None))
+        .set_mode(recursive_params(&["mem:///tree"], 0o600, None))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    let entradas = journal.journal().entries().await.expect("entries");
-    let lotes: std::collections::BTreeSet<Option<i64>> =
-        entradas.iter().map(|e| e.batch_id).collect();
-    assert_eq!(entradas.len(), 3, "una por nodo: {entradas:?}");
-    assert_eq!(lotes.len(), 1, "y todas bajo el MISMO lote: {lotes:?}");
-    assert!(lotes.iter().next().expect("uno").is_some(), "que existe");
+    let entries = journal.journal().entries().await.expect("entries");
+    let batches: std::collections::BTreeSet<Option<i64>> =
+        entries.iter().map(|e| e.batch_id).collect();
+    assert_eq!(entries.len(), 3, "one per node: {entries:?}");
+    assert_eq!(
+        batches.len(),
+        1,
+        "and all under the SAME batch: {batches:?}"
+    );
+    assert!(
+        batches.iter().next().expect("one").is_some(),
+        "that it exists"
+    );
 }
 
-/// Y sin recursivo NO hay lote: un cambio suelto es una acción de una entrada,
-/// y darle un id de lote haría que el undo lo tratara como una unidad de
-/// varias.
+/// And without recursive there is NO batch: a lone change is a one-entry
+/// action, and giving it a batch id would make undo treat it as a multi-unit.
 #[tokio::test]
-async fn un_set_mode_suelto_no_lleva_lote() {
+async fn a_lone_set_mode_carries_no_batch() {
     let (engine, mem, journal) = setup().await;
     write_file(&mem, "mem:///a.sh").await;
     let h = engine
         .set_mode(params(&["mem:///a.sh"], 0o700))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
 
-    let entradas = journal.journal().entries().await.expect("entries");
-    assert_eq!(entradas.len(), 1);
-    assert_eq!(entradas[0].batch_id, None);
+    let entries = journal.journal().entries().await.expect("entries");
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].batch_id, None);
 }
 
-/// El `dir_mode` SIN recursivo no se aplica, que es lo que el wire promete: sin
-/// bajar por el árbol no hay directorios a los que aplicárselo, y usarlo sobre
-/// las rutas pedidas les daría un permiso que nadie pidió.
+/// `dir_mode` WITHOUT recursive is not applied, which is what the wire
+/// promises: without descending the tree there are no directories to apply it
+/// to, and using it on the requested paths would give them a permission
+/// nobody asked for.
 #[tokio::test]
-async fn un_dir_mode_sin_recursivo_no_se_aplica() {
+async fn a_dir_mode_without_recursive_is_not_applied() {
     let (engine, mem, _j) = setup().await;
-    mem.mkdir(&vp("mem:///arbol")).await.expect("arbol");
+    mem.mkdir(&vp("mem:///tree")).await.expect("tree");
 
     let h = engine
         .set_mode(FsSetModeParams {
             dir_mode: Some(0o777),
-            ..params(&["mem:///arbol"], 0o700)
+            ..params(&["mem:///tree"], 0o700)
         })
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(
-        modo(&mem, "mem:///arbol").await,
+        mode(&mem, "mem:///tree").await,
         0o700,
-        "el modo pedido, no el de directorios"
+        "the requested mode, not the directories' one"
     );
 }
 
-/// Un ENLACE dentro del árbol tampoco se toca: `chmod(2)` lo seguiría, y el
-/// modo que se guardaría como reversa sería el del enlace, no el del destino.
-/// Es la misma regla que fuera del árbol, y aquí es más fácil olvidarla.
+/// A LINK inside the tree is not touched either: `chmod(2)` would follow it,
+/// and the mode saved as the reversal would be the link's, not the
+/// destination's. It is the same rule as outside the tree, and here it is
+/// easier to forget.
 #[tokio::test]
-async fn un_enlace_dentro_del_arbol_tampoco_se_toca() {
+async fn a_link_inside_the_tree_is_not_touched_either() {
     let (engine, mem, _j) = setup().await;
-    mem.mkdir(&vp("mem:///arbol")).await.expect("arbol");
+    mem.mkdir(&vp("mem:///tree")).await.expect("tree");
     write_file(&mem, "mem:///real.txt").await;
     mem.symlink(
-        &vp("mem:///arbol/enlace"),
+        &vp("mem:///tree/link"),
         b"real.txt",
         norte_vfs::SymlinkKind::File,
     )
@@ -459,29 +479,29 @@ async fn un_enlace_dentro_del_arbol_tampoco_se_toca() {
     .expect("symlink");
 
     let h = engine
-        .set_mode(params_recursivos(&["mem:///arbol"], 0o600, None))
+        .set_mode(recursive_params(&["mem:///tree"], 0o600, None))
         .await
-        .expect("lanza");
+        .expect("launches");
     let prog = h.progress();
     assert_eq!(h.join().await, TaskState::Completed);
     assert_eq!(
-        modo(&mem, "mem:///real.txt").await,
+        mode(&mem, "mem:///real.txt").await,
         0o644,
-        "el destino del enlace conserva sus permisos"
+        "the link's target keeps its permissions"
     );
-    assert_eq!(prog.borrow().unreadable, Some(1), "y se cuenta");
+    assert_eq!(prog.borrow().unreadable, Some(1), "and it is counted");
 }
 
-/// Una ruta que falla no tumba el lote: la selección de cincuenta no se pierde
-/// por el fichero que ya no está.
+/// A path that fails does not bring down the batch: a selection of fifty is
+/// not lost over the file that is no longer there.
 #[tokio::test]
-async fn una_ruta_que_falla_no_tumba_el_lote() {
+async fn a_failing_path_does_not_bring_down_the_batch() {
     let (engine, mem, _j) = setup().await;
-    write_file(&mem, "mem:///buena.sh").await;
+    write_file(&mem, "mem:///good.sh").await;
     let h = engine
-        .set_mode(params(&["mem:///no-existe", "mem:///buena.sh"], 0o700))
+        .set_mode(params(&["mem:///does-not-exist", "mem:///good.sh"], 0o700))
         .await
-        .expect("lanza");
+        .expect("launches");
     assert_eq!(h.join().await, TaskState::Completed);
-    assert_eq!(modo(&mem, "mem:///buena.sh").await, 0o700);
+    assert_eq!(mode(&mem, "mem:///good.sh").await, 0o700);
 }

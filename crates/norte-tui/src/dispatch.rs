@@ -1,17 +1,17 @@
-//! La tabla de despacho: un nombre de comando (ADR 0006, los mismos que ven
-//! la palette y el wire) y su efecto.
+//! The dispatch table: a command name (ADR 0006, the same ones the palette
+//! and the wire see) and its effect.
 //!
-//! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, y sale
-//! ENTERA. Es un `match` plano de 109 brazos y no se trocea: este repositorio
-//! ya argumentó por escrito contra partir tablas planas
-//! (`norte-core/src/daemon/server.rs`), y el argumento es el mismo aquí —
-//! trocear un match exhaustivo por temas cambia una tabla que el compilador
-//! comprueba de una vez por varias que hay que mantener en sintonía a mano.
+//! It lived in the `ntc` binary's root —a crate DIFFERENT from this lib—
+//! and comes out WHOLE. It is a flat 109-arm `match` and is not split up:
+//! this repository already argued in writing against splitting flat tables
+//! (`norte-core/src/daemon/server.rs`), and the argument is the same here —
+//! splitting an exhaustive match by topic trades a table the compiler checks
+//! all at once for several that have to be kept in sync by hand.
 //!
-//! Lo que la hace grande es el vocabulario, no la profundidad: casi todos los
-//! brazos son de una a tres líneas, y lo que cada uno llama vive ya en su
-//! propio módulo — es lo que las nueve rondas anteriores de esta rama fueron
-//! sacando de aquí debajo.
+//! What makes it big is the vocabulary, not the depth: almost every arm is
+//! one to three lines, and what each one calls already lives in its own
+//! module — that is what this branch's nine previous rounds were pulling out
+//! from underneath here.
 
 use crate::app::{
     App, ExtensionManager, Modal, NavPopupKind, Palette, Settings, Trail, TrailStep, TransferKind,
@@ -35,13 +35,13 @@ use norte_core::backend::Backend;
 use norte_i18n::{t, ta};
 use norte_proto::EntryKind;
 
-/// Ejecuta un comando nombrado (ADR 0006: los mismos nombres que verán la
-/// palette y el wire). Un error de listado en un cd NO tumba el TUI: el
-/// pane se queda donde estaba (aviso visible: barra de mensajes, issue #20).
+/// Runs a named command (ADR 0006: the same names the palette and the wire
+/// will see). A listing error on a cd does NOT bring the TUI down: the pane
+/// stays where it was (visible warning: message bar, issue #20).
 #[expect(
     clippy::too_many_lines,
     clippy::too_many_arguments,
-    reason = "tabla de despacho comando→efecto, no API"
+    reason = "command→effect dispatch table, not an API"
 )]
 pub async fn dispatch(
     app: &mut App,
@@ -53,21 +53,21 @@ pub async fn dispatch(
     lang: norte_i18n::Lang,
     quick_mode: nav::Mode,
     confirm_quit: config::ConfirmQuit,
-    // S3 (`app.settings`): la config VIGENTE — solo leída, para construir
-    // las filas del overlay al abrirlo (`crate::settings::build_rows`).
+    // S3 (`app.settings`): the CURRENT config — read-only, to build the
+    // overlay's rows when opening it (`crate::settings::build_rows`).
     cfg: &config::LoadedConfig,
     cmd: Command,
 ) -> Cd {
-    // Solo los cd (nav.enter/nav.parent) tocan el relleno en background; el
-    // resto de comandos lo dejan como está (`Cancelled`).
+    // Only the cds (nav.enter/nav.parent) touch the background fill; the
+    // rest of the commands leave it as it is (`Cancelled`).
     let mut cd_outcome = Cd::Cancelled;
     match cmd {
-        // S2 (`[ui] confirm_quit`): SOLO este brazo (el despacho nombrado de
-        // `app.quit`, alcanzable por keymap Y por la palette) honra la
-        // config y puede abrir `Modal::ConfirmQuit`. Los `app.quit = true`
-        // hardcodeados de Ctrl+C repartidos por el resto de este fichero
-        // (cada overlay tiene el suyo, documentado in situ) son la salida de
-        // emergencia — se quedan INMEDIATOS a propósito, jamás preguntan.
+        // S2 (`[ui] confirm_quit`): ONLY this arm (the named dispatch of
+        // `app.quit`, reachable by keymap AND by the palette) honors the
+        // config and can open `Modal::ConfirmQuit`. The hardcoded
+        // `app.quit = true`s from Ctrl+C scattered through the rest of this
+        // file (each overlay has its own, documented in place) are the
+        // emergency exit — they stay IMMEDIATE on purpose, never asking.
         Command::AppQuit => {
             if crate::app::quit_needs_confirm(confirm_quit, app.board.has_active()) {
                 app.modal = Some(Modal::ConfirmQuit);
@@ -87,18 +87,19 @@ pub async fn dispatch(
                 app.quit = true;
             }
         }
-        // `pane.copy-path` (#286): el catálogo lo declaraba `Live` desde la
-        // GUI de GPUI, que lo implementaba; ésa se retiró y nadie se quedó el
-        // comando, así que el catálogo prometía algo que no hacía nadie.
+        // `pane.copy-path` (#286): the catalogue declared it `Live` from the
+        // GPUI GUI, which implemented it; that one was retired and nobody
+        // kept the command, so the catalogue was promising something nobody
+        // did.
         //
-        // Dos caminos, y el orden importa: primero el helper del escritorio
-        // (`wl-copy`, `xclip`), porque CONTESTA si funcionó; y si no hay
-        // ninguno —lo normal en una sesión por SSH— la secuencia OSC 52, que
-        // es la salida que un terminal tiene y una ventana no. Un terminal
-        // que no la soporte la ignora sin decir nada y no hay forma de
-        // preguntárselo, así que el mensaje DICE por qué camino fue: eso es
-        // lo que convierte una incertidumbre en algo que el lector puede
-        // comprobar pegando.
+        // Two paths, and the order matters: first the desktop's helper
+        // (`wl-copy`, `xclip`), because it ANSWERS whether it worked; and if
+        // there is none —the normal case in an SSH session— the OSC 52
+        // sequence, which is an option a terminal has and a window does not.
+        // A terminal that does not support it ignores it silently and there
+        // is no way to ask it, so the message SAYS which path it took: that
+        // is what turns an uncertainty into something the reader can verify
+        // by pasting.
         Command::PaneCopyPath => {
             let paths = app.focused().marked_paths();
             if paths.is_empty() {
@@ -134,9 +135,9 @@ pub async fn dispatch(
         Command::TabGoto7 => app.tab_goto(7),
         Command::TabGoto8 => app.tab_goto(8),
         Command::TabGoto9 => app.tab_goto(9),
-        // Alternar, y por el MISMO sitio que los paneles laterales: la barra
-        // es cromo de la aplicación, así que abrirla no puede querer decir dos
-        // cosas según desde dónde se pida.
+        // Toggle, and through the SAME place as the side panels: the bar is
+        // the application's chrome, so opening it cannot mean two things
+        // depending on where it is asked from.
         Command::AppMenu => app.toggle_menu(),
         Command::LayoutSplitH => app.layout_split(norte_frontend::layout::Dir::Horizontal),
         Command::LayoutSplitV => app.layout_split(norte_frontend::layout::Dir::Vertical),
@@ -144,9 +145,10 @@ pub async fn dispatch(
         Command::LayoutFocusPrev => app.layout_focus(-1),
         Command::LayoutCloseSlot => {
             if app.layout_close_slot() {
-                // Se DICE, y con el atajo que el preset puesto ata de verdad:
-                // cerrar un panel es fácil sin querer y difícil de deshacer
-                // si no se sabe con qué. La misma frase que la ventana.
+                // Said out loud, with the shortcut the current preset really
+                // binds: closing a panel is easy to do by accident and hard
+                // to undo if you do not know how. The same sentence as the
+                // window.
                 app.message = Some(norte_frontend::notes::slot_closed(
                     app.chord_split_h.clone().as_deref(),
                     lang,
@@ -160,81 +162,90 @@ pub async fn dispatch(
         Command::LayoutEqualize => app.layout_equalize(),
         Command::LayoutFlip => app.layout_flip(),
         Command::LayoutSetTarget => app.layout_set_target(),
-        // L3: abrir el sidebar es el momento de pedir los volúmenes, y el
-        // ÚNICO junto con desplegar su sección. Si ya estaba abierto no se
-        // vuelven a pedir: esa pulsación solo se lleva el teclado.
+        // L3: opening the sidebar is the moment to request the volumes, and
+        // the ONLY one along with unfolding its section. If it was already
+        // open they are not requested again: that press only takes the
+        // keyboard.
         //
-        // La petición se deja apuntada (`App::places_wants_drives`) y la sirve
-        // el bucle: aquí no se hace I/O, y así el mismo camino vale para los
-        // otros sitios donde el panel aparece sin pasar por esta tecla.
+        // The request is left flagged (`App::places_wants_drives`) and the
+        // loop serves it: no I/O happens here, and that way the same path
+        // works for the other places the panel appears without going
+        // through this key.
         Command::LayoutPlaces => app.toggle_places(),
-        // El visor acoplado no pide nada aquí: lo que lea sale de
-        // `preview::want` en el bucle, contra el cursor de cada frame.
+        // The docked viewer asks for nothing here: what it reads comes from
+        // `preview::want` in the loop, against each frame's cursor.
         Command::LayoutPreview => app.toggle_preview(),
         Command::LayoutProcesses => app.toggle_processes(),
         Command::LayoutLog => app.toggle_log(),
         Command::LayoutDiskMap => app.toggle_disk_map(),
-        // La línea de tiempo (fase 7): abrir es colocar el hueco, y leer el
-        // journal se hace AQUÍ, que es donde hay backend — como el selector de
-        // conexiones lee su fichero en su brazo.
+        // The timeline (phase 7): opening is placing the slot, and reading
+        // the journal is done HERE, which is where the backend is — like the
+        // connections selector reads its file in its own arm.
         //
-        // Un daemon sin journal contesta `Unsupported` y se DICE: un panel
-        // vacío y un panel que no puede existir no se leen igual. Y se abre
-        // igual, porque el hueco es lo que da dónde decirlo.
+        // A daemon with no journal answers `Unsupported` and it is SAID: an
+        // empty panel and a panel that cannot exist do not read the same. It
+        // still opens either way, because the slot is what gives it
+        // somewhere to say it.
         Command::LayoutTimeline => {
             app.toggle_timeline();
-            // Se relee SIEMPRE que la tecla deja el panel abierto, no sólo al
-            // crearlo: entre que se cerró y se volvió a abrir ha podido pasar
-            // cualquier cosa —de hecho es lo normal, porque lo que se hace se
-            // hace con el panel cerrado—, y un historial que enseña el de
-            // hace un rato es peor que uno vacío: el vacío se nota.
+            // Re-read EVERY time the key leaves the panel open, not just on
+            // creating it: between closing it and opening it again anything
+            // could have happened —in fact that is the normal case, because
+            // what gets done gets done with the panel closed— and a history
+            // showing an earlier snapshot is worse than an empty one: the
+            // empty one is noticeable.
             if app.timeline_slot().is_some() {
                 cargar_timeline(app, backend, None).await;
             }
         }
-        // #362: el panel de terminal. La tecla abre, da el teclado y lo
-        // devuelve; NO cierra, porque cerrar mata el shell del lector.
+        // #362: the terminal panel. The key opens, gives the keyboard and
+        // returns it; it does NOT close, because closing kills the reader's
+        // shell.
         //
-        // El shell se arranca aquí y no en `toggle_terminal` porque arrancarlo
-        // es I/O —un pty y un proceso— y el estado de la disposición no la
-        // hace. Si falla, se dice y el hueco se queda: un panel vacío que
-        // explica por qué es mejor que una tecla que no responde.
+        // The shell is started here and not in `toggle_terminal` because
+        // starting it is I/O —a pty and a process— and the layout's state
+        // does not do that. If it fails, it is said and the slot stays: an
+        // empty panel that explains why is better than a key that does not
+        // respond.
         Command::LayoutTerminal => {
             if app.terminal.is_some() {
-                // Ya hay shell: esto es sólo el teclado yendo y viniendo, y no
-                // pide directorio ninguno. Pedirlo aquí dejaría al lector sin
-                // poder volver a SU terminal por estar mirando un panel remoto.
+                // There is already a shell: this is just the keyboard coming
+                // and going, and asks for no directory at all. Asking here
+                // would leave the reader unable to get back to THEIR
+                // terminal because they are looking at a remote panel.
                 app.toggle_terminal();
             } else {
-                // Arrancarlo sí pide un directorio local, y `shell_cwd` es
-                // quien ya sabe decir por qué no lo hay — es la misma puerta
-                // que `app.terminal`, y contesta que no sobre un panel remoto.
+                // Starting it does ask for a local directory, and
+                // `shell_cwd` already knows how to say why there is none —
+                // it is the same gate as `app.terminal`, and answers no over
+                // a remote panel.
                 match shell_cwd(app) {
                     Ok(dir) => {
                         app.toggle_terminal();
-                        // El tamaño de verdad lo pone el pintado en cuanto
-                        // sabe qué rectángulo le tocó; éste es el de arranque
-                        // y dura lo que tarda la primera vuelta.
+                        // The real size is set by the paint as soon as it
+                        // knows which rectangle it got; this one is the
+                        // startup size and lasts as long as the first turn
+                        // takes.
                         match crate::termpanel::abrir(&dir, (80, 24)) {
                             Ok(t) => {
-                                // Se deja constancia, como sus dos hermanos y
-                                // con el mismo «no va al diario» escrito: un
-                                // shell que abre el lector es el lector
-                                // actuando con sus permisos, no una mutación
-                                // de norte —no hay actor que atribuir ni
-                                // reversa que grabar—. Pero arrancar un shell
-                                // es lo de más privilegio que hace un
-                                // frontend, y el panel de registro es ahora
-                                // una superficie que se mira.
+                                // Recorded, like its two siblings and with
+                                // the same "not journalled" written: a shell
+                                // the reader opens is the reader acting with
+                                // their own permissions, not a norte mutation
+                                // —there is no actor to attribute and no
+                                // reversal to record—. But starting a shell
+                                // is the most privileged thing a frontend
+                                // does, and the log panel is now a surface
+                                // that gets looked at.
                                 tracing::info!(
                                     "TUI opened a shell in a terminal panel \
                                      (not journalled: no actor, no reversal)"
                                 );
                                 app.terminal = Some(t);
                             }
-                            // El hueco se queda abierto aunque el shell no
-                            // arranque: un panel vacío con el motivo escrito se
-                            // lee mejor que una tecla que no hace nada.
+                            // The slot stays open even if the shell does not
+                            // start: an empty panel with the reason written
+                            // reads better than a key that does nothing.
                             Err(e) => app.message = Some(e.to_string()),
                         }
                     }
@@ -242,21 +253,22 @@ pub async fn dispatch(
                 }
             }
         }
-        // #136: el árbol se abre, se enfoca y se cierra como el sidebar. Su
-        // contenido lo pide el run loop, una rama por vuelta.
+        // #136: the tree opens, focuses and closes like the sidebar. Its
+        // content is requested by the run loop, one branch per turn.
         Command::PaneTree => app.toggle_tree(),
         Command::LayoutMetadata => app.toggle_metadata(),
-        // El listado del directorio de layouts se hace AQUÍ, fuera del
-        // runtime, y llega hecho al `App` (regla 2). Un directorio que no se
-        // puede leer da lista vacía: quedan las cinco de fábrica, que es más
-        // que nada.
+        // The layouts directory's listing is done HERE, off the runtime, and
+        // arrives already built at `App` (rule 2). A directory that cannot
+        // be read gives an empty list: the five factory ones remain, which
+        // is more than nothing.
         Command::LayoutPick => {
-            // Listar Y LEER, las dos cosas fuera del runtime: cada fila del
-            // selector pinta su pantalla, y leerla al pasar el cursor sería
-            // I/O en el bucle (#244 M2, regla 2). Sin directorio de config no
-            // hay ficheros de usuario: quedan las cinco de fábrica. Antes se
-            // caía a `PathBuf::default()`, que es leer `./layouts/` del
-            // directorio actual — o sea, clonar un repo y pulsar F9 (#244 m3).
+            // Listing AND READING, both off the runtime: each row of the
+            // selector paints its screen, and reading it as the cursor
+            // passes over would be I/O in the loop (#244 M2, rule 2). With
+            // no config directory there are no user files: the five factory
+            // ones remain. It used to fall back to `PathBuf::default()`,
+            // which reads `./layouts/` of the current directory — meaning,
+            // cloning a repo and pressing F9 (#244 m3).
             let mine = match config::user_config_dir() {
                 Some(dir) => tokio::task::spawn_blocking(move || {
                     use norte_frontend::layout::config;
@@ -274,12 +286,12 @@ pub async fn dispatch(
             };
             app.open_layout_picker(mine);
         }
-        // Los perfiles. Listar el directorio Y leer el `norte.toml` de cada
-        // uno —de ahí salen el título de la fila y el motivo de una rota— las
-        // dos cosas FUERA del runtime, por lo mismo que las disposiciones
-        // (regla 2, #244). Sin directorio de config no hay perfiles: lista
-        // vacía, y nunca `PathBuf::default()`, que es leer `./profiles/` del
-        // directorio actual (#244 m3).
+        // The profiles. Listing the directory AND reading each one's
+        // `norte.toml` —that is where the row's title and a broken one's
+        // reason come from— both off the runtime, for the same reason as the
+        // layouts (rule 2, #244). With no config directory there are no
+        // profiles: empty list, and never `PathBuf::default()`, which reads
+        // `./profiles/` of the current directory (#244 m3).
         Command::ProfilePick => {
             let perfiles = match config::user_config_dir() {
                 Some(dir) => {
@@ -291,13 +303,13 @@ pub async fn dispatch(
             };
             app.open_profile_picker(perfiles);
         }
-        // #306: guardar lo que hay en pantalla como un perfil. Aquí solo se
-        // abre el prompt; el disco lo toca el Enter, en el run loop.
+        // #306: saving what is on screen as a profile. Only the prompt opens
+        // here; disk is touched by Enter, in the run loop.
         Command::ProfileSaveAs => app.open_profile_save_as(),
-        // `profile.next`/`profile.prev` giran por la lista SIN abrir el
-        // selector, que es lo que quiere quien tiene dos perfiles y alterna.
-        // El cambio en sí lo hace el run loop (tarea 4): aquí solo se dice
-        // cuál toca.
+        // `profile.next`/`profile.prev` cycle through the list WITHOUT
+        // opening the selector, which is what whoever has two profiles and
+        // alternates wants. The switch itself is done by the run loop
+        // (task 4): here only which one is next gets decided.
         Command::ProfileNext | Command::ProfilePrev => {
             let perfiles = match config::user_config_dir() {
                 Some(dir) => {
@@ -313,9 +325,9 @@ pub async fn dispatch(
                 matches!(cmd, Command::ProfileNext),
             );
         }
-        // `pane.sync-nav`: el espejo PERMANENTE. No navega nada por sí mismo
-        // —enciende o apaga el modo y lo dice—; quien espeja es el punto único
-        // por el que pasan todas las navegaciones.
+        // `pane.sync-nav`: the PERMANENT mirror. It navigates nothing by
+        // itself —it switches the mode on or off and says so—; whoever
+        // mirrors is the single point every navigation goes through.
         Command::PaneSyncNav => {
             app.sync_nav = !app.sync_nav;
             app.message = Some(t(if app.sync_nav {
@@ -324,30 +336,31 @@ pub async fn dispatch(
                 "msg-sync-nav-off"
             }));
         }
-        // `pane.mirror`: la ubicación sale del pane con FOCO y viaja el otro.
+        // `pane.mirror`: the location comes from the FOCUSED pane and the
+        // other one travels.
         Command::PaneMirror => {
             let plan = mirror_plan(app);
             let origin = app.focus();
             cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
         }
-        // `pane.mirror-target`: el mismo gesto, pero lo que viaja es el
-        // OBJETIVO DEL CURSOR (la carpeta bajo él, si lo es).
+        // `pane.mirror-target`: the same gesture, but what travels is the
+        // CURSOR's target (the folder under it, if it is one).
         Command::PaneMirrorTarget => {
             let plan = mirror_target_plan(app);
             let origin = app.focus();
             cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
         }
-        // `pane.pull`: el mismo gesto al revés — la ubicación sale del OTRO
-        // pane y viaja el del foco.
+        // `pane.pull`: the same gesture backwards — the location comes from
+        // the OTHER pane and the focused one travels.
         Command::PanePull => {
             let plan = pull_plan(app);
-            // El origen es el MISMO «otro panel» que resolvió el plan.
+            // The origin is the SAME "other panel" the plan resolved.
             let origin = app.target_index().unwrap_or_else(|| app.focus());
             cd_outcome = run_pane_gesture(app, backend, events, plan, origin).await;
         }
-        // `pane.swap`: NO toca disco — los dos listados ya existían y solo
-        // cambian de lado. La mitad que `dispatch` no ve (fill en vuelo,
-        // fetches de decoración, dedup de la sonda) viaja al run loop.
+        // `pane.swap`: does NOT touch disk — both listings already existed
+        // and only switch sides. The half `dispatch` does not see (fill in
+        // flight, decoration fetches, probe dedup) travels to the run loop.
         Command::PaneSwap => {
             app.swap_panes();
             cd_outcome = Cd::Swapped;
@@ -358,22 +371,22 @@ pub async fn dispatch(
         Command::NavForward => {
             cd_outcome = walk_trail(app, backend, events, TrailStep::Forward).await;
         }
-        // `/` (spec 2026-07-18): arranca el quick search en el modo de la
-        // config. Con uno ya activo las teclas se comen antes del resolver,
-        // así que este brazo solo corre para ABRIRLO — sin recursión.
+        // `/` (spec 2026-07-18): starts the quick search in the config's
+        // mode. With one already active the keys get swallowed before the
+        // resolver, so this arm only runs to OPEN it — no recursion.
         Command::PaneQuickSearch => app.focused_mut().quick_start(quick_mode),
-        // `Alt+↓` / `Ctrl+D` (spec 2026-07-18): con el popup abierto sus
-        // teclas se comen antes del resolver (patrón overlay) — estos
-        // brazos solo corren para ABRIRLO.
+        // `Alt+↓` / `Ctrl+D` (spec 2026-07-18): with the popup open its keys
+        // get swallowed before the resolver (overlay pattern) — these arms
+        // only run to OPEN it.
         Command::PaneHistory => app.open_nav_popup(NavPopupKind::History),
         Command::PaneHotlist => app.open_nav_popup(NavPopupKind::Hotlist),
-        // Spec 2026-09-15 D6/D7: populares y la historia de un LADO. El lado
-        // es `panes[0]`/`panes[1]`, como en `pane.select-drive-left/-right`.
+        // Spec 2026-09-15 D6/D7: popular ones and a SIDE's history. The side
+        // is `panes[0]`/`panes[1]`, like in `pane.select-drive-left/-right`.
         Command::PanePopular => app.open_nav_popup(NavPopupKind::Popular),
         Command::PaneHistoryLeft => app.open_side_history(0),
         Command::PaneHistoryRight => app.open_side_history(1),
-        // D5: saltar al punto es una navegación NORMAL —entra en el rastro—,
-        // así que `nav.back` deshace el salto.
+        // D5: jumping to the point is a NORMAL navigation —it enters the
+        // trail— so `nav.back` undoes the jump.
         Command::NavJumpBack => {
             let pane = app.focus();
             match norte_frontend::history::jump_target(&app.history[pane]) {

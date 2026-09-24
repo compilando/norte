@@ -1,21 +1,21 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// El panel que pinta un PLUGIN (fase 3): qué se le pide, cuándo se le pide, y
-// qué se hace con lo que conteste.
+// The panel a PLUGIN paints (phase 3): what it is asked, when it is asked,
+// and what is done with what it answers.
 //
-// Lo que NO se prueba aquí, dicho para que no se lea como un olvido: un
-// testigo caducado y un hueco que cambia de plugin a media petición no se
-// pueden provocar desde fuera —el estado del controlador es `pub(super)`—, así
-// que esa lógica vive probada en el terminal (`panelplugin::adoptar` y sus
-// tests), donde es la misma decisión escrita una vez.
+// What is NOT tested here, said so it does not read as an oversight: an
+// expired witness and a slot that changes plugin mid-request cannot be
+// triggered from outside — the controller's state is `pub(super)` — so that
+// logic lives tested in the terminal (`panelplugin::adoptar` and its tests),
+// where it is the same decision written once.
 // ---------------------------------------------------------------------------
 
 const PLUGIN: &str = "acme.git";
 const KIND: &str = "plugin:acme.git:status";
 const SLOT: u32 = 9;
 
-/// Un plugin consentido que aporta el panel `status`.
+/// A consented plugin that contributes the `status` panel.
 fn extension_con_panel() -> norte_proto::methods::PluginInfo {
     let mut e = extension(PLUGIN, "Git de ACME", false);
     "panel".clone_into(&mut e.category);
@@ -28,12 +28,12 @@ fn extension_con_panel() -> norte_proto::methods::PluginInfo {
     e
 }
 
-/// Un marco cualquiera del guest, con una zona pulsable.
-fn marco(texto: &str, comando: &str) -> norte_proto::methods::PanelFrame {
+/// Any frame from the guest, with a clickable zone.
+fn frame(text: &str, command: &str) -> norte_proto::methods::PanelFrame {
     norte_proto::methods::PanelFrame {
         plugin_id: PLUGIN.to_owned(),
         lines: vec![vec![norte_proto::methods::SpanWire {
-            text: texto.to_owned(),
+            text: text.to_owned(),
             role: None,
             fg: None,
             bg: None,
@@ -42,18 +42,18 @@ fn marco(texto: &str, comando: &str) -> norte_proto::methods::PanelFrame {
             row: 0,
             col: 0,
             width: 8,
-            command: comando.to_owned(),
+            command: command.to_owned(),
             arg: None,
         }],
         state: Some(b"opaco".to_vec()),
     }
 }
 
-/// Un host con un listado y, al lado, el hueco del panel del plugin.
+/// A host with a listing and, next to it, the plugin panel's slot.
 async fn host_con_panel(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
     use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-    let arbol = Node::Split {
+    let tree = Node::Split {
         dir: Dir::Horizontal,
         sizes: vec![Size::Weight(1), Size::Fixed(30)],
         children: vec![
@@ -61,7 +61,7 @@ async fn host_con_panel(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnap
             Node::slot(SlotId(SLOT), KindId::new(KIND)),
         ],
     };
-    norte_frontend::layout::validate(&arbol).expect("el árbol es válido");
+    norte_frontend::layout::validate(&tree).expect("the tree is valid");
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
@@ -71,7 +71,7 @@ async fn host_con_panel(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnap
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
         keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
-        layout: arbol,
+        layout: tree,
         viewport: (120, 40),
         settings: ajustes_de_prueba(),
         paths: norte_ui_host::settings::HostPaths::default(),
@@ -83,22 +83,22 @@ async fn host_con_panel(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnap
         log_ring: None,
     })
     .await
-    .expect("arranca")
+    .expect("starts")
 }
 
-/// El backend falso con el catálogo y el marco puestos.
-fn backend_con(marco: Option<norte_proto::methods::PanelFrame>) -> Arc<Falso> {
+/// The fake backend with the catalogue and the frame set.
+fn backend_con(frame: Option<norte_proto::methods::PanelFrame>) -> Arc<Falso> {
     let base = arbol_con_plugins(vec![extension_con_panel()], &[]);
     let mut f = Falso {
         plugins: vec![extension_con_panel()].into(),
-        marco_de_panel: marco,
+        marco_de_panel: frame,
         ..Falso::default()
     };
     f.arbol.clone_from(&base.arbol);
     Arc::new(f)
 }
 
-/// El panel del hueco, si la foto lo trae con marco.
+/// The slot's panel, if the snapshot carries it with a frame.
 fn panel_de(snap: &norte_ui_host::ViewSnapshot) -> Option<&norte_ui_host::dto::PanelSlotView> {
     snap.slots.iter().find_map(|s| match s {
         SlotView::Panel(p) if p.slot_id == SLOT => Some(&**p),
@@ -106,115 +106,122 @@ fn panel_de(snap: &norte_ui_host::ViewSnapshot) -> Option<&norte_ui_host::dto::P
     })
 }
 
-/// Lo que el guest describe acaba en la foto, y con el título del panel.
+/// What the guest describes ends up in the snapshot, and with the panel's
+/// title.
 ///
-/// El hueco se coloca antes de que el catálogo llegue, así que la primera foto
-/// lo lleva sin marco: lo que este test fija es que la SEGUNDA, después de que
-/// el panel esté declarado y su marco haya aterrizado, lo trae pintado.
+/// The slot is placed before the catalogue arrives, so the first snapshot
+/// carries it with no frame: what this test pins down is that the SECOND
+/// one, after the panel is declared and its frame has landed, brings it
+/// painted.
 #[tokio::test]
-async fn el_marco_del_guest_llega_a_la_foto() {
-    let backend = backend_con(Some(marco("rama main", "layout.focus-next")));
+async fn the_guests_frame_reaches_the_snapshot() {
+    let backend = backend_con(Some(frame("rama main", "layout.focus-next")));
     let (h, snap) = host_con_panel(Arc::clone(&backend)).await;
     assert!(
         panel_de(&snap).is_some_and(|p| p.lines.is_empty()),
-        "la primera foto lleva el hueco sin marco todavía"
+        "the first snapshot carries the slot with no frame yet"
     );
     let mut sub = h.subscribe();
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let vista = siguiente_foto(&mut sub).await;
-    let panel = panel_de(&vista).expect("el hueco sigue siendo un panel");
-    assert_eq!(panel.title, "status", "el título es el kind, sin prefijo");
-    let texto: String = panel
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let view = siguiente_foto(&mut sub).await;
+    let panel = panel_de(&view).expect("the slot is still a panel");
+    assert_eq!(
+        panel.title, "status",
+        "the title is the kind, with no prefix"
+    );
+    let text: String = panel
         .lines
         .iter()
         .flat_map(|l| l.iter().map(|s| s.text.clone()))
         .collect();
-    assert_eq!(texto, "rama main");
-    assert_eq!(panel.hits.len(), 1, "y su zona, sin comando");
+    assert_eq!(text, "rama main");
+    assert_eq!(panel.hits.len(), 1, "and its zone, with no command");
 }
 
-/// Se pide UNA vez por firma: no una por mensaje del actor.
+/// It is requested ONCE per signature: not once per actor message.
 ///
-/// Es el fallo que el terminal tuvo que arreglar —una RPC por frame pintado—,
-/// y aquí el equivalente sería una por tecla.
+/// It is the failure the terminal had to fix — one RPC per painted frame —
+/// and here the equivalent would be one per keystroke.
 #[tokio::test]
-async fn no_se_pide_dos_veces_lo_mismo() {
-    let backend = backend_con(Some(marco("rama main", "layout.focus-next")));
+async fn the_same_thing_is_not_requested_twice() {
+    let backend = backend_con(Some(frame("rama main", "layout.focus-next")));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
     asentar().await;
     for _ in 0..5 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         asentar().await;
     }
-    let pedidos = backend.paneles_pedidos.lock().expect("mutex").len();
-    assert_eq!(pedidos, 1, "cinco mensajes, una petición: {pedidos}");
+    let requested = backend.paneles_pedidos.lock().expect("mutex").len();
+    assert_eq!(requested, 1, "five messages, one request: {requested}");
 }
 
-/// Y lo que se le cuenta al guest es lo que está mirando el lector: el
-/// directorio, el hueco SIN su marco, y la fila bajo el cursor.
+/// And what the guest is told is what the reader is looking at: the
+/// directory, the slot WITHOUT its frame, and the row under the cursor.
 #[tokio::test]
-async fn al_guest_se_le_cuenta_donde_esta_el_lector() {
-    let backend = backend_con(Some(marco("rama main", "layout.focus-next")));
+async fn the_guest_is_told_where_the_reader_is() {
+    let backend = backend_con(Some(frame("rama main", "layout.focus-next")));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     asentar().await;
 
-    let pedidos = backend.paneles_pedidos.lock().expect("mutex");
-    let p = pedidos.first().expect("se pidió el marco");
+    let requested = backend.paneles_pedidos.lock().expect("mutex");
+    let p = requested.first().expect("the frame was requested");
     assert_eq!(p.plugin_id, PLUGIN);
-    assert_eq!(p.kind, "status", "el kind del plugin, sin el prefijo");
-    assert_eq!(p.dir, dir(), "el directorio que el listado enseña");
-    assert_eq!(p.cols, 28, "treinta celdas menos los dos bordes");
-    assert!(p.cursor_name.is_some(), "y la fila bajo el cursor");
+    assert_eq!(p.kind, "status", "the plugin's kind, with no prefix");
+    assert_eq!(p.dir, dir(), "the directory the listing shows");
+    assert_eq!(p.cols, 28, "thirty cells minus the two borders");
+    assert!(p.cursor_name.is_some(), "and the row under the cursor");
 }
 
-/// Sin plugin que lo pinte, el hueco se queda sin marco y NO se repide.
+/// With no plugin to paint it, the slot stays with no frame and is NOT
+/// re-requested.
 ///
-/// Pasa sin nada hostil: una disposición guardada que nombra un panel cuyo
-/// plugin se desactivó. Repetirlo por mensaje sería una RPC por tecla.
+/// It happens with nothing hostile involved: a saved layout that names a
+/// panel whose plugin got disabled. Repeating it per message would be one
+/// RPC per keystroke.
 #[tokio::test]
-async fn un_panel_sin_marco_no_se_repide() {
+async fn a_panel_with_no_frame_is_not_re_requested() {
     let backend = backend_con(None);
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
     asentar().await;
     for _ in 0..4 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         asentar().await;
     }
-    let pedidos = backend.paneles_pedidos.lock().expect("mutex").len();
-    assert_eq!(pedidos, 1, "se intentó una vez y se anotó: {pedidos}");
+    let requested = backend.paneles_pedidos.lock().expect("mutex").len();
+    assert_eq!(requested, 1, "it was tried once and recorded: {requested}");
 }
 
-/// Un marco firmado por OTRO plugin no se pinta.
+/// A frame signed by ANOTHER plugin does not get painted.
 #[tokio::test]
-async fn un_marco_de_otro_plugin_no_se_pinta() {
-    let mut ajeno = marco("soy otro", "layout.focus-next");
-    ajeno.plugin_id = "evil.thing".to_owned();
-    let backend = backend_con(Some(ajeno));
+async fn a_frame_from_another_plugin_does_not_paint() {
+    let mut foreign = frame("soy otro", "layout.focus-next");
+    foreign.plugin_id = "evil.thing".to_owned();
+    let backend = backend_con(Some(foreign));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let vista = siguiente_foto(&mut sub).await;
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let view = siguiente_foto(&mut sub).await;
     assert!(
-        panel_de(&vista).is_some_and(|p| p.lines.is_empty()),
-        "el hueco sigue sin marco"
+        panel_de(&view).is_some_and(|p| p.lines.is_empty()),
+        "the slot is still without a frame"
     );
 }
 
-/// Pulsar una zona cuyo comando está FUERA de su alcance no ejecuta nada.
+/// Clicking a zone whose command is OUTSIDE its scope runs nothing.
 ///
-/// El plugin elige la etiqueta y el comando, y nada los ata: una zona que pone
-/// «Actualizar» puede nombrar algo que copia ficheros. El consentimiento fue
-/// para pintar.
+/// The plugin chooses the label and the command, and nothing ties them
+/// together: a zone that says "Update" can name something that copies
+/// files. Consent was for painting.
 #[tokio::test]
-async fn una_zona_fuera_de_su_alcance_no_ejecuta_nada() {
-    let backend = backend_con(Some(marco("Actualizar", "pane.unpack")));
+async fn a_zone_outside_its_scope_runs_nothing() {
+    let backend = backend_con(Some(frame("Actualizar", "pane.unpack")));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     asentar().await;
 
     let ack = h
@@ -224,24 +231,24 @@ async fn una_zona_fuera_de_su_alcance_no_ejecuta_nada() {
             col: 1,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
-        "no es un error del lector, simplemente no hace nada: {ack:?}"
+        "not an error for the reader, it simply does nothing: {ack:?}"
     );
     assert!(
         backend.ejecutados.lock().expect("ejecutados").is_empty(),
-        "y desde luego no se ejecuta"
+        "and it certainly does not run"
     );
 }
 
-/// Una celda sin zona tampoco hace nada, y no es un error.
+/// A cell with no zone also does nothing, and it is not an error.
 #[tokio::test]
-async fn una_celda_sin_zona_no_hace_nada() {
-    let backend = backend_con(Some(marco("rama main", "layout.focus-next")));
+async fn a_cell_with_no_zone_does_nothing() {
+    let backend = backend_con(Some(frame("rama main", "layout.focus-next")));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
     asentar().await;
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
     asentar().await;
 
     let ack = h
@@ -251,6 +258,6 @@ async fn una_celda_sin_zona_no_hace_nada() {
             col: 40,
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
 }

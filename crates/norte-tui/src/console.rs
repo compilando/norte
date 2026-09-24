@@ -1,71 +1,72 @@
-//! La terminal viva, en las DOS direcciones: lo que el lector teclea y lo que
-//! se le pinta.
+//! The live terminal, in BOTH directions: what the reader types and what gets
+//! painted for them.
 //!
-//! Existía solo la primera mitad. Una espera larga —`cd` a un bucket remoto,
-//! que puede tardar segundos— corría su propio `select!` leyendo teclas para
-//! poder cancelarse, y en todo ese rato nadie repintaba: la pantalla se quedaba
-//! con el último fotograma, que es indistinguible de un cuelgue. El arreglo no
-//! es un indicador, es que quien espera pueda pintar; el indicador viene
-//! después ([`norte_frontend::busy`]).
+//! Only the first half used to exist. A long wait — a `cd` to a remote
+//! bucket, which can take seconds — ran its own `select!` reading keys so it
+//! could be cancelled, and during all that time nobody repainted: the screen
+//! stayed on the last frame, which is indistinguishable from a hang. The fix
+//! is not an indicator, it is that whoever waits can paint; the indicator
+//! comes after ([`norte_frontend::busy`]).
 //!
-//! Van juntos y no como dos parámetros por el mismo motivo que
-//! `jobs::inflight` juntó diecisiete variables de `run`: quien espera
-//! necesita exactamente estos dos, siempre los dos, y separarlos hace que cada
-//! función del camino nazca con un parámetro más.
+//! They travel together and not as two parameters, for the same reason
+//! `jobs::inflight` bundled seventeen of `run`'s variables: whoever waits
+//! needs exactly these two, always both, and separating them makes every
+//! function along the way born with one more parameter.
 
 use crossterm::event::EventStream;
 
 use crate::app::App;
 
-/// El stream de eventos más con qué repintar mientras se espera.
+/// The event stream plus something to repaint with while waiting.
 pub struct Console<'a> {
-    /// Lo que el lector teclea. Público: los `select!` lo usan directamente —
-    /// un método `next_event(&mut self)` retendría `&mut self` durante todo el
-    /// future y el brazo que repinta, en el mismo `select!`, no compilaría.
+    /// What the reader types. Public: `select!` uses it directly — a
+    /// `next_event(&mut self)` method would hold `&mut self` for the whole
+    /// future, and the repainting arm, in the same `select!`, would not
+    /// compile.
     pub events: &'a mut EventStream,
     paint: Paint<'a>,
-    /// Ya se avisó de un fallo de repintado en esta consola.
-    fallo_avisado: bool,
+    /// A repaint failure has already been warned about on this console.
+    failure_warned: bool,
 }
 
-/// Con qué se pinta, si se puede pintar.
+/// What to paint with, if painting is possible at all.
 enum Paint<'a> {
-    /// El bucle de eventos, que tiene la terminal.
+    /// The event loop, which owns the terminal.
     Terminal(&'a mut crate::tty::Tui),
-    /// No hay con qué. EXPLÍCITO, y no un `Option` que alguien olvidó
-    /// rellenar: un test sin terminal y un contexto que de verdad no puede
-    /// pintar deben decirlo, no parecerse a un descuido.
+    /// Nothing to paint with. EXPLICIT, and not an `Option` someone forgot to
+    /// fill in: a test with no terminal and a context that truly cannot paint
+    /// must say so, not look like an oversight.
     Detached,
 }
 
 impl<'a> Console<'a> {
-    /// La consola del bucle: lee y pinta.
+    /// The loop's console: reads and paints.
     pub fn new(events: &'a mut EventStream, terminal: &'a mut crate::tty::Tui) -> Self {
         Self {
             events,
             paint: Paint::Terminal(terminal),
-            fallo_avisado: false,
+            failure_warned: false,
         }
     }
 
-    /// Una consola que solo lee (tests, y cualquier contexto sin terminal).
+    /// A console that only reads (tests, and any context with no terminal).
     pub fn detached(events: &'a mut EventStream) -> Self {
         Self {
             events,
             paint: Paint::Detached,
-            fallo_avisado: false,
+            failure_warned: false,
         }
     }
 
-    /// La terminal, para quien la necesita para algo que no es repintar:
-    /// arrancar un editor, suspenderse, medir la pantalla.
+    /// The terminal, for whoever needs it for something other than
+    /// repainting: launching an editor, suspending, measuring the screen.
     ///
-    /// Existe porque la terminal tiene UN dueño y ahora es esta consola: dos
-    /// `&mut` a la vez no compilan, y un segundo parámetro `terminal` al lado
-    /// de la consola sería justo el desdoble que este tipo vino a evitar.
-    /// `None` en una consola desligada — y ahí, quien iba a lanzar algo, no
-    /// lanza nada: es lo correcto, no una degradación (sin terminal no hay
-    /// nada que ceder).
+    /// Exists because the terminal has ONE owner and it is now this console:
+    /// two `&mut`s at once do not compile, and a second `terminal` parameter
+    /// alongside the console would be exactly the duplication this type came
+    /// to avoid. `None` on a detached console — and there, whoever was about
+    /// to launch something launches nothing: that is correct, not a
+    /// degradation (with no terminal there is nothing to hand over).
     pub fn terminal(&mut self) -> Option<&mut crate::tty::Tui> {
         match &mut self.paint {
             Paint::Terminal(t) => Some(t),
@@ -73,62 +74,62 @@ impl<'a> Console<'a> {
         }
     }
 
-    /// Repinta con el estado actual, si hay con qué.
+    /// Repaints with the current state, if there is something to paint with.
     ///
-    /// EXENCIÓN puntual de la regla 2, la misma que el `draw` del bucle de
-    /// eventos y por el mismo motivo (patrón async oficial de ratatui): el
-    /// dibujo escribe la terminal de control de forma síncrona. Aquí hay UNA
-    /// diferencia que conviene tener escrita: el bucle dibuja cuando no hay
-    /// nada en vuelo, y esto dibuja mientras la ÚNICA vía de cancelación está
-    /// pendiente. Si la terminal se atasca escribiendo (un XOFF, un pty remoto
-    /// con el buffer lleno), el `select!` no avanza y `Esc` deja de responder
-    /// mientras dure el atasco. Se acepta porque la alternativa —no repintar—
-    /// es el fallo que esto viene a arreglar, y porque el bucle corre esa misma
-    /// exposición en cada vuelta.
+    /// A one-off EXEMPTION from rule 2, the same one the event loop's `draw`
+    /// has and for the same reason (ratatui's official async pattern): the
+    /// draw writes the control terminal synchronously. There is ONE
+    /// difference here worth having written down: the loop draws when
+    /// nothing is in flight, and this draws while the ONLY cancellation path
+    /// is pending. If the terminal stalls writing (an XOFF, a remote pty with
+    /// a full buffer), the `select!` does not advance and `Esc` stops
+    /// responding for as long as the stall lasts. It is accepted because the
+    /// alternative — not repainting — is the failure this exists to fix, and
+    /// because the loop runs that same exposure every turn.
     ///
-    /// Best-effort A PROPÓSITO: un fallo de dibujo no puede cambiar el tipo de
-    /// retorno de una navegación (ni convertir «no pude pintar el spinner» en
-    /// «la navegación falló»), y no se pierde nada — el `draw` del bucle, que
-    /// sí es fatal, vuelve a intentarlo en cuanto la espera acaba.
+    /// Best-effort ON PURPOSE: a draw failure must not change a navigation's
+    /// return type (nor turn "could not paint the spinner" into "the
+    /// navigation failed"), and nothing is lost — the loop's `draw`, which is
+    /// fatal, tries again as soon as the wait ends.
     pub fn repaint(&mut self, app: &App) {
         if let Paint::Terminal(term) = &mut self.paint
             && let Err(e) = term.draw(|f| crate::ui::draw(f, app))
         {
-            // Una vez por espera, no doce por segundo: una terminal rota
-            // durante diez minutos son 7500 líneas idénticas que entierran lo
-            // que sí importa en el log.
-            if !self.fallo_avisado {
-                self.fallo_avisado = true;
-                tracing::warn!(error = %e, "no se pudo repintar durante una espera");
+            // Once per wait, not twelve times a second: a terminal broken for
+            // ten minutes is 7500 identical lines burying what actually
+            // matters in the log.
+            if !self.failure_warned {
+                self.failure_warned = true;
+                tracing::warn!(error = %e, "could not repaint during a wait");
             }
         }
     }
 }
 
-/// Cómo acabó una espera pintada.
+/// How a painted wait ended.
 pub enum Waited<T> {
-    /// El trabajo terminó.
+    /// The work finished.
     Done(T),
-    /// El lector pulsó `Esc`.
+    /// The reader pressed `Esc`.
     Cancelled,
-    /// El lector pulsó `Ctrl+C`: cancelar Y salir.
+    /// The reader pressed `Ctrl+C`: cancel AND quit.
     Quit,
 }
 
-/// Espera `fut` repintando el spinner y dejando cancelar.
+/// Waits on `fut`, repainting the spinner and allowing cancellation.
 ///
-/// Es el patrón de TODA espera larga del TUI, y está aquí en vez de repetido
-/// porque repetirlo fue el fallo: cuando solo lo tenía la navegación, el
-/// refresco de paneles y la apertura del visor seguían congelando la pantalla
-/// exactamente igual, y con una consola en la mano que ya sabía pintar. Quien
-/// añada la cuarta espera hereda el spinner por usar esto.
+/// This is the pattern for EVERY long wait in the TUI, and it is here instead
+/// of repeated because repeating it was the bug: when only navigation had it,
+/// refreshing panes and opening the viewer kept freezing the screen exactly
+/// the same way, with a console in hand that already knew how to paint.
+/// Whoever adds the fourth wait inherits the spinner by using this.
 ///
-/// `Esc` y `Ctrl+C` son FIJOS aquí, no pasan por el keymap: son la salida de
-/// emergencia y no deben poder remapearse a algo que no exista. El resto de
-/// teclas se descarta mientras dura la espera.
+/// `Esc` and `Ctrl+C` are FIXED here, they do not go through the keymap: they
+/// are the emergency exit and must not be remappable to something that does
+/// not exist. Every other key is discarded while the wait lasts.
 ///
-/// El llamante pone `app.busy` ANTES y lo quita DESPUÉS; esto solo le va
-/// poniendo al día lo transcurrido.
+/// The caller sets `app.busy` BEFORE and clears it AFTER; this only keeps it
+/// updated with the elapsed time.
 pub async fn wait_painting<T>(
     console: &mut Console<'_>,
     app: &mut App,
@@ -138,8 +139,8 @@ pub async fn wait_painting<T>(
     use futures::StreamExt as _;
 
     tokio::pin!(fut);
-    // Al ritmo del spinner y no a otro: con dos constantes distintas, el
-    // fotograma se salta o se repite y nadie se entera.
+    // At the spinner's pace and no other: with two different constants, the
+    // frame skips or repeats and nobody notices.
     let mut tick = tokio::time::interval(norte_frontend::busy::FRAME_EVERY);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -148,8 +149,9 @@ pub async fn wait_painting<T>(
             _ = tick.tick() => {
                 if let Some(b) = &mut app.busy {
                     b.elapsed = started.elapsed();
-                    // Antes del umbral no hay nada nuevo que enseñar: repintar
-                    // un fotograma idéntico es trabajo que el lector paga.
+                    // Before the threshold there is nothing new to show:
+                    // repainting an identical frame is work the reader pays
+                    // for.
                     if b.visible() {
                         console.repaint(app);
                     }
@@ -170,8 +172,8 @@ pub async fn wait_painting<T>(
                         }
                     }
                     Some(Ok(_)) => {}
-                    // El stream de eventos se acabó o se rompió: no hay quien
-                    // cancele ni quien siga, así que se abandona la espera.
+                    // The event stream ended or broke: there is nobody left
+                    // to cancel or to continue, so the wait is abandoned.
                     Some(Err(_)) | None => return Waited::Cancelled,
                 }
             }

@@ -1,5 +1,5 @@
-//! La superficie [`Backend::Embedded`] (fase 3 M2): el mismo contrato que
-//! el remoto, contra el `Engine` in-process — sin socket.
+//! The [`Backend::Embedded`] surface (phase 3 M2): the same contract as the
+//! remote one, against the in-process `Engine` — no socket.
 
 use std::sync::Arc;
 
@@ -13,7 +13,7 @@ use norte_testkit::MemProvider;
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
@@ -52,15 +52,15 @@ async fn embedded_list_read_capabilities() {
     let caps = backend.capabilities(&vp("mem:///")).await.expect("caps");
     assert!(caps.flags.contains(CapabilityFlags::TRASH));
 
-    // Embebido no tiene canales de daemon.
+    // Embedded has no daemon channels.
     assert!(backend.take_foreign_tasks().is_none());
     assert!(backend.take_conn_events().is_none());
 }
 
 #[tokio::test]
-async fn embedded_copy_move_delete_como_tasks() {
+async fn embedded_copy_move_delete_as_tasks() {
     let (backend, mem) = embedded();
-    write_file(&mem, "mem:///a", b"datos").await;
+    write_file(&mem, "mem:///a", b"data").await;
 
     let task = backend
         .copy(&vp("mem:///a"), &vp("mem:///b"), TransferOptions::default())
@@ -90,16 +90,16 @@ async fn embedded_copy_move_delete_como_tasks() {
     );
 }
 
-/// #104: mkdir como Task por el backend embebido — crea, y el destino
-/// ocupado falla (sin -p, sin idempotencia).
+/// #104: mkdir as a Task through the embedded backend — it creates, and an
+/// occupied destination fails (no -p, no idempotence).
 #[tokio::test]
-async fn embedded_mkdir_como_task() {
+async fn embedded_mkdir_as_a_task() {
     let (backend, mem) = embedded();
-    let task = backend.mkdir(&vp("mem:///nueva")).await.expect("mkdir");
+    let task = backend.mkdir(&vp("mem:///new")).await.expect("mkdir");
     assert_eq!(task.join().await, TaskState::Completed);
-    assert!(mem.stat(&vp("mem:///nueva")).await.is_ok());
+    assert!(mem.stat(&vp("mem:///new")).await.is_ok());
 
-    let task = backend.mkdir(&vp("mem:///nueva")).await.expect("submit");
+    let task = backend.mkdir(&vp("mem:///new")).await.expect("submit");
     assert!(matches!(task.join().await, TaskState::Failed { .. }));
 }
 
@@ -122,26 +122,27 @@ async fn embedded_cancel_via_canceller() {
 }
 
 #[tokio::test]
-async fn embedded_clonado_comparte_engine_y_stat_funciona() {
+async fn a_clone_shares_the_engine_and_stat_works() {
     let (backend, mem) = embedded();
     write_file(&mem, "mem:///f", b"x").await;
 
-    // El clon debe compartir el mismo Engine (Arc), no montar uno nuevo.
+    // The clone must share the same Engine (Arc), not mount a new one.
     let clone = backend.clone();
     let entry = clone.stat(&vp("mem:///f")).await.expect("stat");
     assert_eq!(entry.size, Some(1));
 
-    // El original sigue funcionando tras clonar (no se movió el Arc).
-    let entry2 = backend.stat(&vp("mem:///f")).await.expect("stat original");
+    // The original still works after cloning (the Arc was not moved).
+    let entry2 = backend.stat(&vp("mem:///f")).await.expect("original stat");
     assert_eq!(entry2.size, Some(1));
 }
 
-/// `Backend::search` embebido = passthrough al walker del engine como
-/// `Actor::User`: devuelve `(TaskRef, rx)` y los lotes de hits llegan por el
-/// canal directo (el walker cierra `tx` al terminar, así que `rx` se cierra
-/// solo). Mismo contrato que el remoto (ver `backend_remote.rs`).
+/// Embedded `Backend::search` = a passthrough to the engine's walker as
+/// `Actor::User`: it returns `(TaskRef, rx)` and the hit batches arrive over
+/// the direct channel (the walker closes `tx` when it finishes, so `rx`
+/// closes on its own). Same contract as the remote one (see
+/// `backend_remote.rs`).
 #[tokio::test]
-async fn embedded_search_stream_de_hits() {
+async fn embedded_search_hits_stream() {
     let (backend, mem) = embedded();
     write_file(&mem, "mem:///a.rs", b"").await;
     write_file(&mem, "mem:///b.txt", b"").await;
@@ -174,39 +175,45 @@ async fn embedded_search_stream_de_hits() {
 }
 
 #[tokio::test]
-async fn embedded_errores_son_taxonomia() {
+async fn embedded_errors_are_taxonomy() {
     let (backend, _mem) = embedded();
     assert_eq!(
-        backend.list(&vp("mem:///no-existe")).await.unwrap_err(),
+        backend
+            .list(&vp("mem:///does-not-exist"))
+            .await
+            .unwrap_err(),
         Error::NotFound
     );
     assert_eq!(
         backend
-            .read(&vp("mem:///no-existe"), None)
+            .read(&vp("mem:///does-not-exist"), None)
             .await
             .unwrap_err(),
         Error::NotFound
     );
 }
 
-// ---------- attrs (#108 bloque 2) ----------
+// ---------- attrs (#108 block 2) ----------
 
 #[tokio::test]
-async fn embedded_sanea_catalogo_y_pide_attrs() {
+async fn embedded_sanitizes_catalogue_and_requests_attrs() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new().with_synthetic_attrs());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
     let backend = Backend::Embedded(Arc::new(engine));
     write_file(&mem, "mem:///f.txt", b"x").await;
 
-    // Catálogo por el camino embebido: pasa por AttrCatalog::new (ADR 0039 §4).
+    // Catalogue through the embedded path: goes through AttrCatalog::new (ADR 0039 §4).
     let cat = backend
         .attr_catalog(&vp("mem:///"))
         .await
-        .expect("catálogo");
-    assert!(cat.iter().any(|a| a.id == "mem.owner"), "catálogo: {cat:?}");
+        .expect("catalogue");
+    assert!(
+        cat.iter().any(|a| a.id == "mem.owner"),
+        "catalogue: {cat:?}"
+    );
 
-    // stat_attrs materializa lo pedido; bytes crudos sobreviven (regla 1).
+    // stat_attrs materializes what was requested; raw bytes survive (rule 1).
     let e = backend
         .stat_attrs(&vp("mem:///f.txt"), &["mem.owner".to_owned()])
         .await
@@ -216,7 +223,8 @@ async fn embedded_sanea_catalogo_y_pide_attrs() {
         Some(norte_proto::AttrValue::Bytes(_))
     ));
 
-    // list_with_skipped_attrs: cada entrada lleva lo pedido; sin pedir, nada.
+    // list_with_skipped_attrs: every entry carries what was requested; without
+    // asking, nothing.
     let (entries, _) = backend
         .list_with_skipped_attrs(&vp("mem:///"), &["mem.mode".to_owned()])
         .await
@@ -229,15 +237,16 @@ async fn embedded_sanea_catalogo_y_pide_attrs() {
     assert!(bare.iter().all(|e| e.attrs.is_empty()));
 }
 
-/// H3d: las DOS mitades de `fs.capabilities` en UNA llamada, y las mismas que
-/// devuelven los dos accesores por separado.
+/// H3d: BOTH halves of `fs.capabilities` in ONE call, and the same values the
+/// two accessors return separately.
 ///
-/// Existe porque los frontends quieren ambas: la TUI cachea el catálogo para
-/// sus columnas y los flags para responder «¿es de solo lectura?» sin volver a
-/// preguntar. Con `capabilities` y `attr_catalog` cada una tirando la otra
-/// mitad, eso eran dos rondas por un mensaje que ya las traía juntas.
+/// This exists because frontends want both: the TUI caches the catalogue for
+/// its columns and the flags to answer "is this read-only?" without asking
+/// again. With `capabilities` and `attr_catalog` each throwing away the other
+/// half, that was two round trips for a message that already carried them
+/// together.
 #[tokio::test]
-async fn embedded_capabilities_y_attrs_en_una_llamada() {
+async fn embedded_capabilities_and_attrs_in_one_call() {
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new().with_synthetic_attrs());
     engine.register_provider(Arc::clone(&mem) as Arc<dyn Provider>);
@@ -246,29 +255,29 @@ async fn embedded_capabilities_y_attrs_en_una_llamada() {
     let (caps, cat) = backend
         .capabilities_and_attrs(&vp("mem:///"))
         .await
-        .expect("las dos mitades");
+        .expect("both halves");
     assert_eq!(
         caps,
         backend.capabilities(&vp("mem:///")).await.expect("caps"),
-        "los flags son los mismos que por el accesor de siempre"
+        "the flags are the same as the usual accessor's"
     );
     assert_eq!(
         cat.iter().map(|a| a.id.clone()).collect::<Vec<_>>(),
         backend
             .attr_catalog(&vp("mem:///"))
             .await
-            .expect("catálogo")
+            .expect("catalogue")
             .iter()
             .map(|a| a.id.clone())
             .collect::<Vec<_>>(),
-        "y el catálogo también: esto no es un camino con otro saneo"
+        "and so is the catalogue: this is not a path with different sanitizing"
     );
 }
 
 // ------------------------------------------------- sync.plan / sync.apply
 
-/// Backend embebido con journal y spool: lo que hace falta para sincronizar de
-/// verdad. Sin cualquiera de los dos, el engine rehúsa (y hay un test debajo).
+/// An embedded backend with a journal and a spool: what is needed to really
+/// sync. Without either, the engine refuses (and there is a test below).
 async fn embedded_sync() -> (Backend, Arc<MemProvider>, tempfile::TempDir) {
     let dir = tempfile::tempdir().expect("tempdir");
     let journal = Arc::new(norte_core::SqliteJournal::new(
@@ -294,15 +303,15 @@ fn sync_params(source: &str, dest: &str) -> norte_proto::methods::SyncPlanParams
     }
 }
 
-/// El ciclo entero por el `Backend` embebido: planificar, cerrar con el hash,
-/// aplicar ese hash y leer el informe. Es lo que la TUI hará, y hasta esta tarea
-/// no había método al que llamar.
+/// The whole cycle through the embedded `Backend`: plan, close with the hash,
+/// apply that hash and read the report. This is what the TUI will do, and
+/// until this task there was no method to call.
 ///
-/// La conexión embebida es UNA: si planificar y aplicar no usaran el mismo
-/// `conn_id`, el `sync_apply` de este mismo `Backend` contestaría `PlanStale` a
-/// su propio plan. Este test es lo que lo pinea.
+/// The embedded connection is ONE: if planning and applying did not use the
+/// same `conn_id`, this same `Backend`'s `sync_apply` would answer `PlanStale`
+/// to its own plan. This test is what pins that down.
 #[tokio::test]
-async fn embedded_sync_plan_y_apply_cierran_el_ciclo() {
+async fn embedded_sync_plan_and_apply_close_the_cycle() {
     let (backend, mem, _dir) = embedded_sync().await;
     mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
     mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
@@ -313,49 +322,50 @@ async fn embedded_sync_plan_y_apply_cierran_el_ciclo() {
         .await
         .expect("sync.plan");
     let mut done = None;
-    let mut pasos = 0usize;
+    let mut steps = 0usize;
     while let Some(event) = rx.recv().await {
         match event {
             norte_core::sync::SyncPlanEvent::Steps(b) => {
-                assert!(done.is_none(), "el cierre tiene que ser el último");
-                pasos += b.steps.len();
+                assert!(done.is_none(), "the closing event has to be last");
+                steps += b.steps.len();
             }
             norte_core::sync::SyncPlanEvent::Done(d) => done = Some(d),
         }
     }
     assert_eq!(task.join().await, TaskState::Completed);
-    let done = done.expect("el plan cerró con su hash");
-    assert_eq!(pasos, 1);
+    let done = done.expect("the plan closed with its hash");
+    assert_eq!(steps, 1);
     assert!(done.executable);
 
     let applying = backend
         .sync_apply(&done.plan_hash)
         .await
-        .expect("su propio plan se aplica");
+        .expect("its own plan applies");
     let id = applying.id();
     assert_eq!(applying.join().await, TaskState::Completed);
-    let report = backend.sync_report(id).await.expect("informe");
+    let report = backend.sync_report(id).await.expect("report");
     assert_eq!(report.done, 1);
     assert_eq!(report.failed, 0);
     assert!(report.batch_id.is_some());
     assert!(
         mem.stat(&vp("mem:///d/a.txt")).await.is_ok(),
-        "la copia ocurrió"
+        "the copy happened"
     );
 
-    // El plan se gastó: el mismo hash ya no ejecuta nada.
+    // The plan was spent: the same hash no longer runs anything.
     assert!(matches!(
         backend.sync_apply(&done.plan_hash).await,
         Err(Error::PlanStale)
     ));
 }
 
-/// Fail-closed, y no por accidente de cableado: un engine SIN spool no
-/// planifica y uno sin journal no aplica. Que el CLI no llame hoy a `set_spool`
-/// no es el que protege; el que protege es el engine, y esto lo pinea.
+/// Fail-closed, and not by wiring accident: an engine WITHOUT a spool does not
+/// plan and one without a journal does not apply. That the CLI does not call
+/// `set_spool` today is not what protects; what protects is the engine, and
+/// this pins it down.
 #[tokio::test]
-async fn embedded_sin_spool_no_planifica_y_sin_journal_no_aplica() {
-    // 1) Sin spool: no hay retención, así que no hay plan que aprobar.
+async fn embedded_without_spool_does_not_plan_and_without_journal_does_not_apply() {
+    // 1) Without a spool: there is no retention, so there is no plan to approve.
     let (backend, mem) = embedded();
     mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
     mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
@@ -364,8 +374,9 @@ async fn embedded_sin_spool_no_planifica_y_sin_journal_no_aplica() {
         Err(Error::Unsupported)
     ));
 
-    // 2) Con spool pero SIN journal: se planifica, y aplicar se rehúsa — un plan
-    //    promete una reversa por paso y solo el journal puede cumplirla.
+    // 2) With a spool but WITHOUT a journal: it plans, and applying is
+    //    refused — a plan promises a reversal per step and only the journal
+    //    can fulfill it.
     let dir = tempfile::tempdir().expect("tempdir");
     let engine = Engine::new();
     let mem = Arc::new(MemProvider::new());
@@ -379,7 +390,7 @@ async fn embedded_sin_spool_no_planifica_y_sin_journal_no_aplica() {
     let (task, mut rx) = backend
         .sync_plan(sync_params("mem:///s", "mem:///d"))
         .await
-        .expect("planificar no escribe");
+        .expect("planning writes nothing");
     let mut done = None;
     while let Some(event) = rx.recv().await {
         if let norte_core::sync::SyncPlanEvent::Done(d) = event {
@@ -387,23 +398,23 @@ async fn embedded_sin_spool_no_planifica_y_sin_journal_no_aplica() {
         }
     }
     assert_eq!(task.join().await, TaskState::Completed);
-    let done = done.expect("el plan cerró");
+    let done = done.expect("the plan closed");
     assert!(matches!(
         backend.sync_apply(&done.plan_hash).await,
         Err(Error::Unsupported)
     ));
     assert!(
         mem.stat(&vp("mem:///d/a.txt")).await.is_err(),
-        "sin journal no se escribe un byte"
+        "without a journal not a byte is written"
     );
 }
 
-/// Los tres campos que no son del llamante se rechazan ANTES de elegir brazo,
-/// con la misma taxonomía que daría el embebido — el daemon los contesta con un
-/// `-32602` pelado, que `to_taxonomy` convertiría en `Internal`. Misma paridad
-/// que `Backend::compare`.
+/// The three fields that are not the caller's are rejected BEFORE choosing an
+/// arm, with the same taxonomy the embedded one would give — the daemon
+/// answers them with a bare `-32602`, which `to_taxonomy` would turn into
+/// `Internal`. Same parity as `Backend::compare`.
 #[tokio::test]
-async fn embedded_sync_plan_rechaza_lo_que_no_es_del_llamante() {
+async fn embedded_sync_plan_rejects_what_is_not_the_callers() {
     let (backend, mem, _dir) = embedded_sync().await;
     mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
     mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");

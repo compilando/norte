@@ -1,13 +1,16 @@
-//! Componer el daemon de `norte daemon run`: qué piezas lleva y en qué orden.
+//! Compose the daemon for `norte daemon run`: which pieces it carries and in
+//! what order.
 //!
-//! Vivía en la CLI (regla 7): el journal, el barrido de spools, la policy, el
-//! índice, la IA, los límites de archivo y el `bind` son decisiones del core,
-//! y el binario que las hacía era el único sitio donde un segundo arranque —un
-//! test, otro frontend, un embebedor— no las podía repetir sin copiarlas.
+//! It used to live in the CLI (rule 7): the journal, the spool sweep, the
+//! policy, the index, the AI, the archive limits and the `bind` are core
+//! decisions, and the binary that made them was the only place where a
+//! second startup — a test, another frontend, an embedder — could not repeat
+//! them without copying them.
 //!
-//! Aquí se COMPONE y no se habla: lo que el operador tiene que saber vuelve
-//! como [`Aviso`] tipado y lo pinta quien lanza, en su idioma. Lo que impide
-//! arrancar vuelve como [`ErrorDeArranque`].
+//! Here it COMPOSES and does not speak: what the operator needs to know
+//! comes back as a typed [`Aviso`], and whoever launches it prints it, in
+//! their own language. What prevents startup comes back as
+//! [`ErrorDeArranque`].
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,79 +19,85 @@ use std::time::Duration;
 use super::{Daemon, DaemonApprovalResolver, DaemonConfig, DaemonError};
 use crate::Engine;
 
-/// Lo que decide quien lanza el daemon.
+/// What whoever launches the daemon decides.
 #[derive(Debug, Clone, Default)]
 pub struct Opciones {
-    /// El socket; `None` = el del sistema.
+    /// The socket; `None` = the system's.
     pub socket: Option<PathBuf>,
-    /// Cuánto sin clientes antes de salir; `None` = nunca.
+    /// How long without clients before exiting; `None` = never.
     pub idle_timeout: Option<Duration>,
-    /// Dónde persiste la sesión de UI; `None` = no se persiste.
+    /// Where the UI session persists; `None` = it is not persisted.
     pub state_dir: Option<PathBuf>,
-    /// De dónde salen el journal, el índice, los spools, las conexiones y los
-    /// secretos de la IA; `None` = el del usuario (`connect::config_dir`).
+    /// Where the journal, the index, the spools, the connections and the
+    /// AI's secrets come from; `None` = the user's (`connect::config_dir`).
     ///
-    /// NO cubre la configuración: `policy.toml`, `[ai]` y `[archive]` se
-    /// leen de las capas estándar del usuario. Un test que pase del journal
-    /// leería la config real, así que los de este módulo paran antes.
+    /// It does NOT cover configuration: `policy.toml`, `[ai]` and `[archive]`
+    /// are read from the user's standard layers. A test that passed this for
+    /// the journal would read the REAL config, so this module's tests stop
+    /// short of that.
     pub config_dir: Option<PathBuf>,
 }
 
-/// Algo que el operador debe saber y que NO impide arrancar. El mismo tipo
-/// que devuelve [`crate::equipo::equipar`], que es de donde salen los de IA.
+/// Something the operator should know that does NOT prevent startup. The
+/// same type returned by [`crate::equipo::equipar`], which is where the AI
+/// ones come from.
 pub use crate::equipo::Aviso;
 
-/// Lo que impide arrancar.
+/// What prevents startup.
 ///
-/// El mensaje NO repite la causa: va en `source()`, y quien imprime la
-/// cadena (`{e:#}` de anyhow) ya la añade. Con `{0}` en el mensaje salía dos
-/// veces.
+/// The message does NOT repeat the cause: that goes in `source()`, and
+/// whoever prints the chain (anyhow's `{e:#}`) already adds it. With `{0}` in
+/// the message it came out twice.
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorDeArranque {
-    /// El journal no abre; con «database is locked», otro proceso lo tiene.
-    #[error("no se pudo abrir el journal")]
+    /// The journal does not open; with "database is locked", another process
+    /// holds it.
+    #[error("could not open the journal")]
     Journal(#[source] crate::journal::JournalError),
-    /// `policy.toml` no se leyó o no es válido.
+    /// `policy.toml` could not be read, or is not valid.
     #[error("policy.toml")]
     Policy(#[source] std::io::Error),
-    /// `[archive]` de `norte.toml` no se leyó o no es válido.
+    /// `[archive]` in `norte.toml` could not be read, or is not valid.
     #[error("norte.toml ([archive])")]
     Archivo(#[source] std::io::Error),
-    /// El socket no se pudo enlazar.
-    #[error("no se pudo enlazar el daemon")]
+    /// The socket could not be bound.
+    #[error("could not bind the daemon")]
     Bind(#[source] DaemonError),
 }
 
-/// Compone el daemon con todo lo suyo, listo para `run`.
+/// Composes the daemon with everything it needs, ready for `run`.
 ///
-/// El orden importa y está escrito en cada paso: el journal PRIMERO, porque su
-/// lock exclusivo es lo que garantiza que no hay otro daemon sobre este
-/// directorio de estado; el barrido de spools DESPUÉS, por eso mismo.
+/// The order matters and is spelled out at each step: the journal FIRST,
+/// because its exclusive lock is what guarantees there is no other daemon
+/// over this state directory; the spool sweep AFTER, for the same reason.
 ///
-/// Los avisos van a `avisos` A MEDIDA que ocurren, y no en el `Ok`: si el
-/// arranque falla después —un `[archive]` roto, el socket ocupado—, lo que ya
-/// se había averiguado por el camino (un spool que no se dejó barrer, un índice
-/// que no abrió) sigue siendo verdad y quien lanza lo tiene que poder decir.
+/// Notices go to `avisos` AS THEY HAPPEN, not in the final `Ok`: if startup
+/// fails later — a broken `[archive]`, the socket already in use — whatever
+/// was already found out along the way (a spool that could not be swept, an
+/// index that did not open) is still true, and whoever launches it needs to
+/// be able to say so.
 ///
 /// # Errors
-/// [`ErrorDeArranque`]: el journal, la policy, los límites de archivo o el
-/// `bind`. Todo lo demás degrada con su [`Aviso`].
+/// [`ErrorDeArranque`]: the journal, the policy, the archive limits or the
+/// `bind`. Everything else degrades with its [`Aviso`].
 pub async fn componer(o: Opciones, avisos: &mut Vec<Aviso>) -> Result<Daemon, ErrorDeArranque> {
     let dir = o.config_dir.unwrap_or_else(crate::connect::config_dir);
-    // El daemon es el dueño ÚNICO del journal (spec §4, ADR 0024) y quien
-    // instala policy + approvals: los agentes MCP se gobiernan aquí, jamás en
-    // el puente.
+    // The daemon is the SOLE owner of the journal (spec §4, ADR 0024) and
+    // installs policy + approvals: MCP agents are governed here, never at
+    // the bridge.
     let journal = crate::SqliteJournal::open(&dir.join("journal.db"))
         .await
         .map_err(ErrorDeArranque::Journal)?;
-    // Barrido de spools de sincronización (ADR 0049), junto al journal y por
-    // lo mismo: un cierre violento deja ficheros que AUTORIZAN escrituras, y
-    // nadie más los va a recoger. Se llevan todos: aquí no hay ninguna conexión
-    // viva todavía. Un barrido que falla NO impide arrancar —lo que impide
-    // aplicar un plan viejo es que el registro de planes nace vacío—.
+    // Sweep of sync spools (ADR 0049), right next to the journal and for the
+    // same reason: a violent shutdown leaves files that AUTHORIZE writes,
+    // and nobody else is going to pick them up. All of them are swept: there
+    // is no live connection yet at this point. A sweep that fails does NOT
+    // prevent startup — what prevents applying an old plan is that the plan
+    // registry is born empty.
     //
-    // El `Spool` se construye UNA vez: dos `Spool::new` son dos registros de
-    // emisión que no se ven, y este es el que se instala en el engine.
+    // The `Spool` is built ONCE: two `Spool::new` calls are two emission
+    // registries that cannot see each other, and this is the one installed
+    // in the engine.
     let spool = crate::sync::Spool::new(dir.clone());
     match spool.sweep().await {
         Ok(r) if r.removed == 0 && r.is_clean() => {}
@@ -103,8 +112,8 @@ pub async fn componer(o: Opciones, avisos: &mut Vec<Aviso>) -> Result<Daemon, Er
             error: e.to_string(),
         }),
     }
-    // policy.toml: ausente = sin reglas = un agente DENTRO de scope aún
-    // deniega (fail-closed, `no-rule`).
+    // policy.toml: absent = no rules = an agent INSIDE scope still gets
+    // denied (fail-closed, `no-rule`).
     let cfg = crate::blocking::spawn_blocking(crate::PolicyConfig::load)
         .await
         .map_err(|e| ErrorDeArranque::Policy(std::io::Error::other(e)))?
@@ -115,16 +124,16 @@ pub async fn componer(o: Opciones, avisos: &mut Vec<Aviso>) -> Result<Daemon, Er
         Arc::new(crate::ScopedPolicy::new(scopes.clone(), cfg)),
         Arc::clone(&approvals) as _,
     );
-    // Índice de búsqueda (M4, ADR 0034). Si no abre, se sigue sin él.
+    // Search index (M4, ADR 0034). If it does not open, we proceed without it.
     let engine = crate::equipo::con_indice(engine, &dir, avisos).await;
     engine.set_spool(spool);
-    // `[archive]` roto ABORTA el daemon (fail-loud, como `policy.toml`); un
-    // frontend embebido, en cambio, lo degrada a aviso.
+    // A broken `[archive]` ABORTS the daemon (fail-loud, like `policy.toml`);
+    // an embedded frontend, by contrast, degrades it to a notice.
     crate::archive_config::aplicar(&engine)
         .await
         .map_err(ErrorDeArranque::Archivo)?;
-    // Proveedor local, conector e IA (ADR 0031: opt-in, jamás aborta): lo que
-    // lleva todo engine, igual que los embebidos.
+    // Local provider, connector and AI (ADR 0031: opt-in, never aborts): what
+    // equips the whole engine, same as the embedded ones.
     avisos.extend(
         crate::equipo::equipar(&engine, &dir, crate::equipo::Ia::TODA)
             .await
@@ -137,8 +146,8 @@ pub async fn componer(o: Opciones, avisos: &mut Vec<Aviso>) -> Result<Daemon, Er
         DaemonConfig {
             socket_path: o.socket,
             idle_timeout: o.idle_timeout,
-            // Se pasa EXPLÍCITO: el default no persiste nada, para que ningún
-            // test ni embebedor escriba el estado real por descuido.
+            // Passed EXPLICITLY: the default persists nothing, so that no
+            // test or embedder writes the real state by accident.
             state_dir: o.state_dir,
             ..DaemonConfig::default()
         },
@@ -152,23 +161,24 @@ pub async fn componer(o: Opciones, avisos: &mut Vec<Aviso>) -> Result<Daemon, Er
 mod tests {
     use super::{ErrorDeArranque, Opciones, componer};
 
-    /// El journal va PRIMERO y su lock es exclusivo: con otro dueño vivo, el
-    /// daemon no arranca, y lo dice con su clase de error. Es lo único que
-    /// impide dos daemons sobre un mismo directorio.
+    /// The journal goes FIRST and its lock is exclusive: with another owner
+    /// alive, the daemon does not start, and says so with its own error
+    /// class. It is the only thing that prevents two daemons over the same
+    /// directory.
     ///
-    /// Es también el único camino de `componer` que se puede probar sin leer
-    /// la config REAL del usuario: los pasos siguientes cargan `policy.toml`
-    /// y `[ai]` por las capas estándar.
+    /// It is also the only path through `componer` that can be tested
+    /// without reading the user's REAL config: the following steps load
+    /// `policy.toml` and `[ai]` through the standard layers.
     ///
-    /// Tarda lo que el `busy_timeout` del journal (5 s): `SQLite` reintenta el
-    /// lock antes de rendirse. Se acepta en vez de añadir una opción que solo
-    /// usaría este test — es el mismo plazo que ve el operador.
+    /// Takes as long as the journal's `busy_timeout` (5s): `SQLite` retries
+    /// the lock before giving up. Accepted instead of adding an option that
+    /// only this test would use — it is the same wait the operator sees.
     #[tokio::test]
-    async fn con_el_journal_tomado_no_arranca() {
+    async fn does_not_start_with_the_journal_already_held() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let _dueno = crate::SqliteJournal::open(&dir.path().join("journal.db"))
+        let _owner = crate::SqliteJournal::open(&dir.path().join("journal.db"))
             .await
-            .expect("primer dueño");
+            .expect("first owner");
         let mut avisos = Vec::new();
         let r = componer(
             Opciones {
@@ -181,9 +191,9 @@ mod tests {
         .await;
         assert!(
             matches!(r, Err(ErrorDeArranque::Journal(_))),
-            "esperaba Journal: {:?}",
+            "expected Journal: {:?}",
             r.err()
         );
-        assert!(avisos.is_empty(), "nada se hizo antes del journal");
+        assert!(avisos.is_empty(), "nothing happened before the journal");
     }
 }

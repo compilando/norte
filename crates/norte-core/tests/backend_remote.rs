@@ -1,6 +1,6 @@
-//! Matriz de la fase 3 M2: `Backend::Remote` contra un daemon real (socket
-//! en tempdir) — la MISMA superficie que el embebido, tasks foráneas,
-//! resync por `task.list` y reconexión con aviso.
+//! M2 phase 3 matrix: `Backend::Remote` against a real daemon (a socket in a
+//! tempdir) — the SAME surface as the embedded one, foreign tasks, resync via
+//! `task.list` and reconnection with a warning.
 #![cfg(unix)]
 
 use std::path::PathBuf;
@@ -19,16 +19,16 @@ use norte_vfs::Provider;
 use tokio::sync::mpsc;
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido de test")
+    VPath::parse(wire).expect("valid test wire")
 }
 
-/// Drena el canal de hits hasta su CIERRE (con tope de tiempo: si el route no
-/// se retirase, esto colgaría). Devuelve los paths de display, ordenados.
+/// Drains the hits channel until it CLOSES (with a time cap: if the route were
+/// never retired, this would hang). Returns the display paths, sorted.
 async fn drain_search(mut rx: mpsc::Receiver<SearchHits>) -> Vec<String> {
     let mut got = Vec::new();
     while let Some(hits) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
-        .expect("un lote o el cierre del canal antes del timeout")
+        .expect("a batch or the channel closing before the timeout")
     {
         for e in hits.entries {
             got.push(e.path.display_lossy());
@@ -39,16 +39,16 @@ async fn drain_search(mut rx: mpsc::Receiver<SearchHits>) -> Vec<String> {
 }
 
 async fn write_file(mem: &MemProvider, wire: &str, content: &[u8]) {
-    let mut sink = mem.write(&vp(wire)).await.expect("write abre");
+    let mut sink = mem.write(&vp(wire)).await.expect("write opens");
     sink.write(Bytes::copy_from_slice(content))
         .await
-        .expect("chunk entra");
-    sink.commit().await.expect("commit publica");
+        .expect("chunk goes in");
+    sink.commit().await.expect("commit publishes");
 }
 
 struct TestDaemon {
     socket: PathBuf,
-    /// Mantiene vivo el `run()` del daemon durante el test.
+    /// Keeps the daemon's `run()` alive during the test.
     _run: tokio::task::JoinHandle<Result<(), norte_core::daemon::DaemonError>>,
     _dir: tempfile::TempDir,
     mem: Arc<MemProvider>,
@@ -100,63 +100,63 @@ async fn remote(d: &TestDaemon) -> RemoteBackend {
     .expect("connect")
 }
 
-/// Espera el terminal de una task vía su watch.
+/// Waits for a task's terminal state via its watch.
 async fn join_ref(task: TaskRef) -> TaskState {
     tokio::time::timeout(Duration::from_secs(5), task.join())
         .await
-        .expect("terminal antes del timeout")
+        .expect("terminal before the timeout")
 }
 
-/// #93: `skipped` del contenedor llega por AMBOS modos del Backend — el
-/// remoto lo trae la primera página de `fs.list`; el embebido consulta el
-/// provider. Sin omitidas: `None` (el badge no se pinta).
+/// #93: a container's `skipped` reaches BOTH `Backend` modes — the remote one
+/// carries it in `fs.list`'s first page; the embedded one queries the
+/// provider. With nothing skipped: `None` (the badge is not painted).
 #[tokio::test]
-async fn list_skipped_llega_por_ambos_modos() {
+async fn list_skipped_reaches_both_modes() {
     let mem = Arc::new(MemProvider::new().with_list_skipped(3));
     let d = spawn_daemon_with(tempfile::tempdir().expect("tempdir"), Arc::clone(&mem)).await;
     write_file(&d.mem, "mem:///a.txt", b"x").await;
 
-    let remoto = Backend::Remote(remote(&d).await);
-    let (entries, skipped) = remoto
+    let remote_b = Backend::Remote(remote(&d).await);
+    let (entries, skipped) = remote_b
         .list_with_skipped(&vp("mem:///"))
         .await
-        .expect("list remoto");
+        .expect("remote list");
     assert_eq!(entries.len(), 1);
-    assert_eq!(skipped, Some(3), "remoto: viaja en la página de fs.list");
+    assert_eq!(skipped, Some(3), "remote: it travels in fs.list's page");
 
     let engine = Arc::new(Engine::new());
     engine.register_provider(mem as Arc<dyn Provider>);
-    let embebido = Backend::Embedded(engine);
-    let (_, skipped) = embebido
+    let embedded = Backend::Embedded(engine);
+    let (_, skipped) = embedded
         .list_with_skipped(&vp("mem:///"))
         .await
-        .expect("list embebido");
-    assert_eq!(skipped, Some(3), "embebido: consulta el provider");
+        .expect("embedded list");
+    assert_eq!(skipped, Some(3), "embedded: it queries the provider");
 
-    // Provider sin omitidas: None en ambos modos.
+    // A provider with nothing skipped: None in both modes.
     let d2 = spawn_daemon().await;
     write_file(&d2.mem, "mem:///b.txt", b"y").await;
-    let remoto2 = Backend::Remote(remote(&d2).await);
-    let (_, skipped) = remoto2
+    let remote2 = Backend::Remote(remote(&d2).await);
+    let (_, skipped) = remote2
         .list_with_skipped(&vp("mem:///"))
         .await
-        .expect("list remoto sin omitidas");
+        .expect("remote list, nothing skipped");
     assert_eq!(skipped, None);
 }
 
-// ---------- superficie unificada ----------
+// ---------- unified surface ----------
 
 #[tokio::test]
-async fn remote_copy_list_read_capabilities_como_el_embebido() {
+async fn remote_copy_list_read_capabilities_like_the_embedded_one() {
     let d = spawn_daemon().await;
-    write_file(&d.mem, "mem:///src.bin", b"contenido-remoto").await;
+    write_file(&d.mem, "mem:///src.bin", b"remote-content").await;
     let backend = Backend::Remote(remote(&d).await);
 
     // list
     let entries = backend.list(&vp("mem:///")).await.expect("list");
     assert_eq!(entries.len(), 1);
 
-    // copy como TaskRef con progreso hasta terminal
+    // copy as a TaskRef with progress up to terminal
     let task = backend
         .copy(
             &vp("mem:///src.bin"),
@@ -167,7 +167,7 @@ async fn remote_copy_list_read_capabilities_como_el_embebido() {
         .expect("copy");
     assert_eq!(join_ref(task).await, TaskState::Completed);
 
-    // read con rango (viewer)
+    // read with a range (viewer)
     let bytes = backend
         .read(
             &vp("mem:///dst.bin"),
@@ -178,9 +178,9 @@ async fn remote_copy_list_read_capabilities_como_el_embebido() {
         )
         .await
         .expect("read");
-    assert_eq!(bytes, b"remoto");
+    assert_eq!(bytes, b"ntent-"[..].to_vec().as_slice());
 
-    // capabilities (gating de F8)
+    // capabilities (F8's gating)
     let caps = backend
         .capabilities(&vp("mem:///"))
         .await
@@ -189,34 +189,34 @@ async fn remote_copy_list_read_capabilities_como_el_embebido() {
 
     // stat (fs.stat, M4 Lua T3)
     let entry = backend.stat(&vp("mem:///dst.bin")).await.expect("stat");
-    assert_eq!(entry.size, Some(16));
+    assert_eq!(entry.size, Some(14));
 }
 
-/// **La costura entera de #295, por el socket y sin una línea de frontend**
-/// (ADR 0073): el SDK retiene el ancla de lo que LISTA y la devuelve sola en
-/// el `transfer`. Aquí se ejerce lo que ningún test de engine puede ver —que
-/// `fs.list` la trae por el wire y que `fs.copy` la lleva de vuelta.
+/// **#295's whole seam, over the socket and without a single frontend line**
+/// (ADR 0073): the SDK retains the anchor of what it LISTS and returns it
+/// alone in the `transfer`. This exercises what no engine test can see — that
+/// `fs.list` carries it over the wire and that `fs.copy` carries it back.
 ///
-/// El destino se sustituye por OTRO nodo con el mismo nombre (borrar y
-/// recrear, que es lo que hace un atacante que no puede escribir dentro). El
-/// core no tiene con qué distinguirlo; el cliente sí, porque no estaba
-/// mirando ESE nodo.
+/// The destination gets replaced by ANOTHER node with the same name (delete
+/// and recreate, which is what an attacker who cannot write inside would do).
+/// The core has nothing to tell it apart with; the client does, because it was
+/// not looking at THAT node.
 #[tokio::test]
-async fn el_sdk_ancla_el_destino_que_listo_y_la_copia_lo_comprueba() {
+async fn the_sdk_anchors_the_destination_it_listed_and_the_copy_checks_it() {
     let d = spawn_daemon().await;
-    d.mem.mkdir(&vp("mem:///d")).await.expect("destino");
-    write_file(&d.mem, "mem:///src.bin", b"contenido").await;
+    d.mem.mkdir(&vp("mem:///d")).await.expect("destination");
+    write_file(&d.mem, "mem:///src.bin", b"content").await;
     let backend = Backend::Remote(remote(&d).await);
 
-    // Listar es lo que ancla: el cliente mira `d/` y retiene su identidad.
+    // Listing is what anchors: the client looks at `d/` and retains its identity.
     backend
         .list(&vp("mem:///d"))
         .await
-        .expect("list del destino");
+        .expect("list of the destination");
     let task = backend
         .copy(
             &vp("mem:///src.bin"),
-            &vp("mem:///d/copia.bin"),
+            &vp("mem:///d/copy.bin"),
             norte_core::TransferOptions::default(),
         )
         .await
@@ -224,25 +224,31 @@ async fn el_sdk_ancla_el_destino_que_listo_y_la_copia_lo_comprueba() {
     assert_eq!(
         join_ref(task).await,
         TaskState::Completed,
-        "el directorio sigue siendo el que se listó"
+        "the directory is still the one that was listed"
     );
 
-    // El cambiazo: mismo NOMBRE, otro NODO.
+    // The swap: same NAME, different NODE.
     d.mem
-        .remove(&vp("mem:///d/copia.bin"))
+        .remove(&vp("mem:///d/copy.bin"))
         .await
-        .expect("vaciar");
-    d.mem.remove(&vp("mem:///d")).await.expect("borrar destino");
-    d.mem.mkdir(&vp("mem:///d")).await.expect("recrear destino");
+        .expect("empty it");
+    d.mem
+        .remove(&vp("mem:///d"))
+        .await
+        .expect("delete the destination");
+    d.mem
+        .mkdir(&vp("mem:///d"))
+        .await
+        .expect("recreate the destination");
 
     let task = backend
         .copy(
             &vp("mem:///src.bin"),
-            &vp("mem:///d/otra.bin"),
+            &vp("mem:///d/other.bin"),
             norte_core::TransferOptions::default(),
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert!(
         matches!(
             join_ref(task).await,
@@ -252,15 +258,15 @@ async fn el_sdk_ancla_el_destino_que_listo_y_la_copia_lo_comprueba() {
                 }
             }
         ),
-        "el ancla retenida ya no nombra a este directorio"
+        "the retained anchor no longer names this directory"
     );
 
-    // Y refrescar el panel es el arreglo: re-listar re-ancla.
+    // And refreshing the pane is the fix: re-listing re-anchors.
     backend.list(&vp("mem:///d")).await.expect("re-list");
     let task = backend
         .copy(
             &vp("mem:///src.bin"),
-            &vp("mem:///d/otra.bin"),
+            &vp("mem:///d/other.bin"),
             norte_core::TransferOptions::default(),
         )
         .await
@@ -268,20 +274,20 @@ async fn el_sdk_ancla_el_destino_que_listo_y_la_copia_lo_comprueba() {
     assert_eq!(join_ref(task).await, TaskState::Completed);
 }
 
-/// Un destino que este cliente NUNCA listó no manda ancla, y eso NO es un
-/// fallo: es un `norte cp` con una ruta escrita a mano, que se comporta como
-/// en 0.53.
+/// A destination this client NEVER listed sends no anchor, and that is NOT a
+/// failure: it is a `norte cp` with a hand-typed path, which behaves as it did
+/// in 0.53.
 #[tokio::test]
-async fn un_destino_que_nadie_listo_copia_sin_ancla() {
+async fn a_destination_nobody_listed_copies_without_an_anchor() {
     let d = spawn_daemon().await;
-    d.mem.mkdir(&vp("mem:///d")).await.expect("destino");
-    write_file(&d.mem, "mem:///src.bin", b"contenido").await;
+    d.mem.mkdir(&vp("mem:///d")).await.expect("destination");
+    write_file(&d.mem, "mem:///src.bin", b"content").await;
     let backend = Backend::Remote(remote(&d).await);
 
     let task = backend
         .copy(
             &vp("mem:///src.bin"),
-            &vp("mem:///d/copia.bin"),
+            &vp("mem:///d/copy.bin"),
             norte_core::TransferOptions::default(),
         )
         .await
@@ -289,15 +295,15 @@ async fn un_destino_que_nadie_listo_copia_sin_ancla() {
     assert_eq!(join_ref(task).await, TaskState::Completed);
 }
 
-/// Un clon de `Backend::Remote` comparte conexión/watches pero NO puede
-/// robarle al dueño original los canales one-shot (`take_foreign_tasks`,
-/// `take_conn_events`, `take_approvals`): si el clon los tomara, la TUI
-/// dueña se quedaría sin canal y los `ask` de policy caducarían a `deny`
-/// en silencio (MAJOR del rust-reviewer sobre e408373). El orden importa:
-/// el clon intenta robar ANTES que el dueño reclame los suyos.
-/// #104: fs.mkdir por el wire — Task remota hasta terminal, y el dir existe.
+/// A clone of `Backend::Remote` shares the connection/watches but CANNOT
+/// steal the one-shot channels (`take_foreign_tasks`, `take_conn_events`,
+/// `take_approvals`) from the original owner: if the clone took them, the
+/// owning TUI would be left without a channel and policy's `ask`s would
+/// silently expire to `deny` (a MAJOR from the rust-reviewer over e408373).
+/// Order matters: the clone tries to steal BEFORE the owner claims its own.
+/// #104: fs.mkdir over the wire — a remote Task up to terminal, and the dir exists.
 #[tokio::test]
-async fn remote_mkdir_como_task() {
+async fn remote_mkdir_as_a_task() {
     let d = spawn_daemon().await;
     let backend = Backend::Remote(remote(&d).await);
     let task = backend.mkdir(&vp("mem:///wire-dir")).await.expect("mkdir");
@@ -305,36 +311,36 @@ async fn remote_mkdir_como_task() {
     assert!(d.mem.stat(&vp("mem:///wire-dir")).await.is_ok());
 }
 
-/// `fs.create` POR EL CABLE (#290): el brazo del dispatcher, el `parse_params`
-/// y la Task hasta terminal, que en proceso no los ejecuta nada.
+/// `fs.create` OVER THE WIRE (#290): the dispatcher's arm, `parse_params` and
+/// the Task up to terminal, none of which the in-process path runs.
 #[tokio::test]
-async fn remote_create_como_task() {
+async fn remote_create_as_a_task() {
     let d = spawn_daemon().await;
     let backend = Backend::Remote(remote(&d).await);
     let task = backend
-        .create_file(&vp("mem:///wire-nuevo.txt"))
+        .create_file(&vp("mem:///wire-new.txt"))
         .await
         .expect("create");
     assert_eq!(join_ref(task).await, TaskState::Completed);
     let e = d
         .mem
-        .stat(&vp("mem:///wire-nuevo.txt"))
+        .stat(&vp("mem:///wire-new.txt"))
         .await
-        .expect("está");
-    assert_eq!(e.size, Some(0), "y VACÍO: crear no inventa contenido");
+        .expect("is there");
+    assert_eq!(e.size, Some(0), "and EMPTY: creating invents no content");
 }
 
-/// Y por el cable, un destino ocupado también es un conflicto — no un
-/// truncado silencioso.
+/// And over the wire, an occupied destination is also a conflict — not a
+/// silent truncation.
 #[tokio::test]
-async fn remote_create_sobre_algo_que_existe_es_conflicto() {
+async fn remote_create_over_something_that_exists_is_a_conflict() {
     let d = spawn_daemon().await;
-    write_file(&d.mem, "mem:///wire-ocupado.txt", b"lo que importa").await;
+    write_file(&d.mem, "mem:///wire-taken.txt", b"what matters").await;
     let backend = Backend::Remote(remote(&d).await);
     let task = backend
-        .create_file(&vp("mem:///wire-ocupado.txt"))
+        .create_file(&vp("mem:///wire-taken.txt"))
         .await
-        .expect("encola");
+        .expect("enqueues");
     assert!(
         matches!(
             join_ref(task).await,
@@ -342,18 +348,18 @@ async fn remote_create_sobre_algo_que_existe_es_conflicto() {
                 error: norte_proto::Error::Conflict { .. }
             }
         ),
-        "un nombre ocupado es un conflicto"
+        "a taken name is a conflict"
     );
     let e = d
         .mem
-        .stat(&vp("mem:///wire-ocupado.txt"))
+        .stat(&vp("mem:///wire-taken.txt"))
         .await
-        .expect("sigue");
-    assert_eq!(e.size, Some(14), "con sus bytes intactos");
+        .expect("still there");
+    assert_eq!(e.size, Some(12), "with its bytes intact");
 }
 
 #[tokio::test]
-async fn un_clon_no_roba_los_canales_del_dueno() {
+async fn a_clone_does_not_steal_the_owners_channels() {
     let d = spawn_daemon().await;
     let mut backend = Backend::Remote(remote(&d).await);
     let mut clone = backend.clone();
@@ -367,44 +373,44 @@ async fn un_clon_no_roba_los_canales_del_dueno() {
     assert!(backend.take_approvals().is_some());
 }
 
-/// Dos frontends, la misma sesión: el backend B ve como FORÁNEA la task
-/// encolada por el backend A — el criterio de la fase 3.
+/// Two frontends, the same session: backend B sees the task queued by backend
+/// A as FOREIGN — phase 3's criterion.
 #[tokio::test]
-async fn dos_backends_ven_las_mismas_tasks() {
+async fn two_backends_see_the_same_tasks() {
     let d = spawn_daemon().await;
-    write_file(&d.mem, "mem:///grande.bin", &vec![0xAB; 100_000]).await;
+    write_file(&d.mem, "mem:///big.bin", &vec![0xAB; 100_000]).await;
     d.mem
         .faults()
         .set_latency_per_op(Some(Duration::from_millis(10)));
 
     let a = Backend::Remote(remote(&d).await);
     let mut b = Backend::Remote(remote(&d).await);
-    let mut foreign = b.take_foreign_tasks().expect("canal foráneo");
+    let mut foreign = b.take_foreign_tasks().expect("foreign channel");
 
     let own = a
         .copy(
-            &vp("mem:///grande.bin"),
-            &vp("mem:///copia.bin"),
+            &vp("mem:///big.bin"),
+            &vp("mem:///copy.bin"),
             norte_core::TransferOptions::default(),
         )
         .await
-        .expect("copy de A");
+        .expect("A's copy");
     let own_id = own.id();
 
     let seen = tokio::time::timeout(Duration::from_secs(5), foreign.recv())
         .await
-        .expect("task foránea antes del timeout")
-        .expect("canal vivo");
-    assert_eq!(seen.id(), own_id, "B ve la task de A");
+        .expect("a foreign task before the timeout")
+        .expect("live channel");
+    assert_eq!(seen.id(), own_id, "B sees A's task");
     assert_eq!(join_ref(seen).await, TaskState::Completed);
 }
 
-/// La cancelación remota funciona desde el `TaskRef` (mismo gesto que el
-/// embebido).
+/// Remote cancellation works from the `TaskRef` (the same gesture as the
+/// embedded one).
 #[tokio::test]
-async fn cancel_remoto_desde_el_task_ref() {
+async fn remote_cancel_from_the_task_ref() {
     let d = spawn_daemon().await;
-    write_file(&d.mem, "mem:///grande.bin", &vec![0xCD; 200_000]).await;
+    write_file(&d.mem, "mem:///big.bin", &vec![0xCD; 200_000]).await;
     d.mem
         .faults()
         .set_latency_per_op(Some(Duration::from_millis(20)));
@@ -412,8 +418,8 @@ async fn cancel_remoto_desde_el_task_ref() {
 
     let task = backend
         .copy(
-            &vp("mem:///grande.bin"),
-            &vp("mem:///copia.bin"),
+            &vp("mem:///big.bin"),
+            &vp("mem:///copy.bin"),
             norte_core::TransferOptions::default(),
         )
         .await
@@ -422,37 +428,36 @@ async fn cancel_remoto_desde_el_task_ref() {
     assert_eq!(join_ref(task).await, TaskState::Cancelled);
 }
 
-/// Un backend que se conecta TARDE ve las tasks vivas por el resync de
-/// task.list.
+/// A backend that connects LATE sees the live tasks through `task.list`'s resync.
 #[tokio::test]
-async fn resync_al_conectar_ve_tasks_en_marcha() {
+async fn resync_on_connecting_sees_ongoing_tasks() {
     let d = spawn_daemon().await;
-    write_file(&d.mem, "mem:///grande.bin", &vec![0xEE; 200_000]).await;
+    write_file(&d.mem, "mem:///big.bin", &vec![0xEE; 200_000]).await;
     d.mem
         .faults()
         .set_latency_per_op(Some(Duration::from_millis(15)));
     let a = Backend::Remote(remote(&d).await);
     let own = a
         .copy(
-            &vp("mem:///grande.bin"),
-            &vp("mem:///copia.bin"),
+            &vp("mem:///big.bin"),
+            &vp("mem:///copy.bin"),
             norte_core::TransferOptions::default(),
         )
         .await
-        .expect("copy de A");
+        .expect("A's copy");
 
-    // B llega tarde y aun así la ve (por task.list, no por broadcast).
+    // B arrives late and still sees it (via task.list, not via broadcast).
     let mut b = Backend::Remote(remote(&d).await);
-    let mut foreign = b.take_foreign_tasks().expect("canal foráneo");
+    let mut foreign = b.take_foreign_tasks().expect("foreign channel");
     let seen = tokio::time::timeout(Duration::from_secs(5), foreign.recv())
         .await
-        .expect("resync antes del timeout")
-        .expect("canal vivo");
+        .expect("resync before the timeout")
+        .expect("live channel");
     assert_eq!(seen.id(), own.id());
 }
 
-/// Enlaza un daemon en un socket CONCRETO (para poder resucitarlo en el
-/// mismo path tras apagarlo).
+/// Binds a daemon on a SPECIFIC socket (to be able to revive it on the same
+/// path after shutting it down).
 async fn bind_at(
     mem: Arc<MemProvider>,
     socket: PathBuf,
@@ -462,8 +467,8 @@ async fn bind_at(
 ) {
     let engine = Arc::new(Engine::new());
     engine.register_provider(mem as Arc<dyn Provider>);
-    // El directorio del socket hace de raíz de plugins: un tempdir del
-    // caller, nunca el `~/.config` real (ver `DaemonConfig::plugins_dir`).
+    // The socket's directory acts as the plugins root: a caller's tempdir,
+    // never the real `~/.config` (see `DaemonConfig::plugins_dir`).
     let plugins_dir = socket.parent().map(std::path::Path::to_path_buf);
     let daemon = Daemon::bind(
         engine,
@@ -481,10 +486,11 @@ async fn bind_at(
     (shutdown, tokio::spawn(daemon.run()))
 }
 
-/// Reconexión con aviso: al morir el daemon llega `Lost`; al volver otro
-/// en el MISMO socket, `Restored` — y las operaciones vuelven a funcionar.
+/// Reconnection with a warning: when the daemon dies, `Lost` arrives; when
+/// another one comes back on the SAME socket, `Restored` — and operations work
+/// again.
 #[tokio::test]
-async fn reconexion_avisa_y_recupera() {
+async fn reconnection_warns_and_recovers() {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let mem = Arc::new(MemProvider::new());
@@ -503,187 +509,190 @@ async fn reconexion_avisa_y_recupera() {
         .await
         .expect("connect"),
     );
-    let mut events = backend.take_conn_events().expect("canal de eventos");
+    let mut events = backend.take_conn_events().expect("events channel");
     assert!(backend.list(&vp("mem:///")).await.is_ok());
 
-    // Apagar el daemon (graceful cierra las conexiones): aviso Lost.
+    // Shut down the daemon (graceful closes the connections): a Lost warning.
     shutdown1.cancel();
     tokio::time::timeout(Duration::from_secs(5), run1)
         .await
-        .expect("apagado")
+        .expect("shutdown")
         .expect("join")
         .expect("run ok");
     let ev = tokio::time::timeout(Duration::from_secs(5), events.recv())
         .await
-        .expect("Lost antes del timeout")
-        .expect("canal vivo");
+        .expect("Lost before the timeout")
+        .expect("live channel");
     assert_eq!(ev, ConnEvent::Lost);
-    // Mientras está caído, la taxonomía es honesta.
+    // While it is down, the taxonomy is honest.
     assert!(matches!(
         backend.list(&vp("mem:///")).await,
         Err(norte_proto::Error::ProviderUnavailable { retryable: true })
     ));
 
-    // Daemon nuevo en el MISMO socket: Restored y operativo.
+    // A new daemon on the SAME socket: Restored and operational.
     let (_shutdown2, _run2) = bind_at(Arc::clone(&mem), socket.clone()).await;
     let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
         .await
-        .expect("Restored antes del timeout (backoff ≤5 s)")
-        .expect("canal vivo");
+        .expect("Restored before the timeout (backoff ≤5 s)")
+        .expect("live channel");
     assert_eq!(ev, ConnEvent::Restored);
     let entries = backend
         .list(&vp("mem:///"))
         .await
-        .expect("operativo tras reconectar");
+        .expect("operational after reconnecting");
     assert_eq!(entries.len(), 1);
 }
 
-/// El brazo de AGENTE sigue siendo agente después de reconectar.
+/// The AGENT arm is still an agent after reconnecting.
 ///
-/// `establish` corre también en cada reconexión, y el daemon fija el actor en
-/// el handshake sin recordar el de la conexión anterior: si la sesión no
-/// viajase ahí, el backend volvería como `Actor::User` —allow-all— y nada se
-/// pondría rojo, porque el síntoma del fallo es que las lecturas EMPIEZAN a
-/// funcionar. De ahí que la aserción de después de `Restored` sea la que
-/// importa: un `Ok` ahí es el actor blanqueándose solo.
+/// `establish` also runs on every reconnection, and the daemon sets the actor
+/// at the handshake without remembering the previous connection's: if the
+/// session did not travel there, the backend would come back as `Actor::User`
+/// — allow-all — and nothing would go red, because the failure's symptom is
+/// that reads START working. Hence the assertion after `Restored` is the one
+/// that matters: an `Ok` there is the actor whitewashing itself.
 #[tokio::test]
-async fn el_brazo_de_agente_sigue_siendo_agente_tras_reconectar() {
+async fn the_agent_arm_is_still_an_agent_after_reconnecting() {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let mem = Arc::new(MemProvider::new());
     write_file(&mem, "mem:///f", b"x").await;
     let (shutdown1, run1) = bind_at(Arc::clone(&mem), socket.clone()).await;
 
-    let mut agente = Backend::Remote(
+    let mut agent = Backend::Remote(
         RemoteBackend::connect_as_agent(
             socket.clone(),
             ClientInfo {
                 name: "backend-test".into(),
                 version: "0.0.0".into(),
             },
-            "sesion.agente".into(),
+            "agent.session".into(),
         )
         .await
         .expect("connect_as_agent"),
     );
-    let mut events = agente.take_conn_events().expect("canal de eventos");
-    // Sin scope concedido, el gate de lectura de agente lo veda. Un `User`
-    // sobre este mismo daemon lista sin problema — lo comprueba
-    // `reconexion_avisa_y_recupera`, que es el control de este test.
+    let mut events = agent.take_conn_events().expect("events channel");
+    // Without a granted scope, the agent read gate blocks it. A `User` over
+    // this same daemon lists fine — `reconexion_avisa_y_recupera` checks
+    // that, and it is this test's control.
     assert!(
         matches!(
-            agente.list(&vp("mem:///")).await,
+            agent.list(&vp("mem:///")).await,
             Err(norte_proto::Error::PolicyDenied { .. })
         ),
-        "de entrada la conexión ya tiene que ser de agente"
+        "from the start the connection has to already be an agent's"
     );
 
-    // Muere el daemon…
+    // The daemon dies…
     shutdown1.cancel();
     tokio::time::timeout(Duration::from_secs(5), run1)
         .await
-        .expect("apagado")
+        .expect("shutdown")
         .expect("join")
         .expect("run ok");
     let ev = tokio::time::timeout(Duration::from_secs(5), events.recv())
         .await
-        .expect("Lost antes del timeout")
-        .expect("canal vivo");
+        .expect("Lost before the timeout")
+        .expect("live channel");
     assert_eq!(ev, ConnEvent::Lost);
 
-    // …y vuelve otro en el MISMO socket: el brazo reconecta solo.
+    // …and another one comes back on the SAME socket: the arm reconnects on its own.
     let (_shutdown2, _run2) = bind_at(Arc::clone(&mem), socket.clone()).await;
     let ev = tokio::time::timeout(Duration::from_secs(15), events.recv())
         .await
-        .expect("Restored antes del timeout (backoff ≤5 s)")
-        .expect("canal vivo");
+        .expect("Restored before the timeout (backoff ≤5 s)")
+        .expect("live channel");
     assert_eq!(ev, ConnEvent::Restored);
-    let tras_reconectar = agente.list(&vp("mem:///")).await;
+    let after_reconnecting = agent.list(&vp("mem:///")).await;
     assert!(
         matches!(
-            tras_reconectar,
+            after_reconnecting,
             Err(norte_proto::Error::PolicyDenied { .. })
         ),
-        "tras reconectar SIGUE siendo agente; un Ok aquí es el actor \
-         blanqueado a User, y fue {tras_reconectar:?}"
+        "after reconnecting it is STILL an agent; an Ok here is the actor \
+         whitewashed to User, and it was {after_reconnecting:?}"
     );
 }
 
-/// Los errores del daemon llegan como TAXONOMÍA (el contrato de los
-/// frontends), no como error de transporte.
+/// Errors from the daemon arrive as TAXONOMY (the frontends' contract), not as
+/// a transport error.
 #[tokio::test]
-async fn errores_remotos_son_taxonomia() {
+async fn remote_errors_are_taxonomy() {
     let d = spawn_daemon().await;
     let backend = Backend::Remote(remote(&d).await);
     assert_eq!(
-        backend.list(&vp("mem:///no-existe")).await.unwrap_err(),
-        norte_proto::Error::NotFound
-    );
-    assert_eq!(
         backend
-            .read(&vp("mem:///no-existe"), None)
+            .list(&vp("mem:///does-not-exist"))
             .await
             .unwrap_err(),
         norte_proto::Error::NotFound
     );
-    // move de algo que no existe: NotFound del stat del origen.
+    assert_eq!(
+        backend
+            .read(&vp("mem:///does-not-exist"), None)
+            .await
+            .unwrap_err(),
+        norte_proto::Error::NotFound
+    );
+    // move of something that does not exist: NotFound from the source's stat.
     let task = backend
         .move_(
-            &vp("mem:///no-existe"),
+            &vp("mem:///does-not-exist"),
             &vp("mem:///x"),
             norte_core::TransferOptions::default(),
         )
         .await
-        .expect("la task se encola");
+        .expect("the task is queued");
     assert!(matches!(join_ref(task).await, TaskState::Failed { .. }));
 }
 
-/// `fs.read` remoto en varias llamadas: un rango mayor que el tope por
-/// llamada se re-pide con el offset avanzado hasta juntar todo.
+/// A remote `fs.read` over several calls: a range bigger than the per-call cap
+/// is re-requested with the offset advanced until everything is joined.
 #[tokio::test]
-async fn read_remoto_multichunk() {
+async fn remote_read_multichunk() {
     let d = spawn_daemon().await;
-    // > 8 MiB (FS_READ_MAX_CHUNK): fuerza al menos dos llamadas.
+    // > 8 MiB (FS_READ_MAX_CHUNK): forces at least two calls.
     let size = usize::try_from(norte_proto::methods::FS_READ_MAX_CHUNK).unwrap() + 4096;
     let content: Vec<u8> = (0..size).map(|i| u8::try_from(i % 251).unwrap()).collect();
-    write_file(&d.mem, "mem:///grande.bin", &content).await;
+    write_file(&d.mem, "mem:///big.bin", &content).await;
     let backend = Backend::Remote(remote(&d).await);
 
     let bytes = backend
-        .read(&vp("mem:///grande.bin"), None)
+        .read(&vp("mem:///big.bin"), None)
         .await
-        .expect("read completo multichunk");
+        .expect("complete multichunk read");
     assert_eq!(bytes.len(), size);
-    assert_eq!(bytes, content, "los tramos se juntan byte-exactos");
+    assert_eq!(bytes, content, "the chunks join byte-exact");
 }
 
-/// Un delete remoto a papelera es una task como las demás.
+/// A remote delete to the trash is a task like any other.
 #[tokio::test]
-async fn delete_remoto_a_papelera() {
+async fn remote_delete_to_trash() {
     let d = spawn_daemon().await;
-    write_file(&d.mem, "mem:///victima", b"x").await;
+    write_file(&d.mem, "mem:///victim", b"x").await;
     let backend = Backend::Remote(remote(&d).await);
     let task = backend
-        .delete(&vp("mem:///victima"), norte_proto::DeleteMode::Trash)
+        .delete(&vp("mem:///victim"), norte_proto::DeleteMode::Trash)
         .await
         .expect("delete");
     assert_eq!(join_ref(task).await, TaskState::Completed);
     assert_eq!(
-        d.mem.stat(&vp("mem:///victima")).await.unwrap_err(),
+        d.mem.stat(&vp("mem:///victim")).await.unwrap_err(),
         norte_proto::Error::NotFound
     );
 }
 
-/// B1 del rust-reviewer: si el daemon MUERE a mitad de una task nuestra,
-/// su `join()` NO cuelga — la reconexión reconcilia la huérfana como
+/// rust-reviewer's B1: if the daemon DIES halfway through one of our tasks,
+/// its `join()` does NOT hang — reconnection reconciles the orphan as
 /// `Failed{ProviderUnavailable}`.
 #[tokio::test]
-async fn task_en_vuelo_no_cuelga_si_el_daemon_muere() {
+async fn an_in_flight_task_does_not_hang_if_the_daemon_dies() {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let mem = Arc::new(MemProvider::new());
     write_file(&mem, "mem:///big.bin", &vec![0xAB; 500_000]).await;
-    // Latencia alta: la copia sigue viva cuando matamos el daemon.
+    // High latency: the copy is still alive when we kill the daemon.
     mem.faults()
         .set_latency_per_op(Some(Duration::from_millis(50)));
     let (shutdown1, run1) = bind_at(Arc::clone(&mem), socket.clone()).await;
@@ -703,37 +712,37 @@ async fn task_en_vuelo_no_cuelga_si_el_daemon_muere() {
     let task = backend
         .copy(
             &vp("mem:///big.bin"),
-            &vp("mem:///copia.bin"),
+            &vp("mem:///copy.bin"),
             norte_core::TransferOptions::default(),
         )
         .await
-        .expect("copy encolada");
+        .expect("queued copy");
 
-    // Matar el daemon con la task viva (hard: cancela y cierra ya).
+    // Kill the daemon with the task alive (hard: cancels and closes right away).
     shutdown1.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(5), run1).await;
 
-    // Un daemon NUEVO y vacío en el mismo socket: la reconexión no la
-    // encuentra → reconciliada como Failed, join JAMÁS cuelga.
+    // A NEW, empty daemon on the same socket: the reconnection does not find
+    // it → reconciled as Failed, join NEVER hangs.
     let (_shutdown2, _run2) = bind_at(Arc::clone(&mem), socket.clone()).await;
     let state = tokio::time::timeout(Duration::from_secs(20), task.join())
         .await
-        .expect("join responde, jamás se cuelga");
+        .expect("join answers, it never hangs");
     assert!(
         matches!(state, TaskState::Failed { .. } | TaskState::Cancelled),
-        "la huérfana se resuelve, no cuelga: {state:?}"
+        "the orphan resolves, it does not hang: {state:?}"
     );
 }
 
-// ---------- fs.search remoto (live search T5) ----------
+// ---------- remote fs.search (live search T5) ----------
 
-/// `Backend::search` remoto = misma superficie que el embebido: los hits
-/// llegan por la notificación `search.hits`, la bomba del `RemoteBackend` los
-/// enruta por `task_id` al `rx` que devuelve `search`, y el `rx` se cierra al
-/// terminal (retirada del route con gracia). Mismo árbol y mismo resultado que
-/// `embedded_search_stream_de_hits`.
+/// Remote `Backend::search` = the same surface as the embedded one: hits
+/// arrive through the `search.hits` notification, `RemoteBackend`'s pump
+/// routes them by `task_id` to the `rx` that `search` returns, and `rx` closes
+/// at the terminal (a graceful route retirement). Same tree and same result as
+/// `embedded_search_hits_stream`.
 #[tokio::test]
-async fn remote_search_como_el_embebido() {
+async fn remote_search_like_the_embedded_one() {
     let d = spawn_daemon().await;
     write_file(&d.mem, "mem:///a.rs", b"").await;
     write_file(&d.mem, "mem:///b.txt", b"").await;
@@ -760,19 +769,19 @@ async fn remote_search_como_el_embebido() {
     assert_eq!(join_ref(task).await, TaskState::Completed);
 }
 
-/// M1 (encoding, MEDIA): el nombre hostil cruza el WIRE byte-EXACTO. Un
-/// fichero de nombre `[0xFF, 0xFE]` (no-UTF8, jamás decodificable) sembrado en
-/// el árbol vuelve por el daemon real con sus bytes intactos —el mismo assert
-/// que el embebido, ahora cruzando la serialización JSON-RPC (regla dura §1:
-/// nombres = bytes, jamás se asume UTF-8).
+/// M1 (encoding, MEDIUM): a hostile name crosses the WIRE byte-EXACT. A file
+/// named `[0xFF, 0xFE]` (non-UTF-8, never decodable) seeded in the tree comes
+/// back through the real daemon with its bytes intact — the same assert as the
+/// embedded one, now crossing JSON-RPC serialization (hard rule §1: names =
+/// bytes, UTF-8 is never assumed).
 #[tokio::test]
-async fn remote_search_preserva_nombre_no_utf8_byte_exacto() {
+async fn remote_search_preserves_a_non_utf8_name_byte_exact() {
     let d = spawn_daemon().await;
-    let seg = norte_proto::Segment::new(vec![0xFF, 0xFE]).expect("segmento válido");
-    let hostil = MemProvider::root().join(seg);
-    let mut sink = d.mem.write(&hostil).await.expect("write abre");
-    sink.write(Bytes::new()).await.expect("chunk vacío");
-    sink.commit().await.expect("commit publica");
+    let seg = norte_proto::Segment::new(vec![0xFF, 0xFE]).expect("valid segment");
+    let hostile = MemProvider::root().join(seg);
+    let mut sink = d.mem.write(&hostile).await.expect("write opens");
+    sink.write(Bytes::new()).await.expect("empty chunk");
+    sink.commit().await.expect("commit publishes");
     let backend = Backend::Remote(remote(&d).await);
 
     let (task, mut rx) = backend
@@ -786,24 +795,24 @@ async fn remote_search_preserva_nombre_no_utf8_byte_exacto() {
     let mut names: Vec<Vec<u8>> = Vec::new();
     while let Some(hits) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
-        .expect("un lote o el cierre antes del timeout")
+        .expect("a batch or the close before the timeout")
     {
         for e in hits.entries {
-            names.push(e.path.file_name().expect("con nombre").as_bytes().to_vec());
+            names.push(e.path.file_name().expect("has a name").as_bytes().to_vec());
         }
     }
     assert_eq!(join_ref(task).await, TaskState::Completed);
     assert!(
         names.iter().any(|n| n.as_slice() == [0xFF, 0xFE]),
-        "el nombre no-UTF8 sobrevivió el wire byte-exacto: {names:?}"
+        "the non-UTF-8 name survived the wire byte-exact: {names:?}"
     );
 }
 
-/// Dos búsquedas CONCURRENTES en la MISMA conexión no mezclan sus lotes: el
-/// enrutado por `task_id` entrega a cada `rx` solo SUS hits (subtrees y globs
-/// disjuntos → cero solape observable si el enrutado es correcto).
+/// Two CONCURRENT searches on the SAME connection do not mix their batches:
+/// routing by `task_id` delivers only ITS OWN hits to each `rx` (disjoint
+/// subtrees and globs → zero observable overlap if the routing is correct).
 #[tokio::test]
-async fn remote_dos_busquedas_no_se_cruzan() {
+async fn remote_two_searches_do_not_cross() {
     let d = spawn_daemon().await;
     d.mem.mkdir(&vp("mem:///da")).await.expect("mkdir da");
     d.mem.mkdir(&vp("mem:///db")).await.expect("mkdir db");
@@ -835,20 +844,20 @@ async fn remote_dos_busquedas_no_se_cruzan() {
             vp("mem:///da/a1.rs").display_lossy(),
             vp("mem:///da/a2.rs").display_lossy()
         ],
-        "rx1 solo ve los .rs de da"
+        "rx1 only sees da's .rs files"
     );
     assert_eq!(
         g2,
         vec![vp("mem:///db/b1.txt").display_lossy()],
-        "rx2 solo ve el .txt de db"
+        "rx2 only sees db's .txt file"
     );
     assert_eq!(join_ref(t1).await, TaskState::Completed);
     assert_eq!(join_ref(t2).await, TaskState::Completed);
 }
 
-// ---------- approval router por el backend (M3-3b T5) ----------
+// ---------- approval router through the backend (M3-3b T5) ----------
 
-/// Daemon con regla `ask` + router de aprobaciones (patrón de tests/daemon.rs).
+/// A daemon with an `ask` rule + approval router (the pattern from tests/daemon.rs).
 async fn spawn_daemon_ask() -> TestDaemon {
     use norte_core::daemon::DaemonApprovalResolver;
     use norte_core::{PolicyConfig, ScopeRegistry, ScopedPolicy};
@@ -884,8 +893,8 @@ async fn spawn_daemon_ask() -> TestDaemon {
     }
 }
 
-/// Conexión cruda de AGENTE con scope de copy sobre `mem:///proj` ya concedido
-/// (request por el agente + grant por un humano efímero).
+/// A raw AGENT connection with a copy scope over `mem:///proj` already granted
+/// (a request by the agent + a grant by an ephemeral human).
 async fn agent_with_scope(d: &TestDaemon, session: &str) -> norte_core::daemon::Client {
     use norte_proto::methods::{
         self, GrantScopeParams, GrantScopeResult, InitializeParams, RequestScopeParams,
@@ -893,7 +902,7 @@ async fn agent_with_scope(d: &TestDaemon, session: &str) -> norte_core::daemon::
     };
     let agent = norte_core::daemon::Client::connect(&d.socket)
         .await
-        .expect("connect agente");
+        .expect("connect agent");
     let _: methods::InitializeResult = agent
         .call(
             methods::INITIALIZE,
@@ -908,7 +917,7 @@ async fn agent_with_scope(d: &TestDaemon, session: &str) -> norte_core::daemon::
             },
         )
         .await
-        .expect("initialize agente");
+        .expect("initialize agent");
     let req: RequestScopeResult = agent
         .call(
             methods::POLICY_REQUEST_SCOPE,
@@ -923,14 +932,14 @@ async fn agent_with_scope(d: &TestDaemon, session: &str) -> norte_core::daemon::
         .expect("request_scope");
     let mut human = norte_core::daemon::Client::connect(&d.socket)
         .await
-        .expect("connect humano");
+        .expect("connect human");
     human
         .initialize(ClientInfo {
             name: "granter".into(),
             version: "0.0.0".into(),
         })
         .await
-        .expect("initialize humano");
+        .expect("initialize human");
     let _: GrantScopeResult = human
         .call(
             methods::POLICY_GRANT_SCOPE,
@@ -943,7 +952,7 @@ async fn agent_with_scope(d: &TestDaemon, session: &str) -> norte_core::daemon::
     agent
 }
 
-/// Lanza el fs.copy del agente en una task propia (queda suspendido en el Ask).
+/// Launches the agent's fs.copy on its own task (it ends up suspended at the Ask).
 fn spawn_agent_copy(
     agent: norte_core::daemon::Client,
 ) -> tokio::task::JoinHandle<
@@ -969,24 +978,24 @@ fn spawn_agent_copy(
     })
 }
 
-/// El camino VIVO del T5: la bomba del `RemoteBackend` enruta
-/// `policy.approval_required` al canal de `take_approvals`, y
-/// `Backend::policy_decide(approve)` desbloquea la copia del agente.
+/// T5's LIVE path: `RemoteBackend`'s pump routes `policy.approval_required`
+/// to the `take_approvals` channel, and `Backend::policy_decide(approve)`
+/// unblocks the agent's copy.
 #[tokio::test]
-async fn backend_recibe_approval_y_decide_aprueba() {
+async fn the_backend_receives_an_approval_and_deciding_approves() {
     let d = spawn_daemon_ask().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
-    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    write_file(&d.mem, "mem:///proj/src.txt", b"hello").await;
     let mut backend = Backend::Remote(remote(&d).await);
-    let mut approvals = backend.take_approvals().expect("canal de approvals");
+    let mut approvals = backend.take_approvals().expect("approvals channel");
 
     let agent = agent_with_scope(&d, "s1").await;
     let copy = spawn_agent_copy(agent);
 
     let req = tokio::time::timeout(Duration::from_secs(5), approvals.recv())
         .await
-        .expect("approval llega")
-        .expect("canal vivo");
+        .expect("the approval arrives")
+        .expect("live channel");
     assert_eq!(req.op, "copy");
     assert_eq!(req.session.as_deref(), Some("s1"));
 
@@ -996,26 +1005,27 @@ async fn backend_recibe_approval_y_decide_aprueba() {
         .expect("decide approve");
     let res = tokio::time::timeout(Duration::from_secs(5), copy)
         .await
-        .expect("no cuelga")
+        .expect("does not hang")
         .expect("join");
-    assert!(res.expect("aprobada procede").task_id.get() > 0);
+    assert!(res.expect("approved, it proceeds").task_id.get() > 0);
 }
 
-/// El camino de RESYNC del T5: un `RemoteBackend` que conecta DESPUÉS del
-/// broadcast recibe la pendiente vía `policy.pending` (`ttl_ms` 0 =
-/// desconocido) y puede denegarla.
+/// T5's RESYNC path: a `RemoteBackend` that connects AFTER the broadcast
+/// receives the pending one via `policy.pending` (`ttl_ms` 0 = unknown) and
+/// can deny it.
 #[tokio::test]
-async fn backend_tardio_resincroniza_pendientes_y_deniega() {
+async fn a_late_backend_resyncs_pending_ones_and_denies() {
     let d = spawn_daemon_ask().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
-    write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
+    write_file(&d.mem, "mem:///proj/src.txt", b"hello").await;
 
     let agent = agent_with_scope(&d, "s1").await;
     let copy = spawn_agent_copy(agent);
-    // Sincroniza: espera a que el Ask esté REGISTRADO en el daemon antes de
-    // conectar el backend (sin esto, la pendiente podría llegarle por
-    // broadcast con ttl real y el assert de resync sería flaky — MAJOR-2 del
-    // rust-reviewer). Poll con un humano crudo a `policy.pending`.
+    // Synchronizes: waits for the Ask to be REGISTERED in the daemon before
+    // connecting the backend (without this, the pending one could reach it
+    // via broadcast with a real ttl and the resync assert would be flaky —
+    // the rust-reviewer's MAJOR-2). Polls with a raw human against
+    // `policy.pending`.
     {
         let mut probe = norte_core::daemon::Client::connect(&d.socket)
             .await
@@ -1038,23 +1048,23 @@ async fn backend_tardio_resincroniza_pendientes_y_deniega() {
             }
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "el Ask nunca llegó a pendiente"
+                "the Ask never became pending"
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        // El probe muere aquí: al conectar el backend, el resync es el único
-        // camino posible para la pendiente ya registrada.
+        // The probe dies here: when the backend connects, the resync is the
+        // only possible path for the already-registered pending one.
     }
 
-    // El frontend conecta TARDE: la pendiente le llega por el resync.
+    // The frontend connects LATE: the pending one reaches it via the resync.
     let mut backend = Backend::Remote(remote(&d).await);
-    let mut approvals = backend.take_approvals().expect("canal de approvals");
+    let mut approvals = backend.take_approvals().expect("approvals channel");
     let req = tokio::time::timeout(Duration::from_secs(5), approvals.recv())
         .await
-        .expect("resync entrega la pendiente")
-        .expect("canal vivo");
+        .expect("the resync delivers the pending one")
+        .expect("live channel");
     assert_eq!(req.op, "copy");
-    assert_eq!(req.ttl_ms, 0, "TTL desconocido en el resync");
+    assert_eq!(req.ttl_ms, 0, "unknown TTL in the resync");
 
     backend
         .policy_decide(req.approval_id, false)
@@ -1062,23 +1072,23 @@ async fn backend_tardio_resincroniza_pendientes_y_deniega() {
         .expect("decide deny");
     let res = tokio::time::timeout(Duration::from_secs(5), copy)
         .await
-        .expect("no cuelga")
+        .expect("does not hang")
         .expect("join");
-    let err = res.expect_err("denegada");
+    let err = res.expect_err("denied");
     assert!(
         matches!(
             err,
             norte_core::daemon::ClientError::Rpc(ref rpc)
                 if matches!(rpc.data, Some(norte_proto::Error::PolicyDenied { ref rule }) if rule == "not-approved")
         ),
-        "PolicyDenied not-approved, fue {err:?}"
+        "PolicyDenied not-approved, was {err:?}"
     );
 }
 
-// ---------- #74: submit abandonado → rpc.cancel del dispatch en vuelo ------
+// ---------- #74: an abandoned submit → rpc.cancel for the in-flight dispatch ------
 
-/// Conector colgado con sonda de drop: `cancelled` se enciende cuando el
-/// future del dial se DROPEA a mitad (la cancelación #47 del pool).
+/// A hanging connector with a drop probe: `cancelled` turns on when the
+/// dial's future is DROPPED halfway (the #47 pool's cancellation).
 struct ProbedHangingConnector {
     started: std::sync::atomic::AtomicUsize,
     cancelled: Arc<std::sync::atomic::AtomicBool>,
@@ -1117,13 +1127,13 @@ impl norte_core::connect::RemoteConnector for ProbedHangingConnector {
     }
 }
 
-/// #74: dropear el future de un submit remoto EN VUELO envía `rpc.cancel`
-/// (guard drop-based del backend, patrón #72) — el dispatch del daemon muere
-/// PRE-efecto (aquí, cancelando el dial #47) y la Task jamás nace huérfana
-/// sin canceller. Es la ventana del driver Lua que ABANDONA el run con el
-/// submit en vuelo.
+/// #74: dropping the future of a remote submit IN FLIGHT sends `rpc.cancel`
+/// (the backend's drop-based guard, the #72 pattern) — the daemon's dispatch
+/// dies PRE-effect (here, cancelling the #47 dial) and the Task never gets
+/// born orphaned with no canceller. This is the Lua driver's window that
+/// ABANDONS the run with the submit in flight.
 #[tokio::test]
-async fn submit_abandonado_envia_rpc_cancel_y_mata_el_dispatch() {
+async fn an_abandoned_submit_sends_rpc_cancel_and_kills_the_dispatch() {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
@@ -1168,14 +1178,17 @@ async fn submit_abandonado_envia_rpc_cancel_y_mata_el_dispatch() {
         )
         .await
     });
-    // El dispatch está EN el dial (fs.copy en vuelo, sin respuesta).
+    // The dispatch is IN the dial (fs.copy in flight, no response).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while conn.started.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-        assert!(tokio::time::Instant::now() < deadline, "el dial no arrancó");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the dial never started"
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    // El caller ABANDONA el future del submit (p. ej. gracia del driver Lua
-    // agotada): el guard debe enviar rpc.cancel con el id en vuelo.
+    // The caller ABANDONS the submit's future (e.g. the Lua driver's grace
+    // period ran out): the guard must send rpc.cancel with the in-flight id.
     submit.abort();
     let _ = submit.await;
 
@@ -1183,28 +1196,27 @@ async fn submit_abandonado_envia_rpc_cancel_y_mata_el_dispatch() {
     while !cancelled.load(std::sync::atomic::Ordering::SeqCst) {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "el dispatch del daemon sigue vivo: el abandono no envió rpc.cancel (#74)"
+            "the daemon's dispatch is still alive: the abandonment did not send rpc.cancel (#74)"
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 }
 
-/// #248: un `fs.list` ABANDONADO no se queda la conexión.
+/// #248: an ABANDONED `fs.list` does not keep the connection stuck.
 ///
-/// `serve_connection` despacha en serie, así que un listado que el cliente
-/// dejó de esperar —el presupuesto de cinco segundos del arranque de sesión
-/// (#235), o cualquier future dropeado— seguía corriendo contra un provider
-/// colgado y TODO lo que viniera detrás esperaba su turno, muriendo en su
-/// propio `CALL_TIMEOUT` de 30 s. La TUI arrancaba, se veía, y no servía para
-/// nada sin decir por qué.
+/// `serve_connection` dispatches serially, so a listing the client stopped
+/// waiting for — the session startup's five-second budget (#235), or any
+/// dropped future — kept running against a hung provider, and EVERYTHING
+/// behind it waited its turn, dying in its own 30 s `CALL_TIMEOUT`. The TUI
+/// started, showed up, and served no purpose without saying why.
 ///
-/// Este test prueba las DOS mitades, que son dos cambios distintos: que el
-/// cliente MANDA el `rpc.cancel` al abandonar una lectura (antes las lecturas
-/// iban por `call_timed`, sin guard), y que el daemon lo ESCUCHA para
-/// `fs.list` (antes solo las mutaciones estaban en el brazo cancelable, así
-/// que el aviso llegaba y no cortaba nada).
+/// This test checks BOTH halves, which are two different changes: that the
+/// client SENDS `rpc.cancel` when abandoning a read (reads used to go through
+/// `call_timed`, with no guard), and that the daemon LISTENS for it for
+/// `fs.list` (before only mutations were on the cancelable arm, so the
+/// notice arrived and cut nothing).
 #[tokio::test]
-async fn un_listado_abandonado_no_se_queda_la_conexion() {
+async fn an_abandoned_listing_does_not_keep_the_connection_stuck() {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
     let engine = Arc::new(Engine::new());
@@ -1241,41 +1253,44 @@ async fn un_listado_abandonado_no_se_queda_la_conexion() {
     );
 
     let b2 = backend.clone();
-    let listado = tokio::spawn(async move { b2.list(&vp("sftp://h/dir")).await });
+    let listing = tokio::spawn(async move { b2.list(&vp("sftp://h/dir")).await });
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while conn.started.load(std::sync::atomic::Ordering::SeqCst) == 0 {
-        assert!(tokio::time::Instant::now() < deadline, "el dial no arrancó");
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the dial never started"
+        );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
-    // El caller deja de esperar: es lo que hace `tokio::time::timeout` al
-    // vencer, que es como llega este caso de verdad.
-    listado.abort();
-    let _ = listado.await;
+    // The caller stops waiting: this is what `tokio::time::timeout` does when
+    // it expires, which is how this case really arrives.
+    listing.abort();
+    let _ = listing.await;
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     while !cancelled.load(std::sync::atomic::Ordering::SeqCst) {
         assert!(
             tokio::time::Instant::now() < deadline,
-            "el dispatch del listado sigue vivo: el abandono no lo cortó (#248)"
+            "the listing's dispatch is still alive: the abandonment did not cut it (#248)"
         );
         tokio::time::sleep(Duration::from_millis(5)).await;
     }
 
-    // Y la conexión SIGUE SIRVIENDO: esta es la mitad que se notaba. Sin el
-    // corte, esta petición esperaba detrás del listado colgado y moría a los
-    // 30 s con `ProviderUnavailable`.
-    let siguiente = tokio::time::timeout(Duration::from_secs(5), backend.list(&vp("mem:///")))
+    // And the connection KEEPS SERVING: this is the half that was noticeable.
+    // Without the cut, this request waited behind the hung listing and died
+    // at 30 s with `ProviderUnavailable`.
+    let next = tokio::time::timeout(Duration::from_secs(5), backend.list(&vp("mem:///")))
         .await
-        .expect("la conexión responde en vez de quedarse encolada");
+        .expect("the connection answers instead of staying queued");
     assert!(
-        siguiente.is_err() || siguiente.is_ok(),
-        "lo que importa es que CONTESTÓ, no qué contestó"
+        next.is_err() || next.is_ok(),
+        "what matters is that it ANSWERED, not what it answered"
     );
 }
 
-// ---------- sync.plan / sync.apply remotos (0.40.0, ADR 0049) ----------
+// ---------- remote sync.plan / sync.apply (0.40.0, ADR 0049) ----------
 
-/// Daemon con journal y spool: lo que hace falta para planificar y aplicar.
+/// A daemon with a journal and a spool: what is needed to plan and apply.
 async fn spawn_daemon_sync() -> TestDaemon {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -1309,16 +1324,16 @@ async fn spawn_daemon_sync() -> TestDaemon {
     }
 }
 
-/// El ciclo entero por el brazo REMOTO, que es donde vive el enrutado: los dos
-/// eventos del plan —`sync.steps` y `sync.plan_done`— viajan por el MISMO `rx`,
-/// el cierre va el último, y el hash que trae ejecuta.
+/// The whole cycle through the REMOTE arm, which is where the routing lives:
+/// the plan's two events — `sync.steps` and `sync.plan_done` — travel over the
+/// SAME `rx`, the closing one comes last, and the hash it carries runs.
 ///
-/// Que compartan canal no es un detalle de implementación: con dos mapas, el
-/// orden entre un lote y el cierre dependería de cómo el runtime despierta dos
-/// receptores, y un cliente podría aprobar el hash de un plan que todavía
-/// estaba llegando.
+/// Sharing a channel is not an implementation detail: with two channels, the
+/// order between a batch and the closing event would depend on how the
+/// runtime wakes up two receivers, and a client could approve the hash of a
+/// plan that was still arriving.
 #[tokio::test]
-async fn remote_sync_plan_y_apply_como_el_embebido() {
+async fn remote_sync_plan_and_apply_like_the_embedded_one() {
     let d = spawn_daemon_sync().await;
     d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
     d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
@@ -1337,31 +1352,31 @@ async fn remote_sync_plan_y_apply_como_el_embebido() {
             include: None,
         })
         .await
-        .expect("sync.plan remoto");
+        .expect("remote sync.plan");
 
-    let mut pasos = 0usize;
+    let mut steps = 0usize;
     let mut done = None;
     while let Some(event) = tokio::time::timeout(Duration::from_secs(5), rx.recv())
         .await
-        .expect("un evento o el cierre del canal antes del timeout")
+        .expect("an event or the channel closing before the timeout")
     {
         match event {
             norte_core::sync::SyncPlanEvent::Steps(b) => {
                 assert!(
                     done.is_none(),
-                    "un lote DESPUÉS del cierre: el orden es la cola de UN canal"
+                    "a batch AFTER closing: the order is a SINGLE channel's queue"
                 );
-                pasos += b.steps.len();
+                steps += b.steps.len();
             }
             norte_core::sync::SyncPlanEvent::Done(d) => {
-                assert!(done.is_none(), "dos cierres para un plan");
+                assert!(done.is_none(), "two closings for one plan");
                 done = Some(d);
             }
         }
     }
     assert_eq!(join_ref(task).await, TaskState::Completed);
-    let done = done.expect("el plan cerró con su hash");
-    assert_eq!(pasos, 300);
+    let done = done.expect("the plan closed with its hash");
+    assert_eq!(steps, 300);
     assert_eq!(done.counts.copy, 300);
 
     let applying = backend
@@ -1375,18 +1390,18 @@ async fn remote_sync_plan_y_apply_como_el_embebido() {
     assert_eq!(report.failed, 0, "{:?}", report.failures);
     assert!(report.batch_id.is_some());
 
-    // Y el plan se gastó: el mismo hash no vuelve a ejecutar.
+    // And the plan was spent: the same hash does not run again.
     assert!(matches!(
         backend.sync_apply(&done.plan_hash).await,
         Err(norte_proto::Error::PlanStale)
     ));
 }
 
-/// Un daemon SIN spool contesta `Unsupported` por el wire y el brazo remoto lo
-/// entrega tal cual: fail-closed también a través del socket, y distinguible de
-/// un fallo real.
+/// A daemon WITHOUT a spool answers `Unsupported` over the wire and the remote
+/// arm delivers it as is: fail-closed also through the socket, and
+/// distinguishable from a real failure.
 #[tokio::test]
-async fn remote_sync_plan_sin_spool_es_unsupported() {
+async fn remote_sync_plan_without_a_spool_is_unsupported() {
     let d = spawn_daemon().await;
     d.mem.mkdir(&vp("mem:///s")).await.expect("mkdir s");
     d.mem.mkdir(&vp("mem:///d")).await.expect("mkdir d");
@@ -1407,20 +1422,21 @@ async fn remote_sync_plan_sin_spool_es_unsupported() {
     ));
 }
 
-/// Roadmap ítem 10: tras un RELEVO el cliente arranca al que viene, y tras una
-/// PARADA no resucita nada. Son la misma conexión cerrada; lo único que las
-/// separa es la notificación.
+/// Roadmap item 10: after a HANDOVER the client starts the next one, and
+/// after a STOP it revives nothing. They are the same closed connection; the
+/// only thing that tells them apart is the notification.
 ///
-/// El `spawn_cmd` no es un daemon: es un `touch`, que es lo que deja OBSERVAR
-/// la decisión sin montar un segundo proceso de verdad. Lo que se prueba es
-/// exactamente eso — si el cliente decide arrancar algo o no—, y el arranque en
-/// sí es el mismo camino que la primera conexión ya usa.
+/// `spawn_cmd` is not a daemon: it is a `touch`, which is what lets the
+/// decision be OBSERVED without setting up a second real process. What is
+/// tested is exactly that — whether the client decides to start something or
+/// not — and the start itself is the same path the first connection already
+/// uses.
 #[tokio::test]
-async fn tras_un_relevo_se_arranca_al_que_viene_y_tras_una_parada_no() {
-    async fn corre(modo: norte_proto::methods::ShutdownMode) -> bool {
+async fn after_a_handover_the_next_one_starts_and_after_a_stop_it_does_not() {
+    async fn run(mode: norte_proto::methods::ShutdownMode) -> bool {
         let dir = tempfile::tempdir().expect("tempdir");
         let socket = dir.path().join("d.sock");
-        let testigo = dir.path().join("arrancado");
+        let witness = dir.path().join("started");
         let mem = Arc::new(MemProvider::new());
         let (_shutdown, run) = bind_at(Arc::clone(&mem), socket.clone()).await;
 
@@ -1428,7 +1444,7 @@ async fn tras_un_relevo_se_arranca_al_que_viene_y_tras_una_parada_no() {
             socket.clone(),
             Some(vec![
                 std::ffi::OsString::from("/usr/bin/touch"),
-                testigo.clone().into_os_string(),
+                witness.clone().into_os_string(),
             ]),
             ClientInfo {
                 name: "backend-test".into(),
@@ -1437,54 +1453,54 @@ async fn tras_un_relevo_se_arranca_al_que_viene_y_tras_una_parada_no() {
         )
         .await
         .expect("connect");
-        // La PRIMERA conexión no arrancó nada (había daemon), así que el
-        // testigo solo puede aparecer por la reconexión.
-        assert!(!testigo.exists(), "la primera conexión no arranca nada");
+        // The FIRST connection started nothing (there was a daemon), so the
+        // witness can only appear via the reconnection.
+        assert!(!witness.exists(), "the first connection starts nothing");
 
-        let mut cliente = norte_core::daemon::Client::connect(&socket)
+        let mut client = norte_core::daemon::Client::connect(&socket)
             .await
-            .expect("cliente de control");
-        cliente
+            .expect("control client");
+        client
             .initialize(ClientInfo {
                 name: "control".into(),
                 version: "0.0.0".into(),
             })
             .await
             .expect("initialize");
-        let _: norte_proto::methods::DaemonShutdownResult = cliente
+        let _: norte_proto::methods::DaemonShutdownResult = client
             .call(
                 norte_proto::methods::DAEMON_SHUTDOWN,
                 &norte_proto::methods::DaemonShutdownParams {
                     graceful: true,
-                    mode: modo,
+                    mode,
                 },
             )
             .await
-            .expect("shutdown aceptado");
+            .expect("shutdown accepted");
         tokio::time::timeout(Duration::from_secs(5), run)
             .await
-            .expect("apagado")
+            .expect("shutdown")
             .expect("join")
             .expect("run ok");
 
-        // Se le da al backend tiempo de una reconexión con su backoff.
+        // Give the backend time for a reconnection with its backoff.
         for _ in 0..40 {
-            if testigo.exists() {
+            if witness.exists() {
                 break;
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
         }
-        let arrancado = testigo.exists();
+        let started = witness.exists();
         drop(backend);
-        arrancado
+        started
     }
 
     assert!(
-        corre(norte_proto::methods::ShutdownMode::Handover).await,
-        "un relevo SÍ autoriza a arrancar al que viene"
+        run(norte_proto::methods::ShutdownMode::Handover).await,
+        "a handover DOES authorize starting the next one"
     );
     assert!(
-        !corre(norte_proto::methods::ShutdownMode::Stop).await,
-        "una parada NO: el usuario lo paró, y nadie lo resucita"
+        !run(norte_proto::methods::ShutdownMode::Stop).await,
+        "a stop does NOT: the user stopped it, and nobody revives it"
     );
 }

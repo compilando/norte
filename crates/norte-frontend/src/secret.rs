@@ -1,63 +1,64 @@
-//! Una contraseña a medio teclear, compartida por los dos frontends.
+//! A password half-typed, shared by both frontends.
 //!
-//! Vive aquí y no en un frontend por la regla D14, y esta vez con el motivo
-//! más fuerte de todos: es un tipo de SEGURIDAD. Dos implementaciones de «lo
-//! tecleado en el campo de una contraseña» son dos sitios donde el `Debug` que
-//! redacta se olvida, dos sitios donde el buffer no se pisa al soltarlo, y
-//! —peor— un frontend que hereda la versión sin ninguna de las dos cosas
-//! porque nació después. La TUI lo tenía desde #325; la ventana lo necesita
-//! para #327, y lo que se comparte es la GARANTÍA, no el parecido.
+//! It lives here and not in a frontend by rule D14, and this time with the
+//! strongest reason of all: it is a SECURITY type. Two implementations of
+//! "what has been typed in a password field" are two places where the
+//! redacting `Debug` gets forgotten, two places where the buffer is not
+//! zeroed on drop, and — worse — a frontend inheriting the version with
+//! neither, because it was born later. The TUI had it since #325; the window
+//! needs it for #327, and what is shared is the GUARANTEE, not the
+//! resemblance.
 
 use zeroize::Zeroizing;
 
-/// Tope de caracteres de una contraseña tecleada.
+/// Cap on the characters of a typed password.
 ///
-/// El mismo que los campos de texto de la TUI (`TEXT_FIELD_MAX_CHARS`), y aquí
-/// además es estructural: fija la capacidad que se reserva de antemano, así
-/// que pasarse significa reasignar — que es exactamente lo que deja trozos de
-/// la contraseña sin pisar en el heap. Ver «Por qué reserva sitio de antemano».
+/// The same as the TUI's text fields (`TEXT_FIELD_MAX_CHARS`), and here it is
+/// also structural: it fixes the capacity reserved up front, so going past it
+/// means reallocating — which is exactly what leaves pieces of the password
+/// unzeroed on the heap. See "Why it reserves space up front".
 pub const SECRET_MAX_CHARS: usize = 256;
 
-/// Los BYTES que hay que reservar para [`SECRET_MAX_CHARS`] caracteres.
+/// The BYTES that must be reserved for [`SECRET_MAX_CHARS`] characters.
 ///
-/// Cuatro por carácter, que es el máximo de UTF-8. Y no es una holgura de
-/// cortesía: la reserva se hacía con el número de CARACTERES, o sea 256 bytes,
-/// mientras el tope se aplicaba en caracteres. Una contraseña de 150 letras
-/// acentuadas son 300 bytes y menos de 256 caracteres — o sea que cabía en el
-/// tope y NO cabía en la reserva, así que `String` reasignaba, copiaba y
-/// liberaba el bloque viejo **sin pisarlo**: la mitad de la contraseña quedaba
-/// en el heap. Exactamente lo que el tipo promete que no pasa.
-const RESERVA_BYTES: usize = SECRET_MAX_CHARS * 4;
+/// Four per character, the maximum for UTF-8. And this is not a courtesy
+/// margin: the reservation used to be made with the number of CHARACTERS,
+/// i.e. 256 bytes, while the cap was applied in characters. A password of 150
+/// accented letters is 300 bytes and fewer than 256 characters — so it fit
+/// under the cap and did NOT fit in the reservation, so `String` reallocated,
+/// copied, and freed the old block **without zeroing it**: half the password
+/// stayed on the heap. Exactly what the type promises does not happen.
+const RESERVED_BYTES: usize = SECRET_MAX_CHARS * 4;
 
-/// Lo tecleado en un campo de contraseña.
+/// What has been typed into a password field.
 ///
-/// Existe por dos cosas que un `String` no da, y ninguna es opcional (regla
-/// 10):
+/// It exists for two things a `String` does not give, and neither is
+/// optional (rule 10):
 ///
-/// * **`Debug` que REDACTA.** Los modales derivan `Debug`, y ese `Debug` acaba
-///   en `tracing`, en el mensaje de un panic y en el diff de un `assert_eq!`.
-///   `Zeroizing<String>` delega su `Debug` en el `String`, así que sin este
-///   envoltorio la contraseña se imprimiría en los tres sitios.
-/// * **Borrado al soltar.** El interior es `Zeroizing`: el buffer se pisa con
-///   ceros en el drop, en vez de quedarse en el heap para un core dump o el
+/// * **A `Debug` that REDACTS.** The modals derive `Debug`, and that `Debug`
+///   ends up in `tracing`, in a panic message and in an `assert_eq!`'s diff.
+///   `Zeroizing<String>` delegates its `Debug` to the `String`, so without
+///   this wrapper the password would print in all three places.
+/// * **Wiped on drop.** The inside is `Zeroizing`: the buffer is overwritten
+///   with zeros on drop, instead of staying on the heap for a core dump or
 ///   swap.
 ///
-/// # Por qué reserva sitio de antemano
+/// # Why it reserves space up front
 ///
-/// `Zeroizing` borra la asignación ACTUAL entera, capacidad incluida — y solo
-/// esa: su propia documentación dice que «cannot ensure that previous
-/// reallocations did not leave values on the heap». Un `String` que crece
-/// 4→8→16→… va dejando por el camino trozos sin pisar de la contraseña a medio
-/// escribir. Naciendo con los BYTES de [`SECRET_MAX_CHARS`] caracteres
-/// reservados —cuatro por carácter; ver `RESERVA_BYTES` para por qué contar
-/// caracteres ahí era un fallo— no hay ninguna reasignación, y el «best
-/// effort» de zeroize pasa a ser exacto para esta copia. Las copias de más allá
-/// del [`TypedSecret::expose`] (los params, el frame serializado, el `Value`
-/// del daemon) siguen sin pisarse: ver el ADR 0015, que dice cuáles sí y cuáles
-/// no.
+/// `Zeroizing` wipes the ENTIRE current allocation, capacity included — and
+/// only that one: its own documentation says it "cannot ensure that previous
+/// reallocations did not leave values on the heap". A `String` that grows
+/// 4→8→16→… leaves unzeroed pieces of the half-typed password along the way.
+/// Being born with the BYTES for [`SECRET_MAX_CHARS`] characters already
+/// reserved — four per character; see `RESERVED_BYTES` for why counting
+/// characters there was a bug — there is no reallocation at all, and
+/// zeroize's "best effort" becomes exact for this copy. The copies beyond
+/// [`TypedSecret::expose`] (the params, the serialized frame, the daemon's
+/// `Value`) are still not wiped: see ADR 0015, which says which ones are and
+/// which are not.
 ///
-/// `PartialEq` está derivado para los tests (comparar dos modales) y compara en
-/// tiempo NO constante: no le pases nunca un valor de origen ajeno.
+/// `PartialEq` is derived for the tests (comparing two modals) and compares
+/// in NON-constant time: never pass it a value from an untrusted source.
 ///
 /// ```
 /// use norte_frontend::secret::TypedSecret;
@@ -66,43 +67,46 @@ const RESERVA_BYTES: usize = SECRET_MAX_CHARS * 4;
 /// s.push('h');
 /// s.push('i');
 /// assert_eq!(s.chars(), 2);
-/// // Lo que se pinta son PUNTOS, no el texto.
+/// // What is painted are DOTS, not the text.
 /// assert_eq!(s.dots(), "••");
-/// // Y el `Debug` no lo dice.
+/// // And the `Debug` does not say it.
 /// assert_eq!(format!("{s:?}"), "TypedSecret(***)");
 /// ```
 #[derive(PartialEq, Eq)]
 pub struct TypedSecret(Zeroizing<String>);
 
 impl Clone for TypedSecret {
-    /// A mano, y no derivado, para que la copia NAZCA con la reserva.
+    /// By hand, and not derived, so the copy is BORN with the reservation.
     ///
-    /// `String::clone` asigna capacidad igual a la longitud, así que un clon
-    /// derivado empieza justo lleno: el primer carácter que se le añadiera lo
-    /// haría reasignar, y ahí es donde se deja un trozo de la contraseña sin
-    /// pisar. Hoy nadie escribe en un clon —la TUI clona el modal para leerlo—
-    /// pero la trampa estaba armada y cuesta tres líneas desarmarla.
+    /// `String::clone` allocates capacity equal to the length, so a derived
+    /// clone starts exactly full: the first character appended to it would
+    /// make it reallocate, and that is where a piece of the password is left
+    /// unzeroed. Today nobody writes into a clone — the TUI clones the modal
+    /// to read it — but the trap was armed and it costs three lines to
+    /// disarm it.
     fn clone(&self) -> Self {
-        let mut copia = Self::default();
-        copia.0.push_str(&self.0);
-        copia
+        let mut copy = Self::default();
+        copy.0.push_str(&self.0);
+        copy
     }
 }
 
 impl Default for TypedSecret {
     fn default() -> Self {
-        // Ver «Por qué reserva sitio de antemano»: `String::new()` aquí
-        // reintroduce las reasignaciones y con ellas los restos en el heap.
-        Self(Zeroizing::new(String::with_capacity(RESERVA_BYTES)))
+        // See "Why it reserves space up front": `String::new()` here would
+        // reintroduce reallocations and, with them, the leftovers on the
+        // heap.
+        Self(Zeroizing::new(String::with_capacity(RESERVED_BYTES)))
     }
 }
 
 impl std::fmt::Debug for TypedSecret {
-    /// Nunca el contenido. La longitud tampoco: es información sobre la
-    /// contraseña, y para depurar basta saber si hay algo escrito.
+    /// Never the content. Not the length either: it is information about the
+    /// password, and knowing whether anything has been typed is enough for
+    /// debugging.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(if self.0.is_empty() {
-            "TypedSecret(vacío)"
+            "TypedSecret(empty)"
         } else {
             "TypedSecret(***)"
         })
@@ -110,43 +114,44 @@ impl std::fmt::Debug for TypedSecret {
 }
 
 impl TypedSecret {
-    /// El texto en claro, para entregarlo por `connection.provide_secret`.
+    /// The plaintext, to hand over via `connection.provide_secret`.
     ///
-    /// Llamarlo es decir «aquí SÍ hace falta el secreto» — no lo uses para
-    /// pintar ni para registrar.
+    /// Calling it is saying "the secret really is needed here" — do not use
+    /// it to paint or to log.
     #[must_use]
     pub fn expose(&self) -> &str {
         &self.0
     }
 
-    /// Cuántos caracteres se han tecleado, para pintar los puntos.
+    /// How many characters have been typed, to paint the dots.
     #[must_use]
     pub fn chars(&self) -> usize {
         self.0.chars().count()
     }
 
-    /// ¿Está vacío? Confirmar sobre un campo vacío no entrega nada.
+    /// Is it empty? Confirming over an empty field hands nothing over.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
 
-    /// Lo que se PINTA: un punto por carácter.
+    /// What gets PAINTED: one dot per character.
     ///
-    /// Un método y no una decisión de cada renderer, porque la alternativa es
-    /// que uno de los dos pinte el texto. Aquí no hay forma de equivocarse: lo
-    /// único que sale de este tipo para la capa de pintado son puntos.
+    /// A method and not a decision each renderer makes, because the
+    /// alternative is one of the two painting the text. There is no way to
+    /// get this wrong: the only thing that comes out of this type for the
+    /// paint layer is dots.
     #[must_use]
     pub fn dots(&self) -> String {
         "•".repeat(self.chars())
     }
 
-    /// Añade un carácter tecleado, hasta [`SECRET_MAX_CHARS`].
+    /// Appends a typed character, up to [`SECRET_MAX_CHARS`].
     ///
-    /// El tope impide que una tecla trabada haga crecer el buffer más allá de
-    /// lo reservado — que es cuando `String` reasigna y deja un trozo de la
-    /// contraseña sin pisar en el heap. Frenar en mudo es lo que hacen los
-    /// otros campos de texto: el campo se ve lleno.
+    /// The cap stops a stuck key from growing the buffer past what is
+    /// reserved — which is when `String` reallocates and leaves a piece of
+    /// the password unzeroed on the heap. Stopping silently is what the other
+    /// text fields do: the field looks full.
     pub fn push(&mut self, c: char) {
         if self.0.chars().count() >= SECRET_MAX_CHARS {
             return;
@@ -154,33 +159,35 @@ impl TypedSecret {
         self.0.push(c);
     }
 
-    /// Borra el último carácter (retroceso).
+    /// Deletes the last character (backspace).
     pub fn pop(&mut self) {
         self.0.pop();
     }
 
-    /// Reemplaza lo tecleado por `texto`, respetando el tope.
+    /// Replaces what was typed with `text`, respecting the cap.
     ///
-    /// Existe para la ventana, donde el campo lo edita la webview y llega el
-    /// texto ENTERO tras cada pulsación en vez de un carácter: el caret es del
-    /// renderer, y reconstruirlo en Rust sería mantener dos ideas de dónde
-    /// está el cursor. Lo que sobra del tope se descarta sin más — igual que
-    /// [`Self::push`] frena en mudo.
+    /// Exists for the window, where the field is edited by the webview and
+    /// the WHOLE text arrives after every keystroke instead of one character:
+    /// the caret belongs to the renderer, and rebuilding it in Rust would
+    /// mean keeping two ideas of where the cursor is. Whatever is left over
+    /// the cap is simply discarded — the same as [`Self::push`] stopping
+    /// silently.
     ///
-    /// El buffer anterior se pisa con ceros ANTES de escribir el nuevo: sin
-    /// eso, teclear seis caracteres dejaría cinco prefijos de la contraseña
-    /// intactos en el heap, que es justo lo que este tipo existe para evitar.
-    pub fn set(&mut self, texto: &str) {
+    /// The previous buffer is zeroed BEFORE writing the new one: without
+    /// that, typing six characters would leave five prefixes of the password
+    /// intact on the heap, which is exactly what this type exists to
+    /// prevent.
+    pub fn set(&mut self, text: &str) {
         use zeroize::Zeroize;
-        // `Zeroize for String` pisa los bytes escritos, hace `clear()` y pisa
-        // TAMBIÉN la capacidad libre — pero no libera: la asignación
-        // sobrevive. Eso es justo lo que hace falta, porque significa que
-        // todos los prefijos que se hayan tecleado antes quedan pisados sin
-        // reasignar nada. La `reserve` de debajo es defensa en profundidad:
-        // sobre un buffer que ya tiene la reserva no hace nada.
+        // `Zeroize for String` overwrites the written bytes, does `clear()`
+        // and ALSO overwrites the free capacity — but does not free it: the
+        // allocation survives. That is exactly what is needed, because it
+        // means every prefix ever typed ends up overwritten without
+        // reallocating anything. The `reserve` below is defense in depth: on
+        // a buffer that already has the reservation it does nothing.
         self.0.zeroize();
-        self.0.reserve(RESERVA_BYTES);
-        for c in texto.chars().take(SECRET_MAX_CHARS) {
+        self.0.reserve(RESERVED_BYTES);
+        for c in text.chars().take(SECRET_MAX_CHARS) {
             self.0.push(c);
         }
     }
@@ -190,28 +197,28 @@ impl TypedSecret {
 mod tests {
     use super::*;
 
-    /// El `Debug` no dice ni el contenido ni la longitud.
+    /// The `Debug` says neither the content nor the length.
     ///
-    /// La longitud tampoco es inocente: es información sobre la contraseña, y
-    /// este `Debug` acaba en `tracing`, en un panic y en el diff de un
-    /// `assert_eq!` sobre el modal entero.
+    /// The length is not innocent either: it is information about the
+    /// password, and this `Debug` ends up in `tracing`, in a panic and in the
+    /// diff of an `assert_eq!` over the whole modal.
     #[test]
-    fn el_debug_redacta() {
+    fn debug_redacts() {
         let mut s = TypedSecret::default();
-        assert_eq!(format!("{s:?}"), "TypedSecret(vacío)");
+        assert_eq!(format!("{s:?}"), "TypedSecret(empty)");
         s.set("correcthorsebatterystaple");
         let d = format!("{s:?}");
         assert_eq!(d, "TypedSecret(***)");
-        assert!(!d.contains("horse"), "el contenido no sale: {d}");
-        assert!(!d.contains("25"), "la longitud tampoco: {d}");
+        assert!(!d.contains("horse"), "the content does not come out: {d}");
+        assert!(!d.contains("25"), "the length does not either: {d}");
     }
 
-    /// Lo único que sale para pintar son puntos, uno por CARÁCTER.
+    /// The only thing shown for painting is dots, one per CHARACTER.
     ///
-    /// Por carácter y no por byte: con bytes, una contraseña con acentos se
-    /// pintaría más larga de lo que es, que es filtrar su composición.
+    /// Per character and not per byte: with bytes, a password with accents
+    /// would paint longer than it is, which leaks its composition.
     #[test]
-    fn solo_salen_puntos_y_uno_por_caracter() {
+    fn only_dots_come_out_one_per_character() {
         let mut s = TypedSecret::default();
         s.set("cañón€");
         assert_eq!(s.chars(), 6);
@@ -219,93 +226,101 @@ mod tests {
         assert_eq!(s.dots().chars().count(), s.chars());
     }
 
-    /// El tope frena en mudo, y `set` no lo salta.
+    /// The cap stops silently, and `set` does not bypass it.
     ///
-    /// Pasarse del tope es reasignar, y reasignar es dejar un trozo de la
-    /// contraseña sin pisar en el heap — la razón de ser de la reserva.
+    /// Going past the cap means reallocating, and reallocating means leaving
+    /// a piece of the password unzeroed on the heap — the whole reason the
+    /// reservation exists.
     #[test]
-    fn el_tope_frena_al_teclear_y_al_reemplazar() {
+    fn the_cap_stops_typing_and_replacing_alike() {
         let mut s = TypedSecret::default();
         for _ in 0..(SECRET_MAX_CHARS + 50) {
             s.push('x');
         }
         assert_eq!(s.chars(), SECRET_MAX_CHARS);
 
-        let largo = "y".repeat(SECRET_MAX_CHARS + 50);
-        s.set(&largo);
+        let long = "y".repeat(SECRET_MAX_CHARS + 50);
+        s.set(&long);
         assert_eq!(s.chars(), SECRET_MAX_CHARS);
-        assert!(s.expose().chars().all(|c| c == 'y'), "se reemplazó entero");
+        assert!(s.expose().chars().all(|c| c == 'y'), "replaced whole");
     }
 
-    /// La reserva se mide en BYTES, no en caracteres, y una contraseña llena
-    /// de acentos no reasigna.
+    /// The reservation is measured in BYTES, not characters, and a password
+    /// full of accents does not reallocate.
     ///
-    /// Este era un fallo de verdad: la reserva se hacía con el número de
-    /// caracteres (256 bytes) y el tope se aplicaba en caracteres, así que 150
-    /// letras acentuadas —300 bytes— cabían en el tope y no en la reserva.
-    /// `String` reasignaba, copiaba y liberaba el bloque viejo SIN pisarlo:
-    /// media contraseña en el heap, que es exactamente lo que este tipo
-    /// promete que no pasa.
+    /// This was a real bug: the reservation was made with the number of
+    /// characters (256 bytes) and the cap was applied in characters, so 150
+    /// accented letters — 300 bytes — fit under the cap and not in the
+    /// reservation. `String` reallocated, copied, and freed the old block
+    /// WITHOUT zeroing it: half the password on the heap, exactly what this
+    /// type promises does not happen.
     ///
-    /// Se comprueba por la CAPACIDAD y no por el puntero porque lo que hay que
-    /// afirmar es que nunca hizo falta crecer.
+    /// Checked by CAPACITY and not by the pointer, because what has to be
+    /// asserted is that it never needed to grow.
     #[test]
-    fn una_contrasena_de_multibyte_no_reasigna() {
+    fn a_multibyte_password_does_not_reallocate() {
         let mut s = TypedSecret::default();
         let cap = s.0.capacity();
-        assert!(cap >= SECRET_MAX_CHARS * 4, "la reserva va en bytes: {cap}");
-        // El peor caso del tope: 256 caracteres de cuatro bytes cada uno.
-        let peor: String = std::iter::repeat_n('\u{1F600}', SECRET_MAX_CHARS).collect();
-        s.set(&peor);
+        assert!(
+            cap >= SECRET_MAX_CHARS * 4,
+            "the reservation is in bytes: {cap}"
+        );
+        // The cap's worst case: 256 characters of four bytes each.
+        let worst: String = std::iter::repeat_n('\u{1F600}', SECRET_MAX_CHARS).collect();
+        s.set(&worst);
         assert_eq!(s.chars(), SECRET_MAX_CHARS);
         assert_eq!(
             s.0.capacity(),
             cap,
-            "creció: hubo una reasignación, y el bloque viejo se liberó sin pisar"
+            "it grew: there was a reallocation, and the old block was freed unzeroed"
         );
 
-        // Y por `push`, que es el camino de la TUI.
+        // And via `push`, which is the TUI's path.
         let mut t = TypedSecret::default();
         let cap = t.0.capacity();
         for _ in 0..SECRET_MAX_CHARS {
             t.push('ñ');
         }
-        assert_eq!(t.0.capacity(), cap, "el otro camino tampoco reasigna");
+        assert_eq!(
+            t.0.capacity(),
+            cap,
+            "the other path does not reallocate either"
+        );
     }
 
-    /// Un clon nace CON la reserva, no lleno.
+    /// A clone is born WITH the reservation, not full.
     ///
-    /// `String::clone` asigna capacidad igual a la longitud, así que el clon
-    /// derivado reasignaba al primer carácter que se le añadiera.
+    /// `String::clone` allocates capacity equal to the length, so the derived
+    /// clone used to reallocate on the first character appended to it.
     #[test]
-    fn un_clon_nace_con_su_reserva() {
+    fn a_clone_is_born_with_its_reservation() {
         let mut s = TypedSecret::default();
-        s.set("algo");
+        s.set("something");
         let c = s.clone();
-        assert_eq!(c.expose(), "algo");
+        assert_eq!(c.expose(), "something");
         assert!(
             c.0.capacity() >= SECRET_MAX_CHARS * 4,
-            "el clon nació lleno: {}",
+            "the clone was born full: {}",
             c.0.capacity()
         );
     }
 
-    /// Vaciar y volver a teclear funciona, y `set("")` deja el campo inerte.
+    /// Clearing and typing again works, and `set("")` leaves the field inert.
     #[test]
-    fn vaciar_deja_el_campo_inerte() {
+    fn clearing_leaves_the_field_inert() {
         let mut s = TypedSecret::default();
-        s.set("algo");
+        s.set("something");
         assert!(!s.is_empty());
         s.set("");
-        assert!(s.is_empty(), "confirmar sobre esto no entrega nada");
+        assert!(s.is_empty(), "confirming over this hands nothing over");
         assert_eq!(s.dots(), "");
         s.push('a');
-        assert_eq!(s.chars(), 1, "sigue usable tras vaciarlo");
+        assert_eq!(s.chars(), 1, "still usable after clearing it");
     }
 
-    /// El retroceso quita UN carácter, no un byte.
+    /// Backspace removes ONE character, not one byte.
     #[test]
-    fn el_retroceso_quita_un_caracter() {
+    fn backspace_removes_one_character() {
         let mut s = TypedSecret::default();
         s.set("añ");
         s.pop();

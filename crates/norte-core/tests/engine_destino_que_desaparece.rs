@@ -1,31 +1,33 @@
-//! **Qué pasa si el destino desaparece MIENTRAS se copia.**
+//! **What happens if the destination disappears WHILE copying.**
 //!
-//! Lo contó un lector: puso a copiar una carpeta grande y, con la barra de
-//! progreso corriendo, borró la carpeta de destino. Al reproducirlo resultó
-//! ser peor de lo que él describió — la tarea no se quedaba parada, terminaba
-//! diciendo **«completada»**, y los ficheros estaban en la papelera.
+//! A reader reported it: they started copying a big folder and, with the
+//! progress bar running, deleted the destination folder. Reproducing it
+//! turned out to be worse than they described — the task did not just sit
+//! there, it finished saying **"completed"**, and the files were in the
+//! trash.
 //!
-//! Va contra el sistema de ficheros REAL y no contra `MemProvider`, por lo
-//! mismo que `engine_leaf_confined`: lo que hace posible el fallo es que la
-//! copia direcciona por un DESCRIPTOR de la raíz de destino, abierto una vez
-//! (#164), y un descriptor no es una ruta. `MemProvider` no tiene descriptores
-//! con los que reproducirlo.
+//! This runs against the REAL filesystem and not against `MemProvider`, for
+//! the same reason as `engine_leaf_confined`: what makes the failure possible
+//! is that the copy addresses through a DESCRIPTOR of the destination root,
+//! opened once (#164), and a descriptor is not a path. `MemProvider` has no
+//! descriptors to reproduce it with.
 //!
-//! Y el borrado de norte es a la papelera, o sea un `rename`
-//! (`trash_fdo::do_rename`). Ahí está la diferencia que lo convierte en un
-//! fallo silencioso en vez de en un error: un `rename` **no invalida** el
-//! descriptor. El directorio sigue existiendo, con su mismo inodo, en otro
-//! sitio — y la copia sigue llenándolo, donde nadie lo va a buscar.
+//! And norte's delete goes to the trash, i.e. a `rename` (`trash_fdo::do_rename`).
+//! That is where the difference lies that turns it into a silent failure
+//! instead of an error: a `rename` **does not invalidate** the descriptor.
+//! The directory keeps existing, with the same inode, somewhere else — and
+//! the copy keeps filling it, where nobody is going to look.
 //!
-//! **No hace falta que el borrado venga de norte**, y eso es lo que decide el
-//! diseño: se puede borrar la carpeta desde otro gestor, con un `rm` en una
-//! terminal, o desde otra máquina sobre el mismo montaje. Negarse a borrarla
-//! dentro de norte no cerraría nada; detectarlo y decirlo, sí.
+//! **The delete does not need to come from norte**, and that is what decides
+//! the design: the folder can be deleted from another manager, with an `rm`
+//! in a terminal, or from another machine over the same mount. Refusing to
+//! delete it from within norte would close nothing; detecting it and saying
+//! so would.
 //!
-//! Los dos tests de aquí atacan los dos caminos por los que se detecta, y
-//! hacen falta los dos: uno deja la ruta VACÍA (no resuelve a nada) y el otro
-//! deja OTRO directorio en su sitio, que es el único caso donde la
-//! comparación de identidad es lo que salva.
+//! The two tests here attack the two paths by which it is detected, and both
+//! are needed: one leaves the path EMPTY (it resolves to nothing) and the
+//! other leaves ANOTHER directory in its place, which is the only case where
+//! identity comparison is what saves it.
 
 #![cfg(unix)]
 
@@ -39,32 +41,33 @@ mod origen_a_peticion;
 use origen_a_peticion::{Mando, OrigenAPeticion};
 
 fn vp(wire: &str) -> VPath {
-    VPath::parse(wire).expect("wire válido")
+    VPath::parse(wire).expect("valid wire")
 }
 
-/// Cuántos ficheros lleva el origen.
+/// How many files the source carries.
 ///
-/// Bastantes para que la copia siga viva cuando el test interviene. No es un
-/// plazo disfrazado: el test no espera un tiempo, espera a VER que la copia
-/// empezó, y con cuatro mil ficheros queda trabajo detrás de ese momento.
+/// Enough for the copy to stay alive when the test steps in. It is not a
+/// deadline in disguise: the test does not wait a fixed time, it waits to SEE
+/// that the copy started, and with four thousand files there is work left
+/// behind that moment.
 ///
-/// Son de 1 KiB porque lo que se prueba se dispara por ENTRADA, no por byte:
-/// hacerlos grandes solo encarece el montaje del test.
-const FICHEROS: usize = 4000;
+/// They are 1 KiB each because what is being tested triggers per ENTRY, not
+/// per byte: making them bigger only makes the test's setup more expensive.
+const FILES: usize = 4000;
 
-/// Espera a que `cond` se cumpla, o se rinde.
+/// Waits until `cond` is true, or gives up.
 ///
-/// Sondea en vez de dormir un rato fijo, que es lo que este repositorio pide:
-/// lo que se espera es un HECHO observable —que haya aterrizado el primer
-/// fichero—, no que pase un tiempo.
+/// Polls instead of sleeping a fixed while, which is what this repository
+/// asks for: what is being waited on is an observable FACT — that the first
+/// file has landed — not that time has passed.
 ///
-/// Treinta segundos y no diez: por debajo de este plazo hay el encolado, el
-/// plan y la hidratación, que hace un `stat` por entrada de una en una. Con la
-/// máquina cargada por el resto de la suite, diez era el número más apretado
-/// del fichero y el primero que se habría puesto rojo sin motivo.
-async fn espera(mut cond: impl FnMut() -> bool) -> bool {
-    let hasta = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
-    while tokio::time::Instant::now() < hasta {
+/// Thirty seconds and not ten: below this deadline there is the queuing, the
+/// plan and the hydration, which does one `stat` per entry one at a time.
+/// With the machine loaded by the rest of the suite, ten was this file's
+/// tightest number and the first one that would have gone red for no reason.
+async fn wait(mut cond: impl FnMut() -> bool) -> bool {
+    let until = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    while tokio::time::Instant::now() < until {
         if cond() {
             return true;
         }
@@ -73,13 +76,13 @@ async fn espera(mut cond: impl FnMut() -> bool) -> bool {
     false
 }
 
-/// El montaje común: un origen con muchos ficheros y un motor que lo sirve.
-fn arbol() -> (tempfile::TempDir, Engine) {
+/// The common setup: a source with many files and an engine that serves it.
+fn tree() -> (tempfile::TempDir, Engine) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let origen = dir.path().join("origen");
-    std::fs::create_dir(&origen).expect("origen");
-    for i in 0..FICHEROS {
-        std::fs::write(origen.join(format!("f{i:04}")), vec![b'x'; 1024]).expect("fichero");
+    let source = dir.path().join("source");
+    std::fs::create_dir(&source).expect("source");
+    for i in 0..FILES {
+        std::fs::write(source.join(format!("f{i:04}")), vec![b'x'; 1024]).expect("file");
     }
     let engine = Engine::new();
     engine.register_provider(
@@ -88,15 +91,15 @@ fn arbol() -> (tempfile::TempDir, Engine) {
     (dir, engine)
 }
 
-/// Lanza la copia y espera a que esté DE VERDAD copiando.
+/// Launches the copy and waits until it is REALLY copying.
 ///
-/// Devuelve el handle y cuántos ficheros había en el destino en ese momento,
-/// que es lo que luego demuestra que el test llegó a tiempo.
-async fn copiando(dir: &std::path::Path, engine: &Engine) -> (norte_core::TaskHandle, usize) {
+/// Returns the handle and how many files were in the destination at that
+/// moment, which is what later proves the test arrived in time.
+async fn copying(dir: &std::path::Path, engine: &Engine) -> (norte_core::TaskHandle, usize) {
     let handle = engine
         .copy_with_as(
-            &vp("file:///origen"),
-            &vp("file:///destino"),
+            &vp("file:///source"),
+            &vp("file:///destination"),
             norte_core::TransferOptions {
                 on_collision: CollisionPolicy::Fail,
                 ..norte_core::TransferOptions::default()
@@ -104,148 +107,154 @@ async fn copiando(dir: &std::path::Path, engine: &Engine) -> (norte_core::TaskHa
             Actor::User,
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
 
-    // Se espera a que haya ALGO dentro, no a un nombre concreto. Esperar a
-    // `f0000` fue uno de los intentos fallidos: el árbol se recorre en el
-    // orden que da `readdir`, que no es alfabético, así que ese fichero podía
-    // ser el último — y el test intervenía con la copia ya acabada, creyendo
-    // que la pillaba empezando.
-    let destino = dir.join("destino");
+    // Waits until there is SOMETHING inside, not a specific name. Waiting for
+    // `f0000` was one of the failed attempts: the tree is walked in the order
+    // `readdir` gives, which is not alphabetical, so that file could be the
+    // last one — and the test would step in with the copy already finished,
+    // believing it caught it starting.
+    let destination = dir.join("destination");
     assert!(
-        espera(|| std::fs::read_dir(&destino).is_ok_and(|d| d.count() > 0)).await,
-        "la copia no llegó a empezar"
+        wait(|| std::fs::read_dir(&destination).is_ok_and(|d| d.count() > 0)).await,
+        "the copy never got to start"
     );
-    // Y se mide JUSTO ANTES de intervenir. Contarlo después no vale, y ése fue
-    // el primer intento fallido: tras el `rename` la copia sigue llenando esa
-    // misma carpeta por el descriptor, así que el contador acababa completo
-    // dijera lo que dijera la realidad en el instante que importa.
-    let cuantos = std::fs::read_dir(&destino).expect("destino").count();
-    (handle, cuantos)
+    // And it is measured RIGHT BEFORE stepping in. Counting it afterward does
+    // not work, and that was the first failed attempt: after the `rename` the
+    // copy keeps filling that same folder through the descriptor, so the
+    // counter would end up complete no matter what reality said at the
+    // moment that mattered.
+    let how_many = std::fs::read_dir(&destination)
+        .expect("destination")
+        .count();
+    (handle, how_many)
 }
 
-/// Espera el desenlace SIN poder colgarse.
+/// Waits for the outcome WITHOUT being able to hang.
 ///
-/// El síntoma que el lector describió —una tarea que se queda ahí— es
-/// precisamente el que un `join()` pelado convertiría en un test colgado en
-/// vez de en un test rojo: saltaría el plazo de nextest minutos después, con
-/// un informe de timeout en lugar del mensaje que aquí está escrito.
-async fn desenlace(handle: norte_core::TaskHandle) -> TaskState {
+/// The symptom the reader described — a task that just sits there — is
+/// exactly what a bare `join()` would turn into a hung test instead of a red
+/// one: nextest's deadline would trip minutes later, with a timeout report
+/// instead of the message written here.
+async fn outcome(handle: norte_core::TaskHandle) -> TaskState {
     tokio::time::timeout(std::time::Duration::from_mins(1), handle.join())
         .await
-        .expect("la tarea se quedó colgada: ni completa, ni falla, ni se cancela")
+        .expect("the task got stuck: neither completed, nor failed, nor cancelled")
 }
 
-fn a_tiempo(cuantos: usize) {
+fn in_time(how_many: usize) {
     assert!(
-        cuantos < FICHEROS,
-        "la copia ya había acabado al intervenir ({cuantos} de {FICHEROS}): \
-         este test no ha probado nada, hace falta un origen más grande"
+        how_many < FILES,
+        "the copy had already finished by the time of stepping in ({how_many} of {FILES}): \
+         this test proved nothing, a bigger source is needed"
     );
 }
 
-/// **Borrar el destino a media copia no se salda como completada.**
+/// **Deleting the destination mid-copy does not settle as completed.**
 ///
-/// Se borra como lo borra norte: a la papelera, que es un `rename`. Lo que la
-/// copia tiene abierto es el descriptor de esa carpeta, así que después del
-/// `rename` sigue escribiendo dentro — en la papelera, donde el lector no
-/// puso nada y no va a mirar.
+/// It is deleted the way norte deletes: to the trash, which is a `rename`.
+/// What the copy has open is that folder's descriptor, so after the `rename`
+/// it keeps writing inside it — in the trash, where the reader put nothing
+/// and is not going to look.
 ///
-/// Aquí la ruta queda VACÍA, así que lo que detecta el caso es que la ruta no
-/// resuelve. El test de abajo cubre el otro camino.
+/// Here the path ends up EMPTY, so what detects the case is that the path
+/// does not resolve. The test below covers the other path.
 #[tokio::test]
-async fn borrar_el_destino_a_media_copia_no_se_salda_como_completada() {
-    let (dir, engine) = arbol();
-    let (handle, cuantos) = copiando(dir.path(), &engine).await;
+async fn deleting_the_destination_mid_copy_does_not_settle_as_completed() {
+    let (dir, engine) = tree();
+    let (handle, how_many) = copying(dir.path(), &engine).await;
 
-    // Entre la cuenta de arriba y este `rename` la copia no puede avanzar:
-    // este test corre en un runtime de UN hilo, y mientras el cuerpo del test
-    // hace E/S síncrona lo tiene cogido. Es load-bearing y no se ve — el día
-    // que alguien le ponga `flavor = "multi_thread"` para acelerarlo, esa
-    // ventana se abre y el test puede fallar con el mensaje equivocado.
-    let papelera = dir.path().join("papelera");
-    std::fs::rename(dir.path().join("destino"), &papelera).expect("a la papelera");
-    a_tiempo(cuantos);
+    // Between the count above and this `rename` the copy cannot advance: this
+    // test runs on a single-thread runtime, and while the test body does
+    // synchronous I/O it holds it. This is load-bearing and invisible — the
+    // day someone puts `flavor = "multi_thread"` on it to speed it up, that
+    // window opens and the test can fail with the wrong message.
+    let trash = dir.path().join("trash");
+    std::fs::rename(dir.path().join("destination"), &trash).expect("to the trash");
+    in_time(how_many);
 
-    let estado = desenlace(handle).await;
+    let state = outcome(handle).await;
     assert_ne!(
-        estado,
+        state,
         TaskState::Completed,
-        "el destino dejó de existir a media copia y la tarea dice que copió: \
-         lo copiado está en {}, que no es donde se pidió",
-        papelera.display()
+        "the destination stopped existing mid-copy and the task says it copied: \
+         what was copied is in {}, which is not where it was asked to go",
+        trash.display()
     );
-    // Y no vale con «falló»: tiene que fallar DICIENDO QUÉ. Antes contestaba
-    // `NotFound` a secas, que en mitad de una copia de miles de ficheros se
-    // lee como «falta algo del ORIGEN» — lo contrario de lo que pasó.
+    // And "failed" alone is not enough: it has to fail SAYING WHAT. Before it
+    // answered a bare `NotFound`, which in the middle of a copy of thousands
+    // of files reads as "something is missing from the SOURCE" — the
+    // opposite of what happened.
     assert!(
         matches!(
-            estado,
+            state,
             TaskState::Failed {
                 error: Error::Conflict {
                     conflict: ConflictKind::DestinationGone
                 }
             }
         ),
-        "tiene que decir que el destino se fue, no {estado:?}"
+        "it has to say the destination is gone, not {state:?}"
     );
 }
 
-/// **Y si en su sitio aparece OTRA carpeta, tampoco.**
+/// **And if ANOTHER folder appears in its place, it does not either.**
 ///
-/// Éste es el caso que de verdad prueba la comparación de identidad, y por eso
-/// hace falta además del de arriba: aquí la ruta SÍ resuelve —hay un
-/// directorio en `file:///destino`— así que «no encuentro la ruta» no salva a
-/// nadie. Lo único que distingue este destino del bueno es que su inodo no es
-/// el del descriptor que la copia tiene abierto.
+/// This is the case that really tests identity comparison, and that is why it
+/// is needed on top of the one above: here the path DOES resolve — there is a
+/// directory at `file:///destination` — so "I cannot find the path" saves
+/// nobody. The only thing telling this destination apart from the good one is
+/// that its inode is not the one of the descriptor the copy has open.
 ///
-/// Sin este test, la comprobación se podría reducir a un `stat` de la ruta y
-/// todo seguiría verde, mientras la copia sigue llenando el directorio viejo.
+/// Without this test, the check could be reduced to a `stat` of the path and
+/// everything would stay green, while the copy keeps filling the old
+/// directory.
 ///
-/// Y es el caso REALISTA, no el rebuscado: borrar la carpeta y volver a
-/// crearla es exactamente lo que hace alguien que quería empezar de cero.
+/// And it is the REALISTIC case, not a contrived one: deleting the folder and
+/// creating it again is exactly what someone who wanted to start from scratch
+/// would do.
 #[tokio::test]
-async fn si_en_el_sitio_del_destino_aparece_otra_carpeta_la_copia_para() {
-    let (dir, engine) = arbol();
-    let (handle, cuantos) = copiando(dir.path(), &engine).await;
+async fn if_another_folder_appears_where_the_destination_was_the_copy_stops() {
+    let (dir, engine) = tree();
+    let (handle, how_many) = copying(dir.path(), &engine).await;
 
-    let destino = dir.path().join("destino");
-    std::fs::rename(&destino, dir.path().join("papelera")).expect("a la papelera");
-    // Y el lector crea una carpeta nueva con el mismo nombre.
-    std::fs::create_dir(&destino).expect("la nueva");
-    a_tiempo(cuantos);
+    let destination = dir.path().join("destination");
+    std::fs::rename(&destination, dir.path().join("trash")).expect("to the trash");
+    // And the reader creates a new folder with the same name.
+    std::fs::create_dir(&destination).expect("the new one");
+    in_time(how_many);
 
-    let estado = desenlace(handle).await;
+    let state = outcome(handle).await;
     assert!(
         matches!(
-            estado,
+            state,
             TaskState::Failed {
                 error: Error::Conflict {
                     conflict: ConflictKind::DestinationGone
                 }
             }
         ),
-        "la ruta resuelve, pero a OTRO directorio: la copia no puede seguir \
-         llenando el viejo y decir que fue bien. Fue {estado:?}"
+        "the path resolves, but to ANOTHER directory: the copy cannot keep \
+         filling the old one and say it went well. Was {state:?}"
     );
-    // Y lo que el lector ve en su carpeta nueva es lo que él puso: nada.
+    // And what the reader sees in their new folder is what they put there: nothing.
     assert_eq!(
-        std::fs::read_dir(&destino).expect("la nueva").count(),
+        std::fs::read_dir(&destination)
+            .expect("the new one")
+            .count(),
         0,
-        "no se escribió ni un fichero en la carpeta nueva"
+        "not a single file was written into the new folder"
     );
 }
 
-/// El montaje del fichero suelto: un origen que se puede parar, un destino
-/// local de verdad, y el motor que los une.
-async fn un_fichero_parado(
-    dir: &std::path::Path,
-) -> (Engine, Arc<norte_testkit::MemProvider>, Mando) {
+/// The lone-file setup: a source that can be paused, a real local destination,
+/// and the engine joining them.
+async fn a_paused_file(dir: &std::path::Path) -> (Engine, Arc<norte_testkit::MemProvider>, Mando) {
     let mem = Arc::new(norte_testkit::MemProvider::new());
-    // Varios trozos por parecerse a un fichero de verdad; la parada no
-    // depende de que haya más de uno (ver `OrigenAPeticion::read`).
+    // Several chunks to look like a real file; the pause does not depend on
+    // there being more than one (see `OrigenAPeticion::read`).
     {
-        let mut sink = mem.write(&vp("lento:///grande")).await.expect("write");
+        let mut sink = mem.write(&vp("slow:///big")).await.expect("write");
         for _ in 0..8 {
             sink.write(bytes::Bytes::from(vec![b'x'; 64 * 1024]))
                 .await
@@ -253,34 +262,34 @@ async fn un_fichero_parado(
         }
         sink.commit().await.expect("commit");
     }
-    let (origen, mando) = OrigenAPeticion::nuevo(Arc::clone(&mem));
+    let (source, mando) = OrigenAPeticion::nuevo(Arc::clone(&mem));
     let engine = Engine::new();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::rooted(dir)) as Arc<dyn Provider>
     );
-    engine.register_provider(origen);
+    engine.register_provider(source);
     (engine, mem, mando)
 }
 
-/// **Y MOVER un fichero es el caso que pierde datos.**
+/// **And MOVING a file is the case that loses data.**
 ///
-/// Lo encontró la revisión de #367 mirando el arreglo, y es peor que lo que
-/// #367 cerraba: un movimiento entre providers copia la hoja y después BORRA
-/// el origen. Con la carpeta de destino borrada a media copia, el resultado
-/// era los bytes en la papelera, el origen destruido y la tarea diciendo
-/// «completada». Aquí la comprobación tiene que ir antes del borrado, y no
-/// antes de la frase final: lo que hay detrás es un efecto irreversible.
+/// The #367 review found it while looking at the fix, and it is worse than
+/// what #367 closed: a move between providers copies the leaf and then
+/// DELETES the source. With the destination folder deleted mid-copy, the
+/// result was the bytes in the trash, the source destroyed and the task
+/// saying "completed". Here the check has to run before the delete, and not
+/// before the final sentence: what is behind it is an irreversible effect.
 #[tokio::test]
-async fn mover_un_fichero_a_un_destino_que_desaparece_no_borra_el_origen() {
+async fn moving_a_file_to_a_disappearing_destination_does_not_delete_the_source() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let destino = dir.path().join("destino");
-    std::fs::create_dir(&destino).expect("destino");
-    let (engine, mem, mut mando) = un_fichero_parado(dir.path()).await;
+    let destination = dir.path().join("destination");
+    std::fs::create_dir(&destination).expect("destination");
+    let (engine, mem, mut mando) = a_paused_file(dir.path()).await;
 
     let handle = engine
         .move_with_as(
-            &vp("lento:///grande"),
-            &vp("file:///destino/grande"),
+            &vp("slow:///big"),
+            &vp("file:///destination/big"),
             norte_core::TransferOptions {
                 on_collision: CollisionPolicy::Fail,
                 ..norte_core::TransferOptions::default()
@@ -288,54 +297,53 @@ async fn mover_un_fichero_a_un_destino_que_desaparece_no_borra_el_origen() {
             Actor::User,
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
 
     assert!(
         mando.empezo().await,
-        "el movimiento no llegó a empezar: este test no ha probado nada"
+        "the move never got to start: this test proved nothing"
     );
-    std::fs::rename(&destino, dir.path().join("papelera")).expect("a la papelera");
+    std::fs::rename(&destination, dir.path().join("trash")).expect("to the trash");
     mando.sigue();
 
-    let estado = desenlace(handle).await;
+    let state = outcome(handle).await;
     assert!(
         matches!(
-            estado,
+            state,
             TaskState::Failed {
                 error: Error::Conflict {
                     conflict: ConflictKind::DestinationGone
                 }
             }
         ),
-        "un movimiento cuyo destino se fue no puede acabar «completada». Fue {estado:?}"
+        "a move whose destination is gone cannot end up \"completed\". Was {state:?}"
     );
-    // Y esto es el daño de verdad, no la frase: el origen sigue ahí.
+    // And this is the real damage, not the sentence: the source is still there.
     assert!(
-        mem.stat(&vp("lento:///grande")).await.is_ok(),
-        "el movimiento borró el origen después de copiarlo a una carpeta que \
-         ya no estaba: los bytes en la papelera y el fichero destruido"
+        mem.stat(&vp("slow:///big")).await.is_ok(),
+        "the move deleted the source after copying it into a folder that was \
+         no longer there: the bytes in the trash and the file destroyed"
     );
 }
 
-/// **#367 — copiar UN fichero tiene el mismo agujero.**
+/// **#367 — copying A SINGLE file has the same hole.**
 ///
-/// `open_leaf_root` comprueba la raíz UNA vez, al abrirla, que es la forma que
-/// tenía el árbol antes de ADR 0151. A partir de ahí la hoja se escribe y se
-/// publica por ese descriptor, así que borrar la carpeta de destino con la
-/// copia en marcha dejaba el fichero en la papelera y la tarea diciendo que
-/// fue bien.
+/// `open_leaf_root` checks the root ONCE, when opening it, which is how the
+/// tree behaved before ADR 0151. From there the leaf is written and published
+/// through that descriptor, so deleting the destination folder while the copy
+/// is running left the file in the trash and the task saying it went well.
 #[tokio::test]
-async fn copiar_un_fichero_a_un_destino_que_desaparece_falla() {
+async fn copying_a_file_to_a_disappearing_destination_fails() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let destino = dir.path().join("destino");
-    std::fs::create_dir(&destino).expect("destino");
+    let destination = dir.path().join("destination");
+    std::fs::create_dir(&destination).expect("destination");
 
-    let (engine, _mem, mut mando) = un_fichero_parado(dir.path()).await;
+    let (engine, _mem, mut mando) = a_paused_file(dir.path()).await;
 
     let handle = engine
         .copy_with_as(
-            &vp("lento:///grande"),
-            &vp("file:///destino/grande"),
+            &vp("slow:///big"),
+            &vp("file:///destination/big"),
             norte_core::TransferOptions {
                 on_collision: CollisionPolicy::Fail,
                 ..norte_core::TransferOptions::default()
@@ -343,28 +351,28 @@ async fn copiar_un_fichero_a_un_destino_que_desaparece_falla() {
             Actor::User,
         )
         .await
-        .expect("encola");
+        .expect("enqueues");
 
-    // El hecho, no un plazo: la copia ya entregó su primer trozo.
+    // The fact, not a deadline: the copy already delivered its first chunk.
     assert!(
         mando.empezo().await,
-        "la copia no llegó a empezar: este test no ha probado nada"
+        "the copy never got to start: this test proved nothing"
     );
-    // Con la copia PARADA a mitad, el lector borra la carpeta de destino.
-    std::fs::rename(&destino, dir.path().join("papelera")).expect("a la papelera");
+    // With the copy PAUSED halfway, the reader deletes the destination folder.
+    std::fs::rename(&destination, dir.path().join("trash")).expect("to the trash");
     mando.sigue();
 
-    let estado = desenlace(handle).await;
+    let state = outcome(handle).await;
     assert!(
         matches!(
-            estado,
+            state,
             TaskState::Failed {
                 error: Error::Conflict {
                     conflict: ConflictKind::DestinationGone
                 }
             }
         ),
-        "un fichero suelto cuyo destino se fue no puede acabar «completada»: \
-         los bytes están en la papelera. Fue {estado:?}"
+        "a lone file whose destination is gone cannot end up \"completed\": \
+         the bytes are in the trash. Was {state:?}"
     );
 }

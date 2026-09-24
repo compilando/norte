@@ -1,42 +1,44 @@
 use super::*;
 
 // ---------------------------------------------------------------------------
-// Cabeceras y orden (fase 4, tarea 4.2).
+// Headers and sorting (phase 4, task 4.2).
 // ---------------------------------------------------------------------------
 
-/// El listado viaja con sus CABECERAS: etiqueta ya traducida, alineación y
-/// cuál manda el orden. El renderer las pinta; no las inventa ni las traduce.
+/// The listing travels with its HEADERS: already-translated label, alignment
+/// and which one drives the sort. The renderer paints them; it does not
+/// invent them nor translate them.
 #[tokio::test]
-async fn el_listado_lleva_sus_cabeceras() {
+async fn the_listing_carries_its_headers() {
     let (_h, snap) = host_arbol(arbol()).await;
     let b = listado(&snap);
     let ids: Vec<&str> = b.columns.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(
         ids,
         vec!["name", "size", "mtime"],
-        "las columnas configuradas, en orden y con el nombre delante"
+        "the configured columns, in order and with the name up front"
     );
     for c in &b.columns {
-        assert!(!c.label.is_empty(), "cada cabecera trae su etiqueta: {c:?}");
+        assert!(!c.label.is_empty(), "every header carries its label: {c:?}");
     }
-    let nombre = &b.columns[0];
+    let name = &b.columns[0];
     assert_eq!(
-        nombre.sort.as_deref(),
+        name.sort.as_deref(),
         Some("asc"),
-        "y dice cuál ordena y en qué sentido"
+        "and it says which one sorts and in which direction"
     );
-    assert!(b.columns[1].sort.is_none(), "las demás, no");
+    assert!(b.columns[1].sort.is_none(), "the others do not");
 }
 
-/// Ordenar por una columna es del host: misma regla que el TUI —la misma
-/// columna invierte, otra columna empieza ascendente— y el cursor se queda
-/// en la MISMA entrada, no en la misma fila.
+/// Sorting by a column is the host's: the same rule as the TUI's — the same
+/// column reverses, another column starts ascending — and the cursor stays
+/// on the SAME entry, not on the same row.
 #[tokio::test]
-async fn ordenar_por_columna_usa_la_regla_compartida() {
+async fn sorting_by_column_uses_the_shared_rule() {
     let (h, snap) = host_arbol(arbol()).await;
-    // Los FICHEROS, sin el directorio: `dirs_first` los agrupa aparte y ese
-    // grupo va siempre ascendente — invertir el orden no lo toca.
-    let ficheros = |s: &norte_ui_host::ViewSnapshot| -> Vec<String> {
+    // FILES, without the directory: `dirs_first` groups it separately and
+    // that group always goes ascending — reversing the sort does not touch
+    // it.
+    let files = |s: &norte_ui_host::ViewSnapshot| -> Vec<String> {
         listado(s)
             .rows
             .iter()
@@ -44,8 +46,8 @@ async fn ordenar_por_columna_usa_la_regla_compartida() {
             .map(|r| r.display_name.clone())
             .collect()
     };
-    let antes = ficheros(&snap);
-    assert!(antes.len() >= 2, "hay ficheros que ordenar: {antes:?}");
+    let before = files(&snap);
+    assert!(before.len() >= 2, "there are files to sort: {before:?}");
     let mut sub = h.subscribe();
 
     h.dispatch(UiAction::SortBy {
@@ -53,33 +55,33 @@ async fn ordenar_por_columna_usa_la_regla_compartida() {
         column: "name".to_owned(),
     })
     .await
-    .expect("host vivo");
-    let _ = sub.recv().await.expect("el host sigue vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let invertido = siguiente_foto(&mut sub).await;
-    let despues = ficheros(&invertido);
-    let mut al_reves = antes.clone();
-    al_reves.reverse();
+    .expect("host alive");
+    let _ = sub.recv().await.expect("the host is still alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let reversed = siguiente_foto(&mut sub).await;
+    let after = files(&reversed);
+    let mut backward = before.clone();
+    backward.reverse();
     assert_eq!(
-        despues, al_reves,
-        "la misma columna dos veces invierte el sentido"
+        after, backward,
+        "the same column twice reverses the direction"
     );
     assert_eq!(
-        listado(&invertido).rows[0].kind,
+        listado(&reversed).rows[0].kind,
         norte_ui_host::dto::RowKind::Dir,
-        "y los directorios siguen primero: invertir no toca su grupo"
+        "and directories still come first: reversing does not touch their group"
     );
     assert_eq!(
-        listado(&invertido).columns[0].sort.as_deref(),
+        listado(&reversed).columns[0].sort.as_deref(),
         Some("desc"),
-        "y la cabecera lo dice"
+        "and the header says so"
     );
 }
 
-/// Una columna que no ordena —o que no está— no altera el listado, y se
-/// responde en vez de callarse.
+/// A column that does not sort — or is not there — leaves the listing
+/// untouched, and it is answered instead of staying silent.
 #[tokio::test]
-async fn ordenar_por_una_columna_que_no_ordena_se_dice() {
+async fn sorting_by_a_non_sortable_column_says_so() {
     let (h, _snap) = host_arbol(arbol()).await;
     let ack = h
         .dispatch(UiAction::SortBy {
@@ -87,32 +89,33 @@ async fn ordenar_por_una_columna_que_no_ordena_se_dice() {
             column: "no-existe".to_owned(),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
-        "se dice que esa columna no ordena: {ack:?}"
+        "it says that column does not sort: {ack:?}"
     );
-    // Un atributo que el esquema no tiene configurado tampoco (ADR 0144):
-    // el texto viene del renderer, y no debe acabar en el orden ni en la
-    // sesión sin que nadie haya pedido esa columna.
+    // Nor does an attribute the scheme has not configured (ADR 0144): the
+    // text comes from the renderer, and it must not end up in the sort or
+    // the session without anyone having requested that column.
     let ack = h
         .dispatch(UiAction::SortBy {
             slot_id: 1,
             column: "attr:no-existe".to_owned(),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
-        "un attr sin configurar no ordena: {ack:?}"
+        "an unconfigured attr does not sort: {ack:?}"
     );
 }
 
-/// ADR 0144: la cabecera de un atributo ordena como las demás —es
-/// clicable, y tras pulsarla lleva la flecha— sin que el puente cambie: la
-/// columna viaja como el mismo texto `attr:<id>` que ya nombraba la cabecera.
+/// ADR 0144: an attribute's header sorts like the others — it is clickable,
+/// and carries the arrow after being pressed — with no change to the bridge:
+/// the column travels as the same `attr:<id>` text that already named the
+/// header.
 #[tokio::test]
-async fn un_atributo_ordena_desde_su_cabecera() {
+async fn an_attribute_sorts_from_its_header() {
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: arbol() as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
@@ -134,23 +137,26 @@ async fn un_atributo_ordena_desde_su_cabecera() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let antes = siguiente_foto(&mut sub).await;
-    let modo = |s: &norte_ui_host::ViewSnapshot| {
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let before = siguiente_foto(&mut sub).await;
+    let mode = |s: &norte_ui_host::ViewSnapshot| {
         listado(s)
             .columns
             .iter()
             .find(|c| c.id == "attr:posix.mode")
             .cloned()
-            .expect("la cabecera del modo")
+            .expect("the mode header")
     };
     assert!(
-        modo(&antes).sortable,
-        "la cabecera del atributo es clicable"
+        mode(&before).sortable,
+        "the attribute's header is clickable"
     );
-    assert!(modo(&antes).sort.is_none(), "y aún no manda el orden");
+    assert!(
+        mode(&before).sort.is_none(),
+        "and does not yet drive the sort"
+    );
 
     let ack = h
         .dispatch(UiAction::SortBy {
@@ -158,44 +164,44 @@ async fn un_atributo_ordena_desde_su_cabecera() {
             column: "attr:posix.mode".to_owned(),
         })
         .await
-        .expect("host vivo");
+        .expect("host alive");
     assert!(
         !matches!(ack, ActionAck::Unavailable { .. }),
-        "un atributo ordena: {ack:?}"
+        "an attribute sorts: {ack:?}"
     );
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        if modo(&foto).sort.as_deref() == Some("asc") {
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        if mode(&snap).sort.as_deref() == Some("asc") {
             assert!(
-                listado(&foto).columns[0].sort.is_none(),
-                "el nombre deja de mandar"
+                listado(&snap).columns[0].sort.is_none(),
+                "the name stops driving it"
             );
             return;
         }
     }
-    panic!("la cabecera del atributo tiene que llevar la flecha tras ordenar");
+    panic!("the attribute's header has to carry the arrow after sorting");
 }
 
 // ---------------------------------------------------------------------------
-// Decoraciones y columnas de plugin (tarea 4.2).
+// Decorations and plugin columns (task 4.2).
 // ---------------------------------------------------------------------------
 
-/// Un backend con `n` entradas, una insignia en la primera y una columna de
-/// plugin con valor para todas.
+/// A backend with `n` entries, a badge on the first one and a plugin column
+/// with a value for all of them.
 pub(super) fn arbol_grande_con_plugins(n: usize) -> Arc<Falso> {
-    let nombres: Vec<(Vec<u8>, bool)> = (0..n)
+    let names: Vec<(Vec<u8>, bool)> = (0..n)
         .map(|i| (format!("f{i:05}.txt").into_bytes(), false))
         .collect();
     let mut f = Falso::default();
-    f.arbol.insert("mem:///casa".to_owned(), nombres);
+    f.arbol.insert("mem:///casa".to_owned(), names);
     f.decoraciones
         .insert("mem:///casa/f00000.txt".to_owned(), "M".to_owned());
     *f.plugins.lock().expect("plugins") = vec![{
         let mut p = extension("acme.git", "Git", true);
-        // DECLARADA en el catálogo: `validated_plugin_requests` no pide una
-        // columna que su plugin no dice tener, para no atribuirla a quien no
-        // es.
+        // DECLARED in the catalogue: `validated_plugin_requests` does not
+        // request a column its plugin does not say it has, so as not to
+        // attribute it to the wrong one.
         p.columns = vec![norte_proto::methods::PluginColumnInfo {
             id: "status".to_owned(),
             header: "Estado".to_owned(),
@@ -211,18 +217,18 @@ pub(super) fn arbol_grande_con_plugins(n: usize) -> Arc<Falso> {
     Arc::new(f)
 }
 
-/// Solo se le pregunta a los plugins por lo que se VE.
+/// Plugins are only asked about what is VISIBLE.
 ///
-/// Cada llamada levanta una instancia de wasm por plugin: #224 midió 167 ms
-/// por página de 20 sobre 2000 entradas. Preguntar por el directorio entero
-/// multiplica ese precio por el tamaño del directorio, y para nada — el
-/// renderer solo puede pintar su ventana. Es donde esto se separa del TUI,
-/// que decora todo lo cargado porque su pane no declara ventana.
-/// Lo que un plugin contesta LLEGA a la celda de su fila, y su cabecera se
-/// llama como el manifiesto dice (`[[contributions.columns]] header`) y no
-/// como su id. Hasta aquí solo se comprobaba que la columna se PIDIERA.
+/// Every call spins up a wasm instance per plugin: #224 measured 167 ms per
+/// page of 20 over 2000 entries. Asking about the whole directory multiplies
+/// that cost by the directory's size, for nothing — the renderer can only
+/// paint its window. This is where it parts ways with the TUI, which
+/// decorates everything loaded because its pane declares no window.
+/// What a plugin answers REACHES its row's cell, and its header is named
+/// what the manifest says (`[[contributions.columns]] header`) and not its
+/// id. Until now only whether the column was REQUESTED got checked.
 #[tokio::test]
-async fn la_columna_de_un_plugin_llega_a_la_fila_y_se_llama_como_su_manifiesto() {
+async fn a_plugin_columns_value_reaches_the_row_named_by_its_manifest() {
     let backend = arbol_grande_con_plugins(3);
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
@@ -245,7 +251,7 @@ async fn la_columna_de_un_plugin_llega_a_la_fila_y_se_llama_como_su_manifiesto()
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
@@ -253,36 +259,36 @@ async fn la_columna_de_un_plugin_llega_a_la_fila_y_se_llama_como_su_manifiesto()
         count: 20,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let foto = esperar_foto(&h, &mut sub, "la celda del plugin llegue", |f| {
+    let snap = esperar_foto(&h, &mut sub, "the plugin's cell to arrive", |f| {
         listado(f)
             .rows
             .iter()
             .any(|r| r.cells.iter().any(|c| c.text.as_deref() == Some("limpio")))
     })
     .await;
-    let b = listado(&foto);
-    let columna = b
+    let b = listado(&snap);
+    let column = b
         .columns
         .iter()
         .find(|c| c.id == "plugin:acme.git/status")
-        .expect("la columna configurada se pinta");
+        .expect("the configured column paints");
     assert_eq!(
-        columna.label, "Estado",
-        "el rótulo del manifiesto, no el id crudo"
+        column.label, "Estado",
+        "the manifest's label, not the raw id"
     );
-    let fila = &b.rows[0];
-    let celda = fila
+    let row = &b.rows[0];
+    let cell = row
         .cells
         .iter()
         .find(|c| c.column == "plugin:acme.git/status")
-        .expect("la fila lleva la celda de esa columna");
-    assert_eq!(celda.text.as_deref(), Some("limpio"));
+        .expect("the row carries that column's cell");
+    assert_eq!(cell.text.as_deref(), Some("limpio"));
 }
 
 #[tokio::test]
-async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
+async fn plugins_are_only_asked_about_the_window() {
     const TOTAL: usize = 2000;
     let backend = arbol_grande_con_plugins(TOTAL);
     let (h, _snap) = UiHost::start(UiHostOptions {
@@ -306,7 +312,7 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
 
     h.dispatch(UiAction::SetVisibleRange {
@@ -315,48 +321,48 @@ async fn a_los_plugins_solo_se_les_pregunta_por_la_ventana() {
         count: 20,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let _ = siguiente_foto(&mut sub).await;
     }
 
-    let lotes = backend.decorados.lock().expect("mutex").clone();
-    assert!(!lotes.is_empty(), "se pregunta a los plugins");
-    for lote in &lotes {
+    let batches = backend.decorados.lock().expect("mutex").clone();
+    assert!(!batches.is_empty(), "plugins are asked");
+    for batch in &batches {
         assert!(
-            lote.len() <= 20,
-            "un lote de {} rutas sobre {TOTAL} entradas: se está pidiendo más \
-             que la ventana",
-            lote.len()
+            batch.len() <= 20,
+            "a batch of {} paths over {TOTAL} entries: more than the window \
+             is being requested",
+            batch.len()
         );
     }
-    let pedidas: usize = lotes.iter().map(Vec::len).sum();
+    let requested: usize = batches.iter().map(Vec::len).sum();
     assert!(
-        pedidas <= 40,
-        "en total se pidieron {pedidas} de {TOTAL}: la ventana es 20"
+        requested <= 40,
+        "in total {requested} of {TOTAL} were requested: the window is 20"
     );
 
-    // Y la columna de plugin viaja por el mismo lote, no por otro barrido.
+    // And the plugin column travels in the same batch, not a separate sweep.
     let cols = backend.columnas_pedidas.lock().expect("mutex").clone();
-    assert!(!cols.is_empty(), "la columna configurada se pide");
-    for (plugin, columna, paths) in &cols {
+    assert!(!cols.is_empty(), "the configured column is requested");
+    for (plugin, column, paths) in &cols {
         assert_eq!(plugin, "acme.git");
-        assert_eq!(columna, "status");
+        assert_eq!(column, "status");
         assert!(
             paths.len() <= 20,
-            "la columna se pide para {} rutas, no para la ventana",
+            "the column is requested for {} paths, not for the window",
             paths.len()
         );
     }
 }
 
-/// ADR 0105: el icono llega a la fila en su propio campo, la insignia en el
-/// suyo —los dos huecos coexisten—, y el lote que se pide decorar lleva la
-/// CLASE de cada ruta, sin la que un decorador de iconos no sabe qué es
-/// carpeta.
+/// ADR 0105: the icon reaches the row in its own field, the badge in its own
+/// — both slots coexist — and the batch requested to decorate carries each
+/// path's CLASS, without which an icon decorator does not know what a
+/// folder is.
 #[tokio::test]
-async fn el_icono_de_un_plugin_llega_a_la_fila_y_la_clase_viaja() {
+async fn a_plugin_icon_reaches_the_row_and_the_class_travels() {
     let mut f = Falso::default();
     f.arbol.insert(
         "mem:///casa".to_owned(),
@@ -377,47 +383,51 @@ async fn el_icono_de_un_plugin_llega_a_la_fila_y_la_clase_viaja() {
         count: 10,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let mut filas = None;
+    let mut rows = None;
     for _ in 0..30 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let b = listado(&foto);
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let b = listado(&snap);
         if b.rows.iter().any(|r| !r.icon.is_empty()) {
-            filas = Some(b.rows.clone());
+            rows = Some(b.rows.clone());
             break;
         }
     }
-    let filas = filas.expect("el icono llega a la fila");
-    let src = filas.iter().find(|r| r.display_name == "src").expect("src");
+    let rows = rows.expect("the icon reaches the row");
+    let src = rows.iter().find(|r| r.display_name == "src").expect("src");
     assert_eq!(src.icon, "📁");
     assert!(src.badge.is_empty());
-    let a = filas
+    let a = rows
         .iter()
         .find(|r| r.display_name == "a.rs")
         .expect("a.rs");
-    assert_eq!(a.icon, "🦀", "el icono, en su hueco");
-    assert_eq!(a.badge, "M", "y la insignia, en el suyo: no se tapan");
+    assert_eq!(a.icon, "🦀", "the icon, in its own slot");
+    assert_eq!(
+        a.badge, "M",
+        "and the badge, in its own: they do not overlap"
+    );
     assert_eq!(a.badge_role, "warning");
-    // Y la clase viajó con el lote, posicional: `src` es una carpeta.
-    let clases = backend.clases_decoradas.lock().expect("clases");
-    let lotes = backend.decorados.lock().expect("decorados");
-    let (paths, kinds) = (&lotes[0], &clases[0]);
-    assert_eq!(paths.len(), kinds.len(), "una clase por ruta");
-    let de_src = paths
+    // And the class travelled with the batch, positionally: `src` is a
+    // folder.
+    let classes = backend.clases_decoradas.lock().expect("clases");
+    let batches = backend.decorados.lock().expect("decorados");
+    let (paths, kinds) = (&batches[0], &classes[0]);
+    assert_eq!(paths.len(), kinds.len(), "one class per path");
+    let src_idx = paths
         .iter()
         .position(|p| p.to_wire() == "mem:///casa/src")
-        .expect("src en el lote");
-    assert_eq!(kinds[de_src], norte_proto::EntryKind::Dir);
+        .expect("src in the batch");
+    assert_eq!(kinds[src_idx], norte_proto::EntryKind::Dir);
 }
 
-/// Apagar un decorador desde el gestor QUITA sus insignias de las filas ya
-/// pintadas: los listados abiertos olvidan lo que los plugins dijeron y lo
-/// vuelven a pedir. Antes se quedaban hasta el siguiente `cd`, y el lector
-/// concluía que apagar no apaga.
+/// Disabling a decorator from the manager REMOVES its badges from the rows
+/// already painted: open listings forget what the plugins said and request
+/// it again. It used to stay until the next `cd`, and the reader concluded
+/// that disabling does not disable.
 #[tokio::test]
-async fn apagar_un_decorador_desde_el_gestor_quita_sus_insignias() {
+async fn disabling_a_decorator_from_the_manager_removes_its_badges() {
     let backend = arbol_grande_con_plugins(3);
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
@@ -440,7 +450,7 @@ async fn apagar_un_decorador_desde_el_gestor_quita_sus_insignias() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
@@ -448,53 +458,53 @@ async fn apagar_un_decorador_desde_el_gestor_quita_sus_insignias() {
         count: 10,
     })
     .await
-    .expect("host vivo");
-    let mut con_insignia = false;
+    .expect("host alive");
+    let mut with_badge = false;
     for _ in 0..30 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        if listado(&foto).rows.iter().any(|r| !r.badge.is_empty()) {
-            con_insignia = true;
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        if listado(&snap).rows.iter().any(|r| !r.badge.is_empty()) {
+            with_badge = true;
             break;
         }
     }
-    assert!(con_insignia, "la insignia llega primero");
-    let tandas_antes = backend.decorados.lock().expect("decorados").len();
+    assert!(with_badge, "the badge arrives first");
+    let rounds_before = backend.decorados.lock().expect("decorados").len();
 
-    // F12, y `e` sobre la única extensión: se apaga.
-    h.dispatch(tecla("F12")).await.expect("host vivo");
+    // F12, and `e` on the only extension: it gets disabled.
+    h.dispatch(tecla("F12")).await.expect("host alive");
     let v = extensiones_cargadas(&mut sub).await;
     assert_eq!(v.rows[0].id, "acme.git");
-    h.dispatch(tecla("e")).await.expect("host vivo");
+    h.dispatch(tecla("e")).await.expect("host alive");
 
-    let mut sin_insignia = false;
+    let mut without_badge = false;
     for _ in 0..30 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let b = listado(&foto);
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let b = listado(&snap);
         if b.rows.iter().all(|r| r.badge.is_empty())
             && b.rows
                 .iter()
                 .all(|r| r.cells.iter().all(|c| c.text.is_none()))
         {
-            sin_insignia = true;
+            without_badge = true;
             break;
         }
     }
     assert!(
-        sin_insignia,
-        "las filas se quedan sin la insignia del plugin apagado"
+        without_badge,
+        "rows end up with no badge from the disabled plugin"
     );
     assert!(
-        backend.decorados.lock().expect("decorados").len() > tandas_antes,
-        "y se volvió a pedir la decoración, no se adivinó"
+        backend.decorados.lock().expect("decorados").len() > rounds_before,
+        "and the decoration was requested again, not guessed"
     );
 }
 
-/// La insignia y el valor de columna llegan a la fila, marcados como lo que
-/// son: texto de un TERCERO.
+/// The badge and the column value reach the row, marked as what they are:
+/// THIRD-PARTY text.
 #[tokio::test]
-async fn la_insignia_de_un_plugin_llega_a_la_fila() {
+async fn a_plugins_badge_reaches_the_row() {
     let backend = arbol_grande_con_plugins(3);
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
@@ -517,56 +527,57 @@ async fn la_insignia_de_un_plugin_llega_a_la_fila() {
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
 
-    // Lo que hace el renderer nada más montarse. El arranque NO adorna ni
-    // sondea: espera a que se declare la ventana, igual que con los tamaños
-    // —pedir por una ventana inventada es pedir de más—.
+    // What the renderer does right after mounting. Startup does NOT decorate
+    // nor probe: it waits for the window to be declared, same as with sizes
+    // — asking about an invented window is asking for too much.
     h.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
         first: 0,
         count: 10,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
 
-    let mut adornada = None;
+    let mut decorated = None;
     for _ in 0..30 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
-        let foto = siguiente_foto(&mut sub).await;
-        let b = listado(&foto);
+        h.dispatch(UiAction::Resync).await.expect("host alive");
+        let snap = siguiente_foto(&mut sub).await;
+        let b = listado(&snap);
         if let Some(f) = b.rows.iter().find(|r| !r.badge.is_empty()) {
-            adornada = Some(f.clone());
+            decorated = Some(f.clone());
             break;
         }
     }
-    let fila = adornada.expect("la insignia llega a la fila");
-    assert_eq!(fila.display_name, "f00000.txt");
-    assert_eq!(fila.badge, "M");
+    let row = decorated.expect("the badge reaches the row");
+    assert_eq!(row.display_name, "f00000.txt");
+    assert_eq!(row.badge, "M");
     assert_eq!(
-        fila.badge_role, "warning",
-        "el rol viene del vocabulario CERRADO del tema, no de una cadena \
-         libre que el plugin elija"
+        row.badge_role, "warning",
+        "the role comes from the theme's CLOSED vocabulary, not a free \
+         string the plugin picks"
     );
 
-    // Y la celda de la columna del plugin.
-    let celda = fila
+    // And the plugin column's cell.
+    let cell = row
         .cells
         .iter()
         .find(|c| c.column == "plugin:acme.git/status")
-        .expect("la columna configurada tiene su celda");
-    assert_eq!(celda.text.as_deref(), Some("limpio"));
+        .expect("the configured column has its cell");
+    assert_eq!(cell.text.as_deref(), Some("limpio"));
 }
 
-/// Lo que el provider se SALTÓ al listar se dice, y traducido.
+/// What the provider SKIPPED while listing is said, and translated.
 ///
-/// Es la clase de fallo que no se puede descubrir mirando: lo que falta no
-/// está, así que no hay ninguna fila donde el lector pueda tropezarse con
-/// ello. Un listado incompleto que se calla miente por omisión. La cuenta la
-/// da el provider —`FsListResult::skipped`— y `HostBackend::list` la TIRABA.
+/// It is the kind of bug that cannot be discovered by looking: what is
+/// missing is not there, so there is no row where the reader could stumble
+/// on it. An incomplete listing that says nothing lies by omission. The
+/// provider gives the count — `FsListResult::skipped` — and `HostBackend::list`
+/// used to THROW IT AWAY.
 #[tokio::test]
-async fn lo_que_el_provider_se_salto_se_dice() {
+async fn what_the_provider_skipped_is_said() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
     f.omitidas = Some(3);
@@ -574,25 +585,25 @@ async fn lo_que_el_provider_se_salto_se_dice() {
     let _ = &h;
 
     let b = listado(&snap);
-    assert_eq!(b.rows.len(), 1, "se pinta lo que sí vino");
+    assert_eq!(b.rows.len(), 1, "what did come is painted");
     assert!(
         b.skipped_note.contains('3'),
-        "y se dice cuántas faltan: {:?}",
+        "and it says how many are missing: {:?}",
         b.skipped_note
     );
     assert!(
         !b.skipped_note.starts_with("listing-"),
-        "traducido, no la clave: {:?}",
+        "translated, not the key: {:?}",
         b.skipped_note
     );
 }
 
-/// Un provider que no lleva la cuenta NO dice que no se saltó ninguna.
+/// A provider that does not keep count does NOT say that none were skipped.
 ///
-/// `None` y `Some(0)` no son lo mismo, y afirmar «no falta nada» cuando
-/// nadie lo ha comprobado es peor que callarse.
+/// `None` and `Some(0)` are not the same, and asserting "nothing is missing"
+/// when nobody has checked is worse than staying silent.
 #[tokio::test]
-async fn un_provider_sin_cuenta_no_afirma_nada() {
+async fn a_provider_with_no_count_asserts_nothing() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
     f.omitidas = None;
@@ -601,9 +612,10 @@ async fn un_provider_sin_cuenta_no_afirma_nada() {
     assert!(listado(&snap).skipped_note.is_empty());
 }
 
-/// Y la cuenta es de ESTE listado: no se arrastra al siguiente directorio.
+/// And the count belongs to THIS listing: it does not carry over to the next
+/// directory.
 #[tokio::test]
-async fn la_cuenta_de_omitidas_no_sobrevive_a_un_cd() {
+async fn the_skipped_count_does_not_survive_a_cd() {
     let mut f = Falso::default();
     f.pon("mem:///casa", vec![(b"docs".to_vec(), true)]);
     f.pon("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
@@ -611,17 +623,20 @@ async fn la_cuenta_de_omitidas_no_sobrevive_a_un_cd() {
     let backend = Arc::new(f);
     let (h, snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    assert!(!listado(&snap).skipped_note.is_empty(), "el primero sí");
+    assert!(
+        !listado(&snap).skipped_note.is_empty(),
+        "the first one does"
+    );
 
-    // El segundo directorio también las salta —el doble contesta lo mismo—,
-    // pero lo que importa es que la cuenta se VUELVA a poner y no se herede:
-    // `set_listing` la limpia, así que sin `set_skipped` después quedaría
-    // vacía. Se comprueba que sigue diciéndose.
+    // The second directory also skips them — the double answers the same —
+    // but what matters is that the count gets SET AGAIN and is not
+    // inherited: `set_listing` clears it, so without `set_skipped`
+    // afterward it would stay empty. It is checked that it still gets said.
     let docs = listado(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
-        .expect("el directorio está")
+        .expect("the directory is there")
         .key;
     h.dispatch(UiAction::Activate {
         slot_id: 1,
@@ -629,81 +644,82 @@ async fn la_cuenta_de_omitidas_no_sobrevive_a_un_cd() {
         generation: listado(&snap).generation,
     })
     .await
-    .expect("host vivo");
+    .expect("host alive");
     for _ in 0..20 {
-        let foto = siguiente_foto(&mut sub).await;
-        if listado(&foto).path_display.contains("docs") {
+        let snap = siguiente_foto(&mut sub).await;
+        if listado(&snap).path_display.contains("docs") {
             assert!(
-                !listado(&foto).skipped_note.is_empty(),
-                "la cuenta se vuelve a poner tras el `cd`"
+                !listado(&snap).skipped_note.is_empty(),
+                "the count gets set again after the `cd`"
             );
             return;
         }
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
     }
-    panic!("nunca llegó el listado de docs");
+    panic!("the docs listing never arrived");
 }
 
 // ---------------------------------------------------------------------------
-// El selector de columnas (tarea 4.2).
+// The columns picker (task 4.2).
 // ---------------------------------------------------------------------------
 
-/// La primera vista del selector con el cursor donde `aguja` diga.
+/// The picker's first view with the cursor wherever `needle` says.
 pub(super) async fn selector_columnas(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::dto::ColumnsPickerView {
     por_la_paleta(h, sub, "pane.columns").await;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         if let Some(c) = siguiente_foto(sub).await.columns.clone() {
             return c;
         }
     }
-    panic!("el selector de columnas no abre");
+    panic!("the columns picker does not open");
 }
 
-/// El selector enseña lo configurado, dice su ALCANCE y avisa de que lo
-/// elegido no se guarda.
+/// The picker shows what is configured, says its SCOPE and warns that what
+/// is chosen is not saved.
 ///
-/// Lo último importa: esta fase no escribe configuración, y un selector que
-/// se calla deja al usuario creyendo que acaba de configurar norte.
+/// The last part matters: this phase writes no configuration, and a picker
+/// that stays silent about it leaves the user thinking they just configured
+/// norte.
 #[tokio::test]
-async fn el_selector_de_columnas_dice_su_alcance_y_que_no_guarda() {
+async fn the_columns_picker_says_its_scope_and_that_it_does_not_save() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
     let c = selector_columnas(&h, &mut sub).await;
 
-    assert!(!c.rows.is_empty(), "hay columnas que enseñar");
+    assert!(!c.rows.is_empty(), "there are columns to show");
     assert!(
         c.rows[0].fixed,
-        "la primera es el NOMBRE, y no se apaga ni se mueve: {:?}",
+        "the first one is the NAME, and it is neither disabled nor moved: {:?}",
         c.rows[0]
     );
     assert!(
         !c.title.starts_with("columns-picker"),
-        "el título viene traducido: {:?}",
+        "the title comes translated: {:?}",
         c.title
     );
     assert!(
         !c.note.is_empty() && !c.note.starts_with("columns-picker"),
-        "y dice que no guarda, traducido: {:?}",
+        "and it says it does not save, translated: {:?}",
         c.note
     );
     for r in &c.rows {
-        assert!(!r.label.is_empty(), "cada fila dice cómo se llama: {r:?}");
+        assert!(!r.label.is_empty(), "every row says its name: {r:?}");
     }
 }
 
-/// Encender una columna `attr:` RE-LISTA el hueco.
+/// Enabling an `attr:` column RE-LISTS the slot.
 ///
-/// Los valores de un atributo solo llegan si se piden en `fs.list`, así que
-/// una columna nueva sobre el listado viejo se quedaría en blanco — y en
-/// blanco significa «este fichero no tiene ese atributo», que es otra cosa.
-/// La huella que decide si hace falta es la COMPARTIDA (`pane_fingerprint`),
-/// la misma que usa el TUI.
+/// An attribute's values only arrive if requested in `fs.list`, so a new
+/// column over the old listing would stay blank — and blank means "this file
+/// has no such attribute", which is a different thing. The fingerprint that
+/// decides whether it is needed is the SHARED one (`pane_fingerprint`), the
+/// same the TUI uses.
 #[tokio::test]
-async fn encender_una_columna_attr_vuelve_a_listar() {
+async fn enabling_an_attr_column_re_lists() {
     let backend = arbol();
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
@@ -721,128 +737,132 @@ async fn encender_una_columna_attr_vuelve_a_listar() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        // SIN la columna de modo: encenderla es lo que cambia la huella.
+        // WITHOUT the mode column: enabling it is what changes the
+        // fingerprint.
         columns: columnas_de(&["name", "size", "attr:posix.mode"]),
         effects: norte_ui_host::commands::Efectos::Completo,
         log_ring: None,
     })
     .await
-    .expect("arranca");
+    .expect("starts");
     let mut sub = h.subscribe();
     let c = selector_columnas(&h, &mut sub).await;
 
-    // Se baja hasta la fila del atributo y se APAGA: quitarla también cambia
-    // la huella, y es el caso que no pide un viaje de más al daemon... pero
-    // sí un re-listado, porque `attrs_de` deja de pedirla.
-    let fila = c
+    // It goes down to the attribute's row and DISABLES it: removing it also
+    // changes the fingerprint, and it is the case that costs no extra trip
+    // to the daemon... but does cost a re-listing, because `attrs_de` stops
+    // requesting it.
+    let row = c
         .rows
         .iter()
         .position(|r| r.id == "attr:posix.mode")
-        .expect("la columna de modo está");
-    for _ in 0..fila {
-        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+        .expect("the mode column is there");
+    for _ in 0..row {
+        h.dispatch(tecla("ArrowDown")).await.expect("host alive");
     }
-    let antes = backend.listados.load(Ordering::SeqCst);
-    h.dispatch(tecla(" ")).await.expect("host vivo");
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
-    // La foto puede venir atrasada, así que se drena hasta ver el efecto.
-    let mut cerrado = false;
+    let before = backend.listados.load(Ordering::SeqCst);
+    h.dispatch(tecla(" ")).await.expect("host alive");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
+    // The snapshot can lag behind, so it is drained until the effect shows.
+    let mut closed = false;
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         if siguiente_foto(&mut sub).await.columns.is_none() {
-            cerrado = true;
+            closed = true;
             break;
         }
     }
-    assert!(cerrado, "el selector se cierra al aplicar");
+    assert!(closed, "the picker closes on applying");
 
     for _ in 0..20 {
-        if backend.listados.load(Ordering::SeqCst) > antes {
+        if backend.listados.load(Ordering::SeqCst) > before {
             return;
         }
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let _ = siguiente_foto(&mut sub).await;
     }
     panic!(
-        "cambiar el conjunto de columnas `attr:` tiene que RE-LISTAR: los \
-         valores de un atributo solo llegan pidiéndolos en `fs.list`, y sin \
-         volver a pedirlo la columna se queda en blanco — que significa otra \
-         cosa"
+        "changing the `attr:` column set has to RE-LIST: an attribute's \
+         values only arrive by requesting them in `fs.list`, and without \
+         requesting it again the column stays blank — which means something \
+         else"
     );
 }
 
-/// Y cambiar solo el ORDEN no re-lista: no cambia qué se pide al provider.
+/// And changing only the ORDER does not re-list: it does not change what is
+/// requested from the provider.
 #[tokio::test]
-async fn cambiar_el_orden_de_las_columnas_no_vuelve_a_listar() {
+async fn changing_the_column_order_does_not_re_list() {
     let backend = arbol();
     let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     let _ = selector_columnas(&h, &mut sub).await;
 
-    let antes = backend.listados.load(Ordering::SeqCst);
-    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-    h.dispatch(tecla("s")).await.expect("host vivo");
-    h.dispatch(tecla("Enter")).await.expect("host vivo");
+    let before = backend.listados.load(Ordering::SeqCst);
+    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+    h.dispatch(tecla("s")).await.expect("host alive");
+    h.dispatch(tecla("Enter")).await.expect("host alive");
     for _ in 0..10 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         let _ = siguiente_foto(&mut sub).await;
     }
     assert_eq!(
         backend.listados.load(Ordering::SeqCst),
-        antes,
-        "ordenar es cosa del pane: no hay nada nuevo que pedirle al provider"
+        before,
+        "sorting belongs to the pane: there is nothing new to ask the provider"
     );
 }
 
-/// El PIE del selector anuncia teclas, y esas teclas hacen lo que dice.
+/// The picker's FOOTER announces keys, and those keys do what it says.
 ///
-/// El pie es una cadena del catálogo y las teclas son un `match` del host:
-/// dos sitios, ninguna atadura. La primera versión de esto escuchaba `J`/`K`
-/// y `→` mientras el pie prometía `Shift+↑/↓` y `F` — una mentira que solo
-/// se descubre probando, y que ningún test verde decía.
+/// The footer is a catalogue string and the keys are a `match` in the host:
+/// two places, no binding between them. This test's first version listened
+/// for `J`/`K` and `→` while the footer promised `Shift+↑/↓` and `F` — a lie
+/// only found by trying it, and no green test said so.
 #[tokio::test]
-async fn las_teclas_del_selector_de_columnas_son_las_que_anuncia_su_pie() {
+async fn the_columns_pickers_keys_are_what_its_footer_announces() {
     let (h, _snap) = host_arbol(arbol()).await;
     let mut sub = h.subscribe();
-    let antes = selector_columnas(&h, &mut sub).await;
+    let before = selector_columnas(&h, &mut sub).await;
 
-    // El pie viene del HOST y sale del KEYMAP (#287): no es una cadena que
-    // nombre teclas y pueda quedarse rancia cuando alguien las reata.
-    let pie = antes.hint.clone();
-    assert!(!pie.is_empty(), "el pie llega pintado: {pie:?}");
+    // The footer comes from the HOST and is built from the KEYMAP (#287): it
+    // is not a string that names keys and can go stale when someone rebinds
+    // them.
+    let footer = before.hint.clone();
+    assert!(!footer.is_empty(), "the footer arrives painted: {footer:?}");
     assert!(
-        pie.contains("activa") && pie.contains("aplica"),
-        "y dice qué hace cada acorde: {pie:?}"
+        footer.contains("activa") && footer.contains("aplica"),
+        "and it says what each chord does: {footer:?}"
     );
-    // El cursor abre sobre el NOMBRE, que es fijo: espacio ahí no hace nada,
-    // y eso es el contrato —la primera columna ES el nombre por contrato del
-    // render— no un fallo.
-    assert_eq!(antes.cursor, 0);
-    assert!(antes.rows[0].fixed);
-    h.dispatch(tecla(" ")).await.expect("host vivo");
-    let quieta = siguiente_columnas(&h, &mut sub).await;
+    // The cursor opens on the NAME, which is fixed: space there does
+    // nothing, and that is the contract — the first column IS the name by
+    // the render's contract — not a bug.
+    assert_eq!(before.cursor, 0);
+    assert!(before.rows[0].fixed);
+    h.dispatch(tecla(" ")).await.expect("host alive");
+    let still = siguiente_columnas(&h, &mut sub).await;
     assert!(
-        quieta.rows[0].enabled,
-        "el nombre no se puede apagar: {:?}",
-        quieta.rows[0]
+        still.rows[0].enabled,
+        "the name cannot be disabled: {:?}",
+        still.rows[0]
     );
 
-    // Una fila que SÍ se puede tocar: espacio la apaga y la enciende.
-    h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
-    let sobre_otra = siguiente_columnas(&h, &mut sub).await;
-    let fila = usize::try_from(sobre_otra.cursor).expect("cabe");
-    assert!(fila > 0 && !sobre_otra.rows[fila].fixed);
-    let encendida = sobre_otra.rows[fila].enabled;
-    h.dispatch(tecla(" ")).await.expect("host vivo");
-    let despues = siguiente_columnas(&h, &mut sub).await;
+    // A row that CAN be touched: space disables and enables it.
+    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+    let on_another = siguiente_columnas(&h, &mut sub).await;
+    let row = usize::try_from(on_another.cursor).expect("fits");
+    assert!(row > 0 && !on_another.rows[row].fixed);
+    let was_on = on_another.rows[row].enabled;
+    h.dispatch(tecla(" ")).await.expect("host alive");
+    let after = siguiente_columnas(&h, &mut sub).await;
     assert_ne!(
-        despues.rows[fila].enabled, encendida,
-        "espacio activa y desactiva"
+        after.rows[row].enabled, was_on,
+        "space toggles it on and off"
     );
 
-    // SHIFT+FLECHA mueve la FILA, no el cursor.
-    assert!(pie.contains("Shift+"), "{pie:?}");
-    let orden_antes: Vec<String> = despues.rows.iter().map(|r| r.id.clone()).collect();
+    // SHIFT+ARROW moves the ROW, not the cursor.
+    assert!(footer.contains("Shift+"), "{footer:?}");
+    let order_before: Vec<String> = after.rows.iter().map(|r| r.id.clone()).collect();
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "ArrowDown".to_owned(),
         ctrl: false,
@@ -851,80 +871,83 @@ async fn las_teclas_del_selector_de_columnas_son_las_que_anuncia_su_pie() {
         meta: false,
     }))
     .await
-    .expect("host vivo");
-    let movido = siguiente_columnas(&h, &mut sub).await;
-    let orden_despues: Vec<String> = movido.rows.iter().map(|r| r.id.clone()).collect();
+    .expect("host alive");
+    let moved = siguiente_columnas(&h, &mut sub).await;
+    let order_after: Vec<String> = moved.rows.iter().map(|r| r.id.clone()).collect();
     assert_ne!(
-        orden_antes, orden_despues,
-        "shift+↓ mueve la fila: {orden_antes:?} → {orden_despues:?}"
+        order_before, order_after,
+        "shift+↓ moves the row: {order_before:?} → {order_after:?}"
     );
 
-    // F cicla el formato de la fila del cursor, si lo admite. Se recorre
-    // como lo haría una persona —bajando y mirando dónde está— en vez de
-    // apuntar a un índice calculado sobre una lista que el paso anterior
-    // acaba de reordenar. Con tope: un bucle sobre una condición que puede
-    // no llegar es un test que se CUELGA en vez de fallar, y uno colgado no
-    // dice nada.
+    // F cycles the cursor's row's format, if it supports one. It walks
+    // through rows the way a person would — going down and looking where it
+    // ended up — instead of pointing at an index computed over a list the
+    // previous step just reordered. Bounded: a loop on a condition that may
+    // never be reached is a test that HANGS instead of failing, and a hung
+    // one says nothing.
     assert!(
-        pie.to_lowercase().contains('f'),
-        "y el acorde de formato: {pie:?}"
+        footer.to_lowercase().contains('f'),
+        "and the format chord: {footer:?}"
     );
-    let mut ciclado = false;
-    for _ in 0..movido.rows.len() + 2 {
+    let mut cycled = false;
+    for _ in 0..moved.rows.len() + 2 {
         let v = siguiente_columnas(&h, &mut sub).await;
-        let aqui = usize::try_from(v.cursor).expect("cabe");
-        let Some(fila) = v.rows.get(aqui) else { break };
-        if !fila.format.is_empty() && !fila.format_locked {
-            let antes = fila.format.clone();
-            h.dispatch(tecla("f")).await.expect("host vivo");
-            let luego = siguiente_columnas(&h, &mut sub).await;
+        let here = usize::try_from(v.cursor).expect("fits");
+        let Some(row) = v.rows.get(here) else { break };
+        if !row.format.is_empty() && !row.format_locked {
+            let before = row.format.clone();
+            h.dispatch(tecla("f")).await.expect("host alive");
+            let after = siguiente_columnas(&h, &mut sub).await;
             assert_ne!(
-                luego.rows[aqui].format, antes,
-                "F cicla el formato de la fila del cursor"
+                after.rows[here].format, before,
+                "F cycles the cursor's row's format"
             );
-            ciclado = true;
+            cycled = true;
             break;
         }
-        h.dispatch(tecla("ArrowDown")).await.expect("host vivo");
+        h.dispatch(tecla("ArrowDown")).await.expect("host alive");
     }
-    assert!(ciclado, "alguna columna admite formato y se pudo ciclar");
+    assert!(
+        cycled,
+        "some column supports a format and it could be cycled"
+    );
 }
 
-/// La vista del selector tras la última tecla.
+/// The picker's view after the last key.
 pub(super) async fn siguiente_columnas(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::dto::ColumnsPickerView {
     for _ in 0..20 {
-        h.dispatch(UiAction::Resync).await.expect("host vivo");
+        h.dispatch(UiAction::Resync).await.expect("host alive");
         if let Some(c) = siguiente_foto(sub).await.columns.clone() {
             return c;
         }
     }
-    panic!("el selector sigue abierto");
+    panic!("the picker is still open");
 }
 
-/// Puente 64: arrastrar el borde de una cabecera fija el ancho de ESA
-/// columna en sesión —la cabecera lo declara en celdas, acotado a lo que
-/// la configuración acepta— y una columna que el hueco no pinta se rehúsa
-/// sin tocar nada.
+/// Bridge 64: dragging a header's edge fixes THAT column's width in session
+/// — the header declares it in cells, clamped to what the configuration
+/// accepts — and a column the slot does not paint is refused untouched.
 #[tokio::test]
-async fn redimensionar_una_columna_fija_su_ancho_en_la_cabecera() {
+async fn resizing_a_column_fixes_its_width_in_the_header() {
     let (h, snap) = host_arbol(arbol()).await;
-    let ancho_de = |s: &norte_ui_host::ViewSnapshot, id: &str| {
+    let width_of = |s: &norte_ui_host::ViewSnapshot, id: &str| {
         listado(s)
             .columns
             .iter()
             .find(|c| c.id == id)
             .map(|c| c.width)
-            .expect("la columna se pinta")
+            .expect("the column paints")
     };
-    // De fábrica `size` ya es fija (la tabla compartida de anchos), así que
-    // lo que se comprueba es que el arrastre la CAMBIA, no que la estrene.
+    // By default `size` is already fixed (the shared width table), so what
+    // is checked is that dragging CHANGES it, not that it introduces it for
+    // the first time.
     assert_ne!(
-        ancho_de(&snap, "size"),
+        width_of(&snap, "size"),
         Some(12),
-        "el ancho de partida no es el pedido"
+        "the starting width is not the requested one"
     );
     let mut sub = h.subscribe();
 
@@ -934,52 +957,49 @@ async fn redimensionar_una_columna_fija_su_ancho_en_la_cabecera() {
         cells: 12,
     })
     .await
-    .expect("host vivo");
-    let _ = sub.recv().await.expect("el host sigue vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let despues = siguiente_foto(&mut sub).await;
+    .expect("host alive");
+    let _ = sub.recv().await.expect("the host is still alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let after = siguiente_foto(&mut sub).await;
+    assert_eq!(width_of(&after, "size"), Some(12), "the header declares it");
     assert_eq!(
-        ancho_de(&despues, "size"),
-        Some(12),
-        "la cabecera lo declara"
-    );
-    assert_eq!(
-        listado(&despues)
+        listado(&after)
             .columns
             .iter()
             .find(|c| c.id == "size")
             .map(|c| c.align.as_str()),
         Some("right"),
-        "y la alineación configurada viaja con ella"
+        "and the configured alignment travels with it"
     );
 
-    // Fuera del rango del loader: se acota, nunca se escribe algo que el
-    // siguiente `load` rechazaría entero.
+    // Outside the loader's range: it gets clamped, never writing something
+    // the next `load` would reject wholesale.
     h.dispatch(UiAction::ResizeColumn {
         slot_id: 1,
         column: "size".to_owned(),
         cells: 900,
     })
     .await
-    .expect("host vivo");
-    let _ = sub.recv().await.expect("el host sigue vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let acotado = siguiente_foto(&mut sub).await;
-    assert_eq!(ancho_de(&acotado, "size"), Some(64), "techo del loader");
+    .expect("host alive");
+    let _ = sub.recv().await.expect("the host is still alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let clamped = siguiente_foto(&mut sub).await;
+    assert_eq!(width_of(&clamped, "size"), Some(64), "the loader's ceiling");
 
-    // Una columna que este hueco no pinta: obsoleta, y la cabecera no cambia.
+    // A column this slot does not paint: stale, and the header does not
+    // change.
     h.dispatch(UiAction::ResizeColumn {
         slot_id: 1,
         column: "attr:nadie".to_owned(),
         cells: 5,
     })
     .await
-    .expect("host vivo");
-    h.dispatch(UiAction::Resync).await.expect("host vivo");
-    let igual = siguiente_foto(&mut sub).await;
-    assert_eq!(ancho_de(&igual, "size"), Some(64));
+    .expect("host alive");
+    h.dispatch(UiAction::Resync).await.expect("host alive");
+    let same = siguiente_foto(&mut sub).await;
+    assert_eq!(width_of(&same, "size"), Some(64));
     assert!(
-        listado(&igual).columns.iter().all(|c| c.id != "attr:nadie"),
-        "no nace una columna por pedir su ancho"
+        listado(&same).columns.iter().all(|c| c.id != "attr:nadie"),
+        "no column is born from asking for its width"
     );
 }

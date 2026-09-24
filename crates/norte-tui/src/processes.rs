@@ -1,11 +1,11 @@
-//! El panel de procesos (fase A): el cursor, y nada más.
+//! The processes pane (phase A): the cursor, and nothing else.
 //!
-//! El estado vive en `norte-frontend`, no aquí: acotar el cursor al LEER es la
-//! respuesta a «¿qué fila se cancelaría?», y esa pregunta la contestan las dos
-//! superficies (ADR 0077). Lo que queda en este crate es el `KIND`, que sí es
-//! del terminal — es lo que su disposición escribe.
+//! The state lives in `norte-frontend`, not here: clamping the cursor on READ
+//! is the answer to "which row would be cancelled?", and both surfaces answer
+//! that question (ADR 0077). What stays in this crate is the `KIND`, which is
+//! indeed terminal-specific — it is what its layout writes.
 
-/// El kind que ocupa un hueco de procesos.
+/// The kind that occupies a processes slot.
 pub const KIND: &str = "processes";
 
 pub use norte_frontend::processes::Processes;

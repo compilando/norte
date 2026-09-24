@@ -1,28 +1,27 @@
-//! Matchers PUROS de fs.search (spec 2026-07-18 live search): sin I/O, sin
-//! Tasks. Los consume el walker de T3.
+//! PURE matchers for fs.search (spec 2026-07-18 live search): no I/O, no
+//! Tasks. Consumed by T3's walker.
 //!
-//! - **Nombre (eje GLOB)**: `lossy → NFC (+ lowercase si case-insensitive) →
-//!   NFC` — la MISMA disciplina que el quick search del TUI
-//!   (`norte-tui/src/nav.rs::fold`). La 2ª NFC es crítica: `to_lowercase`
-//!   puede reintroducir formas descompuestas (p.ej. `J̌`→`ǰ`). La identidad
-//!   del fichero JAMÁS se normaliza; esto es matching de DISPLAY.
-//! - **Nombre (eje REGEX)**: NFC sobre input y patrón, pero la insensibilidad
-//!   de caja la resuelve el MOTOR de `regex` (case folding simple ASCII/
-//!   Unicode del propio motor) — NO el mismo fold que el glob. Difiere en
-//!   casos como `İ`/`i` o `ß`/`ss` (el motor no los pliega igual que
-//!   `to_lowercase`). Consciente y suficiente.
-//! - **Contenido**: la AGUJA se transcodifica a los encodings candidatos de
-//!   `norte_encoding::needle_cycle()` (a-ciegas) que la representen SIN
-//!   pérdida (`encode_lossless`); el pajar se busca bytes-contra-bytes con
-//!   `memmem` por chunks con SOLAPE — jamás se decodifica el fichero entero
-//!   (spec §17.1a). Modo ENCODING-AWARE ([`ContentNeedle::for_encoding`])
-//!   para cuando T3 ya detectó el encoding del fichero.
+//! - **Name (GLOB axis)**: `lossy → NFC (+ lowercase if case-insensitive) →
+//!   NFC` — the SAME discipline as the TUI's quick search
+//!   (`norte-tui/src/nav.rs::fold`). The 2nd NFC is critical: `to_lowercase`
+//!   can reintroduce decomposed forms (e.g. `J̌`→`ǰ`). The file's IDENTITY is
+//!   NEVER normalized; this is DISPLAY matching.
+//! - **Name (REGEX axis)**: NFC on input and pattern, but case
+//!   insensitivity is resolved by the `regex` ENGINE itself (the engine's own
+//!   simple ASCII/Unicode case folding) — NOT the same fold as the glob. It
+//!   differs in cases like `İ`/`i` or `ß`/`ss` (the engine does not fold them
+//!   the same way `to_lowercase` does). Aware and sufficient.
+//! - **Content**: the NEEDLE is transcoded to the candidate encodings from
+//!   `norte_encoding::needle_cycle()` (blind) that represent it WITHOUT
+//!   loss (`encode_lossless`); the haystack is searched byte-against-byte
+//!   with `memmem` in OVERLAPPING chunks — the whole file is NEVER decoded
+//!   (spec §17.1a). ENCODING-AWARE mode ([`ContentNeedle::for_encoding`])
+//!   for when T3 has already detected the file's encoding.
 //!
-//! **Límite NFC/NFD del contenido**: la búsqueda de contenido es
-//! bytes-contra-bytes, sensible a la FORMA de normalización — un fichero en
-//! NFD (típico de macOS) puede no casar una aguja tecleada en NFC (y
-//! viceversa). Inherente a la búsqueda literal sin decodificar; no se corrige
-//! en v1.
+//! **Content's NFC/NFD limit**: content search is byte-against-byte,
+//! sensitive to normalization FORM — a file in NFD (typical of macOS) may
+//! not match a needle typed in NFC (and vice versa). Inherent to literal
+//! search without decoding; not fixed in v1.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -38,69 +37,70 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 use unicode_normalization::UnicodeNormalization;
 
-/// Tope del programa regex compilado (anti-ReDoS): una regex cuya máquina
-/// exceda 1 MiB se rechaza al COMPILAR (no cuelga en runtime).
+/// Cap on the compiled regex program (anti-ReDoS): a regex whose machine
+/// exceeds 1 MiB is rejected at COMPILE time (it does not hang at runtime).
 const REGEX_SIZE_LIMIT: usize = 1 << 20;
 
-/// Fallo de compilación de un patrón de nombre. El mensaje lleva el
-/// diagnóstico del compilador (glob/regex): es el propio input del requester,
-/// así que exponerlo es su diagnóstico, no una fuga. El daemon (T4) lo mapea a
-/// `INVALID_PARAMS`.
+/// Compilation failure of a name pattern. The message carries the
+/// compiler's diagnostic (glob/regex): it is the requester's OWN input, so
+/// exposing it is their own diagnostic, not a leak. The daemon (T4) maps it
+/// to `INVALID_PARAMS`.
 #[derive(Debug, thiserror::Error)]
 pub enum SearchError {
-    /// El glob de nombre no compila.
-    #[error("glob inválido: {0}")]
+    /// The name glob does not compile.
+    #[error("invalid glob: {0}")]
     BadGlob(String),
-    /// La regex (de nombre o contenido) no compila o excede el `size_limit`.
-    #[error("regex inválida: {0}")]
+    /// The regex (name or content) does not compile or exceeds the `size_limit`.
+    #[error("invalid regex: {0}")]
     BadRegex(String),
-    /// Ningún criterio de búsqueda (ni nombre ni contenido).
-    #[error("sin criterios de búsqueda")]
+    /// No search criterion at all (neither name nor content).
+    #[error("no search criteria")]
     NoCriteria,
-    /// Dos criterios excluyentes del MISMO eje (`name_glob`+`name_regex`, o
+    /// Two mutually exclusive criteria of the SAME axis (`name_glob`+`name_regex`, or
     /// `content`+`content_regex`).
-    #[error("criterios excluyentes: {0}")]
+    #[error("conflicting criteria: {0}")]
     Conflicting(&'static str),
-    /// Más de [`norte_proto::methods::SEARCH_EXCLUDES_MAX`] exclusiones
+    /// More than [`norte_proto::methods::SEARCH_EXCLUDES_MAX`] exclusions
     /// (0.81.0).
     ///
-    /// Se comprueba ANTES de compilar ninguna, que es donde está el gasto:
-    /// cada nombre es un glob y con él una regex con su presupuesto, en la
-    /// tarea que atiende la conexión y sin Task que lo acote.
-    #[error("demasiadas exclusiones: {0} (el tope es {1})")]
+    /// Checked BEFORE compiling any of them, which is where the cost is:
+    /// each name is a glob and, with it, a regex with its own budget, in the
+    /// task that serves the connection and with no Task to bound it.
+    #[error("too many exclusions: {0} (the cap is {1})")]
     TooManyExcludes(usize, usize),
-    /// Dos filtros que no pueden cumplirse a la vez (0.81.0).
+    /// Two filters that cannot both hold at once (0.81.0).
     ///
-    /// Es un error y no una búsqueda de cero resultados por la misma razón
-    /// que el glob y la regex del mismo eje: cero resultados se lee como «no
-    /// hay nada», y aquí lo que no hay es la pregunta.
-    #[error("filtros contradictorios: {0}")]
+    /// It is an error and not a zero-result search for the same reason as
+    /// the glob and regex of the same axis: zero results reads as "there is
+    /// nothing", and here what is missing is the question.
+    #[error("contradictory filters: {0}")]
     ImpossibleFilter(&'static str),
-    /// El nombre de codificación de `encoding` no es ninguno conocido
+    /// The `encoding` name is not any known encoding
     /// (0.81.0).
     ///
-    /// Es un error de la PETICIÓN y no una búsqueda que no encuentra nada: un
-    /// nombre mal escrito que cayera a la detección automática devolvería
-    /// resultados perfectamente creíbles leídos con otro alfabeto, y quien
-    /// forzó la codificación lo hizo justamente porque el automático no le
-    /// valía.
-    #[error("codificación desconocida: {0}")]
+    /// It is an error in the REQUEST and not a search that finds nothing: a
+    /// misspelled name that fell back to automatic detection would return
+    /// perfectly believable results read with another alphabet, and whoever
+    /// forced the encoding did so precisely because the automatic one did
+    /// not work for them.
+    #[error("unknown encoding: {0}")]
     BadEncoding(String),
 }
 
-/// Envuelve un patrón entre fronteras de palabra (0.81.0).
+/// Wraps a pattern between word boundaries (0.81.0).
 ///
-/// El grupo `(?:…)` no es decorativo: sin él, un patrón con alternancia de
-/// primer nivel —`gato|perro`— se leería como `\bgato` o `perro\b`, que es
-/// otra búsqueda y además una que casa lo que el lector pidió excluir.
-fn palabra_entera(patron: &str) -> String {
-    format!(r"\b(?:{patron})\b")
+/// The `(?:…)` group is not decorative: without it, a pattern with a
+/// top-level alternation —`cat|dog`— would read as `\bcat` or `dog\b`, which
+/// is a different search and, on top of that, one that matches what the
+/// reader asked to exclude.
+fn whole_word_pattern(pattern: &str) -> String {
+    format!(r"\b(?:{pattern})\b")
 }
 
-/// Fold de nombre para el eje GLOB: `lossy → NFC → (lowercase → NFC)`. La 2ª
-/// NFC re-canoniza lo que `to_lowercase` pudo descomponer. Con
-/// `case_sensitive` se omite el lowercase (pero se conserva la NFC, para que
-/// NFD y NFC del mismo nombre casen).
+/// Name fold for the GLOB axis: `lossy → NFC → (lowercase → NFC)`. The 2nd
+/// NFC re-canonicalizes what `to_lowercase` may have decomposed. With
+/// `case_sensitive` the lowercase step is skipped (but the NFC is kept, so
+/// that NFD and NFC forms of the same name match).
 fn fold_name(name: &[u8], case_sensitive: bool) -> String {
     let nfc: String = String::from_utf8_lossy(name).nfc().collect();
     if case_sensitive {
@@ -110,30 +110,32 @@ fn fold_name(name: &[u8], case_sensitive: bool) -> String {
     }
 }
 
-/// NFC del nombre en bytes para el eje REGEX (la insensibilidad de caja la
-/// resuelve la propia regex con `case_insensitive`; aquí solo canonizamos).
+/// NFC of the name in bytes for the REGEX axis (case insensitivity is
+/// resolved by the regex itself via `case_insensitive`; here we only
+/// canonicalize).
 fn nfc_name(name: &[u8]) -> String {
     String::from_utf8_lossy(name).nfc().collect()
 }
 
-/// Recompila el regex byte-mode de un [`globset::Glob`] en modo Unicode
-/// (#110): globset compila con `(?-u)`, donde `?` consume UN BYTE y una
-/// clase casa byte a byte — `a?o` no casaba `año` (ñ = 2 bytes). globset
-/// sigue siendo la única autoridad de sintaxis; esto solo traduce su
-/// salida: pela el prefijo `(?-u)` y decodifica los runs de escapes `\xNN`
-/// con NN ≥ 0x80 — la única forma en que globset emite los bytes no-ASCII
-/// del patrón (`&str`, así que los runs son siempre UTF-8 completo) — de
-/// vuelta a sus caracteres, literales dentro y fuera de una clase.
+/// Recompiles the byte-mode regex of a [`globset::Glob`] into Unicode mode
+/// (#110): globset compiles with `(?-u)`, where `?` consumes ONE BYTE and a
+/// class matches byte by byte — `a?o` did not match `año` (ñ = 2 bytes).
+/// globset remains the sole authority on syntax; this only translates its
+/// output: it strips the `(?-u)` prefix and decodes the runs of `\xNN`
+/// escapes with NN ≥ 0x80 — the only way globset emits the pattern's
+/// non-ASCII bytes (`&str`, so the runs are always complete UTF-8) — back
+/// into their characters, literal inside and outside a class.
 ///
-/// COPIA deliberada del traductor de `norte-frontend::pane` (mismo
-/// criterio que el fold, duplicado core/frontend): no hay crate común por
-/// debajo de ambos donde quepa sin arrastrar `globset`+`regex` a un crate
-/// ajeno. Cada copia pinea la forma de globset con su propio test guardia.
+/// A deliberate COPY of the translator in `norte-frontend::pane` (same
+/// criterion as the fold, duplicated core/frontend): there is no common
+/// crate below both where it would fit without dragging `globset`+`regex`
+/// into an unrelated crate. Each copy pins globset's shape with its own
+/// guard test.
 ///
 /// # Errors
-/// [`SearchError::BadGlob`] si un run decodificado no es UTF-8 válido — no
-/// debería ocurrir con la globset pineada; fail-loud antes que casar bytes
-/// que el usuario no escribió.
+/// [`SearchError::BadGlob`] if a decoded run is not valid UTF-8 — should not
+/// happen with the pinned globset; fail loud rather than match bytes the
+/// user did not type.
 fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, SearchError> {
     let src = glob.regex();
     let stripped = src.strip_prefix("(?-u)").unwrap_or(src);
@@ -168,8 +170,8 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, SearchError> {
             continue;
         }
         flush(&mut run, &mut out)?;
-        // Copia el resto tal cual — incluidos escapes ASCII (`\.`), cuyo
-        // significado es idéntico en modo Unicode.
+        // Copies the rest verbatim — including ASCII escapes (`\.`), whose
+        // meaning is identical in Unicode mode.
         let step = if bytes[i] == b'\\' && i + 1 < bytes.len() {
             1 + stripped[i + 1..].chars().next().map_or(0, char::len_utf8)
         } else {
@@ -182,42 +184,43 @@ fn unicode_glob_regex(glob: &globset::Glob) -> Result<String, SearchError> {
     Ok(out)
 }
 
-/// Matcher del NOMBRE (último segmento del path): glob O regex, EXCLUYENTES
-/// por eje. Ambos aplican el fold NFC descrito en el módulo antes de comparar.
+/// NAME matcher (last path segment): glob OR regex, MUTUALLY EXCLUSIVE per
+/// axis. Both apply the NFC fold described in the module before comparing.
 #[derive(Debug)]
 pub enum NameMatcher {
-    /// Glob recompilado en modo Unicode (#110, `unicode_glob_regex`): `?`
-    /// y las clases cuentan caracteres. El patrón ya viene foldeado igual
-    /// que el input.
+    /// Glob recompiled in Unicode mode (#110, `unicode_glob_regex`): `?`
+    /// and classes count characters. The pattern already comes folded the
+    /// same way as the input.
     Glob {
-        /// Regex Unicode traducida del glob foldeado.
+        /// Unicode regex translated from the folded glob.
         matcher: regex::Regex,
-        /// Si `false`, input y patrón se foldean a minúsculas.
+        /// If `false`, input and pattern are folded to lowercase.
         case_sensitive: bool,
     },
-    /// Regex compilada con `size_limit` y `case_insensitive`.
+    /// Regex compiled with `size_limit` and `case_insensitive`.
     Regex(regex::Regex),
 }
 
 impl NameMatcher {
-    /// Compila un glob de nombre. El patrón se foldea (NFC + lowercase si
-    /// `!case_sensitive`) igual que el input, de modo que la insensibilidad de
-    /// caja se resuelve por el fold y no por `globset`.
+    /// Compiles a name glob. The pattern is folded (NFC + lowercase if
+    /// `!case_sensitive`) the same way as the input, so that case
+    /// insensitivity is resolved by the fold and not by `globset`.
     ///
     /// # Errors
-    /// [`SearchError::BadGlob`] si el patrón no es un glob válido.
+    /// [`SearchError::BadGlob`] if the pattern is not a valid glob.
     pub fn glob(pattern: &str, case_sensitive: bool) -> Result<Self, SearchError> {
         let folded = fold_name(pattern.as_bytes(), case_sensitive);
         let glob = globset::GlobBuilder::new(&folded)
             .build()
             .map_err(|e| SearchError::BadGlob(e.to_string()))?;
-        // Modo Unicode (#110): `?`/clases cuentan CARACTERES, no bytes.
-        // Mismo `size_limit` que el eje regex — el patrón es input del
-        // usuario y esta es una API pública sin tope propio de longitud.
-        // `dot_matches_new_line`: globset compila su matcher con ese flag,
-        // y `*`/`?` traducen a `.`-derivados — sin él, un nombre con `\n`
-        // (byte legal en unix; corpus `control_newline`) dejaría de casar
-        // `*` EN SILENCIO, el inverso del bug que esto arregla.
+        // Unicode mode (#110): `?`/classes count CHARACTERS, not bytes.
+        // Same `size_limit` as the regex axis — the pattern is user input
+        // and this is a public API with no length cap of its own.
+        // `dot_matches_new_line`: globset compiles its matcher with that
+        // flag, and `*`/`?` translate to `.`-derived forms — without it, a
+        // name with `\n` (a legal byte on unix; corpus `control_newline`)
+        // would silently stop matching `*`, the inverse of the bug this
+        // fixes.
         let matcher = regex::RegexBuilder::new(&unicode_glob_regex(&glob)?)
             .size_limit(REGEX_SIZE_LIMIT)
             .dot_matches_new_line(true)
@@ -229,11 +232,11 @@ impl NameMatcher {
         })
     }
 
-    /// Compila una regex de nombre con `size_limit` anti-ReDoS y
-    /// `case_insensitive(!case_sensitive)`. El patrón se pasa por NFC.
+    /// Compiles a name regex with an anti-ReDoS `size_limit` and
+    /// `case_insensitive(!case_sensitive)`. The pattern is passed through NFC.
     ///
     /// # Errors
-    /// [`SearchError::BadRegex`] si no compila o excede el `size_limit`.
+    /// [`SearchError::BadRegex`] if it does not compile or exceeds the `size_limit`.
     pub fn regex(pattern: &str, case_sensitive: bool) -> Result<Self, SearchError> {
         let pat = nfc_name(pattern.as_bytes());
         let re = regex::RegexBuilder::new(&pat)
@@ -244,8 +247,8 @@ impl NameMatcher {
         Ok(Self::Regex(re))
     }
 
-    /// `true` si `name_bytes` (último segmento, bytes crudos) casa. Nunca hace
-    /// panic con bytes no-UTF8 (matchea sobre el lossy).
+    /// `true` if `name_bytes` (last segment, raw bytes) matches. Never panics
+    /// with non-UTF8 bytes (matches over the lossy form).
     #[must_use]
     pub fn matches(&self, name_bytes: &[u8]) -> bool {
         match self {
@@ -258,35 +261,35 @@ impl NameMatcher {
     }
 }
 
-/// Aguja LITERAL de contenido, ya transcodificada a los bytes de uno o más
-/// encodings que la representan sin pérdida (pares `(encoding, bytes)`). La
-/// búsqueda es bytes-contra-bytes (jamás decodifica el pajar).
+/// LITERAL content needle, already transcoded to the bytes of one or more
+/// encodings that represent it without loss (pairs `(encoding, bytes)`). The
+/// search is byte-against-byte (it never decodes the haystack).
 ///
-/// Dos modos:
-/// - [`ContentNeedle::literal`]: A-CIEGAS — la aguja en TODOS los encodings de
-///   `needle_cycle()`. Fallback cuando la detección del fichero es incierta.
-///   **Trade-off**: una aguja legacy corta (p.ej. `ñ`→1 byte `0xF1` en
-///   windows-1252) casa POR AZAR bytes que en otro encoding forman parte de
-///   una secuencia distinta (0xF1 es byte líder de un char de 4 bytes en
-///   UTF-8) — falsos positivos. Ver el test que fija ese límite.
-/// - [`ContentNeedle::for_encoding`]: ENCODING-AWARE — la aguja SOLO en el
-///   encoding detectado (+ UTF-8). T3 lo usa tras `norte_encoding::detect`
-///   para eliminar el falso positivo del modo a-ciegas.
+/// Two modes:
+/// - [`ContentNeedle::literal`]: BLIND — the needle in ALL the encodings of
+///   `needle_cycle()`. Fallback for when the file's detection is uncertain.
+///   **Trade-off**: a short legacy needle (e.g. `ñ`→1 byte `0xF1` in
+///   windows-1252) matches BY CHANCE bytes that in another encoding are part
+///   of a different sequence (0xF1 is the lead byte of a 4-byte char in
+///   UTF-8) — false positives. See the test that pins this limit.
+/// - [`ContentNeedle::for_encoding`]: ENCODING-AWARE — the needle ONLY in the
+///   detected encoding (+ UTF-8). T3 uses it after `norte_encoding::detect`
+///   to eliminate the blind mode's false positive.
 #[derive(Debug, Clone)]
 pub struct ContentNeedle {
-    /// Pares `(encoding de origen, bytes)`: el encoding acompaña a la aguja
-    /// para que el consumidor (T3) sea encoding-aware; `find_in` solo usa los
-    /// bytes. Dedup por bytes.
+    /// Pairs `(source encoding, bytes)`: the encoding travels with the
+    /// needle so the consumer (T3) can be encoding-aware; `find_in` only
+    /// uses the bytes. Deduped by bytes.
     needles: Vec<(&'static Encoding, Vec<u8>)>,
-    /// Longitud del needle más largo (dimensiona el solape entre chunks).
+    /// Length of the longest needle (sizes the overlap between chunks).
     max_len: usize,
 }
 
 impl ContentNeedle {
-    /// Variantes de caja del texto: el propio texto, y con `!case_sensitive`
-    /// también minúsculas y mayúsculas ANTES de codificar (fold simple: cubre
-    /// agujas de caja HOMOGÉNEA; una aguja en caja mixta en el pajar es
-    /// best-effort — v1 documentada).
+    /// Case variants of the text: the text itself, and with
+    /// `!case_sensitive` also lowercase and uppercase BEFORE encoding
+    /// (simple fold: covers needles of HOMOGENEOUS case; a needle in mixed
+    /// case within the haystack is best-effort — documented for v1).
     fn case_variants(text: &str, case_sensitive: bool) -> Vec<String> {
         let mut variants = vec![text.to_string()];
         if !case_sensitive {
@@ -296,8 +299,9 @@ impl ContentNeedle {
         variants
     }
 
-    /// Construye la aguja codificando cada variante de caja a cada encoding de
-    /// `encs` que la mapee SIN pérdida ([`encode_lossless`]); dedup por bytes.
+    /// Builds the needle by encoding each case variant into each encoding
+    /// from `encs` that maps it WITHOUT loss ([`encode_lossless`]); deduped
+    /// by bytes.
     fn build(text: &str, case_sensitive: bool, encs: &[&'static Encoding]) -> Self {
         let variants = Self::case_variants(text, case_sensitive);
         let mut needles: Vec<(&'static Encoding, Vec<u8>)> = Vec::new();
@@ -314,50 +318,51 @@ impl ContentNeedle {
         Self { needles, max_len }
     }
 
-    /// Aguja A-CIEGAS: transcodificada a TODOS los encodings de
-    /// `norte_encoding::needle_cycle()` que la representen sin pérdida.
-    /// Fallback cuando el encoding del fichero es incierto; asume el
-    /// trade-off de falsos positivos por agujas legacy cortas (ver doc del
-    /// tipo).
+    /// BLIND needle: transcoded to ALL encodings from
+    /// `norte_encoding::needle_cycle()` that represent it without loss.
+    /// Fallback for when the file's encoding is uncertain; accepts the
+    /// trade-off of false positives from short legacy needles (see the
+    /// type's doc).
     #[must_use]
     pub fn literal(text: &str, case_sensitive: bool) -> Self {
         Self::build(text, case_sensitive, needle_cycle())
     }
 
-    /// Aguja ENCODING-AWARE: solo en `enc` (el encoding YA detectado del
-    /// fichero) MÁS siempre UTF-8 (red de seguridad si el detector se
-    /// equivocó hacia un legacy con ASCII común). Devuelve `None` si el texto
-    /// es vacío (ninguna aguja útil). Para un fichero detectado como UTF-16
-    /// pásale `UTF_16LE`/`BE`: `encode_lossless` cae a UTF-8 (gotcha WHATWG),
-    /// así que T3 debe buscar en el texto DECODIFICADO, no aquí — la aguja
-    /// UTF-8 es lo mejor disponible en ese caso.
+    /// ENCODING-AWARE needle: only in `enc` (the file's ALREADY detected
+    /// encoding) PLUS always UTF-8 (a safety net if the detector guessed
+    /// wrong toward a legacy encoding with common ASCII). Returns `None` if
+    /// the text is empty (no useful needle). For a file detected as UTF-16
+    /// pass it `UTF_16LE`/`BE`: `encode_lossless` falls back to UTF-8
+    /// (WHATWG gotcha), so T3 must search the DECODED text, not here — the
+    /// UTF-8 needle is the best available in that case.
     #[must_use]
     pub fn for_encoding(text: &str, case_sensitive: bool, enc: &'static Encoding) -> Option<Self> {
         let n = Self::build(text, case_sensitive, &[enc, norte_encoding::UTF_8]);
         if n.needles.is_empty() { None } else { Some(n) }
     }
 
-    /// Los needles transcodificados `(encoding, bytes)`. El walker (T3) los
-    /// consume en un scan con rastreo de línea/offset que [`Self::find_in`] no
-    /// expone (necesita `pos` y `\n` acumulados para el `line`/`preview`).
+    /// The transcoded needles `(encoding, bytes)`. The walker (T3) consumes
+    /// them in a scan that tracks line/offset, which [`Self::find_in`] does
+    /// not expose (it needs the accumulated `pos` and `\n` count for
+    /// `line`/`preview`).
     #[must_use]
     pub fn needles(&self) -> &[(&'static Encoding, Vec<u8>)] {
         &self.needles
     }
 
-    /// Longitud del needle más largo (dimensiona el solape entre chunks).
+    /// Length of the longest needle (sizes the overlap between chunks).
     #[must_use]
     pub fn max_len(&self) -> usize {
         self.max_len
     }
 
-    /// Busca la aguja en `tail_anterior + chunk` con `memmem`; devuelve el
-    /// offset del primer match dentro de ese buffer combinado (o `None`).
-    /// Actualiza `ov` reteniendo los últimos `max_len - 1` bytes para que una
-    /// aguja partida por el borde del chunk siguiente aún se encuentre.
+    /// Searches for the needle in `previous_tail + chunk` with `memmem`;
+    /// returns the offset of the first match within that combined buffer
+    /// (or `None`). Updates `ov`, retaining the last `max_len - 1` bytes so
+    /// that a needle split by the next chunk's boundary can still be found.
     ///
-    /// El walker (T3) para en el primer hit por fichero, así que no hay
-    /// re-conteo de la cola retenida entre chunks.
+    /// The walker (T3) stops at the first hit per file, so there is no
+    /// re-counting of the retained tail between chunks.
     pub fn find_in(&self, ov: &mut Overlap, chunk: &[u8]) -> Option<usize> {
         let mut buf = std::mem::take(&mut ov.tail);
         buf.extend_from_slice(chunk);
@@ -373,29 +378,29 @@ impl ContentNeedle {
     }
 }
 
-/// Estado de solape entre chunks de un fichero: retiene la cola del chunk
-/// anterior para que una aguja partida por el borde se encuentre.
+/// Overlap state between chunks of a file: retains the previous chunk's
+/// tail so that a needle split by the boundary can be found.
 #[derive(Debug, Default)]
 pub struct Overlap {
-    /// Últimos `max_len - 1` bytes ya vistos (prefijo del siguiente buffer).
+    /// Last `max_len - 1` bytes already seen (prefix of the next buffer).
     tail: Vec<u8>,
 }
 
-/// Regex de CONTENIDO (`content_regex`): solo compila aquí con `size_limit` y
-/// `case_insensitive`; se aplica sobre el texto ya decodificado por líneas en
-/// el walker (T3), donde vive la decodificación por chunks.
+/// CONTENT regex (`content_regex`): only compiled here with `size_limit` and
+/// `case_insensitive`; applied over the text already decoded line by line in
+/// the walker (T3), where the chunked decoding lives.
 #[derive(Debug, Clone)]
 pub struct ContentRegex {
-    /// Regex compilada; se corre por líneas en el walker.
+    /// Compiled regex; run line by line in the walker.
     re: regex::Regex,
 }
 
 impl ContentRegex {
-    /// Compila la regex de contenido con `size_limit` anti-ReDoS y
+    /// Compiles the content regex with an anti-ReDoS `size_limit` and
     /// `case_insensitive(!case_sensitive)`.
     ///
     /// # Errors
-    /// [`SearchError::BadRegex`] si no compila o excede el `size_limit`.
+    /// [`SearchError::BadRegex`] if it does not compile or exceeds the `size_limit`.
     pub fn new(pattern: &str, case_sensitive: bool) -> Result<Self, SearchError> {
         let re = regex::RegexBuilder::new(pattern)
             .size_limit(REGEX_SIZE_LIMIT)
@@ -405,70 +410,70 @@ impl ContentRegex {
         Ok(Self { re })
     }
 
-    /// `true` si `line` (texto ya decodificado) casa.
+    /// `true` if `line` (already decoded text) matches.
     #[must_use]
     pub fn is_match(&self, line: &str) -> bool {
         self.re.is_match(line)
     }
 }
 
-// ── Walker de fs.search (T3): recorre un subtree y emite hits en lotes. ────
+// ── fs.search walker (T3): walks a subtree and emits hits in batches. ────
 
-/// Flush por tiempo del lote de hits (calca `FILL_INTERVAL` del TUI): un lote
-/// no vacío se envía al pasar este intervalo aunque no llene el batch, para
-/// que el pane virtual "gotee" resultados en vivo.
+/// Time-based flush of the hit batch (mirrors the TUI's `FILL_INTERVAL`): a
+/// non-empty batch is sent once this interval passes even if it has not
+/// filled the batch, so the virtual pane "drips" results live.
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
-/// Tope de caracteres del `preview` de un match (recorte server-side).
+/// Cap on a match's `preview` character count (server-side trimming).
 const PREVIEW_MAX_CHARS: usize = 160;
-/// Cota de RAM por línea en la ruta decode (`scan_decode_lines`): una línea
-/// sin `'\n'` que rebasa este tamaño se evalúa TRUNCADA a este prefijo y el
-/// resto se descarta hasta el próximo `'\n'` (evita volcar un fichero de una
-/// sola línea gigante en memoria).
+/// RAM budget per line on the decode path (`scan_decode_lines`): a line
+/// without `'\n'` that exceeds this size is evaluated TRUNCATED to this
+/// prefix and the rest is discarded up to the next `'\n'` (avoids dumping a
+/// single giant-line file entirely into memory).
 const LINE_MATCH_CAP: usize = 1 << 20;
 
-/// Criterio de contenido ya compilado.
+/// Already-compiled content criterion.
 enum ContentSpec {
-    /// Sin búsqueda de contenido (solo nombre).
+    /// No content search (name only).
     None,
-    /// Literal multi-encoding (la aguja se transcodifica por fichero según el
-    /// encoding detectado; el texto crudo se retiene para el modo decode de
-    /// UTF-16, ver [`run_walk`]).
+    /// Multi-encoding literal (the needle is transcoded per file according
+    /// to the detected encoding; the raw text is retained for the UTF-16
+    /// decode path, see [`run_walk`]).
     Literal(String),
-    /// Regex sobre el contenido decodificado por líneas.
+    /// Regex over the content decoded line by line.
     Regex(ContentRegex),
 }
 
-/// Criterios de [`FsSearchParams`] ya validados y COMPILADOS (matchers de
-/// nombre/contenido). Se construye ANTES de la Task: un glob/regex inválido o
-/// una combinación ilegal es un error del REQUEST, no un fallo de la Task.
+/// [`FsSearchParams`] criteria already validated and COMPILED (name/content
+/// matchers). Built BEFORE the Task: an invalid glob/regex or an illegal
+/// combination is a REQUEST error, not a Task failure.
 pub struct SearchMatchers {
     name: Option<NameMatcher>,
     content: ContentSpec,
     case_sensitive: bool,
-    /// Tope de hits (ya convertido a `usize`); `None` = sin tope.
+    /// Hit cap (already converted to `usize`); `None` = no cap.
     max_hits: Option<usize>,
-    /// Los filtros de 0.81.0: lo que decide si una entrada que ya casó por
-    /// nombre y contenido cuenta además como resultado.
-    filtros: Filtros,
-    /// Nombres de carpeta que no se bajan, ya compilados a glob. Vacío = se
-    /// baja a todas.
-    excluir_nombres: Vec<NameMatcher>,
-    /// `false` = solo el directorio raíz.
-    recursivo: bool,
-    /// La codificación con la que leer el contenido, si el lector forzó una
-    /// (0.81.0). `None` = la que detecte cada fichero.
+    /// The 0.81.0 filters: what decides whether an entry that already
+    /// matched by name and content ALSO counts as a result.
+    filters: Filters,
+    /// Directory names that are not descended into, already compiled to
+    /// glob. Empty = descend into all of them.
+    excluded_dir_names: Vec<NameMatcher>,
+    /// `false` = root directory only.
+    recursive: bool,
+    /// The encoding to read content with, if the reader forced one
+    /// (0.81.0). `None` = whatever each file's detection says.
     encoding: Option<&'static Encoding>,
 }
 
-/// Lo que se le pide a una entrada ADEMÁS de casar por nombre o contenido
-/// (protocolo 0.81.0).
+/// What is asked of an entry IN ADDITION to matching by name or content
+/// (protocol 0.81.0).
 ///
-/// Separado de los matchers porque son de otra naturaleza: aquéllos
-/// compilan patrones y pueden fallar, y éstos son comparaciones sobre lo que
-/// la entrada ya trae. Juntarlos haría que un rango de fechas tuviera que
-/// pasar por `Result`.
+/// Kept separate from the matchers because they are of a different nature:
+/// those compile patterns and can fail, and these are comparisons over what
+/// the entry already carries. Merging them would make a date range have to
+/// go through a `Result`.
 #[derive(Debug, Clone, Default)]
-struct Filtros {
+struct Filters {
     kinds: Vec<EntryKind>,
     min_size: Option<u64>,
     max_size: Option<u64>,
@@ -476,15 +481,15 @@ struct Filtros {
     mtime_before: Option<i64>,
 }
 
-impl Filtros {
-    /// ¿Cuenta esta entrada como resultado?
+impl Filters {
+    /// Does this entry count as a result?
     ///
-    /// Un dato que el provider no sabe decir NO pasa un filtro sobre él.
-    /// Filtrar es afirmar, y «no lo sé» no es «sí»: un bucket de objetos que
-    /// no reporta fecha devolvería su contenido entero bajo «modificado esta
-    /// semana», que es peor que no devolver nada, porque se lee igual que un
-    /// resultado.
-    fn pasa(&self, e: &Entry) -> bool {
+    /// A value the provider cannot report does NOT pass a filter on it.
+    /// Filtering is asserting, and "I don't know" is not "yes": a bucket
+    /// that reports no date would return its entire contents under
+    /// "modified this week", which is worse than returning nothing, because
+    /// it reads exactly like a result.
+    fn passes(&self, e: &Entry) -> bool {
         if !self.kinds.is_empty() && !self.kinds.contains(&e.kind) {
             return false;
         }
@@ -503,9 +508,9 @@ impl Filtros {
         true
     }
 
-    /// ¿Hay algún filtro puesto? Sin ninguno no se toca nada, que es el
-    /// camino de 0.80.
-    fn vacios(&self) -> bool {
+    /// Is any filter set? With none, nothing is touched, which is the
+    /// 0.80 path.
+    fn is_empty(&self) -> bool {
         self.kinds.is_empty()
             && self.min_size.is_none()
             && self.max_size.is_none()
@@ -515,29 +520,29 @@ impl Filtros {
 }
 
 impl SearchMatchers {
-    /// Valida y compila los criterios de `params`.
+    /// Validates and compiles `params`'s criteria.
     ///
     /// # Errors
-    /// - [`SearchError::NoCriteria`] si no hay ningún criterio.
-    /// - [`SearchError::Conflicting`] si se dan `name_glob`+`name_regex`, o
-    ///   `content`+`content_regex` (excluyentes por eje).
-    /// - [`SearchError::BadGlob`]/[`SearchError::BadRegex`] si un patrón no
-    ///   compila (o excede el `size_limit` anti-ReDoS).
-    /// - [`SearchError::TooManyExcludes`] por encima de
+    /// - [`SearchError::NoCriteria`] if there is no criterion at all.
+    /// - [`SearchError::Conflicting`] if both `name_glob`+`name_regex`, or
+    ///   `content`+`content_regex` are given (mutually exclusive per axis).
+    /// - [`SearchError::BadGlob`]/[`SearchError::BadRegex`] if a pattern does
+    ///   not compile (or exceeds the anti-ReDoS `size_limit`).
+    /// - [`SearchError::TooManyExcludes`] above
     ///   [`norte_proto::methods::SEARCH_EXCLUDES_MAX`] (0.81.0).
-    /// - [`SearchError::ImpossibleFilter`] si dos filtros no pueden cumplirse
-    ///   a la vez (0.81.0).
-    /// - [`SearchError::BadEncoding`] si `encoding` no nombra ninguna
-    ///   codificación conocida (0.81.0).
+    /// - [`SearchError::ImpossibleFilter`] if two filters cannot both hold
+    ///   at once (0.81.0).
+    /// - [`SearchError::BadEncoding`] if `encoding` does not name any known
+    ///   encoding (0.81.0).
     pub fn compile(params: &FsSearchParams) -> Result<Self, SearchError> {
         if params.name_glob.is_some() && params.name_regex.is_some() {
             return Err(SearchError::Conflicting(
-                "name_glob y name_regex son excluyentes",
+                "name_glob and name_regex are mutually exclusive",
             ));
         }
         if params.content.is_some() && params.content_regex.is_some() {
             return Err(SearchError::Conflicting(
-                "content y content_regex son excluyentes",
+                "content and content_regex are mutually exclusive",
             ));
         }
         let cs = params.case_sensitive;
@@ -546,101 +551,105 @@ impl SearchMatchers {
             (_, Some(r)) => Some(NameMatcher::regex(r, cs)?),
             _ => None,
         };
-        // Una aguja de contenido VACÍA no es un criterio (casaría con todo):
-        // se trata como ausente para el cómputo de "al menos un criterio".
-        // «Palabra entera» (0.81.0) se implementa SIEMPRE como regex, incluso
-        // para una aguja literal, y conviene decir por qué: el camino literal
-        // rápido busca BYTES, con la aguja transcodificada a varios
-        // candidatos y el pajar sin decodificar. Una frontera de palabra no
-        // es una propiedad de los bytes — depende de qué es letra, y eso
-        // depende del alfabeto—, así que no se puede comprobar ahí sin
-        // decodificar, que es justo lo que ese camino existe para no hacer.
-        // Pedirla cuesta el camino rápido; no pedirla no cuesta nada.
+        // An EMPTY content needle is not a criterion (it would match
+        // everything): treated as absent for the "at least one criterion"
+        // computation. "Whole word" (0.81.0) is ALWAYS implemented as a
+        // regex, even for a literal needle, and it is worth saying why: the
+        // fast literal path searches BYTES, with the needle transcoded to
+        // several candidates and the haystack left undecoded. A word
+        // boundary is not a property of the bytes — it depends on what
+        // counts as a letter, and that depends on the alphabet — so it
+        // cannot be checked there without decoding, which is exactly what
+        // that path exists to avoid. Asking for it costs the fast path;
+        // not asking for it costs nothing.
         let content = if let Some(c) = &params.content {
             if c.is_empty() {
                 ContentSpec::None
             } else if params.whole_word {
-                ContentSpec::Regex(ContentRegex::new(&palabra_entera(&regex::escape(c)), cs)?)
+                ContentSpec::Regex(ContentRegex::new(
+                    &whole_word_pattern(&regex::escape(c)),
+                    cs,
+                )?)
             } else {
                 ContentSpec::Literal(c.clone())
             }
         } else if let Some(r) = &params.content_regex {
-            let patron = if params.whole_word {
-                palabra_entera(r)
+            let pattern = if params.whole_word {
+                whole_word_pattern(r)
             } else {
                 r.clone()
             };
-            ContentSpec::Regex(ContentRegex::new(&patron, cs)?)
+            ContentSpec::Regex(ContentRegex::new(&pattern, cs)?)
         } else {
             ContentSpec::None
         };
-        // El tope de exclusiones, antes de compilar ninguna: ahí está el
-        // gasto, y esto lo alcanza un agente.
-        let tope = norte_proto::methods::SEARCH_EXCLUDES_MAX;
+        // The exclusion cap, before compiling any of them: that is where
+        // the cost is, and an agent can reach it.
+        let limit = norte_proto::methods::SEARCH_EXCLUDES_MAX;
         for n in [params.exclude_names.len(), params.exclude_roots.len()] {
-            if n > tope {
-                return Err(SearchError::TooManyExcludes(n, tope));
+            if n > limit {
+                return Err(SearchError::TooManyExcludes(n, limit));
             }
         }
-        let filtros = Filtros {
+        let filters = Filters {
             kinds: params.kinds.clone(),
             min_size: params.min_size,
             max_size: params.max_size,
             mtime_after: params.mtime_after,
             mtime_before: params.mtime_before,
         };
-        // Dos filtros que no pueden cumplirse a la vez se DICEN. Cero
-        // resultados se lee como «no hay nada que casara», y lo que no hay
-        // es la pregunta.
-        if let (Some(min), Some(max)) = (filtros.min_size, filtros.max_size)
+        // Two filters that cannot both hold at once are SAID. Zero results
+        // reads as "nothing matched", and here what is missing is the
+        // question.
+        if let (Some(min), Some(max)) = (filters.min_size, filters.max_size)
             && min > max
         {
             return Err(SearchError::ImpossibleFilter(
-                "el tamaño mínimo es mayor que el máximo",
+                "the minimum size is greater than the maximum",
             ));
         }
-        if let (Some(desde), Some(hasta)) = (filtros.mtime_after, filtros.mtime_before)
-            && desde > hasta
+        if let (Some(after), Some(before)) = (filters.mtime_after, filters.mtime_before)
+            && after > before
         {
             return Err(SearchError::ImpossibleFilter(
-                "la fecha de inicio es posterior a la de fin",
+                "the start date is after the end date",
             ));
         }
-        // Buscar CONTENIDO solo en carpetas no puede casar nada: el
-        // contenido se lee de ficheros regulares y nada más.
-        let solo_carpetas = !filtros.kinds.is_empty() && !filtros.kinds.contains(&EntryKind::File);
-        let pide_contenido = params.content.is_some() || params.content_regex.is_some();
-        if solo_carpetas && pide_contenido {
+        // Searching CONTENT only in directories cannot match anything:
+        // content is read from regular files and nothing else.
+        let dirs_only = !filters.kinds.is_empty() && !filters.kinds.contains(&EntryKind::File);
+        let wants_content = params.content.is_some() || params.content_regex.is_some();
+        if dirs_only && wants_content {
             return Err(SearchError::ImpossibleFilter(
-                "se pide contenido y se excluyen los ficheros",
+                "content is requested and files are excluded",
             ));
         }
-        // Un filtro SOLO —«todo lo que pese más de un giga»— es un criterio
-        // legítimo y de los más útiles que hay. Antes «sin nombre y sin
-        // contenido» era siempre «sin criterios»; ahora lo es solo cuando
-        // tampoco hay filtros.
-        if name.is_none() && matches!(content, ContentSpec::None) && filtros.vacios() {
+        // A filter ALONE —"everything over a gig"— is a legitimate
+        // criterion, and one of the most useful there is. Before, "no name
+        // and no content" was always "no criteria"; now it only is when
+        // there are no filters either.
+        if name.is_none() && matches!(content, ContentSpec::None) && filters.is_empty() {
             return Err(SearchError::NoCriteria);
         }
-        // Los nombres a no bajar son globs sobre el último segmento, con la
-        // misma disciplina que `name_glob` — incluido el fold, que es lo que
-        // hace que `Target` excluya `target` en un macOS.
-        let excluir_nombres = params
+        // The names not to descend into are globs over the last segment,
+        // with the same discipline as `name_glob` — including the fold,
+        // which is what makes `Target` exclude `target` on a macOS.
+        let excluded_dir_names = params
             .exclude_names
             .iter()
             .map(|g| NameMatcher::glob(g, cs))
             .collect::<Result<Vec<_>, _>>()?;
-        // `for_label_no_replacement` y NO `for_label`: el segundo acepta las
-        // etiquetas de reemplazo del estándar —`utf-7`, `hz-gb-2312`,
-        // `iso-2022-cn`— y devuelve el encoding REPLACEMENT, que decodifica
-        // el fichero entero a un solo U+FFFD. La búsqueda no fallaría: no
-        // encontraría nada, en silencio, que es exactamente lo que el
-        // rustdoc de este campo promete no hacer.
+        // `for_label_no_replacement` and NOT `for_label`: the latter accepts
+        // the standard's replacement labels —`utf-7`, `hz-gb-2312`,
+        // `iso-2022-cn`— and returns the REPLACEMENT encoding, which decodes
+        // the whole file to a single U+FFFD. The search would not fail: it
+        // would find nothing, silently, which is exactly what this field's
+        // rustdoc promises not to do.
         let encoding = match &params.encoding {
             None => None,
-            Some(nombre) => Some(
-                Encoding::for_label_no_replacement(nombre.as_bytes())
-                    .ok_or_else(|| SearchError::BadEncoding(nombre.clone()))?,
+            Some(label) => Some(
+                Encoding::for_label_no_replacement(label.as_bytes())
+                    .ok_or_else(|| SearchError::BadEncoding(label.clone()))?,
             ),
         };
         Ok(Self {
@@ -648,39 +657,39 @@ impl SearchMatchers {
             content,
             case_sensitive: cs,
             max_hits: params.max_hits.map(|m| m as usize),
-            filtros,
-            excluir_nombres,
-            recursivo: params.recursive,
+            filters,
+            excluded_dir_names,
+            recursive: params.recursive,
             encoding,
         })
     }
 
-    /// ¿Se baja a este directorio? (protocolo 0.81.0)
+    /// Does the walk descend into this directory? (protocol 0.81.0)
     ///
-    /// Por NOMBRE y en cualquier nivel: la carpeta que sobra —`target`,
-    /// `node_modules`, `.git`— aparece cien veces en sitios que no se saben
-    /// de antemano, así que nombrarla por ruta no serviría de nada.
-    fn se_baja_a(&self, e: &Entry) -> bool {
-        if self.excluir_nombres.is_empty() {
+    /// By NAME and at any level: the folder that is noise —`target`,
+    /// `node_modules`, `.git`— shows up a hundred times in places that are
+    /// not known ahead of time, so naming it by path would not help at all.
+    fn descends_into(&self, e: &Entry) -> bool {
+        if self.excluded_dir_names.is_empty() {
             return true;
         }
         let Some(seg) = e.path.file_name() else {
             return true;
         };
         !self
-            .excluir_nombres
+            .excluded_dir_names
             .iter()
             .any(|m| m.matches(seg.as_bytes()))
     }
 
-    /// `true` si hay criterio de contenido (el walker debe leer ficheros).
+    /// `true` if there is a content criterion (the walker must read files).
     fn searches_content(&self) -> bool {
         !matches!(self.content, ContentSpec::None)
     }
 }
 
-/// Lote de hits en construcción; `matches` solo se puebla en búsquedas de
-/// contenido (alineado 1:1 con `entries`).
+/// Batch of hits under construction; `matches` is only populated for
+/// content searches (aligned 1:1 with `entries`).
 struct Batch {
     task_id: TaskId,
     content: bool,
@@ -716,7 +725,7 @@ impl Batch {
         self.entries.is_empty()
     }
 
-    /// Extrae el lote acumulado como [`SearchHits`], dejando el buffer vacío.
+    /// Extracts the accumulated batch as [`SearchHits`], leaving the buffer empty.
     fn take(&mut self) -> SearchHits {
         SearchHits {
             task_id: self.task_id,
@@ -730,20 +739,20 @@ impl Batch {
     }
 }
 
-/// Desenlace de un [`flush`].
+/// Outcome of a [`flush`].
 enum FlushOutcome {
-    /// Enviado (o nada que enviar): sigue el walk.
+    /// Sent (or nothing to send): the walk continues.
     Continue,
-    /// El receptor murió (dueño de la búsqueda se fue): termina limpio.
+    /// The receiver died (the search's owner left): ends cleanly.
     ReceiverGone,
-    /// Cancelado mientras el `send` estaba bloqueado (backpressure): termina
-    /// como `Cancelled` (regla 3).
+    /// Cancelled while `send` was blocked (backpressure): ends as
+    /// `Cancelled` (rule 3).
     Cancelled,
 }
 
-/// Envía el lote pendiente (si lo hay). Un `send` bloqueado por backpressure
-/// (canal lleno + receptor lento) NO ignora la cancelación: se hace `select`
-/// contra `ctx.cancel`.
+/// Sends the pending batch (if any). A `send` blocked by backpressure
+/// (full channel + slow receiver) does NOT ignore cancellation: it `select`s
+/// against `ctx.cancel`.
 async fn flush(
     tx: &mpsc::Sender<SearchHits>,
     batch: &mut Batch,
@@ -763,37 +772,40 @@ async fn flush(
     }
 }
 
-/// Recorre el subtree bajo `root` en BFS (iterativo, sin recursión — una
-/// jerarquía hostilmente profunda no revienta la pila) emitiendo lotes de
-/// hits por `tx`. Lectura pura: sin journal, sin mutaciones.
+/// Walks the subtree under `root` in BFS (iterative, no recursion — a
+/// hostilely deep hierarchy does not blow the stack) emitting batches of
+/// hits via `tx`. Pure read: no journal, no mutations.
 ///
-/// - **Cancelación** (regla 3): `ctx.cancel` se chequea por directorio, por
-///   entrada y por chunk de contenido; al cancelar devuelve
-///   [`Error::Cancelled`] (→ `TaskState::Cancelled`) y `tx` se dropea (el
-///   canal se cierra).
-/// - **Symlinks**: NO se siguen para descender (evita ciclos); un symlink SÍ
-///   cuenta como candidato de NOMBRE, pero nunca se lee su contenido.
-/// - **`excluded`**: subárboles que el walk NO mira — ni desciende, ni lee, ni
-///   emite hit de nombre, ni los pone en `current` (que se difunde). Cuentan
-///   como entrada examinada y nada más. Es lo que impide que una búsqueda
-///   sobre `$HOME` de un AGENTE baje al directorio de estado del daemon
-///   (#165): el gate de lectura mira la RAÍZ de la búsqueda, así que sin esto
-///   una raíz legítima arrastraría el subárbol protegido con ella.
-/// - **Errores por entrada**: un `list`/`read` que falla se SALTA (cuenta como
-///   entrada examinada) y la búsqueda continúa — un subdir ilegible no aborta.
-/// - **`max_hits`**: alcanzado el tope, envía lo pendiente y termina
-///   `Completed` (no `Failed`); el cliente infiere "truncada" comparando el
-///   total recibido con `max_hits`.
-/// - **Progreso**: `entries_done` = entradas examinadas (incluidas las
-///   saltadas por error); `bytes_done` = nº de hits acumulados (reutiliza el
-///   campo, no hay bytes reales en una búsqueda); `current` = última entrada
-///   vista.
-/// - **Coalescing**: los hits se acumulan hasta [`SEARCH_HITS_MAX_BATCH`] o se
-///   drenan cada `FLUSH_INTERVAL` (lo que ocurra antes).
+/// - **Cancellation** (rule 3): `ctx.cancel` is checked per directory, per
+///   entry and per content chunk; on cancellation it returns
+///   [`Error::Cancelled`] (→ `TaskState::Cancelled`) and `tx` is dropped
+///   (the channel closes).
+/// - **Symlinks**: NOT followed to descend (avoids cycles); a symlink DOES
+///   count as a NAME candidate, but its content is never read.
+/// - **`excluded`**: subtrees the walk does NOT look at — no descent, no
+///   read, no name hit, and they are not put into `current` (which is
+///   broadcast). They count as an examined entry and nothing more. It is
+///   what keeps a search over an AGENT's `$HOME` from descending into the
+///   daemon's state directory (#165): the read gate only looks at the
+///   search's ROOT, so without this a legitimate root would drag the
+///   protected subtree along with it.
+/// - **Errors per entry**: a `list`/`read` that fails is SKIPPED (counted as
+///   an examined entry) and the search continues — an unreadable subdir does
+///   not abort it.
+/// - **`max_hits`**: once the cap is reached, sends what is pending and
+///   ends `Completed` (not `Failed`); the client infers "truncated" by
+///   comparing the total received against `max_hits`.
+/// - **Progress**: `entries_done` = entries examined (including those
+///   skipped on error); `bytes_done` = number of accumulated hits (reuses
+///   the field, there are no real bytes in a search); `current` = last
+///   entry seen.
+/// - **Coalescing**: hits accumulate up to [`SEARCH_HITS_MAX_BATCH`] or
+///   drain every `FLUSH_INTERVAL` (whichever comes first).
 ///
 /// # Errors
-/// [`Error::Cancelled`] si se canceló; jamás propaga errores por-entrada (se
-/// saltan). El `root` ilegible cuenta como un salto más (Completed con 0 hits).
+/// [`Error::Cancelled`] if cancelled; it never propagates per-entry errors
+/// (they are skipped). An unreadable `root` counts as one more skip
+/// (Completed with 0 hits).
 pub async fn run_walk(
     provider: Arc<dyn Provider>,
     root: VPath,
@@ -802,8 +814,9 @@ pub async fn run_walk(
     tx: mpsc::Sender<SearchHits>,
     ctx: &crate::scheduler::TaskCtx,
 ) -> Result<(), Error> {
-    // Una raíz que YA cae en lo excluido no se recorre: sin esto la exclusión
-    // por entrada dejaría pasar el listado del propio directorio protegido.
+    // A root that ALREADY falls under an exclusion is not walked at all:
+    // without this, the per-entry exclusion would let the protected
+    // directory's own listing through.
     if excluded.iter().any(|x| crate::policy::is_under(x, &root)) {
         return Ok(());
     }
@@ -814,10 +827,11 @@ pub async fn run_walk(
     let mut hits: usize = 0;
 
     let mut queue: VecDeque<VPath> = VecDeque::new();
-    // Frontera DURA del walk: NO confiamos en que `provider.list` solo devuelva
-    // descendientes byte-genuinos del dir. Toda entrada se re-verifica contra
-    // `confine` con `is_under` (defensa en profundidad, security T4); un provider
-    // con bug (o malicioso) que liste un path fuera del root jamás filtra.
+    // HARD boundary of the walk: we do NOT trust `provider.list` to return
+    // only byte-genuine descendants of the dir. Every entry is re-verified
+    // against `confine` with `is_under` (defense in depth, security T4); a
+    // provider with a bug (or malicious) that lists a path outside the root
+    // never gets through the filter.
     let confine = root.clone();
     queue.push_back(root);
 
@@ -825,20 +839,21 @@ pub async fn run_walk(
         if ctx.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        // Directorio ilegible: se salta (cuenta como examinado) y sigue.
+        // Unreadable directory: skipped (counted as examined) and continues.
         let Ok(mut stream) = provider.list(&dir).await else {
             ctx.progress.update(|p| p.entries_done += 1);
             continue;
         };
         while let Some(item) = stream.next().await {
-            // Flush por tiempo/tamaño en CADA iteración (aunque la entrada no
-            // sea hit): así el pane gotea en vivo incluso escaneando fallos.
+            // Time/size flush on EVERY iteration (even if the entry is not a
+            // hit): this way the pane drips live even while scanning
+            // through failures.
             if !batch.is_empty()
                 && (batch.len() >= SEARCH_HITS_MAX_BATCH || last_flush.elapsed() >= FLUSH_INTERVAL)
             {
                 match flush(&tx, &mut batch, &ctx.cancel).await {
                     FlushOutcome::Continue => last_flush = Instant::now(),
-                    FlushOutcome::ReceiverGone => return Ok(()), // termina limpio
+                    FlushOutcome::ReceiverGone => return Ok(()), // ends cleanly
                     FlushOutcome::Cancelled => return Err(Error::Cancelled),
                 }
             }
@@ -849,17 +864,18 @@ pub async fn run_walk(
                 ctx.progress.update(|p| p.entries_done += 1);
                 continue;
             };
-            // Cinturón-y-tirantes: una entrada cuyo path NO cae bajo el root del
-            // walk se ignora POR COMPLETO — ni descenso, ni contenido, ni hit de
-            // nombre, ni se filtra en `current` (que se difunde). El scope de la
-            // búsqueda es invariante del core, no de la corrección del provider.
+            // Belt and suspenders: an entry whose path does NOT fall under
+            // the walk's root is ignored ENTIRELY — no descent, no content,
+            // no name hit, and it is not filtered into `current` (which is
+            // broadcast). The search's scope is a core invariant, not a
+            // matter of provider correctness.
             if !crate::policy::is_under(&confine, &entry.path) {
                 ctx.progress.update(|p| p.entries_done += 1);
                 continue;
             }
-            // Subárbol excluido (#165): se cuenta como examinado y se deja
-            // caer ENTERO, antes de tocar `current` — un path protegido no se
-            // difunde ni en el progreso.
+            // Excluded subtree (#165): counted as examined and dropped
+            // ENTIRELY, before touching `current` — a protected path is not
+            // broadcast even in the progress.
             if excluded
                 .iter()
                 .any(|x| crate::policy::is_under(x, &entry.path))
@@ -872,40 +888,41 @@ pub async fn run_walk(
                 p.current = Some(entry.path.clone());
             });
 
-            // Descenso: dirs sí; symlinks NO (candidato de nombre, no se sigue).
+            // Descent: dirs yes; symlinks NO (name candidate, not followed).
             //
-            // Y desde 0.81.0, tampoco si el lector pidió no recorrer
-            // subdirectorios o excluyó este NOMBRE. Las dos cosas frenan el
-            // descenso y solo el descenso: la carpeta sigue pudiendo ser un
-            // resultado por su nombre, que es lo que quiere quien busca
-            // `node_modules` mientras excluye lo que hay dentro.
-            if entry.kind == EntryKind::Dir && matchers.recursivo && matchers.se_baja_a(&entry) {
+            // And since 0.81.0, also not if the reader asked not to walk
+            // subdirectories or excluded this NAME. Both things stop the
+            // descent and only the descent: the folder can still be a
+            // result by its name, which is what whoever searches for
+            // `node_modules` while excluding what is inside it wants.
+            if entry.kind == EntryKind::Dir && matchers.recursive && matchers.descends_into(&entry)
+            {
                 queue.push_back(entry.path.clone());
             }
 
-            // Filtro de nombre (barato) antes de tocar el contenido.
+            // Name filter (cheap) before touching content.
             let name_bytes = entry.path.file_name().map_or(&[][..], Segment::as_bytes);
             let name_ok = matchers.name.as_ref().is_none_or(|m| m.matches(name_bytes));
             if !name_ok {
                 continue;
             }
-            // Los filtros de 0.81.0: clase, tamaño y fecha. Antes del
-            // contenido a propósito — son comparaciones sobre lo que la
-            // entrada ya trae, y el contenido es una LECTURA por fichero,
-            // que por SFTP es una petición por cabeza.
-            if !matchers.filtros.pasa(&entry) {
+            // The 0.81.0 filters: kind, size and date. Before content on
+            // purpose — they are comparisons over what the entry already
+            // carries, and content is a READ per file, which over SFTP is
+            // one request per head.
+            if !matchers.filters.passes(&entry) {
                 continue;
             }
 
             let info = if content_search {
-                // El contenido solo tiene sentido en ficheros regulares.
+                // Content only makes sense for regular files.
                 if entry.kind != EntryKind::File {
                     continue;
                 }
                 match search_content(&*provider, &entry.path, &matchers, &ctx.cancel).await {
                     Ok(Some(info)) => Some(info),
                     Err(Error::Cancelled) => return Err(Error::Cancelled),
-                    // No casa (o binario), o ilegible: en ambos casos se salta.
+                    // No match (or binary), or unreadable: skipped either way.
                     Ok(None) | Err(_) => continue,
                 }
             } else {
@@ -917,7 +934,8 @@ pub async fn run_walk(
             ctx.progress.update(|p| p.bytes_done = hits as u64);
 
             if matchers.max_hits.is_some_and(|max| hits >= max) {
-                // Truncado: drena lo pendiente y COMPLETA (el tope se alcanzó).
+                // Truncated: drain what is pending and COMPLETE (the cap
+                // was reached).
                 let _ = flush(&tx, &mut batch, &ctx.cancel).await;
                 return Ok(());
             }
@@ -927,9 +945,9 @@ pub async fn run_walk(
     Ok(())
 }
 
-/// Busca el criterio de contenido en UN fichero, en streaming. Devuelve el
-/// contexto del primer match (`line`/`preview`) o `None` (no casa / binario /
-/// vacío).
+/// Searches for the content criterion in ONE file, streaming. Returns the
+/// first match's context (`line`/`preview`) or `None` (no match / binary /
+/// empty).
 async fn search_content(
     provider: &dyn Provider,
     path: &VPath,
@@ -937,13 +955,13 @@ async fn search_content(
     cancel: &CancellationToken,
 ) -> Result<Option<MatchInfo>, Error> {
     let mut stream = provider.read(path, None).await?;
-    // Primer chunk NO vacío para la detección de encoding.
+    // First NON-empty chunk for encoding detection.
     let first = loop {
         match stream.next().await {
             Some(Ok(c)) if c.is_empty() => {}
             Some(Ok(c)) => break c,
             Some(Err(e)) => return Err(e),
-            None => return Ok(None), // fichero vacío: nada que casar.
+            None => return Ok(None), // empty file: nothing to match.
         }
     };
     if cancel.is_cancelled() {
@@ -951,25 +969,25 @@ async fn search_content(
     }
     let enc = match norte_encoding::detect(first.as_ref()) {
         Detection::Text { encoding, .. } => encoding,
-        // Binario (NUL sin BOM): NO se busca contenido (spec §17.1a).
+        // Binary (NUL with no BOM): content is NOT searched (spec §17.1a).
         //
-        // También con una codificación FORZADA (0.81.0): forzar dice con qué
-        // alfabeto leer un texto, no que un ejecutable sea texto. Un fichero
-        // con NUL leído como windows-1252 casaría por accidente contra
-        // cualquier aguja corta, y eso es ruido con forma de resultado.
+        // Even with a FORCED encoding (0.81.0): forcing says which alphabet
+        // to read a text with, not that an executable is text. A file with
+        // a NUL read as windows-1252 would match by accident against any
+        // short needle, and that is noise shaped like a result.
         Detection::Binary => return Ok(None),
     };
-    // La codificación que el lector FORZÓ manda sobre la detectada
-    // (0.81.0), que es el mismo trato que le da el visor: la detección
-    // acierta casi siempre, y esto es para cuando no.
+    // The encoding the reader FORCED overrides the detected one (0.81.0),
+    // the same treatment the viewer gives it: detection is right almost
+    // always, and this is for when it is not.
     let enc = matchers.encoding.unwrap_or(enc);
     let cs = matchers.case_sensitive;
     match &matchers.content {
         ContentSpec::None => Ok(None),
         ContentSpec::Literal(text) => {
-            // UTF-16 (BOM): la aguja no se transcodifica a UTF-16 (needle_cycle
-            // lo excluye), así que estos ficheros se enrutan por DECODE por
-            // líneas — jamás casarían en el scan de bytes.
+            // UTF-16 (BOM): the needle is not transcoded to UTF-16
+            // (needle_cycle excludes it), so these files are routed through
+            // DECODE by lines — they would never match in the byte scan.
             if is_utf16(enc) {
                 let needle = text.clone();
                 scan_decode_lines(enc, first.to_vec(), stream, cancel, move |line| {
@@ -979,7 +997,7 @@ async fn search_content(
             } else {
                 match ContentNeedle::for_encoding(text, cs, enc) {
                     Some(needle) => scan_bytes(&needle, enc, first.to_vec(), stream, cancel).await,
-                    None => Ok(None), // aguja vacía tras encode: sin match útil
+                    None => Ok(None), // empty needle after encoding: no useful match
                 }
             }
         }
@@ -993,11 +1011,11 @@ async fn search_content(
     }
 }
 
-/// Scan LITERAL byte-contra-byte con la aguja multi-encoding y solape entre
-/// chunks; rastrea la línea (contando `\n`) para el contexto del match. Es la
-/// misma mecánica que [`ContentNeedle::find_in`] pero inline, porque necesita
-/// `pos` y los `\n` acumulados para computar `line`/`preview` (que `find_in`
-/// no expone).
+/// LITERAL byte-against-byte scan with the multi-encoding needle and
+/// overlap between chunks; tracks the line (counting `\n`) for the match's
+/// context. Same mechanics as [`ContentNeedle::find_in`] but inline, because
+/// it needs `pos` and the accumulated `\n`s to compute `line`/`preview`
+/// (which `find_in` does not expose).
 async fn scan_bytes(
     needle: &ContentNeedle,
     enc: &'static Encoding,
@@ -1006,7 +1024,7 @@ async fn scan_bytes(
     cancel: &CancellationToken,
 ) -> Result<Option<MatchInfo>, Error> {
     let mut tail: Vec<u8> = Vec::new();
-    // `\n` en los bytes que YA dejaron el `tail` (front del fichero committeado).
+    // Count of `\n` in bytes that have ALREADY left `tail` (committed front of the file).
     let mut committed_nl: u64 = 0;
     let mut chunk = Some(first);
     loop {
@@ -1021,7 +1039,7 @@ async fn scan_bytes(
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
-        // buf = tail_anterior ++ chunk (el match, si cae, está aquí).
+        // buf = previous_tail ++ chunk (the match, if it falls, is here).
         let mut buf = std::mem::take(&mut tail);
         buf.extend_from_slice(&c);
         let mut hit: Option<usize> = None;
@@ -1038,7 +1056,7 @@ async fn scan_bytes(
                 preview: Some(preview),
             }));
         }
-        // Retiene los últimos `max_len-1` bytes (solape); el resto se committea.
+        // Retains the last `max_len-1` bytes (overlap); the rest is committed.
         let keep = needle.max_len().saturating_sub(1).min(buf.len());
         let split = buf.len() - keep;
         committed_nl += count_nl(&buf[..split]);
@@ -1047,17 +1065,17 @@ async fn scan_bytes(
     Ok(None)
 }
 
-/// Scan por líneas DECODIFICADAS con un decodificador de ESTADO: parte en
-/// `'\n'` sobre el TEXTO decodificado, no sobre el byte crudo 0x0A. Crítico
-/// para UTF-16 (el `LF` es `0A 00`/`00 0A`: cortar por el byte suelto
-/// desalinea los pares y pierde el match de cualquier línea ≥2). Usado por
-/// `content_regex` y por el literal en UTF-16.
+/// Scan over DECODED lines with a STATEFUL decoder: splits on `'\n'` in the
+/// decoded TEXT, not on the raw 0x0A byte. Critical for UTF-16 (the `LF` is
+/// `0A 00`/`00 0A`: splitting on the lone byte misaligns the pairs and loses
+/// the match of any line ≥2). Used by `content_regex` and by the literal
+/// path for UTF-16.
 ///
-/// **Cota de RAM** ([`LINE_MATCH_CAP`]): una línea sin `'\n'` que supera el
-/// tope (minificados, CSV de una línea) se evalúa TRUNCADA a ese prefijo y el
-/// resto se descarta hasta el próximo `'\n'` — un match más allá del tope en
-/// una única línea gigante se pierde (límite documentado; el preview ya se
-/// acota a [`PREVIEW_MAX_CHARS`]).
+/// **RAM cap** ([`LINE_MATCH_CAP`]): a line without `'\n'` that exceeds the
+/// cap (minified files, single-line CSV) is evaluated TRUNCATED to that
+/// prefix and the rest is discarded up to the next `'\n'` — a match beyond
+/// the cap within a single giant line is lost (documented limit; the
+/// preview is already capped to [`PREVIEW_MAX_CHARS`]).
 async fn scan_decode_lines(
     enc: &'static Encoding,
     first: Vec<u8>,
@@ -1068,7 +1086,7 @@ async fn scan_decode_lines(
     let mut decoder = norte_encoding::StreamDecoder::new(enc);
     let mut pending = String::new();
     let mut line_no: u64 = 0;
-    // `true` mientras se descartan los bytes de una línea ya truncada/evaluada.
+    // `true` while discarding bytes of a line already truncated/evaluated.
     let mut skipping = false;
     let mut chunk = Some(first);
     loop {
@@ -1085,12 +1103,12 @@ async fn scan_decode_lines(
         }
         decoder.feed(&bytes, last, &mut pending);
 
-        // Líneas completas (por el '\n' del texto decodificado).
+        // Complete lines (by the '\n' in the decoded text).
         while let Some(nl) = pending.find('\n') {
             let line: String = pending.drain(..=nl).collect();
             line_no += 1;
             if skipping {
-                // La línea gigante ya se evaluó truncada: solo se cuenta.
+                // The giant line was already evaluated truncated: just counted.
                 skipping = false;
                 continue;
             }
@@ -1103,8 +1121,8 @@ async fn scan_decode_lines(
             }
         }
 
-        // Línea sin '\n' que rebasa el tope: evalúala truncada y descarta el
-        // resto hasta el próximo '\n' (cota de RAM).
+        // Line without '\n' that exceeds the cap: evaluate it truncated and
+        // discard the rest up to the next '\n' (RAM cap).
         if !skipping && pending.len() > LINE_MATCH_CAP {
             let l = strip_eol(&pending);
             if matches(l) {
@@ -1120,7 +1138,7 @@ async fn scan_decode_lines(
         }
 
         if last {
-            // Última línea sin `\n` final.
+            // Last line without a final `\n`.
             if !skipping && !pending.is_empty() {
                 line_no += 1;
                 let l = strip_eol(&pending);
@@ -1136,17 +1154,17 @@ async fn scan_decode_lines(
     }
 }
 
-/// Recorta el `\n`/`\r` finales (CRLF) de una línea drenada.
+/// Trims the trailing `\n`/`\r` (CRLF) off a drained line.
 fn strip_eol(line: &str) -> &str {
     let line = line.strip_suffix('\n').unwrap_or(line);
     line.strip_suffix('\r').unwrap_or(line)
 }
 
-/// `true` si `line` contiene `needle`. NOTA: el fold de caja de esta ruta
-/// (decode-por-líneas, UTF-16/`content_regex`) es `to_lowercase` simple, NO el
-/// mismo que el byte-scan literal, que transcodifica variantes de caja por
-/// `needle_cycle`. Difieren en casos de caja no triviales (p. ej. `ß`/`SS`);
-/// asimetría consciente entre las dos rutas de contenido.
+/// `true` if `line` contains `needle`. NOTE: the case fold on this path
+/// (line-by-line decode, UTF-16/`content_regex`) is a simple `to_lowercase`,
+/// NOT the same one the literal byte-scan uses, which transcodes case
+/// variants via `needle_cycle`. They differ in non-trivial case cases (e.g.
+/// `ß`/`SS`); a deliberate asymmetry between the two content paths.
 fn line_contains(line: &str, needle: &str, case_sensitive: bool) -> bool {
     if case_sensitive {
         line.contains(needle)
@@ -1155,18 +1173,18 @@ fn line_contains(line: &str, needle: &str, case_sensitive: bool) -> bool {
     }
 }
 
-/// Sanea el preview EN ORIGEN y lo recorta a `PREVIEW_MAX_CHARS`. El orden
-/// importa: enmascara PRIMERO (controles/bidi/invisibles → `U+FFFD` vía
-/// [`norte_encoding::mask_terminal_hazards`]) y recorta DESPUÉS, así el corte
-/// nunca parte dentro de un isolate bidi (ya es `U+FFFD`) ni deja un override
-/// sin cerrar. El productor NO manda jamás hazards crudos por wire (spec §6):
-/// un consumidor (p. ej. la tool MCP de `fs.search`) puede pintar el preview
-/// directo sin ejecutar ANSI ni sufrir spoofing de orden visual.
+/// Sanitizes the preview AT THE SOURCE and trims it to `PREVIEW_MAX_CHARS`.
+/// The order matters: it masks FIRST (controls/bidi/invisibles → `U+FFFD`
+/// via [`norte_encoding::mask_terminal_hazards`]) and trims AFTER, so the
+/// cut never lands inside a bidi isolate (already `U+FFFD`) nor leaves an
+/// override unclosed. The producer NEVER sends raw hazards over the wire
+/// (spec §6): a consumer (e.g. the `fs.search` MCP tool) can paint the
+/// preview directly without running ANSI or suffering visual-order spoofing.
 ///
-/// El recorte es por char, no por byte (jamás parte un char multibyte). Sigue
-/// sin ser consciente de grafema/celda de terminal (un cluster combinante o un
-/// char de doble ancho puede quedar cortado por el borde): el saneo-primero
-/// elimina el riesgo BIDI concreto; grafema/celda queda ligado a #79/#81.
+/// The trim is by char, not by byte (it never splits a multibyte char). It
+/// is still not aware of grapheme/terminal cell (a combining cluster or a
+/// double-width char can end up cut at the edge): sanitize-first removes
+/// the concrete BIDI risk; grapheme/cell remains tied to #79/#81.
 fn trim_preview(line: &str) -> String {
     norte_encoding::mask_terminal_hazards(line)
         .chars()
@@ -1174,10 +1192,10 @@ fn trim_preview(line: &str) -> String {
         .collect()
 }
 
-/// Extrae la línea que contiene el offset `pos` dentro de `buf` (entre los
-/// `\n` que la rodean, o los bordes del buffer), decodificada y recortada.
-/// Límite: si la línea empezó antes del `tail` retenido (línea más larga que
-/// el solape), el preview queda recortado por la izquierda — best-effort.
+/// Extracts the line containing offset `pos` within `buf` (between the
+/// surrounding `\n`s, or the buffer's edges), decoded and trimmed. Limit: if
+/// the line started before the retained `tail` (a line longer than the
+/// overlap), the preview ends up trimmed on the left — best-effort.
 fn extract_line_preview(buf: &[u8], pos: usize, enc: &'static Encoding) -> String {
     let start = buf[..pos]
         .iter()
@@ -1192,12 +1210,13 @@ fn extract_line_preview(buf: &[u8], pos: usize, enc: &'static Encoding) -> Strin
     trim_preview(line)
 }
 
-/// Nº de `\n` en `bytes`.
+/// Number of `\n` in `bytes`.
 fn count_nl(bytes: &[u8]) -> u64 {
     memchr::memchr_iter(b'\n', bytes).count() as u64
 }
 
-/// `true` si `enc` es UTF-16 (LE o BE) — se enruta por decode, no por byte-scan.
+/// `true` if `enc` is UTF-16 (LE or BE) — routed through decode, not
+/// byte-scan.
 fn is_utf16(enc: &'static Encoding) -> bool {
     enc.name().starts_with("UTF-16")
 }
@@ -1212,8 +1231,8 @@ mod tests {
         VPath::parse(w).expect("wire")
     }
 
-    /// `TaskCtx` mínimo para llamar a [`run_walk`] sin scheduler.
-    fn ctx_de_test() -> crate::scheduler::TaskCtx {
+    /// Minimal `TaskCtx` to call [`run_walk`] without a scheduler.
+    fn test_ctx() -> crate::scheduler::TaskCtx {
         let (reporter, _rx) =
             crate::progress::ProgressReporter::new(TaskId::new(1), norte_proto::TaskKind::Search);
         crate::scheduler::TaskCtx {
@@ -1231,7 +1250,7 @@ mod tests {
         }
     }
 
-    async fn arbol() -> Arc<MemProvider> {
+    async fn tree() -> Arc<MemProvider> {
         let mem = Arc::new(MemProvider::new());
         for d in [
             "mem:///home",
@@ -1258,53 +1277,53 @@ mod tests {
     }
 
     async fn walk(excluded: Vec<VPath>, root: &str) -> Vec<VPath> {
-        let mem = arbol().await;
-        let matchers = SearchMatchers::compile(&params(root)).expect("criterios");
+        let mem = tree().await;
+        let matchers = SearchMatchers::compile(&params(root)).expect("criteria");
         let (tx, mut rx) = mpsc::channel::<SearchHits>(8);
-        let ctx = ctx_de_test();
+        let ctx = test_ctx();
         let provider: Arc<dyn Provider> = mem;
         let h = tokio::spawn(async move {
             let mut out = Vec::new();
-            while let Some(lote) = rx.recv().await {
-                out.extend(lote.entries.into_iter().map(|e| e.path));
+            while let Some(batch) = rx.recv().await {
+                out.extend(batch.entries.into_iter().map(|e| e.path));
             }
             out
         });
         run_walk(provider, vp(root), matchers, excluded, tx, &ctx)
             .await
-            .expect("walk completo");
+            .expect("walk complete");
         drop(ctx);
-        h.await.expect("colector")
+        h.await.expect("collector")
     }
 
-    /// Lo mismo que [`walk`] pero con los params que le den, para los
-    /// filtros de 0.81.0.
-    async fn walk_con(p: FsSearchParams) -> Vec<VPath> {
-        let mem = arbol().await;
+    /// Same as [`walk`] but with whatever params are given, for the 0.81.0
+    /// filters.
+    async fn walk_with(p: FsSearchParams) -> Vec<VPath> {
+        let mem = tree().await;
         let root = p.root.clone();
-        let matchers = SearchMatchers::compile(&p).expect("criterios");
+        let matchers = SearchMatchers::compile(&p).expect("criteria");
         let (tx, mut rx) = mpsc::channel::<SearchHits>(8);
-        let ctx = ctx_de_test();
+        let ctx = test_ctx();
         let provider: Arc<dyn Provider> = mem;
         let h = tokio::spawn(async move {
             let mut out = Vec::new();
-            while let Some(lote) = rx.recv().await {
-                out.extend(lote.entries.into_iter().map(|e| e.path));
+            while let Some(batch) = rx.recv().await {
+                out.extend(batch.entries.into_iter().map(|e| e.path));
             }
             out
         });
         run_walk(provider, root, matchers, Vec::new(), tx, &ctx)
             .await
-            .expect("walk completo");
+            .expect("walk complete");
         drop(ctx);
-        h.await.expect("colector")
+        h.await.expect("collector")
     }
 
-    /// Excluir un NOMBRE de carpeta la salta en cualquier nivel, y solo frena
-    /// el DESCENSO: la carpeta sigue pudiendo ser un resultado.
+    /// Excluding a folder NAME skips it at any level, and only stops the
+    /// DESCENT: the folder can still be a result.
     #[tokio::test]
-    async fn excluir_un_nombre_no_baja_pero_no_esconde_la_carpeta() {
-        let hits = walk_con(FsSearchParams {
+    async fn excluding_a_name_stops_descent_but_not_the_folder_as_a_result() {
+        let hits = walk_with(FsSearchParams {
             name_glob: Some("*".into()),
             exclude_names: vec!["norte".into()],
             ..FsSearchParams::new(vp("mem:///home/u"))
@@ -1312,22 +1331,22 @@ mod tests {
         .await;
         assert!(
             hits.contains(&vp("mem:///home/u/.config/norte")),
-            "la carpeta excluida sigue siendo un resultado: {hits:?}"
+            "the excluded folder is still a result: {hits:?}"
         );
         assert!(
             !hits.contains(&vp("mem:///home/u/.config/norte/journal.db")),
-            "pero no se baja a ella: {hits:?}"
+            "but it is not descended into: {hits:?}"
         );
         assert!(
             hits.contains(&vp("mem:///home/u/.config/norte-backup/journal.db")),
-            "y el vecino que solo comparte prefijo NO se excluye: {hits:?}"
+            "and the neighbor that only shares a prefix is NOT excluded: {hits:?}"
         );
     }
 
-    /// Sin recursión se lista el directorio de la raíz y nada más.
+    /// Without recursion, only the root directory is listed and nothing else.
     #[tokio::test]
-    async fn sin_recursion_solo_el_directorio_de_la_raiz() {
-        let hits = walk_con(FsSearchParams {
+    async fn without_recursion_only_the_root_directory() {
+        let hits = walk_with(FsSearchParams {
             name_glob: Some("*".into()),
             recursive: false,
             ..FsSearchParams::new(vp("mem:///home/u"))
@@ -1336,15 +1355,15 @@ mod tests {
         assert!(hits.contains(&vp("mem:///home/u/docs")), "{hits:?}");
         assert!(
             !hits.contains(&vp("mem:///home/u/docs/carta.txt")),
-            "nada de un nivel más abajo: {hits:?}"
+            "nothing from one level below: {hits:?}"
         );
     }
 
-    /// Filtrar por CLASE no frena el recorrido: lo que se busca puede estar
-    /// dentro de una carpeta que no cuenta como resultado.
+    /// Filtering by KIND does not stop the walk: what is searched for can
+    /// be inside a folder that does not itself count as a result.
     #[tokio::test]
-    async fn filtrar_por_clase_no_frena_el_recorrido() {
-        let hits = walk_con(FsSearchParams {
+    async fn filtering_by_kind_does_not_stop_the_walk() {
+        let hits = walk_with(FsSearchParams {
             name_glob: Some("*".into()),
             kinds: vec![EntryKind::File],
             ..FsSearchParams::new(vp("mem:///home/u"))
@@ -1352,66 +1371,66 @@ mod tests {
         .await;
         assert!(
             hits.contains(&vp("mem:///home/u/docs/carta.txt")),
-            "el fichero de dos niveles abajo sale: {hits:?}"
+            "the file two levels down comes out: {hits:?}"
         );
         assert!(
             !hits.contains(&vp("mem:///home/u/docs")),
-            "y la carpeta que hubo que atravesar no: {hits:?}"
+            "and the folder that had to be traversed does not: {hits:?}"
         );
     }
 
-    /// Un filtro SOLO, sin nombre ni contenido, es un criterio legítimo — y
-    /// de los más útiles que hay («todo lo que pese más de un giga»).
+    /// A filter ALONE, with no name or content, is a legitimate criterion —
+    /// and one of the most useful there is ("everything over a gig").
     #[test]
-    fn un_filtro_solo_ya_es_un_criterio() {
+    fn a_filter_alone_is_already_a_criterion() {
         let p = FsSearchParams {
             min_size: Some(1),
             ..FsSearchParams::new(vp("mem:///"))
         };
         assert!(SearchMatchers::compile(&p).is_ok());
-        // Y sin nada de nada sigue sin serlo.
-        let vacio = FsSearchParams::new(vp("mem:///"));
+        // And with nothing at all it still is not one.
+        let empty = FsSearchParams::new(vp("mem:///"));
         assert!(matches!(
-            SearchMatchers::compile(&vacio),
+            SearchMatchers::compile(&empty),
             Err(SearchError::NoCriteria)
         ));
     }
 
-    /// Un dato que el provider no sabe decir NO pasa un filtro sobre él.
+    /// A value the provider cannot report does NOT pass a filter on it.
     ///
-    /// Es la mitad honesta del asunto: un bucket que no reporta fecha
-    /// devolvería su contenido entero bajo «modificado esta semana», y eso se
-    /// lee igual que un resultado.
+    /// It is the honest half of the matter: a bucket that reports no date
+    /// would return its entire contents under "modified this week", and
+    /// that reads exactly like a result.
     #[test]
-    fn lo_que_no_se_sabe_no_pasa_el_filtro() {
-        let sin_datos = Entry {
+    fn what_is_unknown_does_not_pass_the_filter() {
+        let no_data = Entry {
             path: vp("mem:///x"),
             kind: EntryKind::File,
             size: None,
             mtime_ms: None,
             attrs: std::collections::BTreeMap::new(),
         };
-        let por_tamano = Filtros {
+        let by_size = Filters {
             min_size: Some(0),
-            ..Filtros::default()
+            ..Filters::default()
         };
-        assert!(!por_tamano.pasa(&sin_datos), "sin tamaño no pasa");
-        let por_fecha = Filtros {
+        assert!(!by_size.passes(&no_data), "no size does not pass");
+        let by_date = Filters {
             mtime_after: Some(i64::MIN),
-            ..Filtros::default()
+            ..Filters::default()
         };
-        assert!(!por_fecha.pasa(&sin_datos), "sin fecha no pasa");
-        // Y sin ningún filtro pasa todo, que es el camino de 0.80.
-        assert!(Filtros::default().pasa(&sin_datos));
+        assert!(!by_date.passes(&no_data), "no date does not pass");
+        // And with no filter at all everything passes, which is the 0.80 path.
+        assert!(Filters::default().passes(&no_data));
     }
 
-    /// Una codificación que no se reconoce es un error de la PETICIÓN.
+    /// An encoding that is not recognized is a REQUEST error.
     ///
-    /// Caer a la automática devolvería resultados perfectamente creíbles
-    /// leídos con otro alfabeto, y quien la forzó lo hizo porque la
-    /// automática no le valía.
+    /// Falling back to the automatic one would return perfectly believable
+    /// results read with another alphabet, and whoever forced it did so
+    /// because the automatic one did not work for them.
     #[test]
-    fn una_codificacion_desconocida_no_cae_a_la_automatica() {
+    fn an_unknown_encoding_does_not_fall_back_to_automatic() {
         let p = FsSearchParams {
             content: Some("hola".into()),
             encoding: Some("no-existe-2026".into()),
@@ -1423,67 +1442,67 @@ mod tests {
         ));
     }
 
-    /// Las exclusiones tienen tope, y se comprueba ANTES de compilarlas.
+    /// Exclusions have a cap, and it is checked BEFORE compiling them.
     ///
-    /// `fs.search` la alcanza un agente, y cada nombre excluido compila un
-    /// glob y una regex con su presupuesto en la tarea que atiende la
-    /// conexión — sin Task todavía, así que fuera del tope de tareas vivas.
+    /// `fs.search` can be reached by an agent, and each excluded name
+    /// compiles a glob and a regex with its own budget in the task that
+    /// serves the connection — no Task yet, so outside the cap on live
+    /// tasks.
     #[test]
-    fn hay_un_tope_de_exclusiones() {
-        let tope = norte_proto::methods::SEARCH_EXCLUDES_MAX;
-        let muchos = vec!["x".to_owned(); tope + 1];
+    fn there_is_a_cap_on_exclusions() {
+        let limit = norte_proto::methods::SEARCH_EXCLUDES_MAX;
+        let too_many = vec!["x".to_owned(); limit + 1];
         let p = FsSearchParams {
             name_glob: Some("*".into()),
-            exclude_names: muchos,
+            exclude_names: too_many,
             ..FsSearchParams::new(vp("mem:///"))
         };
         assert!(matches!(
             SearchMatchers::compile(&p),
             Err(SearchError::TooManyExcludes(_, _))
         ));
-        // Y justo en el tope pasa: la cota es inclusiva.
-        let justos = vec!["x".to_owned(); tope];
+        // And right at the cap it passes: the bound is inclusive.
+        let exactly = vec!["x".to_owned(); limit];
         let p = FsSearchParams {
             name_glob: Some("*".into()),
-            exclude_names: justos,
+            exclude_names: exactly,
             ..FsSearchParams::new(vp("mem:///"))
         };
         assert!(SearchMatchers::compile(&p).is_ok());
     }
 
-    /// Dos filtros que no pueden cumplirse a la vez se DICEN.
+    /// Two filters that cannot both hold at once are SAID.
     ///
-    /// Cero resultados se lee como «no hay nada que casara»; aquí lo que no
-    /// hay es la pregunta, y son dos cosas distintas.
+    /// Zero results reads as "nothing matched"; here what is missing is the
+    /// question, and those are two different things.
     #[test]
-    fn los_filtros_imposibles_se_dicen() {
-        let imposible = |p: FsSearchParams| {
+    fn impossible_filters_are_said() {
+        let impossible = |p: FsSearchParams| {
             assert!(
                 matches!(
                     SearchMatchers::compile(&p),
                     Err(SearchError::ImpossibleFilter(_))
                 ),
-                "debería ser imposible"
+                "should be impossible"
             );
         };
-        imposible(FsSearchParams {
+        impossible(FsSearchParams {
             min_size: Some(10),
             max_size: Some(1),
             ..FsSearchParams::new(vp("mem:///"))
         });
-        imposible(FsSearchParams {
+        impossible(FsSearchParams {
             mtime_after: Some(100),
             mtime_before: Some(1),
             ..FsSearchParams::new(vp("mem:///"))
         });
-        // Contenido solo en carpetas: el contenido se lee de ficheros.
-        imposible(FsSearchParams {
+        // Content only in folders: content is read from files.
+        impossible(FsSearchParams {
             content: Some("hola".into()),
             kinds: vec![EntryKind::Dir],
             ..FsSearchParams::new(vp("mem:///"))
         });
-        // Y los rangos que sí se pueden cumplir compilan, incluido el de un
-        // solo valor.
+        // And ranges that CAN hold do compile, including a single-value one.
         let p = FsSearchParams {
             min_size: Some(5),
             max_size: Some(5),
@@ -1492,18 +1511,18 @@ mod tests {
         assert!(SearchMatchers::compile(&p).is_ok());
     }
 
-    /// Una etiqueta de REEMPLAZO no es una codificación utilizable.
+    /// A REPLACEMENT label is not a usable encoding.
     ///
-    /// `utf-7` y compañía existen en el estándar solo para que un navegador
-    /// las neutralice: decodifican el fichero entero a un U+FFFD. Aceptarlas
-    /// haría que la búsqueda no fallara y no encontrara nada, que es justo
-    /// lo que forzar una codificación viene a evitar.
+    /// `utf-7` and friends exist in the standard only for a browser to
+    /// neutralize them: they decode the whole file to a single U+FFFD.
+    /// Accepting them would make the search not fail and not find anything,
+    /// which is exactly what forcing an encoding exists to prevent.
     #[test]
-    fn una_etiqueta_de_reemplazo_no_vale_como_codificacion() {
-        for etiqueta in ["utf-7", "hz-gb-2312", "iso-2022-cn"] {
+    fn a_replacement_label_does_not_work_as_an_encoding() {
+        for label in ["utf-7", "hz-gb-2312", "iso-2022-cn"] {
             let p = FsSearchParams {
                 content: Some("hola".into()),
-                encoding: Some(etiqueta.to_owned()),
+                encoding: Some(label.to_owned()),
                 ..FsSearchParams::new(vp("mem:///"))
             };
             assert!(
@@ -1511,10 +1530,10 @@ mod tests {
                     SearchMatchers::compile(&p),
                     Err(SearchError::BadEncoding(_))
                 ),
-                "{etiqueta} coló"
+                "{label} got through"
             );
         }
-        // Y una de verdad sí.
+        // And a real one does.
         let p = FsSearchParams {
             content: Some("hola".into()),
             encoding: Some("windows-1252".into()),
@@ -1523,46 +1542,48 @@ mod tests {
         assert!(SearchMatchers::compile(&p).is_ok());
     }
 
-    /// «Palabra entera» envuelve el patrón en UN grupo.
+    /// "Whole word" wraps the pattern in ONE group.
     ///
-    /// Sin el grupo, `gato|perro` se leería como `\bgato` o `perro\b`: otra
-    /// búsqueda, y una que casa justo lo que se pidió excluir.
+    /// Without the group, `cat|dog` would read as `\bcat` or `dog\b`: a
+    /// different search, and one that matches exactly what was asked to be
+    /// excluded.
     #[test]
-    fn palabra_entera_agrupa_la_alternancia() {
-        assert_eq!(palabra_entera("gato|perro"), r"\b(?:gato|perro)\b");
+    fn whole_word_groups_the_alternation() {
+        assert_eq!(whole_word_pattern("gato|perro"), r"\b(?:gato|perro)\b");
     }
 
-    /// #165: el gate de lectura mira la RAÍZ de la búsqueda, así que una raíz
-    /// legítima (`$HOME`) arrastraría el directorio de estado del daemon con
-    /// ella. El walk no baja ahí — ni al dir, ni a su contenido — y el vecino
-    /// que solo comparte prefijo de bytes (`norte-backup`) sí sale.
+    /// #165: the read gate looks at the search's ROOT, so a legitimate root
+    /// (`$HOME`) would drag the daemon's state directory along with it. The
+    /// walk does not go in there — neither the dir nor its content — and the
+    /// neighbor that only shares a byte prefix (`norte-backup`) does come out.
     #[tokio::test]
-    async fn el_walk_no_entra_en_un_subarbol_excluido() {
+    async fn the_walk_does_not_enter_an_excluded_subtree() {
         let hits = walk(vec![vp("mem:///home/u/.config/norte")], "mem:///home/u").await;
         assert!(
             hits.contains(&vp("mem:///home/u/docs/carta.txt")),
-            "lo de fuera sigue saliendo: {hits:?}"
+            "what is outside still comes out: {hits:?}"
         );
         assert!(
             hits.contains(&vp("mem:///home/u/.config/norte-backup/journal.db")),
-            "el vecino con el mismo prefijo NO está protegido: {hits:?}"
+            "the neighbor with the same prefix is NOT protected: {hits:?}"
         );
         assert!(
             !hits
                 .iter()
                 .any(|p| p.to_wire().starts_with("mem:///home/u/.config/norte/")),
-            "nada de dentro del subárbol protegido: {hits:?}"
+            "nothing from inside the protected subtree: {hits:?}"
         );
         assert!(
             !hits.contains(&vp("mem:///home/u/.config/norte")),
-            "ni el directorio protegido mismo: {hits:?}"
+            "not even the protected directory itself: {hits:?}"
         );
     }
 
-    /// Y una raíz que YA cae en lo excluido no se recorre en absoluto: sin
-    /// esto el propio listado del directorio protegido se emitiría entero.
+    /// And a root that ALREADY falls under an exclusion is not walked at
+    /// all: without this, the protected directory's own listing would be
+    /// emitted whole.
     #[tokio::test]
-    async fn una_raiz_excluida_no_da_ni_una_fila() {
+    async fn an_excluded_root_gives_not_even_one_row() {
         let hits = walk(
             vec![vp("mem:///home/u/.config/norte")],
             "mem:///home/u/.config/norte",
@@ -1572,85 +1593,85 @@ mod tests {
     }
 
     #[test]
-    fn glob_e_insensibilidad_nfc() {
+    fn glob_and_nfc_insensitivity() {
         let m = NameMatcher::glob("*.RS", false).expect("glob");
         assert!(m.matches(b"main.rs"));
-        // NFD vs NFC: "año.rs" con la ñ descompuesta casa con el glob "año*".
+        // NFD vs NFC: "año.rs" with the ñ decomposed matches the glob "año*".
         let m = NameMatcher::glob("año*", false).expect("glob");
         assert!(m.matches("an\u{0303}o.rs".as_bytes()));
-        // Bytes no-UTF8: no panic, matchea sobre el lossy.
+        // Non-UTF8 bytes: no panic, matches over the lossy form.
         let m = NameMatcher::glob("*", false).expect("glob");
         assert!(m.matches(b"\xFF\xFE"));
     }
 
-    /// #110 (mismo fix que el marcado por patrón del frontend): `?` y las
-    /// clases cuentan CARACTERES, no bytes UTF-8 — globset a solas compila
-    /// `(?-u)` byte-mode, donde `a?o` no casaba `año` (ñ = 2 bytes) y
-    /// `a[ñx]o` casaba `axo` pero jamás `año`. El patrón que el usuario
-    /// aprende en la búsqueda vale en el marcado y viceversa.
+    /// #110 (same fix as the frontend's pattern-based marking): `?` and
+    /// classes count CHARACTERS, not UTF-8 bytes — globset alone compiles
+    /// `(?-u)` byte-mode, where `a?o` did not match `año` (ñ = 2 bytes) and
+    /// `a[ñx]o` matched `axo` but never `año`. The pattern a user learns in
+    /// search holds in marking and vice versa.
     #[test]
-    fn glob_cuenta_caracteres_no_bytes_utf8() {
+    fn glob_counts_characters_not_utf8_bytes() {
         let m = NameMatcher::glob("a?o.txt", false).expect("glob");
-        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "? = un carácter");
+        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "? = one character");
         assert!(m.matches(b"axo.txt"));
         let m = NameMatcher::glob("a[\u{f1}x]o.txt", false).expect("glob");
-        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "clase con multibyte");
+        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "class with multibyte");
         assert!(m.matches(b"axo.txt"));
         let m = NameMatcher::glob("a[\u{f0}-\u{f2}]o.txt", false).expect("glob");
-        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "rango multibyte");
+        assert!(m.matches("a\u{f1}o.txt".as_bytes()), "multibyte range");
         assert!(!m.matches(b"axo.txt"));
-        // Astral (4 bytes UTF-8): un carácter, no cuatro.
+        // Astral (4 UTF-8 bytes): one character, not four.
         let m = NameMatcher::glob("?.txt", false).expect("glob");
-        assert!(m.matches("\u{1D11E}.txt".as_bytes()), "𝄞 = UN carácter");
+        assert!(m.matches("\u{1D11E}.txt".as_bytes()), "𝄞 = ONE character");
     }
 
-    /// La traducción #110 debe CONSERVAR `dot_matches_new_line` (globset
-    /// compila su matcher con él): `\n` es un byte legal de nombre en unix
-    /// (corpus `control_newline`) y `*`/`?` traducen a `.`-derivados —
-    /// perder el flag haría que `*` dejara de casar esos nombres EN
-    /// SILENCIO, el inverso del bug byte/carácter.
+    /// The #110 translation must PRESERVE `dot_matches_new_line` (globset
+    /// compiles its matcher with it): `\n` is a legal name byte on unix
+    /// (corpus `control_newline`) and `*`/`?` translate to `.`-derived forms
+    /// — losing the flag would make `*` silently stop matching those names,
+    /// the inverse of the byte/character bug.
     #[test]
-    fn glob_sigue_casando_nombres_con_newline() {
+    fn glob_still_matches_names_with_newline() {
         let m = NameMatcher::glob("*", false).expect("glob");
         assert!(m.matches(b"a\nb"));
         let m = NameMatcher::glob("a?b", false).expect("glob");
-        assert!(m.matches(b"a\nb"), "? tambien cruza \\n, como en globset");
+        assert!(m.matches(b"a\nb"), "? also crosses \\n, like in globset");
         let m = NameMatcher::glob("*.txt", false).expect("glob");
         assert!(m.matches(b"a\nb.txt"));
     }
 
-    /// Guardia de la forma del regex de globset que la traducción #110
-    /// decodifica (`unicode_glob_regex`): prefijo `(?-u)` y bytes no-ASCII
-    /// como runs de escapes `\xNN`. Un upgrade de globset que cambie
-    /// cualquiera falla AQUÍ, ruidoso, en vez de dejar de casar nombres
-    /// no-ASCII en silencio. (El frontend pinea la suya igual —
-    /// `globset_regex_shape_is_the_one_this_translation_expects` en
-    /// `norte-frontend::pane` — porque cada lado tiene su copia del
-    /// traductor, mismo criterio que el fold duplicado.)
+    /// Guard for the shape of globset's regex that the #110 translation
+    /// decodes (`unicode_glob_regex`): the `(?-u)` prefix and non-ASCII
+    /// bytes as `\xNN` escape runs. A globset upgrade that changes either
+    /// fails HERE, loudly, instead of silently ceasing to match non-ASCII
+    /// names. (The frontend pins its own the same way —
+    /// `globset_regex_shape_is_the_one_this_translation_expects` in
+    /// `norte-frontend::pane` — because each side has its own copy of the
+    /// translator, same criterion as the duplicated fold.)
     #[test]
-    fn la_forma_del_regex_de_globset_es_la_que_la_traduccion_espera() {
+    fn the_globset_regex_shape_is_the_one_the_translation_expects() {
         let g = globset::GlobBuilder::new("a\u{f1}o").build().expect("glob");
         assert!(g.regex().starts_with("(?-u)"), "{}", g.regex());
         assert!(g.regex().contains(r"\xc3\xb1"), "{}", g.regex());
-        assert_eq!(unicode_glob_regex(&g).expect("traducción"), "^a\u{f1}o$");
+        assert_eq!(unicode_glob_regex(&g).expect("translation"), "^a\u{f1}o$");
     }
 
     #[test]
-    fn regex_de_nombre_con_size_limit() {
+    fn name_regex_with_size_limit() {
         assert!(
             NameMatcher::regex("^ma.n\\.rs$", false)
                 .expect("re")
                 .matches(b"main.rs")
         );
-        // Regex bomba: el size_limit (1 MiB) la rechaza al COMPILAR, no
-        // cuelga. El motor de `regex` es lineal (sin backtracking
-        // catastrófico), así que el guard es de MEMORIA del programa
-        // compilado: `(a|aa)"×8000` supera 1 MiB (medido; ×2000 no llegaba).
+        // Regex bomb: the size_limit (1 MiB) rejects it at COMPILE time, it
+        // does not hang. The `regex` engine is linear (no catastrophic
+        // backtracking), so the guard is on the compiled program's MEMORY:
+        // `(a|aa)`×8000 exceeds 1 MiB (measured; ×2000 did not reach it).
         assert!(NameMatcher::regex(&"(a|aa)".repeat(8000), false).is_err());
     }
 
     #[test]
-    fn aguja_literal_multiencoding() {
+    fn multiencoding_literal_needle() {
         let n = ContentNeedle::literal("año", false);
         // UTF-8:
         assert!(
@@ -1662,7 +1683,7 @@ mod tests {
             n.find_in(&mut Overlap::default(), b"hay un a\xF1o aqu\xED")
                 .is_some()
         );
-        // Y en dos chunks partiendo la aguja por la mitad (solape):
+        // And in two chunks splitting the needle in half (overlap):
         let mut ov = Overlap::default();
         assert!(n.find_in(&mut ov, "hay un a".as_bytes()).is_none());
         assert!(
@@ -1672,7 +1693,7 @@ mod tests {
     }
 
     #[test]
-    fn case_insensitive_de_contenido_ascii() {
+    fn content_case_insensitive_ascii() {
         let n = ContentNeedle::literal("AÑO", false);
         assert!(
             n.find_in(&mut Overlap::default(), "el año".as_bytes())
@@ -1681,55 +1702,56 @@ mod tests {
     }
 
     #[test]
-    fn aguja_no_representable_en_un_encoding_se_omite() {
+    fn a_needle_not_representable_in_an_encoding_is_skipped() {
         let n = ContentNeedle::literal("π", false);
-        // UTF-8 (0xCF 0x80) sí se encuentra.
+        // UTF-8 (0xCF 0x80) is found.
         assert!(
             n.find_in(&mut Overlap::default(), "un π aquí".as_bytes())
                 .is_some()
         );
-        // El encoder de windows-1252 NO puede mapear π: emitiría la referencia
-        // numérica "&#960;". Ese encoding se DESCARTA (unmappable), así que su
-        // representación lossy JAMÁS se convierte en un needle → no casa.
+        // windows-1252's encoder CANNOT map π: it would emit the numeric
+        // reference "&#960;". That encoding is DISCARDED (unmappable), so
+        // its lossy representation NEVER becomes a needle → it does not match.
         assert!(n.find_in(&mut Overlap::default(), b"&#960;").is_none());
     }
 
-    // Los casos de corpus con ficheros reales YA existen sobre el walker de
-    // contenido (`engine_search.rs`: `contenido_encoding_aware_tres_ficheros`),
-    // y la fixture canónica del falso positivo CJK vive en el corpus de
-    // norte-testkit (`cjk_utf8_lead_f1`). Aquí solo se fija el COMPORTAMIENTO
-    // de los matchers con bytes sintéticos.
+    // The corpus cases with real files ALREADY exist over the content walker
+    // (`engine_search.rs`: `contenido_encoding_aware_tres_ficheros`), and the
+    // canonical fixture for the CJK false positive lives in norte-testkit's
+    // corpus (`cjk_utf8_lead_f1`). Here only the matchers' BEHAVIOR with
+    // synthetic bytes is pinned.
 
     #[test]
-    fn falso_positivo_de_aguja_latina_corta_es_limite_de_literal() {
-        // "ñ" en windows-1252/ISO-8859-15 = 1 byte 0xF1. En contenido UTF-8
-        // CJK, 0xF1 aparece como byte LÍDER de una secuencia de 4 bytes
-        // (U+40000..U+7FFFF) → el modo a-ciegas (`literal`) casa POR AZAR.
-        // Límite conocido y documentado del modo multi-aguja.
+    fn short_latin_needle_false_positive_is_a_literal_mode_limit() {
+        // "ñ" in windows-1252/ISO-8859-15 = 1 byte 0xF1. In UTF-8 CJK
+        // content, 0xF1 shows up as the LEAD byte of a 4-byte sequence
+        // (U+40000..U+7FFFF) → blind mode (`literal`) matches BY CHANCE.
+        // Known and documented limit of the multi-needle mode.
         let cjk_utf8 = b"texto \xF1\x84\x80\x81 fin"; // char U+44001 (F1 84 80 81)
         let multi = ContentNeedle::literal("ñ", false);
         assert!(
             multi.find_in(&mut Overlap::default(), cjk_utf8).is_some(),
-            "límite conocido: la aguja legacy de 1 byte casa por azar"
+            "known limit: the 1-byte legacy needle matches by chance"
         );
-        // ENCODING-AWARE con el encoding DETECTADO (UTF-8) NO tiene el falso
-        // positivo: busca 0xC3 0xB1 / 0xC3 0x91, ausentes en ese contenido.
-        let aware =
-            ContentNeedle::for_encoding("ñ", false, norte_encoding::UTF_8).expect("aguja no vacía");
+        // ENCODING-AWARE with the DETECTED encoding (UTF-8) does NOT have the
+        // false positive: it searches for 0xC3 0xB1 / 0xC3 0x91, absent from
+        // that content.
+        let aware = ContentNeedle::for_encoding("ñ", false, norte_encoding::UTF_8)
+            .expect("non-empty needle");
         assert!(aware.find_in(&mut Overlap::default(), cjk_utf8).is_none());
     }
 
     #[test]
-    fn for_encoding_dirigida_encuentra_en_su_encoding() {
+    fn for_encoding_targeted_finds_in_its_own_encoding() {
         let w1252 = norte_encoding::Encoding::for_label(b"windows-1252").unwrap();
-        // Fichero detectado windows-1252: la aguja dirigida encuentra 0xF1.
-        let aware = ContentNeedle::for_encoding("año", false, w1252).expect("aguja");
+        // File detected as windows-1252: the targeted needle finds 0xF1.
+        let aware = ContentNeedle::for_encoding("año", false, w1252).expect("needle");
         assert!(
             aware
                 .find_in(&mut Overlap::default(), b"un a\xF1o legacy")
                 .is_some()
         );
-        // Y también su forma UTF-8 (red de seguridad incluida siempre).
+        // And also its UTF-8 form (safety net always included).
         assert!(
             aware
                 .find_in(&mut Overlap::default(), "un año utf8".as_bytes())
@@ -1738,13 +1760,13 @@ mod tests {
     }
 
     #[test]
-    fn utf16_con_bom_no_lo_cubre_la_aguja_literal_limite_documentado() {
-        // Fichero genuinamente UTF-16LE con BOM: "año" = FF FE 61 00 F1 00
-        // 6F 00. La aguja literal NO codifica a UTF-16 (needle_cycle lo
-        // excluye; `encode_lossless` a UTF-16 cae a UTF-8 por la regla WHATWG),
-        // así que NO casa — los bytes UTF-8/legacy no son contiguos entre los
-        // NUL. Límite documentado: T3 enruta los ficheros UTF-16-con-BOM por
-        // DECODIFICACIÓN (deuda corpus: `year_utf16bom`).
+    fn utf16_with_bom_is_not_covered_by_the_literal_needle_documented_limit() {
+        // A genuinely UTF-16LE file with a BOM: "año" = FF FE 61 00 F1 00
+        // 6F 00. The literal needle does NOT encode to UTF-16 (needle_cycle
+        // excludes it; `encode_lossless` falls back to UTF-8 under the
+        // WHATWG rule), so it does NOT match — the UTF-8/legacy bytes are
+        // not contiguous between the NULs. Documented limit: T3 routes
+        // UTF-16-with-BOM files through DECODING (corpus debt: `year_utf16bom`).
         let utf16_bom = b"\xFF\xFE\x61\x00\xF1\x00\x6F\x00";
         let n = ContentNeedle::literal("año", false);
         assert!(n.find_in(&mut Overlap::default(), utf16_bom).is_none());

@@ -1,5 +1,5 @@
-//! Un espejo al otro pane no puede estrangular el relleno del pane mirado:
-//! son dos huecos distintos y cada uno tiene su propio canal de `Fill`.
+//! A mirror to the other pane must not strangle the fill of the mirrored
+//! pane: they are two different slots and each has its own `Fill` channel.
 
 use norte_proto::{Entry, EntryKind, Segment, VPath};
 use norte_tui::app::{App, Pane};
@@ -9,7 +9,7 @@ use norte_tui::navigate::{Cd, apply_cd};
 use norte_tui::probes::{DecorateFetch, Probed};
 
 fn vp(w: &str) -> VPath {
-    VPath::parse(w).expect("wire de test")
+    VPath::parse(w).expect("test wire")
 }
 
 fn file(dir: &VPath, name: &str) -> Entry {
@@ -22,22 +22,23 @@ fn file(dir: &VPath, name: &str) -> Entry {
     }
 }
 
-/// Un relleno paginado por PANE, y no uno global: `pane.mirror` manda el
-/// OTRO pane a un sitio SIN mover el foco, así que con un solo hueco basta
-/// una tecla para que el pane que el lector está mirando —el suyo, el
-/// enfocado, aún paginando un dir grande— se quede a medias.
+/// A fill paginated PER PANE, not a global one: `pane.mirror` sends the
+/// OTHER pane somewhere WITHOUT moving the focus, so with a single slot one
+/// keypress would be enough to leave the pane the reader is looking at —
+/// theirs, the focused one, still paginating a large dir — half-done.
 ///
-/// Soltar su `rx` mata al drenador sin `finish_listing`, y `loading` solo
-/// lo apaga `finish_listing`/`Failed`/un listado nuevo: el pane queda con
-/// el listado truncado bajo un «cargando…» permanente.
+/// Dropping its `rx` kills the drainer without `finish_listing`, and
+/// `loading` is only turned off by `finish_listing`/`Failed`/a new listing:
+/// the pane would be left with a truncated listing under a permanent
+/// "loading…".
 #[test]
-fn un_espejo_al_otro_pane_no_estrangula_el_relleno_del_pane_mirado() {
+fn a_mirror_to_the_other_pane_does_not_strangle_the_mirrored_panes_fill() {
     let dir = vp("file:///d");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir.clone(), Vec::new()),
     );
-    // El pane 0 —el enfocado, el que el lector mira— está paginando.
+    // Pane 0 —the focused one, the one the reader is looking at— is paginating.
     app.panes[0].begin_listing(dir.clone(), vec![file(&dir, "a")], true, None);
     let (tx0, rx0) = tokio::sync::mpsc::channel::<FillMsg>(1);
     let mut fill: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
@@ -46,7 +47,7 @@ fn un_espejo_al_otro_pane_no_estrangula_el_relleno_del_pane_mirado() {
         norte_frontend::layout::BySlot::new();
     let mut lp = Probed::new();
 
-    // `pane.mirror`: el pane 1 viaja, y su listado también viene paginado.
+    // `pane.mirror`: pane 1 travels, and its listing is also paginated.
     let (_tx1, rx1) = tokio::sync::mpsc::channel::<FillMsg>(1);
     app.panes[1].begin_listing(dir.clone(), Vec::new(), true, None);
     let mut sr: Option<SearchRun> = None;
@@ -62,13 +63,13 @@ fn un_espejo_al_otro_pane_no_estrangula_el_relleno_del_pane_mirado() {
         },
     );
 
-    // El drenador del pane 0 sigue teniendo a quién enviar: nadie le
-    // soltó el `rx` por debajo.
+    // Pane 0's drainer still has someone to send to: nobody dropped its
+    // `rx` from under it.
     tx0.try_send(FillMsg::Batch(vec![file(&dir, "b")]))
-        .expect("el drenador del pane 0 no fue abandonado");
+        .expect("pane 0's drainer was not abandoned");
     let msg = fill
         .get_mut(norte_tui::panel::SLOT_LEFT)
-        .expect("el relleno del pane 0 sigue en su hueco")
+        .expect("pane 0's fill is still in its slot")
         .rx
         .try_recv()
         .ok();
@@ -77,14 +78,14 @@ fn un_espejo_al_otro_pane_no_estrangula_el_relleno_del_pane_mirado() {
     assert_eq!(
         app.panes[0].entries().len(),
         2,
-        "el lote posterior entra en el listado del pane 0"
+        "the later batch enters pane 0's listing"
     );
     assert!(
         app.panes[0].loading(),
-        "y el «cargando…» sigue vivo: nadie terminó el listado por él"
+        "and the \"loading…\" is still alive: nobody finished the listing for it"
     );
     assert!(
         fill.get(norte_tui::panel::SLOT_RIGHT).is_some(),
-        "el espejo se quedó con SU hueco"
+        "the mirror kept ITS OWN slot"
     );
 }

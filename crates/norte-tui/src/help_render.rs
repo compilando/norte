@@ -196,11 +196,11 @@ pub fn render_topic<'a>(
     }
 
     let rows = norte_help::rows_of(topic, r);
-    // `links()`: el `see_also` y los `[[enlaces]]` de la prosa, en el MISMO
-    // orden que las acciones del modelo — si no, el cursor señalaría una fila
-    // y Enter seguiría otra.
-    let enlaces = topic.links();
-    let mut action_lines = Vec::with_capacity(rows.len() + enlaces.len());
+    // `links()`: the `see_also` and the prose's `[[links]]`, in the SAME
+    // order as the model's actions — otherwise the cursor would point at one
+    // row and Enter would follow another.
+    let links = topic.links();
+    let mut action_lines = Vec::with_capacity(rows.len() + links.len());
 
     if !rows.is_empty() {
         lines.push(Line::default());
@@ -217,9 +217,9 @@ pub fn render_topic<'a>(
         }
     }
 
-    if !enlaces.is_empty() {
+    if !links.is_empty() {
         lines.push(Line::default());
-        for id in &enlaces {
+        for id in &links {
             action_lines.push(lines.len());
             // The TITLE of the page the link opens, not its id: the sidebar
             // row for that same page says exactly this, and a reader who
@@ -957,11 +957,11 @@ mod tests {
         }
     }
 
-    /// Todo vetado por el mismo motivo: lo que se comprueba es que la razón
-    /// ACOMPAÑA a la fila, no qué comando la tiene.
-    struct Vetado;
+    /// Everything vetoed for the same reason: what is checked is that the
+    /// reason ACCOMPANIES the row, not which command carries it.
+    struct Vetoed;
 
-    impl ChordResolver for Vetado {
+    impl ChordResolver for Vetoed {
         fn chord(&self, _command: &str) -> Option<String> {
             Some("f5".to_owned())
         }
@@ -977,10 +977,10 @@ mod tests {
         }
     }
 
-    /// Nada vetado: el contrapunto de [`Vetado`].
-    struct Libre;
+    /// Nothing vetoed: [`Vetoed`]'s counterpart.
+    struct Free;
 
-    impl ChordResolver for Libre {
+    impl ChordResolver for Free {
         fn chord(&self, _command: &str) -> Option<String> {
             Some("f5".to_owned())
         }
@@ -995,62 +995,63 @@ mod tests {
     }
 
     #[test]
-    fn una_fila_vetada_pinta_su_razon() {
-        // Atenuar sin decir por qué deja al lector adivinando si es un bug.
+    fn a_vetoed_row_paints_its_reason() {
+        // Dimming without saying why leaves the reader guessing whether it is
+        // a bug.
         let out = render_topic(
             topic(Lang::En, "copying").expect("copying"),
             Lang::En,
-            &Vetado,
+            &Vetoed,
             80,
             &theme(),
         );
         let text = flatten(&out.lines);
         assert!(
             text.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
-            "la razón acompaña a la fila atenuada: {text}"
+            "the reason accompanies the dimmed row: {text}"
         );
-        // Y una fila que SÍ puede correr no arrastra ninguna razón: si la
-        // pintara, el lector no distinguiría lo que puede pulsar.
+        // And a row that CAN run carries no reason at all: if it painted one,
+        // the reader could not tell what they can press.
         let free = render_topic(
             topic(Lang::En, "copying").expect("copying"),
             Lang::En,
-            &Libre,
+            &Free,
             80,
             &theme(),
         );
         let free = flatten(&free.lines);
         assert!(
             !free.contains(&norte_i18n::t_in(Lang::En, "reason-read-only")),
-            "razón pintada en una página sin nada vetado: {free}"
+            "reason painted on a page with nothing vetoed: {free}"
         );
     }
 
-    /// Estrecho: la RAZÓN sobrevive y la etiqueta se lleva la elipsis.
+    /// Narrow: the REASON survives and the label takes the ellipsis.
     ///
-    /// Al revés — componer `label — razón` y recortar el conjunto — el lector
-    /// se queda con el nombre del comando (que ya está en la prosa de arriba y
-    /// en la columna del chord) y pierde el único dato que la atenuación
-    /// planteaba. Y la fila sigue siendo UNA línea cueste lo que cueste: el
-    /// mapa `action_lines` cuenta con eso.
+    /// The other way around — composing `label — reason` and clipping the
+    /// whole — the reader is left with the command's name (already in the
+    /// prose above and in the chord column) and loses the one datum the
+    /// dimming was making. And the row stays ONE line no matter what: the
+    /// `action_lines` map counts on that.
     #[test]
-    fn en_una_fila_estrecha_la_razon_sobrevive_y_la_etiqueta_se_recorta() {
-        let razon = norte_i18n::t_in(Lang::En, "reason-read-only");
-        let rows_a = |width: usize| -> Vec<String> {
+    fn in_a_narrow_row_the_reason_survives_and_the_label_is_clipped() {
+        let reason = norte_i18n::t_in(Lang::En, "reason-read-only");
+        let rows_at = |width: usize| -> Vec<String> {
             let out = render_topic(
                 topic(Lang::En, "copying").expect("copying"),
                 Lang::En,
-                &Vetado,
+                &Vetoed,
                 width,
                 &theme(),
             );
-            // Ninguna FILA se sale del ancho, con razón o sin ella. (Sólo las
-            // filas: un `Block::Code` se deja largo a propósito — ver
-            // `render_block` — y clipearlo es cosa del pane.)
+            // No ROW exceeds the width, with or without a reason. (Only the
+            // rows: a `Block::Code` is deliberately left long — see
+            // `render_block` — and clipping it is the pane's job.)
             for &y in &out.action_lines {
                 let line = &out.lines[y];
                 assert!(
                     cells(line) <= width,
-                    "fila de {} celdas en un cuerpo de {width}: {:?}",
+                    "row of {} cells in a {width}-cell body: {:?}",
                     cells(line),
                     flatten(std::slice::from_ref(line))
                 );
@@ -1061,49 +1062,49 @@ mod tests {
                 .collect()
         };
 
-        // La razón entera sobrevive en todo ancho donde QUEPA, aunque la
-        // etiqueta no.
+        // The whole reason survives at every width where it FITS, even when
+        // the label does not.
         for width in [30, 40, 60, 80] {
-            let rows = rows_a(width);
+            let rows = rows_at(width);
             assert!(
-                rows.iter().any(|f| f.contains(&razon)),
-                "a {width} celdas la razón entera sigue ahí: {rows:?}"
+                rows.iter().any(|f| f.contains(&reason)),
+                "at {width} cells the whole reason is still there: {rows:?}"
             );
         }
 
-        // A 40 celdas la etiqueta más larga de la página ya no cabe: es ELLA
-        // la que se recorta, con la razón intacta detrás.
-        let rows = rows_a(40);
+        // At 40 cells the page's longest label no longer fits: it is THAT one
+        // that gets clipped, with the reason intact behind it.
+        let rows = rows_at(40);
         assert!(
-            rows.iter().any(|f| f.contains('…') && f.contains(&razon)),
-            "la etiqueta cede y la razón queda: {rows:?}"
+            rows.iter().any(|f| f.contains('…') && f.contains(&reason)),
+            "the label yields and the reason stays: {rows:?}"
         );
 
-        // Y cuando ni la razón cabe, se lleva ella la elipsis y la etiqueta
-        // desaparece: no hay nada más que ceder.
-        let narrow = rows_a(20);
-        let row = narrow.first().expect("hay filas");
-        assert!(row.contains('…'), "la razón se recorta: {row:?}");
+        // And when not even the reason fits, it takes the ellipsis and the
+        // label disappears: there is nothing else left to give up.
+        let narrow = rows_at(20);
+        let row = narrow.first().expect("there are rows");
+        assert!(row.contains('…'), "the reason is clipped: {row:?}");
         assert!(
             !row.contains("do pane"),
-            "sin sitio, la etiqueta no se pinta a medias: {row:?}"
+            "with no room, the label is not painted half-done: {row:?}"
         );
 
-        // MINOR-8: los anchos donde a la etiqueta le tocaban una o dos celdas.
-        // Caben dentro del presupuesto, así que el caso «cero» no los cogía y
-        // la fila salía como `f5    … — read-only backend`: una elipsis
-        // solitaria no es un nombre acortado, es lo que parece un fallo del
-        // pintor. Se pliegan al mismo caso que el cero.
+        // MINOR-8: the widths where the label was left one or two cells.
+        // They fit within the budget, so the "zero" case did not catch them
+        // and the row came out as `f5    … — read-only backend`: a lone
+        // ellipsis is not a shortened name, it looks like a painter bug.
+        // They fold into the same case as zero.
         for width in 27..=29 {
-            let rows = rows_a(width);
-            let row = rows.first().expect("hay filas");
+            let rows = rows_at(width);
+            let row = rows.first().expect("there are rows");
             assert!(
-                row.contains(&razon),
-                "a {width} celdas la razón es lo que se conserva: {row:?}"
+                row.contains(&reason),
+                "at {width} cells the reason is what is kept: {row:?}"
             );
             assert!(
                 !row.contains(" … — ") && !row.contains("… — "),
-                "elipsis solitaria donde iba la etiqueta ({width}): {row:?}"
+                "lone ellipsis where the label went ({width}): {row:?}"
             );
         }
     }
@@ -1530,60 +1531,60 @@ mod tests {
         );
     }
 
-    /// H3e: una página de plugin se DECLARA. Enmascarar y acotar —lo que
-    /// `parse_untrusted` ya hizo— no es lo mismo que decir que la página venía
-    /// cortada, y sin esa línea el lector no distingue una página completa de
-    /// un `help.md` que el host tuvo que recortar.
+    /// H3e: a plugin page DECLARES itself. Masking and bounding — what
+    /// `parse_untrusted` already did — is not the same as saying the page
+    /// came cut, and without that line the reader cannot tell a complete page
+    /// from a `help.md` the host had to trim.
     #[test]
-    fn una_pagina_de_plugin_lleva_su_insignia() {
-        let parsed = norte_help::parse_untrusted(b"cuerpo", "acme.ftp", Some("ACME".to_owned()))
+    fn a_plugin_page_carries_its_badge() {
+        let parsed = norte_help::parse_untrusted(b"body", "acme.ftp", Some("ACME".to_owned()))
             .fold_flags(true, true);
-        // Barrido de anchos, y NADA se pierde en ninguno: la insignia se
-        // ENVUELVE en vez de recortarse. Con publicador y las dos banderas pasa
-        // de 60 celdas, así que recortarla se comía justo los segmentos que
-        // avisan — y se los comía en los terminales estrechos, donde el lector
-        // menos puede adivinar lo que faltaba.
+        // Sweep of widths, and NOTHING is lost at any of them: the badge
+        // WRAPS instead of being clipped. With a publisher and both flags it
+        // exceeds 60 cells, so clipping it would eat exactly the segments
+        // that warn — and eat them on narrow terminals, where the reader can
+        // least guess what was missing.
         for width in [40, 60, 100] {
-            let out = render_topic(&parsed.topic, Lang::En, &Vetado, width, &theme());
+            let out = render_topic(&parsed.topic, Lang::En, &Vetoed, width, &theme());
             for line in &out.lines {
-                assert!(cells(line) <= width, "desborda a {width}: {line:?}");
+                assert!(cells(line) <= width, "overflows at {width}: {line:?}");
             }
-            // Unido SIN saltos: una frase partida por el envoltorio sigue
-            // siendo la misma frase para quien la lee.
+            // Joined with NO line breaks: a sentence split by wrapping is
+            // still the same sentence to whoever reads it.
             let text = flatten(&out.lines).replace('\n', " ");
             assert!(
                 text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
-                "la página se declara de un tercero ({width}): {text}"
+                "the page declares itself third-party ({width}): {text}"
             );
-            assert!(text.contains("ACME"), "el publicador se nombra: {text}");
+            assert!(text.contains("ACME"), "the publisher is named: {text}");
             assert!(
                 text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
-                "un cuerpo cortado se declara ({width}): {text}"
+                "a cut body declares itself ({width}): {text}"
             );
             assert!(
                 text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
-                "una decodificación con pérdida se declara ({width}): {text}"
+                "a lossy decoding declares itself ({width}): {text}"
             );
         }
     }
 
-    /// El ataque: un `help.md` PULIDO no puede pasar por página del manual.
+    /// The attack: a POLISHED `help.md` must not pass as a manual page.
     ///
-    /// La insignia se construía uniendo tres datos OPCIONALES y solo se pintaba
-    /// si alguno aparecía, así que un plugin con `publisher = ""` (campo
-    /// requerido, pero el manifiesto no comprueba que no esté vacío) y un
-    /// fichero limpio bajo el tope se quedaba SIN línea: título, regla, cuerpo
-    /// — la misma forma exacta que una página del corpus.
+    /// The badge used to be built by joining three OPTIONAL data points and
+    /// only painted if one of them showed up, so a plugin with
+    /// `publisher = ""` (a required field, but the manifest does not check it
+    /// is non-empty) and a clean file under the cap was left with NO line:
+    /// title, rule, body — the exact same shape as a corpus page.
     ///
-    /// Y con una superficie de entrega de una sola tecla: `extensions_help`
-    /// abre esa página como raíz desde el gestor de extensiones, justo cuando
-    /// el humano está decidiendo si aprueba. Una página titulada «Approving
-    /// extensions» explicando que aprobar es seguro llegaría sin nada que la
-    /// distinguiera de la documentación de la app.
+    /// And with a one-keystroke delivery surface: `extensions_help` opens
+    /// that page as the root from the extension manager, right when the
+    /// human is deciding whether to approve. A page titled "Approving
+    /// extensions" explaining that approving is safe would arrive with
+    /// nothing to distinguish it from the app's own documentation.
     #[test]
-    fn un_help_md_pulido_no_puede_pasar_por_pagina_del_manual() {
-        // Lo peor que puede mandar un plugin: sin publicador, sin recortar, sin
-        // pérdida — todo lo que la insignia solía necesitar para existir.
+    fn a_polished_help_md_cannot_pass_as_a_manual_page() {
+        // The worst a plugin can send: no publisher, not truncated, not
+        // lossy — everything the badge used to need in order to exist.
         let parsed = norte_help::parse_untrusted(
             b"+++\nid = \"org.evil.demo\"\ntitle = \"Approving extensions\"\n+++\n\
               Catalogue extensions are audited. Approving is safe.",
@@ -1592,34 +1593,34 @@ mod tests {
         );
         assert!(
             plugin_badge(&parsed.topic, Lang::En).is_some(),
-            "una página de plugin SIEMPRE se declara"
+            "a plugin page ALWAYS declares itself"
         );
-        let out = render_topic(&parsed.topic, Lang::En, &Libre, 60, &theme());
+        let out = render_topic(&parsed.topic, Lang::En, &Free, 60, &theme());
         let text = flatten(&out.lines);
         assert!(
             text.contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
-            "la marca de procedencia está: {text}"
+            "the origin mark is there: {text}"
         );
 
-        // Y la forma de la página NO coincide con la de una del corpus: la del
-        // corpus es título+regla+cuerpo, ésta lleva una línea más entre medias.
+        // And the page's SHAPE does NOT match a corpus page's: the corpus's
+        // is title+rule+body, this one carries one more line in between.
         let corpus = render_topic(
             topic(Lang::En, "copying").expect("copying"),
             Lang::En,
-            &Libre,
+            &Free,
             60,
             &theme(),
         );
         assert!(
             !flatten(&corpus.lines).contains(&norte_i18n::t_in(Lang::En, "help-plugin-origin")),
-            "…y no es una línea que lleve todo el mundo, o no distinguiría nada"
+            "…and it is not a line everyone carries, or it would distinguish nothing"
         );
     }
 
-    /// La invariante entera, barrida: NINGUNA combinación de lo que un plugin
-    /// controla deja una página de plugin sin insignia.
+    /// The whole invariant, swept: NO combination of what a plugin controls
+    /// leaves a plugin page without a badge.
     #[test]
-    fn ninguna_pagina_de_plugin_se_queda_sin_insignia() {
+    fn no_plugin_page_is_left_without_a_badge() {
         for publisher in [
             None,
             Some(String::new()),
@@ -1629,85 +1630,86 @@ mod tests {
             for truncated in [false, true] {
                 for lossy in [false, true] {
                     let parsed =
-                        norte_help::parse_untrusted(b"cuerpo", "acme.ftp", publisher.clone())
+                        norte_help::parse_untrusted(b"body", "acme.ftp", publisher.clone())
                             .fold_flags(truncated, lossy);
                     let badge = plugin_badge(&parsed.topic, Lang::En);
                     assert!(
                         badge.is_some(),
-                        "sin insignia con publisher={publisher:?} truncated={truncated} lossy={lossy}"
+                        "no badge with publisher={publisher:?} truncated={truncated} lossy={lossy}"
                     );
-                    let badge = badge.expect("comprobado justo arriba");
+                    let badge = badge.expect("checked right above");
                     assert!(
                         !badge.starts_with(" ·") && !badge.starts_with('·'),
-                        "un publicador en blanco no deja un separador huérfano: {badge:?}"
+                        "a blank publisher does not leave an orphan separator: {badge:?}"
                     );
                 }
             }
         }
     }
 
-    /// Un publicador en BLANCO no produce un segmento vacío, y «blanco»
-    /// incluye los invisibles que no son espacio en blanco (U+3164 y compañía).
-    /// Con `trim().is_empty()` la insignia pintaba «published by » sin nada
-    /// detrás.
+    /// A BLANK publisher does not produce an empty segment, and "blank"
+    /// includes invisibles that are not whitespace (U+3164 and friends). With
+    /// `trim().is_empty()` the badge used to paint "published by " with
+    /// nothing behind it.
     #[test]
-    fn un_publicador_en_blanco_no_pinta_un_segmento_vacio() {
+    fn a_blank_publisher_does_not_paint_an_empty_segment() {
         for publisher in ["", "   ", "\u{3164}\u{115F}"] {
             let parsed =
-                norte_help::parse_untrusted(b"cuerpo", "acme.ftp", Some(publisher.to_owned()));
-            let badge = plugin_badge(&parsed.topic, Lang::En).expect("siempre hay insignia");
+                norte_help::parse_untrusted(b"body", "acme.ftp", Some(publisher.to_owned()));
+            let badge = plugin_badge(&parsed.topic, Lang::En).expect("there is always a badge");
             assert_eq!(
                 badge,
                 norte_i18n::t_in(Lang::En, "help-plugin-origin"),
-                "solo la marca de procedencia, sin `·` colgando: {badge:?}"
+                "only the origin mark, with no dangling `·`: {badge:?}"
             );
         }
     }
 
-    /// El publicador va en un segmento ETIQUETADO, para que un `·` dentro del
-    /// nombre no pueda pasar por estructura de la insignia.
+    /// The publisher goes in a LABELED segment, so a `·` inside the name
+    /// cannot pass for the badge's structure.
     ///
-    /// MITIGACIÓN, no arreglo: `"ACME · cut short"` sigue viéndose como dos
-    /// segmentos, y lo único que lo cerraría es un segmento por línea. No se
-    /// paga porque la mentira solo puede AÑADIR un aviso que la página no
-    /// merece, jamás ESCONDER uno — las banderas reales las pone el host
-    /// después, y son lo que el lector usa para decidir.
+    /// A MITIGATION, not a fix: `"ACME · cut short"` still looks like two
+    /// segments, and the only thing that would close it is one segment per
+    /// line. It is not worth paying for because the lie can only ADD a
+    /// warning the page does not deserve, never HIDE one — the real flags are
+    /// set by the host afterward, and they are what the reader uses to
+    /// decide.
     #[test]
-    fn el_publicador_va_etiquetado_y_las_banderas_del_host_sobreviven() {
+    fn the_publisher_is_labeled_and_the_hosts_flags_survive() {
         let parsed = norte_help::parse_untrusted(
-            b"cuerpo",
+            b"body",
             "acme.ftp",
             Some("ACME \u{00B7} cut short".to_owned()),
         )
         .fold_flags(false, true);
-        let badge = plugin_badge(&parsed.topic, Lang::En).expect("siempre hay insignia");
+        let badge = plugin_badge(&parsed.topic, Lang::En).expect("there is always a badge");
         assert!(
             badge.contains(&norte_i18n::ta_in(
                 Lang::En,
                 "help-plugin-by",
                 &[("who", "ACME \u{00B7} cut short")]
             )),
-            "el nombre entero va dentro de su etiqueta: {badge:?}"
+            "the whole name goes inside its label: {badge:?}"
         );
-        // Lo que NO puede hacer: suprimir una bandera de verdad.
+        // What it CANNOT do: suppress a real flag.
         assert!(
             badge.contains(&norte_i18n::t_in(Lang::En, "help-plugin-lossy")),
-            "la bandera del host sobrevive a la fabricación: {badge:?}"
+            "the host's flag survives the fabrication: {badge:?}"
         );
-        // …ni fabricar la que no tiene: `truncated` es false y la insignia no
-        // contiene el texto REAL de esa bandera como segmento propio, solo
-        // dentro del nombre etiquetado.
+        // …nor fabricate the one it does not have: `truncated` is false and
+        // the badge does not contain that flag's REAL text as its own
+        // segment, only inside the labeled name.
         assert!(
             !badge.ends_with(&norte_i18n::t_in(Lang::En, "help-plugin-truncated")),
             "{badge:?}"
         );
     }
 
-    /// Y una página del corpus NO lleva insignia: la línea existe para
-    /// distinguir la prosa de terceros de la nuestra, así que pintarla en
-    /// todas partes no distinguiría nada.
+    /// And a corpus page carries NO badge: the line exists to tell
+    /// third-party prose from ours, so painting it everywhere would
+    /// distinguish nothing.
     #[test]
-    fn una_pagina_del_corpus_no_lleva_insignia() {
+    fn a_corpus_page_carries_no_badge() {
         let out = render_topic(
             topic(Lang::En, "copying").expect("copying"),
             Lang::En,
@@ -1721,60 +1723,60 @@ mod tests {
     }
 
     #[test]
-    fn una_pagina_de_plugin_hostil_sale_enmascarada() {
+    fn a_hostile_plugin_page_comes_out_masked() {
         let parsed = norte_help::parse_untrusted(
-            "+++\nid = \"acme.ftp\"\ntitle = \"a\u{202E}gpj.exe\"\n+++\ncuerpo con \u{200B}truco"
+            "+++\nid = \"acme.ftp\"\ntitle = \"a\u{202E}gpj.exe\"\n+++\nbody with a \u{200B}trick"
                 .as_bytes(),
             "acme.ftp",
             None,
         );
-        let out = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
+        let out = render_topic(&parsed.topic, Lang::En, &Vetoed, 60, &theme());
         let text = flatten(&out.lines);
-        assert!(!text.contains('\u{202E}'), "sin override bidi: {text:?}");
-        assert!(!text.contains('\u{200B}'), "sin invisibles: {text:?}");
-        // Anti-vacuidad: el texto hostil SÍ llegó a la página, enmascarado.
+        assert!(!text.contains('\u{202E}'), "no bidi override: {text:?}");
+        assert!(!text.contains('\u{200B}'), "no invisibles: {text:?}");
+        // Anti-vacuity: the hostile text DID reach the page, masked.
         assert!(
             text.contains('\u{FFFD}'),
-            "el peligro llegó y se enmascaró: {text:?}"
+            "the hazard arrived and was masked: {text:?}"
         );
     }
 
-    /// [`into_static`] desprende la maquetación del tema que prestó sus
-    /// cadenas — y tiene que llevarse TODO: el contenido, el estilo de cada
-    /// span, y el estilo y la alineación de cada línea. Perder estilos en
-    /// silencio es el modo de fallo de esta función, así que se afirma sobre
-    /// los estilos, no solo sobre el texto.
+    /// [`into_static`] detaches the layout from the theme that lent its
+    /// strings — and it has to carry EVERYTHING along: the content, each
+    /// span's style, and each line's style and alignment. Silently losing
+    /// styles is this function's failure mode, so the assertions are on the
+    /// styles, not just the text.
     #[test]
-    fn into_static_conserva_texto_y_estilo() {
+    fn into_static_keeps_text_and_style() {
         let parsed = norte_help::parse_untrusted(
             b"+++\nid = \"acme.ftp\"\ntitle = \"FTP\"\n\
-              commands = [\"plugin:acme.ftp:sync\"]\n+++\n# Cabecera\n\ncuerpo",
+              commands = [\"plugin:acme.ftp:sync\"]\n+++\n# Heading\n\nbody",
             "acme.ftp",
             Some("ACME".to_owned()),
         )
         .fold_flags(true, false);
-        let borrowed = render_topic(&parsed.topic, Lang::En, &Vetado, 60, &theme());
+        let borrowed = render_topic(&parsed.topic, Lang::En, &Vetoed, 60, &theme());
         let own = into_static(borrowed.clone());
         assert_eq!(own.action_lines, borrowed.action_lines);
         assert_eq!(own.lines.len(), borrowed.lines.len());
         for (a, b) in own.lines.iter().zip(&borrowed.lines) {
-            assert_eq!(a.style, b.style, "estilo de línea perdido");
-            assert_eq!(a.alignment, b.alignment, "alineación perdida");
+            assert_eq!(a.style, b.style, "line style lost");
+            assert_eq!(a.alignment, b.alignment, "alignment lost");
             assert_eq!(a.spans.len(), b.spans.len());
             for (x, y) in a.spans.iter().zip(&b.spans) {
                 assert_eq!(x.content, y.content);
-                assert_eq!(x.style, y.style, "estilo de span perdido: {x:?}");
+                assert_eq!(x.style, y.style, "span style lost: {x:?}");
             }
         }
-        // Anti-vacuidad: la página tiene MÁS de un estilo, o comparar estilos
-        // no prueba nada.
+        // Anti-vacuity: the page has MORE than one style, or comparing styles
+        // proves nothing.
         let styles: std::collections::BTreeSet<String> = borrowed
             .lines
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| format!("{:?}", s.style))
             .collect();
-        assert!(styles.len() > 1, "la página es monoestilo: {styles:?}");
+        assert!(styles.len() > 1, "the page is single-style: {styles:?}");
     }
 
     #[test]

@@ -1,21 +1,21 @@
-//! La pila de diálogos: teclear en uno y responderlo.
+//! The dialog stack: typing into one and answering it.
 //!
-//! Parte de `controller`: son métodos de `Estado`, movidos aquí sin
-//! tocarlos (ADR 0086). El único escritor sigue siendo el actor.
+//! Part of `controller`: these are `Estado` methods, moved here without
+//! touching them (ADR 0086). The only writer is still the actor.
 
-// Estos módulos son el mismo `impl Estado` partido en trozos, así que usan
-// los mismos imports que el padre. Enumerarlos aquí sería una lista de
-// cuarenta líneas por fichero, en 32 ficheros, que se desincroniza en cuanto
-// el padre importa algo — `super::*` la sigue sola.
+// These modules are the same `impl Estado` split into pieces, so they use
+// the same imports as the parent. Enumerating them here would be a
+// forty-line list per file, in 32 files, that goes stale the moment the
+// parent imports something — `super::*` tracks it on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
 impl Estado {
-    /// Teclea en el campo de un diálogo.
+    /// Types into a dialog's field.
     ///
-    /// El renderer manda el texto ENTERO tras la edición y no un delta: el
-    /// caret es suyo, y reconstruirlo en Rust sería mantener dos ideas de
-    /// dónde está el cursor.
+    /// The renderer sends the WHOLE text after the edit, not a delta: the
+    /// caret is its own, and rebuilding it in Rust would mean keeping two
+    /// ideas of where the cursor is.
     pub(super) fn escribir_en_dialogo(
         &mut self,
         id: ModalId,
@@ -25,22 +25,23 @@ impl Estado {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         if dialogo.vista.input.is_none() {
-            // Un diálogo de decisión no tiene dónde escribir, y aceptar texto
-            // que nadie va a leer sería peor que decirlo.
+            // A decision dialog has nowhere to type, and accepting text
+            // nobody is going to read would be worse than saying so.
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
         if !matches!(dialogo.tecleado, Tecleado::Texto(_)) {
-            // Un campo de CONTRASEÑA no se teclea por aquí (#327): el host no
-            // guarda lo que se escribe, y la contraseña cruza una sola vez con
-            // la respuesta. Un renderer que lo mande igual está metiendo
-            // material secreto por el camino de un nombre de fichero, así que
-            // se descarta ANTES de tocarlo — sin guardarlo, sin proyectarlo y
-            // sin contestar con una frase que hable de «nombres».
+            // A PASSWORD field is not typed into here (#327): the host does
+            // not store what is typed, and the password crosses over once,
+            // with the answer. A renderer that sends it anyway is pushing
+            // secret material down a file-name path, so it is discarded
+            // BEFORE touching it — without storing it, without projecting
+            // it, and without answering with a phrase that talks about
+            // "names".
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
         if texto.len() > MAX_NOMBRE {
-            // Ni se recorta ni se acepta a medias: un nombre no es una
-            // cadena de pantalla, y recortarlo es inventarse otro.
+            // Neither trimmed nor accepted halfway: a name is not a screen
+            // string, and trimming it is inventing another one.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-name-too-long".to_owned(),
@@ -49,12 +50,13 @@ impl Estado {
             );
         }
         let Tecleado::Texto(crudo) = &mut dialogo.tecleado else {
-            // Imposible: lo filtra el guard de arriba, antes de mirar nada.
+            // Impossible: filtered out by the guard above, before looking at
+            // anything.
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
         texto.clone_into(crudo);
-        // Lo que se PINTA es otra cosa: enmascarado (un `U+202E` en el
-        // nombre que te van a pedir aprobar se ve) y acotado.
+        // What gets PAINTED is something else: masked (a `U+202E` in the
+        // name you are about to be asked to approve shows) and clamped.
         let (pintable, hostil) = norte_frontend::display_name(texto.as_bytes());
         dialogo.vista.input = Some(clamp_display(pintable));
         dialogo.vista.input_hostile = hostil;
@@ -64,16 +66,16 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// Rehúsa confirmar un formulario que todavía no se puede lanzar, sin
-    /// cerrarlo.
+    /// Refuses to confirm a form that cannot be launched yet, without
+    /// closing it.
     ///
-    /// `None` = adelante (o no es un formulario). Vive fuera de
-    /// `ejecutar_pendiente` a propósito: allí el diálogo ya se ha sacado de la
-    /// pila, así que «no cerrar» no es una opción, y un `1 gigabyte` mal
-    /// escrito se llevaba por delante los doce controles mientras el aviso
-    /// señalaba un campo que ya no existía — un consejo que no se puede
-    /// seguir. Es el mismo sitio, y el mismo motivo, que la guarda del
-    /// secreto vacío.
+    /// `None` = go ahead (or it is not a form). Lives outside
+    /// `ejecutar_pendiente` on purpose: there, the dialog has already been
+    /// taken off the stack, so "do not close" is not an option, and a
+    /// mistyped `1 gigabyte` used to sweep away all twelve controls while the
+    /// notice pointed at a field that no longer existed — advice that cannot
+    /// be followed. It is the same spot, and the same reason, as the guard
+    /// for the empty secret.
     fn rechaza_formulario_invalido(
         &mut self,
         pos: usize,
@@ -85,15 +87,15 @@ impl Estado {
                 } else if form.has_criteria() {
                     return None;
                 } else {
-                    // Sin ningún criterio no es una búsqueda, es un listado
-                    // recursivo con otro nombre.
+                    // With no criteria at all it is not a search, it is a
+                    // recursive listing under another name.
                     ("search-empty", None)
                 }
             }
             Tecleado::Texto(_) | Tecleado::Secreto => return None,
         };
-        // El foco va al campo culpable y la proyección se rehace, para que la
-        // ventana lo enseñe señalado en vez de solo decirlo.
+        // Focus goes to the guilty field and the projection is rebuilt, so
+        // the window shows it pointed at instead of just saying so.
         if let (Some(campo), Tecleado::Formulario(form)) = (campo, &mut self.dialogos[pos].tecleado)
         {
             form.field = campo;
@@ -117,18 +119,18 @@ impl Estado {
         ))
     }
 
-    /// Toca un campo de un diálogo-FORMULARIO (puente 91).
+    /// Touches a FORM-dialog field (bridge 91).
     ///
-    /// Tres guardas, y cada una tapa algo distinto: un diálogo que no es un
-    /// formulario no tiene campos que tocar; un id que no es de este
-    /// formulario no se inventa —los campos los decide el host, no quien
-    /// pinta—; y un texto más largo que un nombre no se recorta ni se acepta
-    /// a medias, igual que en [`Self::escribir_en_dialogo`].
+    /// Three guards, and each one covers something different: a dialog that
+    /// is not a form has no fields to touch; an id that is not from this
+    /// form is not invented — the fields are decided by the host, not by
+    /// whoever paints — and a text longer than a name is neither trimmed nor
+    /// accepted halfway, same as in [`Self::escribir_en_dialogo`].
     ///
-    /// Un interruptor y un ciclo llegan SIN valor: el renderer dice que se
-    /// tocaron y a qué estado van lo decide aquí. Mandar el destino dejaría
-    /// que dos pulsaciones rápidas se pisaran, la segunda nacida de una foto
-    /// anterior.
+    /// A toggle and a cycle arrive WITHOUT a value: the renderer says they
+    /// were touched and which state they go to is decided here. Sending the
+    /// destination would let two quick presses step on each other, the
+    /// second one born from an earlier snapshot.
     pub(super) fn tocar_campo_de_dialogo(
         &mut self,
         id: ModalId,
@@ -154,13 +156,14 @@ impl Estado {
                 Vec::new(),
             );
         }
-        // Un `U+FFFD` no se teclea: lo pone la PROYECCIÓN de este host al
-        // enmascarar, y llega de vuelta cuando el renderer re-siembra el campo
-        // con lo que pintó. Aceptarlo convertiría lo pintado en lo tecleado —
-        // el patrón de búsqueda acabaría llevando el reemplazo en vez del
-        // nombre— y nada lo diría. Es el mismo cinturón que `segmento_tecleado`
-        // le pone al diálogo de un solo campo; el otro (que el renderer no
-        // re-siembre) vive en `dialogs.ts`.
+        // A `U+FFFD` is not typed: it is put there by this host's PROJECTION
+        // when masking, and it comes back when the renderer re-seeds the
+        // field with what it painted. Accepting it would turn what is
+        // painted into what is typed — the search pattern would end up
+        // carrying the replacement instead of the name — and nothing would
+        // say so. It is the same belt `segmento_tecleado` puts on the
+        // single-field dialog; the other one (the renderer not re-seeding)
+        // lives in `dialogs.ts`.
         if let Valor::Text { text } = valor
             && text.contains('\u{FFFD}')
         {
@@ -194,15 +197,16 @@ impl Estado {
                 form.cycle_kinds();
                 true
             }
-            // Todo lo demás es un control contestando lo que no es suyo —un
-            // campo de texto «tocado», un interruptor con texto— o un id que
-            // este formulario no tiene. En los dos casos, nada que aplicar.
+            // Everything else is a control answering for something that is
+            // not its own — a "touched" text field, a toggle with text — or
+            // an id this form does not have. In both cases, nothing to
+            // apply.
             _ => false,
         };
         if !conocido {
-            // No es un modal obsoleto —está abierto y es el mismo—, es un
-            // renderer nombrando un control que este formulario no tiene.
-            // Decir «resincroniza» escondería ese fallo suyo.
+            // Not a stale modal — it is open and it is the same one — it is
+            // a renderer naming a control this form does not have. Saying
+            // "resync" would hide that bug of its own.
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-unknown-field".to_owned(),
@@ -217,16 +221,16 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// El lector quiere cerrar: se pregunta, o se cierra.
+    /// The reader wants to close: it either asks, or closes.
     ///
-    /// La decisión de SI hay que preguntar es la compartida
-    /// (`settings::quit_needs_confirm`), la misma que usa el terminal; lo que
-    /// cada frontend calcula por su cuenta es qué cuenta como «queda trabajo».
-    /// Aquí es que haya alguna task VIVA en el tablero: lo que se perdería al
-    /// cerrar es una copia a medias, no una marca.
+    /// The decision of WHETHER to ask is the shared one
+    /// (`settings::quit_needs_confirm`), the same one the terminal uses;
+    /// what each frontend computes on its own is what counts as "work
+    /// remaining". Here that means some task ALIVE on the board: what would
+    /// be lost on close is a copy left halfway, not a mark.
     ///
-    /// Cerrar no preguntaba nunca. El rustdoc de `quit_needs_confirm` ya
-    /// nombraba un `confirm_quit_should_open` de la ventana que no existía.
+    /// Closing never used to ask. `quit_needs_confirm`'s rustdoc already
+    /// named a window's `confirm_quit_should_open` that did not exist.
     pub(super) fn pedir_salir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let hay_trabajo = self.tasks.values().any(|t| !Self::terminal(t.vista.state));
         if !norte_frontend::settings::quit_needs_confirm(
@@ -238,8 +242,8 @@ impl Estado {
         }
         let id = ModalId(self.siguiente_modal);
         self.siguiente_modal += 1;
-        // El cuerpo DICE cuánto hay en marcha cuando lo hay: «¿seguro?» a
-        // secas no es una pregunta que se pueda contestar.
+        // The body SAYS how much is running when there is any: a plain
+        // "are you sure?" is not a question that can be answered.
         let cuerpo = if hay_trabajo {
             let n = self
                 .tasks
@@ -275,8 +279,9 @@ impl Estado {
                     DialogChoice {
                         id: "confirm".to_owned(),
                         label_key: "dialog-quit".to_owned(),
-                        // Cerrar con trabajo en marcha PIERDE ese trabajo: el
-                        // botón lo dice con su forma, como el de borrar.
+                        // Closing with work running LOSES that work: the
+                        // button says so with its shape, like the delete
+                        // one.
                         destructive: hay_trabajo,
                     },
                     DialogChoice {
@@ -300,20 +305,20 @@ impl Estado {
         (self.aplicada(), vec![self.parche(vec![cambio])])
     }
 
-    /// Responde a un diálogo.
+    /// Answers a dialog.
     ///
-    /// Un id que no es el del diálogo abierto —porque ya se contestó, porque
-    /// el renderer tardó— no hace nada y lo dice: confirmar dos veces NO
-    /// borra dos veces.
-    /// Lo que la respuesta AFIRMATIVA de un diálogo pone en marcha.
+    /// An id that is not the open dialog's — because it was already
+    /// answered, because the renderer was slow — does nothing and says so:
+    /// confirming twice does NOT delete twice.
+    /// What a dialog's AFFIRMATIVE answer sets in motion.
     ///
-    /// Separado de [`Self::responder_dialogo`], que se queda con lo que es
-    /// igual para todos: que el id sea el del diálogo abierto, que la
-    /// respuesta esté entre las que se ofrecieron, la cerradura de solo
-    /// lectura y el cierre. Aquí solo vive lo que cada pendiente hace.
+    /// Separate from [`Self::responder_dialogo`], which keeps what is the
+    /// same for all of them: that the id matches the open dialog, that the
+    /// answer is among the ones offered, the read-only lock, and the close.
+    /// Only what each pending action does lives here.
     #[expect(
         clippy::too_many_lines,
-        reason = "despachador exhaustivo: un brazo por pendiente, sin lógica dentro"
+        reason = "exhaustive dispatcher: one arm per pending action, no logic inside"
     )]
     pub(super) fn ejecutar_pendiente(
         &mut self,
@@ -323,8 +328,8 @@ impl Estado {
         buzon: &mpsc::Sender<Mensaje>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let mut salidas = Vec::new();
-        // El motivo por el que la respuesta NO hizo nada, si lo hubo: viaja al
-        // acuse en vez de quedarse solo en la barra.
+        // The reason the answer did NOT do anything, if there was one:
+        // it travels to the ack instead of staying only in the status bar.
         let mut rehusado: Option<&'static str> = None;
         match dialogo.al_confirmar {
             Some(Pendiente::Borrar { paths, permanente }) => {
@@ -341,8 +346,8 @@ impl Estado {
                 );
             }
             Some(Pendiente::Salir) => {
-                // Ya se preguntó y la respuesta fue que sí: quien hospeda
-                // vuelca la sesión y destruye la ventana.
+                // It was already asked and the answer was yes: the host
+                // dumps the session and destroys the window.
                 self.nativo(crate::dto::NativeEffect::CloseWindow);
             }
             Some(Pendiente::ConsultaSemantica) => {
@@ -350,19 +355,21 @@ impl Estado {
                 salidas.extend(self.lanzar_semantica(consulta, backend, buzon));
             }
             Some(Pendiente::EntregarSecreto { conn, slot, dir }) => {
-                // El campo vacío no llega aquí: `responder_dialogo` deja el
-                // confirmar INERTE mientras no haya nada, y ahí es donde tiene
-                // que estar —a esta altura el diálogo ya se ha ido de la pila,
-                // y «no cerrar» ya no es una opción—. Lo que sí se comprueba
-                // es la FORMA: sin ella, un error de cableado entregaría el
-                // texto de un campo normal como si fuera una contraseña.
+                // The empty field does not reach here: `responder_dialogo`
+                // leaves confirm INERT while there is nothing, and that is
+                // where it has to be — at this point the dialog has already
+                // left the stack, and "do not close" is no longer an option.
+                // What IS checked is the SHAPE: without it, a wiring bug
+                // would deliver a normal field's text as if it were a
+                // password.
                 let (Tecleado::Secreto, Some(secreto)) = (&dialogo.tecleado, secreto) else {
                     rehusado = Some("host-secret-empty");
                     return (rehusado, salidas);
                 };
-                // Se envuelve NADA MÁS llegar: a partir de aquí la copia del
-                // host se pisa con ceros cuando la task acaba, en vez de
-                // quedarse en el heap hasta que alguien reutilice el bloque.
+                // It is wrapped the MOMENT it arrives: from here on, the
+                // host's copy is overwritten with zeros when the task ends,
+                // instead of sitting in the heap until someone reuses the
+                // block.
                 let mut secreto_seguro = norte_frontend::secret::TypedSecret::default();
                 secreto_seguro.set(secreto);
                 Self::lanzar_secreto(conn, secreto_seguro, slot, dir, backend, buzon);
@@ -386,61 +393,63 @@ impl Estado {
                 mover,
             }) => {
                 self.enviar_lote(&paths, &origen_dir, &destino, mover, backend, buzon);
-                // Las marcas las CONSUME el envío, no el desenlace (mismo
-                // criterio que el TUI y que mc): una selección a medio
-                // consumir significaría cosas distintas según qué task de
-                // las N terminó.
+                // The marks are CONSUMED by the send, not by the outcome
+                // (same criterion as the TUI and as mc): a selection
+                // half-consumed would mean different things depending on
+                // which of the N tasks finished.
                 //
-                // Y las del hueco de ORIGEN, no las del que tenga el foco
-                // ahora: `FocusSlot` no está vedada mientras hay un
-                // diálogo abierto, así que un clic en el otro panel entre
-                // la pregunta y la respuesta borraba las marcas del panel
-                // equivocado y dejaba intactas las que se acababan de
-                // enviar — y el lector volvía a pulsar F5 sobre lo mismo.
+                // And the SOURCE slot's, not whichever has focus now:
+                // `FocusSlot` is not blocked while a dialog is open, so a
+                // click on the other pane between the question and the
+                // answer used to clear the wrong pane's marks and leave
+                // intact the ones that had just been sent — and the reader
+                // would press F5 again over the same thing.
                 if let Some(h) = self.huecos.get_mut(&origen) {
                     h.pane.clear_marks();
                 }
                 salidas.push(self.parche_filas());
             }
             Some(Pendiente::Soltar { paths, destino }) => {
-                // `origen_dir` es el DESTINO a propósito: solo se usa para
-                // apuntar qué directorios quedan desactualizados cuando se
-                // mueve, y aquí nunca se mueve. Lo de donde salió es de otro
-                // proceso y esta ventana no lo lista.
+                // `origen_dir` is the DESTINATION on purpose: it is only
+                // used to note which directories go out of date when
+                // something is moved, and here nothing is ever moved.
+                // Wherever it came from belongs to another process and this
+                // window does not list it.
                 //
-                // Y NO se tocan las marcas: las de este panel las puso el
-                // lector para otra cosa, y lo que se copia no salió de ahí.
+                // And the marks are NOT touched: this pane's were set by
+                // the reader for something else, and what is being copied
+                // did not come from there.
                 self.enviar_lote(&paths, &destino, &destino, false, backend, buzon);
                 salidas.push(self.parche_filas());
             }
             Some(Pendiente::Buscar { root }) => {
                 use norte_frontend::search::SearchField;
-                // El formulario se COPIA antes de tocar `self`: lanzar la
-                // búsqueda necesita el estado entero, y el diálogo lo tiene
-                // prestado.
-                // El formulario se MUEVE: el diálogo llega por valor y su
-                // `al_confirmar` ya se consumió arriba, así que no hay nada
-                // que clonar.
+                // The form is COPIED before touching `self`: launching the
+                // search needs the whole state, and the dialog has it on
+                // loan.
+                // The form is MOVED: the dialog arrives by value and its
+                // `al_confirmar` was already consumed above, so there is
+                // nothing left to clone.
                 let Tecleado::Formulario(form) = dialogo.tecleado else {
-                    // Un diálogo de búsqueda sin formulario es un error de
-                    // cableado, no del lector. La guarda existe porque el tipo
-                    // la exige: no hay nada que lanzar, y tampoco nada que
-                    // decirle a quien está delante.
+                    // A search dialog with no form is a wiring bug, not the
+                    // reader's. The guard exists because the type demands
+                    // it: there is nothing to launch, and nothing to tell
+                    // whoever is in front either.
                     return (None, salidas);
                 };
                 let form = *form;
-                // Ya está validado: `responder_dialogo` lo comprueba ANTES de
-                // sacar el diálogo de la pila, que es donde todavía se puede
-                // no cerrarlo.
+                // Already validated: `responder_dialogo` checks it BEFORE
+                // taking the dialog off the stack, which is where it can
+                // still be left unclosed.
                 //
-                // El reloj se lee AQUÍ y se le dice al mapeo: «cambiado hace
-                // siete días» se cuenta desde este instante.
+                // The clock is read HERE and told to the mapping: "changed
+                // seven days ago" is counted from this instant.
                 let ahora_ms = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0_i64, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX));
-                // Qué enseña la cabecera de resultados como consulta. Una
-                // búsqueda de solo filtros no tiene patrón que enseñar, y
-                // dejarla en blanco pintaba una cabecera muda.
+                // What the results header shows as the query. A filters-only
+                // search has no pattern to show, and leaving it blank used
+                // to paint a mute header.
                 let etiqueta = if !form.texto(SearchField::Name).is_empty() {
                     form.texto(SearchField::Name).to_owned()
                 } else if !form.texto(SearchField::Content).is_empty() {
@@ -452,15 +461,15 @@ impl Estado {
                     norte_frontend::search::params(&form, root, ahora_ms, Self::MAX_RESULTADOS);
                 salidas.extend(self.lanzar_busqueda(params, etiqueta, backend, buzon));
             }
-            // Los dos que crean un nodo VACÍO a partir de un nombre tecleado.
-            // Juntos porque son la misma forma —validar el segmento, encolar,
-            // apuntar el directorio a refrescar— y este `match` es un
-            // despachador que ya roza su tope.
+            // The two that create an EMPTY node from a typed name. Together
+            // because they are the same shape — validate the segment,
+            // enqueue, mark the directory to refresh — and this `match` is
+            // a dispatcher already brushing its limit.
             Some(p @ (Pendiente::CrearDirectorio { .. } | Pendiente::CrearFichero { .. })) => {
                 let (dir, fichero) = match p {
                     Pendiente::CrearDirectorio { dir } => (dir, false),
                     Pendiente::CrearFichero { dir } => (dir, true),
-                    _ => unreachable!("el patrón de arriba solo deja esos dos"),
+                    _ => unreachable!("the pattern above only leaves those two"),
                 };
                 let (motivo, partes) = if fichero {
                     self.crear_fichero(&dir, dialogo.tecleado.texto(), backend, buzon)
@@ -470,52 +479,52 @@ impl Estado {
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            // #309: el favorito. El destino lo capturó el diálogo al abrirse,
-            // no se relee aquí.
+            // #309: the favorite. The destination was captured by the dialog
+            // on open, it is not re-read here.
             Some(Pendiente::GuardarFavorito { destino }) => {
                 let (motivo, partes) =
                     self.guardar_favorito(&destino, dialogo.tecleado.texto(), buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            // #318: el perfil. A diferencia del favorito, lo que se guarda se
-            // lee AHORA: es el estado de la pantalla, no una respuesta que el
-            // diálogo capturó al abrirse.
+            // #318: the profile. Unlike the favorite, what is saved is read
+            // NOW: it is the screen's state, not an answer the dialog
+            // captured on open.
             Some(Pendiente::GuardarPerfil) => {
                 let (motivo, partes) = self.guardar_perfil(dialogo.tecleado.texto(), buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            // El valor de una entrada de texto de los ajustes: lo valida el
-            // editor compartido y, si vale, se escribe.
+            // A settings text entry's value: it is validated by the shared
+            // editor and, if valid, written.
             Some(Pendiente::EditarAjuste { id }) => {
                 let (motivo, partes) =
                     self.confirmar_valor_de_ajuste(id, dialogo.tecleado.texto(), buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            // Los dos que fabrican ficheros a partir de lo tecleado, juntos:
-            // este `match` es un despachador y ya roza su tope.
+            // The two that build files from what was typed, together: this
+            // `match` is a dispatcher and already brushes its limit.
             Some(p @ (Pendiente::Partir { .. } | Pendiente::Empaquetar { .. })) => {
                 let (motivo, partes) =
                     self.ejecutar_de_archivo(p, dialogo.tecleado.texto(), backend, buzon);
                 rehusado = motivo;
                 salidas.extend(partes);
             }
-            // #311: copiar la lista de sumas. Los bytes se montaron al abrir
-            // el diálogo, con el escapado de coreutils: lo que se pinta va
-            // saneado, y copiar ESO daría un `SHA256SUMS` que no comprueba los
-            // ficheros que nombra.
+            // #311: copy the checksum list. The bytes were assembled when
+            // the dialog opened, with coreutils escaping: what is painted
+            // is sanitized, and copying THAT would give a `SHA256SUMS` that
+            // does not verify the files it names.
             Some(Pendiente::CopiarSumas { bytes }) => {
-                // Cuántas LÍNEAS lleva: es el número que el mensaje enseña, y
-                // el payload termina siempre en salto.
+                // How many LINES it carries: it is the number the message
+                // shows, and the payload always ends in a newline.
                 let count = bytes.split(|b| *b == b'\n').count().saturating_sub(1);
                 if self.nativo(crate::dto::NativeEffect::CopyBytes { bytes, count }) {
                     salidas.extend(self.decir("msg-checksum-copied"));
                 } else {
-                    // Nadie escucha el canal nativo: no hay portapapeles al
-                    // que copiar, y decirlo es mejor que un botón que no hace
-                    // nada.
+                    // Nobody is listening on the native channel: there is no
+                    // clipboard to copy to, and saying so is better than a
+                    // button that does nothing.
                     rehusado = Some("host-no-desktop");
                 }
             }
@@ -555,10 +564,10 @@ impl Estado {
                 approval_id,
                 session,
             }) => {
-                // Y se apunta a QUIÉN se le dijo que sí desde aquí: la fila
-                // del panel de agentes distingue «pidió N veces» de «se le
-                // aprobaron M», que no son lo mismo cuando contestó otra
-                // ventana, cuando se denegó, o cuando caducó.
+                // And it notes WHO was told yes from here: the agents
+                // panel's row distinguishes "asked N times" from "M were
+                // approved", which are not the same when a different window
+                // answered, when it was denied, or when it timed out.
                 if let Some(sesion) = &session {
                     self.agencia.sesiones.aprobada(sesion);
                     if self.agencia.panel {
@@ -568,36 +577,39 @@ impl Estado {
                         salidas.push(self.parche(vec![cambio]));
                     }
                 }
-                // Solo `approve` aprueba. Cualquier otra respuesta —y el
-                // cierre del diálogo— DENIEGA: una decisión de seguridad
-                // no tiene respuesta por defecto que diga «sí».
+                // Only `approve` approves. Any other answer — and closing the
+                // dialog — DENIES: a security decision has no default answer
+                // that says "yes".
                 //
-                // Y si el sí NO llega, se dice. Un `policy.decide` que falla
-                // —el daemon se cayó entre la pregunta y la respuesta— deja
-                // la operación denegada por silencio mientras esta ventana da
-                // por hecho que la autorizó: «lo dije» y «llegó» no son lo
-                // mismo en una superficie de seguridad. Denegar es al revés:
-                // si esa no llega, el desenlace es el mismo que se pidió.
+                // And if the yes does NOT arrive, it is reported. A
+                // `policy.decide` that fails — the daemon went down between
+                // the question and the answer — leaves the operation denied
+                // by silence while this window assumes it authorized it: "I
+                // said it" and "it arrived" are not the same thing on a
+                // security surface. Denying is the opposite: if that one
+                // does not arrive, the outcome is the same one that was
+                // requested.
                 lanzar_aprobacion(approval_id, backend, buzon);
             }
-            // Una colisión no se contesta con «confirmar»: cada salida ES una
-            // política, y quien las traduce es `responder_dialogo`, que sabe
-            // cuál se pulsó. Llegar aquí sería una respuesta que este diálogo
-            // no ofreció, y esas no se interpretan.
+            // A collision is not answered with "confirm": each output IS a
+            // policy, and the one that translates them is `responder_dialogo`,
+            // which knows which one was pressed. Reaching here would be an
+            // answer this dialog never offered, and those are not
+            // interpreted.
             Some(Pendiente::Reintentar { .. }) | None => {}
         }
         (rehusado, salidas)
     }
 
-    /// Un nombre TECLEADO, como `Segment`, o la clave del motivo por el que
-    /// no vale.
+    /// A TYPED name, as a `Segment`, or the key for the reason it is not
+    /// valid.
     ///
-    /// El guard del carácter de sustitución vive aquí y no solo en el rename
-    /// porque el camino de VUELTA lo comparten: `escribir_en_dialogo` proyecta
-    /// `clamp_display(display_name(texto))` en cada tecla, y el renderer
-    /// vuelve a sembrar el campo con esa proyección si tuvo que reconstruir el
-    /// nodo. Sin el guard, crear un directorio escribía en el disco el U+FFFD
-    /// que había puesto la pantalla.
+    /// The replacement-character guard lives here and not only in rename
+    /// because they share the RETURN path: `escribir_en_dialogo` projects
+    /// `clamp_display(display_name(texto))` on every keystroke, and the
+    /// renderer re-seeds the field with that projection if it had to rebuild
+    /// the node. Without the guard, creating a directory would write to disk
+    /// the U+FFFD the screen had put there.
     pub(super) fn segmento_tecleado(nombre: &str) -> Result<norte_proto::Segment, &'static str> {
         if nombre.contains('\u{FFFD}') {
             return Err("msg-transfer-name-fffd");
@@ -616,8 +628,8 @@ impl Estado {
         let Some(pos) = self.dialogos.iter().position(|d| d.id == id) else {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         };
-        // Una respuesta que el diálogo no ofreció no se interpreta: no hay
-        // respuestas implícitas en una superficie de decisión.
+        // An answer the dialog did not offer is not interpreted: there are
+        // no implicit answers on a decision surface.
         if !self.dialogos[pos]
             .vista
             .choices
@@ -626,16 +638,17 @@ impl Estado {
         {
             return (Self::obsoleta(StaleAction::Modal), Vec::new());
         }
-        // La PRIMERA respuesta a un diálogo que se abrió SOLO no lo contesta:
-        // solo lo reconoce. Vive AQUÍ y no en el camino de teclas porque el
-        // ratón es la entrada primaria de esta superficie: el diálogo se
-        // pinta en el mismo sitio que el anterior y con la misma primera
-        // opción, así que un clic ya en marcha sobre «Confirmar» aterrizaba
-        // sobre el «Aprobar» de una aprobación de agente recién llegada.
+        // The FIRST answer to a dialog that opened ON ITS OWN does not
+        // answer it: it only acknowledges it. Lives HERE and not on the key
+        // path because the mouse is this surface's primary input: the
+        // dialog paints in the same spot as the previous one and with the
+        // same first option, so a click already in flight over "Confirm"
+        // used to land on the "Approve" of an agent approval that had just
+        // arrived.
         //
-        // Las respuestas que DENIEGAN están exentas por el mismo motivo que
-        // `Escape`: quitarse de encima algo que uno no ha pedido tiene que
-        // salir a la primera, y denegar es el desenlace seguro.
+        // Answers that DENY are exempt for the same reason as `Escape`:
+        // shrugging off something you did not ask for has to work on the
+        // first try, and denying is the safe outcome.
         if !self.dialogos[pos].reconocido && choice != "deny" && choice != "cancel" {
             self.dialogos[pos].reconocido = true;
             self.status.message = Some(clamp_display(norte_i18n::t_in(
@@ -650,23 +663,25 @@ impl Estado {
         if let Some(rechazo) = self.rechaza_por_solo_lectura(pos) {
             return rechazo;
         }
-        // Confirmar con el campo de contraseña VACÍO es inerte: no entrega y
-        // no cierra (#327). Entregar la cadena vacía reproduce #320 —un
-        // secreto vacío hace que la conexión autentique con la cadena ambiente,
-        // o sea con una identidad que nadie pidió—, y cerrar el diálogo
-        // convertiría un dedo que se adelanta en una navegación abandonada.
+        // Confirming with an EMPTY password field is inert: it does not
+        // deliver and does not close (#327). Delivering the empty string
+        // reproduces #320 — an empty secret makes the connection
+        // authenticate with the ambient string, i.e. with an identity nobody
+        // asked for — and closing the dialog would turn a finger getting
+        // ahead of itself into an abandoned navigation.
         //
-        // Vive AQUÍ, antes del `remove`, y no dentro de `ejecutar_pendiente`:
-        // allí el diálogo ya se ha ido de la pila y «no cerrar» ya no es una
-        // opción. Es el mismo sitio que la TUI eligió (`ALLOW_ASK_SECRET`).
+        // Lives HERE, before the `remove`, and not inside `ejecutar_pendiente`:
+        // there, the dialog has already left the stack and "do not close" is
+        // no longer an option. It is the same spot the TUI chose
+        // (`ALLOW_ASK_SECRET`).
         //
-        // Se juzga lo que ACABA de llegar y no un estado guardado: el host no
-        // tiene ninguno, y así el campo que el lector ve vacío es exactamente
-        // el que se evalúa. Con un buffer en el host los dos podían diferir
-        // —un diálogo apilado encima descarta el nodo del campo, y al volver
-        // se pinta vacío sobre un buffer que no lo estaba—, y entonces
-        // «confirmar sobre un campo vacío no hace nada» dejaba de ser cierto
-        // justo donde se había prometido.
+        // What JUST arrived is judged, not a stored state: the host keeps
+        // none, so the field the reader sees empty is exactly the one being
+        // evaluated. With a buffer in the host the two could differ — a
+        // dialog stacked on top discards the field's node, and coming back
+        // it paints empty over a buffer that was not — and then "confirming
+        // over an empty field does nothing" would stop being true exactly
+        // where it had been promised.
         if choice == "confirm" && matches!(self.dialogos[pos].tecleado, Tecleado::Secreto) {
             if secreto.is_none_or(str::is_empty) {
                 return (
@@ -676,10 +691,11 @@ impl Estado {
                     Vec::new(),
                 );
             }
-            // Y una que no cabe se RECHAZA, no se recorta. Recortar era peor
-            // que el tope: entregar los primeros 256 caracteres de una frase
-            // de paso más larga falla la autenticación sin decir por qué, y el
-            // lector no tiene forma de sospecharlo — el campo va enmascarado.
+            // And one that does not fit is REJECTED, not trimmed. Trimming
+            // was worse than the limit: delivering the first 256 characters
+            // of a longer passphrase fails authentication without saying
+            // why, and the reader has no way to suspect it — the field is
+            // masked.
             if secreto.is_some_and(|s| s.chars().count() > SECRET_MAX_CHARS) {
                 return (
                     ActionAck::Unavailable {
@@ -689,10 +705,10 @@ impl Estado {
                 );
             }
         }
-        // Un FORMULARIO se valida aquí, antes del `remove`, y por el mismo
-        // motivo que el secreto de arriba: dentro de `ejecutar_pendiente` el
-        // diálogo ya se ha ido de la pila y «no cerrar» deja de ser una
-        // opción.
+        // A FORM is validated here, before the `remove`, and for the same
+        // reason as the secret above: inside `ejecutar_pendiente` the dialog
+        // has already left the stack and "do not close" stops being an
+        // option.
         if choice == "confirm"
             && let Some(rehuso) = self.rechaza_formulario_invalido(pos)
         {
@@ -700,27 +716,27 @@ impl Estado {
         }
         let dialogo = self.dialogos.remove(pos);
         let mut salidas = Vec::new();
-        // `confirm` es la respuesta afirmativa de los diálogos normales;
-        // `approve`, la de una aprobación. Nombres distintos a propósito: en
-        // una superficie de seguridad, «confirmar» y «aprobar» no deberían
-        // poder confundirse en un renderer.
+        // `confirm` is the affirmative answer for normal dialogs; `approve`,
+        // for an approval. Different names on purpose: on a security
+        // surface, "confirm" and "approve" should never be able to get
+        // confused in a renderer.
         let mut rehusado = None;
         if choice == "confirm" || choice == "approve" {
             let (motivo, partes) = self.ejecutar_pendiente(dialogo, secreto, backend, buzon);
             rehusado = motivo;
             salidas.extend(partes);
         } else if let Some(Pendiente::Decidir { approval_id, .. }) = dialogo.al_confirmar {
-            // Denegar explícitamente, y también al cerrar: dejar al agente
-            // esperando una respuesta que no llega es peor que decirle que no.
+            // Deny explicitly, and also on close: leaving the agent waiting
+            // on an answer that never arrives is worse than telling it no.
             let backend = Arc::clone(backend);
             tokio::spawn(async move {
                 let _ = backend.policy_decide(approval_id, false).await;
             });
         } else if let Some(Pendiente::Reintentar { con }) = &dialogo.al_confirmar {
-            // Las cuatro salidas de una colisión no son «confirmar» (#274):
-            // cada una ES una política distinta, y cuál se pulsó es la
-            // respuesta entera. `cancel` no traduce a ninguna y entonces no se
-            // relanza nada — la task fallida se queda como estaba.
+            // A collision's four outputs are not "confirm" (#274): each one
+            // IS a different policy, and which one was pressed is the whole
+            // answer. `cancel` translates to none of them and so nothing is
+            // relaunched — the failed task stays as it was.
             let encolar = self.encolar;
             if let Some(politica) = politica_de_colision(choice) {
                 Self::lanzar_reintento(con.clone(), politica, encolar, backend, buzon);
@@ -730,10 +746,11 @@ impl Estado {
             dialogs: self.vistas_de_dialogos(),
         };
         salidas.push(self.parche(vec![cambio]));
-        // Un rechazo se ACUSA como tal. Contestar `Applied` a un nombre que
-        // no se escribió le dice al renderer que la operación salió, y la
-        // misma superficie ya contestaba `Unavailable` cuando el rechazo era
-        // por tener varias marcas: dos respuestas para la misma cosa.
+        // A rejection is ACKNOWLEDGED as such. Answering `Applied` for a
+        // name that was never written tells the renderer the operation
+        // succeeded, and the same surface already answered `Unavailable`
+        // when the rejection was for having several marks: two answers for
+        // the same thing.
         match rehusado {
             Some(reason_key) => (
                 ActionAck::Unavailable {
@@ -745,17 +762,17 @@ impl Estado {
         }
     }
 
-    /// Cuántos elementos como mucho enseña el cuerpo de un diálogo.
+    /// The most items a dialog's body shows.
     ///
-    /// El cuerpo no puede crecer con la selección —un lote de mil ficheros no
-    /// cabe en una pregunta— así que se acota. Que se acotó lo dice
-    /// [`Self::nota_de_recorte`]: una lista recortada en silencio describe
-    /// una operación más pequeña que la que se va a ejecutar, y esta es la
-    /// última pantalla donde todavía se puede decir que no.
+    /// The body cannot grow with the selection — a batch of a thousand files
+    /// does not fit in a question — so it is capped. That it was capped is
+    /// said by [`Self::nota_de_recorte`]: a list silently trimmed describes
+    /// an operation smaller than the one about to run, and this is the last
+    /// screen where saying no is still possible.
     pub(super) const MAX_LINEAS_DIALOGO: usize = 16;
 
-    /// La frase que dice que el cuerpo enseña menos de lo que hay. Vacía si
-    /// los enseña todos.
+    /// The phrase saying the body shows less than there is. Empty if it
+    /// shows all of them.
     pub(super) fn nota_de_recorte(&self, mostrados: usize, total: usize) -> String {
         if mostrados >= total {
             return String::new();
@@ -770,22 +787,22 @@ impl Estado {
         ))
     }
 
-    /// Una ruta como LÍNEA de diálogo: enmascarada, acotada, y diciendo si
-    /// lo pintado difiere de lo real.
+    /// A path as a dialog LINE: masked, clamped, and saying whether what is
+    /// painted differs from the real thing.
     ///
-    /// Una sola función porque los cinco diálogos que enseñan rutas —crear,
-    /// buscar, borrar, transferir y aprobar— tienen que decirlo igual, y el
-    /// sitio donde uno de ellos se olvida del `bool` es exactamente donde
-    /// alguien aprueba otra cosa.
+    /// A single function because the five dialogs that show paths — create,
+    /// search, delete, transfer and approve — have to say it the same way,
+    /// and the spot where one of them forgets the `bool` is exactly where
+    /// someone approves something else.
     pub(super) fn linea_de_ruta(p: &VPath) -> crate::dto::DialogLine {
         let (texto, hostil) = norte_frontend::path_display(p);
-        // El RECORTE también altera lo pintado, y ocurre DESPUÉS del
-        // veredicto de `path_display`: una ruta UTF-8 limpia y larga —doce
-        // segmentos de 255 bytes bastan— se pintaba con `…` al final y se
-        // declaraba fiel. La elipsis es un carácter legal en un nombre, así
-        // que quien lee no puede distinguir «se llama así» de «esto está
-        // cortado», y en el informe de un lote ese nombre es lo único
-        // accionable que hay: se va a teclear a mano.
+        // TRIMMING also alters what is painted, and it happens AFTER
+        // `path_display`'s verdict: a clean, long UTF-8 path — twelve
+        // 255-byte segments are enough — used to be painted with a trailing
+        // `…` and declared faithful. An ellipsis is a legal character in a
+        // name, so a reader cannot tell "that is its name" from "this got
+        // cut", and in a batch's report that name is the only actionable
+        // thing there is: it is about to be typed by hand.
         let recortado = texto.len() > crate::bridge::MAX_STRING_BYTES;
         crate::dto::DialogLine {
             text: clamp_display(texto),
@@ -793,34 +810,38 @@ impl Estado {
         }
     }
 
-    /// Como [`Self::linea_de_ruta`], pero con una REINTERPRETACIÓN concreta:
-    /// la que había cuando se lanzó la operación por la que se pregunta.
+    /// Like [`Self::linea_de_ruta`], but with a specific REINTERPRETATION:
+    /// the one in force when the operation this is asking about was
+    /// launched.
     ///
-    /// Dos cosas que se hacían mal donde se pregunta por una colisión, y las
-    /// dos hacen que se apruebe otra cosa:
+    /// Two things that were done wrong where a collision is asked about, and
+    /// both make something else get approved:
     ///
-    /// - se enmascaraba sobre `display_lossy()`, que YA había metido los
-    ///   U+FFFD. `display_name` recibía entonces UTF-8 impecable y declaraba
-    ///   la ruta FIEL, así que la insignia de hostil no salía — en la única
-    ///   pantalla donde se aprueba sobrescribir un fichero;
-    /// - no se aplicaba `pane.names-encoding`, así que en un panel cp866 el
-    ///   terminal preguntaba por `Папка` y la ventana por `??????`. Aprobar
-    ///   un nombre que no es el que llevas viendo no es aprobar.
+    /// - it used to mask over `display_lossy()`, which had ALREADY put in
+    ///   the U+FFFDs. `display_name` then received flawless UTF-8 and
+    ///   declared the path FAITHFUL, so the hostile badge did not show — on
+    ///   the one screen where overwriting a file is approved;
+    /// - `pane.names-encoding` was not applied, so on a cp866 pane the
+    ///   terminal asked about `Папка` and the window about `??????`.
+    ///   Approving a name that is not the one you have been looking at is
+    ///   not approving.
     ///
-    /// La codificación llega por PARÁMETRO y no se lee del hueco activo: la
-    /// colisión aparece asíncrona, encima de lo que sea que el lector esté
-    /// haciendo, y entre el envío y la pregunta cabe cambiar de hueco o
-    /// ciclar la codificación. Quien lanza la captura (`Reintento::enc`).
+    /// The encoding arrives as a PARAMETER and is not read from the active
+    /// slot: the collision appears asynchronously, on top of whatever the
+    /// reader is doing, and a slot change or an encoding cycle fits between
+    /// the send and the question. Whoever launches captures it
+    /// (`Reintento::enc`).
     ///
-    /// Y la ruta ENTERA, no el nombre: «notas.txt» no dice CUÁL notas.txt, y
-    /// con dos paneles y un lote esa es justo la pregunta.
+    /// And the WHOLE path, not the name: "notas.txt" does not say WHICH
+    /// notas.txt, and with two panes and a batch that is exactly the
+    /// question.
     pub(super) fn linea_con_encoding(
         p: &VPath,
         enc: Option<norte_encoding::NameEncoding>,
     ) -> crate::dto::DialogLine {
         let (texto, hostil) = norte_frontend::path_display_with(p, enc);
-        // El RECORTE también altera lo pintado, y la elipsis es un carácter
-        // legal en un nombre: mismo razonamiento que `linea_de_ruta`.
+        // TRIMMING also alters what is painted, and an ellipsis is a legal
+        // character in a name: same reasoning as `linea_de_ruta`.
         let recortado = texto.len() > crate::bridge::MAX_STRING_BYTES;
         crate::dto::DialogLine {
             text: clamp_display(texto),

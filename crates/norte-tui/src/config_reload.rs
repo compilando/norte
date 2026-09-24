@@ -1,16 +1,16 @@
-//! El hot-reload de la configuración (ADR 0007): relee todas las capas y las
-//! aplica TODAS o NINGUNA.
+//! Config hot-reload (ADR 0007): rereads all layers and applies ALL of them
+//! or NONE.
 //!
-//! Vivía en el root del binario `ntc` —un crate DISTINTO de esta lib—, y es la
-//! función con más parámetros de la rama (doce): todo lo que el bucle de
-//! eventos retiene y que una recarga puede sustituir. No es API, es cableado,
-//! y por eso lleva su `#[expect(clippy::too_many_arguments)]` desde antes de
-//! moverse.
+//! Used to live in the `ntc` binary's root — a crate DIFFERENT from this
+//! lib — and is the branch's function with the most parameters (twelve):
+//! everything the event loop retains that a reload can replace. It is not
+//! API, it is wiring, and that is why it has carried its
+//! `#[expect(clippy::too_many_arguments)]` since before it moved.
 //!
-//! El criterio que ordena el cuerpo entero: nada se aplica hasta que los tres
-//! keymaps se han construido bien. Un TOML a medio guardar —y el watcher los ve
-//! a medio guardar— deja la sesión EXACTAMENTE como estaba, con un aviso por la
-//! barra.
+//! The criterion that orders the whole body: nothing is applied until all
+//! three keymaps have been built successfully. A TOML half-saved — and the
+//! watcher does see them half-saved — leaves the session EXACTLY as it was,
+//! with a warning on the bar.
 
 use std::sync::Arc;
 
@@ -27,18 +27,18 @@ use crate::screens::pickers::apply_theme;
 use crate::screens::settings::plugin_config_summaries;
 use crate::shortcuts_editor::{Maps, build_keymaps, shortcut_rows};
 
-/// Hot-reload (ADR 0007): relee TODAS las capas; ante CUALQUIER error se
-/// conserva la config vigente y se avisa por la barra — jamás romper una
-/// sesión en marcha por un TOML a medio guardar.
+/// Hot-reload (ADR 0007): rereads ALL layers; on ANY error the current config
+/// is kept and a warning goes on the bar — never break a running session over
+/// a half-saved TOML.
 ///
-/// Devuelve si la recarga se APLICÓ. El watcher se conforma con el aviso de la
-/// barra, pero el cambio de PERFIL (ADR 0079, D8) no: su paso 2 es esta misma
-/// recarga con otras capas, y lo que venga detrás —montar la disposición del
-/// perfil nuevo, sembrar sus huecos, darlo por activo— solo puede pasar si
-/// esto aplicó. Un perfil a medio aplicar no es un estado que ese diseño
-/// admita, y el «todo o nada» que esta función ya tenía es justo la semántica
-/// que hace falta.
-#[expect(clippy::too_many_arguments, reason = "wiring del hot-reload, no API")]
+/// Returns whether the reload APPLIED. The watcher is satisfied with the
+/// bar's warning, but a PROFILE switch (ADR 0079, D8) is not: its step 2 is
+/// this very reload with different layers, and what follows — mounting the
+/// new profile's layout, seeding its slots, marking it active — can only
+/// happen if this applied. A half-applied profile is not a state that design
+/// admits, and the "all or nothing" this function already had is exactly the
+/// semantics needed.
+#[expect(clippy::too_many_arguments, reason = "hot-reload wiring, not API")]
 pub async fn reload_config(
     app: &mut App,
     backend: &Backend,
@@ -55,58 +55,58 @@ pub async fn reload_config(
     cli_preset: Option<&str>,
     quick_mode: &mut nav::Mode,
     confirm_quit: &mut config::ConfirmQuit,
-    // S3 (`app.settings`): la snapshot COMPLETA que `run()` retiene para
-    // construir/refrescar el overlay de ajustes — reemplazada ENTERA solo
-    // si TODO el reload aplicó (mismo criterio que el resto de esta
-    // función); un reload fallido deja la config VIGENTE, jamás a medias.
+    // S3 (`app.settings`): the COMPLETE snapshot `run()` retains to
+    // build/refresh the settings overlay — replaced WHOLESALE only if the
+    // ENTIRE reload applied (same criterion as the rest of this function); a
+    // failed reload leaves the CURRENT config, never a halfway one.
     cfg_out: &mut config::LoadedConfig,
 ) -> bool {
     match config::load_async(layers.clone()).await {
         Ok(cfg) => match build_keymaps(&cfg, cli_preset) {
             Ok((browse, viewer, dialog)) => {
-                // El modo del quick search sigue a la config vigente (solo
-                // afecta a quick searches NUEVOS; uno abierto conserva el
-                // suyo). Mismo criterio que el tema: solo si TODO aplicó.
+                // The quick search mode follows the current config (only
+                // affects NEW quick searches; an open one keeps its own).
+                // Same criterion as the theme: only if EVERYTHING applied.
                 *quick_mode = cfg.quick_search_mode;
-                // `[ui] confirm_quit` (S2): mismo criterio — solo afecta a
-                // `app.quit` NUEVOS (uno ya abierto como `Modal::ConfirmQuit`
-                // conserva su decisión hasta que el usuario responda).
+                // `[ui] confirm_quit` (S2): same criterion — only affects
+                // NEW `app.quit`s (one already open as `Modal::ConfirmQuit`
+                // keeps its decision until the user answers).
                 *confirm_quit = cfg.common.ui_confirm_quit;
                 app.confirm_quit = cfg.common.ui_confirm_quit;
-                // La copia de hotlist también (un popup abierto conserva su
-                // snapshot hasta reabrirse — items congelados a propósito).
+                // The hotlist copy too (an open popup keeps its snapshot
+                // until reopened — items frozen on purpose).
                 app.set_hotlist(cfg.common.hotlist.clone());
-                // `[ui] menu_bar` en caliente: el reparto de cada frame lo
-                // lee, así que la barra aparece o desaparece en el siguiente
-                // pintado —y el ratón la sigue, porque lee ese mismo reparto—.
+                // `[ui] menu_bar` hot: each frame's layout reads it, so the
+                // bar appears or disappears on the next paint — and the mouse
+                // follows it, because it reads that same layout.
                 app.menu_bar = cfg.common.ui_menu_bar.unwrap_or(true);
                 app.panel_bar = cfg.common.ui_panel_bar.unwrap_or(true);
-                // El cromo entero, por lo mismo: cada frame lo lee.
+                // The whole chrome, for the same reason: every frame reads it.
                 app.chrome = cfg.common.ui_chrome;
-                // Los elementos de plugin (ADR 0137): la barra los lee cada
-                // frame, y el siguiente listado pide sus columnas.
+                // Plugin status items (ADR 0137): the bar reads them every
+                // frame, and the next listing asks for their columns.
                 app.status_plugins.clone_from(&cfg.common.ui_status_plugins);
-                // Hallazgo 3 (revisión de rama, fase 5): `[ui] images` vive
-                // en el cromo que acaba de reasignarse arriba —
-                // `App::viewer_modo` se fijó al ABRIR el visor, y sin este
-                // corte un `Kitty` que deja de serlo en caliente dejaba los
-                // píxeles ya colocados en pantalla para siempre. Ver el
-                // rustdoc de `App::soltar_miniatura_si_deja_de_ser_kitty`
-                // para por qué la dirección contraria NO se sigue aquí.
+                // Finding 3 (branch review, phase 5): `[ui] images` lives in
+                // the chrome just reassigned above — `App::viewer_modo` was
+                // set when the viewer OPENED, and without this cut a `Kitty`
+                // that stops being one on the fly left the pixels already
+                // placed on screen forever. See the rustdoc of
+                // `App::soltar_miniatura_si_deja_de_ser_kitty` for why the
+                // opposite direction is NOT followed here.
                 app.soltar_miniatura_si_deja_de_ser_kitty(crate::viewer_open::modo_efectivo(
                     app.chrome.images(),
                     crate::kitty_graphics::soportado(),
                 ));
-                // El tope de la historia, también en caliente: al bajarlo se
-                // tira lo más lejano, nunca lo que el lector acaba de andar.
+                // The history cap, also hot: lowering it drops the farthest
+                // entries, never what the reader just walked.
                 app.history.set_capacity(app.chrome.history_size());
-                // La fila `..`, también en caliente: es presentación, y el
-                // pane la pone o la quita sin tocar el listado.
+                // The `..` row, also hot: it is presentation, and the pane
+                // adds or removes it without touching the listing.
                 app.set_parent_row(cfg.common.ui_parent_entry.unwrap_or(true));
-                // Openers (#28): recargados con el resto de la config.
+                // Openers (#28): reloaded with the rest of the config.
                 app.openers = cfg.openers.clone();
-                // Y el editor de `[ui] editor`, por lo mismo: quien lo cambia
-                // en el fichero no tiene por qué reiniciar norte.
+                // And the `[ui] editor` editor, for the same reason: whoever
+                // changes it in the file need not restart norte.
                 app.editor = cfg
                     .common
                     .ui_editor
@@ -115,7 +115,7 @@ pub async fn reload_config(
                         command,
                         detached: cfg.common.ui_editor_detached.unwrap_or(false),
                     });
-                // Y el comparador de `[ui] diff` (#312), por lo mismo.
+                // And the `[ui] diff` comparator (#312), for the same reason.
                 app.diff = cfg
                     .common
                     .ui_diff
@@ -124,30 +124,31 @@ pub async fn reload_config(
                         command,
                         detached: cfg.common.ui_diff_detached.unwrap_or(false),
                     });
-                // #108 7a: `[ui.columns]` editado fuera también refresca la
-                // sesión (antes solo arrancaba); el re-sort mantiene los
-                // panes coherentes con el fichero — el persist del picker
-                // dispara este mismo camino y es idempotente con lo ya
-                // aplicado en memoria.
+                // #108 7a: `[ui.columns]` edited externally also refreshes
+                // the session (it used to only apply at startup); the re-sort
+                // keeps the panes consistent with the file — the picker's
+                // persist triggers this very path and is idempotent with what
+                // is already applied in memory.
                 app.columns =
                     norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
                         .with_date_format(cfg.common.ui_chrome.date_format());
                 for i in 0..app.panes.len() {
                     app.apply_scheme_sort(i);
                 }
-                // Los temas del usuario, por lo mismo: un tema recién puesto en
-                // `themes/` sale en el selector sin reiniciar. La recarga ya
-                // corre donde se puede leer disco; el selector solo lee esto.
+                // The user's themes, for the same reason: a theme just
+                // dropped into `themes/` shows up in the selector without a
+                // restart. The reload already runs where disk can be read;
+                // the selector only reads this.
                 app.user_themes.clone_from(&cfg.user_themes);
-                // Bindings `lua:` descartados del keymap de PROYECTO
-                // (seguridad — mismo aviso que en el arranque; máximo
-                // porque `global` se fusiona en las tres pantallas, H1 T2
-                // suma dialog).
+                // `lua:` bindings discarded from the PROJECT keymap
+                // (security — same warning as at startup; the maximum,
+                // because `global` merges into all three screens, H1 T2 adds
+                // dialog).
                 let discarded_lua = browse
                     .discarded_lua_bindings()
                     .max(viewer.discarded_lua_bindings())
                     .max(dialog.discarded_lua_bindings());
-                // La ayuda refleja el keymap VIGENTE: se reconstruye aquí.
+                // Help reflects the CURRENT keymap: rebuilt here.
                 *help_lines = crate::help::build(&browse, &viewer, &dialog);
                 // H3b: and so does the resolver the CORPUS is rendered
                 // through — same effectives, same moment, before they move
@@ -157,35 +158,35 @@ pub async fn reload_config(
                 // the prose teaching the OLD key.
                 app.help_chords = Arc::new(TuiChords::new(&browse, &viewer, &dialog, lang));
                 app.help = None;
-                // Filas de la palette (H1 T4): reconstruidas del keymap
-                // VIGENTE, ANTES de que se mueva al resolver de abajo —
-                // mismo criterio que help_lines. La palette abierta se
-                // cierra (como la ayuda): sus filas congeladas podrían
-                // apuntar a descripciones/chords ya viejos.
+                // Palette rows (H1 T4): rebuilt from the CURRENT keymap,
+                // BEFORE it moves into the resolver below — same criterion as
+                // help_lines. An open palette is closed (like help): its
+                // frozen rows could point at descriptions/chords already
+                // stale.
                 app.palette_rows = crate::palette::build_rows(&browse, &viewer);
                 app.palette = None;
-                // Hints de los overlays (H1 T3, #24): reconstruidos del
-                // efectivo `dialog` VIGENTE, ANTES de que se mueva al
-                // resolver de abajo — mismo criterio que help_lines.
+                // Overlay hints (H1 T3, #24): rebuilt from the CURRENT
+                // effective `dialog`, BEFORE it moves into the resolver
+                // below — same criterion as help_lines.
                 app.dialog_hints = DialogHints::build(&dialog);
                 app.dialog_hints.buttons = cfg.common.ui_chrome.dialog_buttons();
-                // Y la barra de teclas, de los tres (spec 2026-09-10).
+                // And the key bar, from all three (spec 2026-09-10).
                 app.key_bars = crate::app::KeyBars::build(&browse, &viewer);
                 app.chord_split_h = norte_frontend::palette::first_chord("layout.split-h", &browse);
-                // #142: el acorde de vuelta del subshell, del efectivo
-                // `browse` VIGENTE y antes de que se mude al resolver —
-                // mismo criterio. Un rebind que no llegara aquí dejaría al
-                // lector dentro del shell pulsando la tecla nueva.
+                // #142: the subshell's return chord, from the CURRENT
+                // effective `browse` and before it moves to the resolver —
+                // same criterion. A rebind that did not reach here would
+                // leave the reader inside the shell pressing the new key.
                 app.subshell_chord = norte_frontend::subshell::detach_chord(&browse);
                 app.terminal_chord = browse.lone_chord(crate::termpanel::COMANDO);
-                // K3c: el editor de atajos, si está abierto, se REFRESCA (no
-                // se cierra como `help`/`palette`): esta recarga suele ser su
-                // propia escritura volviendo por el watcher, y un editor que se
-                // cerrase con cada rebind no serviría para el segundo. Sus
-                // filas salen de los efectivos VIGENTES, antes de que se muevan
-                // a los resolvers — mismo criterio que `help_lines`. La
-                // CAPTURA en vuelo, en cambio, no sobrevive: su veredicto se
-                // leyó del mapa que se acaba de sustituir
+                // K3c: the shortcuts editor, if open, is REFRESHED (not
+                // closed like `help`/`palette`): this reload is usually its
+                // own write coming back through the watcher, and an editor
+                // that closed on every rebind would not serve for the second
+                // one. Its rows come from the CURRENT effectives, before they
+                // move into the resolvers — same criterion as `help_lines`.
+                // The in-flight CAPTURE, however, does not survive: its
+                // verdict was read from the map that has just been replaced
                 // (`ShortcutsState::refresh`).
                 if let Some(sc) = &mut app.shortcuts {
                     sc.refresh(shortcut_rows(&Maps {
@@ -197,26 +198,26 @@ pub async fn reload_config(
                 *resolver = Resolver::new(browse);
                 *viewer_resolver = Resolver::new(viewer);
                 *dialog_resolver = Resolver::new(dialog);
-                // K3a: y con la barra se va el panel which-key — sus filas
-                // salieron del efectivo que se acaba de sustituir, así que un
-                // panel superviviente enseñaría teclas que ya no existen.
+                // K3a: and the which-key panel goes with the bar — its rows
+                // came from the effective keymap that has just been replaced,
+                // so a surviving panel would show keys that no longer exist.
                 app.clear_pending();
                 app.message = Some(t("msg-config-reloaded"));
-                // El tema también es hot-reloadable (ADR 0020): si falla, el
-                // mensaje de error del tema pisa el de "config recargada".
+                // The theme is also hot-reloadable (ADR 0020): if it fails,
+                // the theme's error message overrides "config reloaded".
                 apply_theme(app, &cfg);
-                // ÚLTIMO: el aviso de seguridad no debe quedar pisado.
+                // LAST: the security warning must not end up overridden.
                 if discarded_lua > 0 {
                     app.message = Some(ta(
                         "msg-lua-keymap-project",
                         &[("n", &discarded_lua.to_string())],
                     ));
                 }
-                // S3: el overlay de ajustes, si está abierto, se REFRESCA
-                // (no se cierra como `help`/`palette` arriba) — sus filas son
-                // solo `(nombre, descripción, value)` leídas de `cfg`, seguras
-                // de recomputar sin tirar el filtro/edición en curso del
-                // usuario (`Settings::refresh`).
+                // S3: the settings overlay, if open, is REFRESHED (not closed
+                // like `help`/`palette` above) — its rows are just
+                // `(name, description, value)` read from `cfg`, safe to
+                // recompute without discarding the user's current
+                // filter/edit (`Settings::refresh`).
                 if let Some(settings) = &mut app.settings {
                     let summaries = plugin_config_summaries(backend).await;
                     settings.refresh(crate::settings::build_rows(&cfg, &summaries));
