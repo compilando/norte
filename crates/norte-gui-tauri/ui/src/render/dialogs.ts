@@ -7,7 +7,7 @@ import { badge } from "./dom";
 
 /** A dialog's labeled field: the label out of band and the value with its
  *  mark if what is painted differs from what is there. */
-export function campoDeDialogo(
+export function dialogField(
   this: Screen,
   labelText: string,
   line: DialogLine,
@@ -31,9 +31,9 @@ export function campoDeDialogo(
 export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   if (dialogs.length === 0) {
     this.dialogsRoot.replaceChildren();
-    this.dialogoPintado = null;
-    this.dialogoInput = null;
-    this.dialogoCampos.clear();
+    this.dialogPainted = null;
+    this.dialogInput = null;
+    this.dialogFields.clear();
     return;
   }
   const top = dialogs[dialogs.length - 1];
@@ -87,10 +87,10 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   // list: among path lines, a file name saying the same thing would be
   // indistinguishable.
   if (top.subject !== null) {
-    box.append(this.campoDeDialogo(this.t("dialog-subject"), top.subject));
+    box.append(this.dialogField(this.t("dialog-subject"), top.subject));
   }
   if (top.asker !== null) {
-    box.append(this.campoDeDialogo(this.t("dialog-asker"), top.asker));
+    box.append(this.dialogField(this.t("dialog-asker"), top.asker));
   }
   if (top.body.length > 0) {
     // Numbered by POSITION, with an ordered list: the label is structural
@@ -202,7 +202,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
     box.append(notice);
   }
   if (top.input === null) {
-    this.dialogoInput = null;
+    this.dialogInput = null;
   } else {
     // The field is REUSED as long as it is the same dialog. It used to be
     // created anew on every repaint and left with no value set — so as not
@@ -211,7 +211,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
     // came out EMPTY. And since every keystroke triggers a patch, every
     // keystroke emptied it: what reached `fs.mkdir` was the last character.
     // Reusing the node also keeps the cursor and the selection.
-    const previous = this.dialogoPintado === top.id ? this.dialogoInput : null;
+    const previous = this.dialogPainted === top.id ? this.dialogInput : null;
     // Reusing the node is not enough: the dialog box is rebuilt on every
     // repaint and the field gets MOVED to the new one, and moving a node
     // takes it out of the document for an instant, which is what strips its
@@ -277,7 +277,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
       });
     }
     input.setAttribute("aria-labelledby", h.id);
-    this.dialogoInput = input;
+    this.dialogInput = input;
     box.append(input);
   }
   // A form's FIELDS (bridge 91), in the order they arrive: the host orders
@@ -285,10 +285,10 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   const fields = top.fields ?? [];
   if (fields.length > 0) {
     // A different dialog starts from scratch; the SAME one reuses its nodes.
-    if (this.dialogoPintado !== top.id) {
-      this.dialogoCampos.clear();
+    if (this.dialogPainted !== top.id) {
+      this.dialogFields.clear();
     }
-    const justBorn = this.dialogoCampos.size === 0;
+    const justBorn = this.dialogFields.size === 0;
     const box2 = document.createElement("div");
     box2.className = "dialog-fields";
     let first: HTMLInputElement | null = null;
@@ -300,7 +300,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
       label.textContent = this.t(f.label_key);
       label.htmlFor = `dialog-field-${f.id}`;
       row.append(label);
-      const previous = this.dialogoCampos.get(f.id) ?? null;
+      const previous = this.dialogFields.get(f.id) ?? null;
       if (f.kind.kind === "text") {
         // **The node is REUSED and its value is NEVER re-seeded.** What the
         // host sends is its PROJECTION — masked and bounded — so re-seeding
@@ -324,7 +324,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
               value: { set: "text", text: live.value },
             });
           });
-          this.dialogoCampos.set(f.id, live);
+          this.dialogFields.set(f.id, live);
         }
         text.dataset["hostile"] = String(f.hostile);
         text.classList.toggle("hostile", f.hostile);
@@ -354,7 +354,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
               value: { set: "toggled" },
             });
           });
-          this.dialogoCampos.set(f.id, checkbox);
+          this.dialogFields.set(f.id, checkbox);
         }
         checkbox.checked = f.kind.on;
         row.append(checkbox);
@@ -373,7 +373,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
               value: { set: "cycled" },
             });
           });
-          this.dialogoCampos.set(f.id, button);
+          this.dialogFields.set(f.id, button);
         }
         button.textContent = this.t(f.kind.value_key);
         row.append(button);
@@ -408,7 +408,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
           action: "dialog",
           id: top.id,
           choice: c.id,
-          secret: this.dialogoInput?.value ?? "",
+          secret: this.dialogInput?.value ?? "",
         });
         return;
       }
@@ -418,7 +418,7 @@ export function paintDialogs(this: Screen, dialogs: DialogView[]): void {
   }
   box.append(choices);
   this.dialogsRoot.replaceChildren(box);
-  this.dialogoPintado = top.id;
+  this.dialogPainted = top.id;
   if (refocus !== null) {
     refocus.focus();
   }

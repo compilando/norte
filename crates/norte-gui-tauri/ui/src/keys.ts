@@ -57,8 +57,8 @@ const EDITING = new Set([
  * Lives here, exported, and not inside `main.ts`'s handler, because there
  * was no way to test it there — and it was not tested.
  */
-export function esParaElCampo(k: KeyInput, hayCampo: boolean): boolean {
-  if (!hayCampo) {
+export function isForTheField(k: KeyInput, hasField: boolean): boolean {
+  if (!hasField) {
     return false;
   }
   // "A text key" is measured in code points, not UTF-16 units: `length === 1`
@@ -77,7 +77,7 @@ export function keyAction(k: KeyInput): UiAction {
 }
 
 /** The minimal shape of a keyboard event [`AltSolo`] looks at. */
-export interface TeclaCruda {
+export interface RawKey {
   key: string;
   ctrlKey: boolean;
   shiftKey: boolean;
@@ -98,22 +98,22 @@ export interface TeclaCruda {
  * dialog — is decided by the host.
  */
 export class AltSolo {
-  private armado = false;
+  private armed = false;
 
   /** A `keydown`. Alt's held-down repeat does not disarm it. */
-  abajo(e: TeclaCruda): void {
-    this.armado = e.key === "Alt" && !e.ctrlKey && !e.shiftKey && !e.metaKey;
+  down(e: RawKey): void {
+    this.armed = e.key === "Alt" && !e.ctrlKey && !e.shiftKey && !e.metaKey;
   }
 
   /** A `keyup`: `true` if it closes an Alt-alone. */
-  arriba(e: TeclaCruda): boolean {
-    const fue = this.armado && e.key === "Alt";
-    this.armado = false;
-    return fue;
+  up(e: RawKey): boolean {
+    const was = this.armed && e.key === "Alt";
+    this.armed = false;
+    return was;
   }
 
   /** Something that is not the keyboard got in the way (click, wheel, focus). */
-  soltar(): void {
-    this.armado = false;
+  release(): void {
+    this.armed = false;
   }
 }

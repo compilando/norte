@@ -15,10 +15,10 @@ import type {
   WhichKeyView,
   WindowVerb,
 } from "../types";
-import { badge, colVar, revelar, sinCambios } from "./dom";
+import { badge, colVar, revealInView, unchanged } from "./dom";
 import type { SlotDom } from "./dom";
-import { cifraDeInsignia, icono as iconoDePanel } from "./iconos";
-import { hacerArrastrable } from "./mover";
+import { badgeCount, icon as panelIcon } from "./icons";
+import { makeDraggable } from "./move";
 
 /**
  * The panel bar (#324): one button per panel that opens and closes, with its
@@ -48,9 +48,9 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
     document.documentElement.style.setProperty("--activity-w", width);
     this.panelBarHeight = height;
     this.activityWidth = width;
-    this.viewportSucio = true;
+    this.viewportDirty = true;
   }
-  if (sinCambios(this.panelBarRoot, JSON.stringify(bar))) {
+  if (unchanged(this.panelBarRoot, JSON.stringify(bar))) {
     return;
   }
   if (!bar.bar) {
@@ -76,7 +76,7 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
     // open"; keyboard focus is separate, in the state.
     button.setAttribute("aria-pressed", String(b.state !== "closed"));
     button.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
-    const icon = column ? iconoDePanel(document, b.kind) : null;
+    const icon = column ? panelIcon(document, b.kind) : null;
     if (icon !== null) {
       // In column mode there is no visible text: the name goes in the label,
       // which is what a screen reader hears, and in the title on hover.
@@ -104,7 +104,7 @@ export function paintPanelBar(this: Screen, bar: PanelBarView): void {
       const mark = document.createElement("span");
       mark.className = "panelbar-attention";
       const n = b.count ?? 0;
-      mark.textContent = n > 0 ? cifraDeInsignia(n) : "·";
+      mark.textContent = n > 0 ? badgeCount(n) : "·";
       mark.setAttribute(
         "aria-label",
         n > 0
@@ -177,7 +177,7 @@ export function paintWizard(this: Screen, wizard: WizardView | null): void {
 }
 
 /** The window's three buttons, in desktop order. */
-const VERBOS_DE_VENTANA = [
+const WINDOW_VERBS = [
   ["minimize", "window-minimize"],
   ["toggle_maximize", "window-maximize"],
   ["close", "window-close"],
@@ -194,8 +194,8 @@ const VERBOS_DE_VENTANA = [
  * closed verb; the webview's capability still carries no window permissions
  * (D11).
  */
-function barraDeTitulo(this: Screen, bar: HTMLElement, hasActions: boolean): void {
-  montarBarraDeTitulo(
+function titleBar(this: Screen, bar: HTMLElement, hasActions: boolean): void {
+  mountTitleBar(
     bar,
     (k) => this.t(k),
     (v) => {
@@ -211,7 +211,7 @@ function barraDeTitulo(this: Screen, bar: HTMLElement, hasActions: boolean): voi
  * needs it — it covers the menu bar, and without the desktop's, a window
  * with a dead daemon could not be moved nor closed with the mouse.
  */
-export function montarBarraDeTitulo(
+export function mountTitleBar(
   bar: HTMLElement,
   t: (key: string) => string,
   ask: (verb: WindowVerb) => void,
@@ -235,14 +235,14 @@ export function montarBarraDeTitulo(
   window_.dataset["alone"] = String(!hasActions);
   window_.setAttribute("role", "toolbar");
   window_.setAttribute("aria-label", t("window-controls-label"));
-  for (const [verb, key] of VERBOS_DE_VENTANA) {
+  for (const [verb, key] of WINDOW_VERBS) {
     const button = doc.createElement("button");
     button.type = "button";
     button.className = "window-control";
     button.dataset["verb"] = verb;
     button.title = t(key);
     button.setAttribute("aria-label", t(key));
-    const drawing = iconoDePanel(doc, `window:${verb}`);
+    const drawing = panelIcon(doc, `window:${verb}`);
     if (drawing !== null) {
       button.append(drawing);
     }
@@ -284,11 +284,9 @@ export function paintMenu(
   if (this.menuBarHeight !== height) {
     document.documentElement.style.setProperty("--menubar-h", height);
     this.menuBarHeight = height;
-    this.viewportSucio = true;
+    this.viewportDirty = true;
   }
-  if (
-    sinCambios(this.menuRoot, JSON.stringify({ menu, botones: buttons, propia: custom }))
-  ) {
+  if (unchanged(this.menuRoot, JSON.stringify({ menu, buttons, own: custom }))) {
     return;
   }
   if (!hasBar && menu.open === null) {
@@ -330,7 +328,7 @@ export function paintMenu(
       button.dataset["id"] = b.id;
       button.title = b.chord === "—" ? b.label : `${b.label} (${b.chord})`;
       button.setAttribute("aria-label", b.label);
-      const icon = iconoDePanel(document, `layout:${b.id}`);
+      const icon = panelIcon(document, `layout:${b.id}`);
       if (icon !== null) {
         button.append(icon);
       } else {
@@ -344,7 +342,7 @@ export function paintMenu(
     bar.append(actions);
   }
   if (custom) {
-    barraDeTitulo.call(this, bar, buttons.length > 0);
+    titleBar.call(this, bar, buttons.length > 0);
   }
   const box = document.createElement("div");
   box.className = "menu";
@@ -568,7 +566,7 @@ export function paintGoto(this: Screen, goto: GotoView | null): void {
   // list is rebuilt on every patch with the scroll at the top: without this,
   // going down moved an invisible cursor and Enter went to a spot the reader
   // could not see.
-  revelar(list.querySelector('[aria-selected="true"]') ?? undefined);
+  revealInView(list.querySelector('[aria-selected="true"]') ?? undefined);
 }
 
 /** What can follow a half-finished prefix. */
@@ -631,7 +629,7 @@ export function paintTabs(
   dom: SlotDom,
   group: TabGroupView | undefined,
 ): void {
-  if (sinCambios(dom.tabs, JSON.stringify(group ?? null))) {
+  if (unchanged(dom.tabs, JSON.stringify(group ?? null))) {
     return;
   }
   if (group === undefined) {
@@ -663,7 +661,7 @@ export function paintTabs(
       this.send({ action: "select_tab", slot_id: t.slot_id });
     });
     // Dragging the tab takes THAT slot out of the group (ADR 0138).
-    hacerArrastrable(this, li, t.slot_id);
+    makeDraggable(this, li, t.slot_id);
     // Close THIS tab (ADR 0133): each one's `×`, visible on the active one
     // and on hover, as in VS Code. The host chooses it and then closes it,
     // through `pane.tab-close`'s dispatch.
@@ -718,7 +716,7 @@ export function paintTabs(
  * variable. The name's, never: it is the one that grows.
  */
 export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): void {
-  if (sinCambios(dom.header, JSON.stringify(slot.columns))) {
+  if (unchanged(dom.header, JSON.stringify(slot.columns))) {
     // Same columns: the nodes and the width variables are already there.
     // What CANNOT be skipped is the drop check, which depends on the slot's
     // width and not on the columns — a slot that widened gets back the
@@ -729,7 +727,7 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
         dom.root.style.removeProperty(`${colVar(c.id)}-show`);
       }
     }
-    descartarLasQueNoCaben(dom, slot, this.cell().w);
+    dropOverflowingColumns(dom, slot, this.cell().w);
     return;
   }
   const nodes = slot.columns.map((c) => {
@@ -775,7 +773,7 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
     return el;
   });
   dom.header.replaceChildren(...nodes);
-  descartarLasQueNoCaben(dom, slot, this.cell().w);
+  dropOverflowingColumns(dom, slot, this.cell().w);
 }
 
 /**
@@ -792,7 +790,7 @@ export function paintHeader(this: Screen, dom: SlotDom, slot: BrowserSlotView): 
  * no layout, like the tests') nothing is dropped: an extra column beats a
  * listing with none.
  */
-function descartarLasQueNoCaben(
+function dropOverflowingColumns(
   dom: SlotDom,
   slot: BrowserSlotView,
   cellW: number,

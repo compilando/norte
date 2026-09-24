@@ -9,7 +9,7 @@
 import type { Screen } from "../render";
 import type { TimelineSlotView } from "../types";
 import type { SlotDom } from "./dom";
-import { badge, revelar } from "./dom";
+import { badge, revealInView } from "./dom";
 
 /**
  * Paints a slot's timeline: one row per mutation — or per batch — from
@@ -89,5 +89,5 @@ export function paintTimeline(this: Screen, dom: SlotDom, slot: TimelineSlotView
   // The cursor's row, in view: the next page is requested on reaching the
   // last one loaded, and a cursor that moves down unseen does not know where
   // it is.
-  revelar(list.querySelector('[aria-selected="true"]') ?? undefined);
+  revealInView(list.querySelector('[aria-selected="true"]') ?? undefined);
 }

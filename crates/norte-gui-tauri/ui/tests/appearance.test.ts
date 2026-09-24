@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
-  FILA_POR_TAMANO,
+  ROW_BY_SIZE,
   applyAppearance,
   applyTheme,
   showFatal,
@@ -42,7 +42,7 @@ describe("bundled typography and configuration", () => {
     expect(root.style.getPropertyValue("--mono")).toBe("Fira Code");
     expect(root.style.getPropertyValue("--ui-font-size")).toBe("16px");
     expect(root.style.getPropertyValue("--cell-h")).toBe(
-      `${String(Math.round(16 * FILA_POR_TAMANO))}px`,
+      `${String(Math.round(16 * ROW_BY_SIZE))}px`,
     );
   });
 
@@ -59,7 +59,7 @@ describe("bundled typography and configuration", () => {
     const root = document.documentElement;
     const fatal = document.createElement("div");
     const requests: string[] = [];
-    const win = { t: (k: string) => k, pedir: (v: string) => requests.push(v) };
+    const win = { t: (k: string) => k, request: (v: string) => requests.push(v) };
     root.dataset["titlebar"] = "custom";
     showFatal(fatal, "the daemon went away", win);
     const close = fatal.querySelector('[data-verb="close"]') as HTMLButtonElement;
@@ -137,7 +137,7 @@ describe("bundled typography and configuration", () => {
   });
 
   it("the default row is 22 px for 14 px of text", () => {
-    expect(Math.round(14 * FILA_POR_TAMANO)).toBe(22);
+    expect(Math.round(14 * ROW_BY_SIZE)).toBe(22);
     expect(CSS).toMatch(/--cell-h:\s*22px/);
     expect(CSS).toMatch(/font-size:\s*var\(--ui-font-size,\s*14px\)/);
   });

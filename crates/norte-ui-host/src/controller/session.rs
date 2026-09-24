@@ -251,9 +251,7 @@ impl State {
             } else {
                 false
             };
-            let _ = mailbox2
-                .send(Message::HandedOff { released })
-                .await;
+            let _ = mailbox2.send(Message::HandedOff { released }).await;
         });
         (self.applied(), self.say("msg-handoff-running"))
     }

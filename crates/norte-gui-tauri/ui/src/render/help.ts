@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { HelpBlockView, HelpScrollTo, HelpSpanView, HelpView } from "../types";
-import { revelar } from "./dom";
+import { revealInView } from "./dom";
 
 /**
  * Help (F1).
@@ -20,7 +20,7 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
     this.helpRoot.replaceChildren();
     this.helpRoot.dataset["open"] = "false";
     this.helpBodyFocused = false;
-    this.helpPintada = null;
+    this.helpPainted = null;
     // Every opening numbers its requests from 1 (the host creates a fresh
     // help): without this, the next opening's first one would be mistaken
     // for stale.
@@ -33,10 +33,10 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
   // Only within the SAME page: changing pages starts at the top, which is
   // what any reader does.
   const scroll =
-    this.helpPintada === help.topic_id
+    this.helpPainted === help.topic_id
       ? (this.helpRoot.querySelector(".help-body")?.scrollTop ?? 0)
       : 0;
-  this.helpPintada = help.topic_id;
+  this.helpPainted = help.topic_id;
   this.helpRoot.dataset["open"] = "true";
   this.helpBodyFocused = help.focus === "body";
   const box = document.createElement("section");
@@ -64,7 +64,7 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
   // carries the same request, with the same number.
   if (help.scroll !== null && help.scroll.seq > this.helpScrollSeq) {
     this.helpScrollSeq = help.scroll.seq;
-    this.desplazarAyuda(help.scroll.to);
+    this.scrollHelp(help.scroll.to);
   }
 }
 
@@ -81,7 +81,7 @@ export function paintHelp(this: Screen, help: HelpView | null): void {
  * it, not native scroll: that needs the document's focus, and the body is
  * rebuilt on every patch with nobody giving it back.
  */
-export function desplazarAyuda(this: Screen, to: HelpScrollTo): void {
+export function scrollHelp(this: Screen, to: HelpScrollTo): void {
   const body = this.helpRoot.querySelector(".help-body");
   if (!(body instanceof HTMLElement)) {
     return;
@@ -170,7 +170,7 @@ export function helpSidebar(this: Screen, help: HelpView): HTMLElement {
   nav.append(list);
   // The sidebar is longer than its box: without this, scrolling past the
   // fold moves a cursor that is not visible.
-  revelar(list.children[help.cursor]);
+  revealInView(list.children[help.cursor]);
   return nav;
 }
 
@@ -265,7 +265,7 @@ export function helpBody(this: Screen, help: HelpView): HTMLElement {
         "aria-activedescendant",
         `help-action-${String(help.action_cursor)}`,
       );
-      revelar(list.children[help.action_cursor]);
+      revealInView(list.children[help.action_cursor]);
     }
     body.append(list);
   }

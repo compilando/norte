@@ -8,20 +8,20 @@ import type { DropZone } from "../types";
 
 /** Pixels that have to move before a click turns into a drag: the title
  *  carries breadcrumbs that get clicked, and the tab is chosen with a click. */
-const UMBRAL = 6;
+const THRESHOLD = 6;
 
 /** How much of the pane, from each edge, counts as "that side". The rest is
  *  the center. */
-const BORDE = 0.25;
+const EDGE = 0.25;
 
 /** The chrome slots: they neither drag nor receive. */
-const CROMO = new Set(["status", "tasks"]);
+const CHROME = new Set(["status", "tasks"]);
 
 /**
  * The zone of `rect` under the point: the nearest side if it is within a
  * quarter of it, and the center otherwise.
  */
-export function zonaDe(
+export function zoneOf(
   x: number,
   y: number,
   rect: { left: number; top: number; width: number; height: number },
@@ -40,32 +40,32 @@ export function zonaDe(
       best = side;
     }
   }
-  return best[1] < BORDE ? best[0] : "center";
+  return best[1] < EDGE ? best[0] : "center";
 }
 
 /** The pane under the point and the zone, or `null` over itself, the chrome
  *  or nothing. */
-function destinoEn(
+function targetIn(
   screen: Screen,
   x: number,
   y: number,
   origin: number,
 ): { slot: number; zone: DropZone; rect: DOMRect } | null {
   for (const [id, dom] of screen.slots) {
-    if (CROMO.has(dom.root.dataset["kind"] ?? "")) {
+    if (CHROME.has(dom.root.dataset["kind"] ?? "")) {
       continue;
     }
     const r = dom.root.getBoundingClientRect();
     if (x < r.left || x >= r.right || y < r.top || y >= r.bottom) {
       continue;
     }
-    return id === origin ? null : { slot: id, zone: zonaDe(x, y, r), rect: r };
+    return id === origin ? null : { slot: id, zone: zoneOf(x, y, r), rect: r };
   }
   return null;
 }
 
 /** The zone's rectangle, relative to the board. */
-function pintarVelo(
+function paintVeil(
   veil: HTMLElement,
   board: DOMRect,
   d: { zone: DropZone; rect: DOMRect } | null,
@@ -109,11 +109,7 @@ function pintarVelo(
  * it without the key reaching the host, and the click the browser fires on
  * release over the handle is swallowed: a drag is not choosing the tab.
  */
-export function hacerArrastrable(
-  screen: Screen,
-  handle: HTMLElement,
-  slotId: number,
-): void {
+export function makeDraggable(screen: Screen, handle: HTMLElement, slotId: number): void {
   handle.addEventListener("pointerdown", (e: PointerEvent) => {
     if (e.button !== 0) {
       return;
@@ -155,15 +151,15 @@ export function hacerArrastrable(
     };
     const move = (ev: PointerEvent): void => {
       if (!dragging) {
-        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < UMBRAL) {
+        if (Math.hypot(ev.clientX - x0, ev.clientY - y0) < THRESHOLD) {
           return;
         }
         dragging = true;
         doc.documentElement.dataset["dragging"] = "slot";
         screen.root.append(veil);
       }
-      target = destinoEn(screen, ev.clientX, ev.clientY, slotId);
-      pintarVelo(veil, screen.root.getBoundingClientRect(), target);
+      target = targetIn(screen, ev.clientX, ev.clientY, slotId);
+      paintVeil(veil, screen.root.getBoundingClientRect(), target);
     };
     const release = (): void => {
       cleanup();

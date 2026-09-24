@@ -13,18 +13,18 @@ import type { SplashView } from "../types";
  * `brief` mode's deadline is MET by the renderer: there is no event loop to
  * wake the host up, and the number comes in the screen itself
  * (`close_after_ms`). Lives in `Screen` — not in this module — and is armed
- * once per appearance; see `Screen.splashPlazo`.
+ * once per appearance; see `Screen.splashDeadline`.
  */
 export function paintSplash(this: Screen, splash: SplashView | null): void {
   if (splash === null) {
     // It is gone (a key, a click, its own deadline): disarm whatever was
     // left, or a live timer would send the close for a screen that is no
     // longer there and burn a sequence number.
-    if (this.splashPlazo !== null) {
-      clearTimeout(this.splashPlazo);
-      this.splashPlazo = null;
+    if (this.splashDeadline !== null) {
+      clearTimeout(this.splashDeadline);
+      this.splashDeadline = null;
     }
-    this.splashPuesto = false;
+    this.splashShown = false;
     this.splashRoot.replaceChildren();
     this.splashRoot.dataset["open"] = "false";
     return;
@@ -118,11 +118,11 @@ export function paintSplash(this: Screen, splash: SplashView | null): void {
   // patch" — and during startup patches keep arriving nonstop, which is
   // exactly when this screen is up.
   const remaining = splash.close_after_ms;
-  if (!this.splashPuesto && remaining !== null && remaining !== undefined) {
-    this.splashPlazo = setTimeout(() => {
-      this.splashPlazo = null;
+  if (!this.splashShown && remaining !== null && remaining !== undefined) {
+    this.splashDeadline = setTimeout(() => {
+      this.splashDeadline = null;
       this.send({ action: "splash_close" });
     }, remaining);
   }
-  this.splashPuesto = true;
+  this.splashShown = true;
 }

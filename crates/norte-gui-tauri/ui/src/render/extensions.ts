@@ -11,7 +11,7 @@ import type {
   ExtensionOutputView,
   ProgramOutputView,
 } from "../types";
-import { revelar, badge } from "./dom";
+import { revealInView, badge } from "./dom";
 
 /**
  * The extension manager (F12): the list on the left and, on the right, the
@@ -110,7 +110,7 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
     const version = document.createElement("span");
     version.className = "extensions-version";
     version.textContent = r.version;
-    main.append(name, version, estadoDe(r, this.t.bind(this)));
+    main.append(name, version, statusPill(r, this.t.bind(this)));
     row.append(main);
 
     const meta = document.createElement("span");
@@ -130,7 +130,7 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
     }
 
     if (r.capabilities.length > 0) {
-      row.append(capsDe(r.capabilities));
+      row.append(capsList(r.capabilities));
     }
     list.append(row);
   }
@@ -156,7 +156,7 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
       panel.append(hint);
     }
   } else if (broken !== undefined) {
-    panel.append(fichaDeRota(this, broken, ext.cursor));
+    panel.append(brokenCard(this, broken, ext.cursor));
   }
   body.append(panel);
   box.append(body);
@@ -214,7 +214,7 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
     box.append(errors);
   }
   this.extensionsRoot.replaceChildren(box);
-  revelar(box.querySelector(`#extension-row-${String(ext.cursor)}`) ?? undefined);
+  revealInView(box.querySelector(`#extension-row-${String(ext.cursor)}`) ?? undefined);
 }
 
 /**
@@ -223,7 +223,7 @@ export function paintExtensions(this: Screen, ext: ExtensionsView | null): void 
  * like an id and there is nothing to send for deletion — and it is said with
  * the host's sentence.
  */
-function fichaDeRota(s: Screen, e: ExtensionErrorView, row: number): HTMLElement {
+function brokenCard(s: Screen, e: ExtensionErrorView, row: number): HTMLElement {
   const header = document.createElement("header");
   header.className = "extensions-pane-head";
   const name = document.createElement("h2");
@@ -270,7 +270,7 @@ function fichaDeRota(s: Screen, e: ExtensionErrorView, row: number): HTMLElement
 }
 
 /** The status pill: TWO independent facts, and both are stated. */
-function estadoDe(r: ExtensionRowView, t: (key: string) => string): HTMLElement {
+function statusPill(r: ExtensionRowView, t: (key: string) => string): HTMLElement {
   const state = document.createElement("span");
   state.className = "extensions-state";
   state.dataset["approved"] = String(r.approved);
@@ -282,7 +282,7 @@ function estadoDe(r: ExtensionRowView, t: (key: string) => string): HTMLElement 
 }
 
 /** The capabilities as chips, one per node: a third party's text. */
-function capsDe(capabilities: string[]): HTMLElement {
+function capsList(capabilities: string[]): HTMLElement {
   const caps = document.createElement("ul");
   caps.className = "extensions-caps";
   for (const c of capabilities) {
@@ -332,7 +332,7 @@ export function extensionPaneHead(
   const category = document.createElement("span");
   category.className = "extensions-category";
   category.textContent = r.category;
-  meta.append(category, estadoDe(r, this.t.bind(this)));
+  meta.append(category, statusPill(r, this.t.bind(this)));
   header.append(meta);
 
   if (r.description !== "") {
@@ -401,7 +401,7 @@ export function extensionPaneHead(
   header.append(actions);
 
   if (r.capabilities.length > 0) {
-    header.append(capsDe(r.capabilities));
+    header.append(capsList(r.capabilities));
   }
 
   // How much it contributes: the numbers the row has no room to state.
@@ -653,7 +653,7 @@ export function paintAgents(this: Screen, agents: AgentsView | null): void {
   list.setAttribute("aria-activedescendant", `agent-row-${String(agents.cursor)}`);
   box.append(list);
   this.agentsRoot.replaceChildren(box);
-  revelar(list.querySelector(`#agent-row-${String(agents.cursor)}`) ?? undefined);
+  revealInView(list.querySelector(`#agent-row-${String(agents.cursor)}`) ?? undefined);
 }
 
 /**

@@ -112,7 +112,7 @@ const SHAPES: Record<string, Shape> = {
  * in the label, and a reader that also read the drawing would say the same
  * thing twice.
  */
-export function icono(doc: Document, kind: string): SVGSVGElement | null {
+export function icon(doc: Document, kind: string): SVGSVGElement | null {
   const shape = SHAPES[kind];
   if (shape === undefined) {
     return null;
@@ -138,6 +138,6 @@ export function icono(doc: Document, kind: string): SVGSVGElement | null {
 }
 
 /** A badge's figure: past a hundred, `99+`. */
-export function cifraDeInsignia(n: number): string {
+export function badgeCount(n: number): string {
   return n > 99 ? "99+" : String(n);
 }

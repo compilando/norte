@@ -4,7 +4,7 @@
 
 import type { Screen } from "../render";
 import type { TerminalColorView, TerminalSlotView, TerminalSpanView } from "../types";
-import { nota } from "./dom";
+import { note } from "./dom";
 import type { SlotDom } from "./dom";
 
 /**
@@ -31,7 +31,7 @@ export function paintTerminal(this: Screen, dom: SlotDom, slot: TerminalSlotView
   if (slot.no_shell) {
     // A blank panel and a panel with no shell look the same and are not the
     // same thing.
-    dom.scroller.replaceChildren(nota(this.t("terminal-none")));
+    dom.scroller.replaceChildren(note(this.t("terminal-none")));
     return;
   }
   const rows = slot.rows.map((row, y) => paintRow(row, y, slot.cursor));

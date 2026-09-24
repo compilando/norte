@@ -10,8 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { Screen } from "../src/render";
 import { MARK_RULER_COLOR, OVERSCAN, markRulerImage } from "../src/render/dom";
-import { zonaDe } from "../src/render/mover";
-import { objetivoRevelado } from "../src/render/settings";
+import { zoneOf } from "../src/render/move";
+import { revealTarget } from "../src/render/settings";
 import { realCatalog } from "./fixtures";
 import { BRIDGE_VERSION } from "../src/types";
 import type {
@@ -2479,13 +2479,13 @@ describe("moving a panel by dragging it (ADR 0138)", () => {
     expect(document.documentElement.dataset["dragging"]).toBeUndefined();
   });
 
-  it("zonaDe: the nearest side under a quarter away, else the center", () => {
+  it("zoneOf: the nearest side under a quarter away, else the center", () => {
     const r = { left: 0, top: 0, width: 100, height: 100 };
-    expect(zonaDe(5, 50, r)).toBe("left");
-    expect(zonaDe(95, 50, r)).toBe("right");
-    expect(zonaDe(50, 3, r)).toBe("top");
-    expect(zonaDe(50, 90, r)).toBe("bottom");
-    expect(zonaDe(50, 50, r)).toBe("center");
+    expect(zoneOf(5, 50, r)).toBe("left");
+    expect(zoneOf(95, 50, r)).toBe("right");
+    expect(zoneOf(50, 3, r)).toBe("top");
+    expect(zoneOf(50, 90, r)).toBe("bottom");
+    expect(zoneOf(50, 50, r)).toBe("center");
   });
 
   it("dragging the title and dropping on another sends move_slot with the zone", () => {
@@ -3692,12 +3692,12 @@ describe("settings", () => {
     // Row 0: opens "Apariencia", so what scrolls into view is the HEADER.
     // Revealing just the row left the label outside the box, which is how
     // the label went out of sight when scrolling back up.
-    expect(objetivoRevelado(list, 0)?.className).toBe("settings-group");
-    expect(objetivoRevelado(list, 0)?.textContent).toContain("Apariencia");
+    expect(revealTarget(list, 0)?.className).toBe("settings-group");
+    expect(revealTarget(list, 0)?.textContent).toContain("Apariencia");
     // Row 1: opens nothing, it reveals itself.
-    expect(objetivoRevelado(list, 1)?.id).toBe("settings-row-1");
+    expect(revealTarget(list, 1)?.id).toBe("settings-row-1");
     // Row 2: opens the paths section, same rule as 0.
-    expect(objetivoRevelado(list, 2)?.className).toBe("settings-group");
+    expect(revealTarget(list, 2)?.className).toBe("settings-group");
   });
 
   it("a missing location says so, and a hostile one is marked", () => {

@@ -387,7 +387,7 @@ pub enum DropZone {
 impl DropZone {
     /// The zone of a rectangle under point `(x, y)`: the nearest side if it
     /// is less than a QUARTER of it away, and the center otherwise. The
-    /// same rule as `zonaDe` in the window (`render/mover.ts`).
+    /// same rule as `zoneOf` in the window (`render/move.ts`).
     #[must_use]
     pub fn at(x: u16, y: u16, rect: Rect) -> Self {
         let frac = |p: u16, o: u16, long: u16| {

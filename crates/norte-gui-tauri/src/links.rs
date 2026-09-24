@@ -37,13 +37,13 @@ pub enum LinkError {
 /// absolute URL, or the text carries control characters.
 ///
 /// ```
-/// use norte_gui_tauri::links::{validar, LinkError};
+/// use norte_gui_tauri::links::{validate, LinkError};
 ///
-/// assert!(validar("https://norte.example/docs").is_ok());
-/// assert_eq!(validar("file:///etc/passwd"), Err(LinkError::Scheme));
-/// assert_eq!(validar("javascript:alert(1)"), Err(LinkError::Scheme));
+/// assert!(validate("https://norte.example/docs").is_ok());
+/// assert_eq!(validate("file:///etc/passwd"), Err(LinkError::Scheme));
+/// assert_eq!(validate("javascript:alert(1)"), Err(LinkError::Scheme));
 /// ```
-pub fn validar(url: &str) -> Result<(), LinkError> {
+pub fn validate(url: &str) -> Result<(), LinkError> {
     // The SAME predicate that masks names (`norte_encoding::is_terminal_hazard`),
     // and not a fourth hand-written list: the one that used to be here left
     // out `U+061C` — a directional mark — and every zero-width invisible. A
@@ -80,8 +80,8 @@ mod tests {
 
     #[test]
     fn what_is_allowed_passes() {
-        assert!(validar("https://ejemplo.test/a").is_ok());
-        assert!(validar("mailto:alguien@ejemplo.test").is_ok());
+        assert!(validate("https://ejemplo.test/a").is_ok());
+        assert!(validate("mailto:alguien@ejemplo.test").is_ok());
     }
 
     #[test]
@@ -93,26 +93,38 @@ mod tests {
             "ssh://host",
             "vscode://file/etc/passwd",
         ] {
-            assert_eq!(validar(u), Err(LinkError::Scheme), "{u} should not pass");
+            assert_eq!(validate(u), Err(LinkError::Scheme), "{u} should not pass");
         }
     }
 
     #[test]
     fn a_broken_url_does_not_pass() {
-        assert_eq!(validar("sin-esquema"), Err(LinkError::Shape));
-        assert_eq!(validar("https:"), Err(LinkError::Shape));
+        assert_eq!(validate("sin-esquema"), Err(LinkError::Shape));
+        assert_eq!(validate("https:"), Err(LinkError::Shape));
     }
 
     /// A link with a control character inside is painted one way and points
     /// somewhere else.
     #[test]
     fn control_characters_do_not_pass() {
-        assert_eq!(validar("https://a.test/\u{202e}x"), Err(LinkError::Control));
-        assert_eq!(validar("https://a.test/ x"), Err(LinkError::Control));
+        assert_eq!(
+            validate("https://a.test/\u{202e}x"),
+            Err(LinkError::Control)
+        );
+        assert_eq!(validate("https://a.test/ x"), Err(LinkError::Control));
         // The ones the hand-written list used to leave out.
-        assert_eq!(validar("https://a.test/\u{061c}x"), Err(LinkError::Control));
-        assert_eq!(validar("https://a.test/\u{200b}x"), Err(LinkError::Control));
-        assert_eq!(validar("https://a.test/\u{feff}x"), Err(LinkError::Control));
+        assert_eq!(
+            validate("https://a.test/\u{061c}x"),
+            Err(LinkError::Control)
+        );
+        assert_eq!(
+            validate("https://a.test/\u{200b}x"),
+            Err(LinkError::Control)
+        );
+        assert_eq!(
+            validate("https://a.test/\u{feff}x"),
+            Err(LinkError::Control)
+        );
     }
 
     /// A `mailto:` with a query does not pass: it has historically been used
@@ -120,9 +132,9 @@ mod tests {
     #[test]
     fn a_mailto_with_a_query_does_not_pass() {
         assert_eq!(
-            validar("mailto:a@b.test?attach=/etc/shadow"),
+            validate("mailto:a@b.test?attach=/etc/shadow"),
             Err(LinkError::Shape)
         );
-        assert!(validar("mailto:a@b.test").is_ok());
+        assert!(validate("mailto:a@b.test").is_ok());
     }
 }

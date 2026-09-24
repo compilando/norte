@@ -15,9 +15,9 @@ import "@fontsource/inter/latin-600.css";
 
 import { invokeMetrics, tauriPort } from "./bridge";
 import type { HostPort } from "./bridge";
-import { AltSolo, esParaElCampo, keyAction, keyInputOf } from "./keys";
+import { AltSolo, isForTheField, keyAction, keyInputOf } from "./keys";
 import { Screen } from "./render";
-import { montarBarraDeTitulo } from "./render/menus";
+import { mountTitleBar } from "./render/menus";
 import { Session } from "./session";
 import { BRIDGE_VERSION } from "./types";
 import type { Appearance, HostCatalog, UiAction, WindowVerb } from "./types";
@@ -96,9 +96,9 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   // The window's own title bar (ADR 0136), for the screen and for the fatal
   // error. Nothing to wait for a response to: the window moves or it does
   // not, and a rejection (native bar) goes to the console and nothing else.
-  const window_: ControlesDeVentana = {
+  const window_: WindowControls = {
     t: (k) => catalog.strings[k] ?? k,
-    pedir: (verb) => {
+    request: (verb) => {
       port.windowControl(verb).catch((e: unknown) => {
         console.warn("window_control", verb, e);
       });
@@ -181,7 +181,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     catalog,
     send,
     () => port.imageBytes(),
-    window_.pedir,
+    window_.request,
   );
 
   const repaint = (): void => {
@@ -326,30 +326,33 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
   // the keymap either; it is a separate gesture.
   const altSolo = new AltSolo();
   doc.addEventListener("keyup", (e) => {
-    if (altSolo.arriba(e)) {
+    if (altSolo.up(e)) {
       // Without this, WebKitGTK can take focus to its own bar.
       e.preventDefault();
       send({ action: "menu_toggle" });
     }
   });
-  doc.addEventListener("mousedown", () => altSolo.soltar(), true);
-  doc.addEventListener("wheel", () => altSolo.soltar(), { capture: true, passive: true });
-  (doc.defaultView ?? window).addEventListener("blur", () => altSolo.soltar());
+  doc.addEventListener("mousedown", () => altSolo.release(), true);
+  doc.addEventListener("wheel", () => altSolo.release(), {
+    capture: true,
+    passive: true,
+  });
+  (doc.defaultView ?? window).addEventListener("blur", () => altSolo.release());
 
   doc.addEventListener("keydown", (e) => {
-    altSolo.abajo(e);
+    altSolo.down(e);
     const k = keyInputOf(e);
     if (k === null) {
       return;
     }
     // An open text field owns its keys: the ones that type and the ones
     // that EDIT. The rule lives in `keys.ts`, where it can be tested.
-    if (esParaElCampo(k, e.target instanceof HTMLInputElement)) {
+    if (isForTheField(k, e.target instanceof HTMLInputElement)) {
       return;
     }
     // The keys that scroll help also go to the host (bridge 76): it resolves
     // them with the reader's keymap and answers with a request the renderer
-    // applies. See `desplazarAyuda`.
+    // applies. See `scrollHelp`.
     e.preventDefault();
     pending ??= { at: performance.now(), what: "key" };
     send(keyAction(k));
@@ -371,7 +374,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
     // renderer's FULL path (event → invoke → host → event → DOM → next
     // frame). Left out are the system's event delivery and the compositor,
     // and that is stated in the report.
-    await medir(doc, metrics, port, () => {
+    await measure(doc, metrics, port, () => {
       pending ??= { at: performance.now(), what: "scroll" };
     });
   }
@@ -379,7 +382,7 @@ export async function boot(port: HostPort, doc: Document): Promise<Metrics> {
 }
 
 /** Latencies from a scripted pass: keys first, scroll after. */
-async function medir(
+async function measure(
   doc: Document,
   metrics: Metrics,
   port: HostPort,
@@ -493,7 +496,7 @@ function sendViewport(send: (a: UiAction) => void, screen: Screen, doc: Document
  * every projected name was a role every preset defines, so every change
  * overwrote the whole set and just assigning was enough.
  */
-let variablesPuestas: string[] = [];
+let appliedVariables: string[] = [];
 
 /**
  * The colors come from the theme resolved IN RUST; here they are only
@@ -510,13 +513,13 @@ let variablesPuestas: string[] = [];
  */
 export function applyTheme(doc: Document, theme: Record<string, string>): void {
   const root = doc.documentElement;
-  for (const name of variablesPuestas) {
+  for (const name of appliedVariables) {
     root.style.removeProperty(`--${name}`);
   }
   for (const [name, value] of Object.entries(theme)) {
     root.style.setProperty(`--${name}`, value);
   }
-  variablesPuestas = Object.keys(theme);
+  appliedVariables = Object.keys(theme);
 }
 
 /**
@@ -532,7 +535,7 @@ export function themeFor(cat: HostCatalog, dark: boolean): Record<string, string
 }
 
 /** Whether the desktop asks for dark. With no `matchMedia` (a test), no. */
-function escritorioOscuro(doc: Document): boolean {
+function isDesktopDark(doc: Document): boolean {
   const w = doc.defaultView;
   if (w === null || typeof w.matchMedia !== "function") {
     return false;
@@ -541,13 +544,13 @@ function escritorioOscuro(doc: Document): boolean {
 }
 
 function applyThemeFor(doc: Document, cat: HostCatalog): void {
-  applyTheme(doc, themeFor(cat, escritorioOscuro(doc)));
+  applyTheme(doc, themeFor(cat, isDesktopDark(doc)));
 }
 
 /** A row's height-to-size ratio. A 22px row for 14px text is what the
  *  stylesheet says based on the bundled typeface (V1); kept while scaling so
  *  a row keeps the same feel at any size. */
-export const FILA_POR_TAMANO = 22 / 14;
+export const ROW_BY_SIZE = 22 / 14;
 
 /**
  * Fonts and motion (`[ui] font`, `mono_font`, `font_size`,
@@ -579,7 +582,7 @@ export function applyAppearance(doc: Document, ap: Appearance | undefined): void
     root.style.setProperty("--ui-font-size", `${String(ap.font_size)}px`);
     root.style.setProperty(
       "--cell-h",
-      `${String(Math.round(ap.font_size * FILA_POR_TAMANO))}px`,
+      `${String(Math.round(ap.font_size * ROW_BY_SIZE))}px`,
     );
   }
   // Only the REQUEST is ADDED: the configuration cannot contradict someone
@@ -598,7 +601,7 @@ export function applyAppearance(doc: Document, ap: Appearance | undefined): void
   } else {
     delete root.dataset["titlebar"];
   }
-  medirCelda(doc);
+  measureCell(doc);
 }
 
 /**
@@ -612,7 +615,7 @@ export function applyAppearance(doc: Document, ap: Appearance | undefined): void
  * SEVERAL characters are measured and divided: just one rounds to the pixel
  * and the error multiplies by the number of columns.
  */
-function medirCelda(doc: Document): void {
+function measureCell(doc: Document): void {
   const ruler = doc.createElement("span");
   ruler.textContent = "M".repeat(50);
   ruler.style.cssText =
@@ -629,9 +632,9 @@ function medirCelda(doc: Document): void {
 }
 
 /** What the fatal screen needs to set up its own title bar. */
-export interface ControlesDeVentana {
+export interface WindowControls {
   t: (key: string) => string;
-  pedir: (verb: WindowVerb) => void;
+  request: (verb: WindowVerb) => void;
 }
 
 /**
@@ -644,14 +647,14 @@ export interface ControlesDeVentana {
 export function showFatal(
   el: HTMLElement,
   text: string,
-  window_: ControlesDeVentana | null = null,
+  window_: WindowControls | null = null,
 ): void {
   el.replaceChildren();
   const doc = el.ownerDocument;
   if (window_ !== null && doc.documentElement.dataset["titlebar"] === "custom") {
     const bar = doc.createElement("nav");
     bar.className = "menubar";
-    montarBarraDeTitulo(bar, window_.t, window_.pedir, false);
+    mountTitleBar(bar, window_.t, window_.request, false);
     el.append(bar);
   }
   el.append(text);

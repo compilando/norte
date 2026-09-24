@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { CompareFaceView, CompareView, SyncStepView, SyncView } from "../types";
-import { badge, veredicto } from "./dom";
+import { badge, verdict } from "./dom";
 
 /** The sync panel: the PLAN. Painted in the same slot as the diff one —
  *  they are two whole screens and never overlap. */
@@ -297,7 +297,7 @@ export function paintCompare(this: Screen, compare: CompareView | null): void {
     });
     row.append(
       this.compareFace(r.left),
-      veredicto(r, (k) => this.t(k)),
+      verdict(r, (k) => this.t(k)),
       this.compareFace(r.right),
     );
     if (r.paired_under !== null) {

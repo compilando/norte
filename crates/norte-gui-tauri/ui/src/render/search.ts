@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { SearchView } from "../types";
-import { revelar, badge } from "./dom";
+import { revealInView, badge } from "./dom";
 
 export function paintSearch(this: Screen, search: SearchView | null): void {
   if (search === null) {
@@ -96,6 +96,6 @@ export function paintSearch(this: Screen, search: SearchView | null): void {
   box.append(list);
   this.searchRoot.replaceChildren(box);
   if (search.cursor !== null) {
-    revelar(list.querySelector(`#search-row-${String(search.cursor)}`) ?? undefined);
+    revealInView(list.querySelector(`#search-row-${String(search.cursor)}`) ?? undefined);
   }
 }

@@ -19,17 +19,17 @@ import type {
  * without the guard, checking a list's paint brought down a test over a call
  * that has nothing to do with painting.
  */
-export function revelar(el: Element | undefined): void {
+export function revealInView(el: Element | undefined): void {
   if (el instanceof HTMLElement && typeof el.scrollIntoView === "function") {
     el.scrollIntoView({ block: "nearest" });
   }
 }
 
 /** A paragraph with a sentence the host already wrote. */
-export function nota(texto: string): HTMLElement {
+export function note(text: string): HTMLElement {
   const p = document.createElement("p");
   p.className = "slot-note";
-  p.textContent = texto;
+  p.textContent = text;
   return p;
 }
 
@@ -152,11 +152,11 @@ const paintedRows = new WeakMap<
   { row: RowView; selected: boolean; index: number; rowH: number; iconColumn: boolean }
 >();
 
-export function sinCambios(nodo: object, firma: string): boolean {
-  if (signatures.get(nodo) === firma) {
+export function unchanged(node: object, signature: string): boolean {
+  if (signatures.get(node) === signature) {
     return true;
   }
-  signatures.set(nodo, firma);
+  signatures.set(node, signature);
   return false;
 }
 
@@ -208,8 +208,8 @@ export const MARK_RULER_COLOR = "color-mix(in srgb, var(--mark-bg) 55%, var(--fg
  * what a ruler for the whole listing has to do, and this way nothing needs
  * measuring when painting.
  */
-export function markRulerImage(tramos: readonly number[], spans: number): string {
-  if (tramos.length === 0 || spans <= 0) {
+export function markRulerImage(runs: readonly number[], spans: number): string {
+  if (runs.length === 0 || spans <= 0) {
     return "";
   }
   // Four decimals: more than enough for any screen height, and without them
@@ -219,11 +219,11 @@ export function markRulerImage(tramos: readonly number[], spans: number): string
   const c = MARK_RULER_COLOR;
   const stops: string[] = ["transparent 0%"];
   let i = 0;
-  while (i < tramos.length) {
-    const from = tramos[i] ?? 0;
+  while (i < runs.length) {
+    const from = runs[i] ?? 0;
     let to = from;
     // Runs: consecutive spans are ONE band, not two hundred stops.
-    while (i + 1 < tramos.length && tramos[i + 1] === to + 1) {
+    while (i + 1 < runs.length && runs[i + 1] === to + 1) {
       to += 1;
       i += 1;
     }
@@ -294,7 +294,7 @@ export function updateRow(
     return;
   }
   paintedRows.set(el, { row, selected: row.selected, index, rowH, iconColumn });
-  if (sinCambios(el, JSON.stringify([row, index, rowH, iconColumn]))) {
+  if (unchanged(el, JSON.stringify([row, index, rowH, iconColumn]))) {
     return;
   }
   el.style.setProperty("top", `${index * rowH}px`);
@@ -487,7 +487,7 @@ export function errorNode(text: string, detail: string | null): HTMLElement {
 
 /** The two glyphs in the middle of a compared row, already translated by
  *  the host: the verdict and how confident it is. */
-export function veredicto(r: CompareRowView, tr: (k: string) => string): HTMLElement {
+export function verdict(r: CompareRowView, tr: (k: string) => string): HTMLElement {
   const el = document.createElement("span");
   el.className = "compare-verdict";
   el.textContent = r.verdict;
@@ -509,17 +509,17 @@ export function statusNodes(
   status: StatusView,
   connection: string,
   tr: (k: string) => string,
-  rechazo: string | null = null,
+  rejection: string | null = null,
   items: StatusItemView[] = [],
   onItem: ((id: string) => void) | null = null,
 ): Node[] {
   const nodes: Node[] = [];
-  if (rechazo !== null) {
+  if (rejection !== null) {
     // In front of everything: it is the only thing on this bar the host
     // does not know.
     const el = document.createElement("span");
     el.className = "banner rejected";
-    el.textContent = rechazo;
+    el.textContent = rejection;
     nodes.push(el);
   }
   for (const b of status.banners) {

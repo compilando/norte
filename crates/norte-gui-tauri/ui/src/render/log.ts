@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { LogSlotView } from "../types";
-import { nota, chip, badge } from "./dom";
+import { note, chip, badge } from "./dom";
 import type { SlotDom } from "./dom";
 
 /**
@@ -44,7 +44,7 @@ export function paintLog(this: Screen, dom: SlotDom, slot: LogSlotView): void {
     // something that does not exist. The host already collapses `both` to
     // `window` in that case, so here only whether it can be clicked needs
     // deciding.
-    slot.sources_available ? this.selectorDeFuente(slot) : chip(slot.source),
+    slot.sources_available ? this.sourceSelector(slot) : chip(slot.source),
     // And whatever needs to be said about it: that the daemon does not
     // serve its log, or whose level is being shown.
     ...(slot.source_note === "" ? [] : [chip(slot.source_note)]),
@@ -54,11 +54,11 @@ export function paintLog(this: Screen, dom: SlotDom, slot: LogSlotView): void {
   // triggers a frame — i.e. a repaint — the field was destroyed on the first
   // character and focus and caret were lost. Same bug a dialog's field
   // already had, and the same cure: keep the node.
-  let controls = this.logControles;
-  if (controls === null || this.logPintado !== slot.slot_id) {
-    controls = this.crearControlesDeRegistro();
-    this.logControles = controls;
-    this.logPintado = slot.slot_id;
+  let controls = this.logControls;
+  if (controls === null || this.logControlsSlot !== slot.slot_id) {
+    controls = this.createLogControls();
+    this.logControls = controls;
+    this.logControlsSlot = slot.slot_id;
   }
   for (const b of controls.querySelectorAll("button[data-level]")) {
     const el = b as HTMLElement;
@@ -114,7 +114,7 @@ export function paintLog(this: Screen, dom: SlotDom, slot: LogSlotView): void {
   // An empty panel SAYS SO. Without this, "there is nothing", "the filter
   // eats everything" and "this process has no ring" all paint the same: a
   // blank box, which reads as a broken panel.
-  const body: HTMLElement = slot.lines.length === 0 ? nota(this.t("log-empty")) : list;
+  const body: HTMLElement = slot.lines.length === 0 ? note(this.t("log-empty")) : list;
   dom.scroller.replaceChildren(controls, body);
   this.scheduleLogRows(dom);
 }
@@ -130,7 +130,7 @@ export function paintLog(this: Screen, dom: SlotDom, slot: LogSlotView): void {
  * is what lets a test check which one is set without tying it to the
  * language, the same rule as the level buttons.
  */
-export function selectorDeFuente(this: Screen, slot: LogSlotView): HTMLElement {
+export function sourceSelector(this: Screen, slot: LogSlotView): HTMLElement {
   const b = document.createElement("button");
   b.type = "button";
   b.className = "chip log-source";
@@ -148,7 +148,7 @@ export function selectorDeFuente(this: Screen, slot: LogSlotView): HTMLElement {
  * Separate from painting because they carry DOM state that cannot be thrown
  * away on every frame: the filter's focus and caret.
  */
-export function crearControlesDeRegistro(this: Screen): HTMLElement {
+export function createLogControls(this: Screen): HTMLElement {
   const controls = document.createElement("div");
   controls.className = "log-controls";
   // One button per value of the CLOSED vocabulary. Compared by the wire
@@ -204,10 +204,10 @@ export function scheduleLogRows(this: Screen, dom: SlotDom): void {
     const height =
       body instanceof HTMLElement ? body.clientHeight : dom.scroller.clientHeight;
     const rows = Math.max(1, Math.floor(height / h));
-    if (this.logFilas === rows) {
+    if (this.logRows === rows) {
       return;
     }
-    this.logFilas = rows;
+    this.logRows = rows;
     this.send({ action: "log_set_visible_range", rows });
   });
 }

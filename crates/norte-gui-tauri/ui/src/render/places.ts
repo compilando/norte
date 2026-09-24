@@ -3,8 +3,8 @@
 
 import type { Screen } from "../render";
 import type { PlacesSlotView, TreeSlotView } from "../types";
-import { revelar, badge } from "./dom";
-import { icono } from "./iconos";
+import { revealInView, badge } from "./dom";
+import { icon } from "./icons";
 import type { SlotDom } from "./dom";
 
 /**
@@ -63,7 +63,7 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
     }
     // The folder, open or closed depending on the branch: it is what makes
     // the column read as a tree at a glance, as in VS Code.
-    const folder = icono(document, r.expanded ? "fs:folder-open" : "fs:folder");
+    const folder = icon(document, r.expanded ? "fs:folder-open" : "fs:folder");
     const name = document.createElement("span");
     name.className = "tree-name";
     name.dataset["hostile"] = String(r.hostile);
@@ -89,7 +89,7 @@ export function paintTree(this: Screen, dom: SlotDom, slot: TreeSlotView): void 
   }
   list.setAttribute("aria-activedescendant", `tree-row-${String(slot.cursor)}`);
   dom.scroller.replaceChildren(list);
-  revelar(list.querySelector(`#tree-row-${String(slot.cursor)}`) ?? undefined);
+  revealInView(list.querySelector(`#tree-row-${String(slot.cursor)}`) ?? undefined);
 }
 
 /**
@@ -142,7 +142,7 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
         row.dataset["line"] = "one";
       }
       row.title = [r.mount ?? "", r.detail].filter((s) => s !== "").join("\n");
-      const drawing = icono(
+      const drawing = icon(
         document,
         r.kind === "removable"
           ? "fs:removable"
@@ -168,7 +168,7 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
     } else {
       // A favorite, on ONE line: star and name; the target goes in the
       // title. A broken one still says why, below and in red.
-      const star = icono(document, "fs:favorite");
+      const star = icon(document, "fs:favorite");
       if (star !== null) {
         star.classList.add("places-icon");
         row.append(star);
@@ -199,5 +199,5 @@ export function paintPlaces(this: Screen, dom: SlotDom, slot: PlacesSlotView): v
   }
   list.setAttribute("aria-activedescendant", `place-row-${String(slot.cursor)}`);
   dom.scroller.replaceChildren(list);
-  revelar(list.querySelector(`#place-row-${String(slot.cursor)}`) ?? undefined);
+  revealInView(list.querySelector(`#place-row-${String(slot.cursor)}`) ?? undefined);
 }

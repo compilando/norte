@@ -3,7 +3,7 @@
 
 import type { Screen } from "../render";
 import type { MetadataSlotView, PreviewSlotView, ViewerView } from "../types";
-import { nota, viewerBar, viewerBody, badge } from "./dom";
+import { note, viewerBar, viewerBody, badge } from "./dom";
 import type { SlotDom } from "./dom";
 
 /** The viewer covers the screen while it is open. */
@@ -12,10 +12,10 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     this.viewerRoot.replaceChildren();
     this.viewerRoot.dataset["open"] = "false";
     this.viewerRows = 0;
-    this.visorPintado = null;
+    this.viewerPainted = null;
     // The viewer closed: the buffer is RELEASED. An object URL that is not
     // revoked keeps its bytes alive as long as the document lives.
-    this.soltarImagen();
+    this.releaseImage();
     return;
   }
   // The same viewer in a window of the same size and with the same cell is
@@ -24,15 +24,15 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   // body, which is what the end of this function does, does.
   const cell = this.cell();
   const signature = `${String(window.innerWidth)}x${String(window.innerHeight)}|${String(cell.w)}x${String(cell.h)}`;
-  const previous = this.visorPintado;
-  if (previous?.viewer === viewer && previous.firma === signature) {
+  const previous = this.viewerPainted;
+  if (previous?.viewer === viewer && previous.signature === signature) {
     return;
   }
-  this.visorPintado = { viewer, firma: signature };
+  this.viewerPainted = { viewer, signature };
   if (
     previous !== null &&
-    previous.firma === signature &&
-    desplazado(previous.viewer, viewer)
+    previous.signature === signature &&
+    onlyScrolled(previous.viewer, viewer)
   ) {
     // Only SCROLLED: same file, same header, same size. The body, the marks
     // and the bars are swapped in place. Redoing the whole box on every
@@ -42,13 +42,13 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     const old = box?.querySelector<HTMLElement>(".viewer-body");
     const meta = box?.querySelector<HTMLElement>(".viewer-meta");
     if (box && old && meta) {
-      meta.textContent = marcasDelVisor(this, viewer);
+      meta.textContent = viewerMarks(this, viewer);
       box.querySelectorAll(".viewer-bar").forEach((b) => {
         b.remove();
       });
-      const body = cuerpoDelVisor(viewer);
+      const body = focusableViewerBody(viewer);
       old.replaceWith(body);
-      ponerBarras(this, viewer, box, body);
+      placeViewerBars(this, viewer, box, body);
       return;
     }
   }
@@ -73,7 +73,7 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   }
   const meta = document.createElement("span");
   meta.className = "viewer-meta";
-  meta.textContent = marcasDelVisor(this, viewer);
+  meta.textContent = viewerMarks(this, viewer);
   head.append(meta);
   if (viewer.preview_by !== "") {
     // What is shown was produced by a PLUGIN. In its own node and with its
@@ -108,7 +108,7 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     head.append(no);
   }
 
-  const body = cuerpoDelVisor(viewer);
+  const body = focusableViewerBody(viewer);
 
   // The body and the VERTICAL bar go in a row; the HORIZONTAL one below both.
   // The bars are our own because the host only sends the visible window: the
@@ -117,7 +117,7 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
   canvas.className = "viewer-canvas";
   canvas.append(body);
   box.append(head, canvas);
-  ponerBarras(this, viewer, box, body);
+  placeViewerBars(this, viewer, box, body);
   // The wheel scrolls through the HOST, like the docked viewer and the log:
   // it decides the visible window. With `shift`, sideways — the usual gesture
   // for a horizontal axis, and the viewer does not wrap.
@@ -143,7 +143,7 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
     // The bytes do NOT come in the frame: they are requested separately and
     // painted when they arrive. Until then the raw view shows, which is the
     // honest thing — that is what the file is — instead of an empty gap.
-    this.pintarImagen(viewer, body);
+    this.paintImage(viewer, body);
   }
   this.viewerRoot.replaceChildren(box);
   // How many lines fit is known by WHOEVER PAINTS. The host used to estimate
@@ -167,12 +167,12 @@ export function paintViewer(this: Screen, viewer: ViewerView | null): void {
 }
 
 /** Revokes the live `blob:`, if there is one. Idempotent. */
-export function soltarImagen(this: Screen): void {
-  if (this.imagenUrl !== null) {
-    URL.revokeObjectURL(this.imagenUrl);
-    this.imagenUrl = null;
+export function releaseImage(this: Screen): void {
+  if (this.imageUrl !== null) {
+    URL.revokeObjectURL(this.imageUrl);
+    this.imageUrl = null;
   }
-  this.imagenDe = null;
+  this.imageKey = null;
 }
 
 /**
@@ -190,13 +190,13 @@ export function soltarImagen(this: Screen): void {
  * whoever its parent is. Receiving the frame is what let one of the two
  * branches rebuild it and take out whatever was next to the body.
  */
-export function pintarImagen(this: Screen, viewer: ViewerView, body: HTMLElement): void {
+export function paintImage(this: Screen, viewer: ViewerView, body: HTMLElement): void {
   const img = viewer.image;
   if (img === null) {
     return;
   }
   const key = `${viewer.path_display}|${img.format}|${String(img.width)}x${String(img.height)}`;
-  if (this.imagenDe === key && this.imagenUrl !== null) {
+  if (this.imageKey === key && this.imageUrl !== null) {
     // Already requested — or painted — and it is the same one: not
     // requested again.
     //
@@ -207,26 +207,26 @@ export function pintarImagen(this: Screen, viewer: ViewerView, body: HTMLElement
     // ended up a direct child of the frame and the slot was left with no
     // height. One branch rebuilding what another only replaces is the same
     // old divergence, inside a single function.
-    body.replaceWith(this.nodoImagen(this.imagenUrl, img, viewer.image_zoom));
+    body.replaceWith(this.imageNode(this.imageUrl, img, viewer.image_zoom));
     return;
   }
-  this.soltarImagen();
-  this.imagenDe = key;
+  this.releaseImage();
+  this.imageKey = key;
   void this.fetchImage()
     .then((bytes) => {
       // While it was in flight, the viewer could have changed or closed.
       // Painting the previous image over the current file is the same kind
       // of error as opening a viewer nobody asked for.
-      if (this.imagenDe !== key || bytes.byteLength === 0) {
+      if (this.imageKey !== key || bytes.byteLength === 0) {
         return;
       }
       const url = URL.createObjectURL(new Blob([bytes]));
-      this.imagenUrl = url;
-      body.replaceWith(this.nodoImagen(url, img, viewer.image_zoom));
+      this.imageUrl = url;
+      body.replaceWith(this.imageNode(url, img, viewer.image_zoom));
     })
     .catch(() => {
       // Without an image, the raw view stays, which is the real file.
-      this.imagenDe = null;
+      this.imageKey = null;
     });
 }
 
@@ -276,7 +276,7 @@ export function paintMetadataBody(
 ): void {
   dom.scroller.className = "metadata";
   if (slot.note !== "") {
-    dom.scroller.replaceChildren(nota(slot.note));
+    dom.scroller.replaceChildren(note(slot.note));
     return;
   }
   const list = document.createElement("dl");
@@ -315,7 +315,7 @@ export function paintPreview(this: Screen, dom: SlotDom, slot: PreviewSlotView):
   dom.scroller.className = "preview";
   if (slot.viewer === null) {
     dom.scroller.onwheel = null;
-    dom.scroller.replaceChildren(nota(slot.note));
+    dom.scroller.replaceChildren(note(slot.note));
     return;
   }
   // The wheel scrolls through the HOST, like the log: it decides the visible
@@ -348,7 +348,7 @@ export function paintPreview(this: Screen, dom: SlotDom, slot: PreviewSlotView):
  * without changing anything else in the header, and `paintViewer` rewrites
  * them on their own.
  */
-function marcasDelVisor(screen: Screen, viewer: ViewerView): string {
+function viewerMarks(screen: Screen, viewer: ViewerView): string {
   // Each mark is a DATUM the host resolved: encoding, line ending, whether
   // the user forced it, whether decoding had errors, whether the file was
   // truncated. None of it is computed here.
@@ -383,7 +383,7 @@ function marcasDelVisor(screen: Screen, viewer: ViewerView): string {
 }
 
 /** The viewer's body, with what makes it focusable and announceable. */
-function cuerpoDelVisor(viewer: ViewerView): HTMLElement {
+function focusableViewerBody(viewer: ViewerView): HTMLElement {
   const body = viewerBody(viewer);
   body.setAttribute("tabindex", "-1");
   body.setAttribute("aria-describedby", `viewer-meta-${String(viewer.first_line)}`);
@@ -394,7 +394,7 @@ function cuerpoDelVisor(viewer: ViewerView): HTMLElement {
  * The viewer's bars: the vertical one next to the body, in its canvas; the
  * horizontal one at the bottom of the box.
  */
-function ponerBarras(
+function placeViewerBars(
   screen: Screen,
   viewer: ViewerView,
   box: HTMLElement,
@@ -432,7 +432,7 @@ function ponerBarras(
  * same header except for the marks. Never an image, because its body gets
  * replaced by the picture when it arrives.
  */
-function desplazado(before: ViewerView, now: ViewerView): boolean {
+function onlyScrolled(before: ViewerView, now: ViewerView): boolean {
   return (
     before.image === null &&
     now.image === null &&

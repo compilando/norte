@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AltSolo, esParaElCampo, keyInputOf } from "../src/keys";
+import { AltSolo, isForTheField, keyInputOf } from "../src/keys";
 
 function ev(init: KeyboardEventInit): KeyboardEvent {
   return new KeyboardEvent("keydown", init);
@@ -66,8 +66,8 @@ describe("an open text field", () => {
   });
 
   it("keeps the keys that TYPE", () => {
-    expect(esParaElCampo(k("a"), true)).toBe(true);
-    expect(esParaElCampo(k("\u{1F600}"), true)).toBe(true);
+    expect(isForTheField(k("a"), true)).toBe(true);
+    expect(isForTheField(k("\u{1F600}"), true)).toBe(true);
   });
 
   it("and the ones that EDIT, which is the missing half", () => {
@@ -76,29 +76,29 @@ describe("an open text field", () => {
     // a password field (#327) — forty characters, without seeing them — the
     // only way out of a typo was abandoning navigation.
     for (const key of ["Backspace", "Delete", "ArrowLeft", "ArrowRight", "Home", "End"]) {
-      expect(esParaElCampo(k(key), true)).toBe(true);
+      expect(isForTheField(k(key), true)).toBe(true);
     }
   });
 
   it("and paste, which is how a password dialog gets answered", () => {
-    expect(esParaElCampo(k("v", { ctrl: true }), true)).toBe(true);
-    expect(esParaElCampo(k("c", { ctrl: true }), true)).toBe(true);
-    expect(esParaElCampo(k("z", { ctrl: true }), true)).toBe(true);
+    expect(isForTheField(k("v", { ctrl: true }), true)).toBe(true);
+    expect(isForTheField(k("c", { ctrl: true }), true)).toBe(true);
+    expect(isForTheField(k("z", { ctrl: true }), true)).toBe(true);
   });
 
   it("but NOT the host's chords", () => {
     // `ctrl+q` is not editing: if the field kept it, there would be no way
     // to leave the window with a dialog in front.
-    expect(esParaElCampo(k("q", { ctrl: true }), true)).toBe(false);
-    expect(esParaElCampo(k("Enter"), true)).toBe(false);
-    expect(esParaElCampo(k("Escape"), true)).toBe(false);
-    expect(esParaElCampo(k("F5"), true)).toBe(false);
-    expect(esParaElCampo(k("Tab"), true)).toBe(false);
+    expect(isForTheField(k("q", { ctrl: true }), true)).toBe(false);
+    expect(isForTheField(k("Enter"), true)).toBe(false);
+    expect(isForTheField(k("Escape"), true)).toBe(false);
+    expect(isForTheField(k("F5"), true)).toBe(false);
+    expect(isForTheField(k("Tab"), true)).toBe(false);
   });
 
   it("and with no field open, nothing is kept", () => {
-    expect(esParaElCampo(k("a"), false)).toBe(false);
-    expect(esParaElCampo(k("Backspace"), false)).toBe(false);
+    expect(isForTheField(k("a"), false)).toBe(false);
+    expect(isForTheField(k("Backspace"), false)).toBe(false);
   });
 });
 
@@ -116,45 +116,45 @@ describe("Alt ALONE (bridge 68)", () => {
 
   it("pressing and releasing Alt with nothing in between is the gesture", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt"));
-    expect(a.arriba(t("Alt"))).toBe(true);
+    a.down(t("Alt"));
+    expect(a.up(t("Alt"))).toBe(true);
   });
 
   it("Alt held and repeating is still the gesture", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt"));
-    a.abajo(t("Alt"));
-    expect(a.arriba(t("Alt"))).toBe(true);
+    a.down(t("Alt"));
+    a.down(t("Alt"));
+    expect(a.up(t("Alt"))).toBe(true);
   });
 
   it("Alt+another key is NOT it, even if Alt is released last", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt"));
-    a.abajo(t("F4"));
-    expect(a.arriba(t("F4"))).toBe(false);
-    expect(a.arriba(t("Alt"))).toBe(false);
+    a.down(t("Alt"));
+    a.down(t("F4"));
+    expect(a.up(t("F4"))).toBe(false);
+    expect(a.up(t("Alt"))).toBe(false);
   });
 
   it("AltGraph is not Alt: it types @ and # on a Spanish keyboard", () => {
     const a = new AltSolo();
-    a.abajo(t("AltGraph"));
-    expect(a.arriba(t("AltGraph"))).toBe(false);
+    a.down(t("AltGraph"));
+    expect(a.up(t("AltGraph"))).toBe(false);
   });
 
   it("with another modifier held down it doesn't arm", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt", { ctrlKey: true }));
-    expect(a.arriba(t("Alt"))).toBe(false);
+    a.down(t("Alt", { ctrlKey: true }));
+    expect(a.up(t("Alt"))).toBe(false);
   });
 
   it("a click or losing focus in between disarms it", () => {
     const a = new AltSolo();
-    a.abajo(t("Alt"));
-    a.soltar();
-    expect(a.arriba(t("Alt"))).toBe(false);
+    a.down(t("Alt"));
+    a.release();
+    expect(a.up(t("Alt"))).toBe(false);
   });
 
   it("a release with no prior press fires nothing", () => {
-    expect(new AltSolo().arriba(t("Alt"))).toBe(false);
+    expect(new AltSolo().up(t("Alt"))).toBe(false);
   });
 });

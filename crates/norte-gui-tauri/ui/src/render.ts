@@ -22,22 +22,22 @@ import type {
 import { MARK_RULER_SPANS } from "./types";
 import {
   markRulerImage,
-  revelar,
-  nota,
+  revealInView,
+  note,
   OVERSCAN,
   colVar,
   place,
   newRow,
   updateRow,
   badge,
-  sinCambios,
+  unchanged,
   emptyNode,
   errorNode,
   statusNodes,
   taskNode,
 } from "./render/dom";
 import type { Send, SlotDom } from "./render/dom";
-import { hacerArrastrable } from "./render/mover";
+import { makeDraggable } from "./render/move";
 import * as dialogs from "./render/dialogs";
 import * as sync from "./render/sync";
 import * as ai from "./render/ai";
@@ -61,7 +61,7 @@ import * as places from "./render/places";
  * ms. The desktop's own interval cannot be read from a webview; 400ms is
  * what GNOME and KDE use by default.
  */
-const DOBLE_CLIC_MS = 400;
+const DOUBLE_CLICK_MS = 400;
 
 /*
  * The members are public for TypeScript's sake because `render/*`'s
@@ -72,18 +72,18 @@ export class Screen {
   readonly slots = new Map<number, SlotDom>();
   placementsKey = "";
   /** The dialog whose text field has already been seeded. */
-  dialogoPintado: number | null = null;
+  dialogPainted: number | null = null;
   /// The live text field of the dialog above, to REUSE it.
-  dialogoInput: HTMLInputElement | null = null;
+  dialogInput: HTMLInputElement | null = null;
   /** The LIVE nodes of a form-dialog, by field id (bridge 91).
    *
    *  The dialog box is rebuilt whole on every patch and every keystroke
    *  produces one. Reusing the node — instead of creating another and
    *  seeding it with what the host sent — is what keeps the masked
    *  PROJECTION from going back to the host as if it were what was typed,
-   *  and it also keeps the caret. It is the same thing `dialogoInput` does
+   *  and it also keeps the caret. It is the same thing `dialogInput` does
    *  for the single-field dialog; with a dozen controls a map is needed. */
-  dialogoCampos: Map<string, HTMLInputElement | HTMLButtonElement> = new Map();
+  dialogFields: Map<string, HTMLInputElement | HTMLButtonElement> = new Map();
   /**
    * Settings' search bar, kept between repaints.
    *
@@ -93,16 +93,16 @@ export class Screen {
    * window's third spot with the same bug — a dialog's field and the log's
    * filter were the other two — and the same cure: keep the node.
    */
-  settingsBarra: HTMLElement | null = null;
+  settingsBar: HTMLElement | null = null;
   /** The log's controls, kept between repaints (#326). */
-  logControles: HTMLElement | null = null;
+  logControls: HTMLElement | null = null;
   /** The slot they belong to: a different slot, different controls. */
-  logPintado: number | null = null;
+  logControlsSlot: number | null = null;
   /** The last thing the host was told about how many rows fit. */
-  logFilas: number | null = null;
+  logRows: number | null = null;
   pendingLogRows: number | null = null;
   /// The help page that was painted, to keep its scroll.
-  helpPintada: string | null = null;
+  helpPainted: string | null = null;
   /// The last help-scroll request that was already applied (bridge 76).
   helpScrollSeq = 0;
 
@@ -116,30 +116,30 @@ export class Screen {
    * turned "1.2 seconds" into "1.2 seconds after the last patch", which
    * during startup is exactly when they keep arriving nonstop.
    */
-  splashPlazo: ReturnType<typeof setTimeout> | null = null;
+  splashDeadline: ReturnType<typeof setTimeout> | null = null;
 
   /** The splash screen is already up: its deadline, if there was one, is already running. */
-  splashPuesto = false;
+  splashShown = false;
   /// The `blob:` of the image being shown, to REVOKE it.
   ///
   /// An object URL that is not revoked is a buffer held for as long as the
   /// document lives. The revocation goes in the same place as the closing,
   /// not in a `finally` a future refactor could drop (ADR 0069).
-  imagenUrl: string | null = null;
+  imageUrl: string | null = null;
   /// Which image was requested, so as not to request the same one twice nor
   /// paint the previous one over the current viewer.
-  imagenDe: string | null = null;
+  imageKey: string | null = null;
   /// The viewer that is on screen and the window size it was painted with.
   /// Every patch repaints the whole screen, and the viewer used to be
   /// rebuilt with every one — an advancing task, a notice — and on top of
   /// that it forced a reflow to measure its body. The session replaces
   /// `viewer` with a different object when it changes, so the SAME object is
   /// the same viewer.
-  visorPintado: { viewer: ViewerView; firma: string } | null = null;
+  viewerPainted: { viewer: ViewerView; signature: string } | null = null;
   /// Which object each overlay was last painted with, and with what window
   /// size and cell size (`paint`).
-  capasPintadas = new Map<string, unknown>();
-  capasFirma = "";
+  paintedLayers = new Map<string, unknown>();
+  layersSignature = "";
   /** The viewer lines already declared. */
   viewerRows = 0;
   /** The viewer body columns the host already knows. */
@@ -154,15 +154,15 @@ export class Screen {
   /** And the width it reserves when it is the activity bar (bridge 84). */
   activityWidth: string | null = null;
   /** The last frame painted: what gets repainted when something local changes. */
-  ultimaVista: ViewSnapshot | null = null;
+  lastView: ViewSnapshot | null = null;
   /** Local notice for a command rejected at the boundary (`rejected`). */
-  rechazo: string | null = null;
+  rejection: string | null = null;
   /** The last click on a row, to count the double click here instead of
    *  depending on the engine's `dblclick` event (see a row's `mousedown`).
    *  `null` = none pending a match. */
-  ultimoClic: { slot: number; key: number; at: number } | null = null;
+  lastClick: { slot: number; key: number; at: number } | null = null;
   /** The reservation changed: the host has to hear the new height. */
-  viewportSucio = false;
+  viewportDirty = false;
 
   constructor(
     readonly root: HTMLElement,
@@ -207,8 +207,8 @@ export class Screen {
    * consuming query: whoever calls it declares the height again.
    */
   takeViewportDirty(): boolean {
-    const dirty = this.viewportSucio;
-    this.viewportSucio = false;
+    const dirty = this.viewportDirty;
+    this.viewportDirty = false;
     return dirty;
   }
 
@@ -227,24 +227,24 @@ export class Screen {
    */
   rejected(action: UiAction, error: unknown): void {
     console.error("the host did not accept the action:", action.action, error);
-    this.rechazo = `${this.t("gui-msg-action-rejected")}: ${action.action}`;
+    this.rejection = `${this.t("gui-msg-action-rejected")}: ${action.action}`;
     this.repaintStatus();
   }
 
   /** An accepted command withdraws the notice; says whether there was one. */
   accepted(): boolean {
-    if (this.rechazo === null) {
+    if (this.rejection === null) {
       return false;
     }
-    this.rechazo = null;
+    this.rejection = null;
     this.repaintStatus();
     return true;
   }
 
   /** Repaints the status slot with the last frame, if there is one. */
   repaintStatus(): void {
-    if (this.ultimaVista !== null) {
-      this.paint(this.ultimaVista);
+    if (this.lastView !== null) {
+      this.paint(this.lastView);
     }
   }
 
@@ -258,7 +258,7 @@ export class Screen {
   }
 
   paint(view: ViewSnapshot): void {
-    this.ultimaVista = view;
+    this.lastView = view;
     const cell = this.cell();
     const key = view.layout.placements
       .map((p) => `${p.slot_id}:${p.x},${p.y},${p.width},${p.height}`)
@@ -298,15 +298,15 @@ export class Screen {
     // or cell size change repaints all of them, because several measure what
     // fits.
     const signature = `${String(window.innerWidth)}x${String(window.innerHeight)}|${String(cell.w)}x${String(cell.h)}`;
-    if (signature !== this.capasFirma) {
-      this.capasFirma = signature;
-      this.capasPintadas.clear();
+    if (signature !== this.layersSignature) {
+      this.layersSignature = signature;
+      this.paintedLayers.clear();
     }
     const layer = <T>(key: string, value: T, painter: (v: T) => void): void => {
-      if (this.capasPintadas.has(key) && this.capasPintadas.get(key) === value) {
+      if (this.paintedLayers.has(key) && this.paintedLayers.get(key) === value) {
         return;
       }
-      this.capasPintadas.set(key, value);
+      this.paintedLayers.set(key, value);
       painter.call(this, value);
     };
     layer("palette", view.palette, this.paintPalette);
@@ -357,7 +357,7 @@ export class Screen {
   readonly paintHelp = help.paintHelp;
 
   /** In `render/help.ts`. */
-  readonly desplazarAyuda = help.desplazarAyuda;
+  readonly scrollHelp = help.scrollHelp;
 
   /** In `render/help.ts`. */
   readonly helpSidebar = help.helpSidebar;
@@ -432,13 +432,13 @@ export class Screen {
   readonly paintViewer = viewer.paintViewer;
 
   /** In `render/viewer.ts`. */
-  readonly soltarImagen = viewer.soltarImagen;
+  readonly releaseImage = viewer.releaseImage;
 
   /** In `render/viewer.ts`. */
-  readonly pintarImagen = viewer.pintarImagen;
+  readonly paintImage = viewer.paintImage;
 
   /** The `<img>` with its size declared, so it does not jump on load. */
-  nodoImagen(
+  imageNode(
     url: string,
     img: { format: string; width: number; height: number },
     zoom = 100,
@@ -486,7 +486,7 @@ export class Screen {
    */
   buildHandles(view: ViewSnapshot, cell: { w: number; h: number }): void {
     /** How much of each side of the border can be grabbed, in pixels. */
-    const AGARRE = 6;
+    const GRIP = 6;
     for (const a of view.layout.placements) {
       for (const b of view.layout.placements) {
         const vertical =
@@ -499,17 +499,17 @@ export class Screen {
         const el = document.createElement("div");
         el.className = vertical ? "resize-handle col" : "resize-handle row";
         if (vertical) {
-          el.style.setProperty("left", `${(a.x + a.width) * cell.w - AGARRE / 2}px`);
+          el.style.setProperty("left", `${(a.x + a.width) * cell.w - GRIP / 2}px`);
           el.style.setProperty("top", `${Math.max(a.y, b.y) * cell.h}px`);
-          el.style.setProperty("width", `${AGARRE}px`);
+          el.style.setProperty("width", `${GRIP}px`);
           el.style.setProperty(
             "height",
             `${(Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y)) * cell.h}px`,
           );
         } else {
-          el.style.setProperty("top", `${(a.y + a.height) * cell.h - AGARRE / 2}px`);
+          el.style.setProperty("top", `${(a.y + a.height) * cell.h - GRIP / 2}px`);
           el.style.setProperty("left", `${Math.max(a.x, b.x) * cell.w}px`);
-          el.style.setProperty("height", `${AGARRE}px`);
+          el.style.setProperty("height", `${GRIP}px`);
           el.style.setProperty(
             "width",
             `${(Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) * cell.w}px`,
@@ -518,7 +518,7 @@ export class Screen {
         const slot = a.slot_id;
         el.addEventListener("pointerdown", (e: PointerEvent) => {
           e.preventDefault();
-          this.arrastrarBorde(slot, vertical, cell);
+          this.dragBorder(slot, vertical, cell);
         });
         this.root.append(el);
       }
@@ -535,7 +535,7 @@ export class Screen {
    * none, and stayed there. The slot is named by id, which survives any
    * rebuild.
    */
-  arrastrarBorde(slot: number, vertical: boolean, cell: { w: number; h: number }): void {
+  dragBorder(slot: number, vertical: boolean, cell: { w: number; h: number }): void {
     const root = document.documentElement;
     root.dataset["dragging"] = vertical ? "border-col" : "border-row";
     let last = Number.NaN;
@@ -657,7 +657,7 @@ export class Screen {
     // and with `preventDefault`, so the webview does not mistake them for
     // page navigation.
     // Dragging the panel by its TITLE moves it (ADR 0138).
-    hacerArrastrable(this, dom.title, slotId);
+    makeDraggable(this, dom.title, slotId);
     dom.root.addEventListener("mouseup", (e) => {
       if (e.button !== 3 && e.button !== 4) {
         return;
@@ -756,7 +756,7 @@ export class Screen {
       // directory used to be entered with the mouse, and it depends on how
       // the webview interprets a sequence of clicks on a row that also
       // repaints in between. Two `mousedown`s on the SAME row within
-      // `DOBLE_CLIC_MS` are a double click, whether the engine says so or
+      // `DOUBLE_CLICK_MS` are a double click, whether the engine says so or
       // not; it is the same thing the terminal does, which also counts them
       // itself.
       //
@@ -764,16 +764,16 @@ export class Screen {
       // double click happened, and the host receives the two actions in
       // order.
       const now = Date.now();
-      const previous = this.ultimoClic;
-      this.ultimoClic = { slot: slotId, key: rowKey, at: now };
+      const previous = this.lastClick;
+      this.lastClick = { slot: slotId, key: rowKey, at: now };
       if (
         previous !== null &&
         previous.slot === slotId &&
         previous.key === rowKey &&
-        now - previous.at <= DOBLE_CLIC_MS
+        now - previous.at <= DOUBLE_CLICK_MS
       ) {
         // A burst's third click does not activate again.
-        this.ultimoClic = null;
+        this.lastClick = null;
         this.send({
           action: "activate",
           slot_id: slotId,
@@ -954,7 +954,7 @@ export class Screen {
     dom.title.textContent = this.t("processes-title");
     dom.scroller.className = "processes";
     if (view.tasks.length === 0) {
-      dom.scroller.replaceChildren(nota(this.t("processes-empty")));
+      dom.scroller.replaceChildren(note(this.t("processes-empty")));
       return;
     }
     const list = document.createElement("ul");
@@ -971,7 +971,9 @@ export class Screen {
     }
     if (slot.cursor !== null) {
       list.setAttribute("aria-activedescendant", `process-row-${String(slot.cursor)}`);
-      revelar(list.querySelector(`#process-row-${String(slot.cursor)}`) ?? undefined);
+      revealInView(
+        list.querySelector(`#process-row-${String(slot.cursor)}`) ?? undefined,
+      );
     }
     dom.scroller.replaceChildren(list);
   }
@@ -989,10 +991,10 @@ export class Screen {
   readonly paintTimeline = timeline.paintTimeline;
 
   /** In `render/log.ts`. */
-  readonly selectorDeFuente = log.selectorDeFuente;
+  readonly sourceSelector = log.sourceSelector;
 
   /** In `render/log.ts`. */
-  readonly crearControlesDeRegistro = log.crearControlesDeRegistro;
+  readonly createLogControls = log.createLogControls;
 
   /** In `render/log.ts`. */
   readonly scheduleLogRows = log.scheduleLogRows;
@@ -1023,7 +1025,7 @@ export class Screen {
           view.status,
           view.connection.state,
           (k) => this.t(k),
-          this.rechazo,
+          this.rejection,
           view.status_items ?? [],
           (id) => {
             this.send({ action: "status_item_activate", id });
@@ -1069,16 +1071,13 @@ export class Screen {
       slot.hidden_note,
       slot.marked_note ?? "",
     ]);
-    if (!sinCambios(dom.title, titleSignature)) {
+    if (!unchanged(dom.title, titleSignature)) {
       this.paintBrowserTitle(dom, slot);
     }
     dom.root.setAttribute("aria-label", slot.path_display);
     dom.generation = slot.generation;
     if (
-      !sinCambios(
-        dom.footer,
-        JSON.stringify([slot.footer ?? "", slot.used_ratio ?? null]),
-      )
+      !unchanged(dom.footer, JSON.stringify([slot.footer ?? "", slot.used_ratio ?? null]))
     ) {
       this.paintBrowserFooter(dom, slot);
     }
@@ -1307,7 +1306,7 @@ export class Screen {
     // The row stripes (bridge 80): turned on by the CONTAINER, not the row.
     // Every row always carries its parity, so a row recycled by scrolling
     // does not drag along the band from the spot it used to occupy.
-    dom.canvas.dataset["stripes"] = String(this.ultimaVista?.row_stripes ?? false);
+    dom.canvas.dataset["stripes"] = String(this.lastView?.row_stripes ?? false);
     const wanted = new Set<number>();
     // The icon column is opened by the HOST for the whole listing (bridge
     // 62): with or without an icon, every row carries the cell. Deducing it
@@ -1347,7 +1346,7 @@ export class Screen {
   readonly paintOrganize = organize.paintOrganize;
 
   /** In `render/dialogs.ts`. */
-  readonly campoDeDialogo = dialogs.campoDeDialogo;
+  readonly dialogField = dialogs.dialogField;
 
   /** In `render/dialogs.ts`. */
   readonly paintDialogs = dialogs.paintDialogs;

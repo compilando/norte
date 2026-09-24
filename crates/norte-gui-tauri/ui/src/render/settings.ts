@@ -11,7 +11,7 @@ import type {
   SettingsView,
   ThemeView,
 } from "../types";
-import { revelar, badge } from "./dom";
+import { revealInView, badge } from "./dom";
 
 /**
  * Settings (F11).
@@ -37,7 +37,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   // The focus, BEFORE touching anything. Moving the bar to the new box
   // already takes the field out of the DOM for an instant, and that unfocuses
   // it: checking afterward would always see "it did not have it".
-  const field = this.settingsBarra?.querySelector(".settings-search");
+  const field = this.settingsBar?.querySelector(".settings-search");
   const focused = field instanceof HTMLInputElement && document.activeElement === field;
   const caret: [number | null, number | null] =
     field instanceof HTMLInputElement
@@ -62,7 +62,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
   // repaint: a field that got recreated would be destroyed on the first
   // character and take the focus and the caret with it. Same bug and same
   // cure as the log's filter and a dialog's field.
-  let bar = this.settingsBarra;
+  let bar = this.settingsBar;
   if (bar === null) {
     bar = document.createElement("div");
     bar.className = "settings-search-bar";
@@ -76,7 +76,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     const count = document.createElement("span");
     count.className = "settings-count";
     bar.append(input, count);
-    this.settingsBarra = bar;
+    this.settingsBar = bar;
   }
   const search = bar.querySelector(".settings-search");
   // Re-seeding it while it is being typed into would put the host's
@@ -92,7 +92,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
 
   const body = document.createElement("div");
   body.className = "settings-body";
-  body.append(indiceDeSecciones.call(this, settings));
+  body.append(sectionIndex.call(this, settings));
 
   const list = document.createElement("ul");
   list.className = "settings-rows";
@@ -142,7 +142,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
         const name = document.createElement("span");
         name.className = "settings-name";
         name.textContent = r.name;
-        const value = controlDeAjuste.call(this, r);
+        const value = settingControl.call(this, r);
         // The actions go TOGETHER in one cell: today, if it is touched, the
         // button that undoes it. The restart badge is NOT here: it is
         // information that only matters when changing that row, and
@@ -242,7 +242,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
     }
   }
   list.scrollTop = scroll;
-  revelar(objetivoRevelado(list, settings.cursor));
+  revealInView(revealTarget(list, settings.cursor));
 }
 
 /**
@@ -252,7 +252,7 @@ export function paintSettings(this: Screen, settings: SettingsView | null): void
  * icon fonts installed, and a section whose key is not here simply carries
  * no icon — the label, which is what gets read, is still there.
  */
-const ICONO_DE_SECCION: Record<string, string> = {
+const SECTION_ICON: Record<string, string> = {
   appearance: "◐",
   panes: "▤",
   "open-with": "↗",
@@ -276,7 +276,7 @@ const ICONO_DE_SECCION: Record<string, string> = {
  * click that SELECTS and a double click that ACTIVATES, and flipping a
  * switch is neither.
  */
-function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
+function settingControl(this: Screen, r: SettingRowView): HTMLElement {
   const box = document.createElement("span");
   box.className = "settings-value";
   box.dataset["control"] = r.control;
@@ -348,7 +348,7 @@ function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
     if (r.max !== null) {
       num.max = String(r.max);
     }
-    campoQueGuarda.call(this, num, r, set);
+    savingField.call(this, num, r, set);
     box.append(num);
     return box;
   }
@@ -365,7 +365,7 @@ function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
     // painted in a list goes through the mask, but a field that returned the
     // sanitized text would save the replacement into the file.
     field.value = r.value;
-    campoQueGuarda.call(this, field, r, set);
+    savingField.call(this, field, r, set);
     box.append(field);
     return box;
   }
@@ -387,7 +387,7 @@ function controlDeAjuste(this: Screen, r: SettingRowView): HTMLElement {
  * and a reload of the whole configuration. And it does not bubble: the
  * `<li>` underneath moves the cursor with the click.
  */
-function campoQueGuarda(
+function savingField(
   this: Screen,
   field: HTMLInputElement,
   r: SettingRowView,
@@ -423,7 +423,7 @@ function campoQueGuarda(
  * while you type cannot be used as a map. What travels back on a click is
  * its STABLE key, so the jump does not depend on the language.
  */
-function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
+function sectionIndex(this: Screen, settings: SettingsView): HTMLElement {
   // Which section the cursor falls in. Counted over the same sections that
   // are painted, and matched by KEY: matching by the translated label would
   // break the day two are named similarly or someone tweaks a string.
@@ -460,7 +460,7 @@ function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
     const icon = document.createElement("span");
     icon.className = "settings-index-icon";
     icon.setAttribute("aria-hidden", "true");
-    icon.textContent = ICONO_DE_SECCION[s.key] ?? "";
+    icon.textContent = SECTION_ICON[s.key] ?? "";
     const title = document.createElement("span");
     title.className = "settings-index-title";
     title.textContent = s.title;
@@ -491,11 +491,8 @@ function indiceDeSecciones(this: Screen, settings: SettingsView): HTMLElement {
  * Kept separate and exported because `scrollIntoView` does not exist in
  * jsdom: what the tests can check is the CHOICE, not the scrolling.
  */
-export function objetivoRevelado(
-  lista: Element,
-  cursor: number,
-): HTMLElement | undefined {
-  const row = lista.querySelector(`#settings-row-${String(cursor)}`);
+export function revealTarget(list: Element, cursor: number): HTMLElement | undefined {
+  const row = list.querySelector(`#settings-row-${String(cursor)}`);
   if (!(row instanceof HTMLElement)) {
     return undefined;
   }
@@ -848,7 +845,7 @@ export function paintLayouts(this: Screen, layouts: LayoutPickerView | null): vo
   }
   box.append(body);
   this.layoutsRoot.replaceChildren(box);
-  revelar(list.querySelector(`#layout-row-${String(layouts.cursor)}`) ?? undefined);
+  revealInView(list.querySelector(`#layout-row-${String(layouts.cursor)}`) ?? undefined);
 }
 
 /** The volume picker. */
@@ -912,7 +909,7 @@ export function paintPicker(this: Screen, picker: PickerView | null): void {
   }
   if (picker.cursor !== null) {
     list.setAttribute("aria-activedescendant", `picker-row-${String(picker.cursor)}`);
-    revelar(list.querySelector(`#picker-row-${String(picker.cursor)}`) ?? undefined);
+    revealInView(list.querySelector(`#picker-row-${String(picker.cursor)}`) ?? undefined);
   }
   box.append(list);
   this.pickerRoot.replaceChildren(box);
