@@ -42,6 +42,64 @@ impl Lang {
         Self::En
     }
 
+    /// The value of a `--lang` flag: exactly `es` or `en`, in any case.
+    ///
+    /// `None` for anything else. Unlike [`Self::negotiate`], a value the
+    /// reader typed on the command line is not guessed at: `--lang fr` is
+    /// an error to report, not a quiet English.
+    ///
+    /// ```
+    /// use norte_i18n::Lang;
+    /// assert_eq!(Lang::from_flag("ES"), Some(Lang::Es));
+    /// assert_eq!(Lang::from_flag("en"), Some(Lang::En));
+    /// assert_eq!(Lang::from_flag("es_ES"), None);
+    /// assert_eq!(Lang::from_flag("fr"), None);
+    /// ```
+    #[must_use]
+    pub fn from_flag(value: &str) -> Option<Self> {
+        match value.to_ascii_lowercase().as_str() {
+            "es" => Some(Self::Es),
+            "en" => Some(Self::En),
+            _ => None,
+        }
+    }
+
+    /// The language of one run: **`--lang` > `NORTE_LANG` > `[ui] lang` >
+    /// the system's locale**, the same rule in every binary.
+    ///
+    /// What the environment says comes in as arguments (`norte_lang` is
+    /// `NORTE_LANG`'s value, `locale` is [`Self::from_env`]), so the rule is
+    /// testable: `std::env::set_var` is `unsafe` since the 2024 edition and
+    /// rule 5 forbids it. An empty `NORTE_LANG` counts as unset.
+    ///
+    /// ```
+    /// use norte_i18n::Lang;
+    /// // The flag beats everything.
+    /// assert_eq!(Lang::resolve(Some(Lang::Es), Some("en"), Some("en"), Lang::En), Lang::Es);
+    /// // NORTE_LANG beats the configuration.
+    /// assert_eq!(Lang::resolve(None, Some("en"), Some("es"), Lang::Es), Lang::En);
+    /// // The configuration beats the locale.
+    /// assert_eq!(Lang::resolve(None, Some(""), Some("es"), Lang::En), Lang::Es);
+    /// // With nothing said, the locale.
+    /// assert_eq!(Lang::resolve(None, None, None, Lang::Es), Lang::Es);
+    /// ```
+    #[must_use]
+    pub fn resolve(
+        flag: Option<Self>,
+        norte_lang: Option<&str>,
+        config: Option<&str>,
+        locale: Self,
+    ) -> Self {
+        if let Some(lang) = flag {
+            return lang;
+        }
+        match (norte_lang.filter(|v| !v.is_empty()), config) {
+            (Some(env), _) => Self::negotiate(Some(env)),
+            (None, Some(cfg)) => Self::negotiate(Some(cfg)),
+            (None, None) => locale,
+        }
+    }
+
     fn ftl(self) -> &'static str {
         match self {
             Self::Es => include_str!("../i18n/es.ftl"),

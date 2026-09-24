@@ -9,6 +9,13 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **`--lang es|en` in `ntc`, `norte` and `norte-gui`**: the language of one
+  run, without touching `norte.toml` or the environment. The order is now
+  the same in every binary and lives in one place (`Lang::resolve`):
+  `--lang` > `NORTE_LANG` > `[ui] lang` > the system's locale. A language
+  norte does not have (`--lang fr`) is refused with an error that names the
+  flag, instead of quietly falling back to English.
+
 - **A terminal inside a panel** (#362, terminal only for now). `Ctrl+Alt+S`
   opens a shell below the listings, in the focused pane's directory, visible
   at the same time as the files — the embedded terminal Krusader has and

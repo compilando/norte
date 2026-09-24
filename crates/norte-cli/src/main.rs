@@ -105,8 +105,17 @@ struct Cli {
     /// The daemon's socket (default: `$XDG_RUNTIME_DIR/norte/daemon.sock`)
     #[arg(long, global = true)]
     socket: Option<PathBuf>,
+    /// Language of this run's messages (es|en); overrides `NORTE_LANG` and
+    /// the system's locale
+    #[arg(long, global = true, value_name = "LANG", value_parser = parse_lang)]
+    lang: Option<norte_i18n::Lang>,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+/// `--lang`'s value: exactly `es` or `en` ([`norte_i18n::Lang::from_flag`]).
+fn parse_lang(value: &str) -> Result<norte_i18n::Lang, String> {
+    norte_i18n::Lang::from_flag(value).ok_or_else(|| "the languages are `es` and `en`".to_owned())
 }
 
 #[derive(Subcommand)]
@@ -565,6 +574,10 @@ impl From<SymlinksArg> for SymlinkPolicy {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
+    // Before anything is said: the first message fixes the global language.
+    if let Some(lang) = cli.lang {
+        let _ = norte_i18n::force(lang);
+    }
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

@@ -579,7 +579,7 @@
         },
         "lang": {
           "default": null,
-          "description": "Language (`es` or `en`). When absent, negotiate from the environment.",
+          "description": "Language (`es` or `en`). When absent, negotiate from the environment.\n`--lang` and `NORTE_LANG` win over it for a single run.",
           "type": [
             "string",
             "null"
