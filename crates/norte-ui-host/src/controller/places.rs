@@ -40,7 +40,7 @@ impl State {
         // swallows the key that gets you out of it.
         if !matches!(
             effect,
-            Effect::Cursor(_) | Effect::Page(_) | Effect::Extremo { .. }
+            Effect::Cursor(_) | Effect::Page(_) | Effect::End { .. }
         ) {
             return None;
         }
@@ -54,8 +54,8 @@ impl State {
         let target = match effect {
             Effect::Cursor(n) => current.saturating_add(n.clamp(-total, total)),
             Effect::Page(n) => current.saturating_add(n.clamp(-total, total).saturating_mul(total)),
-            Effect::Extremo { al_final: false } => 0,
-            Effect::Extremo { al_final: true } => total - 1,
+            Effect::End { al_final: false } => 0,
+            Effect::End { al_final: true } => total - 1,
             // Everything else goes its own way. Entering and collapsing, in
             // particular, need the backend — a navigation, or asking for the
             // volumes again — so whoever does have it handles them.
@@ -342,7 +342,7 @@ impl State {
     /// The sheet FOLLOWS the cursor, and any message moves the cursor: a key,
     /// a click, a listing that lands. The TUI resolves this for free because
     /// it recomputes every frame; here it has to be asked after every
-    /// message, exactly like the docked preview (`sondear_previews`).
+    /// message, exactly like the docked preview (`probe_previews`).
     ///
     /// Without this, the sheet had NO path of its own to the renderer at all:
     /// it rode piggyback on the whole snapshot another panel triggered, so a
@@ -353,20 +353,20 @@ impl State {
     /// It requests nothing and launches nothing: comparing costs whatever it
     /// costs to build the sheet, which comes from the listing already in
     /// memory.
-    pub(super) fn sondear_hojas(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
+    pub(super) fn probe_leaves(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
         let alive: Vec<u32> = self
             .tree
             .slot_ids()
             .into_iter()
             .map(|SlotId(id)| id)
             .collect();
-        self.hojas.retain(|id, _| alive.contains(id));
+        self.leaves.retain(|id, _| alive.contains(id));
         let mut changed = false;
         for slot in self.leaf_slots() {
             let SlotId(id) = slot;
             let current = self.attributes_sheet(slot);
-            if self.hojas.get(&id) != Some(&current) {
-                self.hojas.insert(id, current);
+            if self.leaves.get(&id) != Some(&current) {
+                self.leaves.insert(id, current);
                 changed = true;
             }
         }

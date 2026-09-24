@@ -146,7 +146,7 @@ pub trait GotoSource {
     /// query and its results match by MEANING, not by letters — a
     /// subsequence filter on top would throw away exactly what makes it
     /// useful.
-    fn ya_filtrada(&self) -> bool {
+    fn ya_filtered(&self) -> bool {
         false
     }
 
@@ -181,7 +181,7 @@ pub const CAP_PER_SECTION: usize = 12;
 pub struct FixedSource {
     section: GotoSection,
     rows: Vec<GotoRow>,
-    ya_filtrada: bool,
+    ya_filtered: bool,
     only_with_query: bool,
 }
 
@@ -192,22 +192,22 @@ impl FixedSource {
         Self {
             section,
             rows,
-            ya_filtrada: false,
+            ya_filtered: false,
             only_with_query: false,
         }
     }
 
     /// Like [`Self::new`], but declaring that the rows ALREADY come
-    /// filtered by whoever brought them (see [`GotoSource::ya_filtrada`]).
+    /// filtered by whoever brought them (see [`GotoSource::ya_filtered`]).
     #[must_use]
-    pub fn ya_filtrada(section: GotoSection, rows: Vec<GotoRow>) -> Self {
+    pub fn ya_filtered(section: GotoSection, rows: Vec<GotoRow>) -> Self {
         Self {
             section,
             rows,
-            ya_filtrada: false,
+            ya_filtered: false,
             only_with_query: false,
         }
-        .con_ya_filtrada()
+        .with_already_filtered()
     }
 
     /// Declares that this source only contributes with something typed
@@ -220,8 +220,8 @@ impl FixedSource {
 
     /// Marks its rows as already filtered.
     #[must_use]
-    fn con_ya_filtrada(mut self) -> Self {
-        self.ya_filtrada = true;
+    fn with_already_filtered(mut self) -> Self {
+        self.ya_filtered = true;
         self
     }
 }
@@ -233,8 +233,8 @@ impl GotoSource for FixedSource {
     fn rows(&self, _query: &str) -> Vec<GotoRow> {
         self.rows.clone()
     }
-    fn ya_filtrada(&self) -> bool {
-        self.ya_filtrada
+    fn ya_filtered(&self) -> bool {
+        self.ya_filtered
     }
     fn only_with_query(&self) -> bool {
         self.only_with_query
@@ -285,7 +285,7 @@ impl GotoSource for PathSource {
     /// anything useful. It is already trimmed when built (`looks_path`
     /// does `trim`), and that trim alone would be enough for the generic
     /// filter to throw it out.
-    fn ya_filtrada(&self) -> bool {
+    fn ya_filtered(&self) -> bool {
         true
     }
 }
@@ -359,7 +359,7 @@ impl Goto {
                     continue;
                 }
                 let raw = source.rows(&self.query);
-                if source.ya_filtrada() || q.is_empty() {
+                if source.ya_filtered() || q.is_empty() {
                     from_this.extend(raw);
                 } else {
                     from_this.extend(
@@ -393,10 +393,10 @@ impl Goto {
     /// Letting a late answer move the cursor is how an Enter ends up
     /// somewhere the reader did not choose: they typed, read, went to
     /// confirm, and the index arrived in between.
-    pub fn replace_section(&mut self, section: GotoSection, rows: Vec<GotoRow>, ya_filtrada: bool) {
+    pub fn replace_section(&mut self, section: GotoSection, rows: Vec<GotoRow>, ya_filtered: bool) {
         self.sources.retain(|s| s.section().id != section.id);
-        self.sources.push(if ya_filtrada {
-            Box::new(FixedSource::ya_filtrada(section, rows))
+        self.sources.push(if ya_filtered {
+            Box::new(FixedSource::ya_filtered(section, rows))
         } else {
             Box::new(FixedSource::new(section, rows))
         });
@@ -688,7 +688,7 @@ pub fn action(key: &str) -> Action {
             .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir);
     }
     if let Some(content) = key.strip_prefix(K_PATH) {
-        return resolver_tecleada(content);
+        return resolver_typed(content);
     }
     Action::Nothing("msg-goto-bad-path")
 }
@@ -701,7 +701,7 @@ pub fn action(key: &str) -> Action {
 /// as local, and one with a scheme is parsed as is — if the backend does
 /// not exist, the core says so, which beats navigating to something other
 /// than what was typed.
-fn resolver_tecleada(content: &str) -> Action {
+fn resolver_typed(content: &str) -> Action {
     let expanded = if content == "~" || content.starts_with("~/") {
         let Some(home) = std::env::var_os("HOME") else {
             return Action::Nothing("msg-goto-no-home");
@@ -723,7 +723,7 @@ fn resolver_tecleada(content: &str) -> Action {
 }
 
 #[cfg(test)]
-mod despacho_tests {
+mod dispatch_tests {
     use super::{Action, K_CMD, K_IR, K_PATH, action};
     use norte_proto::VPath;
 
@@ -789,7 +789,7 @@ mod tests {
     struct Fixed {
         section: GotoSection,
         texts: Vec<&'static str>,
-        ya_filtrada: bool,
+        ya_filtered: bool,
         only_with_query: bool,
     }
 
@@ -809,8 +809,8 @@ mod tests {
                 })
                 .collect()
         }
-        fn ya_filtrada(&self) -> bool {
-            self.ya_filtrada
+        fn ya_filtered(&self) -> bool {
+            self.ya_filtered
         }
         fn only_with_query(&self) -> bool {
             self.only_with_query
@@ -821,7 +821,7 @@ mod tests {
         Box::new(Fixed {
             section,
             texts: texts.to_vec(),
-            ya_filtrada: false,
+            ya_filtered: false,
             only_with_query: false,
         })
     }
@@ -904,7 +904,7 @@ mod tests {
         let index = Box::new(Fixed {
             section: SECTION_INDEX,
             texts: vec!["la factura del gas"],
-            ya_filtrada: true,
+            ya_filtered: true,
             only_with_query: false,
         });
         let mut goto = Goto::new(vec![index, source(SECTION_HISTORY, &["/etc"])]);
@@ -994,7 +994,7 @@ mod tests {
         let commands = Box::new(Fixed {
             section: SECTION_COMMANDS,
             texts: vec!["app.quit"],
-            ya_filtrada: false,
+            ya_filtered: false,
             only_with_query: true,
         });
         let mut goto = Goto::new(vec![commands, source(SECTION_HISTORY, &["/etc"])]);

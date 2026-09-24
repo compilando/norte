@@ -746,7 +746,7 @@ pub fn vpath_from_native_path(native: &str) -> Option<norte_proto::VPath> {
 /// The user's home directory as a `VPath`, or the local root if the
 /// environment does not say: the last-resort destination for a pane left
 /// with nowhere to go (`pane.disconnect`,
-/// [`crate::nav::regreso_after_disconnect`]).
+/// [`crate::nav::return_after_disconnect`]).
 ///
 /// The root and not an error: a destination that does not exist would leave
 /// the pane staring at a closed connection, which is the one thing
@@ -1150,11 +1150,11 @@ mod tests {
     #[test]
     fn a_relative_login_shell_is_refused_not_resolved_against_the_browsed_dir() {
         let fallback = login_shell_from(None);
-        for relativo in ["bash", "./bash", "../bin/bash", "bin/sh"] {
+        for relative in ["bash", "./bash", "../bin/bash", "bin/sh"] {
             assert_eq!(
-                login_shell_from(Some(relativo.as_ref())),
+                login_shell_from(Some(relative.as_ref())),
                 fallback,
-                "{relativo:?} must not become a program looked up next to the user's files"
+                "{relative:?} must not become a program looked up next to the user's files"
             );
         }
         assert_ne!(

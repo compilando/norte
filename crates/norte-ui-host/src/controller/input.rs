@@ -186,7 +186,7 @@ impl State {
             || self.selector_profile.is_some()
             || self.theme_chosen.is_some()
             || self.extensions.is_some()
-            || self.agencia.panel
+            || self.agency.panel
             || self.settings.is_some()
             || self.visor.is_some()
             || self.palette.is_some()
@@ -292,7 +292,7 @@ impl State {
         if self.extensions.is_some() {
             return Some(self.key_in_extensions(k, backend, mailbox));
         }
-        if self.agencia.panel {
+        if self.agency.panel {
             return Some(self.key_in_agents(k, backend, mailbox));
         }
         if self.settings.is_some() {
@@ -546,7 +546,7 @@ impl State {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match k.key.as_str() {
-            "Escape" | "esc" => self.olvidar_menu(),
+            "Escape" | "esc" => self.forget_menu(),
             "ArrowLeft" | "left" => menu_state.cycle_menu(-1),
             "ArrowRight" | "right" => menu_state.cycle_menu(1),
             "ArrowUp" | "up" => menu_state.cycle_item(-1),
@@ -575,7 +575,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.olvidar_menu();
+        self.forget_menu();
         let closing = self.parche(vec![ViewChange::Menu {
             menu: self.vista_menu(),
         }]);
@@ -586,7 +586,7 @@ impl State {
         // catalogue, not a second dispatcher.
         let (ack, mut rest) = match effect_of(cmd, 1) {
             Some(effect) => self.apply_effect(effect, backend, mailbox),
-            None => self.no_implementado(cmd),
+            None => self.no_implemented(cmd),
         };
         let mut outgoing = vec![closing];
         outgoing.append(&mut rest);
@@ -643,10 +643,10 @@ impl State {
                                     let (id, org) = (id.to_owned(), org.to_owned());
                                     self.request_organize_plan(Some((id, org)), backend, mailbox)
                                 }
-                                None => self.no_implementado(&cmd),
+                                None => self.no_implemented(&cmd),
                             }
                         }
-                        None => self.no_implementado(&cmd),
+                        None => self.no_implemented(&cmd),
                     };
                     let mut outgoing = vec![closing];
                     outgoing.append(&mut rest);
@@ -676,7 +676,7 @@ impl State {
 
     /// A catalogue command this host does not execute, said with the same
     /// phrase as the TUI.
-    pub(super) fn no_implementado(
+    pub(super) fn no_implemented(
         &mut self,
         cmd: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {

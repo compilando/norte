@@ -73,7 +73,7 @@ async fn request_tree(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
 #[tokio::test]
 async fn the_tree_tells_apart_what_is_created_from_what_was_already_there() {
     let mut f = Fake::default();
-    // `facturas` already exists in the directory; `new` does not.
+    // `invoices` already exists in the directory; `new` does not.
     f.put(
         "mem:///casa",
         vec![
@@ -93,12 +93,12 @@ async fn the_tree_tells_apart_what_is_created_from_what_was_already_there() {
     request_tree(&h, &mut sub).await;
 
     let v = next_tree(&mut sub).await.expect("opens");
-    let facturas = v
+    let invoices = v
         .lines
         .iter()
         .find(|l| l.text.text == "facturas")
         .expect("is there");
-    assert_eq!(facturas.kind, OrganizeLineKind::ExistingDir, "{facturas:?}");
+    assert_eq!(invoices.kind, OrganizeLineKind::ExistingDir, "{invoices:?}");
     let new = v
         .lines
         .iter()
@@ -119,7 +119,7 @@ async fn a_plan_with_no_token_does_not_open_the_review() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     request_tree(&h, &mut sub).await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snap = next_snapshot(&mut sub).await;
     assert!(
@@ -127,7 +127,7 @@ async fn a_plan_with_no_token_does_not_open_the_review() {
         "with no token there is no review: {:?}",
         snap.organize
     );
-    assert!(backend.organizados.lock().expect("organizados").is_empty());
+    assert!(backend.organized.lock().expect("organizados").is_empty());
 }
 
 /// Approving requires having scrolled through the WHOLE tree, and scrolling
@@ -153,9 +153,9 @@ async fn approving_requires_having_reached_the_end() {
     h.dispatch(UiAction::OrganizeDecide { approve: true })
         .await
         .expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
-        backend.organizados.lock().expect("organizados").is_empty(),
+        backend.organized.lock().expect("organizados").is_empty(),
         "without reading it in full it does not apply"
     );
 
@@ -165,17 +165,17 @@ async fn approving_requires_having_reached_the_end() {
             .await
             .expect("host alive");
     }
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::OrganizeDecide { approve: true })
         .await
         .expect("host alive");
     let sent = until(&backend, "the applied plan", |f| {
-        let v = f.organizados.lock().expect("organizados");
+        let v = f.organized.lock().expect("organizados");
         (!v.is_empty()).then(|| v.len())
     })
     .await;
     assert_eq!(sent, 1, "a single Task for the whole batch");
-    let done = backend.organizados.lock().expect("organizados");
+    let done = backend.organized.lock().expect("organizados");
     assert_eq!(done[0].2, hash(), "with the token that came WITH the plan");
     assert_eq!(done[0].1.len(), 12);
 }
@@ -224,7 +224,7 @@ async fn an_organizer_is_given_the_directorys_names() {
     }
     h.dispatch(press("Enter")).await.expect("host alive");
     let requested = until(&backend, "the request to the organizer", |f| {
-        f.organizers_pedidos
+        f.organizers_requests
             .lock()
             .expect("organizers")
             .first()
@@ -248,11 +248,11 @@ async fn discarding_closes_and_applies_nothing() {
     next_tree(&mut sub).await.expect("opens");
 
     h.dispatch(press("Escape")).await.expect("host alive");
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snap = next_snapshot(&mut sub).await;
     assert!(snap.organize.is_none(), "it closed and stays closed");
-    assert!(backend.organizados.lock().expect("organizados").is_empty());
+    assert!(backend.organized.lock().expect("organizados").is_empty());
 }
 
 /// The tree's names are proposed by a third party over names anyone wrote:
@@ -292,7 +292,7 @@ async fn a_refusing_producer_says_so_and_opens_nothing() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     request_tree(&h, &mut sub).await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snap = next_snapshot(&mut sub).await;
     assert!(snap.organize.is_none(), "refusing opens no review");
@@ -308,9 +308,9 @@ async fn in_read_only_it_is_not_even_requested() {
     let (h, _snap) = crate::reviews::host_solo_read(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     request_tree(&h, &mut sub).await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snap = next_snapshot(&mut sub).await;
     assert!(snap.organize.is_none(), "it does not even open");
-    assert!(backend.organizados.lock().expect("organizados").is_empty());
+    assert!(backend.organized.lock().expect("organizados").is_empty());
 }

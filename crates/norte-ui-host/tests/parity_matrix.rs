@@ -45,7 +45,7 @@ const DEFERRED: &[(&str, u32)] = &[
     // a row only means something for a list that can be EDITED, and this
     // window's only one was read-only. Since #309 there is one that is —
     // favorites — so it left this list and entered
-    // `IMPLEMENTADOS_DIALOG`.
+    // `IMPLEMENTED_DIALOG`.
     // `layout.preview` was here until #291: it was the only one of the seven
     // in ADR 0058 the window did not paint. Now the `viewer` slot follows
     // the cursor and shows the same viewer as the large one.
@@ -96,10 +96,10 @@ const DEFERRED: &[(&str, u32)] = &[
 #[test]
 fn every_live_command_is_classified() {
     use norte_frontend::keymap::catalogue::{CATALOGUE, Status};
-    let done: std::collections::HashSet<&str> = norte_ui_host::commands::IMPLEMENTADOS
+    let done: std::collections::HashSet<&str> = norte_ui_host::commands::IMPLEMENTED
         .iter()
-        .chain(norte_ui_host::commands::IMPLEMENTADOS_VISOR.iter())
-        .chain(norte_ui_host::commands::IMPLEMENTADOS_DIALOG.iter())
+        .chain(norte_ui_host::commands::IMPLEMENTED_VISOR.iter())
+        .chain(norte_ui_host::commands::IMPLEMENTED_DIALOG.iter())
         .copied()
         .collect();
     let does_not_apply: std::collections::HashSet<&str> = DOES_NOT_APPLY.iter().copied().collect();
@@ -128,10 +128,10 @@ fn every_live_command_is_classified() {
 /// from it.
 #[test]
 fn nothing_classified_is_built() {
-    let done: std::collections::HashSet<&str> = norte_ui_host::commands::IMPLEMENTADOS
+    let done: std::collections::HashSet<&str> = norte_ui_host::commands::IMPLEMENTED
         .iter()
-        .chain(norte_ui_host::commands::IMPLEMENTADOS_VISOR.iter())
-        .chain(norte_ui_host::commands::IMPLEMENTADOS_DIALOG.iter())
+        .chain(norte_ui_host::commands::IMPLEMENTED_VISOR.iter())
+        .chain(norte_ui_host::commands::IMPLEMENTED_DIALOG.iter())
         .copied()
         .collect();
     for c in DOES_NOT_APPLY.iter().chain(DEFERRED.iter().map(|(c, _)| c)) {

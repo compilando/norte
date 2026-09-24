@@ -411,7 +411,7 @@ pub async fn run(
             // the session is RECLAIMED, having been released for the window
             // that never arrived.
             let outcome = match crate::handoff::spawn_window(&crate::handoff::window_argv()) {
-                Ok(child) => crate::handoff::wait_startup(child, crate::handoff::GRACIA)
+                Ok(child) => crate::handoff::wait_startup(child, crate::handoff::GRACE)
                     .await
                     .map_err(|code| code.map_or_else(|| "?".to_owned(), |c| c.to_string())),
                 Err(e) => {
@@ -457,7 +457,7 @@ pub async fn run(
         // it is swallowed with a `tracing::debug!`.
         {
             use std::io::Write as _;
-            // `ui::imagen_a_colocar` looks at EVERYTHING needed to decide
+            // `ui::image_to_place` looks at EVERYTHING needed to decide
             // whether pixels get placed this frame — the SAME function
             // `panels::draw_viewer` uses to decide whether to blank the slot
             // (branch review, finding 2: these used to be two separate
@@ -480,7 +480,7 @@ pub async fn run(
             // Computed BEFORE borrowing `app.viewer_imagen` mutably: it looks
             // at the whole `App`, and an already-live mutable borrow of one
             // of its fields would prevent that.
-            let placement = ui::imagen_a_colocar(app, painted_area);
+            let placement = ui::image_to_place(app, painted_area);
             match (&mut app.viewer_imagen, placement) {
                 (Some(image), Some(placement)) => {
                     let rect = placement.rect;
@@ -496,7 +496,7 @@ pub async fn run(
                     if !already_placed {
                         let out = terminal.backend_mut();
                         crate::kitty_graphics::delete_placed(out);
-                        let esc = crate::kitty_graphics::escape_colocar(
+                        let esc = crate::kitty_graphics::escape_place(
                             image.id,
                             &image.bytes,
                             rect,
@@ -507,7 +507,7 @@ pub async fn run(
                         // wherever the last run of repainted cells ended —
                         // arbitrary, and changes frame to frame. The cursor
                         // is moved to the rect BEFORE the APC; `C=1` (in
-                        // `escape_colocar`) keeps placing from moving it in
+                        // `escape_place`) keeps placing from moving it in
                         // turn (and potentially scrolling the screen if it
                         // falls on the last row).
                         let written =

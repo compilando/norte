@@ -173,7 +173,7 @@ pub struct HostTheme {
     /// read once per row.
     pub variant_clara: Option<Box<norte_theme::Theme>>,
     /// The `[ui] theme_dark` one. See [`HostTheme::variant_clara`].
-    pub variant_oscura: Option<Box<norte_theme::Theme>>,
+    pub variant_dark: Option<Box<norte_theme::Theme>>,
 }
 
 /// How the THEME paints an entry's name (`[files.ext]`, which wins, or
@@ -229,7 +229,7 @@ impl HostTheme {
             // Set by whoever starts up, who is the only one that reads the
             // configuration; `de` builds the BASE theme.
             variant_clara: None,
-            variant_oscura: None,
+            variant_dark: None,
         }
     }
 
@@ -246,7 +246,7 @@ impl HostTheme {
     #[must_use]
     pub fn for_scheme(&self, dark: bool) -> &norte_theme::Theme {
         let variant = if dark {
-            self.variant_oscura.as_ref()
+            self.variant_dark.as_ref()
         } else {
             self.variant_clara.as_ref()
         };
@@ -493,7 +493,7 @@ impl Selector {
     pub(crate) fn with_connections(
         &mut self,
         connections: Vec<norte_proto::methods::ConnectionEntry>,
-        inservibles: Vec<norte_proto::methods::ConnectionProblem>,
+        unusable: Vec<norte_proto::methods::ConnectionProblem>,
     ) {
         self.rows = connections
             .into_iter()
@@ -510,7 +510,7 @@ impl Selector {
                     name: None,
                 }
             })
-            .chain(inservibles.into_iter().map(|p| {
+            .chain(unusable.into_iter().map(|p| {
                 let (name, name_hostile) = norte_frontend::display_name(p.name.as_bytes());
                 // The reason was written by a parser over a user file, so it
                 // gets masked just like a name: it is outside text, not one
@@ -1011,7 +1011,7 @@ mod tests {
                 .expect("parses");
         let mut theme = theme_with_files();
         theme.variant_clara = Some(Box::new(light));
-        theme.variant_oscura = Some(Box::new(dark));
+        theme.variant_dark = Some(Box::new(dark));
 
         let kind = norte_theme::FileKind::Regular;
         assert_eq!(
@@ -1044,7 +1044,7 @@ mod tests {
 
         // Only the dark one: the light side stays with the base.
         let mut dark_only = theme_with_files();
-        dark_only.variant_oscura = Some(Box::new(
+        dark_only.variant_dark = Some(Box::new(
             norte_theme::Theme::from_toml("name = \"o\"\n").expect("parses"),
         ));
         assert_eq!(dark_only.for_scheme(true).name.as_deref(), Some("o"));

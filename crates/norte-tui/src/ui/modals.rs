@@ -548,7 +548,7 @@ fn modal_title_text(
         Modal::ConfirmUndoAfter {
             to_undo,
             irreversible,
-            ajenas,
+            foreign,
             ..
         } => {
             let mut text_lines = vec![
@@ -561,8 +561,8 @@ fn modal_title_text(
                     &[("n", &irreversible.to_string())],
                 ));
             }
-            if *ajenas > 0 {
-                text_lines.push(ta("timeline-undo-foreign", &[("n", &ajenas.to_string())]));
+            if *foreign > 0 {
+                text_lines.push(ta("timeline-undo-foreign", &[("n", &foreign.to_string())]));
             }
             text_lines.push(hints.uninstall.clone());
             (t("timeline-undo-title"), text_lines.join("\n"))
@@ -1585,7 +1585,7 @@ pub(crate) fn organize_plan_modal(
         // What is hidden does not slip through clean: if any line OUTSIDE
         // the window is painted different from its bytes, the indicator
         // says so.
-        let oculto_hostile = text_lines
+        let hidden_hostile = text_lines
             .iter()
             .enumerate()
             .any(|(i, l)| (i < offset || i >= last) && display_name(l.text.as_bytes()).1);
@@ -1600,7 +1600,7 @@ pub(crate) fn organize_plan_modal(
                 ),
                 LineKind::Dim,
             )
-            .hostile(oculto_hostile),
+            .hostile(hidden_hostile),
         );
     }
     // H3c: with help on top the modal's keys do not respond, and the footer
@@ -3287,16 +3287,16 @@ mod approval_modal_tests {
             "the count goes ahead of the tree and stands out: {:?}",
             body[1]
         );
-        let facturas = body
+        let invoices = body
             .iter()
             .find(|l| l.text.contains("facturas"))
             .expect("is there");
         assert_eq!(
-            facturas.kind,
+            invoices.kind,
             LineKind::Dim,
-            "the folder that ALREADY existed is not painted as new: {facturas:?}"
+            "the folder that ALREADY existed is not painted as new: {invoices:?}"
         );
-        assert!(facturas.text.starts_with(ORGANIZE_EXISTING), "{facturas:?}");
+        assert!(invoices.text.starts_with(ORGANIZE_EXISTING), "{invoices:?}");
         let new = body
             .iter()
             .find(|l| l.text.contains("nueva"))

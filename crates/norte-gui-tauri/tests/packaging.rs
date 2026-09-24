@@ -47,19 +47,19 @@ fn key(text: &str, k: &str) -> Option<String> {
 #[test]
 fn the_package_brings_the_daemon_and_the_cli() {
     let cfg = conf();
-    let externos: Vec<&str> = cfg["bundle"]["externalBin"]
+    let external: Vec<&str> = cfg["bundle"]["externalBin"]
         .as_array()
         .expect("there are external binaries")
         .iter()
         .filter_map(serde_json::Value::as_str)
         .collect();
     assert!(
-        externos.iter().any(|b| b.ends_with("/norte")),
-        "the daemon travels with the window: {externos:?}"
+        external.iter().any(|b| b.ends_with("/norte")),
+        "the daemon travels with the window: {external:?}"
     );
     assert!(
-        externos.iter().any(|b| b.ends_with("/ntc")),
-        "and the terminal client: {externos:?}"
+        external.iter().any(|b| b.ends_with("/ntc")),
+        "and the terminal client: {external:?}"
     );
 }
 

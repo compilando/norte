@@ -411,11 +411,7 @@ fn the_second_page_of_the_same_directory_reuses_the_instance() {
     );
     let cost1 = t0.elapsed();
     assert_eq!(v1.len(), 20);
-    assert_eq!(
-        pool.reutilizadas(),
-        0,
-        "the first one cannot reuse anything"
-    );
+    assert_eq!(pool.reused(), 0, "the first one cannot reuse anything");
 
     let second = page(20);
     let t1 = std::time::Instant::now();
@@ -431,7 +427,7 @@ fn the_second_page_of_the_same_directory_reuses_the_instance() {
     let cost2 = t1.elapsed();
     assert_eq!(v2.len(), 20);
     assert_eq!(
-        pool.reutilizadas(),
+        pool.reused(),
         1,
         "the second page of the SAME directory has to hit the live instance"
     );
@@ -449,7 +445,7 @@ fn the_second_page_of_the_same_directory_reuses_the_instance() {
     );
     assert_eq!(v3.len(), 1);
     assert_eq!(
-        pool.reutilizadas(),
+        pool.reused(),
         1,
         "changing location instantiates again: the key carries the directory"
     );
@@ -466,5 +462,5 @@ fn the_second_page_of_the_same_directory_reuses_the_instance() {
         first.len(),
     );
     assert_eq!(v4, v1, "the same directory gives the same values");
-    assert_eq!(pool.reutilizadas(), 2);
+    assert_eq!(pool.reused(), 2);
 }

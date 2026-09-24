@@ -195,7 +195,7 @@ pub(super) fn large_tree_with_plugins(n: usize) -> Arc<Fake> {
         .collect();
     let mut f = Fake::default();
     f.tree.insert("mem:///casa".to_owned(), names);
-    f.decoraciones
+    f.decorations
         .insert("mem:///casa/f00000.txt".to_owned(), "M".to_owned());
     *f.plugins.lock().expect("plugins") = vec![{
         let mut p = extension("acme.git", "Git", true);
@@ -327,7 +327,7 @@ async fn plugins_are_only_asked_about_the_window() {
         let _ = next_snapshot(&mut sub).await;
     }
 
-    let batches = backend.decorados.lock().expect("mutex").clone();
+    let batches = backend.decorated.lock().expect("mutex").clone();
     assert!(!batches.is_empty(), "plugins are asked");
     for batch in &batches {
         assert!(
@@ -344,7 +344,7 @@ async fn plugins_are_only_asked_about_the_window() {
     );
 
     // And the plugin column travels in the same batch, not a separate sweep.
-    let cols = backend.columns_pedidas.lock().expect("mutex").clone();
+    let cols = backend.columns_requested.lock().expect("mutex").clone();
     assert!(!cols.is_empty(), "the configured column is requested");
     for (plugin, column, paths) in &cols {
         assert_eq!(plugin, "acme.git");
@@ -372,7 +372,7 @@ async fn a_plugin_icon_reaches_the_row_and_the_class_travels() {
         .insert("mem:///casa/src".to_owned(), "📁".to_owned());
     f.icons
         .insert("mem:///casa/a.rs".to_owned(), "🦀".to_owned());
-    f.decoraciones
+    f.decorations
         .insert("mem:///casa/a.rs".to_owned(), "M".to_owned());
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
@@ -411,8 +411,8 @@ async fn a_plugin_icon_reaches_the_row_and_the_class_travels() {
     assert_eq!(a.badge_role, "warning");
     // And the class travelled with the batch, positionally: `src` is a
     // folder.
-    let classes = backend.classes_decoradas.lock().expect("clases");
-    let batches = backend.decorados.lock().expect("decorados");
+    let classes = backend.classes_decorated.lock().expect("clases");
+    let batches = backend.decorated.lock().expect("decorados");
     let (paths, kinds) = (&batches[0], &classes[0]);
     assert_eq!(paths.len(), kinds.len(), "one class per path");
     let src_idx = paths
@@ -469,11 +469,11 @@ async fn disabling_a_decorator_from_the_manager_removes_its_badges() {
         }
     }
     assert!(with_badge, "the badge arrives first");
-    let rounds_before = backend.decorados.lock().expect("decorados").len();
+    let rounds_before = backend.decorated.lock().expect("decorados").len();
 
     // F12, and `e` on the only extension: it gets disabled.
     h.dispatch(press("F12")).await.expect("host alive");
-    let v = extensions_cargadas(&mut sub).await;
+    let v = extensions_loaded(&mut sub).await;
     assert_eq!(v.rows[0].id, "acme.git");
     h.dispatch(press("e")).await.expect("host alive");
 
@@ -496,7 +496,7 @@ async fn disabling_a_decorator_from_the_manager_removes_its_badges() {
         "rows end up with no badge from the disabled plugin"
     );
     assert!(
-        backend.decorados.lock().expect("decorados").len() > rounds_before,
+        backend.decorated.lock().expect("decorados").len() > rounds_before,
         "and the decoration was requested again, not guessed"
     );
 }

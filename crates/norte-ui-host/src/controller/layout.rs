@@ -412,7 +412,7 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.set_tree(tree, active);
-        self.despertar_visible(backend, mailbox);
+        self.wake_visible(backend, mailbox);
         if self.places_slot().is_some() {
             self.seed_places();
             self.request_places(backend, mailbox);
@@ -421,7 +421,7 @@ impl State {
         // An open panel or a chosen template is exactly what the reader
         // expects to find on returning, and a close that does not make it in
         // time must not lose it.
-        self.empujar_session(backend, mailbox);
+        self.push_session(backend, mailbox);
         let snap = self.snapshot();
         (
             self.applied(),
@@ -492,7 +492,7 @@ impl State {
             Some(id) => self.roles.set(RoleId::Active, id),
             None => self.roles.clear(RoleId::Active),
         }
-        self.reconcilia_roles();
+        self.reconciles_roles();
     }
 
     /// Changes the size of the slot with FOCUS, not the active listing.
@@ -562,13 +562,13 @@ impl State {
     fn apply_si_fits(
         &mut self,
         new: Node,
-        tolerado: Option<SlotId>,
+        tolerated: Option<SlotId>,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let after = resolve(rect(self.viewport), &new, &self.kinds);
         if new != self.tree
-            && !norte_frontend::layout::keeps_on_screen(&self.split, &after, &new, tolerado)
+            && !norte_frontend::layout::keeps_on_screen(&self.split, &after, &new, tolerated)
         {
             return (
                 ActionAck::Unavailable {
@@ -602,12 +602,12 @@ impl State {
         if self.split.placements == before.placements && self.tree == tree_before {
             return (self.applied(), Vec::new());
         }
-        self.reconcilia_roles();
+        self.reconciles_roles();
         // The split changed: whatever just came out of `hidden` has no
         // listing and nobody else is going to request it.
-        self.despertar_visible(backend, mailbox);
+        self.wake_visible(backend, mailbox);
         // And to the session now: a size is a decision about the tree.
-        self.empujar_session(backend, mailbox);
+        self.push_session(backend, mailbox);
         let change = ViewChange::Layout(self.layout());
         (self.applied(), vec![self.parche(vec![change])])
     }

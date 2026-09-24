@@ -23,7 +23,7 @@ use crate::layout::KindRegistry;
 /// are strips that are looked at and not focused, and `compare`/`sync` are
 /// opened by an operation, not a button. A button that cannot open or
 /// close anything is not a button.
-const ESTRUCTURALES: &[&str] = &["browser", "tasks", "status", "compare", "sync"];
+const STRUCTURAL: &[&str] = &["browser", "tasks", "status", "compare", "sync"];
 
 /// The command that opens and closes each built-in panel.
 ///
@@ -309,7 +309,7 @@ pub fn es_button(decl: &crate::layout::KindDecl) -> bool {
     // same decision with two answers, which is exactly what ADR 0077
     // forbids. They enter the bar once the command that opens and closes
     // them exists.
-    !ESTRUCTURALES.contains(&decl.id.as_str())
+    !STRUCTURAL.contains(&decl.id.as_str())
         && decl.focusable
         && !decl.id.as_str().starts_with("plugin:")
 }

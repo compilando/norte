@@ -30,7 +30,7 @@ pub(super) async fn next_comparison(
 }
 
 /// A compared row, with the bare minimum to paint it.
-pub(super) fn row_comparada(
+pub(super) fn row_compared(
     id: u64,
     left: Option<&str>,
     right: Option<&str>,
@@ -62,14 +62,14 @@ pub(super) fn row_comparada(
 #[tokio::test]
 async fn comparing_the_two_panes_opens_the_diff_panel() {
     let fake = tree_as_fake();
-    *fake.rows_comparadas.lock().expect("filas") = Some(vec![
-        row_comparada(
+    *fake.rows_compared.lock().expect("filas") = Some(vec![
+        row_compared(
             1,
             Some("mem:///casa/notas.txt"),
             Some("mem:///casa/docs/notas.txt"),
             norte_proto::methods::CompareVerdict::Same,
         ),
-        row_comparada(
+        row_compared(
             2,
             Some("mem:///casa/solo.txt"),
             None,
@@ -98,7 +98,7 @@ async fn comparing_the_two_panes_opens_the_diff_panel() {
     assert_eq!(view.rows[1].category, "only-left");
     assert!(view.rows[1].right.is_none(), "an orphan has no right side");
     // And it did request comparing the two real directories.
-    let requested = backend.comparaciones.lock().expect("comparaciones").clone();
+    let requested = backend.comparisons.lock().expect("comparaciones").clone();
     assert_eq!(requested.len(), 1);
     assert_ne!(requested[0].0, requested[0].1);
 }
@@ -108,14 +108,14 @@ async fn comparing_the_two_panes_opens_the_diff_panel() {
 #[tokio::test]
 async fn a_filter_hides_a_category_and_does_not_renumber() {
     let fake = tree_as_fake();
-    *fake.rows_comparadas.lock().expect("filas") = Some(vec![
-        row_comparada(
+    *fake.rows_compared.lock().expect("filas") = Some(vec![
+        row_compared(
             1,
             Some("mem:///casa/notas.txt"),
             Some("mem:///casa/docs/notas.txt"),
             norte_proto::methods::CompareVerdict::Same,
         ),
-        row_comparada(
+        row_compared(
             2,
             Some("mem:///casa/solo.txt"),
             None,
@@ -176,7 +176,7 @@ async fn a_filter_hides_a_category_and_does_not_renumber() {
 #[tokio::test]
 async fn opening_an_orphan_on_its_empty_side_does_not_fall_back() {
     let fake = tree_as_fake();
-    *fake.rows_comparadas.lock().expect("filas") = Some(vec![row_comparada(
+    *fake.rows_compared.lock().expect("filas") = Some(vec![row_compared(
         1,
         None,
         Some("mem:///casa/docs/a.md"),

@@ -88,7 +88,7 @@ async fn copy_native_existing_destination_is_conflict() {
 
 /// Absent source → `NotFound` (implemented branch, no contract coverage).
 #[tokio::test]
-async fn copy_native_source_ausente_es_not_found() {
+async fn copy_native_source_absent_es_not_found() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, b"no-existe.bin");

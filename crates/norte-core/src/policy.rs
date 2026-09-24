@@ -203,7 +203,7 @@ pub fn is_under(root: &VPath, path: &VPath) -> bool {
 /// # #[cfg(unix)] {
 /// let r = local_root_vpath(Path::new("/home/u/.config/norte")).expect("absolute");
 /// assert_eq!(r.to_wire(), "file:///home/u/.config/norte");
-/// assert!(local_root_vpath(Path::new("relativo/norte")).is_none());
+/// assert!(local_root_vpath(Path::new("relative/norte")).is_none());
 /// # }
 /// ```
 #[must_use]

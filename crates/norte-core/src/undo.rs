@@ -1287,10 +1287,7 @@ async fn revert_mode_batch(
 ///
 /// # Errors
 /// The journal's, as [`Error`].
-pub(crate) async fn deshechas(
-    journal: &SqliteJournal,
-    seqs: &[i64],
-) -> Result<HashSet<i64>, Error> {
+pub(crate) async fn undone(journal: &SqliteJournal, seqs: &[i64]) -> Result<HashSet<i64>, Error> {
     Ok(journal
         .journal()
         .undone_among(seqs)
@@ -1316,7 +1313,7 @@ pub(crate) enum Validity {
     /// would revert half the batch; skipping it would let the LIFO cross a
     /// half-done unit and revert what's under it. The undo STOPS, like any
     /// other block. The `seq` is that of its first entry.
-    Parada(i64),
+    Stop(i64),
 }
 
 /// Classifies `unit` against what's already been undone (see [`Validity`]).
@@ -1344,7 +1341,7 @@ pub(crate) fn validity(unit: Vec<JournalEntry>, already_undone: &HashSet<i64>) -
                 .collect(),
         );
     }
-    Validity::Parada(unit.first().map_or(0, |e| e.seq))
+    Validity::Stop(unit.first().map_or(0, |e| e.seq))
 }
 
 /// Reverts ONE undo unit, whatever kind it is.
@@ -1838,7 +1835,7 @@ mod tests {
         }
         assert_eq!(
             validity(batch(), &HashSet::from([4])),
-            Validity::Parada(5),
+            Validity::Stop(5),
             "a rename batch halfway STOPS the LIFO: it's neither continued nor skipped"
         );
         assert_eq!(validity(batch(), &HashSet::from([4, 5])), Validity::Undone);

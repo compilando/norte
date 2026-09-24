@@ -23,7 +23,7 @@
 pub mod catalog;
 pub mod commands;
 pub mod links;
-pub mod nativo;
+pub mod native;
 pub mod sink;
 pub mod startup;
 

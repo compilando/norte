@@ -583,7 +583,7 @@ mod tests {
     /// `cmd` sorts BEFORE `ctrl` in `Display`, so a chord carrying both has
     /// exactly ONE spelling and the round trip is closed.
     #[test]
-    fn cmd_precede_a_ctrl_en_la_grafia_canonica() {
+    fn cmd_precedes_ctrl_in_the_canonical_spelling() {
         let c = Chord::new(
             Mods {
                 cmd: true,
@@ -782,7 +782,7 @@ mod tests {
     }
 
     #[test]
-    fn shift_con_char_es_error_diagnosticable() {
+    fn shift_with_char_is_a_diagnosable_error() {
         // A "shift+g" binding would never match (the canonical chord drops
         // shift on chars): rejected at parse time, not a dead binding.
         match parse_chord("shift+g") {
@@ -2651,8 +2651,7 @@ keymap = [
         // `app.help` is in the list on purpose even though all seven have
         // it today: it is the one most missed when it is missing, and the
         // test has to say so before the user does.
-        const IMPRESCINDIBLES: &[&str] =
-            &["app.help", "app.settings", "app.extensions", "app.palette"];
+        const ESSENTIAL: &[&str] = &["app.help", "app.settings", "app.extensions", "app.palette"];
         let known = preset_commands(Screen::Browse);
         let known: Vec<&str> = known.iter().map(String::as_str).collect();
         for name in presets::NAMES {
@@ -2660,7 +2659,7 @@ keymap = [
             let kf = parse_keymap(src).expect("preset parses");
             let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-            for cmd in IMPRESCINDIBLES {
+            for cmd in ESSENTIAL {
                 assert!(
                     eff.bindings().iter().any(|(_, c)| c == cmd),
                     "preset {name}: `{cmd}` has no key, so that screen cannot \

@@ -85,7 +85,7 @@ pub fn before_frame(app: &mut App, area: Rect) {
     {
         // The frame is subtracted: the shell paints INSIDE.
         t.resize((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
-        t.bombear();
+        t.pump();
     }
     // And if the shell left, the panel stops having a shell: it is released
     // so the slot says so instead of showing the last screen of a process
@@ -234,7 +234,7 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
             {
                 out.push(crate::mouse::ResizeBorder {
                     slot: *a,
-                    vecino: *b,
+                    neighbor: *b,
                     dir: Dir::Horizontal,
                     line: ra.x + ra.width,
                     from: ra.y.max(rb.y),
@@ -249,7 +249,7 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
             {
                 out.push(crate::mouse::ResizeBorder {
                     slot: *a,
-                    vecino: *b,
+                    neighbor: *b,
                     dir: Dir::Vertical,
                     line: ra.y + ra.height,
                     from: ra.x.max(rb.x),

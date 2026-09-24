@@ -365,7 +365,7 @@ mod tests {
     /// on the watched dir and emits; the first sighting is the baseline
     /// (starting up is not a change).
     #[tokio::test]
-    async fn poller_degradado_detects_mtime() {
+    async fn poller_degraded_detects_mtime() {
         let dir = tempfile::tempdir().unwrap();
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         // No native watcher: only the poller can emit (isolates the test

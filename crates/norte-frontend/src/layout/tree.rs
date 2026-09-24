@@ -358,11 +358,11 @@ fn drag_pair(sizes: &[Size], pos: usize, frac: f32, pair_cells: u16) -> Vec<Size
 /// an `Option`, because "not flipped here" has to STOP the search and "not
 /// here" has to let it continue. With an `Option` the negative propagated
 /// up and the outer layout got flipped.
-enum Giro {
+enum Flip {
     /// Flipped: the new tree.
     Done(Node),
     /// Found, and not flipped.
-    Rehusado,
+    Refused,
     /// The slot is not in this subtree, or there is no layout to flip.
     NoThis,
 }
@@ -798,14 +798,14 @@ impl Node {
         };
         // Phase F: if that border already has a PANEL (or a group of
         // panels), the new one joins it as a tab, up front.
-        let vecino = if edge.is_front() {
+        let neighbor = if edge.is_front() {
             Some(0)
         } else {
             at.checked_sub(1)
         };
         if agrupar
             && es_panel(new)
-            && let Some(v) = vecino
+            && let Some(v) = neighbor
             && nc.get(v).is_some_and(is_a_group_of_panes)
         {
             let group = match &nc[v] {
@@ -912,8 +912,8 @@ impl Node {
     /// its id, its kind, its params and its bindings.
     #[must_use]
     pub fn move_slot(&self, id: SlotId, target: SlotId, zone: DropZone) -> Self {
-        let movible = |s: SlotId| self.find_slot(s).is_some_and(|n| !es_chrome(n));
-        if id == target || !movible(id) || !movible(target) {
+        let movable = |s: SlotId| self.find_slot(s).is_some_and(|n| !es_chrome(n));
+        if id == target || !movable(id) || !movable(target) {
             return self.clone();
         }
         let Some(node) = self.find_slot(id).cloned() else {
@@ -1037,23 +1037,23 @@ impl Node {
     #[must_use]
     pub fn flip(&self, id: SlotId) -> Self {
         match self.flip_inner(id) {
-            Giro::Done(n) => n,
-            Giro::Rehusado | Giro::NoThis => self.clone(),
+            Flip::Done(n) => n,
+            Flip::Refused | Flip::NoThis => self.clone(),
         }
     }
 
-    fn flip_inner(&self, id: SlotId) -> Giro {
+    fn flip_inner(&self, id: SlotId) -> Flip {
         let kids = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
-            Self::Slot { .. } => return Giro::NoThis,
+            Self::Slot { .. } => return Flip::NoThis,
         };
         let Some(pos) = kids.iter().position(|c| c.contains(id)) else {
-            return Giro::NoThis;
+            return Flip::NoThis;
         };
         match kids[pos].flip_inner(id) {
-            Giro::Done(inside) => return Giro::Done(self.with_child(pos, inside)),
-            Giro::Rehusado => return Giro::Rehusado,
-            Giro::NoThis => {}
+            Flip::Done(inside) => return Flip::Done(self.with_child(pos, inside)),
+            Flip::Refused => return Flip::Refused,
+            Flip::NoThis => {}
         }
         let Self::Split {
             dir,
@@ -1061,10 +1061,10 @@ impl Node {
             sizes,
         } = self
         else {
-            return Giro::NoThis;
+            return Flip::NoThis;
         };
         if children.iter().any(es_chrome) {
-            return Giro::Rehusado;
+            return Flip::Refused;
         }
         let other = match dir {
             Dir::Horizontal => Dir::Vertical,
@@ -1072,7 +1072,7 @@ impl Node {
         };
         let weighs = |i: usize| matches!(sizes.get(i), Some(Size::Weight(_)) | None);
         if !weighs(pos) {
-            return Giro::Rehusado;
+            return Flip::Refused;
         }
         let mut from = pos;
         while from > 0 && weighs(from - 1) {
@@ -1083,10 +1083,10 @@ impl Node {
             until += 1;
         }
         if until - from < 2 {
-            return Giro::Rehusado;
+            return Flip::Refused;
         }
         if from == 0 && until == children.len() {
-            return Giro::Done(Self::Split {
+            return Flip::Done(Self::Split {
                 dir: other,
                 children: children.clone(),
                 sizes: sizes.clone(),
@@ -1097,7 +1097,7 @@ impl Node {
             _ => 1,
         };
         let total = u16::try_from((from..until).map(how_much).sum::<u32>()).unwrap_or(u16::MAX);
-        let racha = Self::Split {
+        let streak = Self::Split {
             dir: other,
             children: children[from..until].to_vec(),
             sizes: (from..until)
@@ -1105,7 +1105,7 @@ impl Node {
                 .collect(),
         };
         let mut nc = children[..from].to_vec();
-        nc.push(racha);
+        nc.push(streak);
         nc.extend_from_slice(&children[until..]);
         let mut ns: Vec<Size> = (0..from)
             .map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1)))
@@ -1114,7 +1114,7 @@ impl Node {
         ns.extend(
             (until..children.len()).map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1))),
         );
-        Giro::Done(Self::Split {
+        Flip::Done(Self::Split {
             dir: *dir,
             children: nc,
             sizes: ns,
@@ -1445,8 +1445,8 @@ impl Node {
     /// asking the user for two steps for that would make no sense.
     #[must_use]
     pub fn add_tab(&self, id: SlotId, new: &Self) -> Self {
-        let envuelto = self.wrap_in_tabs(id);
-        envuelto.insert_tab_near(id, new).unwrap_or(envuelto)
+        let wrapped = self.wrap_in_tabs(id);
+        wrapped.insert_tab_near(id, new).unwrap_or(wrapped)
     }
 
     fn insert_tab_near(&self, id: SlotId, new: &Self) -> Option<Self> {
@@ -2056,7 +2056,7 @@ mod tests {
     /// A healthy tree, rebased, cannot MANUFACTURE a duplicate, whatever
     /// the order of the original ids.
     #[test]
-    fn rebase_no_factory_duplicados() {
+    fn rebase_no_factory_duplicates() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2508,7 +2508,7 @@ mod tests {
     /// Two slots with the same id is incoherent, and the tree knows how to
     /// say so.
     #[test]
-    fn los_ids_repetidos_se_detectan() {
+    fn repeated_ids_are_detected() {
         let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],

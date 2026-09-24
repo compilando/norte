@@ -189,7 +189,7 @@ async fn a_wild_height_does_not_send_the_whole_ring() {
     h.dispatch(UiAction::LogSetVisibleRange { rows: u32::MAX })
         .await
         .expect("host alive");
-    asentar().await;
+    settle().await;
     let view = snapshot_until(&h, &mut sub, "the clamped log", |f| Some(log(f).clone())).await;
     assert!(
         view.lines.len() <= 512,
@@ -212,7 +212,7 @@ async fn closing_the_panel_lowers_what_gets_captured() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert_eq!(ring.level(), norte_config::logline::LogLevel::Trace);
 
     // And while it is open, the panel SAYS more is being captured than it
@@ -241,7 +241,7 @@ async fn closing_the_panel_lowers_what_gets_captured() {
     }))
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert_eq!(
         ring.level(),
         norte_config::logline::LogLevel::Info,
@@ -266,7 +266,7 @@ async fn the_panels_level_raises_the_rings_and_does_not_lower_it() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert_eq!(
         ring.level(),
         norte_config::logline::LogLevel::Debug,
@@ -278,7 +278,7 @@ async fn the_panels_level_raises_the_rings_and_does_not_lower_it() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert_eq!(
         ring.level(),
         norte_config::logline::LogLevel::Debug,
@@ -379,7 +379,7 @@ pub(super) fn line_wire(
 /// The log panel's snapshot, with anything that was in flight already
 /// landed.
 ///
-/// `asentar` first: the daemon's response comes back to the actor through
+/// `settle` first: the daemon's response comes back to the actor through
 /// the SAME mailbox as actions, so once the executor goes still the message
 /// is already queued and `snapshot_until`'s `Resync` goes behind it. No clock and
 /// no guessing.
@@ -391,7 +391,7 @@ pub(super) async fn snapshot_log(h: &UiHost) -> norte_ui_host::dto::LogSlotView 
         .await
         .expect("host alive");
     let mut sub = h.subscribe();
-    asentar().await;
+    settle().await;
     snapshot_until(h, &mut sub, "the log panel", |f| Some(log(f).clone())).await
 }
 
@@ -400,11 +400,11 @@ pub(super) async fn snapshot_log(h: &UiHost) -> norte_ui_host::dto::LogSlotView 
 /// Advancing the clock and not sleeping it: the deadline is REAL — the timer
 /// the panel rearms on its own — and that is exactly the tool this file's
 /// note on deterministic waits points to for a deadline.
-pub(super) async fn sondear(h: &UiHost) {
+pub(super) async fn probe(h: &UiHost) {
     tokio::time::pause();
     tokio::time::advance(std::time::Duration::from_millis(600)).await;
     tokio::time::resume();
-    asentar().await;
+    settle().await;
     let _ = h;
 }
 
@@ -419,7 +419,7 @@ pub(super) async fn set_source(h: &UiHost, source: &str) {
     // while it is not known there is a second source — moving the preference
     // behind a reader's back who cannot see it move is what got fixed — so
     // pressing it before the first `log.tail` would do nothing.
-    asentar().await;
+    settle().await;
     let rounds = match source {
         "window" => 1,
         "daemon" => 2,
@@ -431,7 +431,7 @@ pub(super) async fn set_source(h: &UiHost, source: &str) {
             .await
             .expect("host alive");
     }
-    asentar().await;
+    settle().await;
 }
 
 /// With a daemon that knows nothing about logging there are no two rings, so
@@ -528,7 +528,7 @@ async fn a_daemon_with_no_log_says_so_in_the_panel() {
     backend.log_tail_no_supported();
     let (host, _ring) = host_with_backend_and_log(Arc::clone(&backend)).await;
     let v = snapshot_log(&host).await;
-    let asked = backend.cursors_pedidos().len();
+    let asked = backend.cursors_requests().len();
     assert!(asked > 0, "it did get asked");
     assert_eq!(v.source_mode, "window");
     assert!(!v.source_note.is_empty(), "it has to say why");
@@ -537,10 +537,10 @@ async fn a_daemon_with_no_log_says_so_in_the_panel() {
     // daemon lives — it comes from a compile-time feature or a mount that
     // failed at startup — so continuing to poll would be two RPCs per
     // second, forever, for an answer that cannot be any different.
-    sondear(&host).await;
-    sondear(&host).await;
+    probe(&host).await;
+    probe(&host).await;
     assert_eq!(
-        backend.cursors_pedidos().len(),
+        backend.cursors_requests().len(),
         asked,
         "a daemon with no log is not asked again"
     );
@@ -575,11 +575,11 @@ async fn a_daemon_with_no_log_is_not_asked_for_the_level() {
         .await
         .expect("host alive");
     }
-    asentar().await;
+    settle().await;
     assert!(
-        backend.log_level_pedidos().is_empty(),
+        backend.log_level_requests().is_empty(),
         "a dead RPC per keystroke: {:?}",
-        backend.log_level_pedidos()
+        backend.log_level_requests()
     );
 }
 
@@ -614,7 +614,7 @@ async fn with_no_second_source_the_control_does_not_move_the_preference() {
             .await
             .expect("host alive");
     }
-    asentar().await;
+    settle().await;
 
     // Now it does answer, and the picker shows up: the preference has to
     // still be the opening one.
@@ -657,7 +657,7 @@ async fn the_daemons_level_is_requested_and_said_separately() {
     .await
     .expect("host alive");
     let requested = until(&backend, "the level requested from the daemon", |f| {
-        let v = f.log_level_pedidos();
+        let v = f.log_level_requests();
         (!v.is_empty()).then_some(v)
     })
     .await;
@@ -702,8 +702,8 @@ async fn polling_chains_the_cursor() {
     assert!(v.lines.iter().any(|l| l.message.contains("primera")));
 
     backend.answers_log_tail(vec![line_wire(20, "info", "norte_core", "segunda")], 2);
-    sondear(&host).await;
-    let cursors = backend.cursors_pedidos();
+    probe(&host).await;
+    let cursors = backend.cursors_requests();
     assert_eq!(
         cursors[0], None,
         "the first round requests \"whatever there is\""
@@ -923,7 +923,7 @@ async fn the_window_asks_for_the_secret_and_retries_the_navigation() {
     .await
     .expect("host alive");
 
-    let dados = anotados(&backend, "the secret handed over", 1, |f| {
+    let dados = annotated(&backend, "the secret handed over", 1, |f| {
         f.secrets_dados.lock().expect("secretos_dados").clone()
     })
     .await;
@@ -983,7 +983,7 @@ async fn confirming_without_typing_anything_neither_hands_over_nor_closes() {
         "confirming an empty password field is inert"
     );
 
-    asentar().await;
+    settle().await;
     assert!(
         backend
             .secrets_dados
@@ -1037,7 +1037,7 @@ async fn a_password_that_does_not_fit_is_rejected() {
             reason_key: "host-secret-too-long".to_owned()
         }
     );
-    asentar().await;
+    settle().await;
     assert!(
         backend
             .secrets_dados
@@ -1068,7 +1068,7 @@ async fn two_listings_of_the_same_connection_do_not_stack_two_questions() {
     h.dispatch(UiAction::Parent { slot_id: 1 })
         .await
         .expect("host alive");
-    asentar().await;
+    settle().await;
     let snapshot = snapshot_until(&h, &mut sub, "the stack is stable", |f| {
         Some(f.dialogs.len())
     })
@@ -1098,7 +1098,7 @@ async fn canceling_the_secret_abandons_the_navigation() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
         backend
             .secrets_dados
@@ -1137,7 +1137,7 @@ async fn canceling_the_secret_abandons_the_navigation() {
 async fn a_connection_that_fails_says_why() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.fallidas.lock().expect("fallidas") = Some(rx);
+    *fake.failed.lock().expect("fallidas") = Some(rx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
     tx.send(norte_proto::methods::ConnectionFailed {
@@ -1202,7 +1202,7 @@ async fn a_connection_that_fails_says_why() {
 async fn a_failure_with_an_unknown_reason_leans_on_the_detail() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.fallidas.lock().expect("fallidas") = Some(rx);
+    *fake.failed.lock().expect("fallidas") = Some(rx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
     tx.send(norte_proto::methods::ConnectionFailed {
@@ -1266,7 +1266,7 @@ pub(super) async fn snapshot_until_notice(
 async fn an_unknown_reason_is_not_painted_as_the_known_one() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.degradadas.lock().expect("degradadas") = Some(rx);
+    *fake.degraded.lock().expect("degradadas") = Some(rx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
     tx.send(norte_proto::methods::ConnectionDegraded {
@@ -1418,7 +1418,7 @@ async fn a_repeated_approval_does_not_open_two_dialogs() {
     // The same one, rebuilt by the resync: no TTL, because `policy.pending`
     // does not carry it.
     tx.send(request(0)).expect("the host is listening");
-    asentar().await;
+    settle().await;
     assert!(!was_dialogs(&mut sub).await, "the repeat opens nothing new");
 }
 
@@ -1463,7 +1463,7 @@ async fn an_approval_expires_and_its_dialog_closes() {
 async fn a_finished_undo_asks_for_its_report_and_says_what_did_not_come_back() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report_undo.lock().expect("informe undo") =
         Some(norte_proto::methods::PolicyUndoReportResult {
             undone: 3,
@@ -1484,13 +1484,13 @@ async fn a_finished_undo_asks_for_its_report_and_says_what_did_not_come_back() {
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 51, norte_proto::TaskKind::Undo);
+    let p = inject_task_for(&tx, 51, norte_proto::TaskKind::Undo);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
     let dialogs = next_dialogs(&mut sub).await;
     assert_eq!(
-        *backend.informes_undo_pedidos.lock().expect("pedidos"),
+        *backend.informes_undo_requests.lock().expect("pedidos"),
         vec![51]
     );
     let body: String = dialogs[0]
@@ -1512,7 +1512,7 @@ async fn a_finished_undo_asks_for_its_report_and_says_what_did_not_come_back() {
 async fn a_finished_archiving_says_the_names_that_mean_something_else() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report_pack.lock().expect("informe pack") =
         Some(norte_proto::methods::ArchivePackReportResult {
             entries: 9,
@@ -1527,7 +1527,7 @@ async fn a_finished_archiving_says_the_names_that_mean_something_else() {
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 77, norte_proto::TaskKind::Pack);
+    let p = inject_task_for(&tx, 77, norte_proto::TaskKind::Pack);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
@@ -1541,7 +1541,7 @@ async fn a_finished_archiving_says_the_names_that_mean_something_else() {
             && s.message.as_deref().is_some_and(|t| t.contains('1'))
         {
             assert_eq!(
-                *backend.informes_pack_pedidos.lock().expect("pedidos"),
+                *backend.informes_pack_requests.lock().expect("pedidos"),
                 vec![77]
             );
             return;
@@ -1561,7 +1561,7 @@ async fn a_finished_archiving_says_the_names_that_mean_something_else() {
 async fn a_cancelled_archiving_does_not_warn_about_a_file_that_does_not_exist() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report_pack.lock().expect("informe pack") =
         Some(norte_proto::methods::ArchivePackReportResult {
             entries: 9,
@@ -1576,16 +1576,16 @@ async fn a_cancelled_archiving_does_not_warn_about_a_file_that_does_not_exist() 
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 78, norte_proto::TaskKind::Pack);
+    let p = inject_task_for(&tx, 78, norte_proto::TaskKind::Pack);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Cancelled);
 
     // What is asserted is that it does NOT ask for it: everything the task's
     // outcome might have queued is left to run, and is checked afterward.
-    asentar().await;
+    settle().await;
     assert!(
         backend
-            .informes_pack_pedidos
+            .informes_pack_requests
             .lock()
             .expect("pedidos")
             .is_empty(),
@@ -1598,7 +1598,7 @@ async fn a_cancelled_archiving_does_not_warn_about_a_file_that_does_not_exist() 
 async fn a_clean_undo_opens_nothing() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report_undo.lock().expect("informe undo") =
         Some(norte_proto::methods::PolicyUndoReportResult {
             undone: 4,
@@ -1613,7 +1613,7 @@ async fn a_clean_undo_opens_nothing() {
         });
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 52, norte_proto::TaskKind::Undo);
+    let p = inject_task_for(&tx, 52, norte_proto::TaskKind::Undo);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     let detail = task_detail(&mut sub).await;
@@ -1689,7 +1689,7 @@ async fn a_batchs_report_masks_the_name_and_says_so() {
     let name = String::from_utf8(hostile_bytes).expect("the fixture is UTF-8");
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
         applied: 1,
         rolled_back: 0,
@@ -1707,7 +1707,7 @@ async fn a_batchs_report_masks_the_name_and_says_so() {
     });
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 61, norte_proto::TaskKind::RenameBatch);
+    let p = inject_task_for(&tx, 61, norte_proto::TaskKind::RenameBatch);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
@@ -1736,26 +1736,26 @@ async fn a_batchs_report_masks_the_name_and_says_so() {
 async fn a_reannouncement_does_not_erase_the_batchs_report() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report.lock().expect("informe") = Some(report_clean(2));
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 71, norte_proto::TaskKind::RenameBatch);
+    let p = inject_task_for(&tx, 71, norte_proto::TaskKind::RenameBatch);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     let detail = task_detail(&mut sub).await;
 
     // The same task, re-announced over the "others'" channel the way a
     // reconnection would: already terminal.
-    let p2 = inyectar_task_de(&tx, 71, norte_proto::TaskKind::RenameBatch);
+    let p2 = inject_task_for(&tx, 71, norte_proto::TaskKind::RenameBatch);
     p2.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
     let tasks = next_tasks(&mut sub).await;
     let t = tasks.iter().find(|t| t.task_id == 71).expect("still there");
     assert_eq!(t.detail.as_deref(), Some(detail.as_str()), "{t:?}");
     assert_eq!(
-        backend.informes_pedidos.lock().expect("pedidos").len(),
+        backend.informes_requests.lock().expect("pedidos").len(),
         1,
         "and it is not asked for again"
     );
@@ -1819,25 +1819,25 @@ async fn an_approval_that_does_not_reach_the_daemon_is_said() {
 async fn with_the_board_capped_the_visible_row_is_the_one_cancelled() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (h, _snap) = host_con_layout(Arc::new(fake), "full", (200, 60)).await;
-    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let canceled = Arc::new(std::sync::Mutex::new(Vec::new()));
     let max = norte_ui_host::bridge::MAX_TASKS;
     let total = max + 5;
     let mut vivas = Vec::new();
     for i in 0..total {
-        vivas.push(inyectar_task(&tx, 1000 + i as u64, &canceladas));
+        vivas.push(inject_task(&tx, 1000 + i as u64, &canceled));
     }
     // Subscribes AFTER inserting them: two hundred sixty-one insertions
     // produce more patches than fit to read, and falling behind is not what
     // this test measures. The snapshot the resync asks for brings the whole
     // board.
-    asentar().await;
+    settle().await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snapshot = next_snapshot(&mut sub).await;
     assert_eq!(snapshot.tasks.len(), max, "the board is capped");
-    let first_pintada = snapshot.tasks[0].task_id;
+    let first_painted = snapshot.tasks[0].task_id;
 
     h.dispatch(UiAction::FocusSlot { slot_id: 7 })
         .await
@@ -1848,8 +1848,8 @@ async fn with_the_board_capped_the_visible_row_is_the_one_cancelled() {
         .await
         .expect("host alive");
     assert_eq!(
-        *canceladas.lock().expect("canceladas"),
-        vec![first_pintada],
+        *canceled.lock().expect("canceladas"),
+        vec![first_painted],
         "the one on the highlighted row is cancelled, not one off screen"
     );
     drop(vivas);
@@ -1866,7 +1866,7 @@ async fn with_the_board_capped_the_visible_row_is_the_one_cancelled() {
 async fn a_batch_born_terminal_asks_for_its_report() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report.lock().expect("informe") = Some(report_clean(2));
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
@@ -1903,7 +1903,10 @@ async fn a_batch_born_terminal_asks_for_its_report() {
         detail.contains('2'),
         "the report reached the board: {detail}"
     );
-    assert_eq!(*backend.informes_pedidos.lock().expect("pedidos"), vec![81]);
+    assert_eq!(
+        *backend.informes_requests.lock().expect("pedidos"),
+        vec![81]
+    );
 }
 
 /// A CLICK on a just-opened approval does not approve it.
@@ -1941,7 +1944,7 @@ async fn a_click_on_a_just_opened_approval_does_not_approve_it() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
         backend.decisiones.lock().expect("decisiones").is_empty(),
         "the first click only acknowledges"
@@ -2015,7 +2018,7 @@ async fn a_clean_but_truncated_path_is_marked() {
         .join("/");
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
         applied: 1,
         rolled_back: 0,
@@ -2033,7 +2036,7 @@ async fn a_clean_but_truncated_path_is_marked() {
     });
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 91, norte_proto::TaskKind::RenameBatch);
+    let p = inject_task_for(&tx, 91, norte_proto::TaskKind::RenameBatch);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
@@ -2057,7 +2060,7 @@ async fn a_clean_but_truncated_path_is_marked() {
 async fn after_a_handoff_a_repeated_id_inherits_nothing() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (evtx, evrx) = tokio::sync::mpsc::unbounded_channel();
     *fake.eventos.lock().expect("eventos") = Some(evrx);
     *fake.report.lock().expect("informe") = Some(report_clean(1));
@@ -2065,11 +2068,11 @@ async fn after_a_handoff_a_repeated_id_inherits_nothing() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    let p = inyectar_task_de(&tx, 3, norte_proto::TaskKind::RenameBatch);
+    let p = inject_task_for(&tx, 3, norte_proto::TaskKind::RenameBatch);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     task_detail(&mut sub).await;
-    assert_eq!(backend.informes_pedidos.lock().expect("pedidos").len(), 1);
+    assert_eq!(backend.informes_requests.lock().expect("pedidos").len(), 1);
 
     // Handoff: it leaves and comes back. On the other end, a different
     // daemon.
@@ -2079,13 +2082,13 @@ async fn after_a_handoff_a_repeated_id_inherits_nothing() {
         .expect("the host is listening");
     // The handoff is processed by the actor: it is let run before injecting
     // the new daemon's task, or the race would be with the reconnected one.
-    asentar().await;
+    settle().await;
 
     // Its first task is also 3, and also a batch.
-    let p2 = inyectar_task_de(&tx, 3, norte_proto::TaskKind::RenameBatch);
+    let p2 = inject_task_for(&tx, 3, norte_proto::TaskKind::RenameBatch);
     p2.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    anotados(&backend, "the NEW task's report", 2, |f| {
-        f.informes_pedidos.lock().expect("pedidos").clone()
+    annotated(&backend, "the NEW task's report", 2, |f| {
+        f.informes_requests.lock().expect("pedidos").clone()
     })
     .await;
 }
@@ -2099,7 +2102,7 @@ async fn after_a_handoff_a_repeated_id_inherits_nothing() {
 async fn the_dialog_stack_has_a_ceiling() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
         applied: 1,
         rolled_back: 1,
@@ -2114,7 +2117,7 @@ async fn the_dialog_stack_has_a_ceiling() {
     let cap = norte_ui_host::bridge::MAX_DIALOGS;
     let mut vivas = Vec::new();
     for i in 0..(cap + 3) {
-        let p = inyectar_task_de(&tx, 400 + i as u64, norte_proto::TaskKind::RenameBatch);
+        let p = inject_task_for(&tx, 400 + i as u64, norte_proto::TaskKind::RenameBatch);
         p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
         vivas.push(p);
     }
@@ -2144,7 +2147,7 @@ async fn the_dialog_stack_has_a_ceiling() {
 async fn read_only_does_not_stop_someone_elses_task() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(fake),
         initial_dir: dir(),
@@ -2168,8 +2171,8 @@ async fn read_only_does_not_stop_someone_elses_task() {
     .await
     .expect("starts");
     let mut sub = h.subscribe();
-    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let _p = inyectar_task(&tx, 55, &canceladas);
+    let canceled = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _p = inject_task(&tx, 55, &canceled);
     next_tasks(&mut sub).await;
 
     let ack = h
@@ -2180,7 +2183,7 @@ async fn read_only_does_not_stop_someone_elses_task() {
         matches!(ack, ActionAck::Unavailable { .. }),
         "a window without effects does not stop it: {ack:?}"
     );
-    assert!(canceladas.lock().expect("canceladas").is_empty());
+    assert!(canceled.lock().expect("canceladas").is_empty());
 }
 
 /// An approval says WHAT is being asked and WHO is asking, and both stay
@@ -2271,7 +2274,7 @@ async fn an_approval_without_a_ttl_says_it_does_not_know_the_deadline() {
 async fn a_plaintext_notice_carries_the_connection_separately_and_marked() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.degradadas.lock().expect("degradadas") = Some(rx);
+    *fake.degraded.lock().expect("degradadas") = Some(rx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
     tx.send(norte_proto::methods::ConnectionDegraded {

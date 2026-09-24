@@ -146,7 +146,7 @@ async fn a_typed_path_does_not_go_to_the_index() {
     }
     let requested = backend
         .until("a query to the index", |f| {
-            let p = f.semanticas_pedidas.lock().expect("semantics").clone();
+            let p = f.semanticas_requested.lock().expect("semantics").clone();
             (!p.is_empty()).then_some(p)
         })
         .await;

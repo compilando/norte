@@ -109,14 +109,14 @@ pub(crate) fn cosine_prenormed(a: &[f32], norm_a: f32, b: &[f32]) -> Option<f32>
 /// score came out in whatever order `SQLite` returned them, and a repeated
 /// search could answer with two different lists.
 #[derive(Debug, Clone)]
-pub(crate) struct Puntuado {
+pub(crate) struct Scored {
     pub score: f64,
     pub path: norte_proto::VPath,
 }
 
-impl Puntuado {
+impl Scored {
     /// The RESULT order: best first.
-    fn mejor_first(&self, other: &Self) -> std::cmp::Ordering {
+    fn best_first(&self, other: &Self) -> std::cmp::Ordering {
         other
             .score
             .total_cmp(&self.score)
@@ -124,22 +124,22 @@ impl Puntuado {
     }
 }
 
-impl PartialEq for Puntuado {
+impl PartialEq for Scored {
     fn eq(&self, other: &Self) -> bool {
-        self.mejor_first(other) == std::cmp::Ordering::Equal
+        self.best_first(other) == std::cmp::Ordering::Equal
     }
 }
 
-impl Eq for Puntuado {}
+impl Eq for Scored {}
 
-impl Ord for Puntuado {
+impl Ord for Scored {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Not inverted: see the type's note.
-        self.mejor_first(other)
+        self.best_first(other)
     }
 }
 
-impl PartialOrd for Puntuado {
+impl PartialOrd for Scored {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
@@ -150,17 +150,17 @@ impl PartialOrd for Puntuado {
 /// It used to score everything into a `Vec` as long as the index, sort the
 /// whole thing, and truncate to `k <= 100`. The heap does the same math
 /// while storing at most `k`, which is what's going to be returned.
-pub(crate) fn mejores_k(
-    candidates: impl Iterator<Item = Puntuado>,
+pub(crate) fn best_k(
+    candidates: impl Iterator<Item = Scored>,
     k: usize,
 ) -> Vec<(norte_proto::VPath, f64)> {
-    let mut heap: std::collections::BinaryHeap<Puntuado> =
+    let mut heap: std::collections::BinaryHeap<Scored> =
         std::collections::BinaryHeap::with_capacity(k);
     for c in candidates {
         if heap.len() < k {
             heap.push(c);
         } else if let Some(worst) = heap.peek()
-            && c.mejor_first(worst) == std::cmp::Ordering::Less
+            && c.best_first(worst) == std::cmp::Ordering::Less
         {
             // `Less` in result order = BETTER than the worst one stored.
             heap.pop();
@@ -168,7 +168,7 @@ pub(crate) fn mejores_k(
         }
     }
     let mut out = heap.into_vec();
-    out.sort_unstable_by(Puntuado::mejor_first);
+    out.sort_unstable_by(Scored::best_first);
     out.into_iter().map(|p| (p.path, p.score)).collect()
 }
 
@@ -485,8 +485,8 @@ mod tests {
         assert!(cosine_prenormed(&q, n, &[f32::NAN, 0.0, 0.0]).is_none());
     }
 
-    fn puntuado(path: &str, score: f64) -> Puntuado {
-        Puntuado {
+    fn scored(path: &str, score: f64) -> Scored {
+        Scored {
             score,
             path: vp(path),
         }
@@ -498,19 +498,19 @@ mod tests {
     #[test]
     fn the_heap_gives_the_same_k_as_sorting_everything() {
         let all = vec![
-            puntuado("mem:///c.txt", 0.10),
-            puntuado("mem:///a.txt", 0.90),
-            puntuado("mem:///d.txt", 0.50),
-            puntuado("mem:///b.txt", 0.99),
-            puntuado("mem:///e.txt", -0.20),
+            scored("mem:///c.txt", 0.10),
+            scored("mem:///a.txt", 0.90),
+            scored("mem:///d.txt", 0.50),
+            scored("mem:///b.txt", 0.99),
+            scored("mem:///e.txt", -0.20),
         ];
-        let out = mejores_k(all.iter().cloned(), 3);
+        let out = best_k(all.iter().cloned(), 3);
         assert_eq!(
             out.iter().map(|(p, _)| p.to_wire()).collect::<Vec<_>>(),
             ["mem:///b.txt", "mem:///a.txt", "mem:///d.txt"]
         );
         // Asking for more than there are returns all of them, in the same order.
-        assert_eq!(mejores_k(all.into_iter(), 100).len(), 5);
+        assert_eq!(best_k(all.into_iter(), 100).len(), 5);
     }
 
     /// At equal score, the PATH decides, and that's why the answer doesn't
@@ -518,14 +518,14 @@ mod tests {
     #[test]
     fn at_equal_score_the_order_is_stable() {
         let a = vec![
-            puntuado("mem:///z.txt", 0.5),
-            puntuado("mem:///a.txt", 0.5),
-            puntuado("mem:///m.txt", 0.5),
+            scored("mem:///z.txt", 0.5),
+            scored("mem:///a.txt", 0.5),
+            scored("mem:///m.txt", 0.5),
         ];
         let mut reversed = a.clone();
         reversed.reverse();
-        let one = mejores_k(a.into_iter(), 2);
-        let other = mejores_k(reversed.into_iter(), 2);
+        let one = best_k(a.into_iter(), 2);
+        let other = best_k(reversed.into_iter(), 2);
         assert_eq!(one, other);
         assert_eq!(one[0].0.to_wire(), "mem:///a.txt");
     }
@@ -534,7 +534,7 @@ mod tests {
     /// must not explode if it ever does.
     #[test]
     fn zero_k_returns_nothing() {
-        assert!(mejores_k([puntuado("mem:///a.txt", 1.0)].into_iter(), 0).is_empty());
+        assert!(best_k([scored("mem:///a.txt", 1.0)].into_iter(), 0).is_empty());
     }
 
     #[test]

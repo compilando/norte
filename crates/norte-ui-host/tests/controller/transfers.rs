@@ -137,9 +137,9 @@ async fn the_queue_switch_travels_with_the_transfer() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
-        *backend.encoladas.lock().expect("encoladas"),
+        *backend.queued.lock().expect("encoladas"),
         "the copy went out asking for the queue"
     );
 }
@@ -152,7 +152,7 @@ async fn the_copy_dialog_warns_about_space_and_confinement() {
 
     h.dispatch(press("F5")).await.expect("host alive");
     let _ = next_dialogs(&mut sub).await;
-    asentar().await;
+    settle().await;
 
     let notices = snapshot_until(&h, &mut sub, "the dialog with its warnings", |s| {
         // The LAST one, which is the one the renderer paints: with only one
@@ -183,13 +183,13 @@ async fn the_copy_dialog_warns_about_space_and_confinement() {
 /// something.
 #[tokio::test]
 async fn a_destination_that_fits_and_stays_confined_says_nothing() {
-    let (h, mut sub, backend) = Box::pin(two_panes_on_disk(spare_volume(), confinando())).await;
+    let (h, mut sub, backend) = Box::pin(two_panes_on_disk(spare_volume(), confining())).await;
     marks_the_files(&h, &mut sub, 1).await;
 
     h.dispatch(press("F5")).await.expect("host alive");
     let dialogs = next_dialogs(&mut sub).await;
     assert_eq!(dialogs.len(), 1, "the dialog opens just the same");
-    asentar().await;
+    settle().await;
 
     let d = snapshot_until(&h, &mut sub, "the destination already checked", |s| {
         let d = s.dialogs.last()?;
@@ -209,7 +209,7 @@ async fn a_destination_that_fits_and_stays_confined_says_nothing() {
     // field tells apart.
     assert!(
         backend
-            .volumes_pedidos
+            .volumes_requests
             .load(std::sync::atomic::Ordering::SeqCst)
             > 0,
         "silence is a RESPONSE, not an omission"
@@ -228,7 +228,7 @@ async fn a_volume_that_does_not_answer_does_not_invent_an_alarm() {
 
     h.dispatch(press("F5")).await.expect("host alive");
     let _ = next_dialogs(&mut sub).await;
-    asentar().await;
+    settle().await;
 
     let notices = snapshot_until(&h, &mut sub, "the dialog with its warning", |s| {
         // The LAST one, which is the one the renderer paints: with only one
@@ -282,7 +282,7 @@ pub(super) fn unconfined() -> norte_proto::Capabilities {
     }
 }
 
-pub(super) fn confinando() -> norte_proto::Capabilities {
+pub(super) fn confining() -> norte_proto::Capabilities {
     norte_proto::Capabilities {
         flags: norte_proto::CapabilityFlags::CASE_SENSITIVE
             | norte_proto::CapabilityFlags::CONFINED_WRITES,
@@ -468,8 +468,8 @@ async fn splitting_reads_the_size_in_binary() {
     })
     .await
     .expect("host alive");
-    let ps = anotados(&backend, "the split queued", 1, |f| {
-        f.partidos.lock().expect("partidos").clone()
+    let ps = annotated(&backend, "the split queued", 1, |f| {
+        f.split.lock().expect("partidos").clone()
     })
     .await;
     assert_eq!(ps.len(), 1);
@@ -523,8 +523,8 @@ async fn splitting_refuses_a_size_that_is_not_valid() {
         matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-split-bad-size"),
         "{ack:?}"
     );
-    asentar().await;
-    assert!(backend.partidos.lock().expect("partidos").is_empty());
+    settle().await;
+    assert!(backend.split.lock().expect("partidos").is_empty());
 }
 
 /// **Joining only from the FIRST part** (#132, #290): starting from `.007`
@@ -546,8 +546,8 @@ async fn joining_requires_starting_with_the_first_chunk() {
     // The cursor starts on the first row: the `.001`.
     run_by_palette(&h, &mut sub, "pane.combine-files").await;
     {
-        let js = anotados(&backend, "the join queued", 1, |f| {
-            f.juntados.lock().expect("juntados").clone()
+        let js = annotated(&backend, "the join queued", 1, |f| {
+            f.joined.lock().expect("juntados").clone()
         })
         .await;
         assert_eq!(js.len(), 1, "from the .001 it does");
@@ -566,7 +566,7 @@ async fn joining_requires_starting_with_the_first_chunk() {
         "not from another part: {ack:?}"
     );
     assert_eq!(
-        backend.juntados.lock().expect("juntados").len(),
+        backend.joined.lock().expect("juntados").len(),
         1,
         "and nothing new is requested"
     );
@@ -600,7 +600,7 @@ async fn packaging_derives_the_format_from_the_name() {
     })
     .await
     .expect("host alive");
-    let ps = anotados(&backend, "the archiving queued", 1, |f| {
+    let ps = annotated(&backend, "the archiving queued", 1, |f| {
         f.packed.lock().expect("empaquetados").clone()
     })
     .await;
@@ -651,7 +651,7 @@ async fn packaging_refuses_a_format_that_cannot_be_written() {
         matches!(ack, ActionAck::Unavailable { ref reason_key } if reason_key == "msg-pack-unknown-format"),
         "{ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(
         backend.packed.lock().expect("empaquetados").is_empty(),
         "and nothing gets archived"
@@ -692,7 +692,7 @@ async fn a_waiting_slot_says_where_it_is_going() {
     f.tree.clone_from(&fake_tree().tree);
     // With a delay: without it, the listing lands before the state can be
     // looked at, and the test would be checking the later `Ready`.
-    f.retraso_ms = 50;
+    f.delay_ms = 50;
     let (h, snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
     let b = listing_of(&snap, 1);
@@ -821,7 +821,7 @@ async fn without_a_trash_deletion_warns_there_is_no_going_back() {
         }
         let (h, _snap) = host_tree(Arc::new(f)).await;
         let mut sub = h.subscribe();
-        asentar().await;
+        settle().await;
 
         h.dispatch(press("F8")).await.expect("host alive");
         let d = next_dialogs(&mut sub).await;
@@ -984,7 +984,7 @@ async fn a_copy_that_collides_can_be_retried_with_another_policy() {
     })
     .await
     .expect("host alive");
-    let ts = anotados(&backend, "the original and the retry", 2, |f| {
+    let ts = annotated(&backend, "the original and the retry", 2, |f| {
         f.transfers.lock().expect("transferencias").clone()
     })
     .await;
@@ -1045,11 +1045,11 @@ async fn cancelling_a_collision_does_not_retry() {
     })
     .await
     .expect("host alive");
-    anotados(&backend, "the original transfer", 1, |f| {
+    annotated(&backend, "the original transfer", 1, |f| {
         f.transfers.lock().expect("transferencias").clone()
     })
     .await;
-    asentar().await;
+    settle().await;
     assert_eq!(
         backend.transfers.lock().expect("transferencias").len(),
         1,
@@ -1073,7 +1073,7 @@ async fn copying_composes_the_destination_in_rust() {
     })
     .await
     .expect("host alive");
-    let ts = anotados(&backend, "the transfer queued", 1, |f| {
+    let ts = annotated(&backend, "the transfer queued", 1, |f| {
         f.transfers.lock().expect("transferencias").clone()
     })
     .await;
@@ -1111,7 +1111,7 @@ async fn move_is_a_different_verb_and_says_so() {
     })
     .await
     .expect("host alive");
-    let ts = anotados(&backend, "the move queued", 1, |f| {
+    let ts = annotated(&backend, "the move queued", 1, |f| {
         f.transfers.lock().expect("transferencias").clone()
     })
     .await;
@@ -1130,13 +1130,13 @@ async fn move_is_a_different_verb_and_says_so() {
 async fn with_no_other_slot_the_destination_is_asked_outside() {
     let backend = fake_tree();
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "simple", (120, 40)).await;
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     let ack = h.dispatch(press("F5")).await.expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
         "the gesture is accepted and it asks: {ack:?}"
     );
-    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), native.recv())
         .await
         .expect("the picker comes out")
         .expect("channel alive");
@@ -1172,7 +1172,7 @@ async fn in_read_only_copying_opens_nothing() {
     let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let ack = h.dispatch(press("F5")).await.expect("host alive");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
-    asentar().await;
+    settle().await;
     assert!(backend.transfers.lock().expect("transferencias").is_empty());
 }
 
@@ -1210,7 +1210,7 @@ async fn marks_are_consumed_on_send() {
     })
     .await
     .expect("host alive");
-    anotados(&backend, "the two tasks from the two marks", 2, |f| {
+    annotated(&backend, "the two tasks from the two marks", 2, |f| {
         f.transfers.lock().expect("transferencias").clone()
     })
     .await;
@@ -1396,7 +1396,7 @@ async fn a_copy_in_progress_can_be_canceled() {
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
-    assert_eq!(backend.cancelaciones.load(Ordering::SeqCst), 1);
+    assert_eq!(backend.cancellations.load(Ordering::SeqCst), 1);
 }
 
 /// A refresh NEVER steps on a navigation in flight.
@@ -1420,7 +1420,7 @@ async fn a_refresh_does_not_stomp_on_an_in_flight_navigation() {
         .push((b"hondo".to_vec(), true));
     // The listing's response TAKES A WHILE: that is what opens the window
     // where the refresh could sneak in.
-    f.retraso_ms = 120;
+    f.delay_ms = 120;
     f.state_transfer = Some(norte_proto::TaskState::Completed);
     let backend = Arc::new(f);
     let (h, snap) = two_panes_with_separate_destination(Arc::clone(&backend)).await;
@@ -1469,7 +1469,7 @@ async fn a_refresh_does_not_stomp_on_an_in_flight_navigation() {
         (f.listings() > before && f.en_calma()).then_some(())
     })
     .await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snapshot = next_snapshot(&mut sub).await;
     assert!(
@@ -1671,7 +1671,7 @@ async fn the_body_of_a_confirmation_marks_what_it_masks() {
         h.dispatch(press("F8")).await.expect("host alive");
         let d = next_dialogs(&mut sub).await[0].clone();
         for l in &d.body {
-            sin_peligro(&l.text, id, "a line from a dialog's body");
+            harmless(&l.text, id, "a line from a dialog's body");
         }
         assert_eq!(
             d.body.iter().any(|l| l.hostile),
@@ -1713,7 +1713,7 @@ async fn the_destination_is_composed_byte_by_byte() {
     })
     .await
     .expect("host alive");
-    let ts = anotados(&backend, "the transfer queued", 1, |f| {
+    let ts = annotated(&backend, "the transfer queued", 1, |f| {
         f.transfers.lock().expect("transferencias").clone()
     })
     .await;
@@ -2028,7 +2028,7 @@ async fn the_marks_consumed_are_the_sources() {
     })
     .await
     .expect("host alive");
-    anotados(&backend, "the transfer that consumes the marks", 1, |f| {
+    annotated(&backend, "the transfer that consumes the marks", 1, |f| {
         f.transfers.lock().expect("transferencias").clone()
     })
     .await;
@@ -2102,7 +2102,7 @@ async fn an_affected_hidden_slot_is_left_to_reload() {
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     // The task's outcome arrives over its own channel: it is let run before
     // widening, so the hidden slot is already marked.
-    asentar().await;
+    settle().await;
 
     // The window widens: the slot that was hidden comes back, and since it
     // was left marked as LOADING, it gets listed.
@@ -2139,8 +2139,8 @@ async fn in_read_only_the_palette_does_not_offer_what_mutates() {
     .expect("host alive");
     let p = next_palette(&mut sub).await.expect("the palette opens");
     let solo_read =
-        norte_ui_host::commands::implementados(norte_ui_host::commands::Effects::SoloRead);
-    let no_inertes = norte_ui_host::commands::IMPLEMENTADOS
+        norte_ui_host::commands::implemented(norte_ui_host::commands::Effects::SoloRead);
+    let no_inertes = norte_ui_host::commands::IMPLEMENTED
         .iter()
         .filter(|c| !solo_read.contains(c));
     for cmd in no_inertes {
@@ -2444,11 +2444,11 @@ async fn a_batch_above_the_cap_is_rejected_whole() {
     // listing this size the drain MOVES the generation, and an `Activate`
     // with the startup one arrives stale. It waits for the listing to be
     // whole and reads THAT snapshot's generation.
-    let asentado = wait_snapshot(&h, &mut sub, "the drain finishes", |f| {
+    let settled = wait_snapshot(&h, &mut sub, "the drain finishes", |f| {
         listing_of(f, 2).total_rows.unwrap_or(0) >= HOW_MANY as u64 + 2
     })
     .await;
-    let b2 = listing_of(&asentado, 2);
+    let b2 = listing_of(&settled, 2);
     let docs = b2
         .rows
         .iter()
@@ -2527,7 +2527,7 @@ async fn the_hostile_corpus_crosses_the_approval_dialog() {
             .join(norte_proto::Segment::new(n.bytes.clone()).expect("segment"));
         // The daemon's step: `span_path` is this for any authority with no
         // userinfo, which is the case for a `mem://`.
-        let redactada = p.display_lossy().clone();
+        let redacted = p.display_lossy().clone();
 
         let fake = tree_as_fake();
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
@@ -2538,7 +2538,7 @@ async fn the_hostile_corpus_crosses_the_approval_dialog() {
             approval_id: 7,
             session: Some("agente-1".to_owned()),
             op: "delete".to_owned(),
-            paths: vec![redactada.clone()],
+            paths: vec![redacted.clone()],
             paths_total: 1,
             ttl_ms: 30_000,
             detail: norte_proto::methods::ApprovalDetail::default(),
@@ -2548,7 +2548,7 @@ async fn the_hostile_corpus_crosses_the_approval_dialog() {
         let dialogs = next_dialogs(&mut sub).await;
         let d = &dialogs[0];
         let line = d.body.first().expect("the path is there");
-        sin_peligro(&line.text, id, "a path from the approval dialog");
+        harmless(&line.text, id, "a path from the approval dialog");
         assert!(
             line.hostile,
             "[{id}] the line is painted differently from what there is and does NOT say so: {:?}",
@@ -2617,17 +2617,17 @@ async fn a_non_utf8_plugin_directory_arrives_flagged_and_without_a_false_positiv
             // bytes alongside. The two rows are told apart by their text;
             // what CANNOT be told apart by the text is which of the two got
             // converted, which is exactly the question.
-            let convertida = String::from_utf8_lossy(bytes).into_owned();
+            let converted = String::from_utf8_lossy(bytes).into_owned();
             f.load_errors
-                .push((convertida.clone(), "el manifiesto no parsea".to_owned()));
-            f.payload_bytes.insert(convertida, bytes.clone());
+                .push((converted.clone(), "el manifiesto no parsea".to_owned()));
+            f.payload_bytes.insert(converted, bytes.clone());
         }
     }
     let (h, _snap) = host_tree(std::sync::Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
     let _ = next_extensions(&mut sub).await.expect("opens");
-    let v = extensions_cargadas(&mut sub).await;
+    let v = extensions_loaded(&mut sub).await;
 
     // The two strings collapse into a single key, so the fake ends up
     // sending ONE row: what is asserted is its flag, which with the honest
@@ -2637,15 +2637,15 @@ async fn a_non_utf8_plugin_directory_arrives_flagged_and_without_a_false_positiv
     // The one with raw bytes: it gets marked, and with the bytes on hand it
     // gets marked for the right reason — `display_name` saw they were not
     // UTF-8 — and not by the heuristic.
-    let convertida = v
+    let converted = v
         .errors
         .iter()
         .find(|e| e.dir == String::from_utf8_lossy(&raw))
         .expect("the raw-bytes row is there");
     assert!(
-        convertida.hostile,
+        converted.hostile,
         "what is painted differs from what there is and does NOT say so: {:?}",
-        convertida.dir
+        converted.dir
     );
 
     // And the honest one: NOT marked. This is the half that only passes
@@ -2684,7 +2684,7 @@ async fn without_the_bytes_an_honest_name_with_a_replacement_gets_over_flagged()
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
     let _ = next_extensions(&mut sub).await.expect("opens");
-    let v = extensions_cargadas(&mut sub).await;
+    let v = extensions_loaded(&mut sub).await;
     assert!(
         v.errors[0].hostile,
         "against an old peer the heuristic is all there is, and it marks \
@@ -2849,7 +2849,7 @@ async fn calculating_checksums_opens_the_dialog_with_its_rows() {
         "and with the COPY option, which is the only thing done with a list of digests"
     );
     assert_eq!(
-        backend.checksums_pedidas.lock().expect("sumas").len(),
+        backend.checksums_requested.lock().expect("sumas").len(),
         1,
         "ONE batch was requested"
     );
@@ -2883,14 +2883,14 @@ async fn a_partial_report_does_not_open_a_verdict() {
     // It waits for the report to HAVE come back: what is asserted is that
     // with it in hand nothing opens, not that it had not arrived yet.
     until(&backend, "the checksum report requested", |f| {
-        (!f.checksums_informes_pedidos
+        (!f.checksums_informes_requests
             .lock()
             .expect("informes")
             .is_empty())
         .then_some(())
     })
     .await;
-    asentar().await;
+    settle().await;
     let f = snapshot(&host, &mut sub).await;
     assert!(
         f.dialogs.is_empty(),
@@ -2946,7 +2946,7 @@ async fn changing_permissions_types_and_queues() {
     })
     .await
     .expect("host alive");
-    let batches = anotados(&backend, "the permissions batch queued", 1, |f| {
+    let batches = annotated(&backend, "the permissions batch queued", 1, |f| {
         f.permissions.lock().expect("permisos").clone()
     })
     .await;
@@ -2984,7 +2984,7 @@ async fn an_invalid_mode_changes_nothing() {
         matches!(&ack, ActionAck::Unavailable { .. }),
         "899 is not octal and it is said: {ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(
         backend.permissions.lock().expect("permisos").is_empty(),
         "and nothing was queued"

@@ -116,7 +116,7 @@ pub struct UserTheme {
 /// use norte_frontend::theme::is_theme_name;
 /// assert!(is_theme_name("one-dark-pro"));
 /// assert!(!is_theme_name("../outside"));
-/// assert!(!is_theme_name(".oculto"));
+/// assert!(!is_theme_name(".hidden"));
 /// ```
 #[must_use]
 pub fn is_theme_name(s: &str) -> bool {

@@ -103,7 +103,7 @@ async fn snapshot_where(
         if cond(&snap) {
             return snap;
         }
-        asentar().await;
+        settle().await;
     }
     panic!("a snapshot with {expected} never arrived");
 }
@@ -179,7 +179,7 @@ async fn enter_asks_with_the_count_and_confirming_sends_the_cut() {
     .expect("host alive");
     let cuts = backend
         .until("the cut that was sent", |f| {
-            let c = f.deshechos_until.lock().expect("cortes").clone();
+            let c = f.undone_until.lock().expect("cortes").clone();
             (!c.is_empty()).then_some(c)
         })
         .await;
@@ -208,7 +208,7 @@ async fn a_daemon_with_no_journal_says_so() {
             assert!(l.rows.is_empty());
             return;
         }
-        asentar().await;
+        settle().await;
     }
     panic!("the timeline never said there is no history");
 }

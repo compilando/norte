@@ -3456,7 +3456,7 @@
           "type": "string"
         },
         "proposed_rel": {
-          "description": "Where it goes, RELATIVE to that same directory, with `/` as\nseparator.\n\nCan carry subdirectories (`facturas/2026/marzo.pdf`), and that is\nthis phase's whole value — and its whole risk. What it CANNOT be:\nabsolute, empty, with a `.` or `..` segment, with NUL, or ending in\n`/`. Every segment has to be a valid [`crate::Segment`], and the\nCORE checks that before creating anything\n([`validar_proposed_rel`]): a plan is produced by a third party — a\nmodel or a plugin — and a `..` here is a write outside the\ndirectory the human was looking at.",
+          "description": "Where it goes, RELATIVE to that same directory, with `/` as\nseparator.\n\nCan carry subdirectories (`invoices/2026/marzo.pdf`), and that is\nthis phase's whole value — and its whole risk. What it CANNOT be:\nabsolute, empty, with a `.` or `..` segment, with NUL, or ending in\n`/`. Every segment has to be a valid [`crate::Segment`], and the\nCORE checks that before creating anything\n([`validar_proposed_rel`]): a plan is produced by a third party — a\nmodel or a plugin — and a `..` here is a write outside the\ndirectory the human was looking at.",
           "type": "string"
         }
       },

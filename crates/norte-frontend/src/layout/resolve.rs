@@ -47,7 +47,7 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
     // frame, like the collapse (ADR 0058 D5).
     let mut pruned = tree.clone();
     let mut set_aside: Vec<SlotId> = Vec::new();
-    let mut short = ejes_short(&out, tree, decls);
+    let mut short = axes_short(&out, tree, decls);
     // The largest ONE OF A SHORT AXIS, one per round. Candidates are
     // recomputed over the already-pruned tree — setting a child aside
     // moves its siblings' indices — and so are the axes: setting aside a
@@ -79,7 +79,7 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
             attempt.hidden.extend(set_aside);
             return attempt;
         }
-        short = ejes_short(&attempt, tree, decls);
+        short = axes_short(&attempt, tree, decls);
     }
     // Setting aside all the chrome does not fix it either: the real layout
     // is kept, which at least respects what the user set. Swapping it for
@@ -156,7 +156,7 @@ pub fn border_span(
 /// Asked by whoever MOVES or FLIPS a panel before committing to the new
 /// tree: dropping a listing below another on a short terminal leaves it
 /// with no room, layout hides it and the reader sees their panel vanish.
-/// `tolerado` is the one that goes behind a tab on purpose — the target of
+/// `tolerated` is the one that goes behind a tab on purpose — the target of
 /// dropping in the center. Also, if two listings or more were visible
 /// before, two have to be visible after: "the other pane" is a copy's
 /// target, and with only one visible there is no other.
@@ -165,13 +165,13 @@ pub fn keeps_on_screen(
     before: &Resolved,
     after: &Resolved,
     tree: &Node,
-    tolerado: Option<SlotId>,
+    tolerated: Option<SlotId>,
 ) -> bool {
     let placed = |r: &Resolved, id: SlotId| r.placements.iter().any(|(s, _)| *s == id);
     let lost = before
         .placements
         .iter()
-        .any(|(id, _)| Some(*id) != tolerado && !placed(after, *id));
+        .any(|(id, _)| Some(*id) != tolerated && !placed(after, *id));
     let listings = |r: &Resolved| {
         r.placements
             .iter()
@@ -221,7 +221,7 @@ fn listing_usable(out: &Resolved, tree: &Node, decls: &KindRegistry) -> bool {
 /// setting it aside does not fix a short width. Without this, a `full` at
 /// 80x10 — where only HEIGHT is missing — also lost the sidebar and the
 /// right column, which were not in the way.
-fn ejes_short(out: &Resolved, tree: &Node, decls: &KindRegistry) -> (bool, bool) {
+fn axes_short(out: &Resolved, tree: &Node, decls: &KindRegistry) -> (bool, bool) {
     // An axis is attacked if it is short for ANY listing, not if it is
     // short for all of them.
     //
@@ -470,7 +470,7 @@ fn min_of(node: &Node, decls: &KindRegistry) -> (u16, u16) {
 /// [`Node::substitute_auto`] replaces it earlier — but a layout pass is no
 /// place to blow up.
 ///
-/// `suelos` is each child's minimum on the layout's axis. If the free room
+/// `floors` is each child's minimum on the layout's axis. If the free room
 /// is enough for ALL the weighted ones', none goes below its own: it gets
 /// its minimum and the rest is redistributed among the others, in
 /// proportion. If it is not enough, the layout is the usual proportional
@@ -478,7 +478,7 @@ fn min_of(node: &Node, decls: &KindRegistry) -> (u16, u16) {
 /// division goes to the last weighted one among those that did NOT stay at
 /// their floor. Without this a small weight next to large weights — the
 /// one that lets a border be dragged — came out one pixel short.
-fn distribute(area: Rect, dir: Dir, sizes: &[Size], suelos: &[u16]) -> Vec<Rect> {
+fn distribute(area: Rect, dir: Dir, sizes: &[Size], floors: &[u16]) -> Vec<Rect> {
     let extent = u64::from(match dir {
         Dir::Horizontal => area.width,
         Dir::Vertical => area.height,
@@ -500,7 +500,7 @@ fn distribute(area: Rect, dir: Dir, sizes: &[Size], suelos: &[u16]) -> Vec<Rect>
             Size::Fixed(_) | Size::Auto => 0,
         })
         .collect();
-    let floor = |i: usize| u64::from(suelos.get(i).copied().unwrap_or(0));
+    let floor = |i: usize| u64::from(floors.get(i).copied().unwrap_or(0));
     let floors_fit = (0..sizes.len())
         .filter(|i| weights[*i] > 0)
         .map(floor)
@@ -813,20 +813,20 @@ mod tests {
         use crate::layout::DropZone;
         let b = |id| Node::slot(SlotId(id), KindId::browser());
         let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
-        let apilado = tree.move_slot(SlotId(1), SlotId(2), DropZone::Bottom);
+        let stacked = tree.move_slot(SlotId(1), SlotId(2), DropZone::Bottom);
         let together = tree.move_slot(SlotId(1), SlotId(2), DropZone::Center);
         let below = r(0, 0, 100, 8);
         let alto = r(0, 0, 100, 40);
-        let ok = |area, new: &Node, tolerado| {
+        let ok = |area, new: &Node, tolerated| {
             keeps_on_screen(
                 &resolve(area, &tree, &reg()),
                 &resolve(area, new, &reg()),
                 new,
-                tolerado,
+                tolerated,
             )
         };
-        assert!(!ok(below, &apilado, None), "at 8 rows one gets hidden");
-        assert!(ok(alto, &apilado, None));
+        assert!(!ok(below, &stacked, None), "at 8 rows one gets hidden");
+        assert!(ok(alto, &stacked, None));
         assert!(!ok(alto, &together, Some(SlotId(2))), "only one visible");
     }
 
@@ -1370,7 +1370,7 @@ mod tests {
     /// Arbitrary sizes, `Auto` included: `resolve` should never see it —
     /// `substitute_auto` replaces it — and the properties have to withstand
     /// someone skipping that step.
-    fn tam_arbitrario() -> impl Strategy<Value = Size> {
+    fn tam_arbitrary() -> impl Strategy<Value = Size> {
         prop_oneof![
             (0u16..5).prop_map(Size::Weight),
             (0u16..12).prop_map(Size::Fixed),
@@ -1378,8 +1378,8 @@ mod tests {
         ]
     }
 
-    /// Like [`tree_arbitrario`] but with no `Fixed` or `Auto`.
-    fn tree_ponderado() -> impl Strategy<Value = Node> {
+    /// Like [`tree_arbitrary`] but with no `Fixed` or `Auto`.
+    fn tree_weighted() -> impl Strategy<Value = Node> {
         let kinds = prop::sample::select(vec![
             "browser", "tasks", "viewer", "compare", "sync", "terminal",
         ]);
@@ -1402,7 +1402,7 @@ mod tests {
         })
     }
 
-    fn tree_arbitrario() -> impl Strategy<Value = Node> {
+    fn tree_arbitrary() -> impl Strategy<Value = Node> {
         let kinds = prop::sample::select(vec![
             "browser", "tasks", "viewer", "compare", "sync", "terminal",
         ]);
@@ -1411,7 +1411,7 @@ mod tests {
             prop_oneof![
                 (
                     prop::collection::vec(inner.clone(), 1..4),
-                    prop::collection::vec(tam_arbitrario(), 1..4),
+                    prop::collection::vec(tam_arbitrary(), 1..4),
                     any::<bool>()
                 )
                     .prop_map(|(children, mut sizes, horiz)| {
@@ -1438,7 +1438,7 @@ mod tests {
         /// corrupted text, and gets chased in the wrong place.
         #[test]
         fn placements_neither_overlap_nor_spill_out(
-            tree in tree_arbitrario(), w in 1u16..200, h in 1u16..80
+            tree in tree_arbitrary(), w in 1u16..200, h in 1u16..80
         ) {
             let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
             for (i, (_, a)) in out.placements.iter().enumerate() {
@@ -1458,7 +1458,7 @@ mod tests {
         /// own table tests.
         #[test]
         fn everything_placed_meets_its_minimum(
-            tree in tree_ponderado(), w in 1u16..200, h in 1u16..80
+            tree in tree_weighted(), w in 1u16..200, h in 1u16..80
         ) {
             // With repeated ids `kind_of` returns the FIRST one's, so the
             // minimum we would compare against might not be this slot's.
@@ -1478,7 +1478,7 @@ mod tests {
         /// watch open and nobody watching it.
         #[test]
         fn placements_and_hidden_partition_the_tree(
-            tree in tree_arbitrario(), w in 1u16..200, h in 1u16..80
+            tree in tree_arbitrary(), w in 1u16..200, h in 1u16..80
         ) {
             let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
             let mut seen: Vec<SlotId> = out.placements.iter().map(|(id, _)| *id).collect();
@@ -1492,7 +1492,7 @@ mod tests {
         /// `focus_order` only carries placed, focusable ones, with no repeats.
         #[test]
         fn the_focus_order_only_carries_visible_focusable_ones(
-            tree in tree_arbitrario(), w in 1u16..200, h in 1u16..80
+            tree in tree_arbitrary(), w in 1u16..200, h in 1u16..80
         ) {
             prop_assume!(tree.duplicate_slot_ids().is_empty());
             let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
@@ -1507,7 +1507,7 @@ mod tests {
         /// Never an empty screen: if there is a slot, one is painted.
         #[test]
         fn something_is_always_painted(
-            tree in tree_arbitrario(), w in 1u16..200, h in 1u16..80
+            tree in tree_arbitrary(), w in 1u16..200, h in 1u16..80
         ) {
             let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
             prop_assert!(!out.placements.is_empty());

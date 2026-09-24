@@ -96,7 +96,7 @@ async fn an_untouched_name_renames_nothing() {
         },
         "{ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(
         backend.transfers.lock().expect("transferencias").is_empty(),
         "the same name in the same place is not an operation"
@@ -140,7 +140,7 @@ async fn a_touched_name_with_fffd_is_rejected() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
         backend.transfers.lock().expect("transferencias").is_empty(),
         "a name the screen made up is not written"
@@ -193,7 +193,7 @@ async fn a_new_name_goes_out_as_a_move_to_the_same_place() {
     })
     .await
     .expect("host alive");
-    let ts = anotados(&backend, "the rename queued", 1, |f| {
+    let ts = annotated(&backend, "the rename queued", 1, |f| {
         f.transfers.lock().expect("transferencias").clone()
     })
     .await;
@@ -250,7 +250,7 @@ async fn in_read_only_renaming_does_not_open_anything() {
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
-    asentar().await;
+    settle().await;
     assert!(backend.transfers.lock().expect("transferencias").is_empty());
 }
 
@@ -397,7 +397,7 @@ async fn a_template_batch_is_reviewed_like_the_ais() {
     })
     .await
     .expect("host alive");
-    let reabierto = snapshot_until(
+    let reopened = snapshot_until(
         &h,
         &mut sub,
         "the prompt reopened with the diagnosis",
@@ -410,21 +410,21 @@ async fn a_template_batch_is_reviewed_like_the_ais() {
         },
     )
     .await;
-    assert_eq!(reabierto.input.as_deref(), Some("a/[N]"));
+    assert_eq!(reopened.input.as_deref(), Some("a/[N]"));
     assert!(
-        backend.instrucciones.lock().expect("mutex").is_empty(),
+        backend.instructions.lock().expect("mutex").is_empty(),
         "the model was not asked for anything"
     );
 
     // The good one: the plan is generated here and reviewed like the AI's.
     h.dispatch(UiAction::DialogInput {
-        id: reabierto.id,
+        id: reopened.id,
         text: "ep0[C].[E]".to_owned(),
     })
     .await
     .expect("host alive");
     h.dispatch(UiAction::Dialog {
-        id: reabierto.id,
+        id: reopened.id,
         choice: "confirm".to_owned(),
         secret: None,
     })
@@ -446,11 +446,11 @@ async fn a_template_batch_is_reviewed_like_the_ais() {
         "the core gave its verdict on the template's plan"
     );
     assert!(
-        backend.instrucciones.lock().expect("mutex").is_empty(),
+        backend.instructions.lock().expect("mutex").is_empty(),
         "still no model involved"
     );
     assert_eq!(
-        backend.verdicts_pedidos.lock().expect("mutex").len(),
+        backend.verdicts_requests.lock().expect("mutex").len(),
         1,
         "one verdict requested, for the template's plan"
     );
@@ -497,7 +497,7 @@ async fn a_location_that_refuses_to_write_dims_the_delete() {
     // Capabilities are requested when the listing lands and come back on
     // their own: help freezes its facts WHEN OPENED, so opening it before
     // they arrive would freeze the usual "unknown" forever.
-    asentar().await;
+    settle().await;
 
     // F8 deletes in the ACTIVE slot, which is the source: it is the key
     // that asks about `source_read_only` and only about it.
@@ -539,7 +539,7 @@ async fn a_relisting_does_not_relight_what_the_location_still_refuses() {
     );
     let (h, _snap) = host_en(Arc::new(fake), "mem:///casa").await;
     let mut sub = h.subscribe();
-    asentar().await;
+    settle().await;
     let before = copy_page(&h, &mut sub).await;
     assert!(
         !action(&before, "F8").enabled,
@@ -551,7 +551,7 @@ async fn a_relisting_does_not_relight_what_the_location_still_refuses() {
     h.dispatch(UiAction::RefreshSlot { slot_id: 1 })
         .await
         .expect("host alive");
-    asentar().await;
+    settle().await;
 
     let after = snapshot_until(&h, &mut sub, "help after the re-listing", |s| {
         s.help.clone()
@@ -595,7 +595,7 @@ async fn a_read_only_destination_dims_the_copy_and_not_the_delete() {
     h.dispatch(UiAction::FocusSlot { slot_id: 1 })
         .await
         .expect("host alive");
-    asentar().await;
+    settle().await;
 
     let page = copy_page(&h, &mut sub).await;
     let copy = action(&page, "F5");
@@ -1237,7 +1237,7 @@ async fn approving_sends_the_batch_with_the_cores_hash() {
         "the first key approves nothing"
     );
     h.dispatch(press("y")).await.expect("host alive");
-    let batches = anotados(&backend, "the batch approved", 1, |f| {
+    let batches = annotated(&backend, "the batch approved", 1, |f| {
         f.batches.lock().expect("lotes").clone()
     })
     .await;
@@ -1310,7 +1310,7 @@ async fn an_invalid_pair_brings_down_the_whole_plan() {
         f.en_calma().then_some(())
     })
     .await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snapshot = next_snapshot(&mut sub).await;
     assert!(
@@ -1320,7 +1320,7 @@ async fn an_invalid_pair_brings_down_the_whole_plan() {
     );
     assert!(
         backend
-            .verdicts_pedidos
+            .verdicts_requests
             .lock()
             .expect("veredictos")
             .is_empty(),
@@ -1342,7 +1342,7 @@ async fn a_plan_that_arrives_late_does_not_reopen_what_was_closed() {
     f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.verdict = Some(verdict_ok(&pares));
-    f.retraso_ia_ms = 150;
+    f.delay_ia_ms = 150;
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1356,7 +1356,7 @@ async fn a_plan_that_arrives_late_does_not_reopen_what_was_closed() {
         f.en_calma().then_some(())
     })
     .await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snapshot = next_snapshot(&mut sub).await;
     assert!(
@@ -1378,7 +1378,7 @@ async fn discarding_closes_and_applies_nothing() {
     next_revision(&mut sub).await.expect("opens");
 
     h.dispatch(press("Escape")).await.expect("host alive");
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snapshot = next_snapshot(&mut sub).await;
     assert!(snapshot.ai_rename.is_none(), "it closed and stays closed");
@@ -1437,14 +1437,14 @@ async fn a_long_plan_is_scrolled_through() {
     h.dispatch(press("PageDown")).await.expect("host alive");
     // The core's verdict travels over the SAME ordered channel, so one of
     // its updates can arrive ahead of the scroll's.
-    let mut bajado = next_revision(&mut sub).await.expect("still open");
+    let mut downloaded = next_revision(&mut sub).await.expect("still open");
     for _ in 0..10 {
-        if bajado.first_visible > 0 {
+        if downloaded.first_visible > 0 {
             break;
         }
-        bajado = next_revision(&mut sub).await.expect("still open");
+        downloaded = next_revision(&mut sub).await.expect("still open");
     }
-    assert!(bajado.first_visible > 0, "it scrolled: {bajado:?}");
+    assert!(downloaded.first_visible > 0, "it scrolled: {downloaded:?}");
 
     for _ in 0..10 {
         h.dispatch(press("PageDown")).await.expect("host alive");
@@ -1479,10 +1479,10 @@ async fn in_read_only_no_plan_is_requested() {
         !p.rows.iter().any(|r| r.text == "pane.ai-rename"),
         "a read-only window does not offer requesting a plan"
     );
-    asentar().await;
+    settle().await;
     assert!(
         backend
-            .instrucciones
+            .instructions
             .lock()
             .expect("instrucciones")
             .is_empty()
@@ -1504,7 +1504,7 @@ async fn a_plan_opens_over_the_directory_it_was_planned_for() {
     );
     f.put("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
-    f.retraso_ia_ms = 150;
+    f.delay_ia_ms = 150;
     let backend = Arc::new(f);
     let (h, snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1549,7 +1549,7 @@ async fn two_requests_at_once_and_the_second_still_opens() {
     f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.verdict = Some(verdict_ok(&pares));
-    f.retraso_ia_ms = 120;
+    f.delay_ia_ms = 120;
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1561,7 +1561,7 @@ async fn two_requests_at_once_and_the_second_still_opens() {
     let r = next_revision(&mut sub).await.expect("the second one opens");
     assert_eq!(r.total, 1);
     assert_eq!(
-        backend.instrucciones.lock().expect("instrucciones").len(),
+        backend.instructions.lock().expect("instrucciones").len(),
         2,
         "both were requested"
     );
@@ -1580,7 +1580,7 @@ async fn with_a_plan_in_flight_escape_closes_the_palette() {
     f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.verdict = Some(verdict_ok(&pares));
-    f.retraso_ia_ms = 120;
+    f.delay_ia_ms = 120;
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1668,7 +1668,7 @@ async fn discarding_a_review_does_not_kill_the_next_request() {
     f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.verdict = Some(verdict_ok(&pares));
-    f.retraso_ia_ms = 120;
+    f.delay_ia_ms = 120;
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1701,14 +1701,11 @@ async fn discarding_a_review_does_not_kill_the_next_request() {
     // And request 2 is still alive. The signal that CANNOT be confused with
     // a stray patch from review 1 is the core receiving a SECOND verdict:
     // only a plan that arrived and opened asks for one.
-    anotados(&backend, "the second verdict", 2, |f| {
-        f.verdicts_pedidos.lock().expect("veredictos").clone()
+    annotated(&backend, "the second verdict", 2, |f| {
+        f.verdicts_requests.lock().expect("veredictos").clone()
     })
     .await;
-    assert_eq!(
-        backend.instrucciones.lock().expect("instrucciones").len(),
-        2
-    );
+    assert_eq!(backend.instructions.lock().expect("instrucciones").len(), 2);
 }
 
 /// The first key that reaches the review only ACKNOWLEDGES it.
@@ -1733,13 +1730,13 @@ async fn the_first_key_only_acknowledges_the_review() {
     }
 
     h.dispatch(press("y")).await.expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
         backend.batches.lock().expect("lotes").is_empty(),
         "the key that was already on its way approves nothing"
     );
     h.dispatch(press("y")).await.expect("host alive");
-    anotados(&backend, "the batch the second key approves", 1, |f| {
+    annotated(&backend, "the batch the second key approves", 1, |f| {
         f.batches.lock().expect("lotes").clone()
     })
     .await;
@@ -1799,7 +1796,7 @@ async fn a_chord_with_a_modifier_does_not_approve_the_plan() {
             "ctrl={ctrl}: {ack:?}"
         );
     }
-    asentar().await;
+    settle().await;
     assert!(backend.batches.lock().expect("lotes").is_empty());
 }
 
@@ -1847,9 +1844,9 @@ async fn a_plan_is_not_approved_without_scrolling_through_it_in_full() {
     for _ in 0..6 {
         h.dispatch(press("PageDown")).await.expect("host alive");
     }
-    asentar().await;
+    settle().await;
     h.dispatch(press("y")).await.expect("host alive");
-    anotados(&backend, "the approved batch", 1, |f| {
+    annotated(&backend, "the approved batch", 1, |f| {
         f.batches.lock().expect("lotes").clone()
     })
     .await;
@@ -1943,9 +1940,9 @@ async fn creating_a_directory_with_fffd_is_rejected() {
         },
         "{ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(
-        backend.creados.lock().expect("creados").is_empty(),
+        backend.created.lock().expect("creados").is_empty(),
         "a directory is not created with the U+FFFD the screen made up"
     );
 }
@@ -1974,7 +1971,7 @@ async fn enter_does_not_approve_the_plan() {
     for _ in 0..3 {
         h.dispatch(press("Enter")).await.expect("host alive");
     }
-    asentar().await;
+    settle().await;
     assert!(
         backend.batches.lock().expect("lotes").is_empty(),
         "no Enter approves a batch"
@@ -2002,7 +1999,7 @@ async fn the_button_approves_without_prior_acknowledgment() {
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
-    anotados(&backend, "the batch the button approves", 1, |f| {
+    annotated(&backend, "the batch the button approves", 1, |f| {
         f.batches.lock().expect("lotes").clone()
     })
     .await;
@@ -2090,10 +2087,10 @@ async fn a_name_that_does_not_fit_on_screen_is_not_edited() {
 /// Each one carries a canceller that points at ITS id: a shared counter says
 /// that something was cancelled, not WHICH ONE, and "which one" is exactly
 /// what a board with a cursor has to get right.
-pub(super) fn inyectar_task(
+pub(super) fn inject_task(
     tx: &tokio::sync::mpsc::UnboundedSender<norte_ui_host::backend::HostTask>,
     id: u64,
-    canceladas: &Arc<std::sync::Mutex<Vec<u64>>>,
+    canceled: &Arc<std::sync::Mutex<Vec<u64>>>,
 ) -> tokio::sync::watch::Sender<norte_proto::TaskProgress> {
     let progress = norte_proto::TaskProgress {
         task_id: norte_proto::TaskId::new(id),
@@ -2108,11 +2105,11 @@ pub(super) fn inyectar_task(
         unvisited: None,
     };
     let (ptx, prx) = tokio::sync::watch::channel(progress);
-    let canceladas = Arc::clone(canceladas);
+    let canceled = Arc::clone(canceled);
     tx.send(norte_ui_host::backend::HostTask {
         id: norte_proto::TaskId::new(id),
         progress: prx,
-        cancel: Arc::new(move || canceladas.lock().expect("canceladas").push(id)),
+        cancel: Arc::new(move || canceled.lock().expect("canceladas").push(id)),
         pause: None,
         cola: None,
         foreign: true,
@@ -2147,11 +2144,11 @@ pub(super) async fn next_notice(sub: &mut norte_ui_host::controller::UiSubscript
 async fn the_cancel_key_stops_the_live_task() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let _p = inyectar_task(&tx, 11, &canceladas);
+    let canceled = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _p = inject_task(&tx, 11, &canceled);
     next_tasks(&mut sub).await;
 
     let ack = h
@@ -2160,7 +2157,7 @@ async fn the_cancel_key_stops_the_live_task() {
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
     assert_eq!(
-        *canceladas.lock().expect("canceladas"),
+        *canceled.lock().expect("canceladas"),
         vec![11],
         "the live task was asked to stop"
     );
@@ -2188,11 +2185,11 @@ async fn cancel_without_tasks_says_so() {
 async fn a_finished_task_is_not_the_one_cancelled() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let p = inyectar_task(&tx, 11, &canceladas);
+    let canceled = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let p = inject_task(&tx, 11, &canceled);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     next_tasks(&mut sub).await;
@@ -2201,7 +2198,7 @@ async fn a_finished_task_is_not_the_one_cancelled() {
         .await
         .expect("host alive");
     assert!(
-        canceladas.lock().expect("canceladas").is_empty(),
+        canceled.lock().expect("canceladas").is_empty(),
         "a finished task is not asked to stop"
     );
     assert_eq!(next_notice(&mut sub).await, "msg-no-tasks");
@@ -2217,12 +2214,12 @@ async fn a_finished_task_is_not_the_one_cancelled() {
 async fn with_the_panel_focused_the_cursors_task_is_cancelled() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (h, _snap) = host_con_layout(Arc::new(fake), "full", (200, 60)).await;
     let mut sub = h.subscribe();
-    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let _a = inyectar_task(&tx, 11, &canceladas);
-    let _b = inyectar_task(&tx, 12, &canceladas);
+    let canceled = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let _a = inject_task(&tx, 11, &canceled);
+    let _b = inject_task(&tx, 12, &canceled);
     // Both on the board before touching the cursor.
     for _ in 0..2 {
         if next_tasks(&mut sub).await.len() == 2 {
@@ -2239,7 +2236,7 @@ async fn with_the_panel_focused_the_cursors_task_is_cancelled() {
         .await
         .expect("host alive");
     assert_eq!(
-        *canceladas.lock().expect("canceladas"),
+        *canceled.lock().expect("canceladas"),
         vec![12],
         "the cursor's, not the last one"
     );
@@ -2292,14 +2289,14 @@ pub(super) async fn next_dashboard_patch(
 async fn a_task_that_expires_drags_the_panels_cursor() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (h, _snap) = host_con_layout(Arc::new(fake), "full", (200, 60)).await;
     let mut sub = h.subscribe();
-    let canceladas = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let first = inyectar_task(&tx, 11, &canceladas);
-    let _b = inyectar_task(&tx, 12, &canceladas);
-    let _c = inyectar_task(&tx, 13, &canceladas);
-    let _d = inyectar_task(&tx, 14, &canceladas);
+    let canceled = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let first = inject_task(&tx, 11, &canceled);
+    let _b = inject_task(&tx, 12, &canceled);
+    let _c = inject_task(&tx, 13, &canceled);
+    let _d = inject_task(&tx, 14, &canceled);
     for _ in 0..5 {
         if next_tasks(&mut sub).await.len() == 4 {
             break;
@@ -2355,15 +2352,15 @@ async fn a_task_that_expires_drags_the_panels_cursor() {
         .await
         .expect("host alive");
     assert_eq!(
-        *canceladas.lock().expect("canceladas"),
+        *canceled.lock().expect("canceladas"),
         vec![12],
         "the highlighted one and the one that stops are the same"
     );
 }
 
-/// Same as [`inyectar_task`], but choosing the CLASS: a batch's report is
+/// Same as [`inject_task`], but choosing the CLASS: a batch's report is
 /// only requested for a batch.
-pub(super) fn inyectar_task_de(
+pub(super) fn inject_task_for(
     tx: &tokio::sync::mpsc::UnboundedSender<norte_ui_host::backend::HostTask>,
     id: u64,
     kind: norte_proto::TaskKind,
@@ -2422,18 +2419,18 @@ pub(super) async fn task_detail(sub: &mut norte_ui_host::controller::UiSubscript
 async fn a_finished_batch_asks_for_its_report() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report.lock().expect("informe") = Some(report_clean(3));
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 31, norte_proto::TaskKind::RenameBatch);
+    let p = inject_task_for(&tx, 31, norte_proto::TaskKind::RenameBatch);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
     let detail = task_detail(&mut sub).await;
     assert_eq!(
-        *backend.informes_pedidos.lock().expect("informes"),
+        *backend.informes_requests.lock().expect("informes"),
         vec![31],
         "the batch's report was requested"
     );
@@ -2466,18 +2463,18 @@ pub(super) async fn was_dialogs(sub: &mut norte_ui_host::controller::UiSubscript
 async fn a_copy_does_not_ask_for_a_batch_report() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 32, norte_proto::TaskKind::Copy);
+    let p = inject_task_for(&tx, 32, norte_proto::TaskKind::Copy);
     next_tasks(&mut sub).await;
     p.send_modify(|p| p.state = norte_proto::TaskState::Completed);
     next_tasks(&mut sub).await;
-    asentar().await;
+    settle().await;
     assert!(
         backend
-            .informes_pedidos
+            .informes_requests
             .lock()
             .expect("informes")
             .is_empty()
@@ -2490,7 +2487,7 @@ async fn a_copy_does_not_ask_for_a_batch_report() {
 async fn a_stuck_batch_says_so_and_gives_the_current_name() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     *fake.report.lock().expect("informe") = Some(norte_proto::methods::FsRenameBatchReportResult {
         applied: 4,
         rolled_back: 2,
@@ -2509,7 +2506,7 @@ async fn a_stuck_batch_says_so_and_gives_the_current_name() {
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 33, norte_proto::TaskKind::RenameBatch);
+    let p = inject_task_for(&tx, 33, norte_proto::TaskKind::RenameBatch);
     next_tasks(&mut sub).await;
     p.send_modify(|p| {
         p.state = norte_proto::TaskState::Failed {
@@ -2539,12 +2536,12 @@ async fn a_stuck_batch_says_so_and_gives_the_current_name() {
 async fn a_report_that_cannot_be_requested_is_said() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     // No report: the fake answers `Unsupported`.
     let backend = Arc::new(fake);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let p = inyectar_task_de(&tx, 34, norte_proto::TaskKind::RenameBatch);
+    let p = inject_task_for(&tx, 34, norte_proto::TaskKind::RenameBatch);
     next_tasks(&mut sub).await;
     p.send_modify(|p| {
         p.state = norte_proto::TaskState::Failed {
@@ -2604,7 +2601,7 @@ pub(super) async fn next_banners(
 async fn a_plaintext_session_leaves_a_persistent_notice() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.degradadas.lock().expect("degradadas") = Some(rx);
+    *fake.degraded.lock().expect("degradadas") = Some(rx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
     tx.send(norte_proto::methods::ConnectionDegraded {

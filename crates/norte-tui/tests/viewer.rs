@@ -132,7 +132,7 @@ fn the_cut_from_the_left_keeps_the_grid() {
         .concat();
     let mut v = Viewer::new(vp(), text.into_bytes(), false);
     let alto = lines.len();
-    let anchas: Vec<usize> = v
+    let wide: Vec<usize> = v
         .rows(alto)
         .iter()
         .map(|f| norte_frontend::cells(f))
@@ -151,8 +151,8 @@ fn the_cut_from_the_left_keeps_the_grid() {
             let id = lines[i].id;
             let seen = norte_frontend::cells(row);
             assert_eq!(
-                seen + h.min(anchas[i]),
-                anchas[i],
+                seen + h.min(wide[i]),
+                wide[i],
                 "`{id}` scrolled {h}: loses or gains columns relative to the \
                  others, so its columns stop lining up ({})",
                 lines[i].why

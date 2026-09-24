@@ -138,13 +138,13 @@ impl State {
         // hand (#276).
         let mut agents_notice = Vec::new();
         if let Some(session) = req.session.as_deref() {
-            self.agencia.sessions.vista(session, &req.op);
+            self.agency.sessions.vista(session, &req.op);
             // And it is REPAINTED if the panel is open. The list changes with
             // NO gesture — this request reorders it — and a renderer that is
             // not told keeps painting the previous order: the row the reader
             // sees highlighted stops being the one the host has selected, and
             // `u` undoes another session's work.
-            if self.agencia.panel {
+            if self.agency.panel {
                 agents_notice.push(self.parche(vec![ViewChange::Agents {
                     agents: self.vista_agents(),
                 }]));
@@ -260,7 +260,7 @@ impl State {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        let dropped = self.apilar_dialog(Dialog {
+        let dropped = self.stack_dialog(Dialog {
             id,
             vista: view.clone(),
             typed: Typed::Text(String::new()),
@@ -281,7 +281,7 @@ impl State {
             let ttl = std::time::Duration::from_millis(req.ttl_ms);
             tokio::spawn(async move {
                 tokio::time::sleep(ttl).await;
-                let _ = mailbox.send(Message::ApprovalCaducada(approval_id)).await;
+                let _ = mailbox.send(Message::ApprovalExpired(approval_id)).await;
             });
         }
         let change = ViewChange::Dialogs {

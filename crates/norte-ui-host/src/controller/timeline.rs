@@ -64,7 +64,7 @@ impl State {
     /// the panel REREADS the history: anything could have happened in
     /// between — it is normal to do things with the panel closed — and one
     /// that shows what was there a while ago is worse than an empty one.
-    pub(super) fn sondear_lines(
+    pub(super) fn probe_lines(
         &mut self,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
@@ -207,7 +207,7 @@ impl State {
     }
 
     /// The timeline slot with focus, if one has it.
-    fn line_enfocada(&self) -> Option<u32> {
+    fn line_focused(&self) -> Option<u32> {
         let SlotId(id) = self.roles.get(RoleId::Active)?;
         kind_de(&self.tree, SlotId(id))
             .is_some_and(|k| k.as_str() == KIND)
@@ -216,7 +216,7 @@ impl State {
 
     /// Whether the timeline has focus (and therefore `Enter` belongs to it).
     pub(super) fn the_line_has_focus(&self) -> bool {
-        self.line_enfocada().is_some()
+        self.line_focused().is_some()
     }
 
     /// Movement, with the timeline focused. Only the THREE movement effects
@@ -228,11 +228,11 @@ impl State {
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
         if !matches!(
             effect,
-            Effect::Cursor(_) | Effect::Page(_) | Effect::Extremo { .. }
+            Effect::Cursor(_) | Effect::Page(_) | Effect::End { .. }
         ) {
             return None;
         }
-        let id = self.line_enfocada()?;
+        let id = self.line_focused()?;
         let state = self.lines.get_mut(&id)?;
         // Up to the last row that CROSSES the bridge: beyond that, the cursor
         // would point at a row the renderer does not have.
@@ -249,8 +249,8 @@ impl State {
             // A page is ten rows, like the TUI's list when it does not know
             // how tall it is: jumping further than there is means nothing.
             Effect::Page(n) => current.saturating_add(n.clamp(-total, total).saturating_mul(10)),
-            Effect::Extremo { al_final: false } => 0,
-            Effect::Extremo { al_final: true } => total - 1,
+            Effect::End { al_final: false } => 0,
+            Effect::End { al_final: true } => total - 1,
             _ => return None,
         };
         state
@@ -270,7 +270,7 @@ impl State {
     /// sure?" about something that is not going to happen teaches saying yes
     /// without reading.
     pub(super) fn ask_undo_until(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(id) = self.line_enfocada() else {
+        let Some(id) = self.line_focused() else {
             return (self.applied(), Vec::new());
         };
         let Some(state) = self.lines.get(&id) else {
@@ -310,11 +310,11 @@ impl State {
                 &[("n", &summary.irreversible.to_string())],
             )));
         }
-        if summary.ajenas > 0 {
+        if summary.foreign > 0 {
             body.push(line(norte_i18n::ta_in(
                 self.lang,
                 "timeline-undo-foreign",
-                &[("n", &summary.ajenas.to_string())],
+                &[("n", &summary.foreign.to_string())],
             )));
         }
         let modal = ModalId(self.next_modal);

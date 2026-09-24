@@ -96,7 +96,7 @@ fn a_complete_preset_seeds_every_slots_state() {
             .kind_of(id)
             .map(|k| k.as_str().to_owned())
             .expect("kind");
-        let sembrado = match kind.as_str() {
+        let seeded = match kind.as_str() {
             "browser" => app.panes.browser(id).is_some(),
             "places" => app.panes.places(id).is_some(),
             "viewer" => app.panes.preview(id).is_some(),
@@ -105,7 +105,7 @@ fn a_complete_preset_seeds_every_slots_state() {
             // `tasks` and `status` have no state of their own.
             _ => true,
         };
-        assert!(sembrado, "slot {id:?} of kind {kind} was left empty");
+        assert!(seeded, "slot {id:?} of kind {kind} was left empty");
     }
 }
 

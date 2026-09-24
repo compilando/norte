@@ -89,7 +89,7 @@ pub fn lang_code() -> &'static str {
 /// first addition (ADR 0077). Whatever a plugin wants to offer beyond this
 /// is requested with its own command, which goes through the catalogue,
 /// through consent and through policy like any other.
-pub const ZONE_PERMITIDA: &[&str] = &[
+pub const ZONE_ALLOWED: &[&str] = &[
     "layout.grow",
     "layout.shrink",
     "layout.focus-next",
@@ -113,7 +113,7 @@ pub const ZONE_PERMITIDA: &[&str] = &[
 /// ```
 #[must_use]
 pub fn zone_can(command: &str) -> bool {
-    ZONE_PERMITIDA.contains(&command)
+    ZONE_ALLOWED.contains(&command)
 }
 
 /// A paintable frame: styled lines and clickable zones.

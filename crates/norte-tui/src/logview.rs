@@ -40,7 +40,7 @@ pub const MAX_REMOTE: u32 = 500;
 /// The local ring already has its own; this is the same care for the remote
 /// one, because here lines ACCUMULATE round after round and with no cap a
 /// panel left open all afternoon would grow without end.
-const MAX_LINES_REMOTAS: usize = 2000;
+const MAX_LINES_REMOTE: usize = 2000;
 
 /// What is known about the DAEMON's log.
 ///
@@ -49,7 +49,7 @@ const MAX_LINES_REMOTAS: usize = 2000;
 /// second is a sentence the panel has to put on screen. Collapsing them
 /// would make a freshly opened panel assert an absence nobody has checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Servicio {
+pub enum Service {
     /// Never answered: unknown.
     #[default]
     NoResponse,
@@ -96,7 +96,7 @@ pub struct LogRemote {
     /// probe.
     pub cursor: Option<u64>,
     /// What is known about whether it serves its log.
-    pub servicio: Servicio,
+    pub service: Service,
     /// The level it answered having set, in wire form.
     ///
     /// Its own and not ours: it is global to all its clients and only goes
@@ -159,7 +159,7 @@ impl LogRemote {
     /// never asked — see that field.
     #[must_use]
     pub const fn must_request(&self) -> bool {
-        self.hay_daemon && !matches!(self.servicio, Servicio::NoRing)
+        self.hay_daemon && !matches!(self.service, Service::NoRing)
     }
 }
 
@@ -194,9 +194,9 @@ fn wire_line(l: norte_proto::methods::LogLine) -> LogLine {
 /// installed in this process" sentence lives: there is no log IN MEMORY to
 /// read, and that is not the same as "nothing is being logged".
 #[must_use]
-pub fn source_efectiva(app: &crate::app::App) -> LogSource {
+pub fn source_effective(app: &crate::app::App) -> LogSource {
     match (
-        app.log_remote.servicio == Servicio::Serves,
+        app.log_remote.service == Service::Serves,
         app.log_ring.is_some(),
     ) {
         (true, true) => app.log_panel.source(),
@@ -225,7 +225,7 @@ pub fn visible<'a>(
     app: &'a crate::app::App,
     locales: &'a [LogLine],
 ) -> Vec<(&'a LogLine, LogSource)> {
-    norte_frontend::logpanel::merge(locales, &app.log_remote.lines, source_efectiva(app))
+    norte_frontend::logpanel::merge(locales, &app.log_remote.lines, source_effective(app))
         .into_iter()
         .filter(|(l, _)| app.log_panel.matches(l))
         .collect()
@@ -252,7 +252,7 @@ pub fn source_label(app: &crate::app::App, source: LogSource) -> Option<String> 
     if !app.log_remote.hay_daemon {
         return None;
     }
-    if app.log_remote.servicio == Servicio::NoRing {
+    if app.log_remote.service == Service::NoRing {
         return Some(t("log-source-unsupported"));
     }
     Some(t(match source {
@@ -293,7 +293,7 @@ pub fn source_label(app: &crate::app::App, source: LogSource) -> Option<String> 
 /// whether that daemon knows about logging.
 #[must_use]
 pub fn level_notice(app: &crate::app::App) -> String {
-    if source_efectiva(app) == LogSource::Window {
+    if source_effective(app) == LogSource::Window {
         String::new()
     } else {
         t("log-source-daemon-level")
@@ -395,7 +395,7 @@ pub fn land_tail(
     }
     match res {
         Ok(r) => {
-            app.log_remote.servicio = Servicio::Serves;
+            app.log_remote.service = Service::Serves;
             app.log_remote.level = Some(r.level);
             app.log_remote.cursor = Some(r.next);
             app.log_remote.lost = app.log_remote.lost.saturating_add(r.lost);
@@ -405,7 +405,7 @@ pub fn land_tail(
             // The cap is applied from the front: what is old is what gets
             // dropped, same as in the ring, and it counts as lost — which is
             // what keeps the trim from leaving a silent gap.
-            let overflow = app.log_remote.lines.len().saturating_sub(MAX_LINES_REMOTAS);
+            let overflow = app.log_remote.lines.len().saturating_sub(MAX_LINES_REMOTE);
             if overflow > 0 {
                 app.log_remote.lines.drain(..overflow);
                 app.log_remote.lost = app
@@ -417,7 +417,7 @@ pub fn land_tail(
         // The ONLY reachable degradation: a daemon of the same version
         // without the `logging` feature (or the embedded arm, which has no
         // second source to offer). See `LogRemote::must_request`.
-        Err(norte_proto::Error::Unsupported) => app.log_remote.servicio = Servicio::NoRing,
+        Err(norte_proto::Error::Unsupported) => app.log_remote.service = Service::NoRing,
         // Any failure —the connection dropped, the daemon is busy— is NOT
         // "this daemon has no log": saying so would accuse something that
         // fixes itself on the very next round of a permanent lack. It stays
@@ -433,10 +433,10 @@ pub fn land_level(app: &mut crate::app::App, epoch: u64, res: Result<String, nor
     }
     match res {
         Ok(level) => {
-            app.log_remote.servicio = Servicio::Serves;
+            app.log_remote.service = Service::Serves;
             app.log_remote.level = Some(level);
         }
-        Err(norte_proto::Error::Unsupported) => app.log_remote.servicio = Servicio::NoRing,
+        Err(norte_proto::Error::Unsupported) => app.log_remote.service = Service::NoRing,
         Err(_) => {}
     }
 }
@@ -598,7 +598,7 @@ pub fn apply_action(app: &mut crate::app::App, action: LogAction) {
         // really is a daemon. It is the same thing the window does, where
         // the selector simply is not painted.
         LogAction::Source => {
-            if app.log_remote.servicio == Servicio::Serves {
+            if app.log_remote.service == Service::Serves {
                 app.log_panel.cycle_source();
             }
         }
@@ -900,7 +900,7 @@ mod tests {
     /// connection failed are in the other process. Fixing it in a single
     /// frontend is what makes the two silently diverge.
     #[test]
-    fn la_vista_mezcla_la_terminal_y_el_daemon() {
+    fn the_view_mixes_the_terminal_and_the_daemon() {
         let app = app_with_both_sources();
         let local = snapshot(&app);
         let rows = visible(&app, &local);
@@ -920,18 +920,18 @@ mod tests {
     #[test]
     fn the_effective_source_collapses_toward_the_ring_that_exists() {
         let mut app = app_with_both_sources();
-        assert_eq!(source_efectiva(&app), LogSource::Both, "with both rings");
+        assert_eq!(source_effective(&app), LogSource::Both, "with both rings");
 
         app.log_ring = None;
         assert_eq!(
-            source_efectiva(&app),
+            source_effective(&app),
             LogSource::Daemon,
             "with no local ring there is nothing from this terminal to mix in"
         );
 
-        app.log_remote.servicio = Servicio::NoRing;
+        app.log_remote.service = Service::NoRing;
         assert_eq!(
-            source_efectiva(&app),
+            source_effective(&app),
             LogSource::Window,
             "with no log on the other side the daemon's cannot be shown"
         );
@@ -954,7 +954,7 @@ mod tests {
             LogLevel::Info,
             "the panel's level is moved by the keys, not the daemon"
         );
-        let note = capture_note(&app, source_efectiva(&app));
+        let note = capture_note(&app, source_effective(&app));
         assert!(
             note.contains(LogLevel::Trace.label().trim()),
             "the capture note does not state the daemon's level: {note:?}"
@@ -1005,9 +1005,9 @@ mod tests {
             source_label(&app, LogSource::Both),
             Some(norte_i18n::t("log-source-both"))
         );
-        app.log_remote.servicio = Servicio::NoRing;
+        app.log_remote.service = Service::NoRing;
         assert_eq!(
-            source_label(&app, source_efectiva(&app)),
+            source_label(&app, source_effective(&app)),
             Some(norte_i18n::t("log-source-unsupported")),
             "a daemon with no log has to be stated"
         );
@@ -1040,9 +1040,9 @@ mod tests {
                 "an origin was named with a single ring ({source:?})"
             );
         }
-        // And the effective source cannot be anything else: `servicio`
+        // And the effective source cannot be anything else: `service`
         // never reaches `Serves` because nobody asks.
-        assert_eq!(source_efectiva(&app), LogSource::Window);
+        assert_eq!(source_effective(&app), LogSource::Window);
         // Nor is anyone's ring announced when the level is raised.
         apply_action(&mut app, LogAction::Level(LogLevel::Trace));
         assert_eq!(app.message, None);
@@ -1156,8 +1156,8 @@ mod tests {
             Err(norte_proto::Error::Io { retryable: true }),
         );
         assert_eq!(
-            app.log_remote.servicio,
-            Servicio::NoResponse,
+            app.log_remote.service,
+            Service::NoResponse,
             "a transient failure is not a permanent lack"
         );
         assert!(
@@ -1166,7 +1166,7 @@ mod tests {
         );
 
         land_tail(&mut app, epoch, Err(norte_proto::Error::Unsupported));
-        assert_eq!(app.log_remote.servicio, Servicio::NoRing);
+        assert_eq!(app.log_remote.service, Service::NoRing);
         assert!(
             !app.log_remote.must_request(),
             "continuing to ask would be two RPCs a second forever"
@@ -1201,13 +1201,13 @@ mod tests {
     #[test]
     fn closing_releases_the_lines_but_not_what_is_known_about_the_daemon() {
         let mut app = app_with_both_sources();
-        assert_eq!(app.log_remote.servicio, Servicio::Serves);
+        assert_eq!(app.log_remote.service, Service::Serves);
         app.toggle_log();
         assert!(app.log_remote.lines.is_empty());
         assert_eq!(app.log_remote.cursor, None);
         assert_eq!(
-            app.log_remote.servicio,
-            Servicio::Serves,
+            app.log_remote.service,
+            Service::Serves,
             "forgetting that it serves would hide the control on reopen"
         );
     }
@@ -1256,8 +1256,8 @@ mod tests {
         app.log_remote.hay_daemon = true;
         app.toggle_log();
         assert_eq!(
-            app.log_remote.servicio,
-            Servicio::NoResponse,
+            app.log_remote.service,
+            Service::NoResponse,
             "has not answered yet, and it is asked anyway"
         );
         apply_action(&mut app, LogAction::Level(LogLevel::Debug));
@@ -1308,11 +1308,11 @@ mod tests {
         let mut app = crate::app::testutil::app_two_panes();
         app.toggle_log();
         let epoch = app.log_remote.epoch;
-        let many: Vec<_> = (0..i64::try_from(MAX_LINES_REMOTAS).unwrap() + 3)
+        let many: Vec<_> = (0..i64::try_from(MAX_LINES_REMOTE).unwrap() + 3)
             .map(|i| wire(i, "info", "x"))
             .collect();
         land_tail(&mut app, epoch, Ok(tail(many, 1, 0)));
-        assert_eq!(app.log_remote.lines.len(), MAX_LINES_REMOTAS);
+        assert_eq!(app.log_remote.lines.len(), MAX_LINES_REMOTE);
         assert_eq!(app.log_remote.lost, 3, "the trim stayed silent");
         assert_eq!(
             app.log_remote.lines[0].epoch_ms, 3,

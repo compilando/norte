@@ -656,7 +656,7 @@ pub fn something_above_the_viewer(app: &App) -> bool {
 /// questions resolved by the SAME function, diverging like that stops being
 /// possible (memory `funcion-compartida-no-basta`).
 #[must_use]
-pub fn imagen_a_colocar(app: &App, area: Rect) -> Option<crate::viewer_open::Placement> {
+pub fn image_to_place(app: &App, area: Rect) -> Option<crate::viewer_open::Placement> {
     let viewer = app.viewer.as_ref()?;
     let image = app.viewer_imagen.as_ref()?;
     if image.path != viewer.path || something_above_the_viewer(app) {

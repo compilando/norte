@@ -700,7 +700,7 @@ mod tests {
     /// An inline `secret_access_key` in connections.toml is an ERROR (rule
     /// 10): the secret goes through the resolver, never to plain config.
     #[test]
-    fn secret_access_key_inline_rechazado() {
+    fn secret_access_key_inline_rejected() {
         let toml = r#"
             [connections.x]
             url = "s3://b"
@@ -712,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn load_ausente_es_empty() {
+    fn load_absent_es_empty() {
         let dir = tempfile::tempdir().unwrap();
         let f = ConnectionsFile::load(dir.path()).unwrap();
         assert!(f.connections.is_empty());

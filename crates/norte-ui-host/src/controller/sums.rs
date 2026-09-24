@@ -16,9 +16,9 @@ use super::*;
 /// Task. It is a type and not an `Option<Option<_>>` because "there is no
 /// batch" and "there is one that compares against nothing" are two different
 /// things, and nesting two options to say so reads badly where it matters.
-pub(super) struct ChecksumsEncoladas {
+pub(super) struct ChecksumsQueued {
     /// What the sums file published, if this is a verification.
-    pub(super) publicado: Option<Publicado>,
+    pub(super) published: Option<Published>,
 }
 
 /// The sums file, read exactly as needed to judge it (#311).
@@ -27,7 +27,7 @@ pub(super) struct ChecksumsEncoladas {
 /// reason: the lines in their order, where each one landed in the request,
 /// and how many were not understood — which is what forbids saying "all
 /// correct".
-pub(super) struct Publicado {
+pub(super) struct Published {
     lines: Vec<norte_frontend::checksums::SumLine>,
     asked: Vec<Option<usize>>,
     refused: usize,
@@ -103,7 +103,7 @@ impl State {
             .iter()
             .map(|e| (e.digest.clone(), e.miss))
             .collect();
-        let (lines, copyable, message) = if let Some(published) = checksums.publicado {
+        let (lines, copyable, message) = if let Some(published) = checksums.published {
             let verdicts = checksums::judge(&published.lines, &published.asked, &computed);
             let rows: Vec<crate::dto::DialogLine> = published
                 .lines
@@ -338,7 +338,7 @@ impl State {
         if paths.is_empty() {
             return self.say("err-checksum-not-a-sums-file");
         }
-        let published = Publicado {
+        let published = Published {
             lines: parsed.lines,
             asked,
             refused: parsed.refused,
@@ -350,7 +350,7 @@ impl State {
     pub(super) fn enqueue_checksums(
         &mut self,
         paths: Vec<VPath>,
-        publicado: Option<Publicado>,
+        publicado: Option<Published>,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
@@ -375,7 +375,9 @@ impl State {
         // The Task does not have an id yet: what is noted here is the
         // INTENT, and `apuntar_sumas` matches it with the id once the task is
         // born.
-        self.checksums_pendientes = Some(ChecksumsEncoladas { publicado });
+        self.checksums_pending = Some(ChecksumsQueued {
+            published: publicado,
+        });
         self.say("msg-checksum-started")
     }
 }

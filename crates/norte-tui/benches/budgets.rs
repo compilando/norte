@@ -220,10 +220,10 @@ fn bench_lua_statusbar(c: &mut Criterion) {
 }
 
 criterion_group!(
-    presupuestos,
+    budgets,
     bench_cold_start,
     bench_list_100k,
     bench_fill_100k,
     bench_lua_statusbar
 );
-criterion_main!(presupuestos);
+criterion_main!(budgets);

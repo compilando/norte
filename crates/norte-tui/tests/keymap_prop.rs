@@ -44,7 +44,7 @@ fn to_toml(section: &str, bindings: &[(Vec<String>, String)], key: &str) -> Stri
 
 proptest! {
     #[test]
-    fn keymap_accepted_implica_resolucion_determinista(
+    fn keymap_accepted_implies_deterministic_resolution(
         pane in arb_bindings(),
         global in arb_bindings(),
         user_pre in arb_bindings(),
@@ -111,7 +111,7 @@ proptest! {
 const MAX_COUNT: u32 = 9_999;
 
 /// Commands the generated keymaps bind. `cursor.page-down` is in the
-/// CATALOGUE but NOT in [`CONOCIDOS`]: that is how a
+/// CATALOGUE but NOT in [`KNOWN`]: that is how a
 /// [`Resolution::Unavailable`] gets manufactured — the fourth terminal
 /// resolution, and the only one whose count-clearing path no example pins.
 /// The other two cover both sides of the catalogue (`app.quit` does not
@@ -119,7 +119,7 @@ const MAX_COUNT: u32 = 9_999;
 const COMMANDS_COUNTER: &[&str] = &["app.quit", "cursor.down", "cursor.page-down"];
 
 /// What this "frontend" really implements.
-const CONOCIDOS: &[&str] = &["app.quit", "cursor.down"];
+const KNOWN: &[&str] = &["app.quit", "cursor.down"];
 
 /// BINDABLE keys with counts on. `0` goes in on purpose (it is still
 /// bindable: a count never starts with zero); digits `1`-`9` do not,
@@ -127,16 +127,16 @@ const CONOCIDOS: &[&str] = &["app.quit", "cursor.down"];
 /// would go down the `else` resolving nothing. `esc` does not either: it
 /// only works as a standalone binding and the generated sequences would
 /// knock it out on load.
-const KEYS_LIGABLES: &[&str] = &["a", "g", "q", "0", "enter"];
+const KEYS_BINDABLE: &[&str] = &["a", "g", "q", "0", "enter"];
 
 /// STREAM keys: digits (the count), bindable keys, one unbound one (`z`, a
 /// miss) and `esc` (the cancellation).
 const KEYS_STREAM: &[&str] = &["a", "g", "q", "z", "enter", "esc"];
 const DIGITS: &[&str] = &["0", "1", "2", "3", "5", "9"];
 
-fn arb_seq_ligable() -> impl Strategy<Value = Vec<String>> {
+fn arb_seq_bindable() -> impl Strategy<Value = Vec<String>> {
     proptest::collection::vec(
-        proptest::sample::select(KEYS_LIGABLES).prop_map(str::to_owned),
+        proptest::sample::select(KEYS_BINDABLE).prop_map(str::to_owned),
         1..=3,
     )
 }
@@ -144,7 +144,7 @@ fn arb_seq_ligable() -> impl Strategy<Value = Vec<String>> {
 fn arb_bindings_counter() -> impl Strategy<Value = Vec<(Vec<String>, String)>> {
     proptest::collection::vec(
         (
-            arb_seq_ligable(),
+            arb_seq_bindable(),
             proptest::sample::select(COMMANDS_COUNTER).prop_map(str::to_owned),
         ),
         0..6,
@@ -203,8 +203,8 @@ proptest! {
         let con = parse_keymap(&format!("counts = true\n\n{body}")).expect("valid generated TOML");
         let sin = parse_keymap(&body).expect("valid generated TOML");
         let (con, sin) = (
-            Effective::build(&con, None, CONOCIDOS),
-            Effective::build(&sin, None, CONOCIDOS),
+            Effective::build(&con, None, KNOWN),
+            Effective::build(&sin, None, KNOWN),
         );
         // Property 5, first half: turning counts on does not change WHICH
         // keymaps are legal, because the only key the two dispute — `0` —

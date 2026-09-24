@@ -92,7 +92,7 @@ pub struct HostPaths {
 
 /// What Enter (or a double click) does on the cursor's row.
 #[derive(Debug)]
-pub(crate) enum Activacion {
+pub(crate) enum Activation {
     /// Nothing to activate: a path, or no row at all.
     Nothing,
     /// The row cycled on its own — boolean, enum, theme, preset — and this
@@ -255,7 +255,7 @@ impl Settings {
     ///
     /// Asked AFTER rereading, and it is what distinguishes "reset" from
     /// "another layer sets it" without building layer provenance.
-    pub(crate) fn follows_modificada(&self, id: &str) -> bool {
+    pub(crate) fn follows_modified(&self, id: &str) -> bool {
         self.state
             .rows()
             .iter()
@@ -277,18 +277,18 @@ impl Settings {
     ///
     /// The theme and preset lists arrive from outside and LIVE, as in the
     /// terminal: the effective theme may have changed hot.
-    pub(crate) fn activate(&mut self, themes: &[String], presets: &[&str]) -> Activacion {
+    pub(crate) fn activate(&mut self, themes: &[String], presets: &[&str]) -> Activation {
         // From FLAT row to VISIBLE row: with the search box set, the
         // screen's third row is not the catalog's third.
         let Some(row) = self.visible_row(self.cursor) else {
-            return Activacion::Nothing;
+            return Activation::Nothing;
         };
         self.state.set_cursor(row);
         if let Some(write) = self.state.activate(themes, presets) {
-            return Activacion::Write(Box::new(write));
+            return Activation::Write(Box::new(write));
         }
         if !self.state.is_editing() {
-            return Activacion::Nothing;
+            return Activation::Nothing;
         }
         // The window does not type inline: it asks with a dialog, and the
         // value comes back WHOLE on confirmation. Until then the editor is
@@ -304,9 +304,9 @@ impl Settings {
         let current_row = &self.state.rows()[resolved];
         let name = current_row.name.clone();
         let Some(id) = current_row.id() else {
-            return Activacion::Nothing;
+            return Activation::Nothing;
         };
-        Activacion::RequestText {
+        Activation::RequestText {
             name,
             actual: current,
             id,

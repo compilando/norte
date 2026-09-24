@@ -155,7 +155,7 @@ for rel, m in todo.items():
         if mt.group("id") and tok in m:
             before = b[:mt.start()].rstrip()
             after = b[mt.end():].lstrip()
-            member = before.endswith((".", "::")) or after.startswith(("::", "!"))
+            member = (before.endswith(".") and not before.endswith("..")) or before.endswith("::") or after.startswith(("::", "!"))
             definition = prev_tok in DEF or before.endswith("macro_rules!")
             typelike = tok[:1].isupper()
             field = after.startswith(":") and not after.startswith("::") and field_context(b, mt.start())

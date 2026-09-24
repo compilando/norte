@@ -39,7 +39,7 @@ pub enum RunOutcome {
 /// Each one runs on a blocking thread: starting a process and writing to its
 /// stdin are blocking calls, and doing them on the async executor is rule 2
 /// broken somewhere nobody would look.
-pub async fn bombear(
+pub async fn pump(
     mut rx: tokio::sync::broadcast::Receiver<NativeEffect>,
     host: std::sync::Arc<norte_ui_host::UiHost>,
     theme: impl Fn(&str) + Send + Sync + 'static,
@@ -163,7 +163,7 @@ pub fn execute(effect: &NativeEffect) -> RunOutcome {
         NativeEffect::CopyBytes { bytes, .. } => copy_bytes(bytes),
         NativeEffect::OpenPath { path } => open_path(path),
         NativeEffect::OpenTerminal { dir } => terminal(dir),
-        // Phase 9: `bombear` handles it, since it is the one that can close
+        // Phase 9: `pump` handles it, since it is the one that can close
         // the window and notify the host depending on how it turns out. This
         // is only reached if someone calls `execute` by hand, and then the
         // terminal is simply opened.
@@ -195,7 +195,7 @@ pub fn execute(effect: &NativeEffect) -> RunOutcome {
                 cwd,
             )
         }
-        // `bombear` handles all four, and none of them launches a program
+        // `pump` handles all four, and none of them launches a program
         // here: the `RunProgram` that is AWAITED has to answer, the folder
         // picker has to be ANSWERED with the path, the theme is a catalogue
         // to rebuild, and closing belongs to the event loop. There is nothing

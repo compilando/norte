@@ -53,9 +53,9 @@ fn every_action_the_renderer_sends_the_host_understands() {
         "the sweep did not read `types.ts`: {renderer:?}"
     );
     assert!(host.len() >= 40, "the golden was not read: {host:?}");
-    let huerfanas: Vec<&String> = renderer.difference(&host).collect();
+    let orphaned: Vec<&String> = renderer.difference(&host).collect();
     assert!(
-        huerfanas.is_empty(),
-        "the renderer sends actions the host does not deserialize (the click dies silently): {huerfanas:?}"
+        orphaned.is_empty(),
+        "the renderer sends actions the host does not deserialize (the click dies silently): {orphaned:?}"
     );
 }

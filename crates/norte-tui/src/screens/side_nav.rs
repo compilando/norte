@@ -249,7 +249,7 @@ pub async fn on_timeline_key(
                 seq,
                 to_undo: summary.to_undo,
                 irreversible: summary.irreversible,
-                ajenas: summary.ajenas,
+                foreign: summary.foreign,
                 // Frozen NOW, with the count that is about to be shown.
                 techo: tl.techo(),
             });
@@ -305,7 +305,7 @@ pub fn on_disk_map_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifier
                     app.pending_disk_map_enter = Some(name);
                 }
             }
-            MapAction::Remedir => app.disk_map_stale = true,
+            MapAction::Remeasure => app.disk_map_stale = true,
             MapAction::Leave => app.return_keys_to_panes(),
         }
         return;

@@ -207,7 +207,7 @@ async fn a_resync_does_not_swallow_live_tasks() {
 /// separate task, so it is not ready right when dispatch returns).
 pub(super) async fn next_count(fake: &Fake) -> Vec<VPath> {
     for _ in 0..200 {
-        if let Some(batch) = fake.recuentos.lock().expect("recuentos").first() {
+        if let Some(batch) = fake.counts.lock().expect("recuentos").first() {
             return batch.clone();
         }
         tokio::task::yield_now().await;
@@ -259,7 +259,7 @@ async fn counting_size_sends_the_marks_in_a_single_batch() {
     let batch = next_count(&backend).await;
     assert_eq!(batch.len(), 2, "both marks, in a single batch: {batch:?}");
     assert_eq!(
-        backend.recuentos.lock().expect("recuentos").len(),
+        backend.counts.lock().expect("recuentos").len(),
         1,
         "and a single Task"
     );
@@ -443,7 +443,7 @@ async fn a_lazy_listing_gets_probed_and_cells_fill_up() {
             .any(|r| r.cells.iter().any(|c| c.text.is_some()));
         if filled {
             assert!(
-                !backend.sondeos.lock().expect("sondeos").is_empty(),
+                !backend.probes.lock().expect("sondeos").is_empty(),
                 "and they filled by probing, not by inventing"
             );
             return;
@@ -475,11 +475,11 @@ async fn what_was_probed_is_not_requested_again() {
     // It waits for the FIRST probe and lets the rest run: if all five
     // repaints probed, the other four would already be queued.
     until(&backend, "the first probe", |f| {
-        (!f.sondeos.lock().expect("sondeos").is_empty()).then_some(())
+        (!f.probes.lock().expect("sondeos").is_empty()).then_some(())
     })
     .await;
-    asentar().await;
-    let probes = backend.sondeos.lock().expect("sondeos").clone();
+    settle().await;
+    let probes = backend.probes.lock().expect("sondeos").clone();
     assert_eq!(
         probes.len(),
         1,
@@ -674,7 +674,7 @@ prepend_keymap = [{ on = ["ctrl+t"], run = "layout.set-target" }]
     let keymap = Effective::build_for(
         &preset,
         &[layer],
-        norte_ui_host::commands::IMPLEMENTADOS,
+        norte_ui_host::commands::IMPLEMENTED,
         Screen::Browse,
     )
     .expect("effective");
@@ -795,11 +795,11 @@ fn map_of(snap: &norte_ui_host::ViewSnapshot) -> Option<&norte_ui_host::dto::Dis
 async fn the_map_measures_the_listings_directory_and_the_report_lands() {
     let backend = fake_tree();
     let h = host_with_map(Arc::clone(&backend)).await;
-    asentar().await;
+    settle().await;
 
     let requested = backend
         .until("a map measurement", |f| {
-            f.maps_pedidos.lock().expect("mapas").first().cloned()
+            f.maps_requests.lock().expect("mapas").first().cloned()
         })
         .await;
     assert_eq!(
@@ -843,18 +843,18 @@ async fn the_map_measures_the_listings_directory_and_the_report_lands() {
 async fn the_map_does_not_measure_the_same_directory_twice() {
     let backend = fake_tree();
     let h = host_with_map(Arc::clone(&backend)).await;
-    asentar().await;
+    settle().await;
     let _ = backend
         .until("the first measurement", |f| {
-            f.maps_pedidos.lock().expect("mapas").first().cloned()
+            f.maps_requests.lock().expect("mapas").first().cloned()
         })
         .await;
 
     for _ in 0..5 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        asentar().await;
+        settle().await;
     }
-    let requested = backend.maps_pedidos.lock().expect("mapas").len();
+    let requested = backend.maps_requests.lock().expect("mapas").len();
     assert_eq!(requested, 1, "five messages, one measurement: {requested}");
 }
 

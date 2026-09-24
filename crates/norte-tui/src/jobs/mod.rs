@@ -43,7 +43,7 @@ pub use diskmap::{harvest as harvest_disk_map, launch as launch_disk_map};
 pub use goto::harvest_goto_index;
 pub use inflight::{
     AiRenameRun, ChecksumRun, DiskMapRun, GotoIndexRun, InFlight, OrganizeRun, PendingAiPlan,
-    Publicado, RenameBatchRun, SemanticRun,
+    Published, RenameBatchRun, SemanticRun,
 };
 pub use search::{
     SEARCH_MAX_HITS, SearchRun, drain_search, finalize_search_state, launch_search,

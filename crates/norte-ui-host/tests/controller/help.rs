@@ -473,7 +473,7 @@ async fn an_extension_with_a_page_is_read_from_help() {
 
     assert_eq!(
         backend
-            .pages_pedidas
+            .pages_requested
             .lock()
             .expect("mutex")
             .as_slice()
@@ -515,7 +515,7 @@ async fn an_invalid_extension_id_neither_paints_nor_reaches_the_wire() {
         }
     }
     assert!(
-        backend.pages_pedidas.lock().expect("mutex").is_empty(),
+        backend.pages_requested.lock().expect("mutex").is_empty(),
         "an invalid id is never sent to the wire"
     );
     let _ = help;

@@ -477,7 +477,7 @@ impl State {
             // and putting it ahead of the new one would be starting the list
             // where nobody is looking.
             self.log_remote.restart();
-            self.sondear_log(mailbox);
+            self.probe_log(mailbox);
             self.request_log_remote(backend, mailbox);
         }
         outgoing

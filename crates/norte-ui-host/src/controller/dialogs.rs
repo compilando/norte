@@ -57,8 +57,8 @@ impl State {
         text.clone_into(raw);
         // What gets PAINTED is something else: masked (a `U+202E` in the
         // name you are about to be asked to approve shows) and clamped.
-        let (pintable, hostile) = norte_frontend::display_name(text.as_bytes());
-        dialog.vista.input = Some(clamp_display(pintable));
+        let (paintable, hostile) = norte_frontend::display_name(text.as_bytes());
+        dialog.vista.input = Some(clamp_display(paintable));
         dialog.vista.input_hostile = hostile;
         let change = ViewChange::Dialogs {
             dialogs: self.dialog_views(),
@@ -168,7 +168,7 @@ impl State {
         {
             return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        let conocido = match (SearchField::por_id(field), valor) {
+        let known = match (SearchField::por_id(field), valor) {
             (Some(f), Valor::Text { text }) => {
                 form.set_text(f, text.clone());
                 true
@@ -202,7 +202,7 @@ impl State {
             // apply.
             _ => false,
         };
-        if !conocido {
+        if !known {
             // Not a stale modal — it is open and it is the same one — it is
             // a renderer naming a control this form does not have. Saying
             // "resync" would hide that bug of its own.
@@ -236,7 +236,7 @@ impl State {
             self.config.common.ui_confirm_quit,
             has_work,
         ) {
-            self.nativo(crate::dto::NativeEffect::CloseWindow);
+            self.native(crate::dto::NativeEffect::CloseWindow);
             return (self.applied(), Vec::new());
         }
         let id = ModalId(self.next_modal);
@@ -324,32 +324,32 @@ impl State {
         dialog: Dialog,
         secret: Option<&str>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let mut outputs = Vec::new();
         // The reason the answer did NOT do anything, if there was one:
         // it travels to the ack instead of staying only in the status bar.
-        let mut rehusado: Option<&'static str> = None;
+        let mut refused: Option<&'static str> = None;
         match dialog.on_confirm {
             Some(Pending::Delete { paths, permanent }) => {
-                Self::launch_deleted(paths, permanent, backend, buzon);
+                Self::launch_deleted(paths, permanent, backend, mailbox);
             }
             Some(Pending::InstructionIa { dir }) => {
                 let instruction = dialog.typed.text().to_owned();
-                outputs.extend(self.launch_plan_ia(dir, instruction, backend, buzon));
+                outputs.extend(self.launch_plan_ia(dir, instruction, backend, mailbox));
             }
             Some(Pending::TemplateBatch { dir, names }) => {
                 let template = dialog.typed.text().to_owned();
-                outputs.extend(self.launch_template_plan(dir, &names, &template, backend, buzon));
+                outputs.extend(self.launch_template_plan(dir, &names, &template, backend, mailbox));
             }
             Some(Pending::Exit) => {
                 // It was already asked and the answer was yes: the host
                 // dumps the session and destroys the window.
-                self.nativo(crate::dto::NativeEffect::CloseWindow);
+                self.native(crate::dto::NativeEffect::CloseWindow);
             }
             Some(Pending::QuerySemantic) => {
                 let query = dialog.typed.text().to_owned();
-                outputs.extend(self.launch_semantic(query, backend, buzon));
+                outputs.extend(self.launch_semantic(query, backend, mailbox));
             }
             Some(Pending::DeliverSecret { conn, slot, dir }) => {
                 // The empty field does not reach here: `responder_dialog`
@@ -360,8 +360,8 @@ impl State {
                 // would deliver a normal field's text as if it were a
                 // password.
                 let (Typed::Secret, Some(secret)) = (&dialog.typed, secret) else {
-                    rehusado = Some("host-secret-empty");
-                    return (rehusado, outputs);
+                    refused = Some("host-secret-empty");
+                    return (refused, outputs);
                 };
                 // It is wrapped the MOMENT it arrives: from here on, the
                 // host's copy is overwritten with zeros when the task ends,
@@ -369,12 +369,12 @@ impl State {
                 // block.
                 let mut secret_safe = norte_frontend::secret::TypedSecret::default();
                 secret_safe.set(secret);
-                Self::launch_secret(conn, secret_safe, slot, dir, backend, buzon);
+                Self::launch_secret(conn, secret_safe, slot, dir, backend, mailbox);
             }
-            Some(Pending::Rename { from, siembra }) => {
+            Some(Pending::Rename { from, seed }) => {
                 let (motivo, parts) =
-                    self.confirm_rename(&from, &siembra, dialog.typed.text(), backend, buzon);
-                rehusado = motivo;
+                    self.confirm_rename(&from, &seed, dialog.typed.text(), backend, mailbox);
+                refused = motivo;
                 outputs.extend(parts);
             }
             Some(Pending::Transferir {
@@ -384,7 +384,7 @@ impl State {
                 dest,
                 mover,
             }) => {
-                self.send_batch(&paths, &source_dir, &dest, mover, backend, buzon);
+                self.send_batch(&paths, &source_dir, &dest, mover, backend, mailbox);
                 // The marks are CONSUMED by the send, not by the outcome
                 // (same criterion as the TUI and as mc): a selection
                 // half-consumed would mean different things depending on
@@ -411,7 +411,7 @@ impl State {
                 // And the marks are NOT touched: this pane's were set by
                 // the reader for something else, and what is being copied
                 // did not come from there.
-                self.send_batch(&paths, &dest, &dest, false, backend, buzon);
+                self.send_batch(&paths, &dest, &dest, false, backend, mailbox);
                 outputs.push(self.parche_rows());
             }
             Some(Pending::Search { root }) => {
@@ -450,7 +450,7 @@ impl State {
                     norte_i18n::t_in(self.lang, "search-query-filters-only")
                 };
                 let params = norte_frontend::search::params(&form, root, now_ms, Self::MAX_RESULTS);
-                outputs.extend(self.launch_search(params, label, backend, buzon));
+                outputs.extend(self.launch_search(params, label, backend, mailbox));
             }
             // The two that create an EMPTY node from a typed name. Together
             // because they are the same shape — validate the segment,
@@ -463,40 +463,40 @@ impl State {
                     _ => unreachable!("the pattern above only leaves those two"),
                 };
                 let (motivo, parts) = if file {
-                    self.create_file(&dir, dialog.typed.text(), backend, buzon)
+                    self.create_file(&dir, dialog.typed.text(), backend, mailbox)
                 } else {
-                    self.create_directory(&dir, dialog.typed.text(), backend, buzon)
+                    self.create_directory(&dir, dialog.typed.text(), backend, mailbox)
                 };
-                rehusado = motivo;
+                refused = motivo;
                 outputs.extend(parts);
             }
             // #309: the favorite. The destination was captured by the dialog
             // on open, it is not re-read here.
             Some(Pending::SaveFavorite { dest }) => {
-                let (motivo, parts) = self.save_favorite(&dest, dialog.typed.text(), buzon);
-                rehusado = motivo;
+                let (motivo, parts) = self.save_favorite(&dest, dialog.typed.text(), mailbox);
+                refused = motivo;
                 outputs.extend(parts);
             }
             // #318: the profile. Unlike the favorite, what is saved is read
             // NOW: it is the screen's state, not an answer the dialog
             // captured on open.
             Some(Pending::SaveProfile) => {
-                let (motivo, parts) = self.save_profile(dialog.typed.text(), buzon);
-                rehusado = motivo;
+                let (motivo, parts) = self.save_profile(dialog.typed.text(), mailbox);
+                refused = motivo;
                 outputs.extend(parts);
             }
             // A settings text entry's value: it is validated by the shared
             // editor and, if valid, written.
             Some(Pending::EditSetting { id }) => {
-                let (motivo, parts) = self.confirm_setting_value(id, dialog.typed.text(), buzon);
-                rehusado = motivo;
+                let (motivo, parts) = self.confirm_setting_value(id, dialog.typed.text(), mailbox);
+                refused = motivo;
                 outputs.extend(parts);
             }
             // The two that build files from what was typed, together: this
             // `match` is a dispatcher and already brushes its limit.
             Some(p @ (Pending::Split { .. } | Pending::Pack { .. })) => {
-                let (motivo, parts) = self.run_from_file(p, dialog.typed.text(), backend, buzon);
-                rehusado = motivo;
+                let (motivo, parts) = self.run_from_file(p, dialog.typed.text(), backend, mailbox);
+                refused = motivo;
                 outputs.extend(parts);
             }
             // #311: copy the checksum list. The bytes were assembled when
@@ -507,48 +507,48 @@ impl State {
                 // How many LINES it carries: it is the number the message
                 // shows, and the payload always ends in a newline.
                 let count = bytes.split(|b| *b == b'\n').count().saturating_sub(1);
-                if self.nativo(crate::dto::NativeEffect::CopyBytes { bytes, count }) {
+                if self.native(crate::dto::NativeEffect::CopyBytes { bytes, count }) {
                     outputs.extend(self.say("msg-checksum-copied"));
                 } else {
                     // Nobody is listening on the native channel: there is no
                     // clipboard to copy to, and saying so is better than a
                     // button that does nothing.
-                    rehusado = Some("host-no-desktop");
+                    refused = Some("host-no-desktop");
                 }
             }
             Some(Pending::Permissions { targets }) => {
                 let typed = dialog.typed.text().to_owned();
-                let (motivo, parts) = self.change_permissions(targets, &typed, backend, buzon);
-                rehusado = motivo;
+                let (motivo, parts) = self.change_permissions(targets, &typed, backend, mailbox);
+                refused = motivo;
                 outputs.extend(parts);
             }
             Some(Pending::Patron { mark }) => {
                 let patron = dialog.typed.text().to_owned();
                 let (motivo, parts) = self.apply_patron(mark, &patron);
-                rehusado = motivo;
+                refused = motivo;
                 outputs.extend(parts);
             }
             Some(Pending::UndoSession {
                 session: the_session,
             }) => {
-                let (motivo, parts) = self.undo_session(&the_session, backend, buzon);
-                rehusado = motivo;
+                let (motivo, parts) = self.undo_session(&the_session, backend, mailbox);
+                refused = motivo;
                 outputs.extend(parts);
             }
             Some(Pending::UndoUntil { seq, techo }) => {
-                outputs.extend(self.undo_until(seq, techo, backend, buzon));
+                outputs.extend(self.undo_until(seq, techo, backend, mailbox));
             }
             Some(Pending::ApproveExtension {
                 id,
                 capabilities,
                 digest,
             }) => {
-                let (motivo, parts) = self.grant(&id, &capabilities, digest, backend, buzon);
-                rehusado = motivo;
+                let (motivo, parts) = self.grant(&id, &capabilities, digest, backend, mailbox);
+                refused = motivo;
                 outputs.extend(parts);
             }
             Some(Pending::UninstallExtension { id }) => {
-                outputs.extend(self.gobernar(&id, Governance::Uninstall, backend, buzon));
+                outputs.extend(self.govern(&id, Governance::Uninstall, backend, mailbox));
             }
             Some(Pending::Decide {
                 approval_id,
@@ -559,8 +559,8 @@ impl State {
                 // approved", which are not the same when a different window
                 // answered, when it was denied, or when it timed out.
                 if let Some(the_session) = &session {
-                    self.agencia.sessions.approved(the_session);
-                    if self.agencia.panel {
+                    self.agency.sessions.approved(the_session);
+                    if self.agency.panel {
                         let change = ViewChange::Agents {
                             agents: self.vista_agents(),
                         };
@@ -579,7 +579,7 @@ impl State {
                 // security surface. Denying is the opposite: if that one
                 // does not arrive, the outcome is the same one that was
                 // requested.
-                launch_approval(approval_id, backend, buzon);
+                launch_approval(approval_id, backend, mailbox);
             }
             // A collision is not answered with "confirm": each output IS a
             // policy, and the one that translates them is `responder_dialog`,
@@ -588,7 +588,7 @@ impl State {
             // interpreted.
             Some(Pending::Retry { .. }) | None => {}
         }
-        (rehusado, outputs)
+        (refused, outputs)
     }
 
     /// A TYPED name, as a `Segment`, or the key for the reason it is not
@@ -613,7 +613,7 @@ impl State {
         choice: &str,
         secret: Option<&str>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(pos) = self.dialogs.iter().position(|d| d.id == id) else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -700,9 +700,9 @@ impl State {
         // has already left the stack and "do not close" stops being an
         // option.
         if choice == "confirm"
-            && let Some(rehuso) = self.rejects_form_invalid(pos)
+            && let Some(refusal) = self.rejects_form_invalid(pos)
         {
-            return rehuso;
+            return refusal;
         }
         let dialog = self.dialogs.remove(pos);
         let mut outputs = Vec::new();
@@ -710,10 +710,10 @@ impl State {
         // for an approval. Different names on purpose: on a security
         // surface, "confirm" and "approve" should never be able to get
         // confused in a renderer.
-        let mut rehusado = None;
+        let mut refused = None;
         if choice == "confirm" || choice == "approve" {
-            let (motivo, parts) = self.run_pending(dialog, secret, backend, buzon);
-            rehusado = motivo;
+            let (motivo, parts) = self.run_pending(dialog, secret, backend, mailbox);
+            refused = motivo;
             outputs.extend(parts);
         } else if let Some(Pending::Decide { approval_id, .. }) = dialog.on_confirm {
             // Deny explicitly, and also on close: leaving the agent waiting
@@ -729,7 +729,7 @@ impl State {
             // relaunched — the failed task stays as it was.
             let enqueue = self.enqueue;
             if let Some(policy) = collision_policy(choice) {
-                Self::launch_retry(con.clone(), policy, enqueue, backend, buzon);
+                Self::launch_retry(con.clone(), policy, enqueue, backend, mailbox);
             }
         }
         let change = ViewChange::Dialogs {
@@ -741,7 +741,7 @@ impl State {
         // succeeded, and the same surface already answered `Unavailable`
         // when the rejection was for having several marks: two answers for
         // the same thing.
-        match rehusado {
+        match refused {
             Some(reason_key) => (
                 ActionAck::Unavailable {
                     reason_key: reason_key.to_owned(),

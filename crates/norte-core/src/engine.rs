@@ -790,7 +790,7 @@ impl Engine {
     ///
     /// # What this gate guarantees, and its deadline
     /// **"It was not unreadable the last time it was checked", and that can
-    /// be up to [`FRENO_AFTER_FAILURE`](crate::embedded::FRENO_TRAS_FALLO) old.**
+    /// be up to [`BRAKE_AFTER_FAILURE`](crate::embedded::FRENO_TRAS_FALLO) old.**
     /// #179's brake makes a `Busy` verdict be remembered for thirty seconds
     /// with no reopening; if in that window the file goes from BUSY to
     /// UNREADABLE —someone releases the lock and right after corrupts it—
@@ -3269,13 +3269,13 @@ impl Engine {
         let norm_q = norm2.sqrt();
         let scored = vectors.into_iter().filter_map(|(path, v)| {
             crate::index_embed::cosine_prenormed(&qvec, norm_q, &v).map(|s| {
-                crate::index_embed::Puntuado {
+                crate::index_embed::Scored {
                     score: f64::from(s),
                     path,
                 }
             })
         });
-        Ok(crate::index_embed::mejores_k(scored, k))
+        Ok(crate::index_embed::best_k(scored, k))
     }
 
     /// Copy (recursive if a dir) as a Task, with the default policies
@@ -4642,7 +4642,7 @@ impl Engine {
                         .iter()
                         .flat_map(|(u, _)| u.iter().map(|e| e.seq))
                         .collect();
-                    let already_undone = crate::undo::deshechas(&journal, &seqs).await?;
+                    let already_undone = crate::undo::undone(&journal, &seqs).await?;
                     for (unit, provider) in plan {
                         if ctx.cancel.is_cancelled() {
                             return Err(Error::Cancelled);
@@ -4660,7 +4660,7 @@ impl Engine {
                             // A batch half-undone by another undo: it is
                             // neither continued nor skipped — it stops, like
                             // on a drift.
-                            crate::undo::Validity::Parada(seq) => {
+                            crate::undo::Validity::Stop(seq) => {
                                 report_task.lock().expect("undo report lock").blocked =
                                     Some((seq, Error::PlanStale));
                                 break;

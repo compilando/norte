@@ -152,7 +152,7 @@ pub struct DiskMapRun {
 ///
 /// The Task is already launched and on the board; what's waited for here is
 /// the REPORT, which only makes sense to ask for once the Task finishes —
-/// digests don't fit in the progress. `publicado` distinguishes the batch's
+/// digests don't fit in the progress. `published` distinguishes the batch's
 /// two faces: `None` is "compute and show me", `Some` is "compare against
 /// this".
 pub struct ChecksumRun {
@@ -168,11 +168,11 @@ pub struct ChecksumRun {
     /// nobody to collect them.
     pub task: norte_core::backend::TaskObserver,
     /// What the checksum file published, if this is a verification.
-    pub publicado: Option<Publicado>,
+    pub published: Option<Published>,
 }
 
 /// The checksum file, read as needed to judge it (#311).
-pub struct Publicado {
+pub struct Published {
     /// The understood lines, in the file's order.
     pub lines: Vec<norte_frontend::checksums::SumLine>,
     /// For each line, which position of the REQUEST its path ended up at, or

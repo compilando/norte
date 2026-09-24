@@ -409,7 +409,7 @@ async fn every_slot_that_follows_the_cursor_has_its_own_probe() {
         })
         .await
         .expect("host alive");
-        asentar().await;
+        settle().await;
 
         tokio::time::pause();
         let arrival =
@@ -458,7 +458,7 @@ async fn clicking_a_row_moves_the_sheet_with_no_viewer_in_the_layout() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
 
     // With NO `Resync`, and that is the whole point: `snapshot_until` requests a
     // snapshot on every round, so a test written with it would pass green

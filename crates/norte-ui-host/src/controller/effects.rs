@@ -69,7 +69,7 @@ impl State {
         // focus: they are BOARD commands, not the panel that paints it, and
         // with the process panel closed they still have to mean the same
         // thing.
-        if let Effect::TaskVecina { back: going_back } = effect {
+        if let Effect::TaskNeighbor { back: going_back } = effect {
             return self.move_on_board(going_back);
         }
         if matches!(effect, Effect::DiscardTask) {
@@ -94,7 +94,7 @@ impl State {
         match effect {
             Effect::Cursor(_)
             | Effect::Page(_)
-            | Effect::Extremo { .. }
+            | Effect::End { .. }
             | Effect::Enter
             | Effect::Up
             | Effect::Trail { .. }
@@ -104,7 +104,7 @@ impl State {
             | Effect::MarkExtension { .. }
             | Effect::MarkClass { .. }
             | Effect::RestoreMarks
-            | Effect::MarkSubiendo
+            | Effect::MarkUploading
             | Effect::MarkPage { .. }
             | Effect::MarkToEdge { .. }
             | Effect::UnmarkAll => self.listing_effect(effect, slot, backend, mailbox),
@@ -120,7 +120,7 @@ impl State {
             // with no place has to be a compile error.
             // The BOARD's three are handled before getting here: they do not
             // depend on which panel has focus.
-            Effect::CancelTask | Effect::TaskVecina { .. } | Effect::DiscardTask => {
+            Effect::CancelTask | Effect::TaskNeighbor { .. } | Effect::DiscardTask => {
                 self.cancel_by_command()
             }
             Effect::PauseTask => self.pause_by_command(mailbox),
@@ -145,7 +145,7 @@ impl State {
             Effect::Refresh => self.refresh_visible(backend, mailbox),
             Effect::ToggleHidden => self.toggle_hidden(),
             Effect::CycleEncoding => self.cycle_encoding(),
-            Effect::Mirror | Effect::MirrorObjetivo | Effect::Bring | Effect::Swap => {
+            Effect::Mirror | Effect::MirrorTarget | Effect::Bring | Effect::Swap => {
                 self.pane_gesture(effect, backend, mailbox)
             }
             // Apart from the group above: those NAVIGATE, and this one only
@@ -235,7 +235,7 @@ impl State {
             | Effect::Exit
             | Effect::ProfileChoose
             | Effect::ProfileSaveAs
-            | Effect::ProfileVecino { .. }
+            | Effect::ProfileNeighbor { .. }
             | Effect::Volumes
             | Effect::Connections
             // History and the hotlist are two other selectors: they go with
@@ -290,7 +290,7 @@ impl State {
                     mailbox,
                 )
             }
-            Effect::Extremo { al_final } => {
+            Effect::End { al_final } => {
                 if al_final {
                     self.slot_mut().pane.end();
                 } else {
@@ -360,7 +360,7 @@ impl State {
             // same as in the terminal. The window repaints rows AND cursor
             // because these DO move it (except the edge ones, which on
             // purpose do not).
-            Effect::MarkSubiendo => {
+            Effect::MarkUploading => {
                 self.slot_mut().pane.toggle_mark_and_retreat();
                 (self.applied(), vec![self.parche_rows()])
             }
@@ -389,9 +389,9 @@ impl State {
     /// honest thing is to tell whoever pressed the key that it does not
     /// happen here, instead of acknowledging something that is not going to
     /// occur.
-    pub(super) fn nativo(&self, effect: crate::dto::NativeEffect) -> bool {
+    pub(super) fn native(&self, effect: crate::dto::NativeEffect) -> bool {
         self.desktop
-            .nativos
+            .native
             .as_ref()
             .is_some_and(|tx| tx.send(effect).is_ok())
     }
@@ -422,7 +422,7 @@ impl State {
         }
         let count = paths.len();
         let bytes = norte_frontend::shell::clipboard_bytes(&paths);
-        if !self.nativo(crate::dto::NativeEffect::CopyBytes { bytes, count }) {
+        if !self.native(crate::dto::NativeEffect::CopyBytes { bytes, count }) {
             return Self::without_desktop();
         }
         let outgoing = self.say_with("msg-paths-copied", &[("n", &count.to_string())]);
@@ -456,12 +456,12 @@ impl State {
         // held in `ntc` and not in the window: a whole documented feature
         // honored by a single surface.
         if let Some(effect) = self.program_declared(&path) {
-            if !self.nativo(effect) {
+            if !self.native(effect) {
                 return Self::without_desktop();
             }
             return (self.applied(), self.say("msg-opening-external"));
         }
-        if !self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
+        if !self.native(crate::dto::NativeEffect::OpenPath { path }) {
             return Self::without_desktop();
         }
         (self.applied(), self.say("msg-opening-external"))
@@ -579,7 +579,7 @@ impl State {
             cwd: Some(path_bytes(&dir)),
             detached: self.config.common.ui_editor_detached.unwrap_or(false),
         };
-        if !self.nativo(effect) {
+        if !self.native(effect) {
             return Self::without_desktop();
         }
         (self.applied(), self.say("msg-opening-external"))
@@ -600,7 +600,7 @@ impl State {
                 outgoing,
             );
         }
-        if !self.nativo(crate::dto::NativeEffect::OpenTerminal { dir }) {
+        if !self.native(crate::dto::NativeEffect::OpenTerminal { dir }) {
             return Self::without_desktop();
         }
         (self.applied(), self.say("msg-opening-terminal"))
@@ -691,7 +691,7 @@ impl State {
             cwd: Some(native_dir.as_os_str().as_bytes().to_vec()),
             detached,
         };
-        if !self.nativo(effect) {
+        if !self.native(effect) {
             return Self::without_desktop();
         }
         (self.applied(), self.say("msg-opening-external"))
@@ -782,7 +782,7 @@ impl State {
             Effect::Exit => self.request_exit(),
             Effect::ProfileChoose => self.request_profiles(None, mailbox),
             Effect::ProfileSaveAs => self.request_save_profile(),
-            Effect::ProfileVecino { back: going_back } => {
+            Effect::ProfileNeighbor { back: going_back } => {
                 self.request_profiles(Some(!going_back), mailbox)
             }
             Effect::Volumes => self.open_volumes(backend, mailbox),

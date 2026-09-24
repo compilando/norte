@@ -771,7 +771,7 @@ mod tests {
     /// trusts; `dialog.deny`/`dialog.cancel` cancel; `dialog.confirm`
     /// (Enter) is INERT (H1's safety pin: no dangerous default).
     #[test]
-    fn trust_host_key_solo_approve_confia() {
+    fn trust_host_key_solo_approve_trusts() {
         let m = Modal::TrustHostKey {
             host: "h".into(),
             port: Some(22),

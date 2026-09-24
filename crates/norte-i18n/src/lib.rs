@@ -162,7 +162,7 @@ pub fn message_ids(lang: Lang) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod sin_duplicados {
+mod no_duplicates {
     use std::collections::BTreeSet;
 
     /// No key is defined twice.

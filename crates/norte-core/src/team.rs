@@ -92,7 +92,7 @@ impl std::fmt::Display for Notice {
 
 /// What ended up set, plus what has to be said.
 #[derive(Debug, Default)]
-pub struct Equipado {
+pub struct Equipped {
     /// What did not prevent equipping but has to be reported.
     pub notices: Vec<Notice>,
     /// Whether a RENAME AI provider ended up installed. Whoever requires it
@@ -133,8 +133,8 @@ impl Ia {
 /// opt-in and NEVER fails here: whatever could not be installed is an
 /// [`Notice`].
 #[tracing::instrument(skip_all, fields(renamed = ia.renamed, embeddings = ia.embeddings))]
-pub async fn equipar(engine: &Engine, config_dir: &Path, ia: Ia) -> Equipado {
-    let mut done = Equipado::default();
+pub async fn equipar(engine: &Engine, config_dir: &Path, ia: Ia) -> Equipped {
+    let mut done = Equipped::default();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::os_root()) as Arc<dyn Provider>
     );

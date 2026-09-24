@@ -132,7 +132,7 @@ async fn at_home_a_digit_opens_its_row() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
 
     // The subscription goes AFTER navigating: the navigation's envelopes
     // stay queued, and `next_snapshot` would return a snapshot from before

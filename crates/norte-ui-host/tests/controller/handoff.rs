@@ -250,7 +250,7 @@ async fn if_it_could_not_be_released_nothing_opens() {
         (f.loose.load(std::sync::atomic::Ordering::SeqCst) > 0).then_some(())
     })
     .await;
-    asentar().await;
+    settle().await;
 
     // Nothing crosses the native effects channel.
     assert!(

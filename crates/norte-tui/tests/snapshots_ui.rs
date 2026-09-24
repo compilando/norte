@@ -2330,12 +2330,12 @@ fn snapshot_help_body_with_focus() {
     );
     // …and NOT its neighbor's. A map shifted by one position would highlight
     // `pane.copy` while `Enter` dispatches `pane.move`.
-    let vecino = "pane.copy";
-    let chord_vecino = resolver
-        .chord(vecino)
-        .unwrap_or_else(|| panic!("{vecino} has a chord in the orthodox preset"));
+    let neighbor = "pane.copy";
+    let chord_neighbor = resolver
+        .chord(neighbor)
+        .unwrap_or_else(|| panic!("{neighbor} has a chord in the orthodox preset"));
     assert!(
-        !row.contains(&startup(&resolver.label(vecino))) && !row.contains(&chord_vecino),
+        !row.contains(&startup(&resolver.label(neighbor))) && !row.contains(&chord_neighbor),
         "the highlighted row is the NEIGHBORING action's: the action→line \
          map is shifted: {row:?}"
     );

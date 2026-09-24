@@ -31,7 +31,7 @@ impl State {
             self.last_items = Some(s.status_items.clone());
             // The snapshot was assembled with the CURRENT layout
             // (`setting_of` is pure).
-            let _ = self.settings_movidos();
+            let _ = self.settings_moved();
         }
         self.sequence += 1;
         BridgeEnvelope::new(self.instance.clone(), self.sequence, u)
@@ -66,7 +66,7 @@ impl State {
         // names move them, and none of the paths that change those sends a
         // header. Header and rows go TOGETHER, behind whatever the patch
         // already carried, so they take precedence over it.
-        for slot in self.settings_movidos() {
+        for slot in self.settings_moved() {
             if let Some(h) = self.slots.get(&slot) {
                 changes.push(ViewChange::Columns {
                     slot_id: slot,
@@ -114,7 +114,7 @@ impl State {
     /// A listing's generation: `PaneState`'s EPOCH, which rises on anything
     /// that moves the indices — a re-listing, a re-sort, a hidden-files
     /// filter — not only on changing directory.
-    pub(super) fn generacion(&self) -> u64 {
+    pub(super) fn generation(&self) -> u64 {
         self.slot().pane.listing_epoch()
     }
 
@@ -122,7 +122,7 @@ impl State {
     pub(super) fn parche_cursor(&mut self) -> BridgeEnvelope<UiUpdate> {
         let change = ViewChange::Cursor {
             slot_id: self.active(),
-            generation: self.generacion(),
+            generation: self.generation(),
             cursor: Some(RowKey(self.slot().pane.cursor() as u64)),
         };
         self.parche(vec![change])
@@ -167,7 +167,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) {
-        if self.oculto(slot) {
+        if self.hidden(slot) {
             return;
         }
         let columns = self
@@ -189,8 +189,8 @@ impl State {
         // One batch per slot, checked BEFORE choosing candidates: the other
         // way around, the chosen ones would end up marked as requested
         // without having been, and would never be requested again. It is the
-        // same trap `sondear` documents, and just as easy to fall into.
-        if target_slot.adornando {
+        // same trap `probe` documents, and just as easy to fall into.
+        if target_slot.decorating {
             return;
         }
         let first = usize::try_from(target_slot.first_visible).unwrap_or(0);
@@ -201,17 +201,17 @@ impl State {
             .iter()
             .skip(first)
             .take(count)
-            .filter(|e| !target_slot.adornadas.contains(&e.path))
+            .filter(|e| !target_slot.decorated.contains(&e.path))
             .map(|e| (e.path.clone(), e.kind))
             .unzip();
         if candidates.is_empty() {
             return;
         }
         for p in &candidates {
-            target_slot.adornadas.insert(p.clone());
+            target_slot.decorated.insert(p.clone());
         }
         let dir = target_slot.pane.dir().clone();
-        target_slot.adornando = true;
+        target_slot.decorating = true;
         let generation = target_slot.gen_adornos;
         let cancel_flag = target_slot.cancel_probe.clone();
         let backend = Arc::clone(backend);
@@ -234,7 +234,7 @@ impl State {
         });
     }
 
-    pub(super) fn sondear(
+    pub(super) fn probe(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
@@ -254,7 +254,7 @@ impl State {
         // again. Without this order, a debounced scroll stacked batches of
         // two hundred trips against the same connection and also ate rows
         // along the way.
-        if target_slot.sondeando {
+        if target_slot.probing {
             return;
         }
         let first = usize::try_from(target_slot.first_visible).unwrap_or(0);
@@ -263,17 +263,17 @@ impl State {
             .pane
             .needs_stat_at(first..first.saturating_add(count))
             .into_iter()
-            .filter(|p| !target_slot.sondeados.contains(p))
-            .take(MAX_SONDEOS)
+            .filter(|p| !target_slot.probed.contains(p))
+            .take(MAX_PROBES)
             .collect();
         if candidates.is_empty() {
             return;
         }
         for p in &candidates {
-            target_slot.sondeados.insert(p.clone());
+            target_slot.probed.insert(p.clone());
         }
         let dir = target_slot.pane.dir().clone();
-        target_slot.sondeando = true;
+        target_slot.probing = true;
         let cancel_flag = target_slot.cancel_probe.clone();
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
@@ -306,12 +306,12 @@ impl State {
                 // The listing changed while probing: what comes back does not
                 // describe the screen that is there.
                 let _ = mailbox
-                    .send(Message::Hidratado(Box::new((dir, slot, Vec::new()))))
+                    .send(Message::Hydrated(Box::new((dir, slot, Vec::new()))))
                     .await;
                 return;
             }
             let _ = mailbox
-                .send(Message::Hidratado(Box::new((dir, slot, probes))))
+                .send(Message::Hydrated(Box::new((dir, slot, probes))))
                 .await;
         });
     }
@@ -328,14 +328,14 @@ impl State {
         last: bool,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let target_slot = self.slots.get_mut(&slot)?;
-        if target_slot.drenando != Some(token) {
+        if target_slot.draining != Some(token) {
             // A batch from a navigation already superseded: pasting it would
             // mix two trees on one screen.
             return None;
         }
         if last {
             // The stream is done: this slot is no longer growing.
-            target_slot.drenando = None;
+            target_slot.draining = None;
         }
         if batch.is_empty() && !target_slot.rows_to_publish {
             // Nothing to paste and nothing pending: the stream closed with no
@@ -389,7 +389,7 @@ impl State {
     /// `None` if there is nothing to repaint: the slot disappeared, or the
     /// listing that was probed has already been superseded — pasting sizes
     /// onto it would be lying about what is visible.
-    pub(super) fn apply_sondas(
+    pub(super) fn apply_probes(
         &mut self,
         slot: u32,
         dir: &VPath,
@@ -398,7 +398,7 @@ impl State {
         let target_slot = self.slots.get_mut(&slot)?;
         // The flag is lowered ONLY if what arrives describes this listing. A
         // cancelled batch landing late used to lower the NEW batch's flag,
-        // and then `sondear` would let a second one launch on the same slot.
+        // and then `probe` would let a second one launch on the same slot.
         if target_slot.pane.dir() != dir {
             // The slot is in ANOTHER directory: pasting these sizes onto it
             // would be lying about what is visible. (A filler batch, by
@@ -406,12 +406,12 @@ impl State {
             // indices, and here it is matched by path.)
             return None;
         }
-        target_slot.sondeando = false;
+        target_slot.probing = false;
         for (requested, e) in probes {
             // By the path that was REQUESTED: the one the provider returns
             // can be a different spelling of the same name (NFD on HFS+, a
             // different case on SMB, a link's target) and then it matches
-            // nothing — and since it is already in `sondeados`, it is never
+            // nothing — and since it is already in `probed`, it is never
             // retried.
             target_slot.pane.hydrate(requested, e.size, e.mtime_ms);
         }
@@ -460,7 +460,7 @@ impl State {
 
     /// The slots whose column layout is no longer the last one that crossed,
     /// with the new one already noted as crossed.
-    fn settings_movidos(&mut self) -> Vec<u32> {
+    fn settings_moved(&mut self) -> Vec<u32> {
         let now: Vec<(u32, Vec<norte_frontend::columns::Fitted>)> = self
             .slots
             .iter()
@@ -490,7 +490,7 @@ impl State {
     pub(super) fn row_change(&self) -> ViewChange {
         ViewChange::Rows {
             slot_id: self.active(),
-            generation: self.generacion(),
+            generation: self.generation(),
             first_visible: self.slot().first_visible,
             rows: self.rows_visible(),
             icon_column: self.slot().pane.any_icon(),

@@ -58,7 +58,7 @@ impl State {
         }
         self.splash_seen = true;
         let sections = if mode == SplashMode::Home {
-            self.fuentes_de_splash()
+            self.splash_sources()
         } else {
             // `brief` goes WITHOUT sections: it removes itself, so a list of
             // places there would be an offer withdrawn before it can be
@@ -83,7 +83,7 @@ impl State {
     }
 
     /// THIS window's sections: where you usually go, and what you saved.
-    fn fuentes_de_splash(&self) -> Vec<norte_frontend::splash::SplashSection> {
+    fn splash_sources(&self) -> Vec<norte_frontend::splash::SplashSection> {
         use norte_frontend::splash::{SplashRow, SplashSection};
         let popular: Vec<SplashRow> = self
             .popular

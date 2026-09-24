@@ -395,7 +395,7 @@ impl RemoteBackend {
     /// [`ClientError::SpawnFailed`] if the daemon started and died;
     /// [`ClientError::SpawnTimeout`] if it is still alive and does not
     /// accept; whatever the handshake gives otherwise.
-    pub async fn connect_detallado(
+    pub async fn connect_detailed(
         socket: PathBuf,
         spawn_cmd: Option<Vec<std::ffi::OsString>>,
         client_info: ClientInfo,
@@ -437,7 +437,7 @@ impl RemoteBackend {
     ///
     /// Returns the RAW error and lets each caller translate: what a daemon
     /// says while dying does not fit the taxonomy, and translating here
-    /// would lose it for everyone (see [`Self::connect_detallado`]).
+    /// would lose it for everyone (see [`Self::connect_detailed`]).
     async fn connect_inner(
         socket: PathBuf,
         spawn_cmd: Option<Vec<std::ffi::OsString>>,

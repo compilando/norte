@@ -43,9 +43,9 @@ fn icon_span<'a>(
 ) -> Span<'a> {
     let glyph = decoration.and_then(|d| d.icon.as_deref()).unwrap_or("");
     let glyph = take_width(glyph, ICON_GUTTER - 1);
-    let relleno = (ICON_GUTTER - 1).saturating_sub(glyph.width());
+    let fill = (ICON_GUTTER - 1).saturating_sub(glyph.width());
     Span::styled(
-        format!("{glyph}{} ", " ".repeat(relleno)),
+        format!("{glyph}{} ", " ".repeat(fill)),
         theme.entry(name, kind),
     )
 }
@@ -794,7 +794,7 @@ pub(crate) fn entry_item<'a>(
         }
         let used: usize = spans.iter().map(|sp| sp.content.width()).sum();
         if used > name_w {
-            // Clips the name's TEXT (the body span, index `fijos`: after
+            // Clips the name's TEXT (the body span, index `fixed`: after
             // the gutter, the badge and — if there is one — the icon
             // column) with middle ellipsis to what is left after the other
             // spans — the fixed ones and the decoration stay. With a

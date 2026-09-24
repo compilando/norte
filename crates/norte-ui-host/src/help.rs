@@ -126,7 +126,7 @@ impl Help {
     /// Returns whether the facts CHANGED. Re-freezing the same thing is not
     /// a screen change, and publishing it as one would be a patch for every
     /// fill batch of a directory the reader is not even looking at.
-    pub(crate) fn recongelar(&mut self, facts: norte_frontend::availability::Facts) -> bool {
+    pub(crate) fn refreeze(&mut self, facts: norte_frontend::availability::Facts) -> bool {
         if self.facts == facts {
             return false;
         }
@@ -466,10 +466,10 @@ fn motivo_de(
             norte_help::Reason::AnsweredByTheOverlay,
         ));
     }
-    if crate::commands::IMPLEMENTADOS_VISOR.contains(&cmd) {
+    if crate::commands::IMPLEMENTED_VISOR.contains(&cmd) {
         return (!visor_open).then_some("reason-viewer-only");
     }
-    if !crate::commands::implementados(effects).contains(&cmd) {
+    if !crate::commands::implemented(effects).contains(&cmd) {
         return Some("keymap-short-not-here");
     }
     row.avail
@@ -513,10 +513,10 @@ fn keyboard_sheet(listing: &Effective, visor: &Effective, lang: Lang) -> Vec<Hel
                 // The label can come from a user's `keymap.toml`: it is
                 // masked, and it says that it was masked (#266).
                 let label = norte_frontend::whichkey::command_label(&row.command, lang);
-                let (pintable, hostile) = norte_frontend::display_name(label.as_bytes());
+                let (paintable, hostile) = norte_frontend::display_name(label.as_bytes());
                 HelpKeyRowView {
                     chord: clamp_display(row.chord),
-                    label: clamp_display(pintable),
+                    label: clamp_display(paintable),
                     label_hostile: hostile,
                     enabled: row.avail == Availability::Here,
                     reason: clamp_display(short_unavailable_message(row.avail, lang)),

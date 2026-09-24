@@ -9,7 +9,7 @@
 //! so a late one does not land on whoever occupies that spot when it arrives.
 //!
 //! What changes compared to the TUI is the "when": there it is asked every
-//! frame; here, after every actor message (`sondear_previews`), which is the
+//! frame; here, after every actor message (`probe_previews`), which is the
 //! closest thing to a frame a host that only speaks when something changes
 //! has.
 
@@ -102,7 +102,7 @@ impl State {
     /// Sets every placed preview slot to show whatever it should: a note,
     /// right away; a file, requesting it if it is not the one already shown
     /// nor the one already in flight. Returns a snapshot if any note changed.
-    pub(super) fn sondear_previews(
+    pub(super) fn probe_previews(
         &mut self,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
@@ -288,7 +288,7 @@ impl State {
             let listing = SlotId(self.active());
             self.roles
                 .set(norte_frontend::layout::RoleId::Active, listing);
-            self.reconcilia_roles();
+            self.reconciles_roles();
             let change = ViewChange::Layout(self.layout());
             return Some((self.applied(), vec![self.parche(vec![change])]));
         }
@@ -405,8 +405,8 @@ impl State {
             EffectVisor::Page(n) => v.scroll_down(steps(n).saturating_mul(height)),
             EffectVisor::Column(n) if n < 0 => v.scroll_left(steps(n)),
             EffectVisor::Column(n) => v.scroll_right(steps(n)),
-            EffectVisor::Extremo { al_final: false } => v.scroll_top(),
-            EffectVisor::Extremo { al_final: true } => v.scroll_bottom(),
+            EffectVisor::End { al_final: false } => v.scroll_top(),
+            EffectVisor::End { al_final: true } => v.scroll_bottom(),
             EffectVisor::Hex => v.toggle_hex(),
             EffectVisor::Encoding => v.cycle_encoding(),
             EffectVisor::EncodingAuto => v.reset_encoding(),
@@ -423,7 +423,7 @@ impl State {
         slot: u32,
         delta: i64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.oculto(slot) {
+        if self.hidden(slot) {
             return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let Some(v) = self.previews.get_mut(&slot).and_then(|e| e.viewer.as_mut()) else {

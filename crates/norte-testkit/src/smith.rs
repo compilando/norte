@@ -929,13 +929,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn crc32_vectores_conocidos() {
+    fn crc32_vectores_known() {
         assert_eq!(crc32(b""), 0);
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     }
 
     #[test]
-    fn zip_estructura_coherente() {
+    fn zip_structure_coherente() {
         let z = ZipSmith::new()
             .file(b"a.txt", b"hola")
             .file_utf8("ñ.txt".as_bytes(), "eñe".as_bytes())
@@ -952,14 +952,14 @@ mod tests {
     }
 
     #[test]
-    fn zip_eocd_mentiroso() {
+    fn zip_eocd_lying() {
         let z = ZipSmith::new().file(b"x", b"").build_lying_eocd(60_000);
         let eocd = &z[z.len() - 22..];
         assert_eq!(u16::from_le_bytes([eocd[10], eocd[11]]), 60_000);
     }
 
     #[test]
-    fn zip64_estructura_coherente() {
+    fn zip64_structure_coherente() {
         let z = ZipSmith::new().file(b"a", b"data").build_zip64();
         // Final EOCD with MARKERS.
         let eocd = &z[z.len() - 22..];
@@ -1017,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn tar_estructura_coherente() {
+    fn tar_structure_coherente() {
         let t = TarSmith::new()
             .file(b"docs/x.bin", &[0xFF; 700])
             .symlink(b"lnk", b"docs/x.bin")
@@ -1103,7 +1103,7 @@ mod tests {
     }
 
     #[test]
-    fn vint_codifica_multibyte() {
+    fn vint_encodes_multibyte() {
         assert_eq!(vint(0), vec![0x00]);
         assert_eq!(vint(0x7f), vec![0x7f]);
         assert_eq!(vint(0x80), vec![0x80, 0x01]);

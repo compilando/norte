@@ -251,7 +251,7 @@ impl Extensions {
     /// know WHICH of the lines paints differently from what it says, and
     /// that line is exactly the one a hostile manifest writes to look like
     /// another capability.
-    pub(crate) fn concesion(&self, id: &str) -> Option<Grant> {
+    pub(crate) fn grant(&self, id: &str) -> Option<Grant> {
         let p = self.catalog.iter().find(|p| p.id == id)?;
         Some(Grant {
             name: third_party_text(&p.name),
@@ -382,7 +382,7 @@ impl Extensions {
     }
 
     /// `true` if the detail card's edit buffer is open.
-    pub(crate) fn editando(&self) -> bool {
+    pub(crate) fn editing(&self) -> bool {
         self.detail.as_ref().is_some_and(|f| f.state.is_editing())
     }
 

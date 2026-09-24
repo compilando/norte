@@ -66,8 +66,8 @@ pub fn for_node(id: NodeId) -> DirAnchor {
 /// because [`for_node`] never produces one, and failing closed is correct
 /// here —the anchor exists to authorize, not to dispense—.
 #[must_use]
-pub fn home(esperada: &DirAnchor, id: NodeId) -> bool {
-    for_node(id) == *esperada
+pub fn home(expected: &DirAnchor, id: NodeId) -> bool {
+    for_node(id) == *expected
 }
 
 /// The anchors of the directories a client has LISTED, with a cap and

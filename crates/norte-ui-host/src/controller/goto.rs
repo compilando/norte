@@ -32,7 +32,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let sources = self.fuentes_de_ir_a();
+        let sources = self.go_to_sources();
         // Reopening while the screen is already open (from a menu, say)
         // closes the previous one properly: its question to the index is
         // aborted instead of continuing to spend a provider on a query that
@@ -66,7 +66,7 @@ impl State {
 
     /// The SYNCHRONOUS sources: what this window already has in memory.
     /// Connections start empty and fill in once the daemon answers.
-    fn fuentes_de_ir_a(&self) -> Vec<Box<dyn GotoSource + Send>> {
+    fn go_to_sources(&self) -> Vec<Box<dyn GotoSource + Send>> {
         let slot = self.slot();
         let encoding = slot.pane.name_encoding();
         let current = slot.pane.dir().clone();
@@ -309,7 +309,7 @@ impl State {
             // the catalogue, not a second dispatcher.
             Action::Command(cmd) => match effect_of(&cmd, 1) {
                 Some(effect) => self.apply_effect(effect, backend, mailbox),
-                None => self.no_implementado(&cmd),
+                None => self.no_implemented(&cmd),
             },
             Action::Nothing(reason) => (self.applied(), self.say(reason)),
         };

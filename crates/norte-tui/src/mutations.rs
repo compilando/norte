@@ -167,7 +167,7 @@ pub async fn confirm_modal(
                 .await;
         }
         Modal::ConfirmPluginUninstall { id, .. } => {
-            crate::screens::extensions::uninstall_confirmada(app, backend, &id).await;
+            crate::screens::extensions::uninstall_confirmed(app, backend, &id).await;
         }
         // A human read the count and said yes (phase 7). Runs as an undo
         // Task, with the usual progress and cancellation: what is said here
@@ -593,7 +593,7 @@ async fn checksum_verify(
         app.message = Some(t("msg-checksum-not-a-sums-file"));
         return;
     }
-    let published = crate::jobs::Publicado {
+    let published = crate::jobs::Published {
         lines: published.lines,
         asked,
         refused: published.refused,
@@ -612,7 +612,7 @@ async fn launch_checksums(
     backend: &Backend,
     work: &mut crate::jobs::InFlight,
     paths: Vec<norte_proto::VPath>,
-    publicado: Option<crate::jobs::Publicado>,
+    published: Option<crate::jobs::Published>,
 ) {
     let params = norte_proto::methods::FsChecksumParams {
         paths,
@@ -651,7 +651,7 @@ async fn launch_checksums(
             if let Some(old) = work.checksum.replace(crate::jobs::ChecksumRun {
                 handle,
                 task: observer,
-                publicado,
+                published,
             }) {
                 // Cancel the TASK, not just the wait: aborting the
                 // `JoinHandle` left the core hashing a whole ISO with

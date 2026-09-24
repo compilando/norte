@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn key_cambiada_es_mismatch() {
+    fn key_changed_es_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         let store = KnownHostsStore::at(dir.path().join("kh"));
         let registered = key();

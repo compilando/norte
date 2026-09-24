@@ -42,7 +42,7 @@ pub(super) struct RevisionIa {
     /// gesture that requested it, and it keeps the keyboard. Without this,
     /// the `y` from someone typing `yes.txt` into the quick filter would
     /// approve the whole directory's rename.
-    reconocida: bool,
+    recognized: bool,
     /// The epoch that requested it.
     epoch: u64,
 }
@@ -124,7 +124,7 @@ impl State {
     /// pair travels UTF-8 by protocol.
     pub(super) fn request_batch_template(
         &mut self,
-        siembra: Option<String>,
+        seed: Option<String>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let dir = self.slot().pane.dir().clone();
         let names: Vec<String> = self
@@ -143,7 +143,7 @@ impl State {
                 Vec::new(),
             );
         }
-        let text = siembra.unwrap_or_else(|| "[N].[E]".to_owned());
+        let text = seed.unwrap_or_else(|| "[N].[E]".to_owned());
         let id = ModalId(self.next_modal);
         self.next_modal += 1;
         let vista = DialogView {
@@ -208,15 +208,15 @@ impl State {
         names: &[String],
         template: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let text = template.trim().to_owned();
         if let Err(e) = norte_frontend::rename_pattern::check(&text, names) {
             let key = norte_frontend::rename_pattern::error_key(e);
             self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
             let mut outputs = vec![self.parche(vec![ViewChange::Status(self.status.clone())])];
-            let (_, reabierto) = self.request_batch_template(Some(text));
-            outputs.extend(reabierto);
+            let (_, reopened) = self.request_batch_template(Some(text));
+            outputs.extend(reopened);
             return outputs;
         }
         // Pairs that do NOT change are discarded, like in the TUI: an
@@ -249,7 +249,7 @@ impl State {
         let Some(pairs) = norte_frontend::rename_pairs_in(&entries, Some(&del_dir)) else {
             return self.ai_say(epoch, "msg-ai-rename-invalid-plan");
         };
-        self.open_revision(epoch, dir, entries, pairs, backend, buzon)
+        self.open_revision(epoch, dir, entries, pairs, backend, mailbox)
     }
 
     /// A RENAMER row from the palette (C3, ADR 0095): asks the plugin for
@@ -261,10 +261,10 @@ impl State {
         &mut self,
         key: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some((id, renamer)) = norte_frontend::palette::parse_renamer_key(key) else {
-            return self.no_implementado(key);
+            return self.no_implemented(key);
         };
         if self.effects == crate::commands::Effects::SoloRead {
             // The plan ends in a rename: a window with no effects does not
@@ -300,7 +300,7 @@ impl State {
             .collect();
         self.ai_in_flight = Some((epoch, dir.clone(), del_dir));
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let (id, renamer) = (id.to_owned(), renamer.to_owned());
         tokio::spawn(async move {
             let res = (tokio::time::timeout(
@@ -309,7 +309,7 @@ impl State {
             )
             .await)
                 .unwrap_or(Err(Error::ProviderUnavailable { retryable: true }));
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::PlanIa(
                     epoch,
                     Box::new(res),
@@ -329,7 +329,7 @@ impl State {
         dir: VPath,
         instruction: String,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         if instruction.trim().is_empty() {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
@@ -382,7 +382,7 @@ impl State {
             .filter_map(|s| String::from_utf8(s.as_bytes().to_vec()).ok())
             .collect();
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = (tokio::time::timeout(
                 DEADLINE_IA,
@@ -390,7 +390,7 @@ impl State {
             )
             .await)
                 .unwrap_or(Err(Error::ProviderUnavailable { retryable: true }));
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::PlanIa(
                     epoch,
                     Box::new(res),
@@ -423,7 +423,7 @@ impl State {
         epoch: u64,
         res: Result<norte_proto::methods::AiRenamePlanResult, Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         // The IN-FLIGHT request has to be this one. A plan from a different
         // epoch is one the reader abandoned, and opening it is the
@@ -468,7 +468,7 @@ impl State {
         let Some(pairs) = norte_frontend::rename_pairs_in(&plan.entries, Some(&names)) else {
             return self.ai_say(epoch, "msg-ai-rename-invalid-plan");
         };
-        self.open_revision(epoch, dir, plan.entries, pairs, backend, buzon)
+        self.open_revision(epoch, dir, plan.entries, pairs, backend, mailbox)
     }
 
     /// Opens the review of a plan — the model's or a template's (#310) — and
@@ -484,10 +484,10 @@ impl State {
         entries: Vec<norte_proto::methods::AiRenameEntry>,
         pairs: Vec<norte_proto::methods::RenamePair>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let b = Arc::clone(backend);
-        let buz = buzon.clone();
+        let buz = mailbox.clone();
         let d = dir.clone();
         let p = pairs.clone();
         tokio::spawn(async move {
@@ -506,7 +506,7 @@ impl State {
             plan: norte_frontend::BatchPlan::Pending,
             first: 0,
             seen_until: norte_frontend::AI_RENAME_PAIR_LIMIT,
-            reconocida: false,
+            recognized: false,
             epoch,
         });
         let change = ViewChange::AiRename {
@@ -553,9 +553,9 @@ impl State {
     pub(super) fn vista_ia(&self) -> Option<crate::dto::AiRenameView> {
         let r = self.revision_ia.as_ref()?;
         let line = |text: &str| {
-            let (pintable, hostile) = norte_frontend::display_name(text.as_bytes());
+            let (paintable, hostile) = norte_frontend::display_name(text.as_bytes());
             crate::dto::DialogLine {
-                text: clamp_display(pintable),
+                text: clamp_display(paintable),
                 hostile,
             }
         };
@@ -640,7 +640,7 @@ impl State {
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // A chord WITH a modifier is not an answer to this screen: it is a
         // key meant for somewhere else. `key_in_quick` refuses them for
@@ -662,10 +662,10 @@ impl State {
         // acknowledgment: discarding is safe in both states, and whoever
         // does not want this has to be able to shrug it off on the first
         // try.
-        let reconocida = self.revision_ia.as_ref().is_some_and(|r| r.reconocida);
-        if !reconocida && k.key != "Escape" && k.key != "esc" {
+        let recognized = self.revision_ia.as_ref().is_some_and(|r| r.recognized);
+        if !recognized && k.key != "Escape" && k.key != "esc" {
             if let Some(r) = self.revision_ia.as_mut() {
-                r.reconocida = true;
+                r.recognized = true;
             }
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
@@ -721,7 +721,7 @@ impl State {
             // the second one approving a batch rename is not. What is left
             // is `y` — which acknowledgment protects — and the button, a
             // gesture that cannot be confused with anything else.
-            "y" | "Y" => return self.approve_revision_ia(backend, buzon),
+            "y" | "Y" => return self.approve_revision_ia(backend, mailbox),
             _ => {
                 return (
                     ActionAck::Unavailable {
@@ -745,16 +745,16 @@ impl State {
         &mut self,
         approve: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.revision_ia.is_none() {
             return (Self::stale(StaleAction::Modal), Vec::new());
         }
         if let Some(r) = self.revision_ia.as_mut() {
-            r.reconocida = true;
+            r.recognized = true;
         }
         if approve {
-            self.approve_revision_ia(backend, buzon)
+            self.approve_revision_ia(backend, mailbox)
         } else {
             self.close_revision_ia()
         }
@@ -785,7 +785,7 @@ impl State {
     pub(super) fn approve_revision_ia(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(r) = self.revision_ia.as_ref() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -818,12 +818,12 @@ impl State {
             );
         };
         let (dir, pairs, hash) = (r.dir.clone(), r.pairs.clone(), plan.plan_hash.clone());
-        let afectados = vec![dir.clone()];
+        let affected = vec![dir.clone()];
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
+        let buzon2 = mailbox.clone();
         tokio::spawn(async move {
             let message = match backend2.rename_batch(dir, pairs, hash).await {
-                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Ok(task) => Message::TaskNew(Box::new((task, affected, None))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
             let _ = buzon2.send(message).await;
@@ -890,10 +890,10 @@ impl State {
         // `CAFÉ.TXT`. For a name still not representable that carries a
         // U+FFFD, and that residue is exactly what the confirmation's guard
         // does not let through.
-        let (pintable, hostile) =
+        let (paintable, hostile) =
             norte_frontend::display_name_with(name.as_bytes(), slot.pane.name_encoding());
-        let siembra = clamp_display(pintable.clone());
-        if siembra != pintable {
+        let seed = clamp_display(paintable.clone());
+        if seed != paintable {
             // Trimming tacks an ellipsis onto the end, and `…` is a LEGAL
             // character in a name: neither masked nor flagged. Editing that
             // field and confirming would write the trim to disk as part of
@@ -934,7 +934,7 @@ impl State {
                     destructive: false,
                 },
             ],
-            input: Some(siembra.clone()),
+            input: Some(seed.clone()),
             input_hostile: hostile,
             input_secret: false,
             fields: Vec::new(),
@@ -946,9 +946,9 @@ impl State {
             // The raw value starts the SAME as the seed: that is what makes
             // it possible to recognize "has not touched it" without
             // carrying a separate flag.
-            typed: Typed::Text(siembra.clone()),
+            typed: Typed::Text(seed.clone()),
             recognized: true,
-            on_confirm: Some(Pending::Rename { from, siembra }),
+            on_confirm: Some(Pending::Rename { from, seed }),
         });
         let change = ViewChange::Dialogs {
             dialogs: self.dialog_views(),
@@ -981,10 +981,10 @@ impl State {
     /// - **The same name in the same place** is not an operation.
     pub(super) fn bytes_del_rename(
         from: &VPath,
-        siembra: &str,
+        seed: &str,
         written: &str,
     ) -> Result<VPath, &'static str> {
-        let bytes = if written == siembra {
+        let bytes = if written == seed {
             from.file_name()
                 .map(|n| n.as_bytes().to_vec())
                 .unwrap_or_default()

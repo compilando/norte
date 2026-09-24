@@ -91,7 +91,7 @@ mod tests {
 
     /// A panel that LOOKS at the active listing: the docked viewer and the
     /// attribute sheet. Without the binding they are empty boxes.
-    fn siguiendo(id: SlotId, kind: &str) -> Node {
+    fn following(id: SlotId, kind: &str) -> Node {
         Node::slot_bound(
             id,
             KindId::new(kind),
@@ -119,7 +119,7 @@ mod tests {
         Node::slot(PROCESSES, KindId::new("processes"))
     }
 
-    fn esperado(name: &str) -> Node {
+    fn expected(name: &str) -> Node {
         match name {
             "orthodox" => with_chrome(
                 Node::split(Dir::Horizontal, vec![browser(LEFT), browser(RIGHT)]),
@@ -149,7 +149,7 @@ mod tests {
                     children: vec![
                         Node::slot(PLACES, KindId::new("places")),
                         browser(LEFT),
-                        siguiendo(PREVIEW, "viewer"),
+                        following(PREVIEW, "viewer"),
                     ],
                     sizes: vec![Size::Fixed(16), Size::Weight(1), Size::Weight(1)],
                 },
@@ -166,8 +166,8 @@ mod tests {
                         Node::split(
                             Dir::Vertical,
                             vec![
-                                siguiendo(PREVIEW, "viewer"),
-                                siguiendo(METADATA, "metadata"),
+                                following(PREVIEW, "viewer"),
+                                following(METADATA, "metadata"),
                             ],
                         ),
                     ],
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn the_five_files_are_the_five_trees() {
         for name in NAMES {
-            let want = to_toml(&esperado(name)).expect("serializes");
+            let want = to_toml(&expected(name)).expect("serializes");
             if std::env::var_os("NORTE_UPDATE_GOLDEN").is_some() {
                 std::fs::write(path(name), &want).expect("writes");
             }
@@ -213,7 +213,7 @@ mod tests {
     #[test]
     fn all_five_parse_into_what_they_claim_to_be() {
         for name in NAMES {
-            assert_eq!(tree(name).expect(name), esperado(name), "{name}");
+            assert_eq!(tree(name).expect(name), expected(name), "{name}");
         }
     }
 

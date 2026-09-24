@@ -208,7 +208,7 @@ pub enum Modal {
         irreversible: usize,
         /// How many above the cut are NOT the reader's, and that this undo
         /// therefore doesn't touch.
-        ajenas: usize,
+        foreign: usize,
         /// The ceiling (`upto_seq`, 0.80.0): the newest thing this count
         /// counted. The undo doesn't go past it, so anything done after the
         /// list got painted doesn't get in without being counted.

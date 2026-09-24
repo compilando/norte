@@ -495,9 +495,9 @@ fn profile_start_seeds_a_slot_without_a_session() {
     app.apply_session_value(norte_frontend::session::SCHEMA_VERSION, &body.to_value());
     let start = std::collections::BTreeMap::from([(1, vp("file:///fotos"))]);
 
-    let sembrados = app.seed_profile_start(&start);
+    let seeded = app.seed_profile_start(&start);
 
-    assert_eq!(sembrados, vec![SlotId(1)]);
+    assert_eq!(seeded, vec![SlotId(1)]);
     assert_eq!(
         app.panes
             .browser(SlotId(1))

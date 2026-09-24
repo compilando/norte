@@ -28,7 +28,7 @@ pub async fn launch(app: &mut App, backend: &Backend, work: &mut InFlight) {
     if let Some(m) = app.panes.disk_map_mut(slot)
         && m.dir() != Some(&dir)
     {
-        m.apuntar(dir.clone());
+        m.aim(dir.clone());
     }
     let params = norte_proto::methods::FsDirUsageParams {
         path: dir.clone(),

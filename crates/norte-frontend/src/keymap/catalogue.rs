@@ -601,7 +601,7 @@ mod tests {
     /// A duplicated name would make `lookup` order-dependent, and the table is
     /// hand-maintained: pin it.
     #[test]
-    fn no_hay_names_duplicados() {
+    fn no_hay_names_duplicates() {
         let mut names: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
         names.sort_unstable();
         let before = names.len();

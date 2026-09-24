@@ -139,7 +139,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // that stopped being one (see there for why it is one-directional).
     //
     // The placement loop (T4, `event_loop.rs`) does not need to look at
-    // `modo` on its own: `ui::imagen_a_colocar` only sees something to
+    // `modo` on its own: `ui::image_to_place` only sees something to
     // place while `App::viewer_imagen` stays alive, and `reload_config`
     // already drops it the moment the mode stops being `Kitty` — a single
     // cut point instead of a check repeated every frame.
@@ -192,7 +192,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // UNDER the pixels or flicker as it alternates with them every frame.
     // The frame, the title and the scrollbars below keep painting the same
     // — none of this changes because an image is placed.
-    // Branch review, finding 2: `imagen_a_colocar` (not a check separate
+    // Branch review, finding 2: `image_to_place` (not a check separate
     // from the `path`) is the SAME function the run loop uses to decide
     // whether to place pixels — this line used to only look at `path`, and
     // the run loop additionally added `!something_above_the_viewer` and that the
@@ -200,7 +200,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // screen (the menu, which-key…) this painter used to blank the slot as
     // always while the run loop refused to place pixels over it: neither
     // image nor hexview.
-    let has_image = super::imagen_a_colocar(app, frame.area()).is_some();
+    let has_image = super::image_to_place(app, frame.area()).is_some();
 
     // #29/G3a (ADR 0037): a plugin preview carries color, either through
     // sanitized ANSI-SGR (`fg` only) or through structured WIT (`role`
@@ -701,14 +701,14 @@ pub fn tree_zones(app: &App, area: Rect) -> Vec<TreeZone> {
             let index = offset.checked_add(row)?;
             let the_row = rows.get(index)?;
             // `  ` per level, then the mark: the same mold as `draw_tree`.
-            let sangria = u16::try_from(the_row.depth.saturating_mul(2)).unwrap_or(u16::MAX);
+            let indent = u16::try_from(the_row.depth.saturating_mul(2)).unwrap_or(u16::MAX);
             Some(TreeZone {
                 row: inner
                     .y
                     .saturating_add(u16::try_from(row).unwrap_or(u16::MAX)),
                 x0: inner.x,
                 x1: inner.x.saturating_add(inner.width).saturating_sub(1),
-                mark_x: inner.x.saturating_add(sangria),
+                mark_x: inner.x.saturating_add(indent),
                 index,
             })
         })
@@ -977,13 +977,13 @@ pub(crate) fn draw_processes(
             // anything, so going one over does not break the paint: it eats
             // the trailing `✓`, which is exactly the fact the row exists to
             // give.
-            let fijo = 1
+            let fixed = 1
                 + 4
                 + kind.chars().count()
                 + 10
                 + state_txt.chars().count()
                 + measured.chars().count();
-            let slot = usize::from(inner.width).saturating_sub(fijo);
+            let slot = usize::from(inner.width).saturating_sub(fixed);
             let operating = operand_text(row, app, slot);
             let mark = if i == cursor { '▶' } else { ' ' };
             let header = if operating.is_empty() {
@@ -1117,8 +1117,8 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // Same as the panel: the class and the operand, not the id. The
             // strip used to say " copy #7318349021 45% ", which is the same
             // line for any copy of anything.
-            let fijo = 1 + kind.chars().count() + 2 + state.chars().count();
-            let slot = usize::from(area.width).saturating_sub(fijo);
+            let fixed = 1 + kind.chars().count() + 2 + state.chars().count();
+            let slot = usize::from(area.width).saturating_sub(fixed);
             let operating = operand_text(row, app, slot);
             let head = if operating.is_empty() {
                 Span::raw(format!(" {kind} "))
@@ -1202,7 +1202,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
         Role::BorderUnfocused
     };
     let panel = &app.log_panel;
-    let source = crate::logview::source_efectiva(app);
+    let source = crate::logview::source_effective(app);
     // The title says the level, the SOURCE and the filter: without that, a
     // panel that looks empty cannot tell "nothing has happened" apart from
     // "you are filtering it out" or from "you are looking at the other
@@ -1270,7 +1270,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
         // same ring is promising something that does not exist. It is the
         // same rule as in the window, where the selector simply is not
         // painted.
-        let keys = if app.log_remote.servicio == crate::logview::Servicio::Serves {
+        let keys = if app.log_remote.service == crate::logview::Service::Serves {
             format!("{} · {}", t("log-keys"), t("log-keys-source"))
         } else {
             t("log-keys")
@@ -1310,7 +1310,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
         );
         return;
     }
-    let pintadas: Vec<Line<'_>> = visible
+    let painted: Vec<Line<'_>> = visible
         .iter()
         .skip(from)
         .take(alto)
@@ -1348,7 +1348,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
             ])
         })
         .collect();
-    frame.render_widget(Paragraph::new(pintadas), inner);
+    frame.render_widget(Paragraph::new(painted), inner);
 }
 
 /// The color of a timeline row according to WHO did it (phase 7).
@@ -1638,7 +1638,7 @@ mod draw_log_tests {
         );
 
         app.log_remote.hay_daemon = true;
-        app.log_remote.servicio = crate::logview::Servicio::Serves;
+        app.log_remote.service = crate::logview::Service::Serves;
         let con = painted(&app, 120, 8);
         assert!(
             con.contains(&norte_i18n::t("log-keys-source")),

@@ -158,20 +158,20 @@ fn the_declared_geometry_matches_the_painted_rows() {
 
     for (i, g) in geom.iter().enumerate() {
         assert!(g.list_rows > 0, "pane {i}: no listing rows");
-        let esperada = name_visible(&app, i, g.offset);
+        let expected = name_visible(&app, i, g.offset);
 
         // The first listing row carries the first visible entry.
         let first = crop(&lines, g.first_list_row, g.x, g.width);
         assert!(
-            first.contains(&esperada),
-            "pane {i}: row {} should carry {esperada:?}, carries {first:?}",
+            first.contains(&expected),
+            "pane {i}: row {} should carry {expected:?}, carries {first:?}",
             g.first_list_row
         );
 
         // The row RIGHT ABOVE is chrome (column header): never a listing.
         let header = crop(&lines, g.first_list_row - 1, g.x, g.width);
         assert!(
-            !header.contains(&esperada),
+            !header.contains(&expected),
             "pane {i}: the header cannot carry listing content: {header:?}"
         );
 
@@ -179,7 +179,7 @@ fn the_declared_geometry_matches_the_painted_rows() {
         let below = g.first_list_row + g.list_rows;
         let border = crop(&lines, below, g.x, g.width);
         assert!(
-            border.contains('─') && !border.contains(&esperada),
+            border.contains('─') && !border.contains(&expected),
             "pane {i}: row {below} should be the bottom border: {border:?}"
         );
         assert_eq!(
@@ -279,11 +279,11 @@ fn with_one_tab_open_the_geometry_still_adds_up() {
         before.list_rows - 1,
         "and takes one listing row from it"
     );
-    let esperada = name_visible(&app, 0, geom[0].offset);
+    let expected = name_visible(&app, 0, geom[0].offset);
     let row = crop(&lines, geom[0].first_list_row, geom[0].x, geom[0].width);
     assert!(
-        row.contains(&esperada),
-        "the first listing row should carry {esperada:?}, carries {row:?}"
+        row.contains(&expected),
+        "the first listing row should carry {expected:?}, carries {row:?}"
     );
 }
 
@@ -424,11 +424,11 @@ fn splitting_gives_three_panes_and_all_three_add_up() {
     let width: u32 = geom.iter().map(|g| u32::from(g.width)).sum();
     assert_eq!(width, u32::from(W), "and they add up to the whole frame");
     for (i, g) in geom.iter().enumerate() {
-        let esperada = name_visible(&app, i, g.offset);
+        let expected = name_visible(&app, i, g.offset);
         let row = crop(&lines, g.first_list_row, g.x, g.width);
         assert!(
-            row.contains(&esperada),
-            "panel {i}: row {} should carry {esperada:?}, carries {row:?}",
+            row.contains(&expected),
+            "panel {i}: row {} should carry {expected:?}, carries {row:?}",
             g.first_list_row
         );
     }
@@ -689,11 +689,11 @@ fn the_declared_geometry_matches_whats_painted_with_the_sidebar_open() {
     );
 
     for (i, g) in geom.iter().enumerate() {
-        let esperada = name_visible(&app, i, g.offset);
+        let expected = name_visible(&app, i, g.offset);
         let first = crop(&lines, g.first_list_row, g.x, g.width);
         assert!(
-            first.contains(&esperada),
-            "pane {i}: row {} should carry {esperada:?}, carries {first:?}",
+            first.contains(&expected),
+            "pane {i}: row {} should carry {expected:?}, carries {first:?}",
             g.first_list_row
         );
     }

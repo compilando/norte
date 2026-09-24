@@ -2504,7 +2504,7 @@ mod tests {
             let obs = Arc::clone(&obs);
             let p = p.clone();
             handles.push(tokio::spawn(async move {
-                obs.on_mutation(&Mutation::creado(&p), &Actor::User).await
+                obs.on_mutation(&Mutation::created(&p), &Actor::User).await
             }));
         }
         for h in handles {
@@ -2534,7 +2534,7 @@ mod tests {
             .await
             .expect("open creates the parent");
         let victim = VPath::parse("file:///a").expect("vpath");
-        j.on_mutation(&Mutation::creado(&victim), &Actor::User)
+        j.on_mutation(&Mutation::created(&victim), &Actor::User)
             .await
             .expect("on_mutation");
         assert_eq!(j.journal().count().await.expect("count"), 1);

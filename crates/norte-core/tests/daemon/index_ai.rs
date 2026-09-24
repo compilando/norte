@@ -33,7 +33,7 @@ impl norte_ai::AiProvider for FakeAi {
         // SIMULATED provider latency, not a test wait: it is what opens the
         // window in which an `rpc.cancel` arrives with the request in
         // flight. This `sleep` stays, like `norte-ui-host`'s double's
-        // `retraso_ms`.
+        // `delay_ms`.
         if let Some(d) = self.delay {
             tokio::time::sleep(d).await;
         }

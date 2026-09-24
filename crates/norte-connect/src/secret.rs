@@ -452,7 +452,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn env_key_sanitiza() {
+    fn env_key_sanitizes() {
         assert_eq!(env_key("trabajo"), "NORTE_SECRET_TRABAJO");
         assert_eq!(env_key("mi-server.1"), "NORTE_SECRET_MI_SERVER_1");
     }
@@ -755,7 +755,7 @@ mod anchor_key_tests {
     use super::decode_anchor_key;
 
     #[test]
-    fn decode_round_trip_y_rechazos() {
+    fn decode_round_trip_and_rejections() {
         let key = [0xABu8; 32];
         let hexed: String = key.iter().fold(String::new(), |mut acc, b| {
             use std::fmt::Write as _;

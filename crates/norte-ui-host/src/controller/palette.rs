@@ -150,7 +150,7 @@ impl State {
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some((id, command)) = norte_frontend::palette::parse_plugin_key(key) else {
-            return self.no_implementado(key);
+            return self.no_implemented(key);
         };
         if self.effects == crate::commands::Effects::SoloRead {
             // What a plugin command does is the plugin's decision: it can
@@ -181,7 +181,7 @@ impl State {
             let _ = mailbox2
                 .send(Message::Background(Box::new(Background::CommandOutput(
                     generation,
-                    Box::new(OutputPedida {
+                    Box::new(OutputRequested {
                         id: id3,
                         plugin: label,
                         command: title,
@@ -204,7 +204,7 @@ impl State {
         let from_catalog = self.labels_plugin.get(id);
         let name = from_catalog
             .map(|(n, _)| n.clone())
-            .or_else(|| Some(self.extensions.as_ref()?.concesion(id)?.name))
+            .or_else(|| Some(self.extensions.as_ref()?.grant(id)?.name))
             // Without a known label it falls back to the id — which the core
             // DOES validate — but through the same gate as everything else:
             // it is the daemon that sends it, not this process.

@@ -74,12 +74,12 @@ const NO_SON_COLOR: &[&str] = &[
 /// without an owner is a leak, and not having a list forces a choice between
 /// the two worse options (turning off the test, or leaving the variable
 /// unwritten).
-const HUERFANAS_CONOCIDAS: &[&str] = &[];
+const ORPHANED_KNOWN: &[&str] = &[];
 
 /// Names the agreement has and the sheet does not SPEND yet. **Empty**: since
 /// task 7 of the `2026-09-11-vscode-theme.md` plan none is left, and the
 /// guard's two directions are alive with no exception beyond geometry. Stays
-/// for the same reason as `HUERFANAS_CONOCIDAS`: the mechanism has to exist
+/// for the same reason as `ORPHANED_KNOWN`: the mechanism has to exist
 /// for the next one that arrives with an owner and a date.
 const PENDING_TO_SPEND: &[&str] = &[];
 
@@ -116,7 +116,7 @@ fn sheet_variables() -> BTreeSet<String> {
 /// them — asking a specific theme would have read that silence as "nobody
 /// feeds that variable" and would have declared as orphans the nine the spec
 /// had just added.
-fn acordadas() -> BTreeSet<String> {
+fn agreed() -> BTreeSet<String> {
     norte_ui_host::pickers::theme_names()
         .into_iter()
         .map(str::to_owned)
@@ -125,25 +125,25 @@ fn acordadas() -> BTreeSet<String> {
 
 #[test]
 fn every_color_variable_is_fed_by_the_theme() {
-    let acordadas = acordadas();
-    let huerfanas: Vec<String> = sheet_variables()
+    let agreed = agreed();
+    let orphaned: Vec<String> = sheet_variables()
         .into_iter()
-        .filter(|v| !acordadas.contains(v))
+        .filter(|v| !agreed.contains(v))
         .filter(|v| !NO_SON_COLOR.contains(&v.as_str()))
-        .filter(|v| !HUERFANAS_CONOCIDAS.contains(&v.as_str()))
+        .filter(|v| !ORPHANED_KNOWN.contains(&v.as_str()))
         .collect();
     assert!(
-        huerfanas.is_empty(),
-        "color variables nobody feeds: {huerfanas:?}"
+        orphaned.is_empty(),
+        "color variables nobody feeds: {orphaned:?}"
     );
 }
 
 #[test]
 fn every_agreed_color_is_spent_by_the_sheet() {
-    let usadas = sheet_variables();
-    let unspent: Vec<String> = acordadas()
+    let used = sheet_variables();
+    let unspent: Vec<String> = agreed()
         .into_iter()
-        .filter(|k| !usadas.contains(k))
+        .filter(|k| !used.contains(k))
         .filter(|k| !PENDING_TO_SPEND.contains(&k.as_str()))
         .collect();
     assert!(

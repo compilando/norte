@@ -297,7 +297,7 @@ pub(super) async fn next_extensions(
 }
 
 /// Waits until the catalogue has arrived (stops loading).
-pub(super) async fn extensions_cargadas(
+pub(super) async fn extensions_loaded(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::dto::ExtensionsView {
     for _ in 0..20 {
@@ -344,7 +344,7 @@ async fn the_manager_shows_whats_installed_and_its_status() {
          reads as \"you have none\""
     );
 
-    let v = extensions_cargadas(&mut sub).await;
+    let v = extensions_loaded(&mut sub).await;
     assert_eq!(v.rows.len(), 2);
     assert_eq!(v.rows[0].id, "acme.ftp");
     assert!(v.rows[0].approved && v.rows[0].enabled);
@@ -381,7 +381,7 @@ async fn the_card_shows_the_schema_with_its_effective_value() {
     let (h, _snap) = host_tree(std::sync::Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
 
     h.dispatch(press("Enter")).await.expect("host alive");
     let mut card = None;
@@ -421,7 +421,7 @@ async fn moving_drops_the_card() {
     let (h, _snap) = host_tree(backend).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     h.dispatch(press("Enter")).await.expect("host alive");
     for _ in 0..20 {
         let Some(v) = next_extensions(&mut sub).await else {
@@ -451,7 +451,7 @@ async fn the_first_esc_closes_the_card_and_the_second_the_manager() {
     let (h, _snap) = host_tree(backend).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     h.dispatch(press("Enter")).await.expect("host alive");
     for _ in 0..20 {
         let Some(v) = next_extensions(&mut sub).await else {
@@ -496,7 +496,7 @@ async fn the_approve_button_opens_the_same_question_as_the_key() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
 
     h.dispatch(UiAction::ExtensionGovern {
         row: 1,
@@ -546,7 +546,7 @@ async fn the_approve_button_opens_the_same_question_as_the_key() {
     })
     .await
     .expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     assert_eq!(
         backend.governance.lock().expect("gobierno").as_slice(),
         ["approval:org.norte.demo:true:digest-de-org.norte.demo"]
@@ -561,7 +561,7 @@ async fn uninstalling_asks_and_only_yes_deletes() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
 
     // The key (`d` is `dialog.remove` in orthodox): asks.
     h.dispatch(press("d")).await.expect("host alive");
@@ -652,7 +652,7 @@ async fn a_broken_extension_is_shown_and_only_uninstalls() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let v = extensions_cargadas(&mut sub).await;
+    let v = extensions_loaded(&mut sub).await;
     // The id only when the name is one: it is what the renderer needs to
     // offer the button, and what the host looks at before asking.
     assert_eq!(
@@ -726,7 +726,7 @@ async fn enabling_an_unapproved_one_via_button_is_refused() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     let ack = h
         .dispatch(UiAction::ExtensionGovern {
             row: 1,
@@ -769,7 +769,7 @@ async fn the_help_button_opens_that_extensions_page() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
 
     // With no page, nothing opens, and it is said.
     let ack = h
@@ -820,7 +820,7 @@ async fn an_extensions_text_arrives_masked() {
     let (h, _snap) = host_tree(backend).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let v = extensions_cargadas(&mut sub).await;
+    let v = extensions_loaded(&mut sub).await;
 
     assert_eq!(
         v.rows.len(),
@@ -873,7 +873,7 @@ async fn a_plugin_keys_value_arrives_masked_and_marked() {
     let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     h.dispatch(press("Enter")).await.expect("host alive");
 
     let mut card = None;
@@ -1009,7 +1009,7 @@ async fn the_theme_shows_from_inside_and_says_what_it_does_not_paint() {
         effects: vec!["crt".to_owned(), "scanlines".to_owned()],
         resolved: norte_theme::Theme::default(),
         variant_clara: None,
-        variant_oscura: None,
+        variant_dark: None,
     })
     .await;
     let mut sub = h.subscribe();
@@ -1042,7 +1042,7 @@ async fn a_theme_with_no_effects_says_nothing_about_them() {
         effects: Vec::new(),
         resolved: norte_theme::Theme::default(),
         variant_clara: None,
-        variant_oscura: None,
+        variant_dark: None,
     })
     .await;
     let mut sub = h.subscribe();

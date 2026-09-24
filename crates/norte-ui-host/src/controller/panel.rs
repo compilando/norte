@@ -131,7 +131,7 @@ impl State {
             );
         };
         self.roles.set(RoleId::Active, SlotId(id));
-        self.reconcilia_roles();
+        self.reconciles_roles();
         // The tree follows the active panel, and which one that is just
         // changed. It goes through a SNAPSHOT because the tree has no
         // `ViewChange` of its own: it travels whole or not at all, and a tree
@@ -274,7 +274,7 @@ impl State {
             .slots
             .keys()
             .copied()
-            .filter(|id| *id != active && !self.oculto(*id))
+            .filter(|id| *id != active && !self.hidden(*id))
             .collect();
         let current = self.roles.get(RoleId::Target).map(|SlotId(id)| id);
         let next = match current.and_then(|a| candidates.iter().position(|c| *c == a)) {
@@ -305,7 +305,7 @@ impl State {
         column: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         use norte_frontend::columns::{ColumnId, sort_column_id};
-        if !self.slots.contains_key(&slot_id) || self.oculto(slot_id) {
+        if !self.slots.contains_key(&slot_id) || self.hidden(slot_id) {
             return (Self::stale(StaleAction::Generation), Vec::new());
         }
         // The ones for this slot's SCHEME, not only the painted ones: the fit
@@ -537,7 +537,7 @@ impl State {
         cells: u16,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if !self.slots.contains_key(&slot_id) || self.oculto(slot_id) {
+        if !self.slots.contains_key(&slot_id) || self.hidden(slot_id) {
             return (Self::stale(StaleAction::Generation), Vec::new());
         }
         // Against the FIT, not against what is configured (ADR 0124): a drag
@@ -586,7 +586,7 @@ impl State {
                 Ok(_) => None,
                 Err(e) => Some(io_key(&e)),
             };
-            let _ = mailbox.blocking_send(Message::WidthPersistido(key));
+            let _ = mailbox.blocking_send(Message::WidthPersisted(key));
         });
     }
 

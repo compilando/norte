@@ -35,7 +35,7 @@ pub(super) struct SettingWritten {
 /// It carries the `id` because the message depends on what the row says AFTER
 /// rereading: removing the key from your layer does not return the factory
 /// value if the profile or the project set the same one.
-pub(super) struct SettingRestablecido {
+pub(super) struct SettingRestored {
     /// The entry's name, already translated, for the message.
     pub(super) name: String,
     /// Its catalogue id (`ui.theme`), to find the row again.
@@ -272,9 +272,9 @@ impl State {
                 Err(e) => Err(io_key(&e)),
                 Ok(_) => Ok(norte_frontend::config::load(&layers).ok()),
             };
-            let done = SettingRestablecido { name, id, result };
+            let done = SettingRestored { name, id, result };
             let _ = mailbox.blocking_send(Message::Background(Box::new(
-                Background::SettingRestablecido(Box::new(done)),
+                Background::SettingRestored(Box::new(done)),
             )));
         });
         (self.applied(), Vec::new())
@@ -282,13 +282,13 @@ impl State {
 
     /// The key is no longer there (or could not be removed): what was reread
     /// is applied and what really happened is said.
-    pub(super) fn setting_restablecido(
+    pub(super) fn setting_restored(
         &mut self,
-        done: SettingRestablecido,
+        done: SettingRestored,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let SettingRestablecido { name, id, result } = done;
+        let SettingRestored { name, id, result } = done;
         let cfg = match result {
             Err(key) => return self.say(key),
             Ok(cfg) => cfg,
@@ -305,7 +305,7 @@ impl State {
         let still_set = self
             .settings
             .as_ref()
-            .is_some_and(|a| a.follows_modificada(id));
+            .is_some_and(|a| a.follows_modified(id));
         let key = if still_set {
             "settings-still-set-elsewhere"
         } else {
@@ -386,8 +386,8 @@ impl State {
         };
         let themes = norte_frontend::theme::theme_names(&self.config.user_themes);
         match settings.activate(&themes, norte_frontend::keymap::presets::NAMES) {
-            crate::settings::Activacion::Nothing => (self.applied(), Vec::new()),
-            crate::settings::Activacion::Write(write) => {
+            crate::settings::Activation::Nothing => (self.applied(), Vec::new()),
+            crate::settings::Activation::Write(write) => {
                 let change = ViewChange::Settings {
                     settings: self.vista_settings(),
                 };
@@ -404,7 +404,7 @@ impl State {
                     None => (self.applied(), outgoing),
                 }
             }
-            crate::settings::Activacion::RequestText { name, actual, id } => {
+            crate::settings::Activation::RequestText { name, actual, id } => {
                 self.request_setting_value(&name, actual, id)
             }
         }

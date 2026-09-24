@@ -78,7 +78,7 @@ pub struct TimelineRow {
     /// the HUMAN who ran the undo and with a real reversal, so without this a
     /// timeline would count it as undoable — and after undoing five things it
     /// would promise ten and do zero.
-    pub ya_desecho: bool,
+    pub ya_discard: bool,
     /// [`Self::path`]'s text is painted differently from what the stored
     /// bytes say: the server had to mask something. It is flagged on the row,
     /// like on every decision surface.
@@ -107,7 +107,7 @@ impl TimelineRow {
     /// confirmation promise twice what was actually going to happen.
     #[must_use]
     pub fn will_undo(&self) -> bool {
-        self.is_from_human() && self.reversible && !self.ya_desecho
+        self.is_from_human() && self.reversible && !self.ya_discard
     }
 }
 
@@ -131,7 +131,7 @@ pub struct Cutoff {
     /// their own path — and that is why they are counted apart instead of
     /// added to the others: a number that mixed the three would promise
     /// something that is not going to happen.
-    pub ajenas: usize,
+    pub foreign: usize,
 }
 
 impl Cutoff {
@@ -255,7 +255,7 @@ impl Timeline {
         let mut summary = Cutoff::default();
         for row in self.rows.iter().take(self.cursor) {
             if !row.is_from_human() {
-                summary.ajenas += row.members;
+                summary.foreign += row.members;
             } else if row.will_undo() {
                 summary.to_undo += row.members;
             } else {
@@ -320,7 +320,7 @@ fn group(rows: &[JournalRow]) -> Vec<TimelineRow> {
             // undone whole or not touched. And it is enough for one of them
             // to already be undone for undo to skip it.
             row.reversible = row.reversible && r.reversible;
-            row.ya_desecho = row.ya_desecho || r.undone || r.undoes_seq.is_some();
+            row.ya_discard = row.ya_discard || r.undone || r.undoes_seq.is_some();
             continue;
         }
         out.push(TimelineRow {
@@ -334,7 +334,7 @@ fn group(rows: &[JournalRow]) -> Vec<TimelineRow> {
             reversible: r.reversible,
             // A compensation is a mutation that happened and is shown, but
             // undo does not undo it again: it counts as already undone.
-            ya_desecho: r.undone || r.undoes_seq.is_some(),
+            ya_discard: r.undone || r.undoes_seq.is_some(),
             hostile: r.hostile,
             members: 1,
             batch_id: r.batch_id,
@@ -350,7 +350,7 @@ fn fuse(new: TimelineRow, old: &TimelineRow) -> TimelineRow {
     TimelineRow {
         members: new.members + old.members,
         reversible: new.reversible && old.reversible,
-        ya_desecho: new.ya_desecho || old.ya_desecho,
+        ya_discard: new.ya_discard || old.ya_discard,
         hostile: new.hostile || old.hostile,
         ..new
     }
@@ -442,7 +442,7 @@ mod tests {
         let c = t.summary();
         assert_eq!(c.to_undo, 3, "the lone one above and the two in the batch");
         assert_eq!(c.irreversible, 1);
-        assert_eq!(c.ajenas, 1, "the agent's is not touched by this undo");
+        assert_eq!(c.foreign, 1, "the agent's is not touched by this undo");
     }
 
     /// **Neither a compensation nor an already-undone entry counts as

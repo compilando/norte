@@ -120,7 +120,7 @@ pub fn rewind_for(outcome: &Cd) -> Rewind {
         // trail — not even its own — and there is nothing of its own to
         // rewind. The one who walks the trail is the pane the reader moved,
         // and it is that pane's failure that has to give the step back.
-        Cd::Espejado { reader, .. } => rewind_for(reader),
+        Cd::Mirrored { reader, .. } => rewind_for(reader),
     }
 }
 

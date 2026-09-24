@@ -16,7 +16,7 @@ use std::collections::BTreeSet;
 ///
 /// `main.ts` too: it calls `screen.t(...)`, and looking only at `render.ts`
 /// left out everything painted from startup.
-const FUENTES: &[(&str, &str)] = &[
+const SOURCES: &[(&str, &str)] = &[
     ("render.ts", include_str!("../ui/src/render.ts")),
     ("main.ts", include_str!("../ui/src/main.ts")),
 ];
@@ -27,19 +27,19 @@ const FUENTES: &[(&str, &str)] = &[
 /// not see the free function `tr(...)` nor the templates. `task-foreign`
 /// slipped through there, which exists in no catalogue and which this test
 /// used to call green.
-const LLAMADAS: &[&str] = &["this.t(", "screen.t(", "tr("];
+const CALLS: &[&str] = &["this.t(", "screen.t(", "tr("];
 
 /// The keys the renderer asks the catalogue for.
 ///
 /// A call site whose argument is NOT a literal is required to be registered
-/// in [`COMPUESTAS`]: silently ignoring it is what let the templates through.
-fn keys_pedidas() -> BTreeSet<String> {
+/// in [`COMPOSED`]: silently ignoring it is what let the templates through.
+fn keys_requested() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    for (name, source) in FUENTES {
-        for llamada in LLAMADAS {
+    for (name, source) in SOURCES {
+        for call in CALLS {
             let mut from = 0usize;
-            while let Some(i) = source[from..].find(llamada) {
-                let start = from + i + llamada.len();
+            while let Some(i) = source[from..].find(call) {
+                let start = from + i + call.len();
                 from = start;
                 // The WHOLE argument, up to the closing parenthesis: a
                 // `t(a ? "x" : "y")` asks for TWO keys, and keeping only the
@@ -56,9 +56,9 @@ fn keys_pedidas() -> BTreeSet<String> {
                 // reads the host's code for the same reason this one reads
                 // the renderer's.
                 assert!(
-                    COMPUESTAS.iter().any(|(p, _)| arg.contains(p))
+                    COMPOSED.iter().any(|(p, _)| arg.contains(p))
                         || DEL_HOST.iter().any(|v| arg.starts_with(v)),
-                    "{name}: `{llamada}{arg}` asks for a key this test \
+                    "{name}: `{call}{arg}` asks for a key this test \
                      cannot resolve and that is not in `COMPUESTAS`. A key \
                      the sweep does not see gets painted as its own \
                      identifier the day it is missing, and that is exactly \
@@ -120,7 +120,7 @@ const DEL_HOST: &[&str] = &[
     "output.title_key",
     "c.label_key",
     // `taskNode` receives the translator and composes `gui-task-kind-…`,
-    // which is in `COMPUESTAS`.
+    // which is in `COMPOSED`.
     "k",
 ];
 
@@ -129,7 +129,7 @@ const DEL_HOST: &[&str] = &[
 /// By hand and with their value: these are the only ones a `grep` cannot
 /// resolve, and leaving them out would be the same hole this test is here to
 /// close.
-const COMPUESTAS: &[(&str, &[&str])] = &[
+const COMPOSED: &[(&str, &[&str])] = &[
     ("help-callout-", &["note", "warn", "tip"]),
     // The log panel's level controls (#326). The suffix is `LogLevel::wire`'s
     // CLOSED vocabulary, and this list is the other half: a new level there
@@ -171,12 +171,12 @@ fn the_renderer_does_not_ask_for_any_key_that_does_not_exist() {
         .flat_map(norte_i18n::message_ids)
         .collect();
 
-    let mut missing: Vec<String> = keys_pedidas()
+    let mut missing: Vec<String> = keys_requested()
         .into_iter()
         .filter(|k| !existentes.contains(k))
         .collect();
-    for (prefix, sufijos) in COMPUESTAS {
-        for s in *sufijos {
+    for (prefix, suffixes) in COMPOSED {
+        for s in *suffixes {
             let key = format!("{prefix}{s}");
             if !existentes.contains(&key) {
                 missing.push(key);

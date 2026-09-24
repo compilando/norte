@@ -1556,7 +1556,7 @@ pub fn version_at_least(version: &str, major: u64, minor: u64) -> bool {
 /// assert!(version_compatible("0.4.0", "0.4.9"));
 /// assert!(version_compatible("0.4.0", "0.3.0"));
 /// assert!(!version_compatible("0.4.0", "0.2.0"));
-/// assert!(!version_compatible("0.4.0", "0.5.0")); // cliente del futuro
+/// assert!(!version_compatible("0.4.0", "0.5.0")); // cliente del future
 /// assert!(!version_compatible("0.4.0", "no-semver"));
 /// ```
 #[must_use]
@@ -3468,7 +3468,7 @@ pub struct OrganizeMove {
     /// Where it goes, RELATIVE to that same directory, with `/` as
     /// separator.
     ///
-    /// Can carry subdirectories (`facturas/2026/marzo.pdf`), and that is
+    /// Can carry subdirectories (`invoices/2026/marzo.pdf`), and that is
     /// this phase's whole value — and its whole risk. What it CANNOT be:
     /// absolute, empty, with a `.` or `..` segment, with NUL, or ending in
     /// `/`. Every segment has to be a valid [`crate::Segment`], and the
@@ -3523,7 +3523,7 @@ pub enum OrganizeRelError {
 ///
 /// ```
 /// use norte_proto::methods::validar_proposed_rel;
-/// assert!(validar_proposed_rel("facturas/2026/marzo.pdf").is_ok());
+/// assert!(validar_proposed_rel("invoices/2026/marzo.pdf").is_ok());
 /// assert!(validar_proposed_rel("../outside.txt").is_err());
 /// assert!(validar_proposed_rel("/etc/passwd").is_err());
 /// assert!(validar_proposed_rel("a//b").is_err());

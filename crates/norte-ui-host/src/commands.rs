@@ -34,10 +34,10 @@ pub enum Effects {
 /// 0126). It used to be its own list, `MUTAN`, and forgetting to update it
 /// when adding a command that writes left the "look only" window running it.
 #[must_use]
-pub fn implementados(effects: Effects) -> Vec<&'static str> {
+pub fn implemented(effects: Effects) -> Vec<&'static str> {
     match effects {
-        Effects::Full => IMPLEMENTADOS.to_vec(),
-        Effects::SoloRead => IMPLEMENTADOS.iter().copied().filter(|c| inert(c)).collect(),
+        Effects::Full => IMPLEMENTED.to_vec(),
+        Effects::SoloRead => IMPLEMENTED.iter().copied().filter(|c| inert(c)).collect(),
     }
 }
 
@@ -54,7 +54,7 @@ fn inert(command: &str) -> bool {
 /// Grows with each task of phase 2. Everything else in the catalogue
 /// resolves to [`norte_frontend::keymap::Availability::NotHere`] and is
 /// STATED in the bar, exactly what the TUI does with its own.
-pub const IMPLEMENTADOS: &[&str] = &[
+pub const IMPLEMENTED: &[&str] = &[
     "cursor.up",
     "cursor.down",
     "cursor.page-up",
@@ -220,7 +220,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
 /// answers to dialogs that do not exist here. A preset can bind them: the
 /// key will say no, here, with the same phrase as any other command this
 /// window does not do.
-pub const IMPLEMENTADOS_DIALOG: &[&str] = &[
+pub const IMPLEMENTED_DIALOG: &[&str] = &[
     "dialog.confirm",
     "dialog.cancel",
     "dialog.approve",
@@ -270,7 +270,7 @@ pub const IMPLEMENTADOS_DIALOG: &[&str] = &[
 /// A separate list because the viewer is another SCREEN: with it open the
 /// keys are its own, and mixing them with the listing's would be an input
 /// context that does not exist in any preset.
-pub const IMPLEMENTADOS_VISOR: &[&str] = &[
+pub const IMPLEMENTED_VISOR: &[&str] = &[
     "viewer.close",
     "viewer.up",
     "viewer.down",
@@ -304,8 +304,8 @@ pub fn all() -> Vec<&'static str> {
 /// Same, with the effects mode stated.
 #[must_use]
 pub fn all_with(effects: Effects) -> Vec<&'static str> {
-    let mut v = implementados(effects);
-    v.extend_from_slice(IMPLEMENTADOS_VISOR);
+    let mut v = implemented(effects);
+    v.extend_from_slice(IMPLEMENTED_VISOR);
     v
 }
 
@@ -324,7 +324,7 @@ pub enum EffectVisor {
     /// than the window was nowhere to be found.
     Column(i64),
     /// To the beginning or the end.
-    Extremo {
+    End {
         /// `true` = to the end.
         al_final: bool,
     },
@@ -362,8 +362,8 @@ pub fn viewer_effect_of(command: &str, times: u32) -> Option<EffectVisor> {
         "viewer.down" => EffectVisor::Line(n),
         "viewer.page-up" => EffectVisor::Page(-n),
         "viewer.page-down" => EffectVisor::Page(n),
-        "viewer.top" => EffectVisor::Extremo { al_final: false },
-        "viewer.bottom" => EffectVisor::Extremo { al_final: true },
+        "viewer.top" => EffectVisor::End { al_final: false },
+        "viewer.bottom" => EffectVisor::End { al_final: true },
         "viewer.left" => EffectVisor::Column(-n),
         "viewer.right" => EffectVisor::Column(n),
         "viewer.hex" => EffectVisor::Hex,
@@ -391,7 +391,7 @@ pub enum Effect {
     /// that is is decided by the slot, with the window the renderer told it.
     Page(i64),
     /// Cursor to the start or the end of the listing.
-    Extremo {
+    End {
         /// `true` = to the end.
         al_final: bool,
     },
@@ -407,7 +407,7 @@ pub enum Effect {
     /// Marks or unmarks the cursor's row.
     Mark,
     /// Marks or unmarks the cursor's row and MOVES UP (`shift+↑`).
-    MarkSubiendo,
+    MarkUploading,
     /// Marks (or unmarks) a page's span and moves there.
     MarkPage {
         /// `true` = downward.
@@ -504,7 +504,7 @@ pub enum Effect {
         kind: &'static str,
     },
     /// Moves the BOARD's selected row, without needing to focus it.
-    TaskVecina {
+    TaskNeighbor {
         /// Upward.
         back: bool,
     },
@@ -576,7 +576,7 @@ pub enum Effect {
     /// Saves the CURRENT workspace as a profile (#318).
     ProfileSaveAs,
     /// Jumps to the next or previous profile, without opening anything.
-    ProfileVecino {
+    ProfileNeighbor {
         /// Toward the previous one.
         back: bool,
     },
@@ -760,7 +760,7 @@ pub enum Effect {
     /// folder under it if it is one, and if not the active slot's location
     /// (Krusader's `Ctrl+←`/`Ctrl+→`). Which directory that is is decided by
     /// `PaneState::target_dir`, one shared by both frontends (ADR 0077).
-    MirrorObjetivo,
+    MirrorTarget,
     /// The DESTINATION slot's location travels to the ACTIVE one: the
     /// mirror in reverse.
     Bring,
@@ -829,8 +829,8 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         // travels as pages and not as rows.
         "cursor.page-up" => Effect::Page(-n),
         "cursor.page-down" => Effect::Page(n),
-        "cursor.top" => Effect::Extremo { al_final: false },
-        "cursor.bottom" => Effect::Extremo { al_final: true },
+        "cursor.top" => Effect::End { al_final: false },
+        "cursor.bottom" => Effect::End { al_final: true },
         "nav.enter" => Effect::Enter,
         "nav.parent" => Effect::Up,
         "nav.back" => Effect::Trail { back: true },
@@ -848,7 +848,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "mark.files" => Effect::MarkClass { dirs: false },
         "mark.dirs" => Effect::MarkClass { dirs: true },
         "mark.restore" => Effect::RestoreMarks,
-        "mark.toggle-up" => Effect::MarkSubiendo,
+        "mark.toggle-up" => Effect::MarkUploading,
         "mark.toggle-page-down" => Effect::MarkPage { down: true },
         "mark.toggle-page-up" => Effect::MarkPage { down: false },
         "mark.to-top" => Effect::MarkToEdge { up: true },
@@ -939,8 +939,8 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "app.menu" => Effect::Menu,
         "profile.pick" => Effect::ProfileChoose,
         "profile.save-as" => Effect::ProfileSaveAs,
-        "profile.next" => Effect::ProfileVecino { back: false },
-        "profile.prev" => Effect::ProfileVecino { back: true },
+        "profile.next" => Effect::ProfileNeighbor { back: false },
+        "profile.prev" => Effect::ProfileNeighbor { back: true },
         "pane.select-drive" => Effect::Volumes,
         "pane.connect" => Effect::Connections,
         "pane.disconnect" => Effect::Disconnect,
@@ -980,7 +980,7 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
         "pane.names-encoding" => Effect::CycleEncoding,
         "pane.mirror" => Effect::Mirror,
         "pane.sync-nav" => Effect::MirrorPermanent,
-        "pane.mirror-target" => Effect::MirrorObjetivo,
+        "pane.mirror-target" => Effect::MirrorTarget,
         "pane.pull" => Effect::Bring,
         "pane.swap" => Effect::Swap,
         "pane.history" => Effect::History,
@@ -1002,8 +1002,8 @@ pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
 /// nor the other.
 fn board_effect(command: &str) -> Option<Effect> {
     Some(match command {
-        "task.next" => Effect::TaskVecina { back: false },
-        "task.prev" => Effect::TaskVecina { back: true },
+        "task.next" => Effect::TaskNeighbor { back: false },
+        "task.prev" => Effect::TaskNeighbor { back: true },
         "task.dismiss" => Effect::DiscardTask,
         "task.cancel" => Effect::CancelTask,
         "task.pause" => Effect::PauseTask,
@@ -1024,7 +1024,7 @@ mod tests {
     /// starts lying.
     #[test]
     fn the_list_and_the_effects_cannot_come_apart() {
-        for c in IMPLEMENTADOS {
+        for c in IMPLEMENTED {
             assert!(
                 effect_of(c, 1).is_some(),
                 "{c} is in the list and has no effect"
@@ -1035,7 +1035,7 @@ mod tests {
     /// Same for the viewer screen.
     #[test]
     fn the_viewer_list_and_its_effects_cannot_come_apart() {
-        for c in IMPLEMENTADOS_VISOR {
+        for c in IMPLEMENTED_VISOR {
             assert!(
                 viewer_effect_of(c, 1).is_some(),
                 "{c} is in the viewer list and has no effect"
@@ -1048,11 +1048,8 @@ mod tests {
     /// declaring it.
     #[test]
     fn the_two_screens_share_no_commands() {
-        for c in IMPLEMENTADOS_VISOR {
-            assert!(
-                !IMPLEMENTADOS.contains(c),
-                "{c} is declared on both screens"
-            );
+        for c in IMPLEMENTED_VISOR {
+            assert!(!IMPLEMENTED.contains(c), "{c} is declared on both screens");
         }
     }
 
@@ -1076,15 +1073,15 @@ mod tests {
     /// does.
     #[test]
     fn read_only_removes_what_is_not_inert() {
-        let solo_read = implementados(Effects::SoloRead);
-        let mut quitados: Vec<&str> = IMPLEMENTADOS
+        let solo_read = implemented(Effects::SoloRead);
+        let mut removed: Vec<&str> = IMPLEMENTED
             .iter()
             .copied()
             .filter(|c| !solo_read.contains(c))
             .collect();
-        quitados.sort_unstable();
+        removed.sort_unstable();
         assert_eq!(
-            quitados,
+            removed,
             [
                 "app.handoff",
                 "app.terminal",
@@ -1129,7 +1126,7 @@ mod tests {
     /// promised to only look (ADR 0126).
     #[test]
     fn the_viewer_and_the_dialogs_only_have_inert_commands() {
-        for c in IMPLEMENTADOS_VISOR.iter().chain(IMPLEMENTADOS_DIALOG) {
+        for c in IMPLEMENTED_VISOR.iter().chain(IMPLEMENTED_DIALOG) {
             assert!(
                 inert(c),
                 "{c} is not inert and its list is not filtered in read-only"

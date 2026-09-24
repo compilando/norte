@@ -730,7 +730,7 @@ impl LocalRoot {
             file,
             staging: staging_name,
             final_name,
-            estable: false,
+            stable: false,
         })
     }
 
@@ -832,7 +832,7 @@ impl LocalRoot {
                 file,
                 staging: staging_name,
                 final_name,
-                estable: true,
+                stable: true,
             },
             already,
         ))
@@ -851,7 +851,7 @@ pub(crate) struct ConfinedStaging {
     /// The staging's name is the STABLE one, i.e. rediscoverable by a
     /// later resume. It's what decides whether `keep` preserves it or
     /// deletes it (#297).
-    pub(crate) estable: bool,
+    pub(crate) stable: bool,
 }
 
 /// Publishes the staging under its final name, no-replace and on the same
@@ -1035,7 +1035,7 @@ fn create_exclusive(dir: RawFd, name: &CString) -> Result<std::fs::File, Error> 
 /// And they're checked on the OPEN FILE, not on the path: a prior `lstat`
 /// answers about what was there, not about what got opened.
 #[allow(unsafe_code)]
-pub(crate) fn opens_staging_estable(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
+pub(crate) fn opens_staging_stable(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 
     // No `O_EXCL` on purpose — it's REOPENED, which is what resuming is
@@ -1087,9 +1087,9 @@ pub(crate) fn opens_staging_estable(path: &std::path::Path) -> Result<(std::fs::
 ///
 /// `Ok(None)` is "there's no partial of ours": the caller degrades to
 /// `Length`, and rejecting whatever's there on resume is
-/// [`opens_staging_estable`]'s job.
+/// [`opens_staging_stable`]'s job.
 #[allow(unsafe_code)]
-pub(crate) fn opens_partial_verificado(
+pub(crate) fn opens_partial_verified(
     path: &std::path::Path,
 ) -> Result<Option<std::fs::File>, Error> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
@@ -1363,7 +1363,7 @@ impl ConfinedSink {
             pos: already,
             staging: s.staging,
             final_name: s.final_name,
-            stable: s.estable,
+            stable: s.stable,
             done: false,
         }
     }
@@ -1406,7 +1406,7 @@ impl norte_vfs::ByteSink for ConfinedSink {
                 // makes.
                 let _ = discard(dir.as_raw_fd(), &staging);
             } else {
-                crate::provider::reponer_modo_publicado(&file, stable);
+                crate::provider::restore_modo_published(&file, stable);
             }
             drop(file);
             out

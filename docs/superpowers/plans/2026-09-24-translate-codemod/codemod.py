@@ -28,8 +28,10 @@ KEYWORDS = set(
 
 # ---------------------------------------------------------------- the map
 words = dict(l.split("\t") for l in (D / "words_map.tsv").read_text().splitlines() if "\t" in l)
+if (D / "words_map2.tsv").exists():
+    words.update(dict(l.split("\t") for l in (D / "words_map2.tsv").read_text().splitlines() if "\t" in l))
 ident_map = {}
-for name in ("phrases_A.tsv", "phrases_B.tsv", "phrases_C.tsv"):
+for name in ("phrases_A.tsv", "phrases_B.tsv", "phrases_C.tsv", "phrases_D.tsv"):
     p = D / name
     if p.exists():
         for l in p.read_text().splitlines():

@@ -528,7 +528,7 @@ async fn read_file_multibyte_boundary_falls_back_to_faithful_base64() {
 /// Single criterion for args (sec MINOR-1 / enc H3): an argument PRESENT
 /// with an illegal type is a tool error — never a silent degradation.
 #[tokio::test]
-async fn args_bad_tipados_son_error_no_degradacion() {
+async fn badly_typed_args_are_an_error_not_a_degradation() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/f.txt", b"x").await;

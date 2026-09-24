@@ -136,10 +136,10 @@ async fn requesting_sync_opens_the_plan() {
         "a closed plan with no blockers gets approved: {}",
         vista.status
     );
-    let pedidos = backend.planes_pedidos.lock().expect("plans").clone();
-    assert_eq!(pedidos.len(), 1);
+    let requests = backend.planes_requests.lock().expect("plans").clone();
+    assert_eq!(requests.len(), 1);
     assert_ne!(
-        pedidos[0].0, pedidos[0].1,
+        requests[0].0, requests[0].1,
         "source and destination are different"
     );
 }
@@ -208,7 +208,7 @@ async fn syncing_the_same_directory_queues_nothing() {
         "{ack:?}"
     );
     assert!(
-        backend.planes_pedidos.lock().expect("planes").is_empty(),
+        backend.planes_requests.lock().expect("planes").is_empty(),
         "no plan was requested"
     );
 }
@@ -299,7 +299,7 @@ async fn with_the_plan_pane_in_front_no_other_is_requested() {
     );
     assert!(snapshot.sync.is_some(), "and the panel is still up front");
     assert_eq!(
-        backend.planes_pedidos.lock().expect("planes").len(),
+        backend.planes_requests.lock().expect("planes").len(),
         1,
         "no second plan was requested"
     );
@@ -374,7 +374,7 @@ async fn a_plan_that_deletes_asks_twice() {
         asking.confirming.is_some(),
         "a plan that deletes trees asks again: {asking:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(
         backend.applied.lock().expect("aplicados").is_empty(),
         "and it has still applied nothing"
@@ -382,16 +382,16 @@ async fn a_plan_that_deletes_asks_twice() {
 
     // A key that is not `y` WITHDRAWS the question and applies nothing.
     h.dispatch(press("n")).await.expect("host alive");
-    let retirada = next_sync(&mut sub).await.expect("still open");
-    assert!(retirada.confirming.is_none());
-    asentar().await;
+    let withdrawn = next_sync(&mut sub).await.expect("still open");
+    assert!(withdrawn.confirming.is_none());
+    settle().await;
     assert!(backend.applied.lock().expect("aplicados").is_empty());
 
     // `a` and then `y`: now it does, and with the hash the CORE returned.
     h.dispatch(press("y")).await.expect("host alive");
     let _ = next_sync(&mut sub).await;
     h.dispatch(press("y")).await.expect("host alive");
-    let applied = anotados(&backend, "the plan applied", 1, |f| {
+    let applied = annotated(&backend, "the plan applied", 1, |f| {
         f.applied.lock().expect("aplicados").clone()
     })
     .await;
@@ -408,7 +408,7 @@ async fn a_plan_that_deletes_asks_twice() {
 /// over the same destination.
 #[tokio::test]
 async fn an_apply_of_an_unknown_result_is_not_reoffered() {
-    for (error, se_reofrece) in [
+    for (error, is_offered_again) in [
         (
             norte_proto::Error::PolicyDenied {
                 rule: "policy-rule".to_owned(),
@@ -442,17 +442,17 @@ async fn an_apply_of_an_unknown_result_is_not_reoffered() {
         assert!(vista.can_approve, "{}", vista.status);
 
         h.dispatch(press("y")).await.expect("host alive");
-        anotados(&backend, "the apply requested", 1, |f| {
+        annotated(&backend, "the apply requested", 1, |f| {
             f.applied.lock().expect("aplicados").clone()
         })
         .await;
         // The apply's outcome comes back through the mailbox: it is let run
         // before asking what the screen shows.
-        asentar().await;
+        settle().await;
         h.dispatch(UiAction::Resync).await.expect("host alive");
         let then = next_snapshot(&mut sub).await.sync.expect("still open");
         assert_eq!(
-            then.can_approve, se_reofrece,
+            then.can_approve, is_offered_again,
             "{error:?} left the screen offering approve = {}",
             then.can_approve
         );
@@ -491,7 +491,7 @@ async fn with_apply_in_flight_escape_does_not_close() {
     // question. `y` is `dialog.approve` in the preset (#287): approving a
     // plan is saying yes to what is already up front, not a bare "confirm".
     h.dispatch(press("y")).await.expect("host alive");
-    anotados(&backend, "the plan applied", 1, |f| {
+    annotated(&backend, "the plan applied", 1, |f| {
         f.applied.lock().expect("aplicados").clone()
     })
     .await;
@@ -509,17 +509,13 @@ async fn with_apply_in_flight_escape_does_not_close() {
         "and the screen acknowledges it was heard"
     );
     until(&backend, "the stop requested from the daemon", |f| {
-        (!f.canceladas_por_id.lock().expect("canceladas").is_empty()).then_some(())
+        (!f.canceled_by_id.lock().expect("canceladas").is_empty()).then_some(())
     })
     .await;
-    let paradas = backend
-        .canceladas_por_id
-        .lock()
-        .expect("canceladas")
-        .clone();
+    let stops = backend.canceled_by_id.lock().expect("canceladas").clone();
     assert!(
-        paradas.iter().any(|id| *id >= 500),
-        "the apply's task was asked to stop: {paradas:?}"
+        stops.iter().any(|id| *id >= 500),
+        "the apply's task was asked to stop: {stops:?}"
     );
 
     // The SECOND one closes, whatever happens with the report: without this
@@ -577,7 +573,7 @@ async fn the_sync_report_says_what_failed() {
         vista = next_sync(&mut sub).await.expect("still open");
     }
     h.dispatch(press("y")).await.expect("host alive");
-    anotados(&backend, "the plan applied", 1, |f| {
+    annotated(&backend, "the plan applied", 1, |f| {
         f.applied.lock().expect("aplicados").clone()
     })
     .await;
@@ -619,7 +615,7 @@ async fn approving_asks_and_lists_the_capabilities() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
 
     h.dispatch(press("a")).await.expect("host alive");
     let dialogs = next_dialogs(&mut sub).await;
@@ -637,7 +633,7 @@ async fn approving_asks_and_lists_the_capabilities() {
         d.subject.as_ref().map(|s| s.text.as_str()),
         Some("acme.ftp")
     );
-    asentar().await;
+    settle().await;
     assert!(
         backend.governance.lock().expect("gobierno").is_empty(),
         "and nothing has been granted yet"
@@ -684,7 +680,7 @@ async fn in_read_only_no_extension_is_governed() {
     let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     for key_for in ["a", "e", "d"] {
         let ack = h.dispatch(press(key_for)).await.expect("host alive");
         assert!(
@@ -705,7 +701,7 @@ async fn in_read_only_no_extension_is_governed() {
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
         "uninstalling by button in read-only: {ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(backend.governance.lock().expect("gobierno").is_empty());
 }
 
@@ -722,14 +718,14 @@ async fn turning_on_without_approving_is_refused() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     let ack = h.dispatch(press("e")).await.expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key }
             if reason_key == "host-extension-not-approved"),
         "{ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(backend.governance.lock().expect("gobierno").is_empty());
 }
 
@@ -743,7 +739,7 @@ async fn the_config_editor_cycles_types_and_validates() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     h.dispatch(press("Enter")).await.expect("host alive");
     let detail = detail_open(&mut sub).await;
     assert_eq!(detail.config.len(), 4);
@@ -758,7 +754,7 @@ async fn the_config_editor_cycles_types_and_validates() {
     // milliseconds are no guarantee, and a test that asserts presence
     // against the clock is intermittently red.
     h.dispatch(press("Enter")).await.expect("host alive");
-    anotados(&backend, "the `bool`'s write", 1, |f| {
+    annotated(&backend, "the `bool`'s write", 1, |f| {
         f.writes.lock().expect("escrituras").clone()
     })
     .await;
@@ -802,7 +798,7 @@ async fn the_config_editor_cycles_types_and_validates() {
             if reason_key == "host-value-rejected"),
         "{ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert_eq!(
         backend.writes.lock().expect("escrituras").len(),
         1,
@@ -830,7 +826,7 @@ async fn the_config_editor_cycles_types_and_validates() {
         h.dispatch(press(c)).await.expect("host alive");
     }
     h.dispatch(press("Enter")).await.expect("host alive");
-    let writes = anotados(&backend, "the typed key, sent", 2, |f| {
+    let writes = annotated(&backend, "the typed key, sent", 2, |f| {
         f.writes.lock().expect("escrituras").clone()
     })
     .await;
@@ -849,7 +845,7 @@ async fn while_typing_a_value_letters_are_letters() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
+    let _ = extensions_loaded(&mut sub).await;
     h.dispatch(press("Enter")).await.expect("host alive");
     let _ = detail_open(&mut sub).await;
     // To the `string` key, which is the THIRD one (`verbose`, `timeout`,
@@ -860,21 +856,21 @@ async fn while_typing_a_value_letters_are_letters() {
     h.dispatch(press("Enter")).await.expect("host alive");
     wait_buffer(&h, &mut sub).await;
     h.dispatch(press("a")).await.expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
         backend.governance.lock().expect("gobierno").is_empty(),
         "the typed `a` granted no capabilities"
     );
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snapshot = next_snapshot(&mut sub).await;
-    let editando = snapshot
+    let editing = snapshot
         .extensions
         .expect("still open")
         .detail
         .expect("with a card")
         .editing
         .expect("editing");
-    assert!(editando.ends_with('a'), "the letter went in: {editando:?}");
+    assert!(editing.ends_with('a'), "the letter went in: {editing:?}");
 }
 
 /// A tree with a catalogue AND `[config]` schemas.
@@ -1012,7 +1008,7 @@ async fn the_palette_runs_an_extension_command_and_shows_its_output() {
             continue;
         };
         assert_eq!(
-            backend.ejecutados.lock().expect("ejecutados").as_slice(),
+            backend.executed.lock().expect("ejecutados").as_slice(),
             [("acme.ftp".to_owned(), "greet".to_owned())]
         );
         assert!(output.text_hostile, "the bidi override is said: {output:?}");
@@ -1032,7 +1028,7 @@ async fn the_palette_runs_an_extension_command_and_shows_its_output() {
     }
     panic!(
         "the command's output never arrived; ejecutados = {:?}",
-        backend.ejecutados.lock().expect("ejecutados")
+        backend.executed.lock().expect("ejecutados")
     );
 }
 
@@ -1108,9 +1104,9 @@ async fn the_palette_requests_the_plan_from_a_renamer_and_reviews_it_like_the_ai
         v = next_revision(&mut sub).await.expect("still open");
     }
     assert!(v.confirmable, "the core gave its verdict");
-    let pedidos = backend.renamers_pedidos.lock().expect("mutex").clone();
+    let requests = backend.renamers_requests.lock().expect("mutex").clone();
     assert_eq!(
-        pedidos,
+        requests,
         vec![(
             "org.norte.date-prefix".to_owned(),
             "by-date".to_owned(),
@@ -1118,7 +1114,7 @@ async fn the_palette_requests_the_plan_from_a_renamer_and_reviews_it_like_the_ai
         )]
     );
     assert!(
-        backend.instrucciones.lock().expect("mutex").is_empty(),
+        backend.instructions.lock().expect("mutex").is_empty(),
         "the model was not asked for anything"
     );
 }
@@ -1213,13 +1209,13 @@ async fn in_read_only_an_extension_command_does_not_run() {
             !p.rows.iter().any(|r| r.text.contains("Saludar")),
             "a window with no effects does not offer to run third-party code"
         );
-        asentar().await;
+        settle().await;
     }
     // And nothing ran, which is what the rule protects. The catalogue does
     // travel — `request_panels` requests it to declare kinds, even with no
     // effects — so counting round trips stopped saying anything about what
     // is offered.
-    assert!(backend.ejecutados.lock().expect("ejecutados").is_empty());
+    assert!(backend.executed.lock().expect("ejecutados").is_empty());
 }
 
 /// Waits for the card's editing buffer to be open.
@@ -1257,14 +1253,14 @@ async fn a_failed_governance_check_asks_the_core_again() {
     ext.enabled = false;
     ext.capabilities = vec!["fs-read".to_owned()];
     let backend = tree_with_plugins(vec![ext], &[]);
-    *backend.error_al_gobernar.lock().expect("gobierno") =
+    *backend.governance_error.lock().expect("gobierno") =
         Some(norte_proto::Error::ProviderUnavailable { retryable: true });
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     h.dispatch(press("F12")).await.expect("host alive");
-    let _ = extensions_cargadas(&mut sub).await;
-    let pedidos = backend
-        .catalogos_pedidos
+    let _ = extensions_loaded(&mut sub).await;
+    let requests = backend
+        .catalogos_requests
         .load(std::sync::atomic::Ordering::SeqCst);
 
     h.dispatch(press("a")).await.expect("host alive");
@@ -1283,9 +1279,9 @@ async fn a_failed_governance_check_asks_the_core_again() {
         "the catalogue re-requested after governance",
         |f| {
             let now = f
-                .catalogos_pedidos
+                .catalogos_requests
                 .load(std::sync::atomic::Ordering::SeqCst);
-            (now > pedidos).then_some(())
+            (now > requests).then_some(())
         },
     )
     .await;
@@ -1438,8 +1434,8 @@ async fn the_agents_pane_undoes_the_chosen_session() {
         d.choices.iter().any(|c| c.id == "confirm" && c.destructive),
         "undoing writes: the response is marked"
     );
-    asentar().await;
-    assert!(backend.deshechas.lock().expect("deshechas").is_empty());
+    settle().await;
+    assert!(backend.undone.lock().expect("deshechas").is_empty());
 
     // And confirming sends the RAW id, not the one that is painted.
     h.dispatch(UiAction::Dialog {
@@ -1449,11 +1445,11 @@ async fn the_agents_pane_undoes_the_chosen_session() {
     })
     .await
     .expect("host alive");
-    let pedidas = anotados(&backend, "the undo requested", 1, |f| {
-        f.deshechas.lock().expect("deshechas").clone()
+    let requested = annotated(&backend, "the undo requested", 1, |f| {
+        f.undone.lock().expect("deshechas").clone()
     })
     .await;
-    assert_eq!(pedidas, ["agente\u{202e}1".to_owned()]);
+    assert_eq!(requested, ["agente\u{202e}1".to_owned()]);
 }
 
 /// In read-only nothing is undone: it is SAID.
@@ -1473,8 +1469,8 @@ async fn in_read_only_a_session_cannot_be_undone() {
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
         "{ack:?}"
     );
-    asentar().await;
-    assert!(backend.deshechas.lock().expect("deshechas").is_empty());
+    settle().await;
+    assert!(backend.undone.lock().expect("deshechas").is_empty());
 }
 
 /// A request that arrives with the panel open REPAINTS it, and the
@@ -1619,10 +1615,10 @@ async fn copying_the_path_sends_bytes_to_the_desktop() {
         } else {
             host_tree(Arc::clone(&backend)).await
         };
-        let mut nativos = h.native_effects();
+        let mut native = h.native_effects();
         let mut sub = h.subscribe();
         run_by_palette(&h, &mut sub, "pane.copy-path").await;
-        let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        let effect = tokio::time::timeout(std::time::Duration::from_secs(2), native.recv())
             .await
             .expect("an effect before the deadline")
             .expect("the channel is still alive");
@@ -1744,12 +1740,12 @@ async fn editing_a_new_one_creates_the_file_and_opens_it() {
     .await
     .expect("host alive");
     {
-        let creados = anotados(&backend, "the file created", 1, |f| {
-            f.creados.lock().expect("creados").clone()
+        let created = annotated(&backend, "the file created", 1, |f| {
+            f.created.lock().expect("creados").clone()
         })
         .await;
-        assert_eq!(creados.len(), 1, "{creados:?}");
-        assert_eq!(creados[0].to_wire(), "file:///casa/borrador.md");
+        assert_eq!(created.len(), 1, "{created:?}");
+        assert_eq!(created[0].to_wire(), "file:///casa/borrador.md");
     }
 
     let effect = tokio::time::timeout(WAIT_MAX, effects.recv())
@@ -1779,7 +1775,7 @@ async fn editing_a_new_one_creates_the_file_and_opens_it() {
 #[tokio::test]
 async fn a_created_item_that_stopped_being_a_file_does_not_open() {
     let mut fake = Fake {
-        creado_appears_as: Some(norte_proto::EntryKind::Symlink),
+        created_appears_as: Some(norte_proto::EntryKind::Symlink),
         ..Fake::default()
     };
     fake.put("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
@@ -1805,11 +1801,11 @@ async fn a_created_item_that_stopped_being_a_file_does_not_open() {
     .await
     .expect("host alive");
     {
-        let creados = anotados(&backend, "the file created", 1, |f| {
-            f.creados.lock().expect("creados").clone()
+        let created = annotated(&backend, "the file created", 1, |f| {
+            f.created.lock().expect("creados").clone()
         })
         .await;
-        assert_eq!(creados.len(), 1, "the file WAS created: {creados:?}");
+        assert_eq!(created.len(), 1, "the file WAS created: {created:?}");
     }
     assert!(
         tokio::time::timeout(std::time::Duration::from_millis(300), effects.recv())
@@ -1838,7 +1834,7 @@ async fn editing_a_new_one_is_not_offered_in_a_remote_pane() {
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-not-local"),
         "{ack:?}"
     );
-    assert!(backend.creados.lock().expect("creados").is_empty());
+    assert!(backend.created.lock().expect("creados").is_empty());
 }
 
 /// A host that starts in a specific directory.
@@ -1953,9 +1949,9 @@ async fn disconnecting_returns_to_where_it_was_before() {
     run_by_palette(&h, &mut sub, "pane.disconnect").await;
     let _ = listing_in(&mut sub, "/casa").await;
 
-    let cerradas = backend.cerradas.lock().expect("cerradas");
-    assert_eq!(cerradas.len(), 1, "{cerradas:?}");
-    assert_eq!(cerradas[0].to_wire(), "sftp://server/datos");
+    let closed = backend.closed.lock().expect("cerradas");
+    assert_eq!(closed.len(), 1, "{closed:?}");
+    assert_eq!(closed[0].to_wire(), "sftp://server/datos");
 }
 
 /// And NEVER to another path on the same machine: that would reopen the
@@ -2016,7 +2012,7 @@ async fn in_a_local_pane_there_is_no_connection_to_close() {
         "{ack:?}"
     );
     assert!(
-        backend.cerradas.lock().expect("cerradas").is_empty(),
+        backend.closed.lock().expect("cerradas").is_empty(),
         "and nothing is asked of the daemon"
     );
 }
@@ -2159,7 +2155,7 @@ async fn tab_cycles_the_listings_and_skips_the_sides() {
     })
     .await;
     run_by_palette(&h, &mut sub, "layout.split-v").await;
-    let (tree_slot, partida) =
+    let (tree_slot, split) =
         snapshot_until(&h, &mut sub, "three listings and a tree", |snapshot| {
             let listings = snapshot
                 .slots
@@ -2175,8 +2171,8 @@ async fn tab_cycles_the_listings_and_skips_the_sides() {
         })
         .await;
 
-    let mut vistos = Vec::new();
-    let mut anterior = partida;
+    let mut seen = Vec::new();
+    let mut anterior = split;
     for _ in 0..3 {
         h.dispatch(press("Tab")).await.expect("host alive");
         // Until focus MOVES: the previous envelope may still be in the
@@ -2186,38 +2182,38 @@ async fn tab_cycles_the_listings_and_skips_the_sides() {
             snapshot.focus.filter(|f| *f != anterior)
         })
         .await;
-        vistos.push(now);
+        seen.push(now);
         anterior = now;
     }
     assert!(
-        !vistos.contains(&tree_slot),
-        "tab does not stop on the tree: {vistos:?}"
+        !seen.contains(&tree_slot),
+        "tab does not stop on the tree: {seen:?}"
     );
-    let different: std::collections::BTreeSet<u32> = vistos.iter().copied().collect();
+    let different: std::collections::BTreeSet<u32> = seen.iter().copied().collect();
     assert_eq!(
         different.len(),
         3,
-        "all THREE listings are reachable: {vistos:?}"
+        "all THREE listings are reachable: {seen:?}"
     );
     assert_eq!(
-        vistos[2], partida,
-        "and three jumps go all the way around: {vistos:?}"
+        seen[2], split,
+        "and three jumps go all the way around: {seen:?}"
     );
 
     // The other half: the screen's traversal DOES stop on the tree.
-    let mut paradas = Vec::new();
+    let mut stops = Vec::new();
     for _ in 0..4 {
         h.dispatch(key_alt("o")).await.expect("host alive");
         let now = snapshot_until(&h, &mut sub, "focus moved", |snapshot| {
             snapshot.focus.filter(|f| *f != anterior)
         })
         .await;
-        paradas.push(now);
+        stops.push(now);
         anterior = now;
     }
     assert!(
-        paradas.contains(&tree_slot),
-        "`layout.focus-next` traverses the whole screen: {paradas:?}"
+        stops.contains(&tree_slot),
+        "`layout.focus-next` traverses the whole screen: {stops:?}"
     );
 }
 
@@ -2428,7 +2424,7 @@ async fn a_confirmed_drop_copies_and_respects_the_marks() {
     .await
     .expect("host alive");
     {
-        let ts = anotados(&backend, "the drop's copy", 1, |f| {
+        let ts = annotated(&backend, "the drop's copy", 1, |f| {
             f.transfers.lock().expect("transferencias").clone()
         })
         .await;
@@ -2626,7 +2622,7 @@ async fn with_no_connections_configured_the_selector_says_so() {
 async fn with_the_window_in_front_no_outside_warning_is_shown() {
     let backend = fake_tree();
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     let mut sub = h.subscribe();
     h.dispatch(press("F8")).await.expect("host alive");
     let id = next_dialogs(&mut sub).await[0].id;
@@ -2646,10 +2642,10 @@ async fn with_the_window_in_front_no_outside_warning_is_shown() {
         .clone()
         .expect("there is a task");
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
-    asentar().await;
+    settle().await;
 
     assert!(
-        nativos.try_recv().is_err(),
+        native.try_recv().is_err(),
         "with focus in place, no notice fires to the desktop"
     );
 }
@@ -2663,7 +2659,7 @@ async fn with_the_window_in_front_no_outside_warning_is_shown() {
 async fn without_focus_the_notice_appears_and_carries_the_name() {
     let backend = fake_tree();
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     let mut sub = h.subscribe();
     h.dispatch(UiAction::WindowFocus { focused: false })
         .await
@@ -2692,11 +2688,11 @@ async fn without_focus_the_notice_appears_and_carries_the_name() {
 
     let mut seen = None;
     for _ in 0..2_000 {
-        if let Ok(norte_ui_host::dto::NativeEffect::Notify { title, body }) = nativos.try_recv() {
+        if let Ok(norte_ui_host::dto::NativeEffect::Notify { title, body }) = native.try_recv() {
             seen = Some((title, body));
             break;
         }
-        asentar().await;
+        settle().await;
     }
     let (title, body) = seen.expect("with no focus, the notice fires");
     assert!(!title.is_empty(), "the notice says WHAT happened");
@@ -2714,12 +2710,12 @@ async fn without_focus_the_notice_appears_and_carries_the_name() {
 async fn with_one_pane_the_desktop_chooses_the_destination() {
     let backend = fake_tree();
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     let mut sub = h.subscribe();
 
     // F5 with a single listing: instead of refusing, the effect fires.
     h.dispatch(press("F5")).await.expect("host alive");
-    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), native.recv())
         .await
         .expect("the effect fires before the timeout")
         .expect("channel alive");
@@ -2761,16 +2757,16 @@ async fn with_one_pane_the_desktop_chooses_the_destination() {
 async fn closing_the_selector_without_choosing_does_not_transfer() {
     let backend = fake_tree();
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     h.dispatch(press("F5")).await.expect("host alive");
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), native.recv())
         .await
         .expect("the effect fires");
 
     h.dispatch(UiAction::DirectoryPicked { path: None })
         .await
         .expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
         backend.transfers.lock().expect("transferencias").is_empty(),
         "cancelling the picker transfers nothing"
@@ -2794,7 +2790,7 @@ async fn a_destination_nobody_asked_for_does_nothing() {
         matches!(ack, ActionAck::Stale { .. }),
         "with no picker open, the response is stale: {ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(backend.transfers.lock().expect("transferencias").is_empty());
 }
 
@@ -2804,7 +2800,7 @@ async fn a_destination_nobody_asked_for_does_nothing() {
 async fn in_read_only_nothing_from_the_desktop_is_launched() {
     let backend = fake_tree();
     let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     let mut sub = h.subscribe();
     // They are not even OFFERED: the palette is built with this window's
     // effects, and offering what is going to be refused is promising
@@ -2826,7 +2822,7 @@ async fn in_read_only_nothing_from_the_desktop_is_launched() {
     assert!(p.rows.iter().any(|r| r.text == "pane.copy-path") || p.total > 0);
     assert!(
         matches!(
-            nativos.try_recv(),
+            native.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ),
         "and no effect fired"
@@ -2842,7 +2838,7 @@ async fn in_read_only_nothing_from_the_desktop_is_launched() {
 async fn a_path_that_is_not_local_does_not_open() {
     let backend = fake_tree();
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     let mut sub = h.subscribe();
     for cmd in ["pane.open", "app.terminal"] {
         let ack = execute_via_palette_ack(&h, &mut sub, cmd).await;
@@ -2853,7 +2849,7 @@ async fn a_path_that_is_not_local_does_not_open() {
     }
     assert!(
         matches!(
-            nativos.try_recv(),
+            native.try_recv(),
             Err(tokio::sync::broadcast::error::TryRecvError::Empty)
         ),
         "and no effect fired"
@@ -2899,7 +2895,7 @@ async fn a_rebound_key_answers_the_dialog() {
     let dialog = norte_frontend::keymap::Effective::build_for(
         &base,
         std::slice::from_ref(&layer),
-        norte_ui_host::commands::IMPLEMENTADOS_DIALOG,
+        norte_ui_host::commands::IMPLEMENTED_DIALOG,
         norte_frontend::keymap::Screen::Dialog,
     )
     .expect("effective");
@@ -2938,7 +2934,7 @@ async fn a_rebound_key_answers_the_dialog() {
         "`z` bound to `dialog.confirm` answers the question"
     );
     until(&backend, "the delete queued", |f| {
-        (!f.borrados.lock().expect("borrados").is_empty()).then_some(())
+        (!f.deleted.lock().expect("borrados").is_empty()).then_some(())
     })
     .await;
 }
@@ -3389,7 +3385,7 @@ async fn the_profiles_selector_shows_and_the_chosen_one_is_applied() {
 
     let (h, _snap) = host_with_layers(root.path()).await;
     let mut sub = h.subscribe();
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
 
     run_by_palette(&h, &mut sub, "profile.pick").await;
     // The list arrives from a background task: the snapshot that carries
@@ -3420,7 +3416,7 @@ async fn the_profiles_selector_shows_and_the_chosen_one_is_applied() {
 
     // Choosing it applies it: its `[ui] theme` reaches the host.
     h.dispatch(press("Enter")).await.expect("host alive");
-    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), native.recv())
         .await
         .expect("the theme notice fires")
         .expect("channel alive");
@@ -3456,7 +3452,7 @@ async fn a_profiles_theme_can_be_a_path() {
 
     let (h, _snap) = host_with_layers(root.path()).await;
     let mut sub = h.subscribe();
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
 
     run_by_palette(&h, &mut sub, "profile.pick").await;
     let mut open = false;
@@ -3470,7 +3466,7 @@ async fn a_profiles_theme_can_be_a_path() {
     assert!(open, "the picker opened with the list");
 
     h.dispatch(press("Enter")).await.expect("host alive");
-    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), native.recv())
         .await
         .expect("the theme notice fires")
         .expect("channel alive");
@@ -3725,7 +3721,7 @@ async fn dragging_the_edge_splits_the_two_slots() {
 async fn the_theme_selector_chooses_and_notifies_the_host() {
     use norte_ui_host::dto::NativeEffect;
     let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
-    let mut nativos = h.native_effects();
+    let mut native = h.native_effects();
     let mut sub = h.subscribe();
 
     run_by_palette(&h, &mut sub, "app.theme").await;
@@ -3742,7 +3738,7 @@ async fn the_theme_selector_chooses_and_notifies_the_host() {
     // which is what makes the reader see the theme instead of reading its
     // name.
     h.dispatch(press("ArrowDown")).await.expect("host alive");
-    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), native.recv())
         .await
         .expect("the theme notice fires")
         .expect("channel alive");
@@ -3758,7 +3754,7 @@ async fn the_theme_selector_chooses_and_notifies_the_host() {
     // preview that closes leaving the last one the cursor brushed is a way
     // of changing the theme by accident.
     h.dispatch(press("Escape")).await.expect("host alive");
-    let return_ = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    let return_ = tokio::time::timeout(std::time::Duration::from_secs(2), native.recv())
         .await
         .expect("the return notice fires")
         .expect("channel alive");
@@ -4212,7 +4208,7 @@ async fn dragged_sizes_come_back_on_open() {
         (p.width < left.width).then(|| s.clone())
     })
     .await;
-    let anchos = |s: &norte_ui_host::ViewSnapshot| -> Vec<(u32, u16)> {
+    let widths = |s: &norte_ui_host::ViewSnapshot| -> Vec<(u32, u16)> {
         let mut v: Vec<(u32, u16)> = s
             .layout
             .placements
@@ -4249,8 +4245,8 @@ async fn dragged_sizes_come_back_on_open() {
     );
     let (_h2, snap2) = host_tree(Arc::new(segundo)).await;
     assert_eq!(
-        anchos(&snap2),
-        anchos(&moved),
+        widths(&snap2),
+        widths(&moved),
         "it opens with the same widths"
     );
 }
@@ -4486,10 +4482,10 @@ async fn the_preview_slot_follows_the_cursor_and_shows_the_viewer() {
     assert!(visor.preview_by.contains("Syntax"));
     assert!(con_visor.note.is_empty());
     // And the width requested is the SLOT's, not the window's.
-    let anchos = f.anchos_de_preview.lock().expect("mutex").clone();
+    let widths = f.preview_widths.lock().expect("mutex").clone();
     assert!(
-        anchos.iter().all(|a| a.is_some_and(|a| a < 120)),
-        "the previewer receives the slot's width: {anchos:?}"
+        widths.iter().all(|a| a.is_some_and(|a| a < 120)),
+        "the previewer receives the slot's width: {widths:?}"
     );
 
     // The same command closes it, and what it was showing goes with it.
@@ -4596,7 +4592,7 @@ async fn the_preview_slot_with_focus_moves_with_the_viewer_keys() {
     // `viewer.close` (Esc in the viewer's keymap) returns focus to the
     // listing and leaves the slot where it is.
     h.dispatch(press("Escape")).await.expect("host alive");
-    let devuelto = snapshot_until(&h, &mut sub, "focus returned to the listing", |s| {
+    let returned = snapshot_until(&h, &mut sub, "focus returned to the listing", |s| {
         let active = s
             .layout
             .placements
@@ -4606,7 +4602,7 @@ async fn the_preview_slot_with_focus_moves_with_the_viewer_keys() {
         (active.is_some() && active != Some(slot)).then(|| s.clone())
     })
     .await;
-    assert!(preview_de(&devuelto).is_some(), "the slot is still open");
+    assert!(preview_de(&returned).is_some(), "the slot is still open");
 }
 
 /// The menu REOPENS where it was, not at the first one.

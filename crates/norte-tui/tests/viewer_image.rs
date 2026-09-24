@@ -9,7 +9,7 @@ use norte_config::Images;
 use norte_proto::VPath;
 use norte_proto::methods::PluginThumbnail;
 use norte_tui::app::{App, Modal, Pane};
-use norte_tui::kitty_graphics::{escape_colocar, escape_delete};
+use norte_tui::kitty_graphics::{escape_delete, escape_place};
 use norte_tui::viewer_open::{
     ImagenPlaced, Modo, Thumbnail, image_notice, imagen_from_thumbnail, modo_effective,
 };
@@ -27,7 +27,7 @@ fn vp(wire: &str) -> VPath {
 /// start with the PNG signature — a real regression, caught while writing
 /// these tests. Same pattern `status_row_with_png_without_previewer` already
 /// used (signature + `IHDR` + zero padding up to 40 bytes).
-fn png_bytes_binarios() -> Vec<u8> {
+fn png_bytes_binaries() -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
     bytes.resize(40, 0);
     bytes
@@ -140,7 +140,7 @@ fn a_plugin_previewer_does_not_hide_that_the_bytes_are_an_image() {
 /// APC closes with `\x1b\\` and a PNG normally contains that byte pair.
 #[test]
 fn placing_carries_the_id_the_size_and_base64() {
-    let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20), None);
+    let esc = escape_place(7, b"PNGFALSO", Rect::new(1, 2, 40, 20), None);
     assert!(esc.starts_with("\x1b_G"), "starts with APC: {esc}");
     assert!(esc.contains("i=7"), "carries the id: {esc}");
     assert!(
@@ -172,13 +172,13 @@ fn thumb(mimetype: &str) -> PluginThumbnail {
         plugin_id: "image-thumb".to_owned(),
         plugin_name: "image-thumb".to_owned(),
         mimetype: mimetype.to_owned(),
-        bytes: png_bytes_binarios(),
+        bytes: png_bytes_binaries(),
         width: 8,
         height: 4,
     }
 }
 
-/// FINDING 1 of the branch review: `escape_colocar` sends a FIXED `f=100`
+/// FINDING 1 of the branch review: `escape_place` sends a FIXED `f=100`
 /// — kitty has no `f=` key for JPEG or WebP, only PNG (100) or raw raster
 /// (24/32) — but `PluginThumbnail.mimetype` allows all three, and
 /// `thumb::reencode` (`norte-plugin-host`) really does fall back to JPEG
@@ -215,7 +215,7 @@ fn a_webp_thumbnail_is_discarded() {
 fn a_png_thumbnail_is_placed() {
     let path = vp("mem:///x.png");
     let imagen = imagen_from_thumbnail(&path, thumb("image/png"))
-        .colocable()
+        .placeable()
         .expect("a PNG does get placed");
     assert_eq!(imagen.mimetype, "image/png");
     assert_eq!(imagen.path, path);
@@ -223,20 +223,20 @@ fn a_png_thumbnail_is_placed() {
 
 /// A real thumbnail does not fit in a single APC, so it has to be
 /// chunked: every chunk but the last carries `m=1` and the last `m=0`.
-/// Without this test, the ones above pass with an `escape_colocar` that
+/// Without this test, the ones above pass with an `escape_place` that
 /// does not know how to chunk — 8 bytes never reach the cap.
 #[test]
 fn large_content_is_chunked() {
     let large = vec![0u8; 12 * 1024];
-    let esc = escape_colocar(7, &large, Rect::new(1, 2, 40, 20), None);
+    let esc = escape_place(7, &large, Rect::new(1, 2, 40, 20), None);
     let chunks: Vec<&str> = esc.split("\x1b_G").skip(1).collect();
     assert!(
         chunks.len() > 1,
         "a large image goes in several chunks: {}",
         chunks.len()
     );
-    let (last, previos) = chunks.split_last().expect("there is at least one");
-    for t in previos {
+    let (last, previous) = chunks.split_last().expect("there is at least one");
+    for t in previous {
         assert!(
             t.contains("m=1"),
             "a chunk that is not the last continues: {t}"
@@ -332,7 +332,7 @@ fn app_with_placed_image(area_no_empty: bool) -> (App, Rect) {
     let path = vp("mem:///x.png");
     app.viewer = Some(norte_tui::viewer::Viewer::new(
         path.clone(),
-        png_bytes_binarios(),
+        png_bytes_binaries(),
         false,
     ));
     app.viewer_imagen = Some(ImagenPlaced {
@@ -359,17 +359,17 @@ fn app_with_placed_image(area_no_empty: bool) -> (App, Rect) {
 /// empty". With an overlay that does NOT cover the whole screen (a small
 /// modal, the menu, which-key) the painter blanked the slot as always while
 /// the run loop refused to place pixels: neither image nor hexview. Both
-/// questions are now the SAME function (`ui::imagen_a_colocar`).
+/// questions are now the SAME function (`ui::image_to_place`).
 #[test]
 fn with_something_on_top_it_is_not_placed_even_though_the_path_matches() {
     let (mut app, area) = app_with_placed_image(true);
     assert!(
-        norte_tui::ui::imagen_a_colocar(&app, area).is_some(),
+        norte_tui::ui::image_to_place(&app, area).is_some(),
         "with nothing on top, the thumbnail is placed"
     );
     app.modal = Some(Modal::ConfirmQuit);
     assert!(
-        norte_tui::ui::imagen_a_colocar(&app, area).is_none(),
+        norte_tui::ui::image_to_place(&app, area).is_none(),
         "a modal open over the viewer must not let pixels be placed"
     );
 }
@@ -377,13 +377,13 @@ fn with_something_on_top_it_is_not_placed_even_though_the_path_matches() {
 /// The empty slot (terminal too short to leave room for the frame and its
 /// interior) is the other case where nothing gets placed — the empty-rect
 /// test the branch review asked for separately from the overlay check
-/// above: before this pass, `imagen_a_colocar` did not exist and nothing
+/// above: before this pass, `image_to_place` did not exist and nothing
 /// tested this branch in isolation from the rest of `coloca`.
 #[test]
 fn with_an_empty_rect_it_is_not_placed() {
     let (app, area) = app_with_placed_image(false);
     assert!(
-        norte_tui::ui::imagen_a_colocar(&app, area).is_none(),
+        norte_tui::ui::image_to_place(&app, area).is_none(),
         "with no slot to land in, there is nothing to place: {area:?}"
     );
 }
@@ -400,9 +400,9 @@ fn with_an_empty_rect_it_is_not_placed() {
 fn kitty_to_off_releases_the_already_placed_thumbnail() {
     let (mut app, _) = app_with_placed_image(true);
     app.viewer_modo = Modo::Kitty;
-    let soltada = app.drop_thumbnail_if_no_longer_kitty(Modo::Nothing);
+    let released = app.drop_thumbnail_if_no_longer_kitty(Modo::Nothing);
     assert!(
-        soltada,
+        released,
         "a Kitty that switches to off must release the thumbnail"
     );
     assert!(
@@ -427,13 +427,13 @@ fn blocks_to_kitty_does_not_touch_pinned_mode() {
     let mut app = app_en(&dir);
     app.viewer = Some(norte_tui::viewer::Viewer::new(
         vp("mem:///x.png"),
-        png_bytes_binarios(),
+        png_bytes_binaries(),
         false,
     ));
     app.viewer_modo = Modo::Blocks;
-    let soltada = app.drop_thumbnail_if_no_longer_kitty(Modo::Kitty);
+    let released = app.drop_thumbnail_if_no_longer_kitty(Modo::Kitty);
     assert!(
-        !soltada,
+        !released,
         "it only acts when the pinned mode was ALREADY Kitty"
     );
     assert_eq!(
@@ -452,13 +452,13 @@ fn blocks_to_kitty_does_not_touch_pinned_mode() {
 /// ("preview"), not `Kitty`'s ("thumbnails") on a file that extension was
 /// never asked for.
 #[test]
-fn el_pintor_usa_el_modo_pineado_no_el_chrome_en_vivo() {
+fn the_painter_uses_the_pinned_mode_not_the_live_chrome() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     app.viewer = Some(norte_tui::viewer::Viewer::new(
         vp("mem:///x.png"),
-        png_bytes_binarios(),
+        png_bytes_binaries(),
         false,
     ));
     // What `open_viewer` set when the reader opened the file.
@@ -500,9 +500,9 @@ fn without_a_viewer_there_is_nothing_to_drop() {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     assert_eq!(app.viewer_modo, Modo::Nothing);
-    let soltada = app.drop_thumbnail_if_no_longer_kitty(Modo::Nothing);
+    let released = app.drop_thumbnail_if_no_longer_kitty(Modo::Nothing);
     assert!(
-        !soltada,
+        !released,
         "with no viewer open there is no thumbnail to release"
     );
 }
@@ -612,7 +612,7 @@ fn no_thumbnail_notice_needed_when_it_is_not_an_image() {
 fn no_thumbnail_notice_needed_when_one_is_already_placed() {
     use norte_tui::viewer_open::no_need_to_warn_about_thumbnail;
     let path = vp("mem:///x.png");
-    let v = norte_tui::viewer::Viewer::new(path.clone(), png_bytes_binarios(), false);
+    let v = norte_tui::viewer::Viewer::new(path.clone(), png_bytes_binaries(), false);
     let imagen = ImagenPlaced {
         path,
         bytes: vec![0u8; 4],
@@ -634,7 +634,7 @@ fn no_thumbnail_notice_needed_when_one_is_already_placed() {
 #[test]
 fn no_thumbnail_notice_needed_compares_the_path() {
     use norte_tui::viewer_open::no_need_to_warn_about_thumbnail;
-    let v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), png_bytes_binarios(), false);
+    let v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), png_bytes_binaries(), false);
     let from_another_file = ImagenPlaced {
         path: vp("mem:///otro.png"),
         bytes: vec![0u8; 4],
@@ -841,7 +841,7 @@ fn in_kitty_with_thumbnail_placed_the_warning_does_not_appear() {
     let path = vp("mem:///x.png");
     app.viewer = Some(norte_tui::viewer::Viewer::new(
         path.clone(),
-        png_bytes_binarios(),
+        png_bytes_binaries(),
         false,
     ));
     app.viewer_imagen = Some(ImagenPlaced {

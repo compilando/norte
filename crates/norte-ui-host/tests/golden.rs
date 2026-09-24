@@ -120,7 +120,7 @@ fn row(key: u64, name: &str, hostile: bool) -> RowView {
 ///
 /// The badge, its role and the icon cross JSON here and nowhere else: they
 /// are what a THIRD PARTY paints attached to a file name.
-fn row_adornada(key: u64, name: &str) -> RowView {
+fn row_decorated(key: u64, name: &str) -> RowView {
     RowView {
         badge: "M".to_owned(),
         badge_hostile: false,
@@ -735,7 +735,7 @@ fn screen_actions() -> Vec<(&'static str, UiAction)> {
 }
 
 #[test]
-fn acuses() {
+fn acknowledgments() {
     check_family(
         "acks.json",
         &[
@@ -1160,7 +1160,7 @@ fn reference_slots() -> Vec<SlotView> {
             rows: vec![
                 row(1, "notas.txt", false),
                 row(2, "caf\u{FFFD}.txt", true),
-                row_adornada(3, "cambiado.rs"),
+                row_decorated(3, "cambiado.rs"),
             ],
             icon_column: true,
             cursor: Some(RowKey(1)),
@@ -2359,7 +2359,7 @@ fn reference_help() -> norte_ui_host::dto::HelpView {
 }
 
 #[test]
-fn actualizaciones() {
+fn updates() {
     let snapshot = reference_snapshot();
     check_family(
         "updates.json",
@@ -2469,10 +2469,10 @@ fn nothing_serialized_carries_a_raw_path() {
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/updates.json"),
     )
     .expect("fixture");
-    for prohibido in ["VPath", "PathBuf", "OsString", "wire:", "file:///"] {
+    for forbidden in ["VPath", "PathBuf", "OsString", "wire:", "file:///"] {
         assert!(
-            !json.contains(prohibido),
-            "the bridge must not carry {prohibido}"
+            !json.contains(forbidden),
+            "the bridge must not carry {forbidden}"
         );
     }
 }
@@ -2823,30 +2823,30 @@ fn no_bridge_number_exceeds_where_f64_is_exact() {
     /// 2^53: the last integer an `f64` represents with no lost neighbors.
     const CAP: u64 = 1 << 53;
 
-    fn walks(v: &Value, where_: &str, malos: &mut Vec<String>) {
+    fn walks(v: &Value, where_: &str, bad: &mut Vec<String>) {
         match v {
             Value::Number(n) => {
                 if let Some(u) = n.as_u64()
                     && u > CAP
                 {
-                    malos.push(format!("{where_} = {u}"));
+                    bad.push(format!("{where_} = {u}"));
                 }
             }
             Value::Array(xs) => {
                 for (i, x) in xs.iter().enumerate() {
-                    walks(x, &format!("{where_}[{i}]"), malos);
+                    walks(x, &format!("{where_}[{i}]"), bad);
                 }
             }
             Value::Object(m) => {
                 for (k, x) in m {
-                    walks(x, &format!("{where_}.{k}"), malos);
+                    walks(x, &format!("{where_}.{k}"), bad);
                 }
             }
             _ => {}
         }
     }
 
-    let mut malos = Vec::new();
+    let mut bad = Vec::new();
     for file in [
         "updates.json",
         "changes.json",
@@ -2855,12 +2855,12 @@ fn no_bridge_number_exceeds_where_f64_is_exact() {
         "envelope.json",
     ] {
         for (case, valor) in load(file) {
-            walks(&valor, &format!("{file}/{case}"), &mut malos);
+            walks(&valor, &format!("{file}/{case}"), &mut bad);
         }
     }
     assert!(
-        malos.is_empty(),
-        "a bridge number goes past 2^53 and the renderer would round it off: {malos:?}"
+        bad.is_empty(),
+        "a bridge number goes past 2^53 and the renderer would round it off: {bad:?}"
     );
 }
 

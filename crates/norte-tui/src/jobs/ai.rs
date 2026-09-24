@@ -258,7 +258,7 @@ pub fn harvest_checksum(
     // the verdict comes out of the SHARED funnel, which is where the rule
     // for what each reason means lives. Compute: the list is what was
     // requested, with its digest.
-    let (title_key, rows) = if let Some(published) = run.publicado {
+    let (title_key, rows) = if let Some(published) = run.published {
         let verdicts = checksums::judge(&published.lines, &published.asked, &computed);
         app.message = Some(match checksums::summarize(&verdicts, published.refused) {
             // "All correct" can't be said about 37 of 40 lines: the three

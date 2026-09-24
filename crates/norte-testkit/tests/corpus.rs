@@ -23,7 +23,7 @@ fn corpus_counts() {
 }
 
 #[test]
-fn hostile_chords_son_un_solo_codepoint_hazard_y_unicos() {
+fn hostile_chords_are_a_single_codepoint_hazard_and_unique() {
     let chords = hostile_chords();
     let mut seen = std::collections::HashSet::new();
     for c in &chords {

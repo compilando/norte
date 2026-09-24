@@ -30,7 +30,7 @@ impl State {
                     | crate::dto::TaskStateView::Paused
             )
         });
-        if !self.session.owner || self.session.futuro {
+        if !self.session.owner || self.session.future {
             // A loose window does not write, and a future session is not
             // clobbered.
             return ShutdownReport {

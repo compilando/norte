@@ -299,7 +299,7 @@ async fn cycling_the_encoding_also_repaints_the_header() {
     }))
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
 
     let mut header = None;
     tokio::time::pause();
@@ -627,7 +627,7 @@ async fn swapping_re_requests_the_in_flight_navigation() {
     );
     f.put("mem:///casa/docs", vec![(b"informe.pdf".to_vec(), false)]);
     // Slow enough for the swap to land WITHIN the navigation.
-    f.retraso_ms = 400;
+    f.delay_ms = 400;
     let (h, snap) = host_con_layout(Arc::new(f), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
     let b1 = listing_of(&snap, 1);
@@ -669,7 +669,7 @@ async fn swapping_re_requests_the_in_flight_navigation() {
 
 /// A swap during the DRAIN also re-requests it.
 ///
-/// `in_flight` dies with the first page and `drenando` stays alive: in a
+/// `in_flight` dies with the first page and `draining` stays alive: in a
 /// directory of more than a hundred entries — i.e. almost any — there is a
 /// window in which only the drain is alive. Looking only at `in_flight` left
 /// the listing frozen at a hundred entries, in `Ready` and saying nothing,
@@ -682,7 +682,7 @@ async fn swapping_re_requests_the_drain() {
         "mem:///casa",
         (0..250).map(|i| (format!("f{i:03}").into_bytes(), false)),
     );
-    f.gate_drenaje = Some(Arc::clone(&gate));
+    f.gate_drain = Some(Arc::clone(&gate));
     let (h, _snap) = host_con_layout(Arc::new(f), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
 

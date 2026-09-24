@@ -311,7 +311,7 @@ async fn filling_does_not_publish_a_patch_per_batch() {
         .map(|i| (format!("fichero-{i:06}.txt").into_bytes(), false))
         .collect();
     f.put("mem:///casa", names);
-    f.gate_drenaje = Some(Arc::clone(&gate));
+    f.gate_drain = Some(Arc::clone(&gate));
     let (h, _snap) = host_with(Arc::new(f)).await;
     let mut sub = h.subscribe();
     gate.open();

@@ -300,7 +300,7 @@ pub(crate) fn stable_partial_name(final_name: &[u8]) -> Vec<u8> {
 /// (today it preserves no permissions in any copy); sneaking it in here
 /// would be deciding it by default inside a fix.
 #[cfg(unix)]
-pub(crate) fn modo_publicado() -> u32 {
+pub(crate) fn modo_published() -> u32 {
     0o666 & !process_umask()
 }
 
@@ -349,7 +349,7 @@ fn process_umask() -> u32 {
 /// stays free of instrumentation dependencies —; whoever wants to know
 /// looks at the file's mode.
 #[cfg(unix)]
-pub(crate) fn reponer_modo_publicado(file: &std::fs::File, stable: bool) {
+pub(crate) fn restore_modo_published(file: &std::fs::File, stable: bool) {
     use std::os::fd::AsRawFd as _;
 
     if !stable {
@@ -358,14 +358,14 @@ pub(crate) fn reponer_modo_publicado(file: &std::fs::File, stable: bool) {
     // SAFETY: `file` is alive and its fd is valid for the whole call.
     // `fchmod` takes no pointers.
     #[allow(unsafe_code)]
-    let _ = unsafe { libc::fchmod(file.as_raw_fd(), modo_publicado() as libc::mode_t) };
+    let _ = unsafe { libc::fchmod(file.as_raw_fd(), modo_published() as libc::mode_t) };
 }
 
 /// Windows has no POSIX mode to restore: the file inherits its directory's
 /// ACL and the staging was never restricted by hand.
 #[cfg(windows)]
 #[allow(clippy::needless_pass_by_value)]
-pub(crate) fn reponer_modo_publicado(_file: &std::fs::File, _stable: bool) {}
+pub(crate) fn restore_modo_published(_file: &std::fs::File, _stable: bool) {}
 
 /// Opens (or creates) the stable staging of `path` to RESUME, and says how
 /// many bytes there already were.
@@ -375,7 +375,7 @@ pub(crate) fn reponer_modo_publicado(_file: &std::fs::File, _stable: bool) {}
 /// compute the staging name (#298).
 #[cfg(unix)]
 fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
-    crate::confined::opens_staging_estable(path)
+    crate::confined::opens_staging_stable(path)
 }
 
 /// Windows: without #298's checks yet. A reparse point planted with the
@@ -398,7 +398,7 @@ fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), E
 /// [`open_stable_staging`].
 #[cfg(unix)]
 fn open_partial_for_digest(path: &std::path::Path) -> Result<Option<std::fs::File>, Error> {
-    crate::confined::opens_partial_verificado(path)
+    crate::confined::opens_partial_verified(path)
 }
 
 #[cfg(windows)]
@@ -2338,7 +2338,7 @@ impl ByteSink for LocalSink {
             // TOCTOU window.
             match rename_noreplace(&partial, &final_path) {
                 Ok(()) => {
-                    reponer_modo_publicado(&file, stable);
+                    restore_modo_published(&file, stable);
                     Ok(())
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
@@ -2359,7 +2359,7 @@ impl ByteSink for LocalSink {
                                 let _ = std::fs::remove_file(&partial);
                                 map_io(&e)
                             })?;
-                            reponer_modo_publicado(&file, stable);
+                            restore_modo_published(&file, stable);
                             Ok(())
                         }
                         Err(e) => {

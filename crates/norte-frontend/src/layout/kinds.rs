@@ -449,7 +449,7 @@ mod tests {
     /// does not appear in the bar until the reader approves and enables
     /// the plugin.
     #[test]
-    fn un_panel_sin_consentir_no_aporta_kind() {
+    fn a_panel_without_consent_contributes_no_kind() {
         let mut reg = KindRegistry::builtin();
         reg.insert_panels(&[panel_de_plugin("org.norte.git", "git", None, false)]);
         assert!(

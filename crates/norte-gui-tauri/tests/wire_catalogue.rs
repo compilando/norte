@@ -58,9 +58,9 @@ fn the_catalog_goes_and_returns_with_the_same_fields() {
     assert!(read.appearance.custom_titlebar);
 
     let return_: serde_json::Value = serde_json::to_value(&read).expect("serializes");
-    let esperado: serde_json::Value = serde_json::from_str(FIXTURE).expect("json");
+    let expected: serde_json::Value = serde_json::from_str(FIXTURE).expect("json");
     assert_eq!(
-        return_, esperado,
+        return_, expected,
         "the catalogue has to come back with the SAME fields: a rename \
          here leaves the renderer reading `undefined`"
     );
@@ -87,12 +87,12 @@ fn the_catalog_carries_the_host_version() {
 fn the_marks_rule_counts_the_same_segments_on_both_sides() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
     let tipos = std::fs::read_to_string(root.join("ui/src/types.ts")).expect("types.ts");
-    let esperado = format!(
+    let expected = format!(
         "export const MARK_RULER_SPANS = {};",
         norte_ui_host::dto::MARK_RULER_SPANS
     );
     assert!(
-        tipos.contains(&esperado),
-        "`ui/src/types.ts` does not declare `{esperado}`"
+        tipos.contains(&expected),
+        "`ui/src/types.ts` does not declare `{expected}`"
     );
 }

@@ -258,7 +258,7 @@ pub fn submit_command_line(app: &mut App, cmd: &str) {
 /// Decided BEFORE releasing the session, as in the window: afterward, the
 /// panel's path no longer serves as a key.
 fn dest_after_disconnect(app: &App, closed: &VPath) -> VPath {
-    norte_frontend::nav::regreso_after_disconnect(closed, app.history[app.focus()].trail())
+    norte_frontend::nav::return_after_disconnect(closed, app.history[app.focus()].trail())
         .unwrap_or_else(norte_frontend::shell::home_vpath)
 }
 
@@ -1527,7 +1527,7 @@ mod pane_gestures_tests {
     /// rewind of two apart. With `fwd` empty the second rewind would be a
     /// no-op and no test would see it; with the reader's branch underneath,
     /// it eats it.
-    fn app_con_paso_suspendido() -> (App, VPath) {
+    fn app_with_suspended_step() -> (App, VPath) {
         let mut app = app_en("mem:///d", "mem:///otro");
         app.set_focus(0);
         for dir in ["mem:///a", "mem:///b", "mem:///c"] {
@@ -1566,7 +1566,7 @@ mod pane_gestures_tests {
     /// step `walk_trail` took is the step that occurred.
     #[test]
     fn a_retry_that_lands_leaves_the_step_taken_and_does_not_record_it() {
-        let (mut app, dir) = app_con_paso_suspendido();
+        let (mut app, dir) = app_with_suspended_step();
         let before = (app.history[0].back_len(), app.history[0].fwd_len());
         let mru_before: Vec<VPath> = app.history[0].entries().iter().cloned().collect();
         // The modal CARRIES the interrupted navigation's trail, and the
@@ -1601,7 +1601,7 @@ mod pane_gestures_tests {
     /// reader already had.
     #[test]
     fn an_abandoned_retry_rewinds_the_step_exactly_once() {
-        let (mut app, dir) = app_con_paso_suspendido();
+        let (mut app, dir) = app_with_suspended_step();
         let (back_given, fwd_given) = (app.history[0].back_len(), app.history[0].fwd_len());
 
         settle_suspended_trail(
@@ -1636,7 +1636,7 @@ mod pane_gestures_tests {
     /// either — it is still a `Replay`.
     #[test]
     fn a_retry_that_suspends_again_neither_rewinds_nor_records() {
-        let (mut app, dir) = app_con_paso_suspendido();
+        let (mut app, dir) = app_with_suspended_step();
         let before = (app.history[0].back_len(), app.history[0].fwd_len());
         let mru_before: Vec<VPath> = app.history[0].entries().iter().cloned().collect();
 
@@ -1673,7 +1673,7 @@ mod pane_gestures_tests {
     /// nothing.
     #[test]
     fn a_suspended_normal_cd_has_no_step_to_rewind() {
-        let (mut app, dir) = app_con_paso_suspendido();
+        let (mut app, dir) = app_with_suspended_step();
         let before = (app.history[0].back_len(), app.history[0].fwd_len());
 
         settle_suspended_trail(&mut app, 0, &dir, Trail::Record, &Cd::Cancelled);
@@ -1956,12 +1956,12 @@ mod edit_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("notas.txt");
         std::fs::write(&file, b"").expect("create");
-        let creado = norte_vfs::native::vpath_from_native(&file).expect("native");
+        let created = norte_vfs::native::vpath_from_native(&file).expect("native");
 
-        let pending = edit_created(&creado).expect("local");
+        let pending = edit_created(&created).expect("local");
         assert_eq!(
             pending.check_regular.as_ref(),
-            Some(&creado),
+            Some(&created),
             "the suspension carries the path to check on launch"
         );
         assert_eq!(pending.argv.len(), 2, "program and path, no shell line");
@@ -2005,13 +2005,13 @@ mod edit_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let secret = dir.path().join("secreto");
         std::fs::write(&secret, b"de otro").expect("create");
-        let creado_nativo = dir.path().join("notas.txt");
+        let created_native = dir.path().join("notas.txt");
         // What norte created, already unlinked and replaced by the link.
-        std::os::unix::fs::symlink(&secret, &creado_nativo).expect("symlink");
-        let creado = norte_vfs::native::vpath_from_native(&creado_nativo).expect("native");
+        std::os::unix::fs::symlink(&secret, &created_native).expect("symlink");
+        let created = norte_vfs::native::vpath_from_native(&created_native).expect("native");
 
         assert_eq!(
-            reason_not_to_launch(&backend_local(), Some(creado)).await,
+            reason_not_to_launch(&backend_local(), Some(created)).await,
             Some(t("msg-edit-created-changed")),
             "a link is not the file that was created"
         );
@@ -2025,7 +2025,7 @@ mod edit_tests {
         let folder = dir.path().join("notas.txt");
         std::fs::create_dir(&folder).expect("mkdir");
         let as_dir = norte_vfs::native::vpath_from_native(&folder).expect("native");
-        let ausente =
+        let absent =
             norte_vfs::native::vpath_from_native(&dir.path().join("no-esta")).expect("native");
 
         let backend = backend_local();
@@ -2036,7 +2036,7 @@ mod edit_tests {
         // And the one that is no longer there does NOT count as "could not
         // ask": a provider's `NotFound` is an answer, not a failure to ask.
         assert_eq!(
-            reason_not_to_launch(&backend, Some(ausente)).await,
+            reason_not_to_launch(&backend, Some(absent)).await,
             Some(t("msg-edit-created-changed"))
         );
     }
@@ -2048,10 +2048,10 @@ mod edit_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("notas.txt");
         std::fs::write(&file, b"").expect("create");
-        let creado = norte_vfs::native::vpath_from_native(&file).expect("native");
+        let created = norte_vfs::native::vpath_from_native(&file).expect("native");
 
         let backend = backend_local();
-        assert_eq!(reason_not_to_launch(&backend, Some(creado)).await, None);
+        assert_eq!(reason_not_to_launch(&backend, Some(created)).await, None);
         assert_eq!(reason_not_to_launch(&backend, None).await, None);
     }
 

@@ -15,8 +15,8 @@ use super::*;
 // - "did X already happen?" → [`until`], which waits for the double's
 //   NOTIFICATION. It costs zero on the green path and names what it was
 //   waiting for when it fails. Its short form, for the most common case, is
-//   [`anotados`].
-// - "is it certain that NOTHING happened?" → [`asentar`], which waits for the
+//   [`annotated`].
+// - "is it certain that NOTHING happened?" → [`settle`], which waits for the
 //   executor to have no work left ready. With the clock stopped that is
 //   tokio's CONTRACT, not a bet on the scheduler.
 // - "and when the double does not see it?" → [`snapshot_until`], which requests
@@ -48,7 +48,7 @@ pub(super) async fn until<T>(
 /// It is the short form of [`until`] for by far the most common case: "what
 /// had to be queued is already queued". Returns the cloned `Vec` and not the
 /// `MutexGuard` on purpose: a guard cannot cross an `await`.
-pub(super) async fn anotados<T: Clone>(
+pub(super) async fn annotated<T: Clone>(
     f: &Fake,
     that_expected: &str,
     n: usize,
@@ -77,7 +77,7 @@ pub(super) async fn snapshot_until<T>(
     that_expected: &str,
     that: impl Fn(&norte_ui_host::ViewSnapshot) -> Option<T>,
 ) -> T {
-    const SOCORRO: std::time::Duration = std::time::Duration::from_secs(15);
+    const RESCUE: std::time::Duration = std::time::Duration::from_secs(15);
     let wait = async {
         loop {
             h.dispatch(UiAction::Resync).await.expect("host alive");
@@ -86,7 +86,7 @@ pub(super) async fn snapshot_until<T>(
             }
         }
     };
-    let Ok(v) = tokio::time::timeout(SOCORRO, wait).await else {
+    let Ok(v) = tokio::time::timeout(RESCUE, wait).await else {
         panic!("the screen never reached: {that_expected}")
     };
     v
@@ -114,8 +114,8 @@ pub(super) async fn snapshot_until<T>(
 ///
 /// The deadline is for relief, not for waiting: if the executor never goes
 /// still — a spinning task — this says so instead of hanging forever.
-pub(super) async fn asentar() {
-    const SOCORRO: std::time::Duration = std::time::Duration::from_secs(15);
+pub(super) async fn settle() {
+    const RESCUE: std::time::Duration = std::time::Duration::from_secs(15);
     let still = async {
         tokio::time::pause();
         // A VIRTUAL instant: the stopped clock's auto-advance does not
@@ -125,7 +125,7 @@ pub(super) async fn asentar() {
         tokio::time::resume();
     };
     assert!(
-        tokio::time::timeout(SOCORRO, still).await.is_ok(),
+        tokio::time::timeout(RESCUE, still).await.is_ok(),
         "the executor never ran out of work: there is a spinning task"
     );
 }
@@ -290,7 +290,7 @@ async fn a_late_response_does_not_overwrite_the_new_navigation() {
     let mut f = Fake::default();
     f.put("mem:///casa", vec![(b"docs".to_vec(), true)]);
     f.put("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
-    f.retraso_ms = 60;
+    f.delay_ms = 60;
     let backend = Arc::new(f);
     let (h, snap) = host_tree(Arc::clone(&backend)).await;
     let docs = listing(&snap).rows[0].key;
@@ -326,7 +326,7 @@ async fn a_late_response_does_not_overwrite_the_new_navigation() {
         (f.listings() == 3 && f.en_calma()).then_some(())
     })
     .await;
-    asentar().await;
+    settle().await;
     let more = tokio::time::timeout(std::time::Duration::ZERO, sub.recv()).await;
     assert!(
         more.is_err(),
@@ -1677,7 +1677,7 @@ async fn a_detached_window_does_not_write_when_toggling_a_panel() {
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     by_palette(&h, &mut sub, "layout.places").await;
-    asentar().await;
+    settle().await;
     assert!(
         backend.placed.lock().expect("puestas").is_empty(),
         "detached does not write: the session is a document with a single writer"
@@ -1755,7 +1755,7 @@ async fn deleting_asks_for_confirmation_before_touching_anything() {
         "and it says which of the answers destroys"
     );
     assert!(
-        backend.borrados.lock().expect("borrados").is_empty(),
+        backend.deleted.lock().expect("borrados").is_empty(),
         "opening the dialog deletes nothing"
     );
 }
@@ -1800,11 +1800,11 @@ async fn confirming_twice_does_not_delete_twice() {
     // And only ONE delete was requested: it waits for the first, and lets
     // whatever was behind it run before counting.
     until(&backend, "the queued delete", |f| {
-        (!f.borrados.lock().expect("borrados").is_empty()).then_some(())
+        (!f.deleted.lock().expect("borrados").is_empty()).then_some(())
     })
     .await;
-    asentar().await;
-    assert_eq!(backend.borrados.lock().expect("borrados").len(), 1);
+    settle().await;
+    assert_eq!(backend.deleted.lock().expect("borrados").len(), 1);
 }
 
 /// An answer the dialog did not offer is not interpreted: on a decision
@@ -1830,7 +1830,7 @@ async fn an_answer_that_does_not_exist_is_not_interpreted() {
             reason: StaleAction::Modal
         }
     );
-    assert!(backend.borrados.lock().expect("borrados").is_empty());
+    assert!(backend.deleted.lock().expect("borrados").is_empty());
 }
 
 /// With the delete confirmed, the task shows up on the board and its
@@ -2124,12 +2124,12 @@ async fn a_quick_task_leaves_the_checkmark_and_opens_no_panel() {
 async fn a_handoff_does_not_leave_the_bar_or_the_panel_hanging() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (evtx, evrx) = tokio::sync::mpsc::unbounded_channel();
     *fake.eventos.lock().expect("eventos") = Some(evrx);
     let (h, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = h.subscribe();
-    let _p = inyectar_task_de(&tx, 7, norte_proto::TaskKind::Copy);
+    let _p = inject_task_for(&tx, 7, norte_proto::TaskKind::Copy);
     next_tasks(&mut sub).await;
     tokio::time::advance(std::time::Duration::from_millis(
         u64::try_from(norte_frontend::task_strip::PANEL_MS).expect("positive") + 100,
@@ -2190,7 +2190,7 @@ async fn cancelling_is_idempotent() {
         assert!(matches!(ack, ActionAck::Applied { .. }));
     }
     assert_eq!(
-        backend.cancelaciones.load(Ordering::SeqCst),
+        backend.cancellations.load(Ordering::SeqCst),
         2,
         "both requests arrive; the idempotency contract belongs to the daemon"
     );
@@ -2304,7 +2304,7 @@ async fn the_lost_connection_is_painted_and_said() {
 async fn a_foreign_task_is_visible_and_said_to_be_foreign() {
     let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *fake.ajenas.lock().expect("ajenas") = Some(rx);
+    *fake.foreign.lock().expect("ajenas") = Some(rx);
     let (host, _snap) = host_tree(Arc::new(fake)).await;
     let mut sub = host.subscribe();
 
@@ -2411,7 +2411,7 @@ async fn creating_a_directory_types_and_queues() {
     .await
     .expect("host alive");
     let created = until(&backend, "the queued creation", |f| {
-        let c = f.creados.lock().expect("creados").clone();
+        let c = f.created.lock().expect("creados").clone();
         (!c.is_empty()).then_some(c)
     })
     .await;
@@ -2445,9 +2445,9 @@ async fn an_invalid_name_creates_nothing() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
-        backend.creados.lock().expect("creados").is_empty(),
+        backend.created.lock().expect("creados").is_empty(),
         "`..` is not a directory name"
     );
 }

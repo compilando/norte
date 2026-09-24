@@ -595,7 +595,7 @@ async fn there_is_no_apply_tool() {
 /// default — same precedent as `tool_delete::mode` (spec 3, task 3): the
 /// wire has no neutral value between `update` and `mirror` either.
 #[tokio::test]
-async fn sync_plan_mode_malformado_o_ausente_es_error_no_default() {
+async fn sync_plan_mode_malformed_or_missing_is_an_error_not_a_default() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     mem.mkdir(&vp("mem:///src")).await.expect("mkdir src");
     mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");

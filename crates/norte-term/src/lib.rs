@@ -75,19 +75,19 @@ pub struct Style {
     /// Background color.
     pub bg: ColorTerm,
     /// `SGR 1`.
-    pub negrita: bool,
+    pub bold: bool,
     /// `SGR 2`.
     pub tenue: bool,
     /// `SGR 3`.
-    pub cursiva: bool,
+    pub italic: bool,
     /// `SGR 4`.
-    pub subrayado: bool,
+    pub underlined: bool,
     /// `SGR 7`: the colors are swapped WHEN PAINTING, not here. Storing it
     /// already resolved would lose which was which, and `SGR 27` has to be
     /// able to undo it.
     pub inverse: bool,
     /// `SGR 9`.
-    pub tachado: bool,
+    pub strikethrough: bool,
 }
 
 /// A grid cell.
@@ -99,7 +99,7 @@ pub struct Cell {
     pub style: Style,
     /// The second half of a WIDE character: it is not painted, and it exists
     /// so the columns keep lining up.
-    pub estela: bool,
+    pub trail: bool,
 }
 
 impl Default for Cell {
@@ -107,7 +107,7 @@ impl Default for Cell {
         Self {
             c: ' ',
             style: Style::default(),
-            estela: false,
+            trail: false,
         }
     }
 }
@@ -420,7 +420,7 @@ impl Grid {
             self.cells[i] = Cell {
                 c,
                 style,
-                estela: false,
+                trail: false,
             };
         }
         for d in 1..width_c {
@@ -428,7 +428,7 @@ impl Grid {
                 self.cells[i] = Cell {
                     c: ' ',
                     style,
-                    estela: true,
+                    trail: true,
                 };
             }
         }
@@ -465,23 +465,23 @@ impl Grid {
             let n = codes[i];
             match n {
                 0 => self.style = Style::default(),
-                1 => self.style.negrita = true,
+                1 => self.style.bold = true,
                 2 => self.style.tenue = true,
-                3 => self.style.cursiva = true,
-                4 => self.style.subrayado = true,
+                3 => self.style.italic = true,
+                4 => self.style.underlined = true,
                 7 => self.style.inverse = true,
-                9 => self.style.tachado = true,
+                9 => self.style.strikethrough = true,
                 // 21 is "double underline" on some terminals and "remove
                 // bold" on others; it is treated like 22, which is what the
                 // ones that matter do.
                 21 | 22 => {
-                    self.style.negrita = false;
+                    self.style.bold = false;
                     self.style.tenue = false;
                 }
-                23 => self.style.cursiva = false,
-                24 => self.style.subrayado = false,
+                23 => self.style.italic = false,
+                24 => self.style.underlined = false,
                 27 => self.style.inverse = false,
-                29 => self.style.tachado = false,
+                29 => self.style.strikethrough = false,
                 30..=37 => self.style.fg = ColorTerm::Indexed(u8_de(n - 30)),
                 39 => self.style.fg = ColorTerm::Default,
                 40..=47 => self.style.bg = ColorTerm::Indexed(u8_de(n - 40)),
@@ -492,7 +492,7 @@ impl Grid {
                 90..=97 => self.style.fg = ColorTerm::Indexed(u8_de(n - 90 + 8)),
                 100..=107 => self.style.bg = ColorTerm::Indexed(u8_de(n - 100 + 8)),
                 38 | 48 => {
-                    let (color, read) = color_extendido(&codes[i + 1..]);
+                    let (color, read) = color_extended(&codes[i + 1..]);
                     if let Some(color) = color {
                         if n == 38 {
                             self.style.fg = color;
@@ -520,7 +520,7 @@ fn u8_de(n: u16) -> u8 {
 /// from the right place. A malformed `38` still swallows its arguments:
 /// letting them through would interpret them as loose attributes and paint
 /// with whatever.
-fn color_extendido(rest: &[u16]) -> (Option<ColorTerm>, usize) {
+fn color_extended(rest: &[u16]) -> (Option<ColorTerm>, usize) {
     match rest.first() {
         Some(5) => (
             rest.get(1).map(|n| ColorTerm::Indexed(u8_de(*n))),
@@ -561,7 +561,7 @@ impl vte::Perform for Grid {
     fn csi_dispatch(
         &mut self,
         params: &vte::Params,
-        intermedios: &[u8],
+        intermediate: &[u8],
         _ignores: bool,
         action: char,
     ) {
@@ -575,11 +575,11 @@ impl vte::Perform for Grid {
         let zero = |n: usize| codes.get(n).copied().unwrap_or(0);
         // `?` arrives as a private marker, and without checking it a plain
         // `CSI 25 l` would hide the cursor without anyone asking for it.
-        let privado = intermedios.first() == Some(&b'?');
+        let private = intermediate.first() == Some(&b'?');
         match action {
-            'm' if !privado => self.sgr(&codes),
+            'm' if !private => self.sgr(&codes),
             // `CSI H` counts from ONE; the grid, from zero.
-            'H' | 'f' if !privado => {
+            'H' | 'f' if !private => {
                 self.row = (one(0) - 1).min(self.alto - 1);
                 self.col = (one(1) - 1).min(self.width - 1);
             }
@@ -594,24 +594,24 @@ impl vte::Perform for Grid {
             'B' => self.row = self.row.saturating_add(one(0)).min(self.alto - 1),
             'C' => self.col = self.col.saturating_add(one(0)).min(self.width - 1),
             'D' => self.col = self.col.saturating_sub(one(0)),
-            'J' if !privado => self.delete_screen(zero(0)),
-            'K' if !privado => self.delete_line(zero(0)),
+            'J' if !private => self.delete_screen(zero(0)),
+            'K' if !private => self.delete_line(zero(0)),
             // Absolute position on ONE axis: `CHA` the column, `VPA` the
             // row. Cheap and constant — a prompt that repaints itself uses
             // them on every keystroke—, and without them it kept writing
             // wherever it was.
-            'G' | '`' if !privado => self.col = (one(0) - 1).min(self.width - 1),
-            'd' if !privado => self.row = (one(0) - 1).min(self.alto - 1),
+            'G' | '`' if !private => self.col = (one(0) - 1).min(self.width - 1),
+            'd' if !private => self.row = (one(0) - 1).min(self.alto - 1),
             // Insert and delete LINES, within the region and from the
             // cursor: what an editor uses to open a gap without repainting
             // the rest.
-            'L' if !privado => {
+            'L' if !private => {
                 let (up, down) = self.region;
                 if self.row >= up && self.row <= down {
                     self.down_region(self.row, down, one(0));
                 }
             }
-            'M' if !privado => {
+            'M' if !private => {
                 let (up, down) = self.region;
                 if self.row >= up && self.row <= down {
                     self.up_region(self.row, down, one(0));
@@ -620,25 +620,25 @@ impl vte::Perform for Grid {
             // Insert and delete CHARACTERS on the cursor's row, and clear
             // without moving: what a line editor uses so it does not
             // repaint the whole line on every key.
-            '@' if !privado => self.insertar_cells(one(0)),
-            'P' if !privado => self.delete_cells(one(0)),
-            'X' if !privado => {
+            '@' if !private => self.insertar_cells(one(0)),
+            'P' if !private => self.delete_cells(one(0)),
+            'X' if !private => {
                 let (row, col) = (self.row, self.col);
                 self.delete_row(row, col, col.saturating_add(one(0)));
             }
             // Scrolls the region up and down without moving the cursor
             // (`SU`/`SD`).
-            'S' if !privado => {
+            'S' if !private => {
                 let (up, down) = self.region;
                 self.up_region(up, down, one(0));
             }
-            'T' if !privado => {
+            'T' if !private => {
                 let (up, down) = self.region;
                 self.down_region(up, down, one(0));
             }
             // `REP`: repeat the last printed character. A `tput rep` uses it
             // to paint a line of dashes with four bytes.
-            'b' if !privado => {
+            'b' if !private => {
                 if let Some(c) = self.last {
                     for _ in 0..one(0) {
                         self.set(c);
@@ -649,7 +649,7 @@ impl vte::Perform for Grid {
             // to being the whole screen, and the cursor goes to its corner —
             // the spec says so and the programs that set it take it for
             // granted.
-            'r' if !privado => {
+            'r' if !private => {
                 let up = codes.first().copied().filter(|v| *v != 0).unwrap_or(1) - 1;
                 let down = codes
                     .get(1)
@@ -667,9 +667,9 @@ impl vte::Perform for Grid {
                 }
             }
             // `SCP`/`RCP`, the twins of `ESC 7`/`ESC 8` in CSI form.
-            's' if !privado => self.save_cursor(),
-            'u' if !privado => self.restore_cursor(),
-            'h' | 'l' if privado => {
+            's' if !private => self.save_cursor(),
+            'u' if !private => self.restore_cursor(),
+            'h' | 'l' if private => {
                 let turn_on = action == 'h';
                 match codes.first() {
                     Some(&25) => self.cursor_visible = turn_on,
@@ -687,8 +687,8 @@ impl vte::Perform for Grid {
         }
     }
 
-    fn esc_dispatch(&mut self, intermedios: &[u8], _ignores: bool, byte: u8) {
-        match (intermedios.first(), byte) {
+    fn esc_dispatch(&mut self, intermediate: &[u8], _ignores: bool, byte: u8) {
+        match (intermediate.first(), byte) {
             // `DECSC`/`DECRC`: save and restore the cursor.
             (None, b'7') => self.save_cursor(),
             (None, b'8') => self.restore_cursor(),
@@ -808,7 +808,7 @@ impl Screen {
     pub fn row_tramos(&self, row: u16) -> Vec<(String, Style)> {
         let mut tramos: Vec<(String, Style)> = Vec::new();
         for c in (0..self.grid.width).filter_map(|c| self.cell(row, c)) {
-            if c.estela {
+            if c.trail {
                 continue;
             }
             match tramos.last_mut() {
@@ -827,7 +827,7 @@ impl Screen {
     pub fn row_text(&self, row: u16) -> String {
         (0..self.grid.width)
             .filter_map(|c| self.cell(row, c))
-            .filter(|c| !c.estela)
+            .filter(|c| !c.trail)
             .map(|c| c.c)
             .collect()
     }
@@ -1156,7 +1156,7 @@ mod tests {
         let mut p = Screen::new(4, 1);
         p.alimentar(b"\x1b[1;31ma\x1b[0mb");
         let a = p.cell(0, 0).expect("celda");
-        assert!(a.style.negrita);
+        assert!(a.style.bold);
         assert_eq!(a.style.fg, ColorTerm::Indexed(1));
         let b = p.cell(0, 1).expect("celda");
         assert_eq!(b.style, Style::default(), "`SGR 0` limpia todo");
@@ -1187,9 +1187,9 @@ mod tests {
         let mut p = Screen::new(6, 1);
         p.alimentar("日本x".as_bytes());
         assert_eq!(p.cell(0, 0).expect("celda").c, '日');
-        assert!(p.cell(0, 1).expect("celda").estela);
+        assert!(p.cell(0, 1).expect("celda").trail);
         assert_eq!(p.cell(0, 2).expect("celda").c, '本');
-        assert!(p.cell(0, 3).expect("celda").estela);
+        assert!(p.cell(0, 3).expect("celda").trail);
         assert_eq!(p.cell(0, 4).expect("celda").c, 'x');
         assert_eq!(p.row_text(0).trim_end(), "日本x");
     }
@@ -1365,13 +1365,13 @@ mod tests {
     fn an_escape_split_across_two_chunks_is_recognized() {
         let mut whole = Screen::new(6, 1);
         whole.alimentar(b"\x1b[31mrojo");
-        let mut partido = Screen::new(6, 1);
-        partido.alimentar(b"\x1b[3");
-        partido.alimentar(b"1mrojo");
+        let mut split = Screen::new(6, 1);
+        split.alimentar(b"\x1b[3");
+        split.alimentar(b"1mrojo");
         for col in 0..6 {
             assert_eq!(
                 whole.cell(0, col).expect("celda"),
-                partido.cell(0, col).expect("celda"),
+                split.cell(0, col).expect("celda"),
                 "columna {col}"
             );
         }

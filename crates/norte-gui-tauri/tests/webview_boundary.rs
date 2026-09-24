@@ -20,7 +20,7 @@ fn json(rel: &str) -> serde_json::Value {
 
 /// The CSP leaves no gap: no remote scripts, no `eval`, no inline styles.
 #[test]
-fn la_csp_no_deja_puertas() {
+fn the_csp_leaves_no_doors() {
     let cfg = json("tauri.conf.json");
     let csp = cfg["app"]["security"]["csp"]
         .as_str()
@@ -30,7 +30,7 @@ fn la_csp_no_deja_puertas() {
     // Everything else — a CDN, a dev websocket, a wildcard — is a door to
     // the outside and cannot be there.
     let sin_ipc = csp.replace("http://ipc.localhost", "");
-    for prohibido in [
+    for forbidden in [
         "'unsafe-inline'",
         "'unsafe-eval'",
         "http://",
@@ -40,21 +40,21 @@ fn la_csp_no_deja_puertas() {
         "*",
     ] {
         assert!(
-            !sin_ipc.contains(prohibido),
-            "the CSP cannot contain {prohibido}: {csp}"
+            !sin_ipc.contains(forbidden),
+            "the CSP cannot contain {forbidden}: {csp}"
         );
     }
     assert!(
         csp.starts_with("default-src 'none'"),
         "closed by default: {csp}"
     );
-    for directiva in [
+    for directive in [
         "script-src 'self'",
         "object-src 'none'",
         "base-uri 'none'",
         "frame-ancestors 'none'",
     ] {
-        assert!(csp.contains(directiva), "missing `{directiva}`: {csp}");
+        assert!(csp.contains(directive), "missing `{directive}`: {csp}");
     }
     // Images: `blob:` YES, `data:` NO (ADR 0069).
     //
@@ -175,7 +175,7 @@ fn the_bundle_does_not_phone_home() {
          what its own comment used to say while doing the opposite.",
         dist.display()
     );
-    let mut mirados = 0usize;
+    let mut viewed = 0usize;
     for entry in walk(&dist) {
         let Some(ext) = entry.extension().and_then(|e| e.to_str()) else {
             continue;
@@ -190,8 +190,8 @@ fn the_bundle_does_not_phone_home() {
         // requests it. The whole string is removed before looking, so
         // `http://www.w3.org/something-else` is still red.
         let text = text.replace("http://www.w3.org/2000/svg", "");
-        mirados += 1;
-        for prohibido in [
+        viewed += 1;
+        for forbidden in [
             "http://",
             "https://",
             "ws://",
@@ -200,13 +200,13 @@ fn the_bundle_does_not_phone_home() {
             "new Function(",
         ] {
             assert!(
-                !text.contains(prohibido),
-                "{} contains `{prohibido}`",
+                !text.contains(forbidden),
+                "{} contains `{forbidden}`",
                 entry.display()
             );
         }
     }
-    assert!(mirados >= 2, "the HTML and its script were both looked at");
+    assert!(viewed >= 2, "the HTML and its script were both looked at");
 }
 
 fn walk(dir: &Path) -> Vec<PathBuf> {
@@ -323,14 +323,14 @@ fn the_measurement_feature_is_not_the_default_one() {
 #[test]
 fn the_renderer_only_invokes_known_commands() {
     let src = root().join("ui/src");
-    let conocidos: Vec<&str> = norte_gui_tauri::commands::COMMANDS
+    let known: Vec<&str> = norte_gui_tauri::commands::COMMANDS
         .iter()
         .copied()
         // `metrics` only exists with its feature; the renderer calls it
         // unconditionally and the production binary rejects it.
         .chain(std::iter::once("metrics"))
         .collect();
-    let mut vistos = Vec::new();
+    let mut seen = Vec::new();
     for entry in walk(&src) {
         if entry.extension().and_then(|e| e.to_str()) != Some("ts") {
             continue;
@@ -349,13 +349,13 @@ fn the_renderer_only_invokes_known_commands() {
             else {
                 continue;
             };
-            vistos.push(name.to_owned());
+            seen.push(name.to_owned());
         }
     }
-    assert!(!vistos.is_empty(), "the renderer calls something");
-    for n in &vistos {
+    assert!(!seen.is_empty(), "the renderer calls something");
+    for n in &seen {
         assert!(
-            conocidos.contains(&n.as_str()),
+            known.contains(&n.as_str()),
             "the renderer calls `{n}`, which is not in the declared surface"
         );
     }
@@ -363,7 +363,7 @@ fn the_renderer_only_invokes_known_commands() {
     // calls is a surface nobody maintains.
     for c in norte_gui_tauri::commands::COMMANDS {
         assert!(
-            vistos.iter().any(|v| v == c),
+            seen.iter().any(|v| v == c),
             "nobody calls `{c}`: is it extra in the list?"
         );
     }

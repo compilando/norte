@@ -97,14 +97,14 @@ fn the_corpus_does_not_name_commands_that_do_not_exist() {
     // promises a key that does nothing, or a misspelled id. There is no
     // debt to paper over here, only typos to fix — and since H3h there is
     // no allowlist left to pass in the other direction either.
-    let desconocidos: Vec<Issue> = check_commands(&vocabulary(), &[])
+    let unknown: Vec<Issue> = check_commands(&vocabulary(), &[])
         .into_iter()
         .filter(|i| matches!(i, Issue::UnknownCommand { .. }))
         .collect();
     assert!(
-        desconocidos.is_empty(),
+        unknown.is_empty(),
         "the corpus names commands outside the TUI's vocabulary:\n{}",
-        lines(&desconocidos)
+        lines(&unknown)
     );
 }
 

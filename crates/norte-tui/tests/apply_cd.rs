@@ -38,7 +38,7 @@ fn en_el_pane_0() -> BySlot<Fill> {
 
 /// **A mirrored navigation files away BOTH drains.**
 ///
-/// It is the entire reason `Cd::Espejado` exists. A `cd` returns ONE
+/// It is the entire reason `Cd::Mirrored` exists. A `cd` returns ONE
 /// outcome and the twelve places that file it away do not know about
 /// mirrors; if the mirrored panel's got left behind, its `Fill` — which IS
 /// that listing's drain — would be dropped with no `finish_listing`, and
@@ -56,7 +56,7 @@ fn a_mirror_archives_both_fills() {
         &mut df,
         &mut lp,
         &mut sr,
-        Cd::Espejado {
+        Cd::Mirrored {
             reader: Box::new(Cd::Filling {
                 pane: 0,
                 fill: fill(),
@@ -91,7 +91,7 @@ fn in_a_mirror_each_half_archives_on_its_own() {
         &mut df,
         &mut lp,
         &mut sr,
-        Cd::Espejado {
+        Cd::Mirrored {
             // The reading pane replaced: its old fill is no longer needed.
             reader: Box::new(Cd::Replaced(0)),
             // The mirror is paginating: its own stays.

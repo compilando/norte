@@ -192,7 +192,7 @@ fn ambiguous_prefix_is_a_load_error() {
 }
 
 #[test]
-fn shift_con_char_es_error_diagnosticable() {
+fn shift_with_char_is_a_diagnosable_error() {
     // A "shift+g" binding would never match (the canonical event discards
     // shift on chars): a rejection on parse, not a dead binding.
     match parse_chord("shift+g") {
@@ -581,7 +581,7 @@ fn the_viewer_context_merges_for_its_screen() {
 #[test]
 fn every_command_has_translated_help() {
     use norte_tui::keymap::help_id;
-    let ids_decoracion = [
+    let ids_decoration = [
         "help-title".to_owned(),
         // H3b: the sidebar's synthetic `keys` entry's label. It is resolved
         // in `HelpView::new` and travels to the model as a row TITLE: with
@@ -591,7 +591,7 @@ fn every_command_has_translated_help() {
         "help-section-viewer".to_owned(),
     ];
     let ids = COMMANDS.iter().map(|cmd| help_id(cmd));
-    for id in ids.chain(ids_decoracion) {
+    for id in ids.chain(ids_decoration) {
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
             let text = norte_i18n::t_in(lang, &id);
             assert_ne!(text, id, "{id}: no translation in {lang:?}");
@@ -630,7 +630,7 @@ fn every_help_group_header_has_a_translated_label() {
 
     let mut seen = 0usize;
     for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
-        // `keys`'s label is not being tested here (`ids_decoracion` covers
+        // `keys`'s label is not being tested here (`ids_decoration` covers
         // it); it does not matter what it is as long as it is not empty.
         let state = HelpState::new(lang, "Teclado".to_owned());
         for (i, row) in state.rows().iter().enumerate() {

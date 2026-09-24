@@ -39,14 +39,14 @@ impl State {
             .roles
             .get(RoleId::Target)
             .map(|SlotId(id)| id)
-            .filter(|id| *id != active && self.slots.contains_key(id) && !self.oculto(*id));
+            .filter(|id| *id != active && self.slots.contains_key(id) && !self.hidden(*id));
         if let Some(id) = dest_id {
             return Ok(id);
         }
         let candidates = self
             .slots
             .keys()
-            .filter(|id| **id != active && !self.oculto(**id))
+            .filter(|id| **id != active && !self.hidden(**id))
             .count();
         Err(if candidates > 1 {
             "host-no-target-designated"
@@ -72,7 +72,7 @@ impl State {
     /// just landed, or the daemon has not answered) it does not fold: this
     /// is a client courtesy and the authority is the core.
     pub(super) fn two_marks_fold_the_same(&self, paths: &[VPath]) -> bool {
-        let Some(modo) = self.slot_dest().ok().and_then(|id| self.pliegue_de(id)) else {
+        let Some(modo) = self.slot_dest().ok().and_then(|id| self.fold_of(id)) else {
             return false;
         };
         if modo == norte_encoding::FoldMode::None {
@@ -174,10 +174,10 @@ impl State {
         &mut self,
         mover: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match self.directory_dest() {
-            Ok(dest) => self.confirm_transfer(&dest, mover, backend, buzon),
+            Ok(dest) => self.confirm_transfer(&dest, mover, backend, mailbox),
             // With no OTHER slot to point at: the reader picks it outside.
             Err("host-no-other-slot") => self.request_destination_from_the_desktop(mover),
             Err(reason_key) => (
@@ -221,7 +221,7 @@ impl State {
         // core has always done. With a remote pane, whoever runs it opens
         // wherever it can — the suggestion is lost, the operation is not.
         let from = self.slot().pane.dir().clone();
-        if !self.nativo(crate::dto::NativeEffect::PickDirectory { from }) {
+        if !self.native(crate::dto::NativeEffect::PickDirectory { from }) {
             return Self::without_desktop();
         }
         self.dest_pending = Some(mover);
@@ -239,7 +239,7 @@ impl State {
         &mut self,
         path: Option<String>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(mover) = self.dest_pending.take() else {
             // Nobody asked for a destination: an answer that answers no
@@ -258,7 +258,7 @@ impl State {
                 outside,
             );
         };
-        self.confirm_transfer(&dest, mover, backend, buzon)
+        self.confirm_transfer(&dest, mover, backend, mailbox)
     }
 
     /// Files dropped from the desktop arrived (#283).
@@ -272,11 +272,11 @@ impl State {
     /// Whatever does not convert to a `VPath` is discarded, and the trim is
     /// STATED: nine of ten remain and copying without saying so would lie
     /// about the batch.
-    pub(super) fn soltados(
+    pub(super) fn released(
         &mut self,
         paths: &[String],
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let arrived = paths.len();
         let usables: Vec<VPath> = paths
@@ -385,7 +385,7 @@ impl State {
         // same way. With no total: dropped files are in no listing, so only
         // the confinement one can come out, which is the one that matters
         // here.
-        self.sondear_dest(id, dest, None, backend, buzon);
+        self.probe_dest(id, dest, None, backend, mailbox);
         let change = ViewChange::Dialogs {
             dialogs: self.dialog_views(),
         };
@@ -424,18 +424,18 @@ impl State {
     /// "checking" forever, and then "I asked and it's clean" would become
     /// indistinguishable from "I haven't asked yet" again — exactly what
     /// [`crate::dto::DestCheckView`] exists to keep apart.
-    fn sondear_dest(
+    fn probe_dest(
         &self,
         id: ModalId,
         dest: VPath,
         total: Option<u64>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let lang = self.lang;
-        let sabidas = self.path_caps(&dest);
+        let known = self.path_caps(&dest);
         tokio::spawn(async move {
             let free = match total {
                 // With no total there is no space question to ask, and
@@ -449,7 +449,7 @@ impl State {
                     .and_then(|vols| norte_frontend::space::free_for(&dest, &vols)),
             };
             let caps =
-                match sabidas {
+                match known {
                     Some(c) => c,
                     None => backend.capabilities(dest.clone()).await.unwrap_or(
                         norte_proto::Capabilities {
@@ -462,7 +462,7 @@ impl State {
                 .into_iter()
                 .chain(norte_frontend::confine::warning(caps, lang))
                 .collect();
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(
                     Background::DestinationNotices(id, notices),
                 )))
@@ -498,7 +498,7 @@ impl State {
         dest: &VPath,
         mover: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let active = self.active();
         let dest = dest.clone();
@@ -588,7 +588,7 @@ impl State {
                 mover,
             }),
         });
-        self.sondear_dest(id, dest, total, backend, buzon);
+        self.probe_dest(id, dest, total, backend, mailbox);
         let change = ViewChange::Dialogs {
             dialogs: self.dialog_views(),
         };
@@ -599,14 +599,14 @@ impl State {
     pub(super) fn confirm_rename(
         &mut self,
         from: &VPath,
-        siembra: &str,
+        seed: &str,
         written: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        match Self::bytes_del_rename(from, siembra, written) {
+        match Self::bytes_del_rename(from, seed, written) {
             Ok(dest) => {
-                Self::launch_rename(from.clone(), dest, backend, buzon);
+                Self::launch_rename(from.clone(), dest, backend, mailbox);
                 (None, Vec::new())
             }
             Err(key) => {
@@ -636,14 +636,14 @@ impl State {
         from: VPath,
         to: VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         // The directory it leaves and the one it arrives at are the SAME, so
         // one single entry: re-listing it twice would be asking for the same
         // listing twice.
-        let afectados: Vec<VPath> = from.parent().into_iter().collect();
+        let affected: Vec<VPath> = from.parent().into_iter().collect();
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let message = match backend
                 // A rename is not enqueued: it is a single step and moves no
@@ -651,10 +651,10 @@ impl State {
                 .move_(from, to, norte_proto::CollisionPolicy::Fail, false)
                 .await
             {
-                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Ok(task) => Message::TaskNew(Box::new((task, affected, None))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(message).await;
+            let _ = mailbox.send(message).await;
         });
     }
 
@@ -688,7 +688,7 @@ impl State {
         dest: &VPath,
         mover: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         self.batch = (paths.len() > 1).then(|| Batch {
             total: paths.len(),
@@ -706,7 +706,7 @@ impl State {
             enc,
             self.enqueue,
             backend,
-            buzon,
+            mailbox,
         );
     }
 
@@ -717,7 +717,7 @@ impl State {
         enc: Option<norte_encoding::NameEncoding>,
         a_la_cola: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let (source_dir, dest) = path_list;
         // The directories the outcome leaves out of date. In a copy, only
@@ -728,9 +728,9 @@ impl State {
         // server with no case distinction, they are two strings for the
         // same place and the refresh's byte-for-byte comparison would not
         // find the pane (ADR 0061). Both get noted: one of them matches.
-        let mut afectados = vec![dest.clone()];
+        let mut affected = vec![dest.clone()];
         if mover {
-            afectados.push(source_dir.clone());
+            affected.push(source_dir.clone());
         }
         let mut jobs: Vec<(VPath, VPath)> = Vec::with_capacity(paths.len());
         for path in paths {
@@ -742,14 +742,14 @@ impl State {
             };
             if mover
                 && let Some(padre) = path.parent()
-                && !afectados.contains(&padre)
+                && !affected.contains(&padre)
             {
-                afectados.push(padre);
+                affected.push(padre);
             }
             jobs.push((path.clone(), dest.join(name.clone())));
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         // ONE send task for the whole batch, and the calls IN SERIES. A
         // `spawn` per entry would open as many simultaneous RPCs as there
         // were marks: marking a few thousand files and pressing F5 is the
@@ -770,7 +770,7 @@ impl State {
                     mover,
                     enc,
                 };
-                let encolada = if mover {
+                let queued = if mover {
                     backend
                         .move_(from, to, norte_proto::CollisionPolicy::Fail, a_la_cola)
                         .await
@@ -779,14 +779,14 @@ impl State {
                         .copy(from, to, norte_proto::CollisionPolicy::Fail, a_la_cola)
                         .await
                 };
-                let message = match encolada {
-                    Ok(task) => Message::TaskNew(Box::new((task, afectados.clone(), Some(retry)))),
+                let message = match queued {
+                    Ok(task) => Message::TaskNew(Box::new((task, affected.clone(), Some(retry)))),
                     // To the batch's COUNT, not to the status bar: N
                     // rejections used to be N messages of which only the
                     // last one survived (#271).
                     Err(e) => Message::BatchTaskRejected(Box::new(e)),
                 };
-                if buzon.send(message).await.is_err() {
+                if mailbox.send(message).await.is_err() {
                     // The actor is no longer there: whatever remains of the
                     // batch matters to nobody, and continuing to request it
                     // would matter.

@@ -7,7 +7,7 @@ use super::*;
 /// Bytes `norte_encoding::detect` classifies as BINARY and that start with
 /// the PNG signature: the signature alone is eight bytes with no NUL at all
 /// and the heuristic takes them for text, which would make `is_image()` come
-/// out `false`. Same mold as the TUI's `png_bytes_binarios`.
+/// out `false`. Same mold as the TUI's `png_bytes_binaries`.
 fn png_binary() -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
     bytes.resize(40, 0);
@@ -227,7 +227,7 @@ async fn a_native_image_does_not_ask_the_plugins() {
         let _ = next_snapshot(&mut sub).await;
     }
     assert!(
-        f.anchos_de_preview.lock().expect("mutex").is_empty(),
+        f.preview_widths.lock().expect("mutex").is_empty(),
         "no previewer was asked"
     );
 }
@@ -365,7 +365,7 @@ async fn the_viewer_carries_the_previews_fragments() {
     // viewport the host started with, not a `None` that lets the guest
     // choose.
     assert_eq!(
-        f.anchos_de_preview.lock().expect("mutex").as_slice(),
+        f.preview_widths.lock().expect("mutex").as_slice(),
         &[Some(120)],
         "one request, with the viewport's width"
     );
@@ -441,7 +441,7 @@ pub(super) async fn preview_widths_after(
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
         let _ = next_snapshot(sub).await;
-        widths.clone_from(&f.anchos_de_preview.lock().expect("mutex"));
+        widths.clone_from(&f.preview_widths.lock().expect("mutex"));
         if widths.len() >= n {
             break;
         }

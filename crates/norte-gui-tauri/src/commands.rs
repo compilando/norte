@@ -19,7 +19,7 @@ pub struct Bridge {
     /// able to call `dispatch` from its own task.
     host: Arc<UiHost>,
     /// The startup frame, in its envelope (sequence 0).
-    inicial: BridgeEnvelope<UiUpdate>,
+    initial: BridgeEnvelope<UiUpdate>,
     /// Strings and colors. REPLACEABLE: the colors come from the theme, and
     /// the theme can be changed with the window open (from its picker, and
     /// from a profile). The strings do not move — the language is fixed once
@@ -39,14 +39,14 @@ impl Bridge {
         catalog: HostCatalog,
         lang: norte_i18n::Lang,
     ) -> Self {
-        let inicial = BridgeEnvelope::new(
+        let initial = BridgeEnvelope::new(
             host.instance().clone(),
             0,
             UiUpdate::Snapshot(Box::new(snapshot)),
         );
         Self {
             host: Arc::new(host),
-            inicial,
+            initial,
             catalog: std::sync::RwLock::new(Arc::new(catalog)),
             lang,
         }
@@ -103,7 +103,7 @@ impl Bridge {
     /// renderer does not start by asking for state, it already has it.
     #[must_use]
     pub fn initial_snapshot(&self) -> BridgeEnvelope<UiUpdate> {
-        self.inicial.clone()
+        self.initial.clone()
     }
 
     /// Applies an action from the renderer.

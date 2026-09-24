@@ -19,7 +19,7 @@ pub enum MapAction {
     /// Enter the chosen child.
     Enter,
     /// Re-measure this directory.
-    Remedir,
+    Remeasure,
     /// Return the keyboard without closing the pane.
     Leave,
 }
@@ -54,7 +54,7 @@ pub fn key(
         KeyCode::Home => MapAction::Mover(isize::MIN),
         KeyCode::End => MapAction::Mover(isize::MAX),
         KeyCode::Enter => MapAction::Enter,
-        KeyCode::Char('r') => MapAction::Remedir,
+        KeyCode::Char('r') => MapAction::Remeasure,
         KeyCode::Esc => MapAction::Leave,
         _ => return None,
     })
@@ -92,7 +92,7 @@ mod tests {
         );
         assert_eq!(
             key(KeyCode::Char('r'), KeyModifiers::NONE),
-            Some(MapAction::Remedir)
+            Some(MapAction::Remeasure)
         );
         assert_eq!(
             key(KeyCode::Esc, KeyModifiers::NONE),

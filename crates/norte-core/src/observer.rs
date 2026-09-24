@@ -105,7 +105,7 @@ impl<'a> Mutation<'a> {
     /// it always does—. Whoever can ask builds the variant with its `node`,
     /// which is what the copy does.
     #[must_use]
-    pub fn creado(path: &'a VPath) -> Self {
+    pub fn created(path: &'a VPath) -> Self {
         Self::Created { path, node: None }
     }
 }

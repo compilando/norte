@@ -39,7 +39,7 @@ impl State {
         self.session.revision = session.revision;
         self.session.owner = owner;
         if session.version > norte_frontend::session::SCHEMA_VERSION {
-            self.session.futuro = true;
+            self.session.future = true;
             return;
         }
         if session.version == 0 {
@@ -78,7 +78,7 @@ impl State {
         self.apply_session(&body);
         self.palette_recent.clone_from(&body.palette_recent);
         self.popular = norte_frontend::history::Popular::from_entries(body.popular.clone());
-        self.session.conocidos = body.slots.keys().copied().collect();
+        self.session.known = body.slots.keys().copied().collect();
         for (id, slot_state) in &body.slots {
             self.session.touched.insert(*id, slot_state.touched_ms);
         }
@@ -110,7 +110,7 @@ impl State {
     /// does not reset it (revision m10). Resetting it on assignment would
     /// require a setter at the ~40 places that write `status.message`; left
     /// noted here.
-    pub(super) fn caducar_notice(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+    pub(super) fn expire_notice(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
         let mut changed = false;
         let log_open = self
             .tree
@@ -124,20 +124,20 @@ impl State {
         match self.status.message.as_deref() {
             None => {
                 self.message_ticks = 0;
-                self.message_contado = None;
+                self.message_counted = None;
             }
             Some(msg) => {
-                if self.message_contado.as_deref() == Some(msg) {
+                if self.message_counted.as_deref() == Some(msg) {
                     self.message_ticks = self.message_ticks.saturating_add(1);
                 } else {
-                    self.message_contado = Some(msg.to_owned());
+                    self.message_counted = Some(msg.to_owned());
                     self.message_ticks = 1;
                 }
                 let cap = self.config.common.ui_chrome.notice_seconds();
                 if cap > 0 && self.message_ticks >= cap {
                     let text = self.status.message.take().unwrap_or_default();
                     self.message_ticks = 0;
-                    self.message_contado = None;
+                    self.message_counted = None;
                     self.status.notices_unread = self.status.notices_unread.saturating_add(1);
                     // `info`, not `warn`: "copied 1 file" is not a warning,
                     // and the level is what the log panel filters by.
@@ -157,13 +157,13 @@ impl State {
     /// with a dialog in front, what is being decided is not saved, like in
     /// the terminal. With a `put` in flight, it waits for the answer: two
     /// crossed writes with the same revision are a sure conflict.
-    pub(super) fn empujar_session(
+    pub(super) fn push_session(
         &mut self,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) {
         if !self.session.owner
-            || self.session.futuro
+            || self.session.future
             || self.session.in_flight.is_some()
             || !self.dialogs.is_empty()
         {
@@ -252,7 +252,7 @@ impl State {
                 false
             };
             let _ = mailbox2
-                .send(Message::HandedOff { soltada: released })
+                .send(Message::HandedOff { released })
                 .await;
         });
         (self.applied(), self.say("msg-handoff-running"))
@@ -272,7 +272,7 @@ impl State {
         // Launching the terminal and closing is up to the host. If it
         // cannot, it says so and does NOT close: the session is loose but the
         // screen is still here, which is the cheap failure.
-        if !self.nativo(crate::dto::NativeEffect::HandoffToTerminal { daemon: true }) {
+        if !self.native(crate::dto::NativeEffect::HandoffToTerminal { daemon: true }) {
             return self.say("msg-handoff-no-terminal");
         }
         self.say("msg-handoff-running")
@@ -287,7 +287,7 @@ impl State {
     /// again — through the usual path, which is the writer's policy: if
     /// another frontend claimed it in the meantime, it keeps it and this
     /// window stays loose, which is the truth.
-    pub(super) fn handoff_fallido(
+    pub(super) fn handoff_failed(
         &mut self,
         no_terminal: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -340,7 +340,7 @@ impl State {
                 self.session.in_flight = Some(arc_body);
                 tokio::spawn(async move {
                     let res = backend.session_get().await;
-                    let _ = mailbox.send(Message::SessionReleida(res)).await;
+                    let _ = mailbox.send(Message::SessionReread(res)).await;
                 });
                 Vec::new()
             }
@@ -374,7 +374,7 @@ impl State {
     /// other window just saved. With no body, the next tick conflicts and
     /// rereads again, which is the honest thing. A body from the FUTURE
     /// switches off writing entirely, as on startup.
-    pub(super) fn session_releida(
+    pub(super) fn session_reread(
         &mut self,
         res: Result<(norte_proto::methods::Session, bool), Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
@@ -390,13 +390,13 @@ impl State {
                 self.session.read = body;
             }
             Err(norte_frontend::session::SessionError::FromTheFuture { .. }) => {
-                self.session.futuro = true;
+                self.session.future = true;
             }
             Err(e) => {
                 tracing::warn!(error = %e, "the reread session is not understood; retrying");
             }
         }
-        if was_owner == owner && !self.session.futuro {
+        if was_owner == owner && !self.session.future {
             return Vec::new();
         }
         let change = self.banner_change();
@@ -420,14 +420,14 @@ impl State {
     pub(super) fn profile_seed(&mut self) -> Vec<(u32, VPath)> {
         let seeds: Vec<(u32, VPath)> = norte_frontend::config::profile_start_seeds(
             &self.config.common.profile_start,
-            &self.session.conocidos,
-            &self.session.sembrados,
+            &self.session.known,
+            &self.session.seeded,
         )
         .into_iter()
         .filter(|(id, _)| self.slots.contains_key(id))
         .collect();
         for (id, _) in &seeds {
-            self.session.sembrados.insert(*id);
+            self.session.seeded.insert(*id);
         }
         // An id the profile names and this layout does not place has nowhere
         // to open. It is SAID, like in the terminal: staying quiet about it
@@ -510,7 +510,7 @@ impl State {
             // Through there and not through a path of its own, and that is
             // this fix's lesson: an earlier version seeded them in
             // `land_listing`, and the STARTUP listing does not go
-            // through there — it goes through `list_inicial` — so they
+            // through there — it goes through `list_initial` — so they
             // never arrived. `lands_on` is where they all pass through.
             if self.attach && !slot_state.marks.is_empty() {
                 slot.marks_to_restore.clone_from(&slot_state.marks);

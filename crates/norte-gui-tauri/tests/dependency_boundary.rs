@@ -17,7 +17,7 @@ use std::collections::{HashMap, HashSet};
 /// `norte-vfs-local` is NOT here: `norte-frontend` already consumes it for
 /// native paths, and the host lives over `norte-frontend` on purpose. What is
 /// watched here is that no toolkit and no core show up.
-const PROHIBIDAS: &[&str] = &[
+const FORBIDDEN: &[&str] = &[
     // The engine and its neighbors: this window talks over a socket (ADR
     // 0066).
     "norte-core",
@@ -60,7 +60,7 @@ fn the_window_does_not_drag_in_a_provider_nor_the_core() {
     let nodes = meta["resolve"]["nodes"].as_array().expect("nodes");
 
     // id → (name, deps that are NOT dev)
-    let mut grafo: HashMap<&str, (String, Vec<&str>)> = HashMap::new();
+    let mut graph: HashMap<&str, (String, Vec<&str>)> = HashMap::new();
     for n in nodes {
         let id = n["id"].as_str().expect("id");
         let name = name_of(id, &meta);
@@ -73,26 +73,26 @@ fn the_window_does_not_drag_in_a_provider_nor_the_core() {
                 deps.push(d["pkg"].as_str().expect("pkg"));
             }
         }
-        grafo.insert(id, (name, deps));
+        graph.insert(id, (name, deps));
     }
 
-    let root = grafo
+    let root = graph
         .iter()
         .find(|(_, (name, _))| name == "norte-gui-tauri")
         .map(|(id, _)| *id)
         .expect("norte-gui-tauri is in the graph");
 
-    let mut vistos: HashSet<&str> = HashSet::new();
+    let mut seen: HashSet<&str> = HashSet::new();
     let mut pila = vec![root];
     let mut culpables: Vec<String> = Vec::new();
     while let Some(id) = pila.pop() {
-        if !vistos.insert(id) {
+        if !seen.insert(id) {
             continue;
         }
-        let Some((name, deps)) = grafo.get(id) else {
+        let Some((name, deps)) = graph.get(id) else {
             continue;
         };
-        if id != root && PROHIBIDAS.contains(&name.as_str()) {
+        if id != root && FORBIDDEN.contains(&name.as_str()) {
             culpables.push(name.clone());
         }
         pila.extend(deps.iter().copied());

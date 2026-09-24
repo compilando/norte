@@ -78,7 +78,7 @@ pub struct PanelRuntime {
     /// nothing on screen to explain it. And it happens without hostile
     /// plugins: a saved layout naming a panel from a plugin that is no
     /// longer there is enough.
-    pub intentado: Option<Signature>,
+    pub attempted: Option<Signature>,
 }
 
 impl PanelRuntime {
@@ -119,7 +119,7 @@ impl PanelRuntime {
         // signature will be a different one and it will be tried again.
         self.shown.as_ref() != Some(signature)
             && self.in_flight.as_ref() != Some(signature)
-            && self.intentado.as_ref() != Some(signature)
+            && self.attempted.as_ref() != Some(signature)
     }
 }
 
@@ -245,7 +245,7 @@ pub fn land(
     panel.in_flight = None;
     // The attempt is recorded NO MATTER WHAT: this is what stops a panel
     // with no frame from being retried on every paint.
-    panel.intentado = Some(signature.clone());
+    panel.attempted = Some(signature.clone());
     let Some(Ok(Some(marco))) = res else {
         return;
     };
@@ -357,7 +357,7 @@ mod tests {
             ..Default::default()
         };
         p.in_flight = None;
-        p.intentado = Some(f.clone());
+        p.attempted = Some(f.clone());
         assert!(
             !p.hay_that_request(&f),
             "already tried and came back with no frame"

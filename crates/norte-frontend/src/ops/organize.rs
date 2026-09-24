@@ -190,19 +190,19 @@ mod tests {
     }
 
     /// And a folder that hangs from a NEW one can never be existing, even
-    /// if there is one with that name at the root: `new/facturas` is not
-    /// `facturas`.
+    /// if there is one with that name at the root: `new/invoices` is not
+    /// `invoices`.
     #[test]
     fn a_folder_under_a_new_one_is_never_existing() {
         let lines = tree_lines(
             &[mov("a.pdf", "nueva/facturas/a.pdf")],
             &["facturas".to_owned()],
         );
-        let facturas = lines
+        let invoices = lines
             .iter()
             .find(|l| l.text == "facturas")
             .expect("is there");
-        assert_eq!(facturas.kind, TreeKind::NewDir);
+        assert_eq!(invoices.kind, TreeKind::NewDir);
     }
 
     /// The summary counts new folders and moved files, which is what goes

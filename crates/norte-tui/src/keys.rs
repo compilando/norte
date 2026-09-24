@@ -414,7 +414,7 @@ pub async fn on_key(
             }
             KeyCode::Esc if plain => {
                 app.goto = None;
-                crate::jobs::goto::olvidar(work);
+                crate::jobs::goto::forget(work);
             }
             KeyCode::Up if plain => {
                 if let Some(g) = &mut app.goto {
@@ -436,7 +436,7 @@ pub async fn on_key(
                 // a modal— rules the screen, and a late response no longer
                 // has anywhere to land.
                 app.goto = None;
-                crate::jobs::goto::olvidar(work);
+                crate::jobs::goto::forget(work);
                 let Some(key) = key else { return };
                 match crate::goto::action(app, &key) {
                     crate::goto::Action::Ir(dir) => {

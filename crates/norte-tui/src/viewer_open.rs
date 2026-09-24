@@ -231,7 +231,7 @@ pub fn placement(
     if zoom_pct < 100 {
         // Shrinks the slot. Never to zero: `c=0,r=0` means to kitty "the
         // image's natural size", which over the whole screen is exactly
-        // what [`imagen_a_colocar`]'s guard prevents.
+        // what [`image_to_place`]'s guard prevents.
         let scale = |v: u16| {
             u16::try_from(u32::from(v) * u32::from(zoom_pct) / 100)
                 .unwrap_or(u16::MAX)
@@ -296,15 +296,15 @@ pub enum Thumbnail {
     /// place — PNG only — so it was dropped ([`imagen_from_thumbnail`]).
     FormatForeign,
     /// Ready to place.
-    Colocable(ImagenPlaced),
+    Placeable(ImagenPlaced),
 }
 
 impl Thumbnail {
     /// The image, if there is one; drops the reason.
     #[must_use]
-    pub fn colocable(self) -> Option<ImagenPlaced> {
+    pub fn placeable(self) -> Option<ImagenPlaced> {
         match self {
-            Self::Colocable(imagen) => Some(imagen),
+            Self::Placeable(imagen) => Some(imagen),
             Self::Ninguna | Self::FormatForeign => None,
         }
     }
@@ -324,7 +324,7 @@ fn mint_image_id() -> u32 {
 /// Converts what `plugin.thumbnail` returned into an [`ImagenPlaced`], or
 /// says WHY there is none to place ([`Thumbnail`]).
 ///
-/// Branch review, finding 1: `escape_colocar` sends a FIXED `f=100` — kitty's
+/// Branch review, finding 1: `escape_place` sends a FIXED `f=100` — kitty's
 /// protocol has no `f=` key for JPEG nor for WebP, only PNG (100) or raw
 /// raster (24/32) — but
 /// [`norte_proto::methods::PluginThumbnail::mimetype`] allows all three
@@ -352,7 +352,7 @@ pub fn imagen_from_thumbnail(
     if thumb.mimetype != "image/png" {
         return Thumbnail::FormatForeign;
     }
-    Thumbnail::Colocable(ImagenPlaced {
+    Thumbnail::Placeable(ImagenPlaced {
         path: path.clone(),
         bytes: thumb.bytes,
         mimetype: thumb.mimetype,
@@ -478,7 +478,7 @@ pub async fn viewer_sibling(
     let Some((open, es_imagen)) = actual else {
         return;
     };
-    let quiero = if es_imagen {
+    let want = if es_imagen {
         norte_frontend::viewer::Class::Imagen
     } else {
         norte_frontend::viewer::Class::Other
@@ -489,7 +489,7 @@ pub async fn viewer_sibling(
     // uses to decide what the preview shows, and it has to be: looking at
     // a different listing would move a panel's cursor and leave the
     // preview exactly as it was.
-    let seguido = if docked {
+    let followed = if docked {
         let mut diags = Vec::new();
         app.preview_slot().and_then(|slot| {
             norte_frontend::layout::resolve_follow(&app.layout, slot, &app.roles, &mut diags)
@@ -498,7 +498,7 @@ pub async fn viewer_sibling(
     } else {
         None
     };
-    let pane = match seguido {
+    let pane = match followed {
         Some(id) => app.panes.browser(id),
         None => Some(app.focused()),
     };
@@ -512,7 +512,7 @@ pub async fn viewer_sibling(
     let dest = entries
         .iter()
         .position(|e| e.path == open)
-        .and_then(|from| norte_frontend::viewer::sibling(entries, visible, from, forward, quiero))
+        .and_then(|from| norte_frontend::viewer::sibling(entries, visible, from, forward, want))
         .and_then(|i| entries.get(i).map(|e| (i, e.path.clone())));
     let Some((row, path)) = dest else {
         app.message = Some(t("msg-viewer-no-sibling"));
@@ -525,7 +525,7 @@ pub async fn viewer_sibling(
     // It is ALWAYS pointed at, which is what makes the docked one notice
     // and what leaves the listing where the reader was looking when they
     // close it.
-    match seguido {
+    match followed {
         Some(id) => {
             if let Some(p) = app.panes.browser_mut(id) {
                 p.point_at(row);
@@ -682,7 +682,7 @@ pub async fn open_viewer(
             app.viewer_thumbnail_foreign =
                 matches!(thumbnail, Thumbnail::FormatForeign).then(|| path.clone());
             app.viewer = Some(viewer);
-            app.viewer_imagen = thumbnail.colocable();
+            app.viewer_imagen = thumbnail.placeable();
             // Finding 3: the mode the thumbnail was REQUESTED with, set
             // here and not recomputed later — see `App::viewer_modo`'s
             // rustdoc.

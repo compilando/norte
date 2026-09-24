@@ -26,11 +26,11 @@ impl State {
     pub(super) fn open_extensions(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.extensions = Some(crate::extensions::Extensions::open());
         self.gen_extensions += 1;
-        self.request_extensions_catalog(backend, buzon);
+        self.request_extensions_catalog(backend, mailbox);
         let change = ViewChange::Extensions {
             extensions: self.vista_extensions(),
         };
@@ -52,32 +52,32 @@ impl State {
         &mut self,
         f: Background,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         match f {
-            Background::Profiles(profiles, vecino) => {
-                self.with_the_profiles(profiles, vecino, buzon)
+            Background::Profiles(profiles, neighbor) => {
+                self.with_the_profiles(profiles, neighbor, mailbox)
             }
-            Background::ProfileLoaded(name, res) => self.apply_profile(&name, *res, backend, buzon),
-            Background::SettingWritten(done) => self.setting_written(*done, backend, buzon),
-            Background::SettingRestablecido(done) => {
-                self.setting_restablecido(*done, backend, buzon)
+            Background::ProfileLoaded(name, res) => {
+                self.apply_profile(&name, *res, backend, mailbox)
             }
-            Background::PlanIa(epoch, res) => self.apply_plan_ia(epoch, *res, backend, buzon),
+            Background::SettingWritten(done) => self.setting_written(*done, backend, mailbox),
+            Background::SettingRestored(done) => self.setting_restored(*done, backend, mailbox),
+            Background::PlanIa(epoch, res) => self.apply_plan_ia(epoch, *res, backend, mailbox),
             // Phase 8: the organize tree needs no second trip, so it carries
-            // neither `backend` nor `buzon`.
+            // neither `backend` nor `mailbox`.
             Background::PlanOrganize(epoch, res) => self.apply_organize_plan(epoch, *res),
             // #311: the two halves of checking checksums — the file read
             // before launching anything, and the report that arrives
             // afterward.
             Background::ChecksumsFile(sums, bytes) => {
-                self.checksums_file(&sums, *bytes, backend, buzon)
+                self.checksums_file(&sums, *bytes, backend, mailbox)
             }
             Background::ChecksumsReport(task, state, report) => {
                 self.checksums_report(task, &state, *report)
             }
             Background::BatchPlan(epoch, res) => self.apply_batch_plan(epoch, *res),
-            Background::HelpPlugins(res) => self.apply_plugins_catalog(res, backend, buzon),
+            Background::HelpPlugins(res) => self.apply_plugins_catalog(res, backend, mailbox),
             // The panes contributed by consented plugins become real kinds
             // (phase 3). With no surface to depend on: a plugin pane has to
             // be placeable even if nobody has opened help or the manager. The
@@ -115,7 +115,7 @@ impl State {
                     self.kinds.insert_panels(&list.plugins);
                     self.redo_split();
                 }
-                self.apply_extensions_catalog(opening, request, res, backend, buzon)
+                self.apply_extensions_catalog(opening, request, res, backend, mailbox)
             }
             Background::PluginTab(id, res) => self
                 .apply_detail(&id, res.as_ref().ok())
@@ -123,15 +123,15 @@ impl State {
                 .collect(),
             Background::DestinationNotices(id, notices) => self.destination_notices(id, notices),
             Background::SessionUndo(task_id, session) => {
-                self.agencia.undos.insert(task_id, session);
+                self.agency.undos.insert(task_id, session);
                 Vec::new()
             }
             Background::PalettePlugins(opening, res) => self.apply_plugin_rows(opening, res),
-            Background::Gobernada(opening, res) => {
-                self.apply_governance(opening, &res, backend, buzon)
+            Background::Governed(opening, res) => {
+                self.apply_governance(opening, &res, backend, mailbox)
             }
             Background::ConfigWritten(opening, id, res) => {
-                self.apply_write(opening, &id, res, backend, buzon)
+                self.apply_write(opening, &id, res, backend, mailbox)
             }
             Background::CommandOutput(opening, data) => self.apply_output(opening, *data),
             Background::Volumes(opening, res) => {
@@ -150,13 +150,13 @@ impl State {
             Background::GoToIndex(opening, query, res) => {
                 self.goto_index(opening, &query, res).into_iter().collect()
             }
-            Background::Desconectada(slot, res, dest) => {
-                self.apply_desconexion(slot, res, &dest, backend, buzon)
+            Background::Disconnected(slot, res, dest) => {
+                self.apply_disconnection(slot, res, &dest, backend, mailbox)
             }
             Background::PlacesVolumes(res) => self.apply_places(res).into_iter().collect(),
             Background::FooterVolumes(res) => self.apply_footer_volumes(res).into_iter().collect(),
             Background::TreeBranches(dir, children) => self
-                .apply_branches(dir, children, backend, buzon)
+                .apply_branches(dir, children, backend, mailbox)
                 .into_iter()
                 .collect(),
             Background::Results(epoch, batch) => {
@@ -171,9 +171,9 @@ impl State {
                 }
                 Vec::new()
             }
-            Background::RowsComparadas(epoch, batch) => self.apply_rows_comparadas(epoch, *batch),
+            Background::RowsCompared(epoch, batch) => self.apply_rows_compared(epoch, *batch),
             Background::PlanDeSyncVivo(epoch, id) => self.open_sync_panel(epoch, id),
-            Background::SyncApplying(epoch, id) => self.sync_applying(epoch, id, backend, buzon),
+            Background::SyncApplying(epoch, id) => self.sync_applying(epoch, id, backend, mailbox),
             Background::SyncNoApplied(epoch, safe) => {
                 let mut outside = Vec::new();
                 if let Some(s) = self.sync.as_mut().filter(|s| s.epoch == epoch) {
@@ -197,15 +197,19 @@ impl State {
             Background::SyncReport(epoch, state, report) => {
                 self.sync_report(epoch, &state, *report)
             }
-            Background::PlanDeSyncFallido(epoch) => {
-                if self.sync_pedida.as_ref().is_some_and(|p| p.epoch == epoch) {
-                    self.sync_pedida = None;
+            Background::FailedSyncPlan(epoch) => {
+                if self
+                    .sync_requested
+                    .as_ref()
+                    .is_some_and(|p| p.epoch == epoch)
+                {
+                    self.sync_requested = None;
                 }
                 Vec::new()
             }
             Background::SyncEvent(epoch, ev) => self.apply_sync_event(epoch, *ev),
             Background::Adornos(data) => self
-                .apply_adornos(*data, backend, buzon)
+                .apply_adornos(*data, backend, mailbox)
                 .into_iter()
                 .collect(),
             Background::Imagen(token, read) => self.apply_imagen(token, read).into_iter().collect(),
@@ -252,15 +256,15 @@ impl State {
     /// no plugin panes, which is the usual screen.
     /// With no `self` on purpose: since there is no effects gate, it depends
     /// on nothing from the state.
-    pub(super) fn request_panels(backend: &Arc<dyn HostBackend>, buzon: &mpsc::Sender<Message>) {
+    pub(super) fn request_panels(backend: &Arc<dyn HostBackend>, mailbox: &mpsc::Sender<Message>) {
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_list()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::PluginPanes(res))))
                 .await;
         });
@@ -277,7 +281,7 @@ impl State {
         request: u64,
         res: Result<norte_proto::methods::PluginListResult, Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         // From THIS opening. "Still open" is not "is the same one".
         if opening != self.gen_extensions {
@@ -300,7 +304,7 @@ impl State {
             plugins: Vec::new(),
             errors: Vec::new(),
         }));
-        let _ = (backend, buzon);
+        let _ = (backend, mailbox);
         let change = ViewChange::Extensions {
             extensions: self.vista_extensions(),
         };
@@ -311,7 +315,7 @@ impl State {
     pub(super) fn request_detail(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(e) = self.extensions.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -320,7 +324,7 @@ impl State {
             return (self.applied(), Vec::new());
         };
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res =
                 match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_config(id.clone()))
@@ -329,7 +333,7 @@ impl State {
                     Ok(r) => r,
                     Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
                 };
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::PluginTab(
                     id, res,
                 ))))
@@ -348,7 +352,7 @@ impl State {
         let e = self.extensions.as_mut()?;
         match res {
             Some(r) => e.set_detail(id, r, lang),
-            // A failure is also APPLIED: just returning left `pedida` set,
+            // A failure is also APPLIED: just returning left `requested` set,
             // so `claim_detail` returned `None` forever and that row could
             // never be reopened — `enter` did nothing and said nothing —
             // short of moving the cursor to another and back. It is the
@@ -373,7 +377,7 @@ impl State {
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         /// How many rows a page moves.
         const PAGE: i64 = 10;
@@ -383,8 +387,8 @@ impl State {
         // THREE REGIMES, and the order matters. While a value is being
         // TYPED, letters are letters: resolving `a` as "approve" there would
         // turn typing the word "cat" into two capability grants.
-        if e.editando() {
-            return self.key_editando_config(k, backend, buzon);
+        if e.editing() {
+            return self.key_editing_config(k, backend, mailbox);
         }
         // `Home`/`End` stay fixed: the shared catalog has no verb for "to
         // the start" inside a dialog.
@@ -454,24 +458,24 @@ impl State {
                     );
                 }
                 if e.has_detail() {
-                    return self.activate_key(backend, buzon);
+                    return self.activate_key(backend, mailbox);
                 }
-                return self.request_detail(backend, buzon);
+                return self.request_detail(backend, mailbox);
             }
             // Approving is `dialog.add` — granting — and enabling/disabling
             // is `dialog.toggle-enabled`: the two catalog verbs that mean
             // exactly that, instead of two letters only this window knew.
             (Some("dialog.add"), _) => {
-                return self.gobernar_chosen(Change::Approval, backend, buzon);
+                return self.govern_chosen(Change::Approval, backend, mailbox);
             }
             (Some("dialog.toggle-enabled"), _) => {
-                return self.gobernar_chosen(Change::On, backend, buzon);
+                return self.govern_chosen(Change::On, backend, mailbox);
             }
             // Uninstalling is `dialog.remove`, the verb that removes an
             // entry in the favorites list: here it removes the whole
             // extension, which is why it asks first.
             (Some("dialog.remove"), _) => {
-                return self.gobernar_chosen(Change::Desinstalacion, backend, buzon);
+                return self.govern_chosen(Change::Uninstallation, backend, mailbox);
             }
             _ => return (self.applied(), Vec::new()),
         }
@@ -486,11 +490,11 @@ impl State {
     /// FIXED regime, like any other field on this host: here a letter is a
     /// letter. `Enter` confirms — and then it is written — `Escape` cancels
     /// without writing, and every other key means nothing.
-    pub(super) fn key_editando_config(
+    pub(super) fn key_editing_config(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(e) = self.extensions.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -498,7 +502,7 @@ impl State {
         match k.key.as_str() {
             "Escape" | "esc" => e.cancel_edit(),
             "Backspace" | "backspace" => e.delete(),
-            "Enter" | "enter" => return self.confirm_config(backend, buzon),
+            "Enter" | "enter" => return self.confirm_config(backend, mailbox),
             other => {
                 // A printable key is its character; any other one — and any
                 // combination with a modifier — is not text.
@@ -519,7 +523,7 @@ impl State {
     pub(super) fn activate_key(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.effects == crate::commands::Effects::SoloRead {
             return Self::no_mutates();
@@ -541,7 +545,7 @@ impl State {
                 &id,
                 write,
                 backend,
-                buzon,
+                mailbox,
             ));
         }
         (self.applied(), outside)
@@ -551,7 +555,7 @@ impl State {
     pub(super) fn confirm_config(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // The buffer is only opened by `activate_key`, which already checks
         // this, so today it is unreachable — same as
@@ -577,7 +581,7 @@ impl State {
                     &id,
                     write,
                     backend,
-                    buzon,
+                    mailbox,
                 ));
                 (self.applied(), outside)
             }
@@ -628,10 +632,10 @@ impl State {
         id: &str,
         write: norte_frontend::plugin_config::PendingConfigWrite,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
+        let buzon2 = mailbox.clone();
         let (id2, key, value) = (id.to_owned(), write.key, write.value);
         tokio::spawn(async move {
             let res = match tokio::time::timeout(
@@ -659,12 +663,12 @@ impl State {
         id: &str,
         res: Result<(), Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Err(e) = res else {
             // A setting that changed can change what a decorator paints —
             // the icons' style, for one — listings are requested again.
-            return self.readornar_all(backend, buzon);
+            return self.redecorate_all(backend, mailbox);
         };
         let mut outside = self.say(norte_frontend::error::error_key(&e));
         if opening != self.gen_extensions {
@@ -681,7 +685,7 @@ impl State {
         // soon as the field closes.
         if let Some(ext) = self.extensions.as_mut()
             && ext.is_tab_of(id)
-            && !ext.editando()
+            && !ext.editing()
         {
             ext.close_detail();
             // The close ALWAYS travels in its own patch: `request_detail` sends
@@ -692,18 +696,18 @@ impl State {
                 extensions: self.vista_extensions(),
             };
             outside.push(self.parche(vec![change]));
-            let (_, parts) = self.request_detail(backend, buzon);
+            let (_, parts) = self.request_detail(backend, mailbox);
             outside.extend(parts);
         }
         outside
     }
 
     /// `a`/`e` over the chosen extension.
-    pub(super) fn gobernar_chosen(
+    pub(super) fn govern_chosen(
         &mut self,
         change: Change,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.effects == crate::commands::Effects::SoloRead {
             return Self::no_mutates();
@@ -725,10 +729,10 @@ impl State {
                 );
             };
             let key = match (change, broken.id.clone()) {
-                (Change::Desinstalacion, Some(id)) => {
+                (Change::Uninstallation, Some(id)) => {
                     return self.ask_for_uninstall(&id);
                 }
-                (Change::Desinstalacion, None) => "ext-broken-not-id",
+                (Change::Uninstallation, None) => "ext-broken-not-id",
                 _ => "ext-broken-only-uninstall",
             };
             return (
@@ -743,7 +747,7 @@ impl State {
             // Granting ASKS; revoking does not.
             Change::Approval if !approved => self.ask_for_approval(&id),
             Change::Approval => {
-                let outside = self.gobernar(&id, Governance::Approve(false, None), backend, buzon);
+                let outside = self.govern(&id, Governance::Approve(false, None), backend, mailbox);
                 (self.applied(), outside)
             }
             // TURNING ON a plugin with no approval is not a decision this
@@ -761,12 +765,12 @@ impl State {
                 self.say("host-extension-not-approved"),
             ),
             Change::On => {
-                let outside = self.gobernar(&id, Governance::TurnOn(!on), backend, buzon);
+                let outside = self.govern(&id, Governance::TurnOn(!on), backend, mailbox);
                 (self.applied(), outside)
             }
             // Uninstalling ALWAYS asks: it deletes files and there is no
             // going back.
-            Change::Desinstalacion => self.ask_for_uninstall(&id),
+            Change::Uninstallation => self.ask_for_uninstall(&id),
         }
     }
 
@@ -780,7 +784,7 @@ impl State {
         id: &str,
         change: Change,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // With a dialog in front, no: the manager is modal for the keyboard
         // (`input.rs` cuts it off before reaching here) and it has to be for
@@ -800,7 +804,7 @@ impl State {
         let Some(moved) = Self::extension_row(e, row, id) else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let (ack, mut outside) = self.gobernar_chosen(change, backend, buzon);
+        let (ack, mut outside) = self.govern_chosen(change, backend, mailbox);
         if moved {
             // The cursor moved with the click, and that is painted even if
             // what follows is a question: the highlighted row is the one
@@ -843,7 +847,7 @@ impl State {
         // One that did not load has no manifest name: its directory is
         // shown, which already comes sanitized and with its flag.
         let Some(name) = self.extensions.as_ref().and_then(|e| {
-            e.concesion(id)
+            e.grant(id)
                 .map(|c| c.name)
                 .or_else(|| e.broken(id).map(|r| (r.dir.clone(), r.hostile)))
         }) else {
@@ -920,7 +924,7 @@ impl State {
         row: u32,
         id: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // Modal for the mouse just as for the keyboard: opening help would
         // close the manager under a pending question, and that question's
@@ -971,7 +975,7 @@ impl State {
         self.extensions = None;
         self.help = Some(help);
         let mut outside = vec![self.parche(vec![ViewChange::Extensions { extensions: None }])];
-        outside.extend(self.help_patch(backend, buzon));
+        outside.extend(self.help_patch(backend, mailbox));
         (self.applied(), outside)
     }
 
@@ -981,11 +985,10 @@ impl State {
         &mut self,
         id: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(concesion) = self.extensions.as_ref().and_then(|e| e.concesion(id)) else {
+        let Some(grant) = self.extensions.as_ref().and_then(|e| e.grant(id)) else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let (name, capabilities, anchor) =
-            (concesion.name, concesion.capabilities, concesion.digest);
+        let (name, capabilities, anchor) = (grant.name, grant.capabilities, grant.digest);
         // One capability per LINE, and the extension's name apart: they are
         // the decision's operands, and folding them into a sentence is what
         // lets a third party's name impersonate the window's text. Each with
@@ -996,7 +999,7 @@ impl State {
         // grant, and showing sixteen of forty while the yes grants all forty
         // is exactly the gap the capability nobody read sneaks through. If
         // there are too many to fit, it is not asked about: it is refused.
-        if capabilities.len() > MAX_CAPABILIDADES {
+        if capabilities.len() > MAX_CAPABILITIES {
             let outside = self.say("host-extension-too-many-caps");
             return (
                 ActionAck::Unavailable {
@@ -1085,22 +1088,18 @@ impl State {
     pub(super) fn grant(
         &mut self,
         id: &str,
-        leidas: &[String],
+        read: &[String],
         anchor_read: Option<String>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let now = self
-            .extensions
-            .as_ref()
-            .and_then(|e| e.concesion(id))
-            .map(|c| {
-                c.capabilities
-                    .into_iter()
-                    .map(|(t, _)| t)
-                    .collect::<Vec<_>>()
-            });
-        if now.as_deref() == Some(leidas) {
+        let now = self.extensions.as_ref().and_then(|e| e.grant(id)).map(|c| {
+            c.capabilities
+                .into_iter()
+                .map(|(t, _)| t)
+                .collect::<Vec<_>>()
+        });
+        if now.as_deref() == Some(read) {
             // The anchor that travels is THE QUESTION's, never the current
             // catalog's (#282): re-reading it here would certify to the core
             // "this is what the human read" about what the human did not
@@ -1110,7 +1109,7 @@ impl State {
             // list.
             return (
                 None,
-                self.gobernar(id, Governance::Approve(true, anchor_read), backend, buzon),
+                self.govern(id, Governance::Approve(true, anchor_read), backend, mailbox),
             );
         }
         let mut outside = self.say("host-extension-changed");
@@ -1121,19 +1120,19 @@ impl State {
 
     /// Sends the change to the daemon. The truth will come from the
     /// re-requested catalog.
-    pub(super) fn gobernar(
+    pub(super) fn govern(
         &mut self,
         id: &str,
         change: Governance,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let opening = self.gen_extensions;
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
+        let buzon2 = mailbox.clone();
         let id2 = id.to_owned();
         tokio::spawn(async move {
-            let llamada = match change {
+            let call = match change {
                 Governance::Approve(v, digest) => backend2.plugin_set_approval(id2, v, digest),
                 Governance::TurnOn(v) => backend2.plugin_set_enabled(id2, v),
                 // Whether it had consent does not change what follows: the
@@ -1143,12 +1142,12 @@ impl State {
                     Box::pin(async move { backend2.plugin_uninstall(id2).await.map(|_| ()) })
                 }
             };
-            let res = match tokio::time::timeout(DEADLINE_PLUGINS, llamada).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, call).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = buzon2
-                .send(Message::Background(Box::new(Background::Gobernada(
+                .send(Message::Background(Box::new(Background::Governed(
                     opening, res,
                 ))))
                 .await;
@@ -1166,7 +1165,7 @@ impl State {
         opening: u64,
         res: &Result<(), Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         if opening != self.gen_extensions {
             return Vec::new();
@@ -1185,11 +1184,11 @@ impl State {
         // "unapproved" is the same lie as local optimism, in pessimistic
         // form. The only thing that resolves an unknown is going to ask.
         if self.extensions.is_some() {
-            self.repedir_catalog(backend, buzon);
+            self.rerequest_catalog(backend, mailbox);
         }
         // And the LISTINGS, for the same reason: whatever a decorator or a
         // plugin column said about each row said it with the old catalog.
-        outside.extend(self.readornar_all(backend, buzon));
+        outside.extend(self.redecorate_all(backend, mailbox));
         outside
     }
 
@@ -1203,16 +1202,16 @@ impl State {
     /// and when it lands it is dropped and re-requested. The row patch goes
     /// out RIGHT AWAY, with bare rows, so the screen does not keep showing
     /// what the manager just said is not there.
-    pub(super) fn readornar_all(
+    pub(super) fn redecorate_all(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let slots: Vec<u32> = self.slots.keys().copied().collect();
         let mut outside = Vec::new();
         for slot in slots {
             if let Some(target_slot) = self.slots.get_mut(&slot) {
-                target_slot.olvidar_adornos();
+                target_slot.forget_adornos();
                 target_slot
                     .pane
                     .set_decorations(std::collections::HashMap::new());
@@ -1220,19 +1219,19 @@ impl State {
                     .pane
                     .set_plugin_columns(std::collections::HashMap::new());
             }
-            self.adornar(slot, backend, buzon);
+            self.adornar(slot, backend, mailbox);
             outside.push(self.patch_rows_of(slot));
         }
         outside
     }
 
     /// Requests the catalog again for the LIVE opening.
-    pub(super) fn repedir_catalog(
+    pub(super) fn rerequest_catalog(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        self.request_extensions_catalog(backend, buzon);
+        self.request_extensions_catalog(backend, mailbox);
     }
 
     /// Requests the catalog for the manager, numbering the REQUEST.
@@ -1246,19 +1245,19 @@ impl State {
     pub(super) fn request_extensions_catalog(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let opening = self.gen_extensions;
         self.gen_catalog += 1;
         let request = self.gen_catalog;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_list()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::Catalog(
                     opening, request, res,
                 ))))
@@ -1274,9 +1273,9 @@ impl State {
     pub(super) fn apply_output(
         &mut self,
         opening: u64,
-        data: OutputPedida,
+        data: OutputRequested,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let OutputPedida {
+        let OutputRequested {
             id,
             plugin,
             command,
@@ -1298,9 +1297,9 @@ impl State {
                 let mut lines = Vec::new();
                 let mut hostile = false;
                 for line in cropped.lines().take(MAX_OUTPUT_LINES) {
-                    let (pintable, marked) = norte_frontend::display_name(line.as_bytes());
+                    let (paintable, marked) = norte_frontend::display_name(line.as_bytes());
                     hostile |= marked;
-                    lines.push(clamp_display(pintable));
+                    lines.push(clamp_display(paintable));
                 }
                 truncado |= cropped.lines().nth(MAX_OUTPUT_LINES).is_some();
                 self.desktop.output = Some(crate::dto::ExtensionOutputView {
@@ -1340,17 +1339,17 @@ impl State {
         &mut self,
         row: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(e) = self.extensions.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
         e.point_at(row as usize);
-        let (_, mut envios) = self.request_detail(backend, buzon);
+        let (_, mut sends) = self.request_detail(backend, mailbox);
         let change = ViewChange::Extensions {
             extensions: self.vista_extensions(),
         };
-        envios.push(self.parche(vec![change]));
-        (self.applied(), envios)
+        sends.push(self.parche(vec![change]));
+        (self.applied(), sends)
     }
 }

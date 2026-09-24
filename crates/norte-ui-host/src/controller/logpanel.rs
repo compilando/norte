@@ -37,7 +37,7 @@ const MAX_REMOTE: u32 = 500;
 /// one, because here lines ACCUMULATE round after round and with no cap a
 /// panel left open all afternoon would grow without end. Same order of
 /// magnitude as the default ring: what can be scrolled back through.
-const MAX_LINES_REMOTAS: usize = 2000;
+const MAX_LINES_REMOTE: usize = 2000;
 
 /// How many lines a page jumps when the renderer does not say its height.
 const PAGE: isize = 10;
@@ -70,7 +70,7 @@ const MAX_ROWS_LOG: usize = 512;
 /// put on screen. Collapsing them would make a freshly opened panel assert a
 /// lack nobody has checked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum Servicio {
+pub(super) enum Service {
     /// Has never answered: unknown.
     #[default]
     NoResponse,
@@ -101,7 +101,7 @@ pub(super) struct LogRemote {
     /// pile up one request per tick forever.
     pub(super) in_flight: bool,
     /// What is known about whether it serves its log.
-    pub(super) servicio: Servicio,
+    pub(super) service: Service,
     /// The level it answered it has set, in wire form.
     ///
     /// Its own, not ours: it is global to all its clients and only goes up,
@@ -145,7 +145,7 @@ impl LogRemote {
     /// There is no version comparison here or anywhere: an older daemon does
     /// not even complete `initialize`.
     pub(super) const fn must_request(&self) -> bool {
-        !matches!(self.servicio, Servicio::NoRing)
+        !matches!(self.service, Service::NoRing)
     }
 }
 
@@ -182,12 +182,12 @@ impl State {
             .as_ref()
             .map(norte_config::logring::LogRing::snapshot)
             .unwrap_or_default();
-        let origin = self.source_efectiva();
+        let origin = self.source_effective();
         // Borrowed, not cloned: `merge` returns references on purpose — the
         // ring already cloned once in its `snapshot` — and the panel paints
         // at most one screen.
-        let mezcla = norte_frontend::logpanel::merge(&lines, &self.log_remote.lines, origin);
-        let visible: Vec<_> = mezcla
+        let mix = norte_frontend::logpanel::merge(&lines, &self.log_remote.lines, origin);
+        let visible: Vec<_> = mix
             .into_iter()
             .filter(|(l, _)| self.log_panel.matches(l))
             .collect();
@@ -258,7 +258,7 @@ impl State {
                 LogSource::Both => "both",
             }
             .to_owned(),
-            sources_available: self.log_remote.servicio == Servicio::Serves,
+            sources_available: self.log_remote.service == Service::Serves,
             source_note: self.source_note(origin),
         }
     }
@@ -280,9 +280,9 @@ impl State {
     /// With both rings absent it stays `Window`, which is where #326's
     /// phrase lives: there is no log IN MEMORY to read, and that is not the
     /// same as "nothing is being logged".
-    fn source_efectiva(&self) -> LogSource {
+    fn source_effective(&self) -> LogSource {
         match (
-            self.log_remote.servicio == Servicio::Serves,
+            self.log_remote.service == Service::Serves,
             self.log_ring.is_some(),
         ) {
             (true, true) => self.log_panel.source(),
@@ -303,7 +303,7 @@ impl State {
     /// closing this panel does not lower. Staying quiet about it on the
     /// common path left that decision unannounced.
     fn source_note(&self, origin: LogSource) -> String {
-        let key = if self.log_remote.servicio == Servicio::NoRing {
+        let key = if self.log_remote.service == Service::NoRing {
             "log-source-unsupported"
         } else if origin == LogSource::Window {
             return String::new();
@@ -458,7 +458,7 @@ impl State {
         &mut self,
         level: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(level) = LogLevel::from_wire(level) else {
             // CLOSED vocabulary: an unrecognized one does not fall back to
@@ -482,15 +482,15 @@ impl State {
         // applied it here.
         if self.log_panel.source() != LogSource::Window && self.log_remote.must_request() {
             let backend = Arc::clone(backend);
-            let buzon = buzon.clone();
+            let mailbox = mailbox.clone();
             let epoch = self.log_epoch;
             let requested = level.wire().to_owned();
             tokio::spawn(async move {
                 let r = backend.log_level(requested).await;
-                let _ = buzon.send(Message::LogLevel(epoch, Box::new(r))).await;
+                let _ = mailbox.send(Message::LogLevel(epoch, Box::new(r))).await;
             });
         }
-        self.repintar_log()
+        self.repaint_log()
     }
 
     /// Cycles the log's source (#328).
@@ -510,10 +510,10 @@ impl State {
     /// same thing the TUI does, which also does not cycle without a serving
     /// daemon.
     pub(super) fn log_source(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.log_remote.servicio == Servicio::Serves {
+        if self.log_remote.service == Service::Serves {
             self.log_panel.cycle_source();
         }
-        self.repintar_log()
+        self.repaint_log()
     }
 
     /// The text filter over module and message.
@@ -527,7 +527,7 @@ impl State {
             );
         }
         self.log_panel.set_filter(text);
-        self.repintar_log()
+        self.repaint_log()
     }
 
     /// Scrolls up or down through the log, detaching from the tail.
@@ -544,24 +544,27 @@ impl State {
         // Over the MERGED list, which is what is seen: counting only the
         // local ones would leave the cap short and a page would not reach
         // the end.
-        let visible =
-            norte_frontend::logpanel::merge(&lines, &self.log_remote.lines, self.source_efectiva())
-                .into_iter()
-                .filter(|(l, _)| self.log_panel.matches(l))
-                .count();
+        let visible = norte_frontend::logpanel::merge(
+            &lines,
+            &self.log_remote.lines,
+            self.source_effective(),
+        )
+        .into_iter()
+        .filter(|(l, _)| self.log_panel.matches(l))
+        .count();
         let delta = isize::try_from(delta).unwrap_or(PAGE);
         if delta < 0 {
             self.log_panel.scroll_up(delta.unsigned_abs(), visible);
         } else {
             self.log_panel.scroll_down(delta.unsigned_abs(), visible);
         }
-        self.repintar_log()
+        self.repaint_log()
     }
 
     /// Sticks back to the end.
     pub(super) fn follow_log(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.log_panel.follow();
-        self.repintar_log()
+        self.repaint_log()
     }
 
     /// How many rows fit, from the frame the renderer just painted.
@@ -585,7 +588,7 @@ impl State {
         }
         self.log_rows = rows;
         self.log_panel.set_viewport_rows(rows);
-        self.repintar_log()
+        self.repaint_log()
     }
 
     /// Repaints the log, if some slot is showing it.
@@ -598,7 +601,7 @@ impl State {
     /// With no log slot at all, nothing is sent — the panel closes and an
     /// action in flight lands afterward — an extra snapshot spends a
     /// sequence number to paint the same thing.
-    fn repintar_log(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    fn repaint_log(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.log_slots().is_empty() {
             return (self.applied(), Vec::new());
         }
@@ -618,15 +621,15 @@ impl State {
     /// `epoch` tells one opening from the next: opening, closing and
     /// reopening would leave two timers alive over the same panel, and the
     /// old one would keep rearming forever.
-    pub(super) fn sondear_log(&self, buzon: &mpsc::Sender<Message>) {
+    pub(super) fn probe_log(&self, mailbox: &mpsc::Sender<Message>) {
         if self.log_slots().is_empty() {
             return;
         }
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let epoch = self.log_epoch;
         tokio::spawn(async move {
             tokio::time::sleep(PROBE).await;
-            let _ = buzon.send(Message::LogTic(epoch)).await;
+            let _ = mailbox.send(Message::LogTic(epoch)).await;
         });
     }
 
@@ -639,19 +642,19 @@ impl State {
         &mut self,
         epoch: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         if epoch != self.log_epoch {
             // From a previous opening: let it die without rearming.
             return Vec::new();
         }
-        self.sondear_log(buzon);
+        self.probe_log(mailbox);
         // And along the way the daemon's log is pulled (#328), hung off
         // THIS timer and not one of its own: two clocks over the same panel
         // are two things to turn off on close, and the second one is the
         // one that gets forgotten. The answer comes back through the
         // mailbox, so the actor is still the only one writing.
-        self.request_log_remote(backend, buzon);
+        self.request_log_remote(backend, mailbox);
         let now = self
             .log_ring
             .as_ref()
@@ -667,7 +670,7 @@ impl State {
         if !self.log_panel.following() {
             return Vec::new();
         }
-        let (_, outputs) = self.repintar_log();
+        let (_, outputs) = self.repaint_log();
         outputs
     }
 
@@ -686,7 +689,7 @@ impl State {
     pub(super) fn request_log_remote(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         if self.log_slots().is_empty()
             // With one in flight another is not enqueued: a daemon slower
@@ -708,12 +711,12 @@ impl State {
         }
         self.log_remote.in_flight = true;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let epoch = self.log_epoch;
         let cursor = self.log_remote.cursor;
         tokio::spawn(async move {
             let r = backend.log_tail(cursor, MAX_REMOTE).await;
-            let _ = buzon.send(Message::LogRemote(epoch, Box::new(r))).await;
+            let _ = mailbox.send(Message::LogRemote(epoch, Box::new(r))).await;
         });
     }
 
@@ -731,10 +734,10 @@ impl State {
             return Vec::new();
         }
         self.log_remote.in_flight = false;
-        let before = (self.log_remote.servicio, self.log_remote.level.clone());
-        let nuevas = match res {
+        let before = (self.log_remote.service, self.log_remote.level.clone());
+        let new = match res {
             Ok(r) => {
-                self.log_remote.servicio = Servicio::Serves;
+                self.log_remote.service = Service::Serves;
                 self.log_remote.level = Some(r.level);
                 self.log_remote.cursor = Some(r.next);
                 self.log_remote.lost = self.log_remote.lost.saturating_add(r.lost);
@@ -745,11 +748,7 @@ impl State {
                 // The cap applies from the front: the old stuff is what gets
                 // dropped, same as in the ring, and it counts as lost — that
                 // is what keeps the trim from leaving a silent gap.
-                let extra = self
-                    .log_remote
-                    .lines
-                    .len()
-                    .saturating_sub(MAX_LINES_REMOTAS);
+                let extra = self.log_remote.lines.len().saturating_sub(MAX_LINES_REMOTE);
                 if extra > 0 {
                     self.log_remote.lines.drain(..extra);
                     self.log_remote.lost = self
@@ -764,7 +763,7 @@ impl State {
             // comparison anywhere — an older one does not even complete
             // `initialize`, so it never gets this far.
             Err(Error::Unsupported) => {
-                self.log_remote.servicio = Servicio::NoRing;
+                self.log_remote.service = Service::NoRing;
                 0
             }
             // Any failure — the connection dropped, the daemon is busy — is
@@ -773,8 +772,8 @@ impl State {
             // It is kept quiet and retried in half a second.
             Err(_) => 0,
         };
-        let changes_the_state = before != (self.log_remote.servicio, self.log_remote.level.clone());
-        self.repaint_if_needed(nuevas > 0, changes_the_state)
+        let changes_the_state = before != (self.log_remote.service, self.log_remote.level.clone());
+        self.repaint_if_needed(new > 0, changes_the_state)
     }
 
     /// Lands the level the daemon really left set.
@@ -786,16 +785,16 @@ impl State {
         if epoch != self.log_epoch {
             return Vec::new();
         }
-        let before = (self.log_remote.servicio, self.log_remote.level.clone());
+        let before = (self.log_remote.service, self.log_remote.level.clone());
         match res {
             Ok(level) => {
-                self.log_remote.servicio = Servicio::Serves;
+                self.log_remote.service = Service::Serves;
                 self.log_remote.level = Some(level);
             }
-            Err(Error::Unsupported) => self.log_remote.servicio = Servicio::NoRing,
+            Err(Error::Unsupported) => self.log_remote.service = Service::NoRing,
             Err(_) => {}
         }
-        let changes = before != (self.log_remote.servicio, self.log_remote.level.clone());
+        let changes = before != (self.log_remote.service, self.log_remote.level.clone());
         self.repaint_if_needed(false, changes)
     }
 
@@ -812,7 +811,7 @@ impl State {
         changes_the_state: bool,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         if changes_the_state || (hay_lines && self.log_panel.following()) {
-            let (_, outputs) = self.repintar_log();
+            let (_, outputs) = self.repaint_log();
             return outputs;
         }
         Vec::new()

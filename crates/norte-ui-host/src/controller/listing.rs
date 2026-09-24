@@ -31,7 +31,7 @@ impl State {
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let Some(target_slot) = self.slots.get(&slot) else {
             return;
@@ -43,12 +43,12 @@ impl State {
         // every re-listing, because landing re-freezes it right after this
         // call.
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let Ok(caps) = backend.capabilities(dir.clone()).await else {
                 return;
             };
-            let _ = buzon.send(Message::Capabilities(slot, dir, caps)).await;
+            let _ = mailbox.send(Message::Capabilities(slot, dir, caps)).await;
         });
     }
 
@@ -73,7 +73,7 @@ impl State {
             return None;
         }
         h.caps = Some((dir.clone(), caps));
-        self.recongelar_help()
+        self.refreeze_help()
     }
 
     /// What a slot's location accepts, if it is known and is of THAT place.
@@ -156,7 +156,7 @@ impl State {
     }
 
     /// How a slot's location folds names, if known (#268).
-    pub(super) fn pliegue_de(&self, slot: u32) -> Option<norte_encoding::FoldMode> {
+    pub(super) fn fold_of(&self, slot: u32) -> Option<norte_encoding::FoldMode> {
         self.caps_of(slot).map(norte_vfs::fold_mode_of)
     }
 
@@ -168,7 +168,7 @@ impl State {
         &mut self,
         data: ResponseListing,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let (token, slot, dir, res) = data;
         if self.slots.get(&slot).and_then(|h| h.in_flight) != Some(token) {
@@ -204,23 +204,23 @@ impl State {
             .and_then(|h| h.visita_pending.take());
         match &res {
             Ok(_) => {
-                if let Some(visitado) = pending {
-                    self.popular.visit(&visitado);
+                if let Some(visited) = pending {
+                    self.popular.visit(&visited);
                 }
             }
             Err(Error::NotFound) => self.popular.remove(&dir),
             Err(_) => {}
         }
         self.lands_on(slot, dir, res);
-        self.request_capabilities(slot, backend, buzon);
-        self.sondear(slot, backend, buzon);
-        self.adornar(slot, backend, buzon);
+        self.request_capabilities(slot, backend, mailbox);
+        self.probe(slot, backend, mailbox);
+        self.adornar(slot, backend, mailbox);
         // And the footer's free space: this listing can be on another
         // volume (spec 2026-09-10).
-        self.request_footer_volumes(backend, buzon);
+        self.request_footer_volumes(backend, mailbox);
         // And the tree, if there is one: this listing is where the pane is
         // now looking, and the neighboring pane has to say the same thing.
-        self.follow_branches(slot, backend, buzon);
+        self.follow_branches(slot, backend, mailbox);
         // The help facts describe the entry under the CURSOR, and this
         // listing is a different thing (#262). The snapshot below already
         // carries it re-frozen, so no patch is built here: it would spend a
@@ -235,18 +235,18 @@ impl State {
 
     /// What a probe found out, applied; and the next batch is requested.
     ///
-    /// `MAX_SONDEOS` bounds each ROUND, not the window: without asking
+    /// `MAX_PROBES` bounds each ROUND, not the window: without asking
     /// again, a window taller than one batch would stay half-silent.
-    pub(super) fn land_sondas(
+    pub(super) fn land_probes(
         &mut self,
-        data: Sondas,
+        data: Probes,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let (dir, slot, sondas) = data;
-        let u = self.apply_sondas(slot, &dir, &sondas)?;
-        self.sondear(slot, backend, buzon);
-        self.adornar(slot, backend, buzon);
+        let (dir, slot, probes) = data;
+        let u = self.apply_probes(slot, &dir, &probes)?;
+        self.probe(slot, backend, mailbox);
+        self.adornar(slot, backend, mailbox);
         Some(u)
     }
 
@@ -261,9 +261,9 @@ impl State {
         &mut self,
         data: Adornos,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let (generacion, slot, dir, adornos, cells, labels) = data;
+        let (generation, slot, dir, adornos, cells, labels) = data;
         // The labels belong to the PLUGIN, not to the slot: they hold for
         // everyone's headers, and they survive even when this batch is
         // discarded as stale — a column's name does not expire with a
@@ -271,13 +271,13 @@ impl State {
         // column's style for both frontends.
         let change_headers = self.columns.apply_plugin_headers(labels);
         let target_slot = self.slots.get_mut(&slot)?;
-        target_slot.adornando = false;
-        if generacion != target_slot.gen_adornos {
+        target_slot.decorating = false;
+        if generation != target_slot.gen_adornos {
             // Requested BEFORE the decorations were forgotten — a plugin
             // turned off, a setting changed — it describes what there was,
             // not what there is. It is dropped, and what was left unasked is
             // requested again.
-            self.adornar(slot, backend, buzon);
+            self.adornar(slot, backend, mailbox);
             return None;
         }
         if *target_slot.pane.dir() != dir {
@@ -335,19 +335,19 @@ impl State {
         &mut self,
         data: (RequestToken, u32, Vec<Entry>, bool),
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let (token, slot, batch, last) = data;
         let Some(u) = self.apply_batch(slot, token, batch, last) else {
             return Vec::new();
         };
-        self.sondear(slot, backend, buzon);
-        self.adornar(slot, backend, buzon);
+        self.probe(slot, backend, mailbox);
+        self.adornar(slot, backend, mailbox);
         // The listing grew from below: if the help is in front, its facts
         // talk about a different entry (#262). There is no snapshot here to
         // drag it along, so it gets its own patch.
         let mut output = vec![u];
-        output.extend(self.recongelar_help());
+        output.extend(self.refreeze_help());
         output
     }
 
@@ -391,7 +391,7 @@ impl State {
         // with no mouse there was no way back.
         if !matches!(
             effect,
-            Effect::Cursor(_) | Effect::Page(_) | Effect::Extremo { .. }
+            Effect::Cursor(_) | Effect::Page(_) | Effect::End { .. }
         ) {
             return None;
         }
@@ -407,8 +407,8 @@ impl State {
             // A page of the processes pane is its rows: no window is
             // declared for it, and jumping more than there is means nothing.
             Effect::Page(n) => paso(n).saturating_mul(total),
-            Effect::Extremo { al_final: false } => -actual,
-            Effect::Extremo { al_final: true } => total - 1 - actual,
+            Effect::End { al_final: false } => -actual,
+            Effect::End { al_final: true } => total - 1 - actual,
             // The three above are the only ones that reach here: the filter
             // is in the entry guard.
             _ => return None,
@@ -438,9 +438,9 @@ impl State {
         dir: &VPath,
         token: RequestToken,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        self.request_catalog(dir, backend, buzon);
+        self.request_catalog(dir, backend, mailbox);
         // WHERE it is going stays noted down: what the slot shows does not
         // change until this lands, and until then `pane.dir()` answers for
         // the directory being left behind.
@@ -448,14 +448,14 @@ impl State {
             h.dir_requested = Some(dir.clone());
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let dir = dir.clone();
         let attrs = self.attrs_de(&dir);
         tokio::spawn(async move {
             let stream = backend.list(dir.clone(), attrs).await;
-            let res = State::first_page(stream, slot, token, buzon.clone()).await;
+            let res = State::first_page(stream, slot, token, mailbox.clone()).await;
             // If the actor is no longer there, the answer matters to nobody.
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Listing(Box::new((token, slot, dir, res))))
                 .await;
         });
@@ -472,14 +472,14 @@ impl State {
     /// flight, and by what it shows if not: both are "this pane's
     /// directory", and looking only at the second left unrefreshed the pane
     /// that was entering the very place the mutation changed.
-    pub(super) fn refresh_afectados(
+    pub(super) fn refresh_affected(
         &mut self,
         task_id: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<ViewChange> {
-        let afectados = match self.tasks.get(&task_id) {
-            Some(t) if !t.afectados.is_empty() => t.afectados.clone(),
+        let affected = match self.tasks.get(&task_id) {
+            Some(t) if !t.affected.is_empty() => t.affected.clone(),
             _ => return Vec::new(),
         };
         // While ANOTHER task is still alive over the same directory, there
@@ -491,7 +491,7 @@ impl State {
         let remains_work = self.tasks.iter().any(|(id, t)| {
             *id != task_id
                 && !Self::terminal(t.vista.state)
-                && t.afectados.iter().any(|d| afectados.contains(d))
+                && t.affected.iter().any(|d| affected.contains(d))
         });
         if remains_work {
             return Vec::new();
@@ -499,25 +499,25 @@ impl State {
         // Consumed: neither this one nor its already-finished siblings ask
         // for it again.
         for t in self.tasks.values_mut() {
-            if t.afectados.iter().any(|d| afectados.contains(d)) {
-                t.afectados.clear();
+            if t.affected.iter().any(|d| affected.contains(d)) {
+                t.affected.clear();
             }
         }
         let slots: Vec<(u32, bool)> = self
             .slots
             .iter()
             .filter(|(_, h)| {
-                afectados.contains(h.dir_requested.as_ref().unwrap_or_else(|| h.pane.dir()))
+                affected.contains(h.dir_requested.as_ref().unwrap_or_else(|| h.pane.dir()))
             })
-            .map(|(id, _)| (*id, self.oculto(*id)))
+            .map(|(id, _)| (*id, self.hidden(*id)))
             .collect();
         let mut changes = Vec::new();
-        for (slot, oculto) in slots {
-            if oculto {
+        for (slot, hidden) in slots {
+            if hidden {
                 // A slot that is not visible does not request listings —
                 // what is not seen is not fetched — but it also cannot keep
                 // believing its listing is still true: it is marked LOADING,
-                // which is what `despertar_visible` picks up as soon as it
+                // which is what `wake_visible` picks up as soon as it
                 // comes back to the screen. Without this, a background tab
                 // over the destination directory kept showing a listing from
                 // before the copy until someone navigated by hand.
@@ -530,7 +530,7 @@ impl State {
                 });
                 continue;
             }
-            changes.extend(self.refresh(slot, backend, buzon));
+            changes.extend(self.refresh(slot, backend, mailbox));
         }
         changes
     }
@@ -561,7 +561,7 @@ impl State {
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<ViewChange> {
         self.token += 1;
         let token = RequestToken(self.token);
@@ -586,8 +586,8 @@ impl State {
         let dir = target_slot.pane.dir().clone();
         target_slot.state = Self::loading_toward(None, None);
         target_slot.in_flight = Some(token);
-        target_slot.drenando = Some(token);
-        self.request_listing(slot, &dir, token, backend, buzon);
+        target_slot.draining = Some(token);
+        self.request_listing(slot, &dir, token, backend, mailbox);
         vec![ViewChange::SlotState {
             slot_id: slot,
             state: Self::loading_toward(None, None),
@@ -599,22 +599,22 @@ impl State {
     /// Of all, not just the focused one, which is what the TUI does and for
     /// the same reason: what changes a listing underneath is a change ON
     /// DISK, and a change on disk does not respect focus. Hidden ones stay
-    /// out — what is not seen is not fetched — `despertar_visible` already
+    /// out — what is not seen is not fetched — `wake_visible` already
     /// wakes them when the layout brings them into view.
     pub(super) fn refresh_visible(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slots: Vec<u32> = self
             .slots
             .keys()
             .copied()
-            .filter(|id| !self.oculto(*id))
+            .filter(|id| !self.hidden(*id))
             .collect();
         let mut changes = Vec::new();
         for slot in slots {
-            changes.extend(self.refresh(slot, backend, buzon));
+            changes.extend(self.refresh(slot, backend, mailbox));
         }
         if changes.is_empty() {
             // Everyone had something in flight: what is about to land is
@@ -630,7 +630,7 @@ impl State {
     /// entries stay in the model. And it is ANNOUNCED, because a listing
     /// that shrinks without saying why reads as a pane failure.
     pub(super) fn toggle_hidden(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let (visible, podadas) = {
+        let (visible, pruned) = {
             let target_slot = self.slot_mut();
             let visible = target_slot.pane.toggle_hidden();
             (visible, target_slot.pane.pruned_marks())
@@ -641,7 +641,7 @@ impl State {
             "msg-hidden-hidden"
         };
         let mut phrase = norte_i18n::t_in(self.lang, key);
-        if podadas > 0 {
+        if pruned > 0 {
             // Setting the hidden ones aside PRUNES the marks of the ones
             // that leave. The contract of `PaneState::pruned_marks` is that
             // this is never silent: keeping quiet about it would send the
@@ -651,7 +651,7 @@ impl State {
             phrase.push_str(&norte_i18n::ta_in(
                 self.lang,
                 "status-marks-pruned",
-                &[("n", &podadas.to_string())],
+                &[("n", &pruned.to_string())],
             ));
         }
         self.status.message = Some(clamp_display(phrase));

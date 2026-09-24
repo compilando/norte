@@ -84,7 +84,7 @@ pub struct Startup<'a> {
 
 /// What the reader thread leaves for whoever repaints.
 #[derive(Default)]
-struct Buzon {
+struct Mailbox {
     /// Bytes read from the pty and not yet fed to the grid.
     pending: Vec<u8>,
     /// The pty closed: the shell is gone.
@@ -137,7 +137,7 @@ pub struct Shell {
     entry: Entry,
     maestro: Box<dyn portable_pty::MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
-    buzon: Arc<Mutex<Buzon>>,
+    mailbox: Arc<Mutex<Mailbox>>,
     tam: (u16, u16),
 }
 
@@ -176,20 +176,20 @@ impl Shell {
         // The slave is DROPPED: while it is held open, closing the shell
         // does not close the pty and the reader would never see EOF.
         drop(par.slave);
-        let escritor = par.master.take_writer().map_err(std::io::Error::other)?;
+        let writer = par.master.take_writer().map_err(std::io::Error::other)?;
         let reader = par
             .master
             .try_clone_reader()
             .map_err(std::io::Error::other)?;
-        let entry = launch_escritor(escritor);
-        let buzon = Arc::new(Mutex::new(Buzon::default()));
-        launch_reader(reader, Arc::clone(&buzon), entry.clone(), responder);
+        let entry = launch_writer(writer);
+        let mailbox = Arc::new(Mutex::new(Mailbox::default()));
+        launch_reader(reader, Arc::clone(&mailbox), entry.clone(), responder);
         Ok(Self {
             screen: Screen::new(tam.0, tam.1),
             entry,
             maestro: par.master,
             child,
-            buzon,
+            mailbox,
             tam,
         })
     }
@@ -199,9 +199,9 @@ impl Shell {
     ///
     /// Returning whether there were bytes is what avoids repainting when
     /// the shell is quiet, which is almost always.
-    pub fn bombear(&mut self) -> bool {
+    pub fn pump(&mut self) -> bool {
         let pending = {
-            let mut b = buzon_de(&self.buzon);
+            let mut b = mailbox_of(&self.mailbox);
             std::mem::take(&mut b.pending)
         };
         if pending.is_empty() {
@@ -248,7 +248,7 @@ impl Shell {
 
     /// Is the shell gone?
     pub fn dead(&mut self) -> bool {
-        buzon_de(&self.buzon).closed || matches!(self.child.try_wait(), Ok(Some(_)))
+        mailbox_of(&self.mailbox).closed || matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     /// The grid, to paint it.
@@ -280,8 +280,8 @@ impl Drop for Shell {
     }
 }
 
-fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
-    buzon
+fn mailbox_of(mailbox: &Mutex<Mailbox>) -> std::sync::MutexGuard<'_, Mailbox> {
+    mailbox
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -294,11 +294,11 @@ fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
 /// waiting.
 ///
 /// Dies when the last sender is dropped, i.e. with the `Shell`.
-fn launch_escritor(mut escritor: Box<dyn std::io::Write + Send>) -> Entry {
+fn launch_writer(mut writer: Box<dyn std::io::Write + Send>) -> Entry {
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(COLA_MAX);
     std::thread::spawn(move || {
         while let Ok(bytes) = rx.recv() {
-            if escritor.write_all(&bytes).is_err() || escritor.flush().is_err() {
+            if writer.write_all(&bytes).is_err() || writer.flush().is_err() {
                 return;
             }
         }
@@ -308,7 +308,7 @@ fn launch_escritor(mut escritor: Box<dyn std::io::Write + Send>) -> Entry {
 
 fn launch_reader(
     mut reader: Box<dyn std::io::Read + Send>,
-    buzon: Arc<Mutex<Buzon>>,
+    mailbox: Arc<Mutex<Mailbox>>,
     entry: Entry,
     responder: Responder,
 ) {
@@ -317,7 +317,7 @@ fn launch_reader(
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => {
-                    buzon_de(&buzon).closed = true;
+                    mailbox_of(&mailbox).closed = true;
                     return;
                 }
                 Ok(n) => {
@@ -331,7 +331,7 @@ fn launch_reader(
                     if let Some(r) = responder(&buf[..n]) {
                         let _ = entry.try_send(r);
                     }
-                    let mut b = buzon_de(&buzon);
+                    let mut b = mailbox_of(&mailbox);
                     b.pending.extend_from_slice(&buf[..n]);
                     // The cut falls on WHATEVER byte, and that is accepted:
                     // an escape split there loses its `ESC [` and its tail

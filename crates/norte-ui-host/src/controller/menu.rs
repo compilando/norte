@@ -17,7 +17,7 @@ impl State {
     /// choosing an entry, and clicking outside — and whichever one forgot to
     /// note it would be the one that makes the next opening start from the
     /// first item for no apparent reason.
-    pub(super) fn olvidar_menu(&mut self) {
+    pub(super) fn forget_menu(&mut self) {
         if let Some(m) = &self.menu {
             self.menu_last = m.menu();
         }
@@ -32,7 +32,7 @@ impl State {
     /// `Esc`.
     pub(super) fn open_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.menu.is_some() {
-            self.olvidar_menu();
+            self.forget_menu();
         } else {
             self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_last));
         }
@@ -67,7 +67,7 @@ impl State {
         }
         let same = self.menu.as_ref().is_some_and(|m| m.menu() == i);
         if same {
-            self.olvidar_menu();
+            self.forget_menu();
         } else {
             self.menu = Some(norte_frontend::menu::MenuState::reopen_at(i));
         }
@@ -78,10 +78,7 @@ impl State {
     }
 
     /// The mouse hovering over an entry: moves the cursor and nothing else.
-    pub(super) fn apuntar_en_menu(
-        &mut self,
-        row: u32,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn point_in_menu(&mut self, row: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(m) = self.menu.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
@@ -137,7 +134,7 @@ impl State {
             // A contributed kind whose `layout.<kind>` is not in the
             // catalogue: the button exists to SHOW the panel, and saying it
             // cannot be opened from here is better than a mute click.
-            None => self.no_implementado(&command),
+            None => self.no_implemented(&command),
         }
     }
 
@@ -163,7 +160,7 @@ impl State {
         };
         match crate::commands::effect_of(command, 1) {
             Some(effect) => self.apply_effect(effect, backend, mailbox),
-            None => self.no_implementado(command),
+            None => self.no_implemented(command),
         }
     }
 
@@ -181,7 +178,7 @@ impl State {
         };
         match crate::commands::effect_of(button_def.command, 1) {
             Some(effect) => self.apply_effect(effect, backend, mailbox),
-            None => self.no_implementado(button_def.command),
+            None => self.no_implemented(button_def.command),
         }
     }
 
@@ -205,7 +202,7 @@ impl State {
         };
         let (ack, more) = match crate::commands::effect_of(command, 1) {
             Some(effect) => self.apply_effect(effect, backend, mailbox),
-            None => self.no_implementado(command),
+            None => self.no_implemented(command),
         };
         outputs.extend(more);
         (ack, outputs)
@@ -216,7 +213,7 @@ impl State {
         if self.menu.is_none() {
             return (self.applied(), Vec::new());
         }
-        self.olvidar_menu();
+        self.forget_menu();
         let change = ViewChange::Menu {
             menu: self.vista_menu(),
         };

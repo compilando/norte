@@ -114,7 +114,7 @@ pub(super) async fn no_surface_masks_silently() {
                     _ => None,
                 })
                 .expect("the favorite is there");
-            sin_peligro(&favorite.0, &n.id, "a favorite's name");
+            harmless(&favorite.0, &n.id, "a favorite's name");
             assert!(
                 favorite.1,
                 "[{}] the favorite is masked and does NOT say so: {:?}",
@@ -134,7 +134,7 @@ pub(super) async fn no_surface_masks_silently() {
                 _ => None,
             });
             if let Some((label, hostile)) = drive {
-                sin_peligro(&label, &n.id, "a volume's label in the bar");
+                harmless(&label, &n.id, "a volume's label in the bar");
                 assert!(
                     hostile,
                     "[{}] the volume's label is masked and does NOT say so: {label:?}",
@@ -158,7 +158,7 @@ pub(super) async fn no_surface_masks_silently() {
             .first()
             .expect("the first field is the name")
             .clone();
-        sin_peligro(&field.value, &n.id, "an attribute's value");
+        harmless(&field.value, &n.id, "an attribute's value");
         assert!(
             field.hostile,
             "[{}] the attribute's value is masked and does NOT say so: {:?}",
@@ -168,7 +168,7 @@ pub(super) async fn no_surface_masks_silently() {
 }
 
 /// No paintable string carries a terminal hazard.
-pub(super) fn sin_peligro(painted: &str, id: &str, where_: &str) {
+pub(super) fn harmless(painted: &str, id: &str, where_: &str) {
     for c in painted.chars() {
         assert!(
             !norte_encoding::is_terminal_hazard(c),

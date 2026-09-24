@@ -299,7 +299,7 @@ pub fn attach_subshell(
                     _ => {}
                 }
             }
-            let pending = sub.drenar();
+            let pending = sub.drain();
             if !pending.is_empty() {
                 out.write_all(&pending)?;
                 out.flush()?;

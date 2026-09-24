@@ -80,7 +80,7 @@ impl State {
     /// first thing is to bail out cheaply when there is nothing to do:
     /// walking the tree to discover there is no map at all is paid on every
     /// keystroke of every session that does not use it.
-    pub(super) fn sondear_maps(
+    pub(super) fn probe_maps(
         &mut self,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
@@ -115,7 +115,7 @@ impl State {
             // for exactly the while the measurement lasts, which is when
             // someone is looking at it.
             if state.map.dir() != Some(&dir) {
-                state.map.apuntar(dir.clone());
+                state.map.aim(dir.clone());
             }
             self.token += 1;
             let token = RequestToken(self.token);
@@ -255,7 +255,7 @@ impl State {
         // A HIDDEN slot keeps its map, so its zones would keep resolving even
         // though nobody sees them. The renderer does not paint what is
         // hidden, so a click there does not come from a person.
-        if self.oculto(slot) {
+        if self.hidden(slot) {
             return (Self::stale(crate::StaleAction::Generation), Vec::new());
         }
         let Some((cols, rows)) = self

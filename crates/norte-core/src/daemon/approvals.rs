@@ -56,7 +56,7 @@ pub enum Decision {
     Applied,
     /// It was pending, but the requester is no longer listening — its TTL
     /// expired or its dispatch was cancelled. The decision had no effect.
-    Vencida,
+    Expired,
     /// That id existed and is no longer pending: someone resolved it earlier
     /// — another window, its own TTL sweeping it, or the requester WITHDRAWING
     /// it with an `rpc.cancel`.
@@ -65,7 +65,7 @@ pub enum Decision {
     /// is the same — that decision is no longer theirs, refresh the list —
     /// and because telling them apart would mean remembering why each id
     /// left, which is memory spent on a nuance nobody uses.
-    YaDecidida,
+    YaDecided,
     /// That id was never issued in this process. A stale modal from before a
     /// daemon restart lands here.
     Unknown,
@@ -188,7 +188,7 @@ impl DaemonApprovalResolver {
                 if e.decide.send(approve).is_ok() {
                     Decision::Applied
                 } else {
-                    Decision::Vencida
+                    Decision::Expired
                 }
             }
             // Not pending. The id alone says so, but it takes BOTH bounds:
@@ -200,7 +200,7 @@ impl DaemonApprovalResolver {
             None if (self.inner.first_id..self.inner.next_id.load(Ordering::Relaxed))
                 .contains(&approval_id) =>
             {
-                Decision::YaDecidida
+                Decision::YaDecided
             }
             None => Decision::Unknown,
         }
@@ -418,7 +418,7 @@ mod tests {
         // A decision consumes the id — and what a second attempt is told is
         // "someone already decided it", not "it doesn't exist" (#279): with
         // two windows open that is exactly what happened.
-        assert_eq!(r.decide(id, true), Decision::YaDecidida);
+        assert_eq!(r.decide(id, true), Decision::YaDecided);
         assert!(r.pending().is_empty());
     }
 

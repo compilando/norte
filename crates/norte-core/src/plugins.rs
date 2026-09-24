@@ -4775,7 +4775,7 @@ pub struct ColumnPool {
     /// second page takes less time is the symptom, and a symptom measured in
     /// milliseconds turns red the day the machine is under load. That the
     /// instance was reused is the fact, and it is deterministic.
-    reutilizadas: std::sync::atomic::AtomicU64,
+    reused: std::sync::atomic::AtomicU64,
 }
 
 impl std::fmt::Debug for ColumnPool {
@@ -4786,7 +4786,7 @@ impl std::fmt::Debug for ColumnPool {
         let n = self.live.lock().map_or(0, |v| v.len());
         f.debug_struct("ColumnPool")
             .field("live", &n)
-            .field("reutilizadas", &self.reutilizadas)
+            .field("reutilizadas", &self.reused)
             .finish()
     }
 }
@@ -4795,12 +4795,12 @@ impl ColumnPool {
     /// The column's values, reusing this `(plugin, location)`'s instance if
     /// it is still alive and with the same permissions.
     ///
-    /// How many calls found their instance alive. See [`Self::reutilizadas`].
+    /// How many calls found their instance alive. See [`Self::reused`].
     #[cfg(any(test, feature = "testing"))]
     #[doc(hidden)]
     #[must_use]
-    pub fn reutilizadas(&self) -> u64 {
-        self.reutilizadas.load(std::sync::atomic::Ordering::Relaxed)
+    pub fn reused(&self) -> u64 {
+        self.reused.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// [`Self::column_values`] for the e2e tests, for the same reason and
@@ -4888,7 +4888,7 @@ impl ColumnPool {
         drop(live);
 
         let mut entry = if let Some(e) = found {
-            self.reutilizadas
+            self.reused
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             e
         } else {

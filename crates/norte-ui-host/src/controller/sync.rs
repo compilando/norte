@@ -14,11 +14,11 @@ use super::*;
 ///
 /// Exists because of the id: the shared model needs it AT BIRTH to be able
 /// to discard whatever comes from a different plan.
-pub(super) struct SyncPedida {
+pub(super) struct SyncRequested {
     /// Which of this window's plans this is.
     pub(super) epoch: u64,
     /// It was abandoned before the Task came back.
-    pub(super) abandonada: Arc<std::sync::atomic::AtomicBool>,
+    pub(super) abandoned: Arc<std::sync::atomic::AtomicBool>,
     /// The requested mode.
     modo: norte_proto::methods::SyncMode,
     /// Source root.
@@ -44,7 +44,7 @@ pub(super) struct Sync {
     /// it).
     task: norte_proto::TaskId,
     /// The view closed and whatever is left is extra.
-    abandonada: Arc<std::sync::atomic::AtomicBool>,
+    abandoned: Arc<std::sync::atomic::AtomicBool>,
     /// The shared model.
     pub(super) vista: norte_frontend::sync::SyncView,
     /// The window the renderer says it is painting.
@@ -76,7 +76,7 @@ pub(super) struct Comparison {
     /// The daemon's Task, as soon as it is known. Zero while it is not.
     pub(super) task: norte_proto::TaskId,
     /// The view closed and whatever is left of this comparison is extra.
-    abandonada: Arc<std::sync::atomic::AtomicBool>,
+    abandoned: Arc<std::sync::atomic::AtomicBool>,
     /// The shared MODEL: roots, rows, filters, selection, active side and —
     /// what matters most — what state it ended up in.
     ///
@@ -109,7 +109,7 @@ impl State {
         &mut self,
         p: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let Some(sync) = self.sync.as_ref() else {
             return;
@@ -137,10 +137,10 @@ impl State {
             s.report_requested = true;
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let report = backend.sync_report(id).await;
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::SyncReport(
                     epoch,
                     state,
@@ -221,9 +221,9 @@ impl State {
         if c.task != p.task_id {
             return Vec::new();
         }
-        let recibidas = c.vista.pane.len() as u64;
+        let received = c.vista.pane.len() as u64;
         c.vista
-            .finish_from_task(&p.state, p.entries_done, recibidas, lang);
+            .finish_from_task(&p.state, p.entries_done, received, lang);
         vec![ViewChange::Compare {
             compare: self.vista_comparison(),
         }]
@@ -253,7 +253,7 @@ impl State {
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(sync) = self.sync.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -268,7 +268,7 @@ impl State {
             };
             sync.vista.confirming = None;
             if si {
-                return self.apply_plan(backend, buzon);
+                return self.apply_plan(backend, mailbox);
             }
             let change = ViewChange::Sync {
                 sync: self.vista_sync(),
@@ -289,7 +289,7 @@ impl State {
             // what is being answered here is "yes, write" over a plan
             // already in front, which is exactly what that verb names — and
             // it is the same one the SECOND question is answered with.
-            (Some("dialog.approve"), _) => self.request_approval(backend, buzon),
+            (Some("dialog.approve"), _) => self.request_approval(backend, mailbox),
             (Some("dialog.cancel"), _) => {
                 // While the daemon is WRITING, `Escape` asks to cancel and
                 // does not close: closing loses the report — and with it the
@@ -336,7 +336,7 @@ impl State {
                 }
                 if sync.vista.cancel_requested {
                     let task = sync.task;
-                    sync.abandonada
+                    sync.abandoned
                         .store(true, std::sync::atomic::Ordering::SeqCst);
                     self.sync = None;
                     if task.get() != 0 {
@@ -412,7 +412,7 @@ impl State {
     pub(super) fn request_approval(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let lang = self.lang;
         let Some(sync) = self.sync.as_mut() else {
@@ -435,7 +435,7 @@ impl State {
                 };
                 (self.applied(), vec![self.parche(vec![change])])
             }
-            None => self.apply_plan(backend, buzon),
+            None => self.apply_plan(backend, mailbox),
         }
     }
 
@@ -449,7 +449,7 @@ impl State {
     pub(super) fn apply_plan(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let epoch = self.sync.as_ref().map_or(0, |s| s.epoch);
         let Some(hash) = self.sync.as_mut().and_then(|s| s.vista.submit()) else {
@@ -461,7 +461,7 @@ impl State {
             );
         };
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
+        let buzon2 = mailbox.clone();
         tokio::spawn(async move {
             let result = backend2.sync_apply(hash).await;
             match result {
@@ -514,7 +514,7 @@ impl State {
         epoch: u64,
         task: norte_proto::TaskId,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Some(sync) = self.sync.as_mut().filter(|s| s.epoch == epoch) else {
             return Vec::new();
@@ -542,15 +542,15 @@ impl State {
         // answering and its progress never fires. It is the same race the
         // board already documents, and here it translates into a panel
         // stuck applying forever.
-        let nacio = self
+        let born = self
             .tasks
             .get(&task.get())
             .map(|t| t.progress.borrow().clone());
         let mut outside = vec![self.parche(vec![ViewChange::Sync {
             sync: self.vista_sync(),
         }])];
-        if let Some(p) = nacio.filter(|p| p.state.is_terminal()) {
-            self.request_sync_report(&p, backend, buzon);
+        if let Some(p) = born.filter(|p| p.state.is_terminal()) {
+            self.request_sync_report(&p, backend, mailbox);
         }
         outside.extend(Vec::new());
         outside
@@ -560,7 +560,7 @@ impl State {
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.comparison.is_none() {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -577,8 +577,7 @@ impl State {
             (Some("dialog.cancel"), _) => {
                 if c.vista.cancel_requested {
                     let task = c.task;
-                    c.abandonada
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    c.abandoned.store(true, std::sync::atomic::Ordering::SeqCst);
                     self.comparison = None;
                     if task.get() != 0 {
                         self.cancel(task.get());
@@ -611,7 +610,7 @@ impl State {
                 let Some(id) = c.vista.pane.selected_id() else {
                     return (self.applied(), Vec::new());
                 };
-                self.comparison_active(id, backend, buzon)
+                self.comparison_active(id, backend, mailbox)
             }
             (Some(v @ ("dialog.up" | "dialog.down")), _) => {
                 let down = v == "dialog.down";
@@ -666,11 +665,11 @@ impl State {
         &mut self,
         action: &UiAction,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match action {
-            UiAction::CompareSelectRow { id } => self.comparison_selecciona(*id),
-            UiAction::CompareActivateRow { id } => self.comparison_active(*id, backend, buzon),
+            UiAction::CompareSelectRow { id } => self.comparison_selects(*id),
+            UiAction::CompareActivateRow { id } => self.comparison_active(*id, backend, mailbox),
             UiAction::CompareToggleFilter { category } => self.comparison_filters(category),
             UiAction::CompareSetVisibleRange { first, count } => {
                 self.comparison_window(*first, *count)
@@ -681,7 +680,7 @@ impl State {
     }
 
     /// Chooses a row from the differences panel.
-    pub(super) fn comparison_selecciona(
+    pub(super) fn comparison_selects(
         &mut self,
         id: u64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -754,7 +753,7 @@ impl State {
         &mut self,
         id: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(c) = self.comparison.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -777,9 +776,9 @@ impl State {
         // requests the listing.
         if let Some(slot) = self.side_slot() {
             self.roles.set(RoleId::Active, SlotId(slot));
-            self.reconcilia_roles();
+            self.reconciles_roles();
         }
-        let mut outputs = self.navigate(&dest, Trail::Record, backend, buzon);
+        let mut outputs = self.navigate(&dest, Trail::Record, backend, mailbox);
         let change = ViewChange::Compare {
             compare: self.vista_comparison(),
         };
@@ -805,13 +804,13 @@ impl State {
     pub(super) fn request_sync(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // ONE at a time. Relaunching left the previous panel un-abandoned and
         // its Task uncancelled — the daemon kept walking a tree for a plan
         // that can no longer be seen — and, with a request in flight, the
         // second press killed both panels' one.
-        if self.sync.is_some() || self.sync_pedida.is_some() {
+        if self.sync.is_some() || self.sync_requested.is_some() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-sync-already".to_owned(),
@@ -862,7 +861,10 @@ impl State {
                 Vec::new(),
             );
         }
-        (self.applied(), self.launch_sync_plan(roots, backend, buzon))
+        (
+            self.applied(),
+            self.launch_sync_plan(roots, backend, mailbox),
+        )
     }
 
     /// Enqueues `sync.plan` and hooks its event channel to the actor.
@@ -870,7 +872,7 @@ impl State {
         &mut self,
         roots: norte_frontend::sync::SyncRoots,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let norte_frontend::sync::SyncRoots {
             source,
@@ -880,7 +882,7 @@ impl State {
         } = roots;
         self.epoch_search += 1;
         let epoch = self.epoch_search;
-        let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let abandoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
         // `Update` and not `Mirror`: the mode that does NOT delete is the
         // one that can be the default. Choosing mirror is a decision made on
         // purpose, and until there is somewhere to make it, it is not
@@ -898,8 +900,8 @@ impl State {
             include: None,
         };
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
-        let abandonada2 = Arc::clone(&abandonada);
+        let buzon2 = mailbox.clone();
+        let abandonada2 = Arc::clone(&abandoned);
         tokio::spawn(async move {
             let (task, mut rx) = match backend2.sync_plan(params).await {
                 Ok(par) => par,
@@ -907,13 +909,13 @@ impl State {
                     // The failure IS REPORTED and also RELEASES the request:
                     // without the latter, a daemon that does not know how to
                     // plan — or overlapping roots — used to leave
-                    // `sync_pedida` set forever and the next attempt refused
+                    // `sync_requested` set forever and the next attempt refused
                     // itself.
                     let _ = buzon2.send(Message::TaskFailed(Box::new(e))).await;
                     let _ = buzon2
-                        .send(Message::Background(Box::new(
-                            Background::PlanDeSyncFallido(epoch),
-                        )))
+                        .send(Message::Background(Box::new(Background::FailedSyncPlan(
+                            epoch,
+                        ))))
                         .await;
                     return;
                 }
@@ -954,9 +956,9 @@ impl State {
         // and with a filler id it also discarded its own — the panel stayed
         // at zero steps and the plan closed "cannot approve".
         self.sync = None;
-        self.sync_pedida = Some(SyncPedida {
+        self.sync_requested = Some(SyncRequested {
             epoch,
-            abandonada,
+            abandoned,
             modo,
             source,
             dest,
@@ -981,27 +983,31 @@ impl State {
         // FILTER before TAKING: an unconditional `take()` swept away a new
         // request when an old one's Task answered, and then no panel opened
         // at all while two traversals kept walking two trees on the daemon.
-        if self.sync_pedida.as_ref().is_none_or(|p| p.epoch != epoch) {
+        if self
+            .sync_requested
+            .as_ref()
+            .is_none_or(|p| p.epoch != epoch)
+        {
             return Vec::new();
         }
-        let Some(pedida) = self.sync_pedida.take() else {
+        let Some(requested) = self.sync_requested.take() else {
             return Vec::new();
         };
         self.sync = Some(Sync {
             epoch,
             task,
-            abandonada: pedida.abandonada,
+            abandoned: requested.abandoned,
             vista: norte_frontend::sync::SyncView::new(
                 task,
-                pedida.modo,
-                pedida.source,
-                pedida.dest,
+                requested.modo,
+                requested.source,
+                requested.dest,
                 // Each side's reinterpretations, exactly as the shared rule
                 // decided them: there are TWO because the two panes are two
                 // locations, and swapping them would name the file the
                 // write lands on with different bytes.
-                pedida.source_encoding,
-                pedida.dest_encoding,
+                requested.source_encoding,
+                requested.dest_encoding,
             ),
             first_visible: 0,
             window: Self::WINDOW_COMPARISON,
@@ -1046,7 +1052,7 @@ impl State {
     }
 
     /// The window's steps, projected by the SHARED model.
-    pub(super) fn steps_proyectados(
+    pub(super) fn steps_projected(
         steps: &[norte_proto::methods::SyncStep],
         trash: norte_proto::methods::DestTrash,
         enc: norte_frontend::sync::SyncEncodings,
@@ -1083,7 +1089,7 @@ impl State {
     }
 
     /// The report's failures, once there is a report.
-    pub(super) fn failures_proyectados(
+    pub(super) fn failures_projected(
         state: &norte_frontend::sync::SyncState,
         enc: norte_frontend::sync::SyncEncodings,
         lang: norte_i18n::Lang,
@@ -1144,13 +1150,13 @@ impl State {
         let until = first.saturating_add(sync.window).min(steps.len());
         let trash = v.dest_trash();
         let enc = v.encodings();
-        let rows = Self::steps_proyectados(
+        let rows = Self::steps_projected(
             steps.get(first..until).unwrap_or_default(),
             trash,
             enc,
             self.lang,
         );
-        let failures = Self::failures_proyectados(&v.state, enc, self.lang);
+        let failures = Self::failures_projected(&v.state, enc, self.lang);
         Some(crate::dto::SyncView {
             source: crate::dto::DialogLine {
                 text: clamp_display(source),
@@ -1262,7 +1268,7 @@ impl State {
     pub(super) fn request_comparison(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let right = match self.directory_dest() {
             Ok(d) => d,
@@ -1289,7 +1295,7 @@ impl State {
         }
         (
             self.applied(),
-            self.launch_comparison(left, right, backend, buzon),
+            self.launch_comparison(left, right, backend, mailbox),
         )
     }
 
@@ -1308,7 +1314,7 @@ impl State {
     pub(super) fn count_size(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // `marked_paths` falls back to the cursor when there are no marks:
         // the same source of "what this operates on" a transfer uses.
@@ -1322,13 +1328,13 @@ impl State {
             );
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let message = match backend.dir_size(paths).await {
                 Ok(task) => Message::TaskNew(Box::new((task, Vec::new(), None))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(message).await;
+            let _ = mailbox.send(message).await;
         });
         (self.applied(), Vec::new())
     }
@@ -1339,11 +1345,11 @@ impl State {
         left: VPath,
         right: VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         self.epoch_search += 1;
         let epoch = self.epoch_search;
-        let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let abandoned = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let params = norte_proto::methods::FsCompareParams {
             left: left.clone(),
             right: right.clone(),
@@ -1366,7 +1372,7 @@ impl State {
         self.comparison = Some(Comparison {
             epoch,
             task: norte_proto::TaskId::new(0),
-            abandonada: Arc::clone(&abandonada),
+            abandoned: Arc::clone(&abandoned),
             vista: norte_frontend::compare::CompareView::new(
                 left,
                 right,
@@ -1382,7 +1388,7 @@ impl State {
             window: Self::WINDOW_COMPARISON,
         });
         let backend2 = Arc::clone(backend);
-        let buzon2 = buzon.clone();
+        let buzon2 = mailbox.clone();
         tokio::spawn(async move {
             let (task, mut rx) = match backend2.compare(params).await {
                 Ok(par) => par,
@@ -1404,17 +1410,17 @@ impl State {
             // The view may have closed while the daemon was accepting the
             // Task: in that window the actor has nobody to cancel, so
             // whoever does have it cancels it.
-            if abandonada.load(std::sync::atomic::Ordering::SeqCst) {
+            if abandoned.load(std::sync::atomic::Ordering::SeqCst) {
                 cancel();
                 return;
             }
             while let Some(batch) = rx.recv().await {
-                if abandonada.load(std::sync::atomic::Ordering::SeqCst) {
+                if abandoned.load(std::sync::atomic::Ordering::SeqCst) {
                     cancel();
                     return;
                 }
                 if buzon2
-                    .send(Message::Background(Box::new(Background::RowsComparadas(
+                    .send(Message::Background(Box::new(Background::RowsCompared(
                         epoch,
                         Box::new(batch),
                     ))))
@@ -1432,7 +1438,7 @@ impl State {
     }
 
     /// A batch of compared rows. Matches by EPOCH, like search hits.
-    pub(super) fn apply_rows_comparadas(
+    pub(super) fn apply_rows_compared(
         &mut self,
         epoch: u64,
         batch: norte_proto::methods::CompareRowsBatch,

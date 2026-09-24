@@ -122,7 +122,7 @@ async fn the_guests_frame_reaches_the_snapshot() {
         "the first snapshot carries the slot with no frame yet"
     );
     let mut sub = h.subscribe();
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let view = next_snapshot(&mut sub).await;
     let panel = panel_de(&view).expect("the slot is still a panel");
@@ -147,12 +147,12 @@ async fn the_guests_frame_reaches_the_snapshot() {
 async fn the_same_thing_is_not_requested_twice() {
     let backend = backend_con(Some(frame("rama main", "layout.focus-next")));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
-    asentar().await;
+    settle().await;
     for _ in 0..5 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        asentar().await;
+        settle().await;
     }
-    let requested = backend.panels_pedidos.lock().expect("mutex").len();
+    let requested = backend.panels_requests.lock().expect("mutex").len();
     assert_eq!(requested, 1, "five messages, one request: {requested}");
 }
 
@@ -162,11 +162,11 @@ async fn the_same_thing_is_not_requested_twice() {
 async fn the_guest_is_told_where_the_reader_is() {
     let backend = backend_con(Some(frame("rama main", "layout.focus-next")));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    asentar().await;
+    settle().await;
 
-    let requested = backend.panels_pedidos.lock().expect("mutex");
+    let requested = backend.panels_requests.lock().expect("mutex");
     let p = requested.first().expect("the frame was requested");
     assert_eq!(p.plugin_id, PLUGIN);
     assert_eq!(p.kind, "status", "the plugin's kind, with no prefix");
@@ -185,12 +185,12 @@ async fn the_guest_is_told_where_the_reader_is() {
 async fn a_panel_with_no_frame_is_not_re_requested() {
     let backend = backend_con(None);
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
-    asentar().await;
+    settle().await;
     for _ in 0..4 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        asentar().await;
+        settle().await;
     }
-    let requested = backend.panels_pedidos.lock().expect("mutex").len();
+    let requested = backend.panels_requests.lock().expect("mutex").len();
     assert_eq!(requested, 1, "it was tried once and recorded: {requested}");
 }
 
@@ -202,7 +202,7 @@ async fn a_frame_from_another_plugin_does_not_paint() {
     let backend = backend_con(Some(foreign));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let view = next_snapshot(&mut sub).await;
     assert!(
@@ -220,9 +220,9 @@ async fn a_frame_from_another_plugin_does_not_paint() {
 async fn a_zone_outside_its_scope_runs_nothing() {
     let backend = backend_con(Some(frame("Actualizar", "pane.unpack")));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    asentar().await;
+    settle().await;
 
     let ack = h
         .dispatch(UiAction::PanelClick {
@@ -237,7 +237,7 @@ async fn a_zone_outside_its_scope_runs_nothing() {
         "not an error for the reader, it simply does nothing: {ack:?}"
     );
     assert!(
-        backend.ejecutados.lock().expect("ejecutados").is_empty(),
+        backend.executed.lock().expect("ejecutados").is_empty(),
         "and it certainly does not run"
     );
 }
@@ -247,9 +247,9 @@ async fn a_zone_outside_its_scope_runs_nothing() {
 async fn a_cell_with_no_zone_does_nothing() {
     let backend = backend_con(Some(frame("rama main", "layout.focus-next")));
     let (h, _snap) = host_con_panel(Arc::clone(&backend)).await;
-    asentar().await;
+    settle().await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    asentar().await;
+    settle().await;
 
     let ack = h
         .dispatch(UiAction::PanelClick {

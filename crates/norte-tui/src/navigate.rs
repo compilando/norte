@@ -54,7 +54,7 @@ pub fn cd_landed_pane(outcome: &Cd) -> Option<usize> {
         // The READER's: it is the one that sorts its listing, requests
         // decorations and drags the tree along. The mirror's settles on its
         // own in [`settle_cd`], which splits the two apart.
-        Cd::Espejado { reader, .. } => cd_landed_pane(reader),
+        Cd::Mirrored { reader, .. } => cd_landed_pane(reader),
     }
 }
 
@@ -120,7 +120,7 @@ pub enum Cd {
     /// Dropping the mirror's was not an option: its `Fill` IS that listing's
     /// drainer, and without filing it the other panel is left half-filled
     /// and with `loading` set forever (#78).
-    Espejado {
+    Mirrored {
         /// The panel's the reader moved.
         reader: Box<Cd>,
         /// The panel's that repeated it.
@@ -190,7 +190,7 @@ pub fn settle_cd(
     // decorations, volumes — because both replaced a listing. Settling only
     // the reader's left the other panel with no icons and the previous
     // scheme's sort order.
-    if let Cd::Espejado {
+    if let Cd::Mirrored {
         reader,
         mirror: the_mirror,
     } = outcome
@@ -298,7 +298,7 @@ pub fn apply_cd(
         ),
         // Both, each against ITS OWN pane. The order does not matter: they
         // are different panes, and the fill slots are indexed by pane.
-        Cd::Espejado {
+        Cd::Mirrored {
             reader,
             mirror: the_mirror,
         } => {
@@ -630,7 +630,7 @@ pub async fn cd_in(
         // round: the echo comes in with `Seed` and the guard above stops
         // it.
         let mirror = Box::pin(cd_in(app, backend, events, other, dest, Trail::Seed)).await;
-        return Cd::Espejado {
+        return Cd::Mirrored {
             reader: Box::new(out),
             mirror: Box::new(mirror),
         };

@@ -48,9 +48,9 @@ async fn in_read_only_delete_opens_nothing() {
         matches!(ack, ActionAck::Unavailable { .. }),
         "F8 gets answered, not executed: {ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(
-        backend.borrados.lock().expect("borrados").is_empty(),
+        backend.deleted.lock().expect("borrados").is_empty(),
         "and it deletes nothing"
     );
 }
@@ -62,8 +62,8 @@ async fn in_read_only_create_creates_nothing() {
     let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let ack = h.dispatch(press("F7")).await.expect("host alive");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
-    asentar().await;
-    assert!(backend.creados.lock().expect("creados").is_empty());
+    settle().await;
+    assert!(backend.created.lock().expect("creados").is_empty());
 }
 
 /// And a policy approval does not even get raised: a renderer that cannot
@@ -114,7 +114,7 @@ async fn in_full_mode_delete_still_asks_for_confirmation() {
 ///
 /// `lands_on` clears the witness when the first page lands, and the drain
 /// task kept sending its batches with that same witness: `apply_batch`
-/// rejected them all. Startup did not see it because `list_inicial`
+/// rejected them all. Startup did not see it because `list_initial`
 /// restores the witness by hand.
 #[tokio::test]
 async fn navigating_to_a_large_directory_brings_it_whole() {
@@ -224,7 +224,7 @@ async fn an_overflowing_range_does_not_mark_the_whole_listing() {
 
 /// A window taller than one probe batch fills up ENTIRELY.
 ///
-/// `MAX_SONDEOS` bounds each batch, and nothing requested the next one: 200
+/// `MAX_PROBES` bounds each batch, and nothing requested the next one: 200
 /// rows with a size and the rest blank until the user moved something. A
 /// ceiling that does not rearm itself is a silent ceiling.
 #[tokio::test]
@@ -248,7 +248,7 @@ async fn a_large_window_gets_probed_in_batches_to_the_end() {
     .expect("host alive");
 
     until(&backend, "the 500 entries probed", |f| {
-        (f.sondeos.lock().expect("sondeos").len() >= 500).then_some(())
+        (f.probes.lock().expect("sondeos").len() >= 500).then_some(())
     })
     .await;
 }
@@ -265,7 +265,7 @@ async fn a_probe_from_another_listing_does_not_hydrate() {
     let mut f = Fake {
         lazy: true,
         // The stat takes a while: there is time to navigate underneath.
-        retraso_ms: 120,
+        delay_ms: 120,
         ..Fake::default()
     };
     f.put(
@@ -296,7 +296,7 @@ async fn a_probe_from_another_listing_does_not_hydrate() {
         (f.listings() >= 2 && f.en_calma()).then_some(())
     })
     .await;
-    asentar().await;
+    settle().await;
 
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Resync).await.expect("host alive");
@@ -397,7 +397,7 @@ async fn the_name_that_is_typed_is_the_one_that_gets_created() {
     .await
     .expect("host alive");
     let created = until(&backend, "the queued creation", |f| {
-        let c = f.creados.lock().expect("creados").clone();
+        let c = f.created.lock().expect("creados").clone();
         (!c.is_empty()).then_some(c)
     })
     .await;
@@ -522,7 +522,7 @@ async fn two_columns_masked_the_same_are_still_two() {
 async fn a_late_viewer_does_not_open_on_its_own() {
     let mut f = Fake {
         // The read takes a while; there is time to close.
-        retraso_ms: 150,
+        delay_ms: 150,
         ..Fake::default()
     };
     f.put("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
@@ -537,10 +537,10 @@ async fn a_late_viewer_does_not_open_on_its_own() {
     h.dispatch(press("Escape")).await.expect("host alive");
     // The late read already came back: none is left in flight.
     until(&backend, "the late read served", |f| {
-        (f.servidos() >= 2 && f.en_calma()).then_some(())
+        (f.served() >= 2 && f.en_calma()).then_some(())
     })
     .await;
-    asentar().await;
+    settle().await;
 
     h.dispatch(UiAction::Resync).await.expect("host alive");
     let snap = next_snapshot(&mut sub).await;
@@ -649,7 +649,7 @@ async fn columns_from_another_scheme_are_not_dead() {
     );
     assert!(
         backend
-            .attrs_pedidos
+            .attrs_requests
             .lock()
             .expect("attrs")
             .iter()

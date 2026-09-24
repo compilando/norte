@@ -403,17 +403,17 @@ fn no_text_inherits_the_terminals_foreground_with_a_background_theme() {
         let mut terminal = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");
         let buffer = terminal.backend().buffer().clone();
-        let huerfanas: Vec<String> = buffer
+        let orphaned: Vec<String> = buffer
             .content
             .iter()
             .filter(|c| c.symbol() != " " && c.fg == Color::Reset)
             .map(|c| c.symbol().to_owned())
             .collect();
         assert!(
-            huerfanas.is_empty(),
+            orphaned.is_empty(),
             "{name}: {} glyphs with the terminal's foreground over the theme's background: {:?}",
-            huerfanas.len(),
-            &huerfanas[..huerfanas.len().min(20)]
+            orphaned.len(),
+            &orphaned[..orphaned.len().min(20)]
         );
     }
 }
@@ -434,7 +434,7 @@ fn no_text_inherits_the_terminals_foreground_with_a_background_theme() {
 /// and over a light background it darkens it (more contrast, not less).
 #[test]
 fn each_presets_text_reaches_the_contrast_floor() {
-    fn luminancia(c: (u8, u8, u8)) -> f64 {
+    fn luminance(c: (u8, u8, u8)) -> f64 {
         let canal = |v: u8| {
             let s = f64::from(v) / 255.0;
             if s <= 0.039_28 {
@@ -446,7 +446,7 @@ fn each_presets_text_reaches_the_contrast_floor() {
         0.2126 * canal(c.0) + 0.7152 * canal(c.1) + 0.0722 * canal(c.2)
     }
     fn contraste(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
-        let (l1, l2) = (luminancia(a), luminancia(b));
+        let (l1, l2) = (luminance(a), luminance(b));
         let (height, below) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
         (height + 0.05) / (below + 0.05)
     }
@@ -488,11 +488,11 @@ fn each_presets_text_reaches_the_contrast_floor() {
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");
         for cell in &terminal.backend().buffer().content {
             let glyph = cell.symbol();
-            let decoracion = glyph == " "
+            let decoration = glyph == " "
                 || glyph
                     .chars()
                     .all(|c| matches!(c, '\u{2500}'..='\u{257f}' | '\u{2580}'..='\u{259f}'));
-            if decoracion {
+            if decoration {
                 continue;
             }
             let (Some(fg), Some(bg)) = (rgb(cell.fg), rgb(cell.bg)) else {

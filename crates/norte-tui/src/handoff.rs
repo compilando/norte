@@ -90,7 +90,7 @@ pub fn spawn_window(argv: &[OsString]) -> std::io::Result<std::process::Child> {
 /// when handing over the screen, which is a one-time gesture; what it does
 /// not catch — a window that dies ten seconds later — waiting three would not
 /// catch either.
-pub const GRACIA: std::time::Duration = std::time::Duration::from_millis(1_500);
+pub const GRACE: std::time::Duration = std::time::Duration::from_millis(1_500);
 
 /// Is the window still alive past `grace`? `Err` with its exit code if it
 /// died before that (`None` if a signal killed it).

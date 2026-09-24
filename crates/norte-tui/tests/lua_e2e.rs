@@ -211,7 +211,7 @@ async fn the_command_copy_leaves_an_undoable_trail_in_the_journal() {
 
     let entries = journal.journal().entries().await.expect("entries");
     assert!(!entries.is_empty(), "the copy was left in the journal");
-    let revertibles = journal
+    let revertible = journal
         .journal()
         .revertible_for(&Actor::User)
         .await
@@ -220,11 +220,11 @@ async fn the_command_copy_leaves_an_undoable_trail_in_the_journal() {
     // entry is EXACTLY this copy's: User actor and the path of the
     // DESTINATION created (`dst/copy-a`, wire form).
     assert!(
-        revertibles.iter().any(|e| {
+        revertible.iter().any(|e| {
             e.actor_kind == "user"
                 && e.op == "created"
                 && e.path == vp("mem:///dst/copia-a").to_wire().into_bytes()
         }),
-        "the copy's revertible entry references the destination: {revertibles:?}"
+        "the copy's revertible entry references the destination: {revertible:?}"
     );
 }

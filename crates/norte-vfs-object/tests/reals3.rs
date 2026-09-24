@@ -139,7 +139,7 @@ async fn dirs_markers_y_rename() {
 /// accepts up to 1024 in the full key (ADR 0016 D); that total ceiling is
 /// only validated by AWS, not `MinIO`.
 #[tokio::test]
-async fn keys_largas_byte_exactas() {
+async fn keys_long_byte_exactas() {
     let (_c, p, _op) = setup().await;
     let r = root();
     let long_name = "x".repeat(250);

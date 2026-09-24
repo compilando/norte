@@ -62,7 +62,7 @@ impl Popular {
             p.entries.push(e);
         }
         while p.entries.len() > POPULAR_CAP {
-            p.expulsa();
+            p.expels();
         }
         p
     }
@@ -84,7 +84,7 @@ impl Popular {
             return;
         }
         if self.entries.len() >= POPULAR_CAP {
-            self.expulsa();
+            self.expels();
         }
         self.entries.push(PopularEntry {
             path: path.clone(),
@@ -113,7 +113,7 @@ impl Popular {
         v
     }
 
-    fn expulsa(&mut self) {
+    fn expels(&mut self) {
         let victim = self
             .entries
             .iter()

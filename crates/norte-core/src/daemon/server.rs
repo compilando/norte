@@ -886,7 +886,7 @@ impl Daemon {
         // persisted, which is what a test wants; with it, whoever fails to
         // get the lock starts WITH the screen and without a writer — clones
         // it and runs detached.
-        let (session_lock, session, escribible) = open_session(cfg.state_dir.clone()).await?;
+        let (session_lock, session, writable) = open_session(cfg.state_dir.clone()).await?;
         // Persisting is THREE things at once: there is somewhere to, the
         // right is held, and what is on disk is not from a newer binary.
         // What is computed here is the STARTUP, not the whole lifetime
@@ -901,7 +901,7 @@ impl Daemon {
         // `Conflict` that had no reason to exist. Fixed for free: on x86
         // these are the same instructions.
         let session_persists = Arc::new(AtomicBool::new(
-            session_lock.is_some() && cfg.state_dir.is_some() && escribible,
+            session_lock.is_some() && cfg.state_dir.is_some() && writable,
         ));
         let session_flush = Arc::new(tokio::sync::Notify::new());
 
@@ -1010,7 +1010,7 @@ impl Daemon {
                 session_flush,
                 shared.shutdown.clone(),
                 session_persists,
-                WriteState::initial(session_lock, escribible),
+                WriteState::initial(session_lock, writable),
             ))))
         });
         Ok(Self {
@@ -1272,9 +1272,9 @@ async fn session_writer(
     flush: Arc<tokio::sync::Notify>,
     stop: CancellationToken,
     persiste: Arc<AtomicBool>,
-    inicial: WriteState,
+    initial: WriteState,
 ) {
-    let mut state = inicial;
+    let mut state = initial;
     if matches!(state, WriteState::Surrendered) {
         // The bind held the lock and the file was from a newer binary: it
         // was released while building the state and is not retried. The task
@@ -1336,10 +1336,10 @@ enum WriteState {
         /// The right, alive for as long as the state lasts.
         _lock: crate::ui_session::disk::SessionLock,
     },
-    /// Without the lock, and retrying it. `avisado` so the warning goes out
+    /// Without the lock, and retrying it. `warned` so the warning goes out
     /// once and not once a second; `ticks` counts the attempts to space them
     /// out ([`WriteState::should_retry`]).
-    Detached { avisado: bool, ticks: u32 },
+    Detached { warned: bool, ticks: u32 },
     /// On disk there is a session from a NEWER binary. It is not overwritten
     /// and not retried for the rest of the process's life.
     ///
@@ -1358,15 +1358,15 @@ impl WriteState {
     /// With the lock taken but a file from the future, it is released HERE:
     /// keeping it would leave the file hostage to a core that cannot write
     /// it, which is what the daemon used to do before #237.
-    fn initial(lock: Option<crate::ui_session::disk::SessionLock>, escribible: bool) -> Self {
-        match (lock, escribible) {
+    fn initial(lock: Option<crate::ui_session::disk::SessionLock>, writable: bool) -> Self {
+        match (lock, writable) {
             (Some(lock), true) => Self::Owned { _lock: lock },
             (Some(lock), false) => {
                 drop(lock);
                 Self::Surrendered
             }
             (None, _) => Self::Detached {
-                avisado: false,
+                warned: false,
                 ticks: 0,
             },
         }
@@ -1419,13 +1419,13 @@ impl WriteState {
         store: &Arc<crate::ui_session::SessionStore>,
         persiste: &Arc<AtomicBool>,
     ) -> Self {
-        let Self::Detached { avisado, ticks } = self else {
+        let Self::Detached { warned, ticks } = self else {
             return self;
         };
         let next = ticks.saturating_add(1);
         if !Self::should_retry(ticks) {
             return Self::Detached {
-                avisado,
+                warned,
                 ticks: next,
             };
         }
@@ -1436,44 +1436,44 @@ impl WriteState {
                 return Ok::<_, std::io::Error>(None);
             };
             // With the lock in place, and not before.
-            let recuperada = crate::ui_session::disk::load_or_default(&d);
-            Ok(Some((lock, recuperada)))
+            let recovered = crate::ui_session::disk::load_or_default(&d);
+            Ok(Some((lock, recovered)))
         })
         .await;
-        let tomado = match attempt {
+        let taken = match attempt {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
-                if !avisado {
+                if !warned {
                     tracing::warn!(error = %e, "could not take the UI session lock");
                 }
                 return Self::Detached {
-                    avisado: true,
+                    warned: true,
                     ticks: next,
                 };
             }
             Err(e) => {
-                if !avisado {
+                if !warned {
                     tracing::warn!(error = %e, "the UI session lock attempt crashed");
                 }
                 return Self::Detached {
-                    avisado: true,
+                    warned: true,
                     ticks: next,
                 };
             }
         };
-        let Some((lock, recuperada)) = tomado else {
+        let Some((lock, recovered)) = taken else {
             return Self::Detached {
-                avisado,
+                warned,
                 ticks: next,
             };
         };
-        if !recuperada.writable {
+        if !recovered.writable {
             drop(lock);
             persiste.store(false, Ordering::Release);
             tracing::warn!("the UI session on disk is from a newer binary: not writing it");
             return Self::Surrendered;
         }
-        store.adopt_from_disk(recuperada.session);
+        store.adopt_from_disk(recovered.session);
         persiste.store(true, Ordering::Release);
         tracing::info!("the UI session became free: this daemon is saving it again");
         Self::Owned { _lock: lock }
@@ -3419,8 +3419,8 @@ fn handle_policy_decide(
             tracing::info!("policy approval decided by the human");
             return to_value(&methods::PolicyDecideResult {});
         }
-        Decision::Vencida => "expired",
-        Decision::YaDecidida => "already-decided",
+        Decision::Expired => "expired",
+        Decision::YaDecided => "already-decided",
         Decision::Unknown => "unknown",
     };
     Err(RpcError::from(norte_proto::Error::ApprovalGone {

@@ -31,7 +31,7 @@ pub use norte_frontend::goto::{Action, MINIMUM_FOR_THE_INDEX};
 /// when they could not be read — one fewer section, not a screen that fails
 /// to open.
 #[must_use]
-pub fn fuentes(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoSource + Send>> {
+pub fn sources(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoSource + Send>> {
     let focus = app.focus();
     let enc = app.focused().name_encoding();
     let current = app.focused().dir().clone();
@@ -100,7 +100,7 @@ pub fn fuentes(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoS
 pub fn set_index(app: &mut App, hits: &[norte_proto::methods::SemanticHit]) {
     let rows = norte_frontend::goto::index_rows(hits);
     if let Some(goto) = &mut app.goto {
-        // `ya_filtrada`: the index matched by MEANING, and running the
+        // `ya_filtered`: the index matched by MEANING, and running the
         // query's subsequence over it again would throw away exactly what
         // makes it useful.
         goto.replace_section(SECTION_INDEX, rows, true);
@@ -116,6 +116,6 @@ pub fn action(_app: &App, key: &str) -> Action {
 
 /// Opens the screen with the given sources.
 pub fn open(app: &mut App, connections: &[(String, String)]) {
-    let sources = fuentes(app, connections);
+    let sources = sources(app, connections);
     app.goto = Some(Goto::new(sources));
 }

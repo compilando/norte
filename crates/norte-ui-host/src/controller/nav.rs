@@ -36,7 +36,7 @@ impl State {
                 // this and a double click on the panel next door did
                 // NOTHING. An action that names its slot cannot depend on
                 // another one having arrived first.
-                self.enfocar_for_act(slot_id);
+                self.focus_for_act(slot_id);
                 let Some(i) = self.row_of(slot_id, key, generation) else {
                     return (Self::stale(StaleAction::Generation), Vec::new());
                 };
@@ -203,7 +203,7 @@ impl State {
         slot_state.in_flight = Some(token);
         // The drain lives LONGER than the first page: it is marked here and
         // only another navigation of the same slot supersedes it.
-        slot_state.drenando = Some(token);
+        slot_state.draining = Some(token);
 
         self.request_listing(slot, &target, token, backend, mailbox);
 
@@ -246,15 +246,15 @@ impl State {
     /// The criterion is the same as `UiAction::FocusSlot`'s: the shared focus
     /// walk and the slot being visible. A slot that does not qualify is left
     /// as is, and the caller will refuse it on its own.
-    pub(super) fn enfocar_for_act(&mut self, slot_id: u32) {
+    pub(super) fn focus_for_act(&mut self, slot_id: u32) {
         if slot_id == self.active()
             || !self.split.focus_order.contains(&SlotId(slot_id))
-            || self.oculto(slot_id)
+            || self.hidden(slot_id)
         {
             return;
         }
         self.roles.set(RoleId::Active, SlotId(slot_id));
-        self.reconcilia_roles();
+        self.reconciles_roles();
     }
 
     /// A clicked breadcrumb (bridge 65): navigates to the ancestor with the
@@ -270,7 +270,7 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if !self.slots.contains_key(&slot_id) || self.oculto(slot_id) {
+        if !self.slots.contains_key(&slot_id) || self.hidden(slot_id) {
             return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let Some(slot_state) = self.slots.get(&slot_id) else {

@@ -130,7 +130,7 @@ impl State {
     /// slot; while there is one, another is not started — dropping the
     /// response does not cancel the work, which is already instantiating
     /// wasm.
-    pub(super) fn sondear_panels(
+    pub(super) fn probe_panels(
         &mut self,
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
@@ -333,7 +333,7 @@ impl State {
         // snapshot". In the terminal this is not needed because the count
         // starts from the painted rectangle; here the cell arrives over the
         // wire.
-        if self.oculto(slot) {
+        if self.hidden(slot) {
             return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let command = self
@@ -350,7 +350,7 @@ impl State {
         };
         match crate::commands::effect_of(&command, 1) {
             Some(effect) => self.apply_effect(effect, backend, mailbox),
-            None => self.no_implementado(&command),
+            None => self.no_implemented(&command),
         }
     }
 }

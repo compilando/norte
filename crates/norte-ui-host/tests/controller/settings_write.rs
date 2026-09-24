@@ -366,7 +366,7 @@ async fn an_out_of_range_integer_is_not_written_and_says_so() {
         },
         "it is rejected as such, not as applied"
     );
-    asentar().await;
+    settle().await;
     assert!(
         toml_de(root.path()).is_none_or(|s| !s.contains("font_size")),
         "nothing was written: {:?}",
@@ -499,7 +499,7 @@ async fn with_the_prompt_open_a_double_click_does_nothing() {
         matches!(ack, ActionAck::Stale { .. }),
         "with a dialog in front, the click is stale: {ack:?}"
     );
-    asentar().await;
+    settle().await;
     assert!(
         toml_de(root.path()).is_none(),
         "nothing was written: {:?}",

@@ -30,7 +30,7 @@ pub(super) async fn next_search(
 pub(super) fn tree_with_findings(pattern: &str, paths: &[&str]) -> Arc<Fake> {
     let base = fake_tree();
     let mut f = Fake {
-        hallazgos: [(
+        findings: [(
             pattern.to_owned(),
             paths
                 .iter()
@@ -111,7 +111,7 @@ async fn searching_opens_its_view_and_hits_arrive_in_batches() {
         v.status
     );
     assert_eq!(
-        backend.busquedas.lock().expect("mutex").as_slice(),
+        backend.searches.lock().expect("mutex").as_slice(),
         &["*.txt".to_owned()],
         "and the pattern reached the wire as-is"
     );
@@ -349,7 +349,7 @@ async fn closing_a_search_with_no_hits_cancels_it_anyway() {
         "the view closes"
     );
     assert_eq!(
-        backend.cancelaciones.load(Ordering::SeqCst),
+        backend.cancellations.load(Ordering::SeqCst),
         1,
         "and the Task gets cancelled EVEN THOUGH not one batch arrived: it \
          is the only thing that stops the daemon"
@@ -496,7 +496,7 @@ async fn going_to_a_result_navigates_and_leaves_the_cursor_on_it() {
         "mem:///casa/docs",
         vec![(b"a.md".to_vec(), false), (b"hallado.md".to_vec(), false)],
     );
-    f.hallazgos = [(
+    f.findings = [(
         "hallado*".to_owned(),
         vec![norte_proto::VPath::parse("mem:///casa/docs/hallado.md").expect("vpath")],
     )]
@@ -590,7 +590,7 @@ async fn an_empty_pattern_launches_nothing() {
     let after = next_snapshot(&mut sub).await;
     assert!(after.search.is_none(), "no search was opened");
     assert!(
-        backend.busquedas.lock().expect("mutex").is_empty(),
+        backend.searches.lock().expect("mutex").is_empty(),
         "and nothing reached the wire"
     );
 }
@@ -748,7 +748,7 @@ async fn an_unreadable_field_does_not_take_down_the_form() {
     assert_eq!(value("name"), "*.rs", "and what was typed was not lost");
     assert_eq!(value("min-size"), "1 gigabyte");
     assert!(
-        backend.busquedas.lock().expect("mutex").is_empty(),
+        backend.searches.lock().expect("mutex").is_empty(),
         "and nothing reached the wire"
     );
 }
@@ -951,7 +951,7 @@ async fn the_window_searches_by_meaning() {
     // equally good and the order looks arbitrary.
     assert!(view.rows[0].score.is_some_and(|s| s > 0.9));
     let requested = backend
-        .semanticas_pedidas
+        .semanticas_requested
         .lock()
         .expect("requested")
         .clone();
@@ -1016,10 +1016,10 @@ async fn an_empty_semantic_query_is_not_sent() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
     assert!(
         backend
-            .semanticas_pedidas
+            .semanticas_requested
             .lock()
             .expect("requested")
             .is_empty()
@@ -1047,7 +1047,7 @@ async fn an_empty_ai_instruction_returns_the_field() {
     })
     .await
     .expect("host alive");
-    asentar().await;
+    settle().await;
 
     let snap = snapshot(&h, &mut sub).await;
     assert!(
@@ -1056,7 +1056,7 @@ async fn an_empty_ai_instruction_returns_the_field() {
         snap.dialogs
     );
     assert!(
-        backend.instrucciones.lock().expect("requested").is_empty(),
+        backend.instructions.lock().expect("requested").is_empty(),
         "and nothing goes out to the AI provider"
     );
 }
@@ -1114,7 +1114,7 @@ async fn in_read_only_there_is_no_semantic_search() {
     );
     assert!(
         backend
-            .semanticas_pedidas
+            .semanticas_requested
             .lock()
             .expect("requested")
             .is_empty()
@@ -1143,7 +1143,7 @@ pub(super) async fn run_by_palette(
 /// it is given one millisecond, which is plenty for what is already
 /// published and far too little to wait for something that has not happened
 /// yet.
-async fn drenar_snapshots(sub: &mut norte_ui_host::controller::UiSubscription) {
+async fn drain_snapshots(sub: &mut norte_ui_host::controller::UiSubscription) {
     while tokio::time::timeout(std::time::Duration::from_millis(1), sub.recv())
         .await
         .is_ok()
@@ -1177,7 +1177,7 @@ pub(super) async fn execute_via_palette_ack(
         // answer to an attribute catalogue, a volume, a capability. Throwing
         // them away is correct because the only one that matters is the one
         // after `Resync`, which is by definition the newest.
-        drenar_snapshots(sub).await;
+        drain_snapshots(sub).await;
         h.dispatch(UiAction::Resync).await.expect("host alive");
         let p = next_snapshot(sub)
             .await

@@ -7,7 +7,7 @@
 // the same imports as the parent. Enumerating them here would be a
 // forty-line list per file, in 32 files, that goes stale the moment the
 // parent imports something — `super::*` tracks it on its own.
-use super::sums::Publicado;
+use super::sums::Published;
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
@@ -28,7 +28,7 @@ pub(super) struct ChecksumsInFlight {
     pub(super) report_requested: bool,
     /// What the checksums file was publishing, if this is a CHECK. `None` =
     /// only computing.
-    pub(super) publicado: Option<Publicado>,
+    pub(super) published: Option<Published>,
 }
 
 /// A finished Task's report, by class.
@@ -51,7 +51,7 @@ pub(super) enum Report {
 /// Three cases and not two: "there is none" and "the pointed-at one already
 /// finished" read differently, and collapsing them would make cancelling a
 /// finished task say there are no tasks while the board shows four.
-pub(super) enum Objetivo {
+pub(super) enum Target {
     /// There is none to ask to stop.
     Ninguna,
     /// The pointed-at one is already terminal.
@@ -101,7 +101,7 @@ pub(super) struct TaskViva {
     /// says which file is currently in flight, not which screens lie once
     /// it finishes. Empty = nothing to refresh (a search, an unrelated task
     /// whose id is all that is known).
-    pub(super) afectados: Vec<VPath>,
+    pub(super) affected: Vec<VPath>,
     /// What to retry with if it COLLIDES (#274). `None` for everything that
     /// is not a transfer: a delete or an undo have no other policy to
     /// offer.
@@ -128,23 +128,22 @@ pub(super) struct Batch {
     /// How many entries were requested.
     pub(super) total: usize,
     /// How many became a task.
-    pub(super) encoladas: usize,
+    pub(super) queued: usize,
     /// How many the daemon rejected on enqueuing.
-    pub(super) rechazadas: usize,
+    pub(super) rejected: usize,
     /// The ids of the ones enqueued, to recognize their outcome. An id not
     /// here belongs to something else (a search, an undo, another client).
     pub(super) ids: std::collections::BTreeSet<u64>,
     /// GOOD terminal outcomes of the enqueued ones.
     pub(super) done: usize,
     /// Bad terminal outcomes: failed or cancelled.
-    pub(super) fallidas: usize,
+    pub(super) failed: usize,
 }
 
 impl Batch {
     /// Everything requested is resolved.
     fn closed(&self) -> bool {
-        self.encoladas + self.rechazadas >= self.total
-            && self.done + self.fallidas >= self.encoladas
+        self.queued + self.rejected >= self.total && self.done + self.failed >= self.queued
     }
 }
 
@@ -162,11 +161,11 @@ impl State {
     /// Same pattern as an approval's TTL: a `spawn` that sleeps and sends a
     /// message to the actor, because the state is touched by a single
     /// writer.
-    pub(super) fn programar_caducidad(id: u64, epoch: u64, buzon: &mpsc::Sender<Message>) {
-        let buzon = buzon.clone();
+    pub(super) fn programar_expiration(id: u64, epoch: u64, mailbox: &mpsc::Sender<Message>) {
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             tokio::time::sleep(TTL_TASK_TERMINAL).await;
-            let _ = buzon.send(Message::TaskCaducada(id, epoch)).await;
+            let _ = mailbox.send(Message::TaskExpired(id, epoch)).await;
         });
     }
 
@@ -178,26 +177,26 @@ impl State {
     ///   this clock has been flying for ten seconds;
     /// - that it is still TERMINAL, because a re-announced id can be running
     ///   again;
-    /// - that it does not owe a refresh (`afectados`), which is the
+    /// - that it does not owe a refresh (`affected`), which is the
     ///   invariant cap-based eviction already asserts: dropping the row
     ///   would sweep away the re-read of the directory that mutation
     ///   changed.
-    pub(super) fn caducar_task(
+    pub(super) fn expire_task(
         &mut self,
         id: u64,
         epoch: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let remove = self.tasks.get(&id).is_some_and(|t| {
-            t.epoch == epoch && Self::terminal(t.vista.state) && t.afectados.is_empty()
+            t.epoch == epoch && Self::terminal(t.vista.state) && t.affected.is_empty()
         });
         if !remove {
             return Vec::new();
         }
         self.tasks.remove(&id);
-        self.anotar_strip(buzon);
-        let mut envios = vec![self.parche(vec![ViewChange::Tasks {
+        self.annotate_strip(mailbox);
+        let mut sends = vec![self.parche(vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
             cursor: self.board_cursor(),
         }])];
@@ -208,8 +207,8 @@ impl State {
         // session. The terminal did not have the bug because its loop
         // re-evaluates the same condition every round — the divergence
         // ADR 0077 goes after.
-        envios.extend(self.processes_automaticos(backend, buzon));
-        envios
+        sends.extend(self.processes_automaticos(backend, mailbox));
+        sends
     }
 
     pub(super) fn evict_from_board(&mut self) {
@@ -228,7 +227,7 @@ impl State {
             .map(|(k, _)| *k);
         if let Some(old) = old {
             debug_assert!(
-                self.tasks[&old].afectados.is_empty(),
+                self.tasks[&old].affected.is_empty(),
                 "evicting a task with a pending refresh"
             );
             self.tasks.remove(&old);
@@ -247,20 +246,20 @@ impl State {
         policy: norte_proto::CollisionPolicy,
         a_la_cola: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         // The destination changes; the source also stops being there if it
         // is a move. Both parents are noted down, like in the original
         // transfer.
-        let mut afectados: Vec<VPath> = con.to.parent().into_iter().collect();
+        let mut affected: Vec<VPath> = con.to.parent().into_iter().collect();
         if con.mover
             && let Some(padre) = con.from.parent()
-            && !afectados.contains(&padre)
+            && !affected.contains(&padre)
         {
-            afectados.push(padre);
+            affected.push(padre);
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let queued = if con.mover {
                 backend
@@ -272,10 +271,10 @@ impl State {
                     .await
             };
             let message = match queued {
-                Ok(task) => Message::TaskNew(Box::new((task, afectados, Some(con)))),
+                Ok(task) => Message::TaskNew(Box::new((task, affected, Some(con)))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(message).await;
+            let _ = mailbox.send(message).await;
         });
     }
 
@@ -298,17 +297,17 @@ impl State {
         slot: u32,
         dir: VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = backend
                 .provide_secret(conn, secret.expose().to_owned())
                 .await;
             drop(secret);
-            let _ = buzon
-                .send(Message::SecretEntregado(Box::new((slot, dir, res))))
+            let _ = mailbox
+                .send(Message::SecretDelivered(Box::new((slot, dir, res))))
                 .await;
         });
     }
@@ -321,7 +320,7 @@ impl State {
     /// collision the reader finds on returning with no way out. The epoch
     /// matters: after a daemon handoff the ids start over, and whatever was
     /// there with that number was something else.
-    pub(super) fn retry_heredado(&self, id: u64) -> Option<Retry> {
+    pub(super) fn retry_inherited(&self, id: u64) -> Option<Retry> {
         self.tasks
             .get(&id)
             .filter(|t| t.epoch == self.epoch_connection)
@@ -384,10 +383,10 @@ impl State {
     pub(super) fn registrar_task(
         &mut self,
         task: crate::backend::HostTask,
-        afectados: Vec<VPath>,
+        affected: Vec<VPath>,
         retry: Option<Retry>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let id = task.id.get();
         let foreign = task.foreign;
@@ -395,10 +394,10 @@ impl State {
         // was enqueued was enqueued even if its row does not end up fitting.
         if let Some(batch) = self.batch.as_mut()
             && !foreign
-            && batch.encoladas + batch.rechazadas < batch.total
+            && batch.queued + batch.rejected < batch.total
             && batch.ids.insert(id)
         {
-            batch.encoladas += 1;
+            batch.queued += 1;
         }
         self.evict_from_board();
         // And the HARD ceiling on what is retained (#271). This is only
@@ -406,32 +405,32 @@ impl State {
         // unrelated-tasks channel: own ones never get past
         // `request_transfer`, which refuses the whole batch if it does
         // not fit. An unrelated row that falls loses nothing — it arrives
-        // with empty `afectados`, i.e. no refresh it owes — except a row
+        // with empty `affected`, i.e. no refresh it owes — except a row
         // this window never promised to show.
         if self.tasks.len() >= MAX_TASKS_RETAINED && !self.tasks.contains_key(&id) {
             tracing::debug!(task = id, "board full: an unrelated task is not retained");
             return Vec::new();
         }
         let mut rx = task.progress.clone();
-        let nacio = rx.borrow().clone();
-        self.bind_the_creation(id, foreign, nacio.kind);
+        let born = rx.borrow().clone();
+        self.bind_the_creation(id, foreign, born.kind);
         // #311: the checksums Task already has an id, so the intent noted
         // down when enqueuing it turns into the batch awaiting its report.
         // Only the OWN one: an unrelated task of the same kind is another
         // window's check, and hanging this report off it would give it
         // someone else's digests.
         if !foreign
-            && nacio.kind == norte_proto::TaskKind::Checksum
-            && let Some(encolada) = self.checksums_pendientes.take()
+            && born.kind == norte_proto::TaskKind::Checksum
+            && let Some(encolada) = self.checksums_pending.take()
         {
             self.checksums = Some(ChecksumsInFlight {
                 task: task.id,
                 epoch_connection: self.epoch_connection,
                 report_requested: false,
-                publicado: encolada.publicado,
+                published: encolada.published,
             });
         }
-        let mut vista = Self::vista_de(&nacio);
+        let mut vista = Self::vista_de(&born);
         vista.foreign = foreign;
         self.inherit_detail(id, &mut vista);
         // If this task was ALREADY on the board — a reconnection
@@ -440,14 +439,14 @@ impl State {
         // noted down is kept: replacing it with an empty list lost the
         // re-listing exactly on the path where the screen is most likely
         // to be stale.
-        let afectados = if afectados.is_empty() {
+        let affected = if affected.is_empty() {
             self.tasks
                 .get(&id)
                 .filter(|t| t.epoch == self.epoch_connection)
-                .map(|t| t.afectados.clone())
+                .map(|t| t.affected.clone())
                 .unwrap_or_default()
         } else {
-            afectados
+            affected
         };
         // An ACCEPTED mutation is proof the journal came back: the daemon
         // refuses to mutate without it (hard rule 4), so if this one got
@@ -456,9 +455,9 @@ impl State {
         // embedded — and a warning that does not know how to turn off lies
         // about the one thing it describes for the whole session.
         let turns_off_the_notice =
-            self.journal_rehusado && !foreign && Self::mutates(vista.kind.as_str());
+            self.journal_refused && !foreign && Self::mutates(vista.kind.as_str());
         if turns_off_the_notice {
-            self.journal_rehusado = false;
+            self.journal_refused = false;
         }
         // Same as with the affected directories: if it was already there,
         // whether its report was requested is preserved. A reconnection
@@ -467,7 +466,7 @@ impl State {
             .tasks
             .get(&id)
             .is_some_and(|t| t.report_requested && t.epoch == self.epoch_connection);
-        let retry = retry.or_else(|| self.retry_heredado(id));
+        let retry = retry.or_else(|| self.retry_inherited(id));
         self.tasks.insert(
             id,
             TaskViva {
@@ -479,14 +478,14 @@ impl State {
                 cancel: task.cancel,
                 pause: task.pause,
                 cola: task.cola,
-                afectados,
+                affected,
                 retry,
                 report_requested,
                 epoch: self.epoch_connection,
                 progress: task.progress.clone(),
             },
         );
-        let buzon2 = buzon.clone();
+        let buzon2 = mailbox.clone();
         tokio::spawn(async move {
             // The NOW state was already projected by the registration; what
             // this pumps are the CHANGES. The terminal one goes through the
@@ -519,7 +518,7 @@ impl State {
         //
         // The light bar also sees it from here: one born finished is the
         // fast copy whose "✓" is the only thing that will say it happened.
-        self.anotar_strip(buzon);
+        self.annotate_strip(mailbox);
         let mut changes = vec![ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
             cursor: self.board_cursor(),
@@ -527,7 +526,7 @@ impl State {
         if turns_off_the_notice {
             changes.push(self.banner_change());
         }
-        changes.extend(self.nacio_terminal(id, &nacio, backend, buzon));
+        changes.extend(self.born_terminal(id, &born, backend, mailbox));
         vec![self.parche(changes)]
     }
 
@@ -538,12 +537,12 @@ impl State {
     /// to be called even once: `rx.changed()` does not fire for a channel
     /// born with its final value. Without it, a very fast copy left the
     /// destination un-re-listed forever — the race task 5.1 names literally.
-    pub(super) fn nacio_terminal(
+    pub(super) fn born_terminal(
         &mut self,
         id: u64,
-        nacio: &norte_proto::TaskProgress,
+        born: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<ViewChange> {
         let Some(state) = self
             .tasks
@@ -554,21 +553,21 @@ impl State {
             return Vec::new();
         };
         // Its time on the board is counted from here, for the same reason.
-        Self::programar_caducidad(id, self.epoch_connection, buzon);
+        Self::programar_expiration(id, self.epoch_connection, mailbox);
         let mut changes = Vec::new();
         if self.records_batch_outcome(id, state) {
             changes.push(self.banner_change());
         }
-        changes.extend(self.refresh_afectados(id, backend, buzon));
+        changes.extend(self.refresh_affected(id, backend, mailbox));
         // And its report, for the same reason as the re-listing: it is the
         // only signal that the directory was left halfway, and a very fast
         // batch used to be left without it right when the Task's outcome
         // most looks like everything went fine.
-        self.request_batch_report(nacio, backend, buzon);
+        self.request_batch_report(born, backend, mailbox);
         // #311: and the checksums' one, for the same reason. A batch of
         // three small files is born terminal almost always, so without this
         // the fast path — the most used one — showed nothing.
-        self.request_checksums_report(nacio, backend, buzon);
+        self.request_checksums_report(born, backend, mailbox);
         changes
     }
 
@@ -577,7 +576,7 @@ impl State {
         &mut self,
         p: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Some(viva) = self.tasks.get_mut(&p.task_id.get()) else {
             return Vec::new();
@@ -611,7 +610,7 @@ impl State {
         // and rearming the clock on every repeat would leave the row there
         // forever, which is exactly the opposite of what is asked for.
         if ended && !era_terminal {
-            Self::programar_caducidad(p.task_id.get(), epoch, buzon);
+            Self::programar_expiration(p.task_id.get(), epoch, mailbox);
         }
         // The panel that opens and closes on its own (`[ui] processes_panel
         // = "auto"`, ADR 0115): a panel taking up space to say "nothing
@@ -619,8 +618,8 @@ impl State {
         // copy starts does not either. It only closes what it itself opened,
         // and goes through BOTH HALVES of the gesture, never through the
         // toggle.
-        self.anotar_strip(buzon);
-        let del_panel = self.processes_automaticos(backend, buzon);
+        self.annotate_strip(mailbox);
+        let del_panel = self.processes_automaticos(backend, mailbox);
         let mut changes = self.line_changes();
         changes.push(ViewChange::Tasks {
             tasks: self.vistas_de_tasks(),
@@ -636,9 +635,9 @@ impl State {
         // row says so and `u` over it is refused — two undos of the same
         // session walk the same entry list — and that cannot stay stuck
         // forever.
-        if ended && let Some(session) = self.agencia.undos.remove(&p.task_id.get()) {
-            self.agencia.sessions.undone(&session);
-            if self.agencia.panel {
+        if ended && let Some(session) = self.agency.undos.remove(&p.task_id.get()) {
+            self.agency.sessions.undone(&session);
+            if self.agency.panel {
                 changes.push(ViewChange::Agents {
                     agents: self.vista_agents(),
                 });
@@ -673,20 +672,20 @@ impl State {
         // is on disk and not in the listing. Only with a REAL outcome —
         // `Running` is not one — and only once.
         if ended {
-            changes.extend(self.refresh_afectados(p.task_id.get(), backend, buzon));
-            self.request_batch_report(p, backend, buzon);
+            changes.extend(self.refresh_affected(p.task_id.get(), backend, mailbox));
+            self.request_batch_report(p, backend, mailbox);
             // And the timeline (#359): what just happened — or was just
             // undone — has to show up in a panel that stays open.
             self.reload_lines();
             changes.extend(self.close_comparison(p));
             changes.extend(self.close_sync(p));
-            self.request_sync_report(p, backend, buzon);
+            self.request_sync_report(p, backend, mailbox);
             // #311: and the checksums' one, which is where the digests
             // travel.
-            self.request_checksums_report(p, backend, buzon);
+            self.request_checksums_report(p, backend, mailbox);
             changes.extend(self.report_the_count(p));
             changes.extend(self.offer_retry(p));
-            self.open_the_created(p, backend, buzon);
+            self.open_the_created(p, backend, mailbox);
             self.notify_of_outcome(p);
         }
         // The automatic panel travels BEHIND the patch and separately:
@@ -734,7 +733,7 @@ impl State {
         &mut self,
         req: &norte_proto::methods::PolicyApprovalRequired,
     ) {
-        if self.enfocada {
+        if self.focused {
             return;
         }
         let (who, _) =
@@ -746,7 +745,7 @@ impl State {
             "notify-approval-body",
             &[("op", &op), ("who", &who)],
         ));
-        self.nativo(crate::dto::NativeEffect::Notify { title, body });
+        self.native(crate::dto::NativeEffect::Notify { title, body });
     }
 
     /// Sends a desktop notification when a task FINISHES (#285).
@@ -762,7 +761,7 @@ impl State {
     /// history and can be seen on the lock screen, so a name with bidi or
     /// control characters cannot fake there what it cannot fake here.
     pub(super) fn notify_of_outcome(&mut self, p: &norte_proto::TaskProgress) {
-        if self.enfocada {
+        if self.focused {
             return;
         }
         let (key, count) = match &p.state {
@@ -799,7 +798,7 @@ impl State {
             "notify-task-body",
             &[("what", &detail), ("kind", task_class(p.kind))],
         ));
-        self.nativo(crate::dto::NativeEffect::Notify { title, body });
+        self.native(crate::dto::NativeEffect::Notify { title, body });
     }
 
     /// A transfer that COLLIDED opens the missing question (#274).
@@ -913,15 +912,15 @@ impl State {
         }
         let size = norte_frontend::human_bytes(p.bytes_done);
         let how_many = p.entries_done.to_string();
-        let saltados = p.unreadable.unwrap_or(0);
-        let message = if saltados > 0 {
+        let skipped = p.unreadable.unwrap_or(0);
+        let message = if skipped > 0 {
             norte_i18n::ta_in(
                 self.lang,
                 "msg-dir-size-partial",
                 &[
                     ("size", &size),
                     ("count", &how_many),
-                    ("skipped", &saltados.to_string()),
+                    ("skipped", &skipped.to_string()),
                 ],
             )
         } else {
@@ -950,7 +949,7 @@ impl State {
         &mut self,
         p: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         // Three classes have a report, and all three for the same reason:
         // what has to be said does not fit in a Task's outcome. The first
@@ -983,7 +982,7 @@ impl State {
             _ => return,
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let epoch = self.epoch_connection;
         tokio::spawn(async move {
             let which = match which {
@@ -991,7 +990,7 @@ impl State {
                 Which::Undo => Report::Undo(backend.undo_report(id).await),
                 Which::Packed => Report::Packed(backend.archive_pack_report(id).await),
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Report(Box::new((epoch, id.get(), which))))
                 .await;
         });
@@ -1009,7 +1008,7 @@ impl State {
         // A journal rejection is not a mutation gone wrong: it is that THIS
         // SESSION does not mutate until the file is fixed (hard rule 4).
         // That lasts longer than one message.
-        self.journal_rehusado |= matches!(e, Error::JournalUnavailable);
+        self.journal_refused |= matches!(e, Error::JournalUnavailable);
         // A creation that never even got enqueued releases its intent: with
         // no task there is no outcome to consume it, and staying stuck
         // would make the NEXT `edit-new` open this one's file, which does
@@ -1044,14 +1043,14 @@ impl State {
         let Some(batch) = self.batch.as_mut() else {
             return self.task_failed(e);
         };
-        batch.rechazadas += 1;
+        batch.rejected += 1;
         // A journal rejection still means the same thing even coming from a
         // batch: this session does NOT mutate until the file is fixed (hard
         // rule 4), and that lasts longer than any summary — and it is the
         // only thing about a lone rejection that DOES travel before the end.
-        let before = self.journal_rehusado;
-        self.journal_rehusado |= matches!(e, Error::JournalUnavailable);
-        let banner_new = self.journal_rehusado != before;
+        let before = self.journal_refused;
+        self.journal_refused |= matches!(e, Error::JournalUnavailable);
+        let banner_new = self.journal_refused != before;
         if !self.batch_summary_if_closed() && !banner_new {
             // A patch per rejection is the storm this exists to silence:
             // while the batch stays open, nothing travels.
@@ -1078,7 +1077,7 @@ impl State {
         if state == TaskStateView::Done {
             batch.done += 1;
         } else {
-            batch.fallidas += 1;
+            batch.failed += 1;
         }
         self.batch_summary_if_closed()
     }
@@ -1098,7 +1097,7 @@ impl State {
         // status bar.
         let total = batch.total.to_string();
         let bien = batch.done.to_string();
-        let bad = (batch.rechazadas + batch.fallidas).to_string();
+        let bad = (batch.rejected + batch.failed).to_string();
         self.batch = None;
         self.status.message = Some(clamp_display(norte_i18n::ta_in(
             self.lang,
@@ -1219,14 +1218,14 @@ impl State {
             Ok(r) => !Self::undo_clean(r),
             Err(_) => task_failed,
         };
-        let mut caidos = Vec::new();
+        let mut fallen = Vec::new();
         if hay_that_say_it {
-            let (change, cayeron) = self.open_report("modal-undo-report-title".to_owned(), body);
+            let (change, fell) = self.open_report("modal-undo-report-title".to_owned(), body);
             changes.push(change);
-            caidos = cayeron;
+            fallen = fell;
         }
         let mut outputs = vec![self.parche(changes)];
-        outputs.extend(caidos);
+        outputs.extend(fallen);
         outputs
     }
 
@@ -1325,14 +1324,14 @@ impl State {
             // enough.
             Err(_) => task_failed,
         };
-        let mut caidos = Vec::new();
+        let mut fallen = Vec::new();
         if hay_that_say_it {
-            let (change, cayeron) = self.open_report("modal-batch-report-title".to_owned(), body);
+            let (change, fell) = self.open_report("modal-batch-report-title".to_owned(), body);
             changes.push(change);
-            caidos = cayeron;
+            fallen = fell;
         }
         let mut outputs = vec![self.parche(changes)];
-        outputs.extend(caidos);
+        outputs.extend(fallen);
         outputs
     }
 
@@ -1381,7 +1380,7 @@ impl State {
     /// the top one, which is the one being answered; if all are acknowledged,
     /// the oldest one. That one fell IS SAID: a question disappearing in
     /// silence is worse than a long stack.
-    pub(super) fn apilar_dialog(&mut self, dialog: Dialog) -> Vec<BridgeEnvelope<UiUpdate>> {
+    pub(super) fn stack_dialog(&mut self, dialog: Dialog) -> Vec<BridgeEnvelope<UiUpdate>> {
         let mut outside = Vec::new();
         if self.dialogs.len() >= MAX_DIALOGS {
             // A REPORT is sacrificed before a decision: the report also
@@ -1433,7 +1432,7 @@ impl State {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        let caidos = self.apilar_dialog(Dialog {
+        let fallen = self.stack_dialog(Dialog {
             id,
             vista,
             typed: Typed::Text(String::new()),
@@ -1445,7 +1444,7 @@ impl State {
             ViewChange::Dialogs {
                 dialogs: self.dialog_views(),
             },
-            caidos,
+            fallen,
         )
     }
 
@@ -1459,9 +1458,9 @@ impl State {
     /// is cancelled, which is what the TUI does with the same key.
     pub(super) fn cancel_by_command(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match self.task_to_cancel() {
-            Objetivo::Ninguna => (self.applied(), self.say("msg-no-tasks")),
-            Objetivo::Finished => (self.applied(), self.say("msg-task-finished")),
-            Objetivo::Viva(id) => {
+            Target::Ninguna => (self.applied(), self.say("msg-no-tasks")),
+            Target::Finished => (self.applied(), self.say("msg-task-finished")),
+            Target::Viva(id) => {
                 // A window with no effects does not abort ANOTHER client's
                 // task: cancelling a copy leaves the destination clean or a
                 // `.norte-partial`, i.e. it touches disk. Its own ones,
@@ -1488,12 +1487,12 @@ impl State {
     /// does not happen and is not reported is worse than not offering it.
     pub(super) fn pause_by_command(
         &mut self,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let id = match self.task_to_cancel() {
-            Objetivo::Ninguna => return (self.applied(), self.say("msg-no-tasks")),
-            Objetivo::Finished => return (self.applied(), self.say("msg-task-finished")),
-            Objetivo::Viva(id) => id,
+            Target::Ninguna => return (self.applied(), self.say("msg-no-tasks")),
+            Target::Finished => return (self.applied(), self.say("msg-task-finished")),
+            Target::Viva(id) => id,
         };
         let Some(viva) = self.tasks.get(&id) else {
             return (self.applied(), self.say("msg-no-tasks"));
@@ -1512,10 +1511,10 @@ impl State {
             return (self.applied(), self.say("msg-pause-unsupported"));
         };
         let pause = state != norte_proto::TaskState::Paused;
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             if let Err(norte_proto::Error::Unsupported) = command(pause).await {
-                let _ = buzon.send(Message::Say("msg-pause-unsupported")).await;
+                let _ = mailbox.send(Message::Say("msg-pause-unsupported")).await;
             }
         });
         let notice = if pause { "msg-pausing" } else { "msg-resuming" };
@@ -1542,20 +1541,20 @@ impl State {
     pub(super) fn move_in_queue_by_command(
         &mut self,
         up: bool,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let id = match self.task_to_cancel() {
-            Objetivo::Ninguna => return (self.applied(), self.say("msg-no-tasks")),
-            Objetivo::Finished => return (self.applied(), self.say("msg-task-finished")),
-            Objetivo::Viva(id) => id,
+            Target::Ninguna => return (self.applied(), self.say("msg-no-tasks")),
+            Target::Finished => return (self.applied(), self.say("msg-task-finished")),
+            Target::Viva(id) => id,
         };
         let Some(command) = self.tasks.get(&id).and_then(|t| t.cola.clone()) else {
             return (self.applied(), self.say("msg-queued-not-moved"));
         };
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             if command(up).await.is_err() {
-                let _ = buzon.send(Message::Say("msg-queued-not-moved")).await;
+                let _ = mailbox.send(Message::Say("msg-queued-not-moved")).await;
             }
         });
         (self.applied(), self.say("msg-queued-moved"))
@@ -1572,7 +1571,7 @@ impl State {
         self.tasks
             .values()
             .filter(|t| t.epoch == self.epoch_connection && !Self::terminal(t.vista.state))
-            .filter(|t| t.afectados.iter().any(|d| d == dir))
+            .filter(|t| t.affected.iter().any(|d| d == dir))
             .filter(|t| norte_frontend::tasks::counts_as_work(t.progress.borrow().kind))
             .filter_map(|t| norte_frontend::tasks::progress_pct(&t.progress.borrow()))
             .min()
@@ -1609,7 +1608,7 @@ impl State {
     pub(super) fn retry_by_command(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.effects == crate::commands::Effects::SoloRead {
             return Self::no_mutates();
@@ -1634,7 +1633,7 @@ impl State {
             norte_proto::CollisionPolicy::Fail,
             self.enqueue,
             backend,
-            buzon,
+            mailbox,
         );
         (self.applied(), self.say("msg-retrying"))
     }
@@ -1717,13 +1716,13 @@ impl State {
     /// it were not released here, that session would stay marked "undoing"
     /// forever and `u` over it would be refused for no reason.
     pub(super) fn undos_sin_task(&mut self, task_id: u64) {
-        if let Some(session) = self.agencia.undos.remove(&task_id) {
-            self.agencia.sessions.undone(&session);
+        if let Some(session) = self.agency.undos.remove(&task_id) {
+            self.agency.sessions.undone(&session);
         }
     }
 
     /// Which task is due to stop.
-    pub(super) fn task_to_cancel(&self) -> Objetivo {
+    pub(super) fn task_to_cancel(&self) -> Target {
         if self.processes_have_focus() {
             // The cursor's, whatever its state: a human chose it by looking
             // at it. If it already finished, it IS SAID, instead of jumping
@@ -1733,12 +1732,12 @@ impl State {
                 .tasks_visible()
                 .nth(self.cursor_processes.row_or_zero(&self.board_ids()))
             else {
-                return Objetivo::Ninguna;
+                return Target::Ninguna;
             };
             return if Self::follows_viva(viva) {
-                Objetivo::Viva(*id)
+                Target::Viva(*id)
             } else {
-                Objetivo::Finished
+                Target::Finished
             };
         }
         // The board goes by id, and the daemon hands them out increasing:
@@ -1747,7 +1746,7 @@ impl State {
             .iter()
             .rev()
             .find(|(_, t)| Self::follows_viva(t))
-            .map_or(Objetivo::Ninguna, |(id, _)| Objetivo::Viva(*id))
+            .map_or(Target::Ninguna, |(id, _)| Target::Viva(*id))
     }
 
     /// `true` if this task class WRITES.
@@ -1861,8 +1860,8 @@ impl State {
     /// lists split apart, and the one that is seen stops being the one that
     /// is cancelled".
     pub(super) fn tasks_visible(&self) -> impl Iterator<Item = (&u64, &TaskViva)> {
-        let sobran = self.tasks.len().saturating_sub(MAX_TASKS);
-        self.tasks.iter().skip(sobran)
+        let leftover = self.tasks.len().saturating_sub(MAX_TASKS);
+        self.tasks.iter().skip(leftover)
     }
 
     /// Opens or closes the processes panel on its own, and says what
@@ -1874,7 +1873,7 @@ impl State {
     pub(super) fn processes_automaticos(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         if self.config.common.ui_chrome.processes_panel()
             != norte_config::load::ProcessesPanel::Auto
@@ -1891,11 +1890,11 @@ impl State {
         let open = self.slot_of_kind("processes").is_some();
         if opens && !open {
             self.processes_auto = true;
-            return self.open_slot_of_kind("processes", backend, buzon).1;
+            return self.open_slot_of_kind("processes", backend, mailbox).1;
         }
         if !has_work && open && self.processes_auto {
             self.processes_auto = false;
-            return self.close_slot_of_kind("processes", backend, buzon).1;
+            return self.close_slot_of_kind("processes", backend, mailbox).1;
         }
         Vec::new()
     }
@@ -1908,7 +1907,7 @@ impl State {
 
     /// Shows the board to the light bar (ADR 0146) and schedules the next
     /// wake-up if the bar is going to change with no progress arriving.
-    pub(super) fn anotar_strip(&mut self, buzon: &mpsc::Sender<Message>) {
+    pub(super) fn annotate_strip(&mut self, mailbox: &mpsc::Sender<Message>) {
         let now = self.clock_strip();
         // Copies: progress lives behind a `watch`, and its guard cannot
         // cross the call. There are few of them (the board has a cap) and
@@ -1936,15 +1935,15 @@ impl State {
         let Some(when) = self.strip.next_change_ms(now) else {
             return;
         };
-        if self.strip_despertar == Some(when) {
+        if self.strip_wake == Some(when) {
             return;
         }
-        self.strip_despertar = Some(when);
+        self.strip_wake = Some(when);
         let wait = std::time::Duration::from_millis(u64::try_from(when - now).unwrap_or(0));
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             tokio::time::sleep(wait).await;
-            let _ = buzon.send(Message::Strip).await;
+            let _ = mailbox.send(Message::Strip).await;
         });
     }
 
@@ -1952,18 +1951,18 @@ impl State {
     /// travels only if something depending on it changed (the status bar's
     /// elements are compared by `parche` alone; the panel, by
     /// `processes_automaticos`).
-    pub(super) fn despertar_strip(
+    pub(super) fn wake_strip(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.strip_despertar = None;
-        self.anotar_strip(buzon);
-        let mut envios = self.processes_automaticos(backend, buzon);
-        if envios.is_empty() && self.last_items.as_ref() != Some(&self.status_items_view()) {
-            envios.push(self.parche(Vec::new()));
+        self.strip_wake = None;
+        self.annotate_strip(mailbox);
+        let mut sends = self.processes_automaticos(backend, mailbox);
+        if sends.is_empty() && self.last_items.as_ref() != Some(&self.status_items_view()) {
+            sends.push(self.parche(Vec::new()));
         }
-        envios
+        sends
     }
 
     /// How many rows the PAINTED board has.
@@ -1985,7 +1984,7 @@ impl State {
     /// Asks the LIVE progress because that is where the typed class is; the
     /// projected view only carries its name.
     fn has_work(&self) -> bool {
-        // Only this connection's, for the same reason as in `anotar_strip`:
+        // Only this connection's, for the same reason as in `annotate_strip`:
         // a previous daemon's work is never going to finish, and the panel
         // would not close.
         self.tasks.values().any(|t| {

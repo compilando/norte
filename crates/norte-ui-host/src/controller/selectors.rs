@@ -27,9 +27,9 @@ impl State {
     pub(super) fn open_volumes(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.open_volumes_in(self.active(), backend, buzon)
+        self.open_volumes_in(self.active(), backend, mailbox)
     }
 
     /// The volumes for the slot on a SIDE of the screen.
@@ -44,7 +44,7 @@ impl State {
         &mut self,
         right: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(slot) = self.side_listing(right) else {
             return (
@@ -57,7 +57,7 @@ impl State {
         self.open_volumes_with(
             crate::pickers::Selector::side_volumes(slot, right),
             backend,
-            buzon,
+            mailbox,
         )
     }
 
@@ -88,9 +88,9 @@ impl State {
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.open_volumes_with(crate::pickers::Selector::volumes(slot), backend, buzon)
+        self.open_volumes_with(crate::pickers::Selector::volumes(slot), backend, mailbox)
     }
 
     /// The shared body: opens THIS selector and requests the mount table.
@@ -98,19 +98,19 @@ impl State {
         &mut self,
         selector: crate::pickers::Selector,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.selector = Some(selector);
         self.gen_selector += 1;
         let opening = self.gen_selector;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.volumes()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::Volumes(
                     opening, res,
                 ))))
@@ -157,19 +157,19 @@ impl State {
     pub(super) fn open_connections(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.selector = Some(crate::pickers::Selector::connections(self.active()));
         self.gen_selector += 1;
         let opening = self.gen_selector;
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.connections()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::Connections(
                     opening, res,
                 ))))
@@ -192,7 +192,7 @@ impl State {
     pub(super) fn disconnect(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slot = self.active();
         let dir = self.slot().pane.dir().clone();
@@ -207,12 +207,12 @@ impl State {
         }
         let dest = self.where_to_return_after_disconnecting(&dir);
         let backend_c = Arc::clone(backend);
-        let buzon_c = buzon.clone();
+        let mailbox_c = mailbox.clone();
         let key = dir.clone();
         tokio::spawn(async move {
             let res = backend_c.close_connection(key).await;
-            let _ = buzon_c
-                .send(Message::Background(Box::new(Background::Desconectada(
+            let _ = mailbox_c
+                .send(Message::Background(Box::new(Background::Disconnected(
                     slot, res, dest,
                 ))))
                 .await;
@@ -228,19 +228,19 @@ impl State {
     /// home and this window retraced its trail, under the same key and the
     /// same name.
     pub(super) fn where_to_return_after_disconnecting(&self, closed: &VPath) -> VPath {
-        norte_frontend::nav::regreso_after_disconnect(closed, self.slot().history.trail())
+        norte_frontend::nav::return_after_disconnect(closed, self.slot().history.trail())
             .unwrap_or_else(norte_frontend::shell::home_vpath)
     }
 
     /// The session closed (or there was none): it is reported and the pane
     /// leaves.
-    pub(super) fn apply_desconexion(
+    pub(super) fn apply_disconnection(
         &mut self,
         slot: u32,
         res: Result<bool, Error>,
         dest: &VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let key = match res {
             Ok(true) => "msg-disconnect-done",
@@ -256,7 +256,7 @@ impl State {
             }
         };
         self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
-        self.navigate_slot(slot, dest, Trail::Record, backend, buzon)
+        self.navigate_slot(slot, dest, Trail::Record, backend, mailbox)
     }
 
     /// The connections arrived (#264). Same opening guard as the volumes: an
@@ -273,8 +273,8 @@ impl State {
         // A failure is painted as an EMPTY list with its own phrase, not as
         // an unexplained list: "you have none" and "could not be asked" are
         // not the same thing, and without the phrase both read alike.
-        let (good, inservibles) = res.map(|r| (r.connections, r.unusable)).unwrap_or_default();
-        s.with_connections(good, inservibles);
+        let (good, unusable) = res.map(|r| (r.connections, r.unusable)).unwrap_or_default();
+        s.with_connections(good, unusable);
         self.gen_selector += 1;
         let change = ViewChange::Picker {
             picker: self.vista_selector(),
@@ -298,7 +298,7 @@ impl State {
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(p) = self.selector_profile.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -315,8 +315,8 @@ impl State {
                 let chosen = p.chosen().map(std::ffi::OsStr::to_os_string);
                 return match chosen {
                     Some(name) => {
-                        let envios = self.choose_profile(&name, backend, buzon);
-                        (self.applied(), envios)
+                        let sends = self.choose_profile(&name, backend, mailbox);
+                        (self.applied(), sends)
                     }
                     // A row that cannot be loaded changes nothing, and the
                     // selector stays open: closing it would be answering yes
@@ -343,7 +343,7 @@ impl State {
         &mut self,
         name: &std::ffi::OsStr,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let _ = backend;
         if self.profile_active.as_deref() == Some(name) {
@@ -353,13 +353,13 @@ impl State {
             self.selector_profile = None;
             return vec![self.parche(vec![ViewChange::Profiles { profiles: None }])];
         }
-        self.switch_profile(name, buzon)
+        self.switch_profile(name, mailbox)
     }
 
     pub(super) fn key_in_theme(
         &mut self,
         k: &crate::keys::KeyInput,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(sel) = self.theme_chosen.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -378,7 +378,7 @@ impl State {
                 // undoes their side too.
                 let name = previo.name.clone();
                 self.theme = previo;
-                self.nativo(crate::dto::NativeEffect::ThemeChanged { name });
+                self.native(crate::dto::NativeEffect::ThemeChanged { name });
                 let change = ViewChange::Theme { theme: None };
                 // And the rows: the live preview left the names with the
                 // colors of whichever theme the cursor brushed, and going
@@ -396,12 +396,12 @@ impl State {
                     return (self.applied(), Vec::new());
                 };
                 self.theme_chosen = None;
-                self.apply_theme(&chosen, buzon);
+                self.apply_theme(&chosen, mailbox);
                 // And it IS SAVED, which is what separates choosing a theme
                 // from just looking at it. To the active profile if there is
                 // one: writing it to the user layer while a profile pins its
                 // own leaves it shadowed (ADR 0079 D1).
-                self.persistir_theme(&chosen, buzon);
+                self.persistir_theme(&chosen, mailbox);
                 let change = ViewChange::Theme { theme: None };
                 let mut outside = vec![self.parche(vec![change])];
                 outside.extend(self.patches_of_rows_from_all());
@@ -413,7 +413,7 @@ impl State {
         // name.
         let under_the_cursor = sel.names.get(sel.cursor).cloned();
         if let Some(name) = under_the_cursor {
-            self.apply_theme(&name, buzon);
+            self.apply_theme(&name, mailbox);
         }
         let change = ViewChange::Theme {
             theme: self.vista_theme(),
@@ -450,13 +450,13 @@ impl State {
     /// PROFILE SWITCH door it did, because a profile can carry `theme =
     /// "…/mine.toml"` (ADR 0020) and that used to go silently unapplied,
     /// with the terminal applying it.
-    pub(super) fn apply_theme(&mut self, name: &str, buzon: &mpsc::Sender<Message>) {
+    pub(super) fn apply_theme(&mut self, name: &str, mailbox: &mpsc::Sender<Message>) {
         if let Ok(Some(theme)) = norte_theme::Theme::preset(name) {
             self.theme_placed(name, &theme);
             return;
         }
         let spec = name.to_owned();
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::task::spawn_blocking(move || {
             let resolved = norte_frontend::theme::resolve_theme(Some(&spec));
             // The error does NOT travel: it carries the spec inside, which
@@ -467,7 +467,7 @@ impl State {
                 norte_frontend::theme::ResolveError::Io { .. } => "host-theme-unreadable",
                 norte_frontend::theme::ResolveError::Parse { .. } => "host-theme-invalid",
             });
-            let _ = buzon.blocking_send(Message::ThemeResolved(Box::new((spec, output))));
+            let _ = mailbox.blocking_send(Message::ThemeResolved(Box::new((spec, output))));
         });
     }
 
@@ -475,7 +475,7 @@ impl State {
     /// it is told.
     pub(super) fn theme_placed(&mut self, name: &str, theme: &norte_theme::Theme) {
         self.theme = crate::pickers::HostTheme::de(name, theme);
-        self.nativo(crate::dto::NativeEffect::ThemeChanged {
+        self.native(crate::dto::NativeEffect::ThemeChanged {
             name: name.to_owned(),
         });
     }
@@ -496,7 +496,7 @@ impl State {
     /// Lives here, next to `theme_placed`, because the two paths that set a
     /// theme both go through it: the preset one, which resolves on the spot,
     /// and the file one, which arrives through `Message::ThemeResolved`. It
-    /// is the same bug `readornar_all` fixed for the icons.
+    /// is the same bug `redecorate_all` fixed for the icons.
     pub(super) fn patches_of_rows_from_all(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
         let slots: Vec<u32> = self.slots.keys().copied().collect();
         slots
@@ -511,7 +511,7 @@ impl State {
     /// inter-process lock behind it (`persist_ui_theme_to` blocks while
     /// another norte is writing): doing it here would freeze the whole
     /// window. It comes back through the mailbox like everything else.
-    pub(super) fn persistir_theme(&mut self, name: &str, buzon: &mpsc::Sender<Message>) {
+    pub(super) fn persistir_theme(&mut self, name: &str, mailbox: &mpsc::Sender<Message>) {
         let Some(dir) = self.write_dir() else {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
@@ -520,7 +520,7 @@ impl State {
             return;
         };
         let name = name.to_owned();
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::task::spawn_blocking(move || {
             let key = match norte_config::persist_ui_theme_to(&dir, &name) {
                 Ok(_) => None,
@@ -529,7 +529,7 @@ impl State {
                 // The category is enough to know what happened.
                 Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Message::ThemePersistido(key));
+            let _ = mailbox.blocking_send(Message::ThemePersisted(key));
         });
     }
 
@@ -662,7 +662,7 @@ impl State {
         &mut self,
         dest: &VPath,
         name: &str,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let name = name.trim().to_owned();
         if name.is_empty() {
@@ -676,14 +676,14 @@ impl State {
         };
         let wire = dest.to_wire();
         let where_to = dest.clone();
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let n = name.clone();
         tokio::task::spawn_blocking(move || {
             let key = match norte_config::persist_hotlist_add(&dir, &n, &wire) {
                 Ok(_) => None,
                 Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Message::FavoritePersistido(Box::new((n, where_to, key))));
+            let _ = mailbox.blocking_send(Message::FavoritePersisted(Box::new((n, where_to, key))));
         });
         (None, Vec::new())
     }
@@ -766,7 +766,7 @@ impl State {
     pub(super) fn save_profile(
         &mut self,
         name: &str,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let name = std::ffi::OsString::from(name.trim());
         if !norte_config::valid_profile_name(&name) {
@@ -779,14 +779,14 @@ impl State {
             return (Some("host-no-config-dir"), self.say("host-no-config-dir"));
         };
         let snap = self.profile_snapshot();
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let visible = name.to_string_lossy().into_owned();
         tokio::task::spawn_blocking(move || {
             let key = match norte_config::save_profile(&dir, &name, &snap) {
                 Ok(_) => None,
                 Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Message::ProfileSaved(Box::new((visible, key))));
+            let _ = mailbox.blocking_send(Message::ProfileSaved(Box::new((visible, key))));
         });
         (None, Vec::new())
     }
@@ -815,7 +815,7 @@ impl State {
     /// the row and not from its label, which is sanitized.
     pub(super) fn remove_favorite(
         &mut self,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(name) = self
             .selector
@@ -839,14 +839,14 @@ impl State {
                 outside,
             );
         };
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let n = name;
         tokio::task::spawn_blocking(move || {
             let key = match norte_config::persist_hotlist_remove(&dir, &n) {
                 Ok(_) => None,
                 Err(e) => Some(io_key(&e)),
             };
-            let _ = buzon.blocking_send(Message::FavoriteRemoved(Box::new((n, key))));
+            let _ = mailbox.blocking_send(Message::FavoriteRemoved(Box::new((n, key))));
         });
         (self.applied(), Vec::new())
     }
@@ -874,7 +874,7 @@ impl State {
         vec![self.parche(vec![change])]
     }
 
-    pub(super) fn favorite_persistido(
+    pub(super) fn favorite_persisted(
         &mut self,
         name: &str,
         dest: Option<VPath>,
@@ -935,7 +935,7 @@ impl State {
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         /// How many rows a page moves.
         const PAGE: i64 = 10;
@@ -949,12 +949,12 @@ impl State {
         // `Home`/`End` stay fixed keys: the shared catalog has no verb for
         // "to the start" inside a dialog, and waiting for it to have one
         // would have left the list with no extremes.
-        let extremo = match k.key.as_str() {
+        let end = match k.key.as_str() {
             "Home" | "home" => Some(i64::MIN / 2),
             "End" | "end" => Some(i64::MAX / 2),
             _ => None,
         };
-        let verb = if extremo.is_some() {
+        let verb = if end.is_some() {
             None
         } else {
             self.dialog_verb(k)
@@ -962,7 +962,7 @@ impl State {
         let Some(s) = self.selector.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if let Some(jump) = extremo {
+        if let Some(jump) = end {
             s.mover(jump);
         } else {
             match verb.as_deref() {
@@ -971,14 +971,14 @@ impl State {
                 Some("dialog.up") => s.mover(-1),
                 Some("dialog.page-down") => s.mover(PAGE),
                 Some("dialog.page-up") => s.mover(-PAGE),
-                Some("dialog.confirm") => return self.choose_from_selector(backend, buzon),
+                Some("dialog.confirm") => return self.choose_from_selector(backend, mailbox),
                 // Favorites are the only list in this window that gets
                 // EDITED (#309), and they are the two verbs the catalog
                 // already had for that: in the terminal they are `a` and `d`
                 // on the same popup. On any other selector they mean nothing
                 // and are ignored, like any key that selector does not bind.
                 Some("dialog.add") if s.es_hotlist() => return self.request_favorite(),
-                Some("dialog.remove") if s.es_hotlist() => return self.remove_favorite(buzon),
+                Some("dialog.remove") if s.es_hotlist() => return self.remove_favorite(mailbox),
                 // History and frequent are also edited (spec 2026-09-15 D2),
                 // and opening in the other slot works for any navigating
                 // list.
@@ -995,7 +995,7 @@ impl State {
                     };
                 }
                 Some("dialog.confirm-other") => {
-                    return self.choose_from_selector_into_another(backend, buzon);
+                    return self.choose_from_selector_into_another(backend, mailbox);
                 }
                 _ => return (self.applied(), Vec::new()),
             }
@@ -1017,7 +1017,7 @@ impl State {
     pub(super) fn choose_from_selector(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(s) = self.selector.as_ref() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
@@ -1027,7 +1027,7 @@ impl State {
         // would let moving it with the list up mount the volume in another
         // pane.
         let slot = s.slot();
-        if !self.slots.contains_key(&slot) || self.oculto(slot) {
+        if !self.slots.contains_key(&slot) || self.hidden(slot) {
             // The layout changed with the list up: the slot the selector
             // captured on opening is no longer there, or stopped being
             // visible. Navigating there would bring a listing nobody is
@@ -1058,9 +1058,9 @@ impl State {
         };
         self.selector = None;
         let close = self.parche(vec![ViewChange::Picker { picker: None }]);
-        let mut envios = vec![close];
-        envios.extend(self.navigate_slot(slot, &dest, Trail::Record, backend, buzon));
-        (self.applied(), envios)
+        let mut sends = vec![close];
+        sends.extend(self.navigate_slot(slot, &dest, Trail::Record, backend, mailbox));
+        (self.applied(), sends)
     }
 
     /// A click on a selector row: chooses it.
@@ -1091,7 +1091,7 @@ impl State {
         &mut self,
         ev: norte_client::ConnEvent,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let (vista, key) = match ev {
             norte_client::ConnEvent::Restored => (ConnectionView::Connected, "msg-daemon-restored"),
@@ -1135,7 +1135,7 @@ impl State {
             self.epoch_connection = self.epoch_connection.saturating_add(1);
             // The light bar stops counting the previous daemon's work
             // (ADR 0146): without this its burst would never close.
-            self.anotar_strip(buzon);
+            self.annotate_strip(mailbox);
             // "Go to" (#357): whatever the PREVIOUS daemon answers with —
             // its connections, its index — no longer belongs to this one. A
             // new opening invalidates it.
@@ -1144,23 +1144,23 @@ impl State {
             // answered by the new one: its id starts over at 1, and leaving
             // the request hanging would make the panel open with someone
             // else's Task.
-            if let Some(pedida) = self.sync_pedida.take() {
-                pedida
-                    .abandonada
+            if let Some(requested) = self.sync_requested.take() {
+                requested
+                    .abandoned
                     .store(true, std::sync::atomic::Ordering::SeqCst);
             }
         }
         self.connection = vista.clone();
         // And the pane that opened only for that work closes.
-        let mut envios = self.processes_automaticos(backend, buzon);
+        let mut sends = self.processes_automaticos(backend, mailbox);
         let banners = self.banner_change();
         let parche = self.parche(vec![ViewChange::Connection(vista), banners]);
         let notice = self.over(UiUpdate::Notice(UiNotice::Message {
             key: key.to_owned(),
             detail: None,
         }));
-        envios.extend([parche, notice]);
-        envios
+        sends.extend([parche, notice]);
+        sends
     }
 
     /// A provider session travels unencrypted (#44): it is noted and
@@ -1174,7 +1174,7 @@ impl State {
         &mut self,
         d: norte_proto::methods::ConnectionDegraded,
     ) -> BridgeEnvelope<UiUpdate> {
-        self.degradadas.note(d);
+        self.degraded.note(d);
         let change = self.banner_change();
         self.parche(vec![change])
     }
@@ -1203,7 +1203,7 @@ impl State {
         // ONE question per connection. Two panes over the same `prompt`
         // entry — or a refresh while the dialog is up front — used to stack
         // another identical question, with its own empty field; and under
-        // enough of those, `apilar_dialog`'s cap-based eviction sweeps away
+        // enough of those, `stack_dialog`'s cap-based eviction sweeps away
         // unacknowledged agent APPROVALS, which are the first thing it
         // sacrifices.
         if self.dialogs.iter().any(
@@ -1218,9 +1218,9 @@ impl State {
         // from a URL, and neither origin is trustworthy for what is
         // painted.
         let line = |s: &str| {
-            let (pintable, hostile) = norte_frontend::display_name(s.as_bytes());
+            let (paintable, hostile) = norte_frontend::display_name(s.as_bytes());
             crate::dto::DialogLine {
-                text: clamp_display(pintable),
+                text: clamp_display(paintable),
                 hostile,
             }
         };
@@ -1274,7 +1274,7 @@ impl State {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        let mut outside = self.apilar_dialog(Dialog {
+        let mut outside = self.stack_dialog(Dialog {
             id,
             vista,
             typed: Typed::Secret,
@@ -1292,7 +1292,7 @@ impl State {
             recognized: true,
             on_confirm: Some(Pending::DeliverSecret { conn, slot, dir }),
         });
-        // `apilar_dialog` only stacks — and returns what fell off the cap —
+        // `stack_dialog` only stacks — and returns what fell off the cap —
         // the patch that PAINTS it is sent by whoever opens it, like
         // everything else.
         let change = ViewChange::Dialogs {
@@ -1309,13 +1309,13 @@ impl State {
     /// which is what the pending action carries. If delivering it failed,
     /// there is no retry: the slot stays as the error left it and the status
     /// bar counts it.
-    pub(super) fn secret_entregado(
+    pub(super) fn secret_delivered(
         &mut self,
         slot: u32,
         dir: &VPath,
         res: Result<(), Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         match res {
             // `Record` and not `Replay`, even though this is a retry: a
@@ -1327,7 +1327,7 @@ impl State {
             // And it does not duplicate: the failed listing left the slot
             // SHOWING the directory it could not enter, so on retry
             // `anterior == dest` and `navigate_slot` records nothing.
-            Ok(()) => self.navigate_slot(slot, dir, Trail::Record, backend, buzon),
+            Ok(()) => self.navigate_slot(slot, dir, Trail::Record, backend, mailbox),
             Err(e) => self.say(norte_frontend::error::error_key(&e)),
         }
     }
@@ -1414,7 +1414,7 @@ impl State {
             subject: None,
         };
         let mut banners = Vec::new();
-        if self.journal_rehusado {
+        if self.journal_refused {
             banners.push(phrase("status-journal-refused"));
         }
         if let Some(key) = self.daemon_notice {
@@ -1425,10 +1425,10 @@ impl State {
         // now nobody said so: it closed and silently lost where each pane
         // was. The same indicator as the terminal, and in the same place
         // (ADR 0077).
-        if !self.session.owner || self.session.futuro {
+        if !self.session.owner || self.session.future {
             banners.push(phrase("status-session-detached"));
         }
-        if let Some(notice) = self.degradadas.banner(self.lang) {
+        if let Some(notice) = self.degraded.banner(self.lang) {
             // The connection goes in its own field, never inside the
             // sentence: see `connection_banner`'s rustdoc.
             banners.push(crate::dto::BannerView {

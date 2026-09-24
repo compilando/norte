@@ -40,7 +40,7 @@ impl State {
         dir: &VPath,
         name: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let seg = match Self::segment_typed(name) {
             Ok(seg) => seg,
@@ -52,17 +52,17 @@ impl State {
         };
         let dest = dir.join(seg);
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         let dir = dir.clone();
         tokio::spawn(async move {
             match backend.mkdir(dest).await {
                 Ok(task) => {
-                    let _ = buzon
+                    let _ = mailbox
                         .send(Message::TaskNew(Box::new((task, vec![dir], None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = buzon.send(Message::TaskFailed(Box::new(e))).await;
+                    let _ = mailbox.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
@@ -76,13 +76,13 @@ impl State {
         pending: Pending,
         typed: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         match pending {
             Pending::Split { path, dest_dir } => {
-                self.split_file(path, dest_dir, typed, backend, buzon)
+                self.split_file(path, dest_dir, typed, backend, mailbox)
             }
-            Pending::Pack { dir, sources } => self.pack(&dir, sources, typed, backend, buzon),
+            Pending::Pack { dir, sources } => self.pack(&dir, sources, typed, backend, mailbox),
             // The caller already filtered; naming them here makes a third
             // one a compile error.
             _ => (None, Vec::new()),
@@ -100,25 +100,25 @@ impl State {
         dest_dir: VPath,
         size: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(part_bytes) = norte_frontend::nav::parse_size(size) else {
             return (Some("msg-split-bad-size"), self.say("msg-split-bad-size"));
         };
-        let afectados = vec![dest_dir.clone()];
+        let affected = vec![dest_dir.clone()];
         let params = norte_proto::methods::FileSplitParams {
             path,
             part_bytes,
             dest_dir,
         };
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let message = match backend.split_file(params).await {
-                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Ok(task) => Message::TaskNew(Box::new((task, affected, None))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(message).await;
+            let _ = mailbox.send(message).await;
         });
         (None, Vec::new())
     }
@@ -138,7 +138,7 @@ impl State {
         sources: Vec<VPath>,
         name: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let seg = match Self::segment_typed(name) {
             Ok(seg) => seg,
@@ -157,15 +157,15 @@ impl State {
             level: None,
             base: dir.clone(),
         };
-        let afectados = vec![dir.clone()];
+        let affected = vec![dir.clone()];
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let message = match backend.pack(params).await {
-                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Ok(task) => Message::TaskNew(Box::new((task, affected, None))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(message).await;
+            let _ = mailbox.send(message).await;
         });
         (None, Vec::new())
     }
@@ -310,15 +310,15 @@ impl State {
         &mut self,
         effect: Effect,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match effect {
-            Effect::DirectorySize => self.count_size(backend, buzon),
+            Effect::DirectorySize => self.count_size(backend, mailbox),
             Effect::Pack => self.request_packed(),
-            Effect::Unpack => self.unpack(backend, buzon),
-            Effect::CheckArchive => self.check_archive(backend, buzon),
-            Effect::SplitFile => self.request_partido(),
-            Effect::Join => self.join_chunks(backend, buzon),
+            Effect::Unpack => self.unpack(backend, mailbox),
+            Effect::CheckArchive => self.check_archive(backend, mailbox),
+            Effect::SplitFile => self.request_split(),
+            Effect::Join => self.join_chunks(backend, mailbox),
             // The caller already filtered: naming them here is what makes
             // adding one more a compile error.
             _ => (self.applied(), Vec::new()),
@@ -393,7 +393,7 @@ impl State {
     /// The chunks go to the destination pane, like a copy and for the same
     /// reason: splitting a gigabyte file in the place it already sits
     /// usually does not fit.
-    pub(super) fn request_partido(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn request_split(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
                 ActionAck::Unavailable {
@@ -473,7 +473,7 @@ impl State {
     pub(super) fn join_chunks(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
@@ -501,15 +501,15 @@ impl State {
             first: entry.path.clone(),
             dest: dir.join(base),
         };
-        let afectados = vec![dir];
+        let affected = vec![dir];
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let message = match backend.combine_files(params).await {
-                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Ok(task) => Message::TaskNew(Box::new((task, affected, None))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(message).await;
+            let _ = mailbox.send(message).await;
         });
         (self.applied(), self.say("msg-combine-started"))
     }
@@ -524,7 +524,7 @@ impl State {
     pub(super) fn unpack(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
@@ -573,7 +573,7 @@ impl State {
             norte_proto::CollisionPolicy::Fail,
             a_la_cola,
             backend,
-            buzon,
+            mailbox,
         );
         (self.applied(), self.say("msg-unpack-started"))
     }
@@ -583,7 +583,7 @@ impl State {
     pub(super) fn check_archive(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
@@ -605,7 +605,7 @@ impl State {
             path: entry.path.clone(),
         };
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let message = match backend.test_archive(params).await {
                 // Testing changes nothing: there are no directories to
@@ -613,7 +613,7 @@ impl State {
                 Ok(task) => Message::TaskNew(Box::new((task, Vec::new(), None))),
                 Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(message).await;
+            let _ = mailbox.send(message).await;
         });
         (self.applied(), self.say("msg-test-archive-started"))
     }
@@ -763,7 +763,7 @@ impl State {
         targets: Vec<VPath>,
         typed: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let mode = match norte_frontend::chmod::parse_mode(typed) {
             Ok(m) => m,
@@ -789,16 +789,16 @@ impl State {
             dir_mode: None,
         };
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             match backend.set_mode(params).await {
                 Ok(task) => {
-                    let _ = buzon
+                    let _ = mailbox
                         .send(Message::TaskNew(Box::new((task, refresh, None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = buzon.send(Message::TaskFailed(Box::new(e))).await;
+                    let _ = mailbox.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
@@ -878,7 +878,7 @@ impl State {
         dir: &VPath,
         name: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
         let seg = match Self::segment_typed(name) {
             Ok(seg) => seg,
@@ -890,18 +890,18 @@ impl State {
         };
         let dest = dir.join(seg);
         let backend_c = Arc::clone(backend);
-        let buzon_c = buzon.clone();
+        let mailbox_c = mailbox.clone();
         let dir_c = dir.clone();
         let open = dest.clone();
         tokio::spawn(async move {
             match backend_c.create_file(dest).await {
                 Ok(task) => {
-                    let _ = buzon_c
+                    let _ = mailbox_c
                         .send(Message::TaskNew(Box::new((task, vec![dir_c], None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = buzon_c.send(Message::TaskFailed(Box::new(e))).await;
+                    let _ = mailbox_c.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
@@ -939,14 +939,14 @@ impl State {
     /// 0077).
     ///
     /// The answer comes back through the mailbox as just another message
-    /// ([`Message::CreadoChecked`]): the state is touched by a single
+    /// ([`Message::CreatedChecked`]): the state is touched by a single
     /// writer, and waiting here would block the whole actor for a round trip
     /// to the daemon.
     pub(super) fn open_the_created(
         &mut self,
         p: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         // By ID, not by kind. `task.progress` is broadcast to EVERY human
         // connection, so an `fs.create` from the TUI — or from another
@@ -969,7 +969,7 @@ impl State {
             return;
         }
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             // With no attributes: the only thing being asked is WHAT it is,
             // and requesting attributes would be provider work nobody is
@@ -985,8 +985,8 @@ impl State {
                 Err(Error::NotFound) => Verdict::NoLongerTheFile,
                 Err(_) => Verdict::Unknown,
             };
-            let _ = buzon
-                .send(Message::CreadoChecked(Box::new((path, verdict))))
+            let _ = mailbox
+                .send(Message::CreatedChecked(Box::new((path, verdict))))
                 .await;
         });
     }
@@ -1008,7 +1008,7 @@ impl State {
             Verdict::NoLongerTheFile => return self.say("host-created-changed"),
             Verdict::Unknown => return self.say("host-created-unchecked"),
         }
-        if self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
+        if self.native(crate::dto::NativeEffect::OpenPath { path }) {
             return Vec::new();
         }
         self.say("host-no-desktop")
@@ -1019,7 +1019,7 @@ impl State {
         paths: Vec<VPath>,
         permanent: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let mode = if permanent {
             norte_proto::DeleteMode::Permanent
@@ -1028,17 +1028,17 @@ impl State {
         };
         for path in paths {
             let backend = Arc::clone(backend);
-            let buzon = buzon.clone();
-            let afectados: Vec<VPath> = path.parent().into_iter().collect();
+            let mailbox = mailbox.clone();
+            let affected: Vec<VPath> = path.parent().into_iter().collect();
             tokio::spawn(async move {
                 match backend.delete(path, mode).await {
                     Ok(task) => {
-                        let _ = buzon
-                            .send(Message::TaskNew(Box::new((task, afectados, None))))
+                        let _ = mailbox
+                            .send(Message::TaskNew(Box::new((task, affected, None))))
                             .await;
                     }
                     Err(e) => {
-                        let _ = buzon.send(Message::TaskFailed(Box::new(e))).await;
+                        let _ = mailbox.send(Message::TaskFailed(Box::new(e))).await;
                     }
                 }
             });

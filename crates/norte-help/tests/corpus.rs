@@ -149,18 +149,18 @@ fn a_topic_id_matches_its_filename() {
 #[test]
 fn the_topics_of_a_tag_are_contiguous() {
     for lang in LANGS {
-        let mut vistos: Vec<&str> = Vec::new();
+        let mut seen: Vec<&str> = Vec::new();
         let mut anterior: Option<&str> = None;
         for t in topics(lang) {
             let tag = t.tags.first().map_or("", String::as_str);
             if anterior != Some(tag) {
                 assert!(
-                    !vistos.contains(&tag),
+                    !seen.contains(&tag),
                     "{lang:?}/{}: tag `{tag}` appears again after another tag \
                      — the sidebar would show its group header twice",
                     t.id
                 );
-                vistos.push(tag);
+                seen.push(tag);
                 anterior = Some(tag);
             }
         }

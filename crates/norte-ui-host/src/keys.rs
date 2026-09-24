@@ -269,7 +269,7 @@ pub fn keymap_dialog_preset_with_layers(
     norte_frontend::keymap::Effective::build_for(
         &preset,
         layers,
-        crate::commands::IMPLEMENTADOS_DIALOG,
+        crate::commands::IMPLEMENTED_DIALOG,
         norte_frontend::keymap::Screen::Dialog,
     )
 }

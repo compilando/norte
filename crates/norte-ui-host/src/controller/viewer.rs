@@ -94,8 +94,8 @@ impl State {
             }
             crate::commands::EffectVisor::Column(n) if n < 0 => v.scroll_left(steps(n)),
             crate::commands::EffectVisor::Column(n) => v.scroll_right(steps(n)),
-            crate::commands::EffectVisor::Extremo { al_final: false } => v.scroll_top(),
-            crate::commands::EffectVisor::Extremo { al_final: true } => v.scroll_bottom(),
+            crate::commands::EffectVisor::End { al_final: false } => v.scroll_top(),
+            crate::commands::EffectVisor::End { al_final: true } => v.scroll_bottom(),
             crate::commands::EffectVisor::Hex => v.toggle_hex(),
             crate::commands::EffectVisor::Encoding => v.cycle_encoding(),
             crate::commands::EffectVisor::EncodingAuto => v.reset_encoding(),

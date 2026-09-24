@@ -279,7 +279,7 @@ async fn secret_access_key_never_in_the_error() {
 }
 
 #[tokio::test]
-async fn region_ausente_sin_endpoint_es_error() {
+async fn missing_region_without_endpoint_is_an_error() {
     let spec = ConnectionSpec {
         url: format!("s3://{BUCKET}"),
         auth: AuthMethod::AccessKey,

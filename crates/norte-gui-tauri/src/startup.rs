@@ -374,18 +374,18 @@ fn theme_seen(
     spec: Option<&str>,
     theme: &Theme,
     variant_clara: Option<Theme>,
-    variant_oscura: Option<Theme>,
+    variant_dark: Option<Theme>,
 ) -> HostTheme {
     HostTheme {
         // In a `Box`: `HostTheme` travels inside the startup future, and two
         // inline `Theme`s crossed `large_futures`'s threshold.
         variant_clara: variant_clara.map(Box::new),
-        variant_oscura: variant_oscura.map(Box::new),
+        variant_dark: variant_dark.map(Box::new),
         // The RESOLVED one, which is `theme`'s. `spec` is what was
         // requested, and with a broken file the two do not match.
         name: spec.unwrap_or("default").to_owned(),
         roles: crate::catalog::variables(theme).into_iter().collect(),
-        effects: effects_declarados(theme),
+        effects: effects_declared(theme),
         // The WHOLE theme, which is what is needed to color an entry by its
         // extension (bridge 66): that cannot be projected as CSS variables
         // because extensions are an open set.
@@ -398,7 +398,7 @@ fn theme_seen(
 /// The `[effects]` block is free-form on purpose (ADR 0036): each renderer
 /// interprets it. Here only its top-level keys are enumerated, which is what
 /// is needed to say which ones are not painted.
-fn effects_declarados(theme: &Theme) -> Vec<String> {
+fn effects_declared(theme: &Theme) -> Vec<String> {
     // `Theme::effects` is a `toml::Value` and this crate does not depend on
     // `toml` (nor does it need to: it does not parse configuration). It asks
     // for the shape through the type it already has in hand.
@@ -762,14 +762,14 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // terminal before they can open a window is not an architecture
     // decision, it is a chore left for the reader.
     //
-    // And it connects with `connect_detallado` on purpose: when the daemon
+    // And it connects with `connect_detailed` on purpose: when the daemon
     // starts and DIES — a journal that cannot migrate is the real case — the
     // only sentence that says what to do is the one it writes to `stderr`,
     // and the wire's taxonomy has nowhere to put it. Without this, the
     // window said "could not connect (retryable: true)", i.e. "wait", about
     // something that was never going to arrive.
     let startup = daemon_command(&socket).await;
-    let backend = RemoteBackend::connect_detallado(
+    let backend = RemoteBackend::connect_detailed(
         socket.clone(),
         startup,
         ClientInfo {
@@ -849,7 +849,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
             lang,
             "msg-layout-load-failed",
             &[
-                ("name", &layout_pintable(&entry_name)),
+                ("name", &layout_paintable(&entry_name)),
                 ("err", &e.to_string()),
             ],
         )
@@ -940,7 +940,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
 /// without the mask, a `--layout $'a\x1b[31mb'` leaves the RAW sequence in
 /// `norte-gui.log`, and without the marker `$'\xff'` and `$'\xfe'` give the
 /// same message.
-fn layout_pintable(name: &std::ffi::OsStr) -> String {
+fn layout_paintable(name: &std::ffi::OsStr) -> String {
     let (showable, lossy) = norte_frontend::display_os_name(name);
     let showable = norte_encoding::mask_terminal_hazards(&showable);
     if lossy {
@@ -1001,12 +1001,12 @@ fn startup_tree(
             // that does not exist, and that is what gets said.
             LayoutError::NotFound(_) | LayoutError::BadName(_) => StartupError::Unknown {
                 that: "--layout",
-                valor: layout_pintable(name),
+                valor: layout_paintable(name),
             },
             // The file IS there and does not work. Announcing it as "does
             // not exist" sends the reader looking for a name they already
             // typed correctly: what they need is the parse error.
-            other => StartupError::Config(format!("--layout {}: {other}", layout_pintable(name))),
+            other => StartupError::Config(format!("--layout {}: {other}", layout_paintable(name))),
         });
     }
     let name = std::ffi::OsString::from(config.unwrap_or("orthodox"));
@@ -1078,7 +1078,7 @@ fn theme(entry_name: Option<&str>) -> (Theme, Option<String>) {
 /// Validated HERE and not inside the window: a startup error with the screen
 /// already mounted is a gray box that says nothing.
 fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
-    let nativo = match dir {
+    let native = match dir {
         Some(d) => {
             let meta = std::fs::metadata(&d)
                 .map_err(|e| StartupError::Dir(format!("{}: {e}", d.display())))?;
@@ -1092,8 +1092,8 @@ fn start_dir(dir: Option<PathBuf>) -> Result<VPath, StartupError> {
         }
         None => std::env::current_dir().map_err(|e| StartupError::Dir(e.to_string()))?,
     };
-    norte_vfs::native::vpath_from_native(&nativo)
-        .map_err(|e| StartupError::Dir(format!("{}: {e}", nativo.display())))
+    norte_vfs::native::vpath_from_native(&native)
+        .map_err(|e| StartupError::Dir(format!("{}: {e}", native.display())))
 }
 
 /// The log goes to the FILE and only to the file.

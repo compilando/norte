@@ -119,7 +119,7 @@ pub async fn load_lua(app: &mut App, layers: &Layers) -> Option<LuaHost> {
         // ProgramData (APPDATA stayed "system").
         match lua_of_this_layer(layer) {
             LayerLua::AfterTrust => load_lua_project(app, &host, dir.clone()).await,
-            LayerLua::Ignorada => {
+            LayerLua::Ignored => {
                 if matches!(read_optional_bytes(dir.join("init.lua")).await, Ok(Some(_))) {
                     app.message = Some(t("err-lua-profile-ignored"));
                 }
@@ -151,7 +151,7 @@ pub(crate) enum LayerLua {
     /// Only evaluated after ADR 0026's TOFU.
     AfterTrust,
     /// Never evaluated, and it says so.
-    Ignorada,
+    Ignored,
 }
 
 /// What to do with `layer`'s `init.lua`.
@@ -175,7 +175,7 @@ pub(crate) enum LayerLua {
 pub(crate) const fn lua_of_this_layer(layer: Layer) -> LayerLua {
     match layer {
         Layer::System | Layer::User => LayerLua::Runs,
-        Layer::Profile => LayerLua::Ignorada,
+        Layer::Profile => LayerLua::Ignored,
         Layer::Project => LayerLua::AfterTrust,
     }
 }
@@ -478,7 +478,7 @@ mod tests {
     /// D2's whitelist never granted it `init.lua`.
     #[test]
     fn a_profile_does_not_execute_init_lua() {
-        assert_eq!(lua_of_this_layer(Layer::Profile), LayerLua::Ignorada);
+        assert_eq!(lua_of_this_layer(Layer::Profile), LayerLua::Ignored);
     }
 
     /// And the other three do not change: system and user belong to the

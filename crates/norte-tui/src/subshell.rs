@@ -40,8 +40,8 @@ pub struct Subshell {
     /// Where it is written to.
     ///
     /// SHARED with the reader thread, which also writes: it is the one that
-    /// answers the shell's terminal queries ([`Escritor`]).
-    write: Escritor,
+    /// answers the shell's terminal queries ([`Writer`]).
+    write: Writer,
     /// The pty, which is also the one that resizes.
     maestro: Box<dyn portable_pty::MasterPty + Send>,
     /// The child. Kept so it can be killed and so we know whether it is
@@ -49,7 +49,7 @@ pub struct Subshell {
     child: Box<dyn portable_pty::Child + Send + Sync>,
     /// What the shell has written and has not been painted yet, plus the
     /// LAST cwd it announced. Filled by a reader thread.
-    buzon: Arc<Mutex<Buzon>>,
+    mailbox: Arc<Mutex<Mailbox>>,
     /// Which of the three it is, if it is one of the three. `None` = norte
     /// installed nothing in it and does not type anything into it.
     which: Option<norte_frontend::shell::Shell>,
@@ -67,7 +67,7 @@ pub struct Subshell {
     /// Deleted on releasing the subshell. If norte dies abruptly, a file of
     /// a few dozen bytes is left in a directory the system cleans up on
     /// logout.
-    buzon_file: Option<std::path::PathBuf>,
+    mailbox_file: Option<std::path::PathBuf>,
 }
 
 /// The pty's input, shared between whoever attaches and the reader thread.
@@ -78,11 +78,11 @@ pub struct Subshell {
 /// terminal it has in front of it and STOPS until it is answered (fish 4
 /// does it before its first prompt), so the response cannot wait for
 /// someone to attach.
-type Escritor = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
+type Writer = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
 
 /// What the reader thread leaves for whoever attaches.
 #[derive(Default)]
-struct Buzon {
+struct Mailbox {
     /// Bytes pending painting, already WITHOUT the markers.
     pending: Vec<u8>,
     /// The last cwd announced, in bytes (rule 1).
@@ -155,35 +155,35 @@ impl Subshell {
         // The slave is RELEASED here: while norte keeps it open, closing the
         // shell would not close the pty and the reader would never see EOF.
         drop(pair.slave);
-        let write: Escritor = Arc::new(Mutex::new(
+        let write: Writer = Arc::new(Mutex::new(
             pair.master.take_writer().map_err(std::io::Error::other)?,
         ));
         let reader = pair
             .master
             .try_clone_reader()
             .map_err(std::io::Error::other)?;
-        let buzon = Arc::new(Mutex::new(Buzon::default()));
+        let mailbox = Arc::new(Mutex::new(Mailbox::default()));
         // THIS session's nonce: what separates a marker the hook printed
         // from one that came from inside a file. See `Nonce`.
         let nonce = Nonce::new();
         launch_reader(
             reader,
-            Arc::clone(&buzon),
+            Arc::clone(&mailbox),
             Arc::clone(&write),
             nonce.clone(),
         );
 
-        let which = shell_conocido(&shell);
+        let which = shell_known(&shell);
         // The mailbox is created BEFORE the hook: the hook carries its path
         // inside.
-        let buzon_file = which.and_then(|_| create_buzon(&nonce));
+        let mailbox_file = which.and_then(|_| create_mailbox(&nonce));
         let mut me = Self {
             write,
             maestro: pair.master,
             child,
-            buzon,
+            mailbox,
             which,
-            buzon_file,
+            mailbox_file,
         };
         // The prompt hook is sent as if the reader typed it: NONE of their
         // files is touched. A `.bashrc` norte edited would be a permanent
@@ -193,8 +193,8 @@ impl Subshell {
         // With no mailbox, nothing is installed: the hook carries its path
         // inside, and one pointing at a file that does not exist would be
         // plumbing typed into the reader's face for nothing in return.
-        if let (Some(which), Some(buzon)) = (which, me.buzon_file.clone()) {
-            let _ = me.write(install(which, &nonce, &buzon).as_bytes());
+        if let (Some(which), Some(mailbox)) = (which, me.mailbox_file.clone()) {
+            let _ = me.write(install(which, &nonce, &mailbox).as_bytes());
             // Ctrl+L: the `readline`/ZLE/fish command that clears the
             // screen and repaints the prompt. Without this, the first thing
             // the reader sees on their first Ctrl+O is the wall of plumbing
@@ -278,7 +278,7 @@ impl Subshell {
         if self.which.is_none() {
             return Ok(false);
         }
-        let Some(buzon) = self.buzon_file.as_deref() else {
+        let Some(mailbox) = self.mailbox_file.as_deref() else {
             return Ok(false);
         };
         // The trailing `_` is a sentinel and not decoration: the shell
@@ -286,7 +286,7 @@ impl Subshell {
         // directory CAN end in one.
         let mut bytes = dir.as_os_str().as_bytes().to_vec();
         bytes.push(b'_');
-        write_buzon(buzon, &bytes)?;
+        write_mailbox(mailbox, &bytes)?;
         Ok(true)
     }
 
@@ -298,19 +298,19 @@ impl Subshell {
     /// so whatever was inside no longer describes the shell's screen — and
     /// painting it anyway is worse than crashing (rule 6).
     #[must_use]
-    pub fn drenar(&self) -> Vec<u8> {
-        let mut b = buzon_de(&self.buzon);
+    pub fn drain(&self) -> Vec<u8> {
+        let mut b = mailbox_of(&self.mailbox);
         std::mem::take(&mut b.pending)
     }
 
     /// The last directory the shell announced, if it announced any.
     ///
     /// # Panics
-    /// Same as [`Self::drenar`]: poisoned mailbox.
+    /// Same as [`Self::drain`]: poisoned mailbox.
     #[must_use]
     pub fn cwd(&self) -> Option<std::path::PathBuf> {
         use std::os::unix::ffi::OsStrExt as _;
-        let b = buzon_de(&self.buzon);
+        let b = mailbox_of(&self.mailbox);
         let bytes = b.cwd.as_ref()?;
         Some(std::path::PathBuf::from(std::ffi::OsStr::from_bytes(bytes)))
     }
@@ -318,10 +318,10 @@ impl Subshell {
     /// Is the shell gone? (the reader saw EOF, or the child died).
     ///
     /// # Panics
-    /// Same as [`Self::drenar`]: poisoned mailbox.
+    /// Same as [`Self::drain`]: poisoned mailbox.
     #[must_use]
     pub fn dead(&mut self) -> bool {
-        let closed = buzon_de(&self.buzon).closed;
+        let closed = mailbox_of(&self.mailbox).closed;
         closed || matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
@@ -358,7 +358,7 @@ impl Drop for Subshell {
         // shell is already gone and there is nobody to tell—, and what is
         // left if norte dies abruptly is a few dozen bytes in a directory
         // the system cleans up on logout.
-        if let Some(p) = &self.buzon_file {
+        if let Some(p) = &self.mailbox_file {
             let _ = std::fs::remove_file(p);
             let _ = std::fs::remove_file(p.with_extension("cd.tmp"));
         }
@@ -373,7 +373,7 @@ impl Drop for Subshell {
 /// was — no hook, no `cd` and not a single message explaining it. Now a
 /// non-UTF-8 name simply is not one of the three we know, which is the
 /// truth.
-fn shell_conocido(shell: &std::path::Path) -> Option<norte_frontend::shell::Shell> {
+fn shell_known(shell: &std::path::Path) -> Option<norte_frontend::shell::Shell> {
     use std::os::unix::ffi::OsStrExt as _;
     let name = shell.file_name()?;
     let text = std::str::from_utf8(name.as_bytes()).ok()?;
@@ -395,8 +395,8 @@ fn shell_conocido(shell: &std::path::Path) -> Option<norte_frontend::shell::Shel
 /// disproportionate price for a few bytes of screen. And there is no
 /// invariant that supports an `expect`: nobody can promise a thread will
 /// not panic.
-fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
-    buzon
+fn mailbox_of(mailbox: &Mutex<Mailbox>) -> std::sync::MutexGuard<'_, Mailbox> {
+    mailbox
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
@@ -413,7 +413,7 @@ fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
 /// `None` if it cannot be done. The caller degrades: the panel does not
 /// drag the shell along and the hook is not installed. That is preferable
 /// to the two alternatives —crashing, or typing the `cd` again—.
-fn create_buzon(nonce: &Nonce) -> Option<std::path::PathBuf> {
+fn create_mailbox(nonce: &Nonce) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let dir = match std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
         Some(r) => std::path::PathBuf::from(r).join("norte"),
@@ -457,7 +457,7 @@ fn uid_own() -> Option<u32> {
 /// `cd` to somewhere it should not be. The `rename` within the same
 /// directory is atomic, so the shell sees the whole path or the previous
 /// one, never a fragment.
-fn write_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+fn write_mailbox(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     let tmp = path.with_extension("cd.tmp");
@@ -479,7 +479,7 @@ fn write_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Used by both writers. The distinction matters: typing a command puts
 /// something on the line, and answering a terminal query does not — the
 /// program that asked is waiting for those bytes, not `readline`.
-fn write_raw(write: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
+fn write_raw(write: &Writer, bytes: &[u8]) -> std::io::Result<()> {
     let mut e = write
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -489,8 +489,8 @@ fn write_raw(write: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
 
 fn launch_reader(
     mut reader: PtyReader,
-    buzon: Arc<Mutex<Buzon>>,
-    write: Escritor,
+    mailbox: Arc<Mutex<Mailbox>>,
+    write: Writer,
     nonce: norte_frontend::subshell::Nonce,
 ) {
     std::thread::spawn(move || {
@@ -498,7 +498,7 @@ fn launch_reader(
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => {
-                    buzon_de(&buzon).closed = true;
+                    mailbox_of(&mailbox).closed = true;
                     return;
                 }
                 Ok(n) => {
@@ -509,7 +509,7 @@ fn launch_reader(
                     if let Some(r) = norte_frontend::subshell::terminal_reply(&buf[..n]) {
                         let _ = write_raw(&write, &r);
                     }
-                    let mut b = buzon_de(&buzon);
+                    let mut b = mailbox_of(&mailbox);
                     // The previous chunk's tail goes FIRST: a marker split
                     // between two reads is reconstructed here, and without
                     // this the cwd would be lost and the escape sequence
@@ -684,7 +684,7 @@ mod tests {
             let mut announced = None;
             while std::time::Instant::now() < until && announced.is_none() {
                 announced = sh.cwd();
-                let _ = sh.drenar();
+                let _ = sh.drain();
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
             assert_eq!(
@@ -727,7 +727,7 @@ mod tests {
         // lost". That is the difference that cost the diagnosis.
         let mut seen = Vec::new();
         while std::time::Instant::now() < until && !sent {
-            seen.extend_from_slice(&sh.drenar());
+            seen.extend_from_slice(&sh.drain());
             sent = sh.ir_a(&hostile).expect("cd");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
@@ -742,7 +742,7 @@ mod tests {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut arrived = false;
         while std::time::Instant::now() < until {
-            seen.extend_from_slice(&sh.drenar());
+            seen.extend_from_slice(&sh.drain());
             if sh.cwd().as_deref() == Some(hostile.as_path()) {
                 arrived = true;
                 break;
@@ -799,7 +799,7 @@ mod tests {
         let mut sh = bash(&dir);
         wait_idle(&sh);
         sh.write_key(b"\x0c").expect("ctrl+l");
-        let _ = sh.drenar();
+        let _ = sh.drain();
 
         assert!(
             sh.ir_a(&other).expect("cd"),
@@ -812,7 +812,7 @@ mod tests {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut arrived = false;
         while std::time::Instant::now() < until {
-            let _ = sh.drenar();
+            let _ = sh.drain();
             if sh.cwd().as_deref() == Some(other.as_path()) {
                 arrived = true;
                 break;
@@ -852,14 +852,14 @@ mod tests {
         // appears if bash executed it.
         sh.write(b"echo pwn''ed").expect("media linea");
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let _ = sh.drenar();
+        let _ = sh.drain();
 
         assert!(
             sh.ir_a(&other).expect("cd"),
             "there is a mailbox to note it in, so it is noted"
         );
         std::thread::sleep(std::time::Duration::from_millis(300));
-        let text = String::from_utf8_lossy(&sh.drenar()).into_owned();
+        let text = String::from_utf8_lossy(&sh.drain()).into_owned();
         assert!(
             !text.contains("pwned"),
             "what the reader did not execute got executed: {text}"
@@ -867,7 +867,7 @@ mod tests {
         // And the line is still there: Enter executes it WHOLE and alone.
         sh.write(b"\n").expect("intro");
         std::thread::sleep(std::time::Duration::from_millis(400));
-        let text = String::from_utf8_lossy(&sh.drenar()).into_owned();
+        let text = String::from_utf8_lossy(&sh.drain()).into_owned();
         assert!(
             text.contains("pwned"),
             "the reader's line did not survive the move: {text}"
@@ -907,7 +907,7 @@ mod tests {
         assert!(sh.ir_a(&other).expect("cd"), "noted in the mailbox");
         std::thread::sleep(std::time::Duration::from_millis(1800));
 
-        let text = String::from_utf8_lossy(&sh.drenar()).into_owned();
+        let text = String::from_utf8_lossy(&sh.drain()).into_owned();
         assert!(
             !text.contains("pwned"),
             "the reader's type-ahead ended up being executed: {text}"
@@ -989,7 +989,7 @@ mod tests {
         let mut still = 0;
         while std::time::Instant::now() < until {
             std::thread::sleep(std::time::Duration::from_millis(100));
-            if sh.drenar().is_empty() && sh.cwd().is_some() {
+            if sh.drain().is_empty() && sh.cwd().is_some() {
                 still += 1;
                 if still >= 3 {
                     return;
@@ -1005,7 +1005,7 @@ mod tests {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut seen: Vec<u8> = Vec::new();
         while std::time::Instant::now() < until {
-            seen.extend_from_slice(&sh.drenar());
+            seen.extend_from_slice(&sh.drain());
             if seen.windows(needle.len()).any(|w| w == needle) {
                 return Some(seen);
             }

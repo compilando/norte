@@ -62,7 +62,7 @@ impl State {
             // showing: during a navigation `pane.dir()` still answers with
             // the directory being left, and mirroring that would send the
             // other panel to the place the reader just left.
-            Effect::Mirror | Effect::MirrorObjetivo | Effect::Bring => {
+            Effect::Mirror | Effect::MirrorTarget | Effect::Bring => {
                 let (source, arrives) = if matches!(effect, Effect::Bring) {
                     (other, active)
                 } else {
@@ -95,13 +95,13 @@ impl State {
     /// The location that TRAVELS in a panel gesture, read from slot `source`.
     ///
     /// For mirror and pull it is [`Self::current_dir`]. For
-    /// [`Effect::MirrorObjetivo`] it is the folder under the cursor if it is
+    /// [`Effect::MirrorTarget`] it is the folder under the cursor if it is
     /// one (`PaneState::target_dir`, the same answer the TUI gives) — except
     /// with a navigation IN FLIGHT, where the cursor is still the abandoned
     /// listing's and what matters is where the slot is going.
     pub(super) fn gesture_destination(&self, effect: Effect, source: u32) -> Option<VPath> {
         let slot = self.slots.get(&source)?;
-        if matches!(effect, Effect::MirrorObjetivo) && slot.dir_requested.is_none() {
+        if matches!(effect, Effect::MirrorTarget) && slot.dir_requested.is_none() {
             return Some(slot.pane.target_dir().clone());
         }
         self.current_dir(source)
@@ -177,12 +177,12 @@ impl State {
                 h.cancel_probe
                     .store(true, std::sync::atomic::Ordering::SeqCst);
                 h.cancel_probe = std::sync::Arc::default();
-                h.sondeando = false;
-                h.sondeados.clear();
-                h.olvidar_adornos();
-                h.adornando = false;
+                h.probing = false;
+                h.probed.clear();
+                h.forget_adornos();
+                h.decorating = false;
             }
-            self.reanudar_request(slot, backend, mailbox);
+            self.resume_request(slot, backend, mailbox);
         }
         // Both halves of the screen change at once — rows, headers, path,
         // cursor and state — so a SNAPSHOT travels and not six patches.
@@ -197,7 +197,7 @@ impl State {
     ///
     /// "In flight" is TWO things, and looking at only the first let the
     /// common case slip through. `in_flight` clears as soon as the first page
-    /// lands, while `drenando` keeps bringing the rest of the stream: in a
+    /// lands, while `draining` keeps bringing the rest of the stream: in a
     /// directory with more than `FIRST_PAGE` entries — i.e. almost any of
     /// them — there is a window where only the drain is alive. Batches that
     /// kept arriving would be discarded by token (they do not cross slots,
@@ -214,7 +214,7 @@ impl State {
     ///   back, with the same discipline as [`Self::refresh`].
     ///
     /// With neither of the two it does nothing, and spends no token.
-    pub(super) fn reanudar_request(
+    pub(super) fn resume_request(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
@@ -224,7 +224,7 @@ impl State {
             return;
         };
         let navigating = h.in_flight.is_some();
-        if !navigating && h.drenando.is_none() {
+        if !navigating && h.draining.is_none() {
             return;
         }
         self.token += 1;
@@ -255,7 +255,7 @@ impl State {
             };
         }
         h.in_flight = Some(token);
-        h.drenando = Some(token);
+        h.draining = Some(token);
         // WITH the target when there is one. This function documents three
         // lines up that it keeps the old request's target, and then it used
         // to throw it away: swapping two panels while one navigates degraded

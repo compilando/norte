@@ -35,7 +35,7 @@ const CAP: u32 = norte_frontend::goto::INDEX_CAP;
 /// answer to a question that is no longer being asked.
 pub fn ask_the_index(app: &mut App, backend: &Backend, work: &mut InFlight) {
     let Some(goto) = &mut app.goto else {
-        olvidar(work);
+        forget(work);
         return;
     };
     let q = goto.query().to_owned();
@@ -43,7 +43,7 @@ pub fn ask_the_index(app: &mut App, backend: &Backend, work: &mut InFlight) {
     // sending it to an embeddings provider — maybe remote — is sending it
     // the name of a directory of the reader's.
     if q.chars().count() < MINIMUM_FOR_THE_INDEX || norte_frontend::goto::looks_path(&q).is_some() {
-        olvidar(work);
+        forget(work);
         goto.replace_section(SECTION_INDEX, Vec::new(), true);
         return;
     }
@@ -63,7 +63,7 @@ pub fn ask_the_index(app: &mut App, backend: &Backend, work: &mut InFlight) {
 ///
 /// Called when closing the screen and when confirming a row: whatever comes
 /// after wins, and a late answer no longer has anywhere to land.
-pub fn olvidar(work: &mut InFlight) {
+pub fn forget(work: &mut InFlight) {
     if let Some(old) = work.goto_index.take() {
         old.handle.abort();
     }

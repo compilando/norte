@@ -46,10 +46,10 @@ fn test_app() -> App {
 /// A preset's effective keymap for the `dialog` screen, the one that
 /// resolves while the keyboard is inside a panel.
 fn dialog(preset: &str) -> Effective {
-    let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    let known: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
     let src = presets::source(preset).expect("the preset exists");
     let kf = norte_frontend::keymap::parse_keymap(src).expect("the preset parses");
-    Effective::build_for(&kf, &[], &conocidos, Screen::Dialog).expect("the preset merges")
+    Effective::build_for(&kf, &[], &known, Screen::Dialog).expect("the preset merges")
 }
 
 /// The key SEQUENCE a preset binds to `cmd` on the `dialog` screen,
@@ -199,12 +199,12 @@ fn the_pane_dispatches_its_entire_vocabulary() {
 /// does: it opens from the menu or the palette, #228).
 #[test]
 fn the_preset_that_binds_layout_processes_binds_it_on_both_screens() {
-    let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    let known: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
     for name in presets::NAMES {
         let src = presets::source(name).expect("the preset exists");
         let kf = norte_frontend::keymap::parse_keymap(src).expect("the preset parses");
         let binds = |screen| {
-            Effective::build_for(&kf, &[], &conocidos, screen)
+            Effective::build_for(&kf, &[], &known, screen)
                 .expect("the preset merges")
                 .bindings()
                 .iter()

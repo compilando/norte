@@ -291,7 +291,7 @@ fn main() -> ExitCode {
                         let _ = v.close();
                     }
                 };
-                tauri::async_runtime::spawn(norte_gui_tauri::nativo::bombear(
+                tauri::async_runtime::spawn(norte_gui_tauri::native::pump(
                     native_effects,
                     bridge.host_shared(),
                     apply_theme,

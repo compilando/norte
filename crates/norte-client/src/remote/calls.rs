@@ -53,7 +53,7 @@ impl Drop for CancelOnAbandon {
 /// Translates a client error into the wire's taxonomy.
 ///
 /// This is what [`super::RemoteBackend::connect`] does internally, and it is
-/// public because a frontend using [`super::RemoteBackend::connect_detallado`]
+/// public because a frontend using [`super::RemoteBackend::connect_detailed`]
 /// — to be able to show what a daemon that died said — needs to translate
 /// all the OTHER cases exactly as they would translate themselves.
 ///
@@ -84,7 +84,7 @@ pub fn to_taxonomy(e: ClientError) -> Error {
         // `retryable: false`. What it SAID does not fit the taxonomy — it
         // carries no free text, and it is not an error of the wire but of
         // this machine — so whoever needs it connects with
-        // [`super::RemoteBackend::connect_detallado`].
+        // [`super::RemoteBackend::connect_detailed`].
         ClientError::SpawnFailed { .. } => Error::ProviderUnavailable { retryable: false },
         ClientError::BadResult(_) => Error::Internal { panic: false },
         ClientError::ForeignDaemon => Error::PermissionDenied,

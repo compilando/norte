@@ -561,7 +561,7 @@ async fn revoke_or_say(app: &mut App, backend: &Backend, id: &str) {
 /// Uninstalls — already confirmed by a human who read what is lost (ADR
 /// 0104) — and RE-LISTS. A failure is reported and re-listed anyway, for
 /// the same reason as granting: the screen shows what the core believes.
-pub(crate) async fn uninstall_confirmada(app: &mut App, backend: &Backend, id: &str) {
+pub(crate) async fn uninstall_confirmed(app: &mut App, backend: &Backend, id: &str) {
     match backend.plugins_uninstall(id).await {
         Ok(_) => relist_extensions(app, backend).await,
         Err(e) => {

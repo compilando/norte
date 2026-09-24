@@ -298,7 +298,7 @@ pub(crate) async fn daemon_cmd(
             // language, the log ring and the signals.
             use norte_core::daemon::compose::{Options, StartupError};
             let mut notices = Vec::new();
-            let compuesto = norte_core::daemon::compose(
+            let composed = norte_core::daemon::compose(
                 Options {
                     socket,
                     idle_timeout: (idle_timeout > 0)
@@ -318,7 +318,7 @@ pub(crate) async fn daemon_cmd(
             for notice in &notices {
                 eprintln!("{}", warning_text(notice));
             }
-            let daemon = match compuesto {
+            let daemon = match composed {
                 Ok(d) => d,
                 // The warning NAMES the likely cause: since #167 an
                 // embedded frontend (an `ntc` without `--daemon`) keeps

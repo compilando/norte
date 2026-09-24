@@ -22,7 +22,7 @@ impl State {
     pub(super) fn open_help(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // Not over a dialog that is being TYPED into. Help keeps the
         // keyboard while it is open, so opening it over a text field turns
@@ -51,13 +51,13 @@ impl State {
         // gains rows half a second later. A failure is not reported: help is
         // painted without extension pages.
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_list()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::HelpPlugins(res))))
                 .await;
         });
@@ -77,9 +77,9 @@ impl State {
     pub(super) fn help_patch(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.request_plugin_page(backend, buzon);
+        self.request_plugin_page(backend, mailbox);
         let change = ViewChange::Help {
             help: self.vista_help(),
         };
@@ -96,7 +96,7 @@ impl State {
         &mut self,
         res: Result<norte_proto::methods::PluginListResult, Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Ok(list) = res else {
             return Vec::new();
@@ -113,7 +113,7 @@ impl State {
             // for nothing.
             return Vec::new();
         }
-        self.help_patch(backend, buzon)
+        self.help_patch(backend, mailbox)
     }
 
     /// Requests the open extension's page, if there is one and it has not
@@ -121,13 +121,13 @@ impl State {
     pub(super) fn request_plugin_page(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let Some(id) = self.help.as_mut().and_then(crate::help::Help::claim_page) else {
             return;
         };
         let backend = Arc::clone(backend);
-        let buzon = buzon.clone();
+        let mailbox = mailbox.clone();
         tokio::spawn(async move {
             let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_help(id.clone()))
                 .await
@@ -135,7 +135,7 @@ impl State {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
-            let _ = buzon
+            let _ = mailbox
                 .send(Message::Background(Box::new(Background::PluginPage(
                     id, res,
                 ))))
@@ -336,7 +336,7 @@ impl State {
     /// selection that no longer exists. There was no wrong dispatch —
     /// `activate_in_help` asks again before running — but a screen that
     /// explains something false is a screen that lies.
-    pub(super) fn recongelar_help(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+    pub(super) fn refreeze_help(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
         if !self.refreeze_help_facts() {
             return None;
         }
@@ -357,7 +357,7 @@ impl State {
             return false;
         }
         let facts = self.facts();
-        self.help.as_mut().is_some_and(|a| a.recongelar(facts))
+        self.help.as_mut().is_some_and(|a| a.refreeze(facts))
     }
 
     /// One part of a verdict's detail, in separate LINES (#273).
@@ -444,7 +444,7 @@ impl State {
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // `Ctrl+P` leaves help for the palette, which is what its footer
         // promises. BOTH changes travel in the same patch: a renderer that
@@ -456,7 +456,7 @@ impl State {
                 self.palette_rows(),
                 &self.palette_recent,
             ));
-            self.request_plugin_rows(backend, buzon);
+            self.request_plugin_rows(backend, mailbox);
             let changes = vec![
                 ViewChange::Help { help: None },
                 ViewChange::Palette {
@@ -547,7 +547,7 @@ impl State {
                 }
             }
             (Some("dialog.confirm"), _) | (None, "Enter" | "enter") => {
-                return self.enter_in_help(backend, buzon);
+                return self.enter_in_help(backend, mailbox);
             }
             (Some("dialog.filter"), _) if !a.state.filtering() => a.state.start_filter(),
             (_, other) => {
@@ -564,7 +564,7 @@ impl State {
                 }
             }
         }
-        (self.applied(), self.help_patch(backend, buzon))
+        (self.applied(), self.help_patch(backend, mailbox))
     }
 
     /// `enter` over help: open the chosen page, follow a link, or run a
@@ -572,17 +572,17 @@ impl State {
     pub(super) fn enter_in_help(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(a) = self.help.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
         if a.state.focus() == norte_frontend::help::Focus::Topics {
             a.state.open_selected();
-            return (self.applied(), self.help_patch(backend, buzon));
+            return (self.applied(), self.help_patch(backend, mailbox));
         }
         let i = a.state.action_cursor();
-        self.activate_in_help(u32::try_from(i).unwrap_or(u32::MAX), backend, buzon)
+        self.activate_in_help(u32::try_from(i).unwrap_or(u32::MAX), backend, mailbox)
     }
 
     /// Acts on body row `i`, whether from `enter` or from a click.
@@ -595,7 +595,7 @@ impl State {
         &mut self,
         i: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let (lang, effects, hay_visor) = (self.lang, self.effects, self.visor.is_some());
         let Some(a) = self.help.as_mut() else {
@@ -608,7 +608,7 @@ impl State {
         // next arrow moves from where the reader pointed.
         a.point_at(i);
         match verdict {
-            Ok(action) => self.act_in_help(Some(action), backend, buzon),
+            Ok(action) => self.act_in_help(Some(action), backend, mailbox),
             Err(key) if key.is_empty() => {
                 // A row that no longer exists: the renderer was one frame
                 // behind, and that is not an error.
@@ -638,14 +638,14 @@ impl State {
         &mut self,
         action: Option<norte_frontend::help::Action>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match action {
             Some(norte_frontend::help::Action::Open(id)) => {
                 if let Some(a) = self.help.as_mut() {
                     a.state.open(&id);
                 }
-                (self.applied(), self.help_patch(backend, buzon))
+                (self.applied(), self.help_patch(backend, mailbox))
             }
             Some(norte_frontend::help::Action::Run(cmd)) => {
                 // Running closes help: the command acts on the listing help
@@ -655,15 +655,15 @@ impl State {
                 self.help = None;
                 let close = self.parche(vec![ViewChange::Help { help: None }]);
                 let Some(effect) = effect_of(&cmd, 1) else {
-                    let (ack, mut rest) = self.no_implementado(&cmd);
-                    let mut envios = vec![close];
-                    envios.append(&mut rest);
-                    return (ack, envios);
+                    let (ack, mut rest) = self.no_implemented(&cmd);
+                    let mut sends = vec![close];
+                    sends.append(&mut rest);
+                    return (ack, sends);
                 };
-                let (ack, mut rest) = self.apply_effect(effect, backend, buzon);
-                let mut envios = vec![close];
-                envios.append(&mut rest);
-                (ack, envios)
+                let (ack, mut rest) = self.apply_effect(effect, backend, mailbox);
+                let mut sends = vec![close];
+                sends.append(&mut rest);
+                (ack, sends)
             }
             None => (self.applied(), Vec::new()),
         }
@@ -675,12 +675,12 @@ impl State {
         &mut self,
         row: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Message>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(a) = self.help.as_mut() else {
             return (Self::stale(StaleAction::Modal), Vec::new());
         };
         a.state.click_row(row as usize);
-        (self.applied(), self.help_patch(backend, buzon))
+        (self.applied(), self.help_patch(backend, mailbox))
     }
 }

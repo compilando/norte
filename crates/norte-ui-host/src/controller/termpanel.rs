@@ -84,7 +84,7 @@ impl State {
             };
             self.roles
                 .set(norte_frontend::layout::RoleId::Active, target);
-            self.reconcilia_roles();
+            self.reconciles_roles();
             // And if the slot exists WITHOUT a shell, it is started here. It
             // is the case of a restored session — the tree is saved, the
             // shell is not — and of a startup that failed: without this the
@@ -118,7 +118,7 @@ impl State {
         // set here.
         if let Some(id) = self.slot_of_kind(KIND) {
             self.roles.set(norte_frontend::layout::RoleId::Active, id);
-            self.reconcilia_roles();
+            self.reconciles_roles();
         }
         updates.extend(self.start_si_missing(mailbox));
         (ack, updates)
@@ -152,7 +152,7 @@ impl State {
                      (does not go to the journal: no actor and no undo)"
                 );
                 self.terminal = Some(shell);
-                self.sondear_terminal(mailbox);
+                self.probe_terminal(mailbox);
             }
             Err(e) => {
                 // And it is SAID, not just to the log: the slot stays, so
@@ -171,7 +171,7 @@ impl State {
     /// closes — same mechanism as the log panel's polling, and for the same
     /// reason: a 30 Hz timer that outlived the panel would keep waking the
     /// actor to paint nothing.
-    fn sondear_terminal(&self, mailbox: &mpsc::Sender<Message>) {
+    fn probe_terminal(&self, mailbox: &mpsc::Sender<Message>) {
         if self.slot_of_kind(KIND).is_none() {
             return;
         }
@@ -201,7 +201,7 @@ impl State {
             self.release_terminal();
             return Vec::new();
         }
-        self.sondear_terminal(mailbox);
+        self.probe_terminal(mailbox);
         // The slot's size, BEFORE pumping: the pty has to know it or a
         // full-screen program paints for a width that is not its own and
         // line wrapping comes out wrong. It started at 80x24 and nobody ever
@@ -217,7 +217,7 @@ impl State {
         if let Some(size) = size {
             t.resize(size);
         }
-        let changed = t.bombear();
+        let changed = t.pump();
         // If the shell left, the slot SAYS so instead of showing the last
         // screen of a process that no longer exists. The slot stays: closing
         // it on its own would move someone's layout without them touching
@@ -404,12 +404,12 @@ fn span_view(text: String, e: Style) -> TerminalSpanView {
         text,
         fg: color_view(e.fg),
         bg: color_view(e.bg),
-        bold: e.negrita,
+        bold: e.bold,
         dim: e.tenue,
-        italic: e.cursiva,
-        underline: e.subrayado,
+        italic: e.italic,
+        underline: e.underlined,
         reverse: e.inverse,
-        strike: e.tachado,
+        strike: e.strikethrough,
     }
 }
 

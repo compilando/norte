@@ -251,7 +251,7 @@ async fn trust_with_wrong_fingerprint_does_not_register() {
 /// A REGISTERED host key that changes is a `HostKeyMismatch` (possible
 /// MITM): never connects nor re-registers silently.
 #[tokio::test]
-async fn host_key_cambiada_es_mismatch() {
+async fn host_key_changed_es_mismatch() {
     let host_key = key();
     let fp_presented = fingerprint(host_key.public_key());
     let port = spawn_server(host_key, None).await;

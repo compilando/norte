@@ -818,17 +818,17 @@ impl History {
 /// while the window walked back its trail.
 ///
 /// ```
-/// use norte_frontend::nav::regreso_after_disconnect;
+/// use norte_frontend::nav::return_after_disconnect;
 /// use norte_proto::VPath;
 /// let vp = |s: &str| VPath::parse(s).expect("wire");
 /// let trail = [vp("file:///home/o"), vp("sftp://srv/a")];
 /// assert_eq!(
-///     regreso_after_disconnect(&vp("sftp://srv/a"), &trail),
+///     return_after_disconnect(&vp("sftp://srv/a"), &trail),
 ///     Some(vp("file:///home/o")),
 /// );
 /// ```
 #[must_use]
-pub fn regreso_after_disconnect(closed: &VPath, trail: &[VPath]) -> Option<VPath> {
+pub fn return_after_disconnect(closed: &VPath, trail: &[VPath]) -> Option<VPath> {
     let is_same_session = |p: &VPath| {
         session_scheme(p.scheme()) == session_scheme(closed.scheme())
             && p.authority() == closed.authority()
@@ -1375,7 +1375,7 @@ mod history_tests {
     fn the_return_skips_everything_from_the_closed_machine() {
         let trail = [vp("file:///home/o"), vp("sftp://srv/a"), vp("sftp://srv/b")];
         assert_eq!(
-            regreso_after_disconnect(&vp("sftp://srv/b"), &trail),
+            return_after_disconnect(&vp("sftp://srv/b"), &trail),
             Some(vp("file:///home/o")),
         );
     }
@@ -1394,13 +1394,13 @@ mod history_tests {
             vp("sftp://srv/a"),
         ];
         assert_eq!(
-            regreso_after_disconnect(&vp("sftp://srv/b"), &trail),
+            return_after_disconnect(&vp("sftp://srv/b"), &trail),
             Some(vp("file:///home/o")),
         );
         // And the other way round: closing from INSIDE the archive does not
         // return to the outside of the same machine either.
         assert_eq!(
-            regreso_after_disconnect(&vp("zip+sftp://srv/x.zip%21/dentro"), &trail),
+            return_after_disconnect(&vp("zip+sftp://srv/x.zip%21/dentro"), &trail),
             Some(vp("file:///home/o")),
         );
     }
@@ -1412,7 +1412,7 @@ mod history_tests {
     fn another_server_of_the_same_scheme_is_valid() {
         let trail = [vp("sftp://otro/x"), vp("sftp://srv/a")];
         assert_eq!(
-            regreso_after_disconnect(&vp("sftp://srv/a"), &trail),
+            return_after_disconnect(&vp("sftp://srv/a"), &trail),
             Some(vp("sftp://otro/x")),
         );
     }
@@ -1421,10 +1421,10 @@ mod history_tests {
     /// has nowhere to go back to: the caller decides, and falls back home.
     #[test]
     fn with_nothing_foreign_in_the_trail_there_is_no_return() {
-        assert_eq!(regreso_after_disconnect(&vp("sftp://srv/a"), &[]), None);
+        assert_eq!(return_after_disconnect(&vp("sftp://srv/a"), &[]), None);
         let all_its_own = [vp("sftp://srv/a"), vp("sftp://srv/b")];
         assert_eq!(
-            regreso_after_disconnect(&vp("sftp://srv/b"), &all_its_own),
+            return_after_disconnect(&vp("sftp://srv/b"), &all_its_own),
             None,
         );
     }

@@ -58,7 +58,7 @@ pub struct ResizeBorder {
     /// The right or bottom one: together the two locate the layout node
     /// where they are neighbors (`Node::border_pair`), which may not be
     /// `slot`'s.
-    pub vecino: norte_frontend::layout::SlotId,
+    pub neighbor: norte_frontend::layout::SlotId,
     /// Which direction the `Split` containing them lays out.
     pub dir: norte_frontend::layout::Dir,
     /// The border's column (or row).
@@ -894,7 +894,7 @@ fn resize_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
             let frac = inside / f32::from(border.long);
             app.layout =
                 app.layout
-                    .drag_border_between(border.slot, border.vecino, frac, border.long);
+                    .drag_border_between(border.slot, border.neighbor, frac, border.long);
             Some(After::Nothing)
         }
         MouseEventKind::Up(MouseButton::Left) => {
@@ -1048,14 +1048,14 @@ fn column_border_at(app: &App, col: u16, row: u16) -> Option<ColumnDrag> {
         // The SAME catalogue the painting uses: two different answers here
         // would make the border the mouse grabs belong to a different
         // column.
-        let anchos = crate::ui::pane_columns(
+        let widths = crate::ui::pane_columns(
             &app.columns,
             pane,
             g.width.saturating_sub(2),
             app.attr_catalog(pane.dir().scheme()),
         );
         let mut x = g.x.saturating_add(1);
-        for (k, f) in anchos.iter().enumerate() {
+        for (k, f) in widths.iter().enumerate() {
             if k > 0 && (col == x || col.saturating_add(1) == x) {
                 return Some(ColumnDrag {
                     column: f.id.to_string(),
@@ -1978,7 +1978,7 @@ pub fn restore_after_suspend(
 ///
 /// Sharing the exit path is the fix, not adding the missing line: two arms
 /// that finish off by hand are two places to forget the third.
-async fn despachar_click(
+async fn dispatch_click(
     app: &mut crate::app::App,
     backend: &norte_core::backend::Backend,
     events: &mut crate::console::Console<'_>,
@@ -2107,7 +2107,7 @@ pub async fn on_mouse(
         // inside a single frontend.
         self::After::PanelBar => {
             if let Some(id) = app.pending_panel_command.take() {
-                despachar_click(
+                dispatch_click(
                     app,
                     backend,
                     events,
@@ -2131,7 +2131,7 @@ pub async fn on_mouse(
         // being able to diverge.
         self::After::MenuAccept => {
             if let Some(id) = app.take_menu_choice() {
-                despachar_click(
+                dispatch_click(
                     app,
                     backend,
                     events,
@@ -2153,7 +2153,7 @@ pub async fn on_mouse(
         // path to enter a directory would be a
         // second place to fix every cd bug.
         //
-        // And through the same finish as the menu (`despachar_click`),
+        // And through the same finish as the menu (`dispatch_click`),
         // which is what was missing: over a FILE, `nav.enter`
         // resolves the desktop program and leaves it
         // armed, so without launching it a double click on a
@@ -2165,7 +2165,7 @@ pub async fn on_mouse(
             // it armed would make the next key fire a
             // command requested before changing directory.
             app.abandon_pending(resolver);
-            despachar_click(
+            dispatch_click(
                 app,
                 backend,
                 events,

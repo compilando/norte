@@ -17,7 +17,7 @@
 //!
 //! `pub` identifiers in this module (`State`/`Idle`/`Measuring`/`Done`/
 //! `Failure`, and the `DiskMap` methods `report`/`chosen`/`state`/
-//! `apuntar`/`measuring`/`failure`/`land`/`mover`/`choose`) are Spanish and
+//! `aim`/`measuring`/`failure`/`land`/`mover`/`choose`) are Spanish and
 //! reported for a cross-file rename in phase 2: they are called from
 //! `norte-tui` (`src/jobs/diskmap.rs`, `src/ui/panels.rs`,
 //! `src/screens/side_nav.rs`) and `norte-ui-host`
@@ -90,7 +90,7 @@ impl DiskMap {
     /// paint the previous one's map under the new one's title — for however
     /// long the measurement takes, which is exactly the moment someone is
     /// looking at it.
-    pub fn apuntar(&mut self, dir: VPath) {
+    pub fn aim(&mut self, dir: VPath) {
         self.dir = Some(dir);
         self.report = FsDirUsageReportResult::default();
         self.chosen = None;
@@ -280,7 +280,7 @@ mod tests {
         let mut m = DiskMap::new();
         m.land(report(&["a"]), true);
         m.choose(&seg("a"));
-        m.apuntar(VPath::parse("mem:///other").expect("wire"));
+        m.aim(VPath::parse("mem:///other").expect("wire"));
         assert!(m.report().children.is_empty());
         assert!(m.chosen().is_none());
         assert_eq!(m.state(), &State::Idle);

@@ -99,7 +99,7 @@ fn over_the_parent_row_the_viewer_says_directory() {
 /// A preview behind a tab produces no target: there is no request to
 /// count. In L1b an identical leak was only ever seen by a test, so here it is.
 #[test]
-fn un_preview_oculto_no_produce_objetivo() {
+fn a_hidden_preview_produces_no_target() {
     let mut app = test_app();
     app.toggle_preview();
     app.panes[0].set_cursor(1);
@@ -274,13 +274,12 @@ fn a_denied_read_paints_the_reason_and_does_not_open_a_modal() {
 #[test]
 fn layout_preview_is_bound_in_all_seven_presets_and_both_screens() {
     use norte_frontend::keymap::{CATALOGUE, Effective, Screen, parse_keymap, presets};
-    let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    let known: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
     for name in presets::NAMES {
         let src = presets::source(name).expect("the preset exists");
         let kf = parse_keymap(src).expect("the preset parses");
         for screen in [Screen::Browse, Screen::Viewer] {
-            let eff =
-                Effective::build_for(&kf, &[], &conocidos, screen).expect("the preset merges");
+            let eff = Effective::build_for(&kf, &[], &known, screen).expect("the preset merges");
             assert!(
                 eff.bindings()
                     .iter()

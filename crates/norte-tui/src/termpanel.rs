@@ -125,22 +125,22 @@ fn style_of(e: Style) -> ratatui::style::Style {
         s = s.bg(c);
     }
     let mut m = Modifier::empty();
-    if e.negrita {
+    if e.bold {
         m |= Modifier::BOLD;
     }
     if e.tenue {
         m |= Modifier::DIM;
     }
-    if e.cursiva {
+    if e.italic {
         m |= Modifier::ITALIC;
     }
-    if e.subrayado {
+    if e.underlined {
         m |= Modifier::UNDERLINED;
     }
     if e.inverse {
         m |= Modifier::REVERSED;
     }
-    if e.tachado {
+    if e.strikethrough {
         m |= Modifier::CROSSED_OUT;
     }
     s.add_modifier(m)
@@ -191,8 +191,8 @@ mod tests {
         let e = Style {
             fg: ColorTerm::Indexed(4),
             bg: ColorTerm::Rgb(1, 2, 3),
-            negrita: true,
-            subrayado: true,
+            bold: true,
+            underlined: true,
             ..Style::default()
         };
         let s = style_of(e);

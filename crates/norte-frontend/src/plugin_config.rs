@@ -136,12 +136,12 @@ pub fn sanitize_config_keys(keys: &[PluginConfigKeyWire]) -> Vec<ConfigKeyRow> {
         .map(|k| {
             let (value, v_hostile) = crate::display_name(k.value.as_bytes());
             let (default, d_hostile) = crate::display_name(k.default.as_bytes());
-            let dominio: Vec<(String, bool)> = k
+            let domain: Vec<(String, bool)> = k
                 .values
                 .iter()
                 .map(|v| crate::display_name(v.as_bytes()))
                 .collect();
-            let hostile = v_hostile || d_hostile || dominio.iter().any(|(_, h)| *h);
+            let hostile = v_hostile || d_hostile || domain.iter().any(|(_, h)| *h);
             ConfigKeyRow {
                 key: k.key.clone(),
                 kind: k.kind.clone(),
@@ -158,7 +158,7 @@ pub fn sanitize_config_keys(keys: &[PluginConfigKeyWire]) -> Vec<ConfigKeyRow> {
                 display: ConfigKeyDisplay {
                     value,
                     default,
-                    values: dominio.into_iter().map(|(v, _)| v).collect(),
+                    values: domain.into_iter().map(|(v, _)| v).collect(),
                     hostile,
                 },
             }
@@ -359,15 +359,15 @@ impl PluginConfigState {
         // Enter wrote `true` again — the daemon flip-flopped and the screen
         // never moved. The new value can be plugin text (an `enum` value) or
         // human-typed, so it goes through the same mask as the rest.
-        let (pintable, hostile) = crate::display_name(value.as_bytes());
-        row.display.value.clone_from(&pintable);
+        let (paintable, hostile) = crate::display_name(value.as_bytes());
+        row.display.value.clone_from(&paintable);
         // The row's flag is about ALL THREE free-text fields, so it can only
         // grow here: a clean new value does not clear a hostile `default` or
         // a hostile domain.
         row.display.hostile |= hostile;
         PendingConfigWrite {
             key: row.key.clone(),
-            display: pintable,
+            display: paintable,
             value,
         }
     }

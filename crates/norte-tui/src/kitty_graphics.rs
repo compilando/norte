@@ -2,7 +2,7 @@
 //! same question [`crate::alt_menu`] asks the KEYBOARD protocol, for the
 //! IMAGE protocol: asked once, at startup, and cached.
 //!
-//! T4 (WOW phase 5) adds what actually paints: [`escape_colocar`]/
+//! T4 (WOW phase 5) adds what actually paints: [`escape_place`]/
 //! [`escape_delete`] are the pure escapes — no I/O here, that runs in the run
 //! loop, which owns the terminal — and [`mark_placed`]/[`delete_placed`]
 //! keep count of which id is placed RIGHT NOW on the real terminal. That
@@ -172,15 +172,15 @@ const CHUNK_RAW_BYTES: usize = 3 * 1024;
 /// shows the whole image, the usual case.
 ///
 /// ```
-/// use norte_tui::kitty_graphics::escape_colocar;
+/// use norte_tui::kitty_graphics::escape_place;
 /// use ratatui::layout::Rect;
 ///
-/// let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20), None);
+/// let esc = escape_place(7, b"PNGFALSO", Rect::new(1, 2, 40, 20), None);
 /// assert!(esc.starts_with("\x1b_G") && esc.ends_with("\x1b\\"));
 /// assert!(!esc.contains(",x="), "with no crop its keys are not sent");
 /// ```
 #[must_use]
-pub fn escape_colocar(
+pub fn escape_place(
     id: u32,
     bytes: &[u8],
     rect: Rect,
@@ -240,7 +240,7 @@ pub fn escape_colocar(
 /// `i=<id>` still scopes the erase to THIS image: without it, every image on
 /// the whole terminal would be erased, including another program's in
 /// another tab. `q=2` silences the response, same reason as
-/// [`escape_colocar`].
+/// [`escape_place`].
 ///
 /// ```
 /// use norte_tui::kitty_graphics::escape_delete;
@@ -260,7 +260,7 @@ static PLACED: AtomicU32 = AtomicU32::new(0);
 
 /// Notes that `id` was just placed on the real terminal.
 ///
-/// Called by the run loop right after successfully writing [`escape_colocar`]
+/// Called by the run loop right after successfully writing [`escape_place`]
 /// — never before, or a write failure would leave this count believing an
 /// image is up that the terminal never saw.
 pub fn mark_placed(id: u32) {

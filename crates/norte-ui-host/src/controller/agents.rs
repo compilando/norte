@@ -29,8 +29,8 @@ impl State {
     /// typed session id can be mistyped, and undoing the wrong session is
     /// undoing someone else's work.
     pub(super) fn open_agents(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.agencia.panel = true;
-        self.agencia.sessions.on_open();
+        self.agency.panel = true;
+        self.agency.sessions.on_open();
         let change = ViewChange::Agents {
             agents: self.vista_agents(),
         };
@@ -44,9 +44,9 @@ impl State {
         // nobody has asked for anything. The screen says so, instead of
         // asserting what it does not know.
         let listening = self.effects == crate::commands::Effects::Full;
-        self.agencia
+        self.agency
             .panel
-            .then(|| self.agencia.sessions.vista_de(self.lang, listening))
+            .then(|| self.agency.sessions.vista_de(self.lang, listening))
     }
 
     /// The keys while the agent panel is open.
@@ -68,13 +68,13 @@ impl State {
             _ => self.dialog_verb(k),
         };
         match (verb.as_deref(), k.key.as_str()) {
-            (Some("dialog.cancel"), _) => self.agencia.panel = false,
-            (Some("dialog.down"), _) => self.agencia.sessions.mover(1),
-            (Some("dialog.up"), _) => self.agencia.sessions.mover(-1),
-            (Some("dialog.page-down"), _) => self.agencia.sessions.mover(PAGE),
-            (Some("dialog.page-up"), _) => self.agencia.sessions.mover(-PAGE),
-            (_, "Home" | "home") => self.agencia.sessions.mover(i64::MIN / 2),
-            (_, "End" | "end") => self.agencia.sessions.mover(i64::MAX / 2),
+            (Some("dialog.cancel"), _) => self.agency.panel = false,
+            (Some("dialog.down"), _) => self.agency.sessions.mover(1),
+            (Some("dialog.up"), _) => self.agency.sessions.mover(-1),
+            (Some("dialog.page-down"), _) => self.agency.sessions.mover(PAGE),
+            (Some("dialog.page-up"), _) => self.agency.sessions.mover(-PAGE),
+            (_, "Home" | "home") => self.agency.sessions.mover(i64::MIN / 2),
+            (_, "End" | "end") => self.agency.sessions.mover(i64::MAX / 2),
             // `u` UNDOES the whole session, and asks first: it is the biggest
             // operation this window can launch in one go — it reverts
             // everything an agent did, in reverse order — and no other
@@ -100,10 +100,10 @@ impl State {
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // With a dialog on top, the panel does not receive: it is modal for
         // the keyboard, and it has to be for the mouse too.
-        if !self.agencia.panel || !self.dialogs.is_empty() {
+        if !self.agency.panel || !self.dialogs.is_empty() {
             return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        if !self.agencia.sessions.point_at(row as usize, generation) {
+        if !self.agency.sessions.point_at(row as usize, generation) {
             // The list changed between painting and the click: it is refused
             // instead of clamped, because clamping is choosing for the
             // reader.
@@ -120,7 +120,7 @@ impl State {
         if self.effects == crate::commands::Effects::SoloRead {
             return Self::no_mutates();
         }
-        let Some(session) = self.agencia.sessions.chosen() else {
+        let Some(session) = self.agency.sessions.chosen() else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-no-session".to_owned(),
@@ -132,7 +132,7 @@ impl State {
         // session walk the SAME list of entries — each photographs it before
         // the other records its compensations — and the second returns a
         // report full of locks that belong to nobody.
-        if self.agencia.sessions.has_undo_vivo(&session) {
+        if self.agency.sessions.has_undo_vivo(&session) {
             let outgoing = self.say("host-undo-already-running");
             return (
                 ActionAck::Unavailable {
@@ -215,13 +215,13 @@ impl State {
         backend: &Arc<dyn HostBackend>,
         mailbox: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.agencia.sessions.has_undo_vivo(session) {
+        if self.agency.sessions.has_undo_vivo(session) {
             return (
                 Some("host-undo-already-running"),
                 self.say("host-undo-already-running"),
             );
         }
-        self.agencia.sessions.undoing(session);
+        self.agency.sessions.undoing(session);
         // With no known SCOPE: an `undo_session` touches whatever
         // directories the session touched, which this window does not know.
         // What is relisted is what is ON SCREEN, which is where the reader
@@ -229,7 +229,7 @@ impl State {
         let visible = self.dirs_visible();
         Self::launch_undo(session.to_owned(), visible, backend, mailbox);
         let mut outgoing = Vec::new();
-        if self.agencia.panel {
+        if self.agency.panel {
             let change = ViewChange::Agents {
                 agents: self.vista_agents(),
             };

@@ -408,13 +408,12 @@ fn over_a_drive_the_cursor_is_no_longer_on_a_header() {
 #[test]
 fn layout_places_is_bound_in_all_seven_presets_and_both_screens() {
     use norte_frontend::keymap::{CATALOGUE, Effective, Screen, parse_keymap, presets};
-    let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
+    let known: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
     for name in presets::NAMES {
         let src = presets::source(name).expect("the preset exists");
         let kf = parse_keymap(src).expect("the preset parses");
         for screen in [Screen::Browse, Screen::Dialog] {
-            let eff =
-                Effective::build_for(&kf, &[], &conocidos, screen).expect("the preset merges");
+            let eff = Effective::build_for(&kf, &[], &known, screen).expect("the preset merges");
             assert!(
                 eff.bindings()
                     .iter()
