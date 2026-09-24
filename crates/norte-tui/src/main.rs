@@ -321,7 +321,7 @@ async fn main() -> Result<()> {
     // key that opens the subshell and the one that closes it would be
     // different.
     app.subshell_chord = norte_frontend::subshell::detach_chord(&browse_eff);
-    app.terminal_chord = browse_eff.lone_chord(norte_tui::termpanel::COMANDO);
+    app.terminal_chord = browse_eff.lone_chord(norte_tui::termpanel::COMMAND);
     // Declarative openers (#28): `pane.open`'s source (F4).
     app.openers = cfg.openers.clone();
     // `[ui] editor` (#133): norte's editor, if the config names one.
@@ -485,18 +485,18 @@ async fn main() -> Result<()> {
     // hold crossterm's lock and leave it answering "no" after two seconds.
     // It is asked even with the key off, so turning it on from settings
     // works with no restart.
-    let _ = norte_tui::alt_menu::consultar_soporte();
+    let _ = norte_tui::alt_menu::query_support();
     // The same question for GRAPHICS, at the same spot and for the same two
     // reasons: the event reader does not exist yet and stdout is still the
     // terminal. Nobody paints anything with the answer yet — that belongs
     // to another task in this phase.
-    let _ = norte_tui::kitty_graphics::consultar_soporte();
+    let _ = norte_tui::kitty_graphics::query_support();
     // `[ui] alt_menu`: a terminal with no protocol receives nothing, and a
     // write failure leaves the TUI without the gesture, not without
     // starting.
     if let Err(e) = norte_tui::alt_menu::set(
         cfg.common.ui_alt_menu.unwrap_or(false),
-        norte_tui::alt_menu::soportado,
+        norte_tui::alt_menu::supported,
         &mut mouse_out,
     ) {
         tracing::warn!(error = %e, "could not request kitty's keyboard protocol");
@@ -805,19 +805,19 @@ async fn make_backend(
         );
         // Local provider, connector (an sftp://…/ftp://… path, navigable if
         // the host key is already trusted) and opt-in AI: what the whole
-        // engine carries, decided in `norte_core::equipo` and not here
+        // engine carries, decided in `norte_core::team` and not here
         // (rule 7).
         //
         // Notices go to the log and not to stderr: ratatui is about to take
         // the screen, and this binary already installs a subscriber
         // (`init_to_file`, roadmap item 9).
-        let equipped = norte_core::equipo::equipar(
+        let equipped = norte_core::team::equipar(
             &engine,
             &norte_core::connect::config_dir(),
-            norte_core::equipo::Ia::TODA,
+            norte_core::team::Ia::ALL,
         )
         .await;
-        for notice in equipped.avisos {
+        for notice in equipped.notices {
             tracing::warn!("{notice}");
         }
         return Ok(Backend::Embedded(Arc::new(engine)));

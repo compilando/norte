@@ -14,8 +14,8 @@ use norte_ui_host::action::UiAction;
 use norte_ui_host::controller::{UiHost, UiHostOptions, Update};
 use norte_ui_host::dto::{UiUpdate, ViewChange};
 
-mod backend_falso;
-use backend_falso::Falso;
+mod backend_fake;
+use backend_fake::Fake;
 
 /// The ceiling for a cursor patch (task 3.6).
 const CURSOR_CEILING: usize = 16 * 1024;
@@ -25,7 +25,7 @@ const LARGE: usize = 100_000;
 
 /// The large directory's host, with its future on the HEAP.
 ///
-/// `Estado` is large — it is the window's whole state — and the future that
+/// `State` is large — it is the window's whole state — and the future that
 /// builds it carries it inside, so as soon as one more field grows, the
 /// future goes over `clippy::large_futures`'s ceiling and the gate turns red
 /// in a file nobody touched. Boxing it once, here, means the three callers
@@ -35,31 +35,31 @@ fn large_host() -> std::pin::Pin<Box<dyn Future<Output = (UiHost, norte_ui_host:
 }
 
 async fn large_host_inner() -> (UiHost, norte_ui_host::ViewSnapshot) {
-    let mut f = Falso::default();
+    let mut f = Fake::default();
     let names: Vec<(Vec<u8>, bool)> = (0..LARGE)
         .map(|i| (format!("fichero-{i:06}.txt").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa", names);
+    f.put("mem:///casa", names);
     host_with(Arc::new(f)).await
 }
 
-async fn host_with(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
+async fn host_with(backend: Arc<Fake>) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (200, 60),
         // The `..` row turned off: these tests reason about listing indices,
         // and one more row at the start would shift them all without saying
         // anything about what they test.
         settings: {
-            let mut cfg = norte_ui_host::ajustes_por_defecto();
+            let mut cfg = norte_ui_host::default_settings();
             cfg.common.ui_parent_entry = Some(false);
             cfg
         },
@@ -67,8 +67,8 @@ async fn host_with(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot)
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -305,16 +305,16 @@ async fn filling_does_not_publish_a_patch_per_batch() {
     // subscription time the fill has NOT started: without it, the fake
     // drains a hundred thousand entries into memory before this test even
     // looks.
-    let gate = Arc::new(backend_falso::Puerta::default());
-    let mut f = Falso::default();
+    let gate = Arc::new(backend_fake::Gate::default());
+    let mut f = Fake::default();
     let names: Vec<(Vec<u8>, bool)> = (0..how_many)
         .map(|i| (format!("fichero-{i:06}.txt").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa", names);
-    f.puerta_drenaje = Some(Arc::clone(&gate));
+    f.put("mem:///casa", names);
+    f.gate_drenaje = Some(Arc::clone(&gate));
     let (h, _snap) = host_with(Arc::new(f)).await;
     let mut sub = h.subscribe();
-    gate.abrir();
+    gate.open();
 
     let mut row_patches = 0usize;
     let mut seen_the_end = false;

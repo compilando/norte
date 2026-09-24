@@ -316,7 +316,7 @@ mod tests {
     /// the result on screen was a panel with a focus border whose arrows
     /// moved the list next to it.
     #[test]
-    fn processes_y_metadata_se_enfocan_pero_no_son_destino() {
+    fn processes_and_metadata_can_be_focused_but_are_not_a_destination() {
         let reg = KindRegistry::builtin();
         for id in ["processes", "metadata"] {
             let d = reg.get(&KindId::new(id)).expect("declared");
@@ -345,7 +345,7 @@ mod tests {
     /// `None` and whoever paints draws the box with the name. It is the
     /// model's rule 3.
     #[test]
-    fn un_kind_fuera_del_registro_no_es_un_error() {
+    fn a_kind_outside_the_registry_is_not_an_error() {
         let reg = KindRegistry::builtin();
         // The name says what it needs to be: one that will NEVER be
         // registered. This used to say `terminal`, and when the terminal
@@ -366,7 +366,7 @@ mod tests {
     /// ADR 0077 forbids, so until the command that opens and closes it
     /// exists, there is no button.
     #[test]
-    fn un_panel_de_plugin_no_tiene_boton_en_la_barra() {
+    fn a_plugin_panel_has_no_button_in_the_bar() {
         let mut reg = KindRegistry::builtin();
         reg.insert_panels(&[panel_de_plugin("git", "status", None, true)]);
         let d = reg
@@ -374,7 +374,7 @@ mod tests {
             .expect("is declared");
         assert!(d.focusable, "is focusable");
         assert!(
-            !crate::panelbar::es_boton(d),
+            !crate::panelbar::es_button(d),
             "and still does not appear in the bar"
         );
     }
@@ -382,7 +382,7 @@ mod tests {
     /// The minimums are the only thing the engine consults to collapse, so
     /// declaring them wrong shows across the whole screen.
     #[test]
-    fn el_browser_declara_su_minimo_y_puede_tomar_los_dos_roles() {
+    fn the_browser_declares_its_minimum_and_can_take_both_roles() {
         let reg = KindRegistry::builtin();
         let d = reg.get(&KindId::browser()).expect("browser is there");
         assert_eq!(d.min, (20, 5));
@@ -393,7 +393,7 @@ mod tests {
     /// `tasks` is the bottom strip: does not take focus, does not take
     /// keys, and there is ONE.
     #[test]
-    fn tasks_es_unico_y_no_toma_foco() {
+    fn tasks_is_unique_and_does_not_take_focus() {
         let reg = KindRegistry::builtin();
         let d = reg.get(&KindId::new("tasks")).expect("tasks is there");
         assert!(!d.focusable && !d.takes_keys && !d.multi);
@@ -403,7 +403,7 @@ mod tests {
     /// The sidebar holds no role and does not allow two. The first is what
     /// stops a copy from ending up targeting a list of drives.
     #[test]
-    fn places_no_toma_roles_y_es_unico() {
+    fn places_takes_no_roles_and_is_unique() {
         let reg = KindRegistry::builtin();
         let d = reg.get(&KindId::new("places")).expect("places is there");
         assert_eq!(d.min, (14, 5));
@@ -461,7 +461,7 @@ mod tests {
     /// Consented, the kind exists, carries the prefix that stops
     /// collisions, and takes keys.
     #[test]
-    fn un_panel_consentido_es_un_kind_con_su_prefijo() {
+    fn a_consented_pane_is_a_kind_with_its_prefix() {
         let mut reg = KindRegistry::builtin();
         reg.insert_panels(&[panel_de_plugin("org.norte.git", "git", None, true)]);
         let decl = reg
@@ -479,7 +479,7 @@ mod tests {
     /// fallback when it does not: a panel with no declared minimums cannot
     /// be left with none, or layout would place it in two columns.
     #[test]
-    fn los_minimos_del_manifiesto_mandan_y_hay_respaldo() {
+    fn the_manifests_minimums_rule_and_there_is_a_fallback() {
         let mut reg = KindRegistry::builtin();
         reg.insert_panels(&[
             panel_de_plugin("org.norte.git", "git", Some((40, 9)), true),
@@ -505,7 +505,7 @@ mod tests {
     /// usual ones being where they always are is what lets a button's
     /// position be learned by the finger.
     #[test]
-    fn lo_aportado_no_se_cuela_delante_de_lo_de_serie() {
+    fn contributed_entries_do_not_cut_ahead_of_stock_ones() {
         let before: Vec<String> = KindRegistry::builtin()
             .decls()
             .iter()
@@ -533,7 +533,7 @@ mod tests {
     /// `get` return one and `min_of` the other depending on order, which
     /// is the kind of bug that only shows up when someone adds a kind.
     #[test]
-    fn insertar_el_mismo_kind_dos_veces_reemplaza() {
+    fn inserting_the_same_kind_twice_replaces() {
         let mut reg = KindRegistry::builtin();
         reg.insert(KindDecl {
             id: KindId::browser(),

@@ -355,7 +355,7 @@ pub enum Error {
     /// destination is mandatory: **a password dialog that does not say who
     /// it is going to hand it to is not answerable.** The name was chosen by
     /// `connections.toml`, which may come from someone else's dotfiles or an
-    /// edited line; `trabajo` says nothing about whether that entry points
+    /// edited line; `work` says nothing about whether that entry points
     /// today at the usual machine or at `ftp://evil.example`. It is the same
     /// reason the TOFU above carries host, algorithm and fingerprint: whoever
     /// answers verifies the OTHER END, not a local label.

@@ -174,7 +174,7 @@ impl ConnectionFailureReason {
     /// to decide its string, and this list simply stops covering it — which
     /// is why the test compares BOTH WAYS against the proto, which is where
     /// the gap would show.
-    pub const TODAS: &'static [Self] = &[
+    pub const ALL: &'static [Self] = &[
         Self::SecretMissing,
         Self::SecretEmpty,
         Self::SecretNotUtf8,
@@ -226,7 +226,7 @@ pub struct ConnectionFailure {
     /// Cause, CLOSED vocabulary (see `methods::ConnectionFailed::reason`).
     pub reason: ConnectionFailureReason,
     /// Human phrase, if the variant can expose it — see
-    /// `ConnectError::detalle_publico`. `None` is not a failure without an
+    /// `ConnectError::detail_publico`. `None` is not a failure without an
     /// explanation: it is an explanation that cannot go out.
     pub detail: Option<String>,
 }
@@ -256,7 +256,7 @@ pub trait ConnectionObserver: Send + Sync {
 /// connection. Joining them earlier would force dragging the destination
 /// through the whole error path just to name it again.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Causa {
+pub struct Cause {
     /// Name from `connections.toml`, if there was one.
     pub conn: Option<String>,
     /// CLOSED vocabulary (see `methods::ConnectionFailed::reason`).
@@ -281,7 +281,7 @@ pub struct DialError {
     /// and the normal path is the one that does NOT carry a cause: fattening
     /// every `Result` in the pool with two `String`s that are almost always
     /// empty would be paying for the rare case in the common one.
-    pub causa: Option<Box<Causa>>,
+    pub cause: Option<Box<Cause>>,
 }
 
 impl From<Error> for DialError {
@@ -289,7 +289,7 @@ impl From<Error> for DialError {
     /// before #322. It's what lets a connector that doesn't provide one —
     /// the test doubles — not have to change.
     fn from(error: Error) -> Self {
-        Self { error, causa: None }
+        Self { error, cause: None }
     }
 }
 
@@ -960,7 +960,7 @@ fn log_and_map(e: norte_connect::ConnectError) -> Error {
 /// `None` = this variant is not counted. That is not the same as "it has no
 /// reason": it's that its explanation adds nothing for whoever is looking (a
 /// TOFU already travels typed, with its fingerprint) or that it cannot go
-/// out (rule 10, see `ConnectError::detalle_publico`).
+/// out (rule 10, see `ConnectError::detail_publico`).
 ///
 /// Exhaustive on purpose: a new variant does not compile until someone
 /// decides whether the human gets to know about it.
@@ -1015,15 +1015,15 @@ fn reason_for(e: &norte_connect::ConnectError) -> Option<ConnectionFailureReason
 fn log_and_dial(e: norte_connect::ConnectError, name: Option<&str>) -> DialError {
     tracing::warn!(error = %e, "remote connection failure");
     let cause = reason_for(&e).map(|reason| {
-        Box::new(Causa {
+        Box::new(Cause {
             conn: name.map(ToOwned::to_owned),
             reason,
-            detail: e.detalle_publico(),
+            detail: e.detail_publico(),
         })
     });
     DialError {
         error: Error::from(e),
-        causa: cause,
+        cause,
     }
 }
 

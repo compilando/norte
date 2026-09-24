@@ -86,15 +86,15 @@ impl PackFormat {
 pub enum PackError {
     /// The name doesn't fit the format (zip carries it in 16 bits).
     #[error("entry name does not fit the format")]
-    Nombre,
+    Name,
     /// Called out of order: data with no entry open, two entries at once,
     /// closing twice.
     #[error("archive writer used out of order")]
-    Estado,
+    State,
     /// The delivered bytes don't match the announced size (tar carries it
     /// in the header, BEFORE the data).
     #[error("entry size does not match the bytes written")]
-    Tamano,
+    Size,
     /// The compressor failed.
     #[error("compressor failed")]
     Io,
@@ -281,12 +281,12 @@ mod tests {
     fn the_order_of_calls_is_checked() {
         for f in [PackFormat::Zip, PackFormat::Tar, PackFormat::TarGz] {
             let mut w = ArchiveWriter::new(f, 6);
-            assert_eq!(w.data(b"x"), Err(PackError::Estado), "{f:?}");
-            assert_eq!(w.end(), Err(PackError::Estado), "{f:?}");
+            assert_eq!(w.data(b"x"), Err(PackError::State), "{f:?}");
+            assert_eq!(w.end(), Err(PackError::State), "{f:?}");
             w.begin(&PackEntry::file(b"a".to_vec(), 1)).expect("opens");
             assert_eq!(
                 w.begin(&PackEntry::file(b"b".to_vec(), 1)),
-                Err(PackError::Estado),
+                Err(PackError::State),
                 "{f:?}: two entries at once, no"
             );
         }
@@ -299,8 +299,8 @@ mod tests {
     fn tar_does_not_let_the_size_lie() {
         let mut w = ArchiveWriter::new(PackFormat::Tar, 0);
         w.begin(&PackEntry::file(b"a".to_vec(), 4)).expect("opens");
-        assert_eq!(w.data(b"12345"), Err(PackError::Tamano), "too much");
+        assert_eq!(w.data(b"12345"), Err(PackError::Size), "too much");
         w.data(b"123").expect("too little goes in");
-        assert_eq!(w.end(), Err(PackError::Tamano), "and it shows at close");
+        assert_eq!(w.end(), Err(PackError::Size), "and it shows at close");
     }
 }

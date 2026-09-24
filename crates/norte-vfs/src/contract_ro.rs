@@ -24,7 +24,7 @@
 /// ```text
 /// /docs/hello.txt      → b"hola norte\n"
 /// /docs/sub/nested.bin → b"\x00\x01\x02\xff"
-/// /vacio.txt           → b""  (empty file)
+/// /empty.txt           → b""  (empty file)
 /// /hostile/<name>      → content = the name's bytes  (for every
 ///                        hostile_name)
 /// ```

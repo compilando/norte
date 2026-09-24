@@ -818,17 +818,17 @@ impl History {
 /// while the window walked back its trail.
 ///
 /// ```
-/// use norte_frontend::nav::regreso_tras_desconectar;
+/// use norte_frontend::nav::regreso_after_disconnect;
 /// use norte_proto::VPath;
 /// let vp = |s: &str| VPath::parse(s).expect("wire");
 /// let trail = [vp("file:///home/o"), vp("sftp://srv/a")];
 /// assert_eq!(
-///     regreso_tras_desconectar(&vp("sftp://srv/a"), &trail),
+///     regreso_after_disconnect(&vp("sftp://srv/a"), &trail),
 ///     Some(vp("file:///home/o")),
 /// );
 /// ```
 #[must_use]
-pub fn regreso_tras_desconectar(closed: &VPath, trail: &[VPath]) -> Option<VPath> {
+pub fn regreso_after_disconnect(closed: &VPath, trail: &[VPath]) -> Option<VPath> {
     let is_same_session = |p: &VPath| {
         session_scheme(p.scheme()) == session_scheme(closed.scheme())
             && p.authority() == closed.authority()
@@ -871,7 +871,7 @@ fn session_scheme(scheme: &str) -> &str {
 /// the SAME navigation the TOFU interrupted, and the lib cannot refer to a
 /// type declared in `main.rs`.
 // TODO(translation): review — the paragraph above ends abruptly and the doc
-// comment for `destino_en_espejo` appears to have been merged into this one
+// comment for `mirrored_destination` appears to have been merged into this one
 // in the original Spanish (a stale merge, same class of issue as modal.rs);
 // translated as-is, without restructuring.
 /// Where the OTHER pane has to go when the navigation is mirrored, or `None`
@@ -899,20 +899,20 @@ fn session_scheme(scheme: &str) -> &str {
 /// being looked at, so there it does navigate.
 ///
 /// ```
-/// use norte_frontend::nav::destino_en_espejo;
+/// use norte_frontend::nav::mirrored_destination;
 /// use norte_proto::VPath;
 ///
-/// let home = VPath::parse("mem:///casa").unwrap();
-/// let docs = VPath::parse("mem:///casa/docs").unwrap();
+/// let home = VPath::parse("mem:///home").unwrap();
+/// let docs = VPath::parse("mem:///home/docs").unwrap();
 /// // The other pane is somewhere else: it is sent to the destination.
-/// assert_eq!(destino_en_espejo(&docs, &home, false), Some(docs.clone()));
+/// assert_eq!(mirrored_destination(&docs, &home, false), Some(docs.clone()));
 /// // Already there: it does not get re-listed for nothing.
-/// assert_eq!(destino_en_espejo(&docs, &docs, false), None);
+/// assert_eq!(mirrored_destination(&docs, &docs, false), None);
 /// // Unless what it shows is search results, which are not a location.
-/// assert_eq!(destino_en_espejo(&docs, &docs, true), Some(docs));
+/// assert_eq!(mirrored_destination(&docs, &docs, true), Some(docs));
 /// ```
 #[must_use]
-pub fn destino_en_espejo(
+pub fn mirrored_destination(
     dest: &norte_proto::VPath,
     other_dir: &norte_proto::VPath,
     other_is_virtual: bool,
@@ -951,7 +951,7 @@ pub enum Trail {
     /// It exists as a variant and not as a `Record` that does not matter
     /// because both frontends have to do the SAME thing: the terminal seeds
     /// by building the pane from scratch, with no trail; the window goes
-    /// through its `navegar_hueco`, which records. With no way to say "this
+    /// through its `navigate_slot`, which records. With no way to say "this
     /// is not a step", the two surfaces ended up with different histories
     /// (ADR 0077).
     Seed,
@@ -1018,7 +1018,7 @@ impl TrailStep {
 /// ```
 /// use norte_proto::{Entry, EntryKind, VPath};
 /// let zip = Entry {
-///     path: VPath::parse("file:///casa/cosas.zip").unwrap(),
+///     path: VPath::parse("file:///home/cosas.zip").unwrap(),
 ///     kind: EntryKind::File,
 ///     size: None,
 ///     mtime_ms: None,
@@ -1027,7 +1027,7 @@ impl TrailStep {
 /// // A container is navigated from inside…
 /// assert!(norte_frontend::nav::enter_target(&zip).is_some());
 /// // …and a normal file is not navigated: Enter opens it.
-/// let txt = Entry { path: VPath::parse("file:///casa/a.txt").unwrap(), ..zip };
+/// let txt = Entry { path: VPath::parse("file:///home/a.txt").unwrap(), ..zip };
 /// assert!(norte_frontend::nav::enter_target(&txt).is_none());
 /// ```
 #[must_use]
@@ -1178,16 +1178,16 @@ pub fn parse_size(s: &str) -> Option<u64> {
 /// in `.001` or if what is left is not a legal name.
 ///
 /// ```
-/// use norte_frontend::nav::base_de_trozos;
+/// use norte_frontend::nav::chunk_base;
 /// assert_eq!(
-///     base_de_trozos(b"pelicula.mkv.001").map(|s| s.as_bytes().to_vec()),
+///     chunk_base(b"pelicula.mkv.001").map(|s| s.as_bytes().to_vec()),
 ///     Some(b"pelicula.mkv".to_vec())
 /// );
 /// // From another chunk, no: it would join half a thing.
-/// assert!(base_de_trozos(b"pelicula.mkv.007").is_none());
+/// assert!(chunk_base(b"pelicula.mkv.007").is_none());
 /// ```
 #[must_use]
-pub fn base_de_trozos(name: &[u8]) -> Option<norte_proto::Segment> {
+pub fn chunk_base(name: &[u8]) -> Option<norte_proto::Segment> {
     let base = name
         .len()
         .checked_sub(4)
@@ -1375,7 +1375,7 @@ mod history_tests {
     fn the_return_skips_everything_from_the_closed_machine() {
         let trail = [vp("file:///home/o"), vp("sftp://srv/a"), vp("sftp://srv/b")];
         assert_eq!(
-            regreso_tras_desconectar(&vp("sftp://srv/b"), &trail),
+            regreso_after_disconnect(&vp("sftp://srv/b"), &trail),
             Some(vp("file:///home/o")),
         );
     }
@@ -1394,13 +1394,13 @@ mod history_tests {
             vp("sftp://srv/a"),
         ];
         assert_eq!(
-            regreso_tras_desconectar(&vp("sftp://srv/b"), &trail),
+            regreso_after_disconnect(&vp("sftp://srv/b"), &trail),
             Some(vp("file:///home/o")),
         );
         // And the other way round: closing from INSIDE the archive does not
         // return to the outside of the same machine either.
         assert_eq!(
-            regreso_tras_desconectar(&vp("zip+sftp://srv/x.zip%21/dentro"), &trail),
+            regreso_after_disconnect(&vp("zip+sftp://srv/x.zip%21/dentro"), &trail),
             Some(vp("file:///home/o")),
         );
     }
@@ -1412,7 +1412,7 @@ mod history_tests {
     fn another_server_of_the_same_scheme_is_valid() {
         let trail = [vp("sftp://otro/x"), vp("sftp://srv/a")];
         assert_eq!(
-            regreso_tras_desconectar(&vp("sftp://srv/a"), &trail),
+            regreso_after_disconnect(&vp("sftp://srv/a"), &trail),
             Some(vp("sftp://otro/x")),
         );
     }
@@ -1421,10 +1421,10 @@ mod history_tests {
     /// has nowhere to go back to: the caller decides, and falls back home.
     #[test]
     fn with_nothing_foreign_in_the_trail_there_is_no_return() {
-        assert_eq!(regreso_tras_desconectar(&vp("sftp://srv/a"), &[]), None);
+        assert_eq!(regreso_after_disconnect(&vp("sftp://srv/a"), &[]), None);
         let all_its_own = [vp("sftp://srv/a"), vp("sftp://srv/b")];
         assert_eq!(
-            regreso_tras_desconectar(&vp("sftp://srv/b"), &all_its_own),
+            regreso_after_disconnect(&vp("sftp://srv/b"), &all_its_own),
             None,
         );
     }

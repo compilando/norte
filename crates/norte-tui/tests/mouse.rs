@@ -35,14 +35,14 @@ const H: u16 = 12;
 /// one click test touched.
 const FILA0: u16 = 4;
 /// How many listing rows fit. Two fewer: the two bars have eaten them.
-const FILAS: u16 = 6;
+const ROWS: u16 = 6;
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
 }
 
 /// `n` entries `f0..f{n-1}` under `dir`.
-fn entradas(dir: &VPath, n: usize) -> Vec<Entry> {
+fn entries(dir: &VPath, n: usize) -> Vec<Entry> {
     (0..n)
         .map(|i| Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -61,10 +61,10 @@ fn entradas(dir: &VPath, n: usize) -> Vec<Entry> {
 fn app_pintada(n: usize) -> App {
     let dir = vp("file:///casa");
     let mut app = App::new(
-        Pane::new(dir.clone(), entradas(&dir, n)),
-        Pane::new(dir.clone(), entradas(&dir, n)),
+        Pane::new(dir.clone(), entries(&dir, n)),
+        Pane::new(dir.clone(), entries(&dir, n)),
     );
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     app
 }
 
@@ -77,13 +77,13 @@ fn app_pintada(n: usize) -> App {
 /// everything would stay green and the mouse would mark the neighboring
 /// file — which is exactly the bug the geometry exists to not have. The
 /// tests that resolve an index CONTRAST it against that row's text.
-fn pintar(app: &mut App) -> Vec<String> {
-    pintar_en(app, W, H)
+fn paint(app: &mut App) -> Vec<String> {
+    paint_at(app, W, H)
 }
 
-/// Like [`pintar`] over a terminal of a different size: with a side panel
+/// Like [`paint`] over a terminal of a different size: with a side panel
 /// open, 60×12 is not enough to place it and the layout leaves it out.
-fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
+fn paint_at(app: &mut App, w: u16, h: u16) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("test terminal");
     // The SAME order as the run loop: reconcile the window, paint, return
     // the geometry. Without the first step it would paint a window nobody
@@ -124,7 +124,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
 ///
 /// Compares against the entry's name, not against a literal: `Pane::new`
 /// SORTS, so `entries[13]` is not "f13".
-fn assert_fila(lines: &[String], app: &App, row: u16, index: usize) {
+fn assert_row(lines: &[String], app: &App, row: u16, index: usize) {
     let entry = &app.panes[0].entries()[index];
     let name = String::from_utf8_lossy(
         entry
@@ -157,14 +157,14 @@ fn ev_con(kind: MouseEventKind, col: u16, row: u16, modifiers: KeyModifiers) -> 
 }
 
 /// The border that OPENS the left pane's second column, on an already
-/// painted terminal of `ancho` columns: `(cell, header row, id, width)`.
+/// painted terminal of `width` columns: `(cell, header row, id, width)`.
 ///
 /// Comes from the SAME layout that paints the header, over the geometry's
 /// interior width: a border calculated with different arithmetic would pass
 /// with the layout broken.
-fn borde_de_la_segunda_columna(app: &App) -> (u16, u16, norte_frontend::columns::ColumnId, u16) {
+fn edge_of_the_second_column(app: &App) -> (u16, u16, norte_frontend::columns::ColumnId, u16) {
     let g = &app.mouse.geometry().expect("there is geometry")[0];
-    let (x0, interior, cabecera) = (g.x + 1, g.width - 2, g.first_list_row - 1);
+    let (x0, interior, header) = (g.x + 1, g.width - 2, g.first_list_row - 1);
     let scheme = app.panes[0].dir().scheme();
     let cols = norte_frontend::columns::column_widths(
         &app.columns,
@@ -176,11 +176,11 @@ fn borde_de_la_segunda_columna(app: &App) -> (u16, u16, norte_frontend::columns:
         cols.len() >= 2,
         "there are more columns than the name: {cols:?}"
     );
-    (x0 + cols[0].1, cabecera, cols[1].0.clone(), cols[1].1)
+    (x0 + cols[0].1, header, cols[1].0.clone(), cols[1].1)
 }
 
 /// The width the layout gives RIGHT NOW to column `id` of the left pane.
-fn ancho_de(app: &App, id: &norte_frontend::columns::ColumnId) -> u16 {
+fn width_of(app: &App, id: &norte_frontend::columns::ColumnId) -> u16 {
     let g = &app.mouse.geometry().expect("there is geometry")[0];
     let scheme = app.panes[0].dir().scheme();
     norte_frontend::columns::column_widths(
@@ -199,35 +199,35 @@ fn ancho_de(app: &App, id: &norte_frontend::columns::ColumnId) -> u16 {
 /// requests saving it: the width persists on its own (the same as the
 /// window already did).
 #[test]
-fn arrastrar_el_borde_de_una_columna_cambia_su_ancho_y_pide_guardarlo() {
+fn dragging_a_column_edge_changes_its_width_and_asks_to_save_it() {
     let dir = vp("file:///casa");
     let mut app = App::new(
-        Pane::new(dir.clone(), entradas(&dir, 3)),
-        Pane::new(dir.clone(), entradas(&dir, 3)),
+        Pane::new(dir.clone(), entries(&dir, 3)),
+        Pane::new(dir.clone(), entries(&dir, 3)),
     );
-    let _ = pintar_en(&mut app, 120, H);
-    let (borde, cabecera, id, ancho) = borde_de_la_segunda_columna(&app);
+    let _ = paint_at(&mut app, 120, H);
+    let (edge, header, id, width) = edge_of_the_second_column(&app);
 
     assert_eq!(
-        mouse::handle(&mut app, ev(ABAJO, borde, cabecera)),
+        mouse::handle(&mut app, ev(DOWN, edge, header)),
         After::Nothing
     );
     assert_eq!(
-        mouse::handle(&mut app, ev(ARRASTRE, borde - 3, cabecera)),
+        mouse::handle(&mut app, ev(DRAG, edge - 3, header)),
         After::Nothing
     );
     assert_eq!(
-        ancho_de(&app, &id),
-        ancho + 3,
+        width_of(&app, &id),
+        width + 3,
         "the border follows the pointer"
     );
     assert_eq!(
-        mouse::handle(&mut app, ev(ARRIBA, borde - 3, cabecera)),
+        mouse::handle(&mut app, ev(UP, edge - 3, header)),
         After::ColumnWidth
     );
     assert_eq!(
         app.mouse.take_column_width(),
-        Some((id.to_string(), ancho + 3))
+        Some((id.to_string(), width + 3))
     );
     assert_eq!(
         app.mouse.take_column_width(),
@@ -240,94 +240,94 @@ fn arrastrar_el_borde_de_una_columna_cambia_su_ancho_y_pide_guardarlo() {
 /// right before the separator would change the width by one and save it
 /// without the reader having moved anything.
 #[test]
-fn un_clic_en_el_borde_de_una_columna_no_guarda_nada() {
+fn a_click_on_a_columns_border_saves_nothing() {
     let dir = vp("file:///casa");
     let mut app = App::new(
-        Pane::new(dir.clone(), entradas(&dir, 3)),
-        Pane::new(dir.clone(), entradas(&dir, 3)),
+        Pane::new(dir.clone(), entries(&dir, 3)),
+        Pane::new(dir.clone(), entries(&dir, 3)),
     );
-    let _ = pintar_en(&mut app, 120, H);
-    let (borde, cabecera, id, ancho) = borde_de_la_segunda_columna(&app);
-    mouse::handle(&mut app, ev(ABAJO, borde - 1, cabecera));
+    let _ = paint_at(&mut app, 120, H);
+    let (edge, header, id, width) = edge_of_the_second_column(&app);
+    mouse::handle(&mut app, ev(DOWN, edge - 1, header));
     assert_eq!(
-        mouse::handle(&mut app, ev(ARRIBA, borde - 1, cabecera)),
+        mouse::handle(&mut app, ev(UP, edge - 1, header)),
         After::Nothing
     );
     assert_eq!(app.mouse.take_column_width(), None);
-    assert_eq!(ancho_de(&app, &id), ancho);
+    assert_eq!(width_of(&app, &id), width);
 }
 
 /// Grabbing the cell BEFORE the separator does not jump the width on the
 /// first move: it is measured against where it was grabbed, not against the
 /// border.
 #[test]
-fn agarrar_antes_del_separador_no_salta_una_celda() {
+fn grabbing_before_the_separator_does_not_skip_a_cell() {
     let dir = vp("file:///casa");
     let mut app = App::new(
-        Pane::new(dir.clone(), entradas(&dir, 3)),
-        Pane::new(dir.clone(), entradas(&dir, 3)),
+        Pane::new(dir.clone(), entries(&dir, 3)),
+        Pane::new(dir.clone(), entries(&dir, 3)),
     );
-    let _ = pintar_en(&mut app, 120, H);
-    let (borde, cabecera, id, ancho) = borde_de_la_segunda_columna(&app);
-    mouse::handle(&mut app, ev(ABAJO, borde - 1, cabecera));
-    mouse::handle(&mut app, ev(ARRASTRE, borde - 3, cabecera));
+    let _ = paint_at(&mut app, 120, H);
+    let (edge, header, id, width) = edge_of_the_second_column(&app);
+    mouse::handle(&mut app, ev(DOWN, edge - 1, header));
+    mouse::handle(&mut app, ev(DRAG, edge - 3, header));
     assert_eq!(
-        ancho_de(&app, &id),
-        ancho + 2,
+        width_of(&app, &id),
+        width + 2,
         "two cells to the left, two more"
     );
 }
 
 /// Left button down.
-const ABAJO: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
+const DOWN: MouseEventKind = MouseEventKind::Down(MouseButton::Left);
 /// Left button up.
-const ARRIBA: MouseEventKind = MouseEventKind::Up(MouseButton::Left);
+const UP: MouseEventKind = MouseEventKind::Up(MouseButton::Left);
 /// Drag with the left button held.
-const ARRASTRE: MouseEventKind = MouseEventKind::Drag(MouseButton::Left);
+const DRAG: MouseEventKind = MouseEventKind::Drag(MouseButton::Left);
 
 /// A DETACHED window carries its indicator in the status bar, and clicking it
 /// requests the explanation: the run loop opens help on the panels page. The
 /// zone comes from the PAINTED frame, so it is checked against the line the
 /// reader has in front of them and not against parallel arithmetic.
 #[test]
-fn pulsar_el_indicador_de_sesion_pide_la_ayuda() {
+fn pressing_the_session_indicator_opens_help() {
     let mut app = app_pintada(3);
     app.session.detached = true;
-    let lines = pintar(&mut app);
+    let lines = paint(&mut app);
     // The test backend quotes each line: the first cell is byte 1, not 0.
-    let barra = lines[usize::from(H - 1)].trim_start_matches('"');
+    let bar = lines[usize::from(H - 1)].trim_start_matches('"');
     let badge = app.session_banner().expect("there is an indicator");
-    assert!(barra.contains(&badge), "the bar paints it: {barra}");
-    let x0 = u16::try_from(barra.find(&badge).expect("it is there")).expect("it fits");
+    assert!(bar.contains(&badge), "the bar paints it: {bar}");
+    let x0 = u16::try_from(bar.find(&badge).expect("it is there")).expect("it fits");
     // The first character's column: on this line everything before it is
     // ASCII, so bytes and cells coincide.
     assert_eq!(
-        mouse::handle(&mut app, ev(ABAJO, x0, H - 1)),
+        mouse::handle(&mut app, ev(DOWN, x0, H - 1)),
         After::SessionHelp,
         "clicking the indicator requests help"
     );
     // And to its left, no: the rest of the bar is not clickable.
     assert_eq!(
-        mouse::handle(&mut app, ev(ABAJO, x0.saturating_sub(1), H - 1)),
+        mouse::handle(&mut app, ev(DOWN, x0.saturating_sub(1), H - 1)),
         After::Nothing
     );
     // The page exists in the corpus, in both languages: the constant cannot
     // point at a deleted page without this turning red.
-    for (lang, sesion) in [
+    for (lang, session) in [
         (norte_help::Lang::Es, "sesión"),
         (norte_help::Lang::En, "session"),
     ] {
-        let pagina = norte_help::topic(lang, mouse::SESSION_HELP_TOPIC)
+        let page = norte_help::topic(lang, mouse::SESSION_HELP_TOPIC)
             .unwrap_or_else(|| panic!("page {} exists in {lang:?}", mouse::SESSION_HELP_TOPIC));
         // And it TALKS about the session: existing was not enough. When
         // `panes` was split, the constant kept pointing at a real page that
         // no longer covered it.
-        let habla = pagina.blocks.iter().any(|b| {
-            matches!(b, norte_help::Block::Heading { text, .. } if text.to_lowercase().contains(sesion))
+        let speaks = page.blocks.iter().any(|b| {
+            matches!(b, norte_help::Block::Heading { text, .. } if text.to_lowercase().contains(session))
         });
         assert!(
-            habla,
-            "{lang:?}: page {} has no section about the {sesion}",
+            speaks,
+            "{lang:?}: page {} has no section about the {session}",
             mouse::SESSION_HELP_TOPIC
         );
     }
@@ -344,20 +344,17 @@ fn pulsar_el_indicador_de_sesion_pide_la_ayuda() {
     // The owner has no indicator, and the same cell does nothing.
     app.help = None;
     app.session.detached = false;
-    let _ = pintar(&mut app);
-    assert_eq!(
-        mouse::handle(&mut app, ev(ABAJO, x0, H - 1)),
-        After::Nothing
-    );
+    let _ = paint(&mut app);
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, x0, H - 1)), After::Nothing);
 }
 
 #[test]
-fn el_layout_de_estos_tests_es_el_que_se_pinta() {
+fn the_layout_of_these_tests_is_the_one_that_gets_painted() {
     // Anchor for the numbers above: if the pane gains or loses chrome, THIS
     // test fails with a clear message, and not the next six with confusing
     // arithmetic.
     let mut app = app_pintada(5);
-    let lines = pintar(&mut app);
+    let lines = paint(&mut app);
     let geom = app.mouse.geometry().expect("there is geometry");
     let (left, right) = (geom[0], geom[1]);
     // `y = 2` and two fewer rows of height: the two pinned bars keep rows 0
@@ -370,16 +367,16 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
         (30, 2, 30, 9)
     );
     assert_eq!(left.first_list_row, FILA0, "top border + header");
-    assert_eq!(left.list_rows, FILAS, "interior minus the header");
+    assert_eq!(left.list_rows, ROWS, "interior minus the header");
     assert_eq!(left.offset, 0, "cursor on the first: no scroll");
     // And what is really PAINTED on those rows. The sort indicator (`▲`)
     // instead of the column's label: the label is translated and these
     // tests do not fix a language.
-    let cabecera = usize::from(FILA0) - 1;
+    let header = usize::from(FILA0) - 1;
     assert!(
-        lines[cabecera].contains('▲'),
-        "row {cabecera} = column header: {}",
-        lines[cabecera]
+        lines[header].contains('▲'),
+        "row {header} = column header: {}",
+        lines[header]
     );
     // And row 0 is the menu bar, which is what pushed the header down there.
     // Checked by its SHAPE and not by a label: these tests do not fix a
@@ -389,11 +386,11 @@ fn el_layout_de_estos_tests_es_el_que_se_pinta() {
         "row 0 = menu bar (text, no panel borders): {}",
         lines[0]
     );
-    assert_fila(&lines, &app, FILA0, 0);
+    assert_row(&lines, &app, FILA0, 0);
 }
 
 #[test]
-fn un_click_en_la_primera_fila_resuelve_la_primera_entrada() {
+fn a_click_on_the_first_row_resolves_the_first_entry() {
     let app = app_pintada(5);
     let hit = mouse::hit_test(&app, 5, FILA0).expect("inside the left pane");
     assert_eq!(hit.pane, 0);
@@ -401,7 +398,7 @@ fn un_click_en_la_primera_fila_resuelve_la_primera_entrada() {
 }
 
 #[test]
-fn un_click_en_la_ultima_entrada_resuelve_esa_y_no_otra() {
+fn a_click_on_the_last_entry_resolves_that_one_and_no_other() {
     let app = app_pintada(5);
     let hit = mouse::hit_test(&app, 5, FILA0 + 4).expect("inside the pane");
     assert_eq!(hit.index, Some(4), "fifth painted row = fifth entry");
@@ -411,7 +408,7 @@ fn un_click_en_la_ultima_entrada_resuelve_esa_y_no_otra() {
 /// Without this, sorting by a column with the mouse (which is what the user
 /// is going to try there) would also move the cursor to the first entry.
 #[test]
-fn la_cabecera_de_columnas_no_es_ninguna_fila() {
+fn the_column_header_is_not_any_row() {
     let app = app_pintada(5);
     // Relative to `FILA0` and not a bare number: the header is the row right
     // above the listing's first one, and tying it to the constant makes
@@ -424,7 +421,7 @@ fn la_cabecera_de_columnas_no_es_ninguna_fila() {
 /// The top border (where the title with the path goes) and the bottom one
 /// (where the quick search input paints) are not rows either.
 #[test]
-fn los_bordes_del_pane_no_son_filas() {
+fn the_panes_borders_are_not_rows() {
     let app = app_pintada(5);
     // Row 0 is no longer the pane's border: it is the MENU BAR, and belongs
     // to no panel — same as the status bar below. A click there cannot
@@ -433,7 +430,7 @@ fn los_bordes_del_pane_no_son_filas() {
         mouse::hit_test(&app, 5, 0).is_none(),
         "row 0 is the menu bar, not a pane"
     );
-    for row in [FILA0 - 2, FILA0 + FILAS] {
+    for row in [FILA0 - 2, FILA0 + ROWS] {
         let hit = mouse::hit_test(&app, 5, row).expect("inside the block");
         assert_eq!(hit.index, None, "row {row} is a border");
     }
@@ -450,10 +447,10 @@ fn los_bordes_del_pane_no_son_filas() {
 /// did nothing — a bar that exists so you can find the menu and on which the
 /// click is inert.
 #[test]
-fn un_click_en_la_barra_de_menu_la_abre() {
+fn a_click_on_the_menu_bar_opens_it() {
     let mut app = app_pintada(5);
     assert!(app.menu.is_none(), "starts closed");
-    let _ = mouse::handle(&mut app, ev(ABAJO, 2, 0));
+    let _ = mouse::handle(&mut app, ev(DOWN, 2, 0));
     assert!(
         app.menu.is_some(),
         "clicking the first title opens the menu"
@@ -467,7 +464,7 @@ fn un_click_en_la_barra_de_menu_la_abre() {
 /// time. Closing goes through a single door (`App::close_menu`) precisely so
 /// the five places that close it all point at the same thing.
 #[test]
-fn el_menu_se_reabre_por_donde_iba() {
+fn the_menu_reopens_where_it_left_off() {
     let mut app = app_pintada(5);
     let mut m = norte_frontend::menu::MenuState::new();
     m.open(3);
@@ -475,7 +472,7 @@ fn el_menu_se_reabre_por_donde_iba() {
     app.close_menu();
     assert!(app.menu.is_none(), "closed");
 
-    app.menu = Some(norte_frontend::menu::MenuState::reopen_at(app.menu_ultimo));
+    app.menu = Some(norte_frontend::menu::MenuState::reopen_at(app.menu_last));
     assert_eq!(
         app.menu.as_ref().map(norte_frontend::menu::MenuState::menu),
         Some(3),
@@ -495,12 +492,12 @@ fn el_menu_se_reabre_por_donde_iba() {
 /// click landed on a button. The test stayed green — `menu.is_none()` still
 /// held — while its stated invariant was already false.
 #[test]
-fn sin_barras_fijadas_un_click_arriba_no_abre_nada() {
+fn without_pinned_bars_a_click_above_opens_nothing() {
     let mut app = app_pintada(5);
     app.menu_bar = false;
     app.panel_bar = false;
-    let _ = pintar(&mut app);
-    let _ = mouse::handle(&mut app, ev(ABAJO, 2, 0));
+    let _ = paint(&mut app);
+    let _ = mouse::handle(&mut app, ev(DOWN, 2, 0));
     assert!(app.menu.is_none());
     assert!(app.pending_panel_command.is_none());
 }
@@ -508,11 +505,11 @@ fn sin_barras_fijadas_un_click_arriba_no_abre_nada() {
 /// Without the menu one but WITH the panel one, row 0 belongs to the panel
 /// bar: it moves up and stays clickable.
 #[test]
-fn sin_barra_de_menus_la_de_paneles_se_muda_a_la_fila_cero() {
+fn without_a_menu_bar_the_panes_bar_moves_to_row_zero() {
     let mut app = app_pintada(5);
     app.menu_bar = false;
-    let _ = pintar(&mut app);
-    let _ = mouse::handle(&mut app, ev(ABAJO, 1, 0));
+    let _ = paint(&mut app);
+    let _ = mouse::handle(&mut app, ev(DOWN, 1, 0));
     assert_eq!(
         app.pending_panel_command.as_deref(),
         Some("layout.places"),
@@ -530,36 +527,36 @@ fn sin_barra_de_menus_la_de_paneles_se_muda_a_la_fila_cero() {
 /// the sixth `layout.log`. Both EXTREMES are checked and the cell right
 /// after the last one, which is where a miscalculated `x1` shows.
 #[test]
-fn cada_boton_de_la_barra_cae_en_su_sitio() {
+fn every_bar_button_falls_into_its_place() {
     let mut app = app_pintada(5);
     // This test's columns are the LETTER ones (three cells per button); with
     // names, the zones follow what is painted and `theme_render` checks it.
     app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
-    let _ = pintar(&mut app);
-    let pulsa = |app: &mut norte_tui::app::App, col: u16| {
+    let _ = paint(&mut app);
+    let press = |app: &mut norte_tui::app::App, col: u16| {
         app.pending_panel_command = None;
-        let _ = mouse::handle(app, ev(ABAJO, col, 1));
+        let _ = mouse::handle(app, ev(DOWN, col, 1));
         app.pending_panel_command.clone()
     };
-    assert_eq!(pulsa(&mut app, 1).as_deref(), Some("layout.places"));
-    assert_eq!(pulsa(&mut app, 16).as_deref(), Some("layout.log"));
+    assert_eq!(press(&mut app, 1).as_deref(), Some("layout.places"));
+    assert_eq!(press(&mut app, 16).as_deref(), Some("layout.log"));
     assert_eq!(
-        pulsa(&mut app, 19).as_deref(),
+        press(&mut app, 19).as_deref(),
         Some("layout.disk-map"),
         "the disk map (phase 4) landed after the log"
     );
     assert_eq!(
-        pulsa(&mut app, 22).as_deref(),
+        press(&mut app, 22).as_deref(),
         Some("layout.timeline"),
         "and the timeline (phase 7) after the map, by registration order"
     );
     assert_eq!(
-        pulsa(&mut app, 25).as_deref(),
+        press(&mut app, 25).as_deref(),
         Some("layout.terminal"),
         "and the terminal (#362) after the timeline, by registration order"
     );
     assert_eq!(
-        pulsa(&mut app, 27),
+        press(&mut app, 27),
         None,
         "past the last one there is no button"
     );
@@ -573,33 +570,33 @@ fn cada_boton_de_la_barra_cae_en_su_sitio() {
 /// still thought the bar was a row, clicking row 1 would open places with
 /// the listing underneath.
 #[test]
-fn en_columna_cada_boton_es_una_fila_del_borde_izquierdo() {
+fn in_column_mode_each_button_is_a_row_on_the_left_edge() {
     let mut app = app_pintada(5);
     app.chrome.panel_bar_position = Some(norte_config::PanelBarPosition::Left);
-    let lineas = pintar(&mut app);
-    let pulsa = |app: &mut norte_tui::app::App, fila: u16| {
+    let lines = paint(&mut app);
+    let press = |app: &mut norte_tui::app::App, row: u16| {
         app.pending_panel_command = None;
-        let _ = mouse::handle(app, ev(ABAJO, 1, fila));
+        let _ = mouse::handle(app, ev(DOWN, 1, row));
         app.pending_panel_command.clone()
     };
-    assert_eq!(pulsa(&mut app, 1).as_deref(), Some("layout.places"));
-    assert_eq!(pulsa(&mut app, 6).as_deref(), Some("layout.log"));
+    assert_eq!(press(&mut app, 1).as_deref(), Some("layout.places"));
+    assert_eq!(press(&mut app, 6).as_deref(), Some("layout.log"));
     // What is painted says the same: one ICON per row (ADR 0140), on column
     // 1 (character 2: `TestBackend` puts the line in quotes).
-    let celda = |lineas: &[String], f: usize| {
-        lineas[f]
+    let cell = |lines: &[String], f: usize| {
+        lines[f]
             .chars()
             .nth(2)
             .expect("there is column 1")
             .to_string()
     };
-    let icono = |k| {
+    let icon = |k| {
         norte_frontend::panelbar::icon(k, norte_frontend::panelbar::IconSet::Unicode)
             .expect("icon")
             .to_owned()
     };
-    assert_eq!(celda(&lineas, 1), icono("places"), "{:?}", lineas[1]);
-    assert_eq!(celda(&lineas, 6), icono("log"), "{:?}", lineas[6]);
+    assert_eq!(cell(&lines, 1), icon("places"), "{:?}", lines[1]);
+    assert_eq!(cell(&lines, 6), icon("log"), "{:?}", lines[6]);
     // And the listing moved with it: its first row is now 3, starting at
     // column 3; the rail's column belongs to no pane.
     assert!(mouse::hit_test(&app, 5, FILA0 - 1).is_some());
@@ -607,94 +604,94 @@ fn en_columna_cada_boton_es_una_fila_del_borde_izquierdo() {
 
     // With `letters`, the usual letters.
     app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
-    let lineas = pintar(&mut app);
+    let lines = paint(&mut app);
     assert!(
-        celda(&lineas, 1).chars().all(char::is_alphabetic),
+        cell(&lines, 1).chars().all(char::is_alphabetic),
         "{:?}",
-        lineas[1]
+        lines[1]
     );
 
     // With room to spare, AIR between icons, like VS Code: the first one a
     // row lower and a blank one between two. The mouse measures the same.
     app.chrome.panel_bar_style = None;
-    let lineas = pintar_en(&mut app, 80, 40);
-    assert_eq!(celda(&lineas, 2), icono("places"), "{:?}", lineas[2]);
-    assert_eq!(celda(&lineas, 3), " ", "air row: {:?}", lineas[3]);
-    assert_eq!(celda(&lineas, 4), icono("viewer"), "{:?}", lineas[4]);
-    assert_eq!(pulsa(&mut app, 2).as_deref(), Some("layout.places"));
-    assert_eq!(pulsa(&mut app, 3), None, "air is not a button");
-    assert_eq!(pulsa(&mut app, 4).as_deref(), Some("layout.preview"));
+    let lines = paint_at(&mut app, 80, 40);
+    assert_eq!(cell(&lines, 2), icon("places"), "{:?}", lines[2]);
+    assert_eq!(cell(&lines, 3), " ", "air row: {:?}", lines[3]);
+    assert_eq!(cell(&lines, 4), icon("viewer"), "{:?}", lines[4]);
+    assert_eq!(press(&mut app, 2).as_deref(), Some("layout.places"));
+    assert_eq!(press(&mut app, 3), None, "air is not a button");
+    assert_eq!(press(&mut app, 4).as_deref(), Some("layout.preview"));
 }
 
 /// The layout buttons (ADR 0133) go on the menu bar's right edge and run
 /// their order; on a terminal that does not let them fit whole next to the
 /// titles, there is none to click.
 #[test]
-fn los_botones_de_disposicion_caen_en_el_borde_derecho() {
+fn layout_buttons_fall_on_the_right_edge() {
     let mut app = app_pintada(5);
-    let lineas = pintar_en(&mut app, 120, H);
+    let lines = paint_at(&mut app, 120, H);
     // `[#]` is the last one: its three cells are the row 0's last three.
     assert!(
-        lineas[0].trim_end_matches('"').ends_with("[#]"),
+        lines[0].trim_end_matches('"').ends_with("[#]"),
         "{:?}",
-        lineas[0]
+        lines[0]
     );
-    let pulsa = |app: &mut norte_tui::app::App, col: u16| {
+    let press = |app: &mut norte_tui::app::App, col: u16| {
         app.pending_panel_command = None;
-        let _ = mouse::handle(app, ev(ABAJO, col, 0));
+        let _ = mouse::handle(app, ev(DOWN, col, 0));
         app.pending_panel_command.clone()
     };
     // All five at 120 columns: `[|] [-] [=] [/] [#]` starting at 101.
-    assert_eq!(pulsa(&mut app, 119).as_deref(), Some("layout.pick"));
-    assert_eq!(pulsa(&mut app, 101).as_deref(), Some("layout.split-h"));
-    assert_eq!(pulsa(&mut app, 114).as_deref(), Some("layout.flip"));
-    assert_eq!(pulsa(&mut app, 104), None, "the gap between two buttons");
+    assert_eq!(press(&mut app, 119).as_deref(), Some("layout.pick"));
+    assert_eq!(press(&mut app, 101).as_deref(), Some("layout.split-h"));
+    assert_eq!(press(&mut app, 114).as_deref(), Some("layout.flip"));
+    assert_eq!(press(&mut app, 104), None, "the gap between two buttons");
     // With an overlay in front (the review caught it): they neither paint
     // nor click. Painted and dead was the class of BLOCKER the panel bar
     // already had.
     app.open_theme_picker();
-    let lineas = pintar_en(&mut app, 120, H);
-    assert!(!lineas[0].contains("[#]"), "{:?}", lineas[0]);
-    assert_eq!(pulsa(&mut app, 119), None);
+    let lines = paint_at(&mut app, 120, H);
+    assert!(!lines[0].contains("[#]"), "{:?}", lines[0]);
+    assert_eq!(press(&mut app, 119), None);
     app.theme_picker = None;
     // Narrowing, the first to yield is flip, and the usual four stay there
     // (ADR 0138). The exact width depends on the titles' language, so it is
     // searched for.
     let cede = (60..120)
         .rev()
-        .find(|w| !pintar_en(&mut app, *w, H)[0].contains("[/]"))
+        .find(|w| !paint_at(&mut app, *w, H)[0].contains("[/]"))
         .expect("it yields at some width");
-    let lineas = pintar_en(&mut app, cede, H);
-    assert!(lineas[0].contains("[|] [-] [=] [#]"), "{:?}", lineas[0]);
+    let lines = paint_at(&mut app, cede, H);
+    assert!(lines[0].contains("[|] [-] [=] [#]"), "{:?}", lines[0]);
     // At sixty columns the titles keep the spot.
-    let lineas = pintar(&mut app);
-    assert!(!lineas[0].contains("[#]"), "{:?}", lineas[0]);
+    let lines = paint(&mut app);
+    assert!(!lines[0].contains("[#]"), "{:?}", lines[0]);
 }
 
-/// Grabs `desde`'s title and drops it on the bottom half of `sobre`.
-fn soltar_debajo(
+/// Grabs `from`'s title and drops it on the bottom half of `over`.
+fn release_below(
     app: &mut App,
-    desde: norte_frontend::layout::Rect,
-    sobre: norte_frontend::layout::Rect,
+    from: norte_frontend::layout::Rect,
+    over: norte_frontend::layout::Rect,
 ) {
-    let (x, y) = (sobre.x + sobre.width / 2, sobre.y + sobre.height - 2);
-    let _ = mouse::handle(app, ev(ABAJO, desde.x + 4, desde.y));
-    let _ = mouse::handle(app, ev(ARRASTRE, x, y));
-    let _ = mouse::handle(app, ev(ARRIBA, x, y));
+    let (x, y) = (over.x + over.width / 2, over.y + over.height - 2);
+    let _ = mouse::handle(app, ev(DOWN, from.x + 4, from.y));
+    let _ = mouse::handle(app, ev(DRAG, x, y));
+    let _ = mouse::handle(app, ev(UP, x, y));
 }
 
 /// ADR 0138: where stacking two listings would hide one, dropping does
 /// nothing and says so: the panel cannot disappear by being moved.
 #[test]
-fn mover_donde_no_cabe_se_rehusa_y_se_dice() {
+fn moving_where_it_does_not_fit_is_refused_and_reported() {
     let mut app = app_pintada(5);
-    let _ = pintar_en(&mut app, 120, H);
+    let _ = paint_at(&mut app, 120, H);
     let a = app.mouse.slot_rect(app.panes.slot_of(0)).expect("placed");
     let b = app.mouse.slot_rect(app.panes.slot_of(1)).expect("placed");
-    let antes = app.layout.clone();
+    let before = app.layout.clone();
     app.message = None;
-    soltar_debajo(&mut app, a, b);
-    assert_eq!(app.layout, antes, "at {H} rows they do not fit stacked");
+    release_below(&mut app, a, b);
+    assert_eq!(app.layout, before, "at {H} rows they do not fit stacked");
     assert!(app.message.is_some(), "and it says so");
 }
 
@@ -702,87 +699,87 @@ fn mover_donde_no_cabe_se_rehusa_y_se_dice() {
 /// other one's bottom half stacks them; clicking without dragging just
 /// focuses.
 #[test]
-fn arrastrar_el_titulo_mueve_el_panel() {
+fn dragging_the_title_moves_the_pane() {
     let mut app = app_pintada(5);
     // Room to spare: at `H` rows two stacked listings do not fit.
-    let _ = pintar_en(&mut app, 120, 50);
-    let izq = app.panes.slot_of(0);
-    let der = app.panes.slot_of(1);
+    let _ = paint_at(&mut app, 120, 50);
+    let left = app.panes.slot_of(0);
+    let right = app.panes.slot_of(1);
     let rect = |app: &norte_tui::app::App, s| {
         app.mouse
             .slot_rect(s)
             .unwrap_or_else(|| panic!("{s:?} not placed: {:?}", app.layout))
     };
-    let (a, b) = (rect(&app, izq), rect(&app, der));
+    let (a, b) = (rect(&app, left), rect(&app, right));
     assert_eq!(a.y, b.y, "side by side at the start");
-    let antes = app.layout.clone();
+    let before = app.layout.clone();
 
     // A click on the title moves nothing.
-    let _ = mouse::handle(&mut app, ev(ABAJO, a.x + 4, a.y));
-    let _ = mouse::handle(&mut app, ev(ARRIBA, a.x + 4, a.y));
-    assert_eq!(app.layout, antes, "a click is not a drag");
+    let _ = mouse::handle(&mut app, ev(DOWN, a.x + 4, a.y));
+    let _ = mouse::handle(&mut app, ev(UP, a.x + 4, a.y));
+    assert_eq!(app.layout, before, "a click is not a drag");
 
     // Grab, drag to the other one's bottom half: it highlights.
-    let destino_y = b.y + b.height - 2;
-    let destino_x = b.x + b.width / 2;
-    let _ = mouse::handle(&mut app, ev(ABAJO, a.x + 4, a.y));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, destino_x, destino_y));
+    let destination_and = b.y + b.height - 2;
+    let dest_x = b.x + b.width / 2;
+    let _ = mouse::handle(&mut app, ev(DOWN, a.x + 4, a.y));
+    let _ = mouse::handle(&mut app, ev(DRAG, dest_x, destination_and));
     assert!(
         app.mouse.move_target().is_some(),
         "the destination highlights"
     );
-    let _ = mouse::handle(&mut app, ev(ARRIBA, destino_x, destino_y));
+    let _ = mouse::handle(&mut app, ev(UP, dest_x, destination_and));
     assert!(app.mouse.move_target().is_none());
-    let foco = app.focused_slot();
-    let _ = pintar_en(&mut app, 120, 50);
-    let (a, b) = (rect(&app, izq), rect(&app, der));
+    let focus = app.focused_slot();
+    let _ = paint_at(&mut app, 120, 50);
+    let (a, b) = (rect(&app, left), rect(&app, right));
     assert!(a.y > b.y && a.x == b.x, "stacked: {a:?} under {b:?}");
     // Focus stays on its SLOT, even though its position changed.
-    assert_eq!(app.focused_slot(), foco);
+    assert_eq!(app.focused_slot(), focus);
 }
 
 /// ADR 0134: two panels on the same edge share a spot as tabs, and their
 /// slot's first row is the STRIP with both names. Clicking the hidden one
 /// runs its command (which reveals it); the one in front is not a zone.
 #[test]
-fn los_paneles_de_un_borde_se_agrupan_con_su_tira() {
+fn panes_on_one_edge_group_with_their_strip() {
     let mut app = app_pintada(5);
     // Both go to the RIGHT.
     app.toggle_preview();
     app.toggle_metadata();
-    let (huecos, activo) = app
+    let (slots, active) = app
         .layout
         .tabs_of(app.metadata_slot().expect("details open"))
         .expect("in a group");
-    assert_eq!(huecos.len(), 2, "the viewer and the details together");
-    assert_eq!(activo, 1, "the one that arrives, in front");
-    let lineas = pintar_en(&mut app, 120, 20);
+    assert_eq!(slots.len(), 2, "the viewer and the details together");
+    assert_eq!(active, 1, "the one that arrives, in front");
+    let lines = paint_at(&mut app, 120, 20);
     // The panel bar's names, in the suite's language.
     let lang = norte_i18n::active();
     let visor = norte_frontend::panelbar::label_in(lang, "viewer", "layout.preview");
     let detalles = norte_frontend::panelbar::label_in(lang, "metadata", "layout.metadata");
     // From the body: rows 0 and 1 are the menu and the panel bar, and the
     // strip also says "Visor" and "Detalles".
-    let fila = lineas
+    let row = lines
         .iter()
         .enumerate()
         .skip(2)
         .find(|(_, l)| l.contains(&visor) && l.contains(&detalles))
-        .map_or_else(|| panic!("a row with both tabs: {lineas:#?}"), |(i, _)| i);
+        .map_or_else(|| panic!("a row with both tabs: {lines:#?}"), |(i, _)| i);
     // The column of some text on the row: `TestBackend` puts the line in
     // quotes, so character 0 is the quote mark.
-    let texto_de_fila: String = lineas[fila].chars().skip(1).collect();
-    let col = |texto: &str| {
-        let byte = texto_de_fila.find(texto).expect("it is there");
-        u16::try_from(texto_de_fila[..byte].chars().count()).expect("it fits")
+    let row_text: String = lines[row].chars().skip(1).collect();
+    let col = |text: &str| {
+        let byte = row_text.find(text).expect("it is there");
+        u16::try_from(row_text[..byte].chars().count()).expect("it fits")
     };
-    let fila = u16::try_from(fila).expect("it fits");
+    let row = u16::try_from(row).expect("it fits");
     // The hidden one (Visor) is clickable; the one in front is not.
     app.pending_panel_command = None;
-    let _ = mouse::handle(&mut app, ev(ABAJO, col(&visor), fila));
+    let _ = mouse::handle(&mut app, ev(DOWN, col(&visor), row));
     assert_eq!(app.pending_panel_command.as_deref(), Some("layout.preview"));
     app.pending_panel_command = None;
-    let _ = mouse::handle(&mut app, ev(ABAJO, col(&detalles), fila));
+    let _ = mouse::handle(&mut app, ev(DOWN, col(&detalles), row));
     assert!(
         app.pending_panel_command.is_none(),
         "the one in front does not close with a click on its tab: {:?}",
@@ -792,8 +789,8 @@ fn los_paneles_de_un_borde_se_agrupan_con_su_tira() {
     // With two counts, a click on the grouped disk map used to pick the
     // sibling next to it.
     let metadata = app.metadata_slot().expect("details open");
-    let hueco = app.mouse.slot_rect(metadata).expect("placed");
-    assert_eq!(hueco.y, fila + 1, "the content starts below the strip");
+    let slot = app.mouse.slot_rect(metadata).expect("placed");
+    assert_eq!(slot.y, row + 1, "the content starts below the strip");
 }
 
 /// REGRESSION of a BLOCKER: with an overlay in front, the bar neither
@@ -805,25 +802,25 @@ fn los_paneles_de_un_borde_se_agrupan_con_su_tira() {
 /// reader was not looking at. Painted and clickable have to be the same
 /// thing.
 #[test]
-fn con_un_overlay_delante_la_barra_no_se_pulsa() {
+fn with_an_overlay_in_front_the_bar_is_not_clickable() {
     let mut app = app_pintada(5);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     // Any overlay from those that cover the row.
     app.open_theme_picker();
-    let _ = pintar(&mut app);
-    let antes = app.layout.clone();
-    let _ = mouse::handle(&mut app, ev(ABAJO, 1, 1));
+    let _ = paint(&mut app);
+    let before = app.layout.clone();
+    let _ = mouse::handle(&mut app, ev(DOWN, 1, 1));
     assert!(
         app.pending_panel_command.is_none(),
         "a click on the overlay touched a bar button"
     );
-    assert_eq!(antes, app.layout, "and the layout changed underneath");
+    assert_eq!(before, app.layout, "and the layout changed underneath");
 }
 
 /// The status bar belongs to no pane: outside the whole hit test, not "the
 /// last row of the pane below".
 #[test]
-fn la_barra_de_estado_no_pertenece_a_ningun_pane() {
+fn the_status_bar_does_not_belong_to_any_pane() {
     let app = app_pintada(5);
     assert!(mouse::hit_test(&app, 5, H - 1).is_none());
 }
@@ -834,20 +831,20 @@ fn la_barra_de_estado_no_pertenece_a_ningun_pane() {
 /// the cursor to — the directory's last file, which is exactly the one
 /// nobody was looking at when they clicked there.
 #[test]
-fn el_hueco_bajo_la_ultima_entrada_no_es_la_ultima_entrada() {
+fn the_slot_below_the_last_entry_is_not_the_last_entry() {
     let mut app = app_pintada(3);
-    for row in FILA0 + 3..FILA0 + FILAS {
+    for row in FILA0 + 3..FILA0 + ROWS {
         let hit = mouse::hit_test(&app, 5, row).expect("still inside the pane");
         assert_eq!(hit.index, None, "row {row}: empty, not an entry");
     }
     // And the real click does not move the cursor either.
     app.panes[0].set_cursor(1);
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 6));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 6));
     assert_eq!(app.panes[0].cursor(), 1, "the cursor stays where it was");
 }
 
 #[test]
-fn un_click_fuera_de_los_dos_panes_no_resuelve_nada() {
+fn a_click_outside_both_panes_resolves_nothing() {
     let app = app_pintada(5);
     assert!(mouse::hit_test(&app, W - 1, H - 1).is_none(), "corner");
     assert!(
@@ -857,10 +854,10 @@ fn un_click_fuera_de_los_dos_panes_no_resuelve_nada() {
 }
 
 #[test]
-fn un_click_enfoca_ese_pane_y_mueve_el_cursor() {
+fn a_click_focuses_that_pane_and_moves_the_cursor() {
     let mut app = app_pintada(5);
     assert_eq!(app.focus(), 0);
-    let after = mouse::handle(&mut app, ev(ABAJO, 35, FILA0 + 2));
+    let after = mouse::handle(&mut app, ev(DOWN, 35, FILA0 + 2));
     assert_eq!(after, After::Nothing);
     assert_eq!(app.focus(), 1, "the click focuses the clicked pane");
     assert_eq!(app.panes[1].cursor(), 2);
@@ -872,23 +869,23 @@ fn un_click_enfoca_ese_pane_y_mueve_el_cursor() {
 /// naive hit test (painted row = index) silently gets it wrong, and it gets
 /// it more wrong the further down the user is.
 #[test]
-fn un_click_sobre_un_listado_desplazado_suma_el_scroll() {
+fn a_click_on_a_scrolled_listing_adds_in_the_scroll() {
     let mut app = app_pintada(40);
     app.panes[0].set_cursor(20);
-    let lines = pintar(&mut app);
+    let lines = paint(&mut app);
     let offset = app.mouse.geometry().expect("geometry")[0].offset;
     assert_eq!(
         offset,
-        21 - usize::from(FILAS),
+        21 - usize::from(ROWS),
         "the cursor goes to the edge"
     );
     let hit = mouse::hit_test(&app, 5, FILA0).expect("inside the pane");
     assert_eq!(hit.index, Some(offset), "the first PAINTED row");
     // Against the buffer: the row that resolves is the one that shows.
-    assert_fila(&lines, &app, FILA0, offset);
-    let hit = mouse::hit_test(&app, 5, FILA0 + FILAS - 1).expect("inside the pane");
+    assert_row(&lines, &app, FILA0, offset);
+    let hit = mouse::hit_test(&app, 5, FILA0 + ROWS - 1).expect("inside the pane");
     assert_eq!(hit.index, Some(20), "the last painted one is the cursor");
-    assert_fila(&lines, &app, FILA0 + FILAS - 1, 20);
+    assert_row(&lines, &app, FILA0 + ROWS - 1, 20);
 }
 
 /// The wheel scrolls the listing UNDER THE POINTER and does not touch
@@ -897,7 +894,7 @@ fn un_click_sobre_un_listado_desplazado_suma_el_scroll() {
 /// passing the mouse over it would be a change of the next operation's
 /// destination made without clicking anything.
 #[test]
-fn la_rueda_desplaza_el_pane_bajo_el_puntero_y_no_el_del_foco() {
+fn the_wheel_scrolls_the_pane_under_the_pointer_and_not_the_focused_one() {
     let mut app = app_pintada(40);
     let _ = mouse::handle(&mut app, ev(MouseEventKind::ScrollDown, 35, FILA0 + 1));
     assert_eq!(app.focus(), 0, "focus does NOT move with the wheel");
@@ -915,14 +912,14 @@ fn la_rueda_desplaza_el_pane_bajo_el_puntero_y_no_el_del_foco() {
 /// obvious gesture a viewer has, and the only thing underneath was a
 /// listing you cannot see — scrolling THAT would have been worse.
 #[test]
-fn la_rueda_sobre_el_visor_lo_desplaza_y_no_el_listado() {
+fn the_wheel_over_the_viewer_scrolls_it_and_not_the_listing() {
     let mut app = app_pintada(40);
-    let texto: Vec<u8> = (0..80)
+    let text: Vec<u8> = (0..80)
         .flat_map(|i| format!("linea {i}\n").into_bytes())
         .collect();
     app.viewer = Some(norte_tui::viewer::Viewer::new(
         vp("file:///casa/alto.txt"),
-        texto,
+        text,
         false,
     ));
 
@@ -948,18 +945,18 @@ fn la_rueda_sobre_el_visor_lo_desplaza_y_no_el_listado() {
 /// the navigation itself: entering a directory needs a backend and already
 /// has its own tests.
 #[test]
-fn el_doble_click_pide_el_mismo_nav_enter_del_teclado() {
+fn the_double_click_requests_the_same_nav_enter_as_the_keyboard() {
     let mut app = app_pintada(5);
     let t0 = std::time::Instant::now();
     assert_eq!(
-        mouse::handle_at(&mut app, ev(ABAJO, 5, FILA0 + 1), t0),
+        mouse::handle_at(&mut app, ev(DOWN, 5, FILA0 + 1), t0),
         After::Nothing,
         "the first one is a normal click"
     );
     assert_eq!(
         mouse::handle_at(
             &mut app,
-            ev(ABAJO, 5, FILA0 + 1),
+            ev(DOWN, 5, FILA0 + 1),
             t0 + std::time::Duration::from_millis(120)
         ),
         After::Enter
@@ -975,12 +972,12 @@ fn el_doble_click_pide_el_mismo_nav_enter_del_teclado() {
 /// double click on a `.jpg` did absolutely nothing and did not say why.
 ///
 /// What is checked here is the CONTRACT that finish depends on: that
-/// `nav.enter` on a file arms the launch. The wire itself — `despachar_clic`
+/// `nav.enter` on a file arms the launch. The wire itself — `despachar_click`
 /// launching what is armed — has no test because `on_mouse` needs a real
 /// terminal; the fix is that all three mouse arms go through the SAME
 /// function, which is what stops it from being forgotten again.
 #[test]
-fn nav_enter_sobre_un_fichero_deja_un_opener_armado() {
+fn nav_enter_on_a_file_leaves_an_opener_armed() {
     use norte_tui::gestures::{EnterAction, enter_action, resolve_opener};
 
     let mut app = app_pintada(5);
@@ -1005,14 +1002,14 @@ fn nav_enter_sobre_un_fichero_deja_un_opener_armado() {
 /// different rows, too: otherwise, scrolling down the listing click by
 /// click would enter a directory every other row.
 #[test]
-fn dos_clicks_lejanos_en_tiempo_o_en_fila_no_son_un_doble() {
+fn two_clicks_far_apart_in_time_or_row_are_not_a_double() {
     let mut app = app_pintada(5);
     let t0 = std::time::Instant::now();
-    let _ = mouse::handle_at(&mut app, ev(ABAJO, 5, FILA0 + 1), t0);
+    let _ = mouse::handle_at(&mut app, ev(DOWN, 5, FILA0 + 1), t0);
     assert_eq!(
         mouse::handle_at(
             &mut app,
-            ev(ABAJO, 5, FILA0 + 1),
+            ev(DOWN, 5, FILA0 + 1),
             t0 + std::time::Duration::from_secs(3)
         ),
         After::Nothing,
@@ -1020,11 +1017,11 @@ fn dos_clicks_lejanos_en_tiempo_o_en_fila_no_son_un_doble() {
     );
 
     let t0 = std::time::Instant::now();
-    let _ = mouse::handle_at(&mut app, ev(ABAJO, 5, FILA0 + 1), t0);
+    let _ = mouse::handle_at(&mut app, ev(DOWN, 5, FILA0 + 1), t0);
     assert_eq!(
         mouse::handle_at(
             &mut app,
-            ev(ABAJO, 5, FILA0 + 2),
+            ev(DOWN, 5, FILA0 + 2),
             t0 + std::time::Duration::from_millis(50)
         ),
         After::Nothing,
@@ -1037,18 +1034,18 @@ fn dos_clicks_lejanos_en_tiempo_o_en_fila_no_son_un_doble() {
 /// counted, the gesture would enter the directory instead of starting the
 /// drag.
 #[test]
-fn un_click_con_modificador_no_es_la_primera_mitad_de_un_doble() {
+fn a_click_with_a_modifier_is_not_the_first_half_of_a_double() {
     let mut app = app_pintada(5);
     let t0 = std::time::Instant::now();
     let _ = mouse::handle_at(
         &mut app,
-        ev_con(ABAJO, 5, FILA0 + 1, KeyModifiers::CONTROL),
+        ev_con(DOWN, 5, FILA0 + 1, KeyModifiers::CONTROL),
         t0,
     );
     assert_eq!(
         mouse::handle_at(
             &mut app,
-            ev(ABAJO, 5, FILA0 + 1),
+            ev(DOWN, 5, FILA0 + 1),
             t0 + std::time::Duration::from_millis(50)
         ),
         After::Nothing
@@ -1056,22 +1053,22 @@ fn un_click_con_modificador_no_es_la_primera_mitad_de_un_doble() {
 }
 
 #[test]
-fn ctrl_click_marca_y_desmarca_la_fila_pulsada() {
+fn ctrl_click_marks_and_unmarks_the_clicked_row() {
     let mut app = app_pintada(5);
     let ctrl = KeyModifiers::CONTROL;
-    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 3, ctrl));
+    let _ = mouse::handle(&mut app, ev_con(DOWN, 5, FILA0 + 3, ctrl));
     assert_eq!(app.panes[0].marks_len(), 1);
-    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 3, ctrl));
+    let _ = mouse::handle(&mut app, ev_con(DOWN, 5, FILA0 + 3, ctrl));
     assert_eq!(app.panes[0].marks_len(), 0, "the same gesture unmarks");
 }
 
 #[test]
-fn un_arrastre_marca_lo_que_barre() {
+fn a_drag_marks_what_it_sweeps() {
     let mut app = app_pintada(10);
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 1));
     assert_eq!(app.panes[0].marks_len(), 0, "the press does not mark yet");
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 4));
-    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, FILA0 + 4));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 4));
+    let _ = mouse::handle(&mut app, ev(UP, 5, FILA0 + 4));
     assert_eq!(app.panes[0].marks_len(), 4, "rows 1..=4");
 }
 
@@ -1085,29 +1082,29 @@ fn un_arrastre_marca_lo_que_barre() {
 /// the day one of the two paths changes. The MODALS are compared, not a
 /// description of them: they are what gets put to the test.
 #[test]
-fn un_drop_abre_el_mismo_modal_que_la_tecla_de_copiar() {
+fn a_drop_opens_the_same_modal_as_the_copy_key() {
     let mut app = app_pintada(10);
     // Two marks by hand (with two, the gate opens the list confirm).
     for row in [1, 2] {
         let _ = mouse::handle(
             &mut app,
-            ev_con(ABAJO, 5, FILA0 + row, KeyModifiers::CONTROL),
+            ev_con(DOWN, 5, FILA0 + row, KeyModifiers::CONTROL),
         );
     }
     assert_eq!(app.panes[0].marks_len(), 2);
 
     // What the KEYBOARD produces with this same selection.
     app.open_transfer(TransferKind::Copy, 0, 1, None);
-    let por_teclado = app.modal.take().expect("F5 opens a modal");
+    let by_keyboard = app.modal.take().expect("F5 opens a modal");
 
     // And now the mouse: press ON a marked row and drop on the other one.
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 1));
-    let _ = mouse::handle(&mut app, ev(ARRIBA, 35, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 35, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(UP, 35, FILA0 + 1));
 
     assert_eq!(
         app.modal.as_ref(),
-        Some(&por_teclado),
+        Some(&by_keyboard),
         "the drop produces the same as the key, or there are two mutation paths"
     );
     assert_eq!(
@@ -1123,22 +1120,22 @@ fn un_drop_abre_el_mismo_modal_que_la_tecla_de_copiar() {
 /// comes up. It is what lets you change your mind mid-gesture without
 /// moving (a destructive mutation at the source) what you meant to copy.
 #[test]
-fn mayus_al_soltar_decide_copiar_o_mover() {
-    let arrastra = |mods: KeyModifiers| {
+fn shift_on_drop_decides_copy_or_move() {
+    let drags = |mods: KeyModifiers| {
         let mut app = app_pintada(10);
-        let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 2, KeyModifiers::CONTROL));
-        let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 3, KeyModifiers::CONTROL));
+        let _ = mouse::handle(&mut app, ev_con(DOWN, 5, FILA0 + 2, KeyModifiers::CONTROL));
+        let _ = mouse::handle(&mut app, ev_con(DOWN, 5, FILA0 + 3, KeyModifiers::CONTROL));
         // The press goes with NO Shift in both cases: only the release changes.
-        let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
-        let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 2));
-        let _ = mouse::handle(&mut app, ev_con(ARRIBA, 35, FILA0 + 2, mods));
+        let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 2));
+        let _ = mouse::handle(&mut app, ev(DRAG, 35, FILA0 + 2));
+        let _ = mouse::handle(&mut app, ev_con(UP, 35, FILA0 + 2, mods));
         match app.modal {
             Some(Modal::ConfirmTransfer { kind, .. }) => kind,
-            otro => panic!("expected a transfer confirm: {otro:?}"),
+            other => panic!("expected a transfer confirm: {other:?}"),
         }
     };
-    assert_eq!(arrastra(KeyModifiers::NONE), TransferKind::Copy);
-    assert_eq!(arrastra(KeyModifiers::SHIFT), TransferKind::Move);
+    assert_eq!(drags(KeyModifiers::NONE), TransferKind::Copy);
+    assert_eq!(drags(KeyModifiers::SHIFT), TransferKind::Move);
 }
 
 /// A drag born on an UNMARKED row that crosses to the other pane is
@@ -1146,27 +1143,27 @@ fn mayus_al_soltar_decide_copiar_o_mover() {
 /// manager — and returns the marks it swept along the way. What travels is
 /// the pressed row, not the eleven marks the pane might have.
 #[test]
-fn un_arrastre_promovido_lleva_su_fila_y_devuelve_lo_que_barrio() {
+fn a_promoted_drag_carries_its_row_and_returns_what_it_swept() {
     let mut app = app_pintada(10);
     // A previous mark, unrelated to the gesture.
     let _ = mouse::handle(
         &mut app,
-        ev_con(ABAJO, 5, FILA0 + FILAS - 1, KeyModifiers::CONTROL),
+        ev_con(DOWN, 5, FILA0 + ROWS - 1, KeyModifiers::CONTROL),
     );
     assert_eq!(app.panes[0].marks_len(), 1);
 
     // Press on an UNMARKED row, sweeps along the way, and crosses to the
     // other pane.
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 3));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 3));
     assert_eq!(app.panes[0].marks_len(), 4, "swept 1..=3 along the way");
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 35, FILA0 + 1));
     assert_eq!(
         app.panes[0].marks_len(),
         1,
         "crossing returns what was swept: only the previous mark is left"
     );
-    let _ = mouse::handle(&mut app, ev(ARRIBA, 35, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(UP, 35, FILA0 + 1));
 
     let expected = app.panes[0].entries()[1].path.clone();
     let Some(Modal::TransferName {
@@ -1184,12 +1181,12 @@ fn un_arrastre_promovido_lleva_su_fila_y_devuelve_lo_que_barrio() {
 /// not a directory copying onto itself, and it is what whoever changed
 /// their mind mid-drag and went back home asks for.
 #[test]
-fn soltar_en_el_panel_de_origen_no_somete_nada() {
+fn dropping_on_the_source_pane_submits_nothing() {
     let mut app = app_pintada(10);
-    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 2, KeyModifiers::CONTROL));
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 2)); // wanders…
-    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, FILA0 + 6)); // …and comes back
+    let _ = mouse::handle(&mut app, ev_con(DOWN, 5, FILA0 + 2, KeyModifiers::CONTROL));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 2));
+    let _ = mouse::handle(&mut app, ev(DRAG, 35, FILA0 + 2)); // wanders…
+    let _ = mouse::handle(&mut app, ev(UP, 5, FILA0 + 6)); // …and comes back
     assert!(app.modal.is_none(), "neither modal nor transfer");
     assert_eq!(app.panes[0].marks_len(), 1, "the mark is still there");
 }
@@ -1202,12 +1199,12 @@ fn soltar_en_el_panel_de_origen_no_somete_nada() {
 /// where the gesture of someone who changed their mind ends: dropping
 /// outside every row does not guess a destination.
 #[test]
-fn un_arrastre_cancelado_restituye_las_marcas() {
+fn a_canceled_drag_restores_the_marks() {
     let mut app = app_pintada(10);
     for row in [5, 6] {
         let _ = mouse::handle(
             &mut app,
-            ev_con(ABAJO, 5, FILA0 + row, KeyModifiers::CONTROL),
+            ev_con(DOWN, 5, FILA0 + row, KeyModifiers::CONTROL),
         );
     }
     let marked = |app: &App| -> Vec<bool> {
@@ -1221,10 +1218,10 @@ fn un_arrastre_cancelado_restituye_las_marcas() {
 
     // Press on an unmarked row, sweeps, crosses (promotes) and drops on the
     // status bar, which belongs to no pane.
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 3));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 3));
-    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, H - 1));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 3));
+    let _ = mouse::handle(&mut app, ev(DRAG, 35, FILA0 + 3));
+    let _ = mouse::handle(&mut app, ev(UP, 5, H - 1));
 
     assert!(app.modal.is_none(), "cancelling produces nothing");
     assert_eq!(marked(&app), before, "the marks, exactly as they were");
@@ -1239,39 +1236,39 @@ fn un_arrastre_cancelado_restituye_las_marcas() {
 /// a no-op: promising a copy that will not happen is worse than promising
 /// nothing) nor when the gesture is a sweep.
 #[test]
-fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
+fn the_bar_announces_what_dropping_now_would_do() {
     let mut app = app_pintada(10);
-    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 2, KeyModifiers::CONTROL));
-    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 3, KeyModifiers::CONTROL));
+    let _ = mouse::handle(&mut app, ev_con(DOWN, 5, FILA0 + 2, KeyModifiers::CONTROL));
+    let _ = mouse::handle(&mut app, ev_con(DOWN, 5, FILA0 + 3, KeyModifiers::CONTROL));
 
     // Sweep at home: nothing to announce.
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 8));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 9));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 8));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 9));
     assert_eq!(mouse::drop_hint(&app), None, "marking promises nothing");
 
     // Transfer still over its own pane: neither.
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 5));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 2));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 5));
     assert_eq!(mouse::drop_hint(&app), None, "at home, dropping is a no-op");
 
     // Over the other pane: it says how many and that it COPIES…
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 35, FILA0 + 1));
-    let copia = mouse::drop_hint(&app).expect("there is a pending drop");
-    assert!(copia.contains('2'), "the two marks: {copia}");
+    let _ = mouse::handle(&mut app, ev(DRAG, 35, FILA0 + 1));
+    let copy = mouse::drop_hint(&app).expect("there is a pending drop");
+    assert!(copy.contains('2'), "the two marks: {copy}");
     // The destination with the SAME sanitizing as the pane's header (rule 1).
     let (dest, _) = norte_frontend::path_display_with(app.panes[1].dir(), None);
     assert_eq!(
-        copia,
+        copy,
         norte_i18n::ta("drag-copy", &[("n", "2"), ("to", &dest)]),
     );
     // …and the bar PAINTS it (over any pending message).
     app.message = Some("un mensaje cualquiera".to_owned());
-    let cabeza = copia
+    let cabeza = copy
         .split_once("  ")
-        .map_or(copia.as_str(), |(head, _)| head)
+        .map_or(copy.as_str(), |(head, _)| head)
         .to_owned();
-    let lineas = pintar(&mut app);
-    let barra = lineas.last().expect("status bar");
+    let lines = paint(&mut app);
+    let bar = lines.last().expect("status bar");
     // The bar YIELDS on the right: its ELEMENTS — position, marks, encoding
     // (ADR 0132) — keep their part and the notice cuts wherever it must.
     // Requiring the WHOLE head tied this test to the language without saying
@@ -1279,28 +1276,28 @@ fn la_barra_anuncia_lo_que_haria_soltar_ahora() {
     // one about thirty, so the same sixty-wide screen passed in English and
     // failed in Spanish. What is asserted here is not how much fits, but WHO
     // RULES: the notice starts the bar and the pending message does not show.
-    let principio: String = cabeza.chars().take(15).collect();
+    let start: String = cabeza.chars().take(15).collect();
     assert!(
-        barra.contains(&principio),
+        bar.contains(&start),
         "the notice rules the bar while the drag lasts.\n\
-         expected the bar to start with: {principio:?}\n\
-         and the painted bar is:         {barra:?}"
+         expected the bar to start with: {start:?}\n\
+         and the painted bar is:         {bar:?}"
     );
     assert!(
-        !barra.contains("un mensaje cualquiera"),
-        "and the pending message does not sneak in underneath: {barra:?}"
+        !bar.contains("un mensaje cualquiera"),
+        "and the pending message does not sneak in underneath: {bar:?}"
     );
 
     // With Shift, MOVE — and the drop does what was promised.
-    let mut con_mayus = ev(ARRASTRE, 35, FILA0 + 2);
-    con_mayus.modifiers = KeyModifiers::SHIFT;
-    let _ = mouse::handle(&mut app, con_mayus);
+    let mut with_shift = ev(DRAG, 35, FILA0 + 2);
+    with_shift.modifiers = KeyModifiers::SHIFT;
+    let _ = mouse::handle(&mut app, with_shift);
     let mover = mouse::drop_hint(&app).expect("there is still a drop");
     assert_eq!(
         mover,
         norte_i18n::ta("drag-move", &[("n", "2"), ("to", &dest)]),
     );
-    let _ = mouse::handle(&mut app, ev_con(ARRIBA, 35, FILA0 + 2, KeyModifiers::SHIFT));
+    let _ = mouse::handle(&mut app, ev_con(UP, 35, FILA0 + 2, KeyModifiers::SHIFT));
     assert!(
         matches!(
             app.modal,
@@ -1337,7 +1334,7 @@ fn marking_under_a_filter_does_not_reach_what_the_filter_hides() {
     let dir = vp("file:///casa");
     // Alternating names: the `sí` filter leaves the EVEN indices visible, so
     // there is always a hidden one between two painted rows.
-    let entradas: Vec<Entry> = ["a-si", "b-no", "c-si", "d-no", "e-si", "f-no"]
+    let entries: Vec<Entry> = ["a-si", "b-no", "c-si", "d-no", "e-si", "f-no"]
         .iter()
         .map(|n| Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -1348,7 +1345,7 @@ fn marking_under_a_filter_does_not_reach_what_the_filter_hides() {
         })
         .collect();
     let mut app = App::new(
-        Pane::new(dir.clone(), entradas),
+        Pane::new(dir.clone(), entries),
         Pane::new(dir.clone(), Vec::new()),
     );
     app.panes[0].quick_start(norte_tui::nav::Mode::Filter);
@@ -1357,7 +1354,7 @@ fn marking_under_a_filter_does_not_reach_what_the_filter_hides() {
     }
     // The REAL cursor stays far from the painted anchor on purpose.
     app.panes[0].set_cursor(5);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(
         app.panes[0].quick_visible(),
         Some(&[0, 2, 4][..]),
@@ -1366,7 +1363,7 @@ fn marking_under_a_filter_does_not_reach_what_the_filter_hides() {
 
     // shift+click on the THIRD painted row: range from the painted anchor
     // (the first) to it.
-    let _ = mouse::handle(&mut app, ev_con(ABAJO, 5, FILA0 + 2, KeyModifiers::SHIFT));
+    let _ = mouse::handle(&mut app, ev_con(DOWN, 5, FILA0 + 2, KeyModifiers::SHIFT));
     assert!(
         app.panes[0].quick_visible().is_some(),
         "a marking gesture does NOT close the filter"
@@ -1389,15 +1386,15 @@ fn marking_under_a_filter_does_not_reach_what_the_filter_hides() {
 /// next operation acts on the row that was clicked and not on the one the
 /// filter had selected.
 #[test]
-fn un_click_limpio_cierra_el_quick_search_sobre_la_fila_pulsada() {
+fn a_clean_click_closes_quick_search_on_the_clicked_row() {
     let mut app = app_pintada(20);
     app.panes[0].quick_start(norte_tui::nav::Mode::Filter);
     app.panes[0].quick_char('f');
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let expected = app.mouse.geometry().expect("geometry")[0].offset + 2;
 
     let hit = mouse::hit_test(&app, 5, FILA0 + 2).expect("inside the pane");
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 2));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 2));
     assert!(app.panes[0].quick_visible().is_none(), "filter closed");
     assert_eq!(app.panes[0].cursor(), hit.index.expect("row"));
     assert_eq!(
@@ -1413,10 +1410,10 @@ fn un_click_limpio_cierra_el_quick_search_sobre_la_fila_pulsada() {
 /// move the cursor of a listing the user is not looking at while a modal
 /// asks them something else. The keyboard is already routed this way.
 #[test]
-fn con_un_overlay_abierto_el_raton_no_toca_los_panes() {
+fn with_an_overlay_open_the_mouse_does_not_touch_the_panes() {
     let mut app = app_pintada(5);
     app.modal = Some(norte_tui::app::Modal::ConfirmQuit);
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 3));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 3));
     assert_eq!(app.panes[0].cursor(), 0);
     assert_eq!(app.panes[0].marks_len(), 0);
 }
@@ -1432,27 +1429,27 @@ fn con_un_overlay_abierto_el_raton_no_toca_los_panes() {
 /// It expires where it stops being true: the listing moved, so the
 /// gesture's indices no longer name what got painted.
 #[test]
-fn un_release_que_se_comio_otro_pump_no_deja_el_gesto_armado() {
+fn a_release_that_swallowed_another_pump_does_not_leave_the_gesture_armed() {
     let mut app = app_pintada(10);
     let dir = app.panes[0].dir().clone();
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 2));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 2));
     let marks = app.panes[0].marks_len();
     assert!(marks > 0, "the sweep was underway");
 
     // …the release falls inside a pump that only looks at keys: it never
     // arrives. What does happen is that pump refreshes the listing.
-    app.panes[0].refresh_listing(entradas(&dir, 10));
-    let _ = pintar(&mut app);
+    app.panes[0].refresh_listing(entries(&dir, 10));
+    let _ = paint(&mut app);
 
     let after = app.panes[0].marks_len();
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + FILAS - 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + ROWS - 1));
     assert_eq!(
         app.panes[0].marks_len(),
         after,
         "the motion does not continue a sweep that no longer exists"
     );
-    let _ = mouse::handle(&mut app, ev(ARRIBA, 5, FILA0 + FILAS - 1));
+    let _ = mouse::handle(&mut app, ev(UP, 5, FILA0 + ROWS - 1));
     assert_eq!(app.panes[0].marks_len(), after, "nor the late release");
 }
 
@@ -1464,23 +1461,23 @@ fn un_release_que_se_comio_otro_pump_no_deja_el_gesto_armado() {
 /// chose, and is one of the hardest things to explain ("I clicked twice and
 /// it went into a folder I never touched").
 #[test]
-fn un_click_antes_y_otro_despues_de_un_cd_no_son_un_doble_click() {
+fn a_click_before_and_another_after_a_cd_are_not_a_double_click() {
     let mut app = app_pintada(10);
     let t0 = std::time::Instant::now();
     assert_eq!(
-        mouse::handle_at(&mut app, ev(ABAJO, 5, FILA0 + 2), t0),
+        mouse::handle_at(&mut app, ev(DOWN, 5, FILA0 + 2), t0),
         After::Nothing
     );
 
     // cd: the pane switches to another listing (the real path of `nav.enter`).
     let other = vp("file:///casa/subdir");
-    app.panes[0].set_listing(other.clone(), entradas(&other, 10));
-    let _ = pintar(&mut app);
+    app.panes[0].set_listing(other.clone(), entries(&other, 10));
+    let _ = paint(&mut app);
 
     assert_eq!(
         mouse::handle_at(
             &mut app,
-            ev(ABAJO, 5, FILA0 + 2),
+            ev(DOWN, 5, FILA0 + 2),
             t0 + std::time::Duration::from_millis(80)
         ),
         After::Nothing,
@@ -1491,18 +1488,18 @@ fn un_click_antes_y_otro_despues_de_un_cd_no_son_un_doble_click() {
 /// A modal opened mid-drag also carries away the gesture: by the time the
 /// user answers, the drag is history.
 #[test]
-fn un_modal_abierto_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
+fn a_modal_opened_mid_drag_carries_the_gesture_along() {
     let mut app = app_pintada(10);
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 2));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 2));
     let marks = app.panes[0].marks_len();
 
     app.modal = Some(norte_tui::app::Modal::ConfirmQuit);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     app.modal = None;
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
 
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + FILAS - 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + ROWS - 1));
     assert_eq!(app.panes[0].marks_len(), marks, "dead gesture");
 }
 
@@ -1510,12 +1507,12 @@ fn un_modal_abierto_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
 /// the gesture alive. Without this, expiry would be "always cancel", which
 /// passes the two tests above and breaks every drag.
 #[test]
-fn un_frame_normal_no_caduca_el_gesto() {
+fn a_normal_frame_does_not_expire_the_gesture() {
     let mut app = app_pintada(10);
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
-    let _ = pintar(&mut app);
-    let _ = pintar(&mut app);
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 4));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 1));
+    let _ = paint(&mut app);
+    let _ = paint(&mut app);
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 4));
     assert_eq!(app.panes[0].marks_len(), 4, "the sweep is still alive");
 }
 
@@ -1528,10 +1525,10 @@ fn un_frame_normal_no_caduca_el_gesto() {
 /// the content of the OTHER side: the gesture was reattributed behind the
 /// reader's back.
 #[test]
-fn un_intercambio_de_panes_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
+fn swapping_panes_mid_drag_carries_the_gesture_along() {
     let mut app = app_pintada(10);
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 1));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + 2));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + 2));
     assert!(app.panes[0].marks_len() > 0, "the sweep was underway");
     assert_eq!(
         app.panes[0].listing_epoch(),
@@ -1540,12 +1537,12 @@ fn un_intercambio_de_panes_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
     );
 
     app.swap_panes();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
 
     // The sweep's marks traveled with their pane to slot 1; pane 0 is now
     // the other listing, and the armed gesture still names `pane: 0`.
     let before = app.panes[0].marks_len();
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, 5, FILA0 + FILAS - 1));
+    let _ = mouse::handle(&mut app, ev(DRAG, 5, FILA0 + ROWS - 1));
     assert_eq!(
         app.panes[0].marks_len(),
         before,
@@ -1558,15 +1555,15 @@ fn un_intercambio_de_panes_a_mitad_de_un_arrastre_se_lleva_el_gesto() {
 /// editor, a pager) inherits a mouse-mode terminal it never asked for and
 /// receives every pointer movement as if it were keys.
 #[test]
-fn la_captura_se_suelta_y_se_restaura_alrededor_del_suspend() {
+fn the_capture_is_released_and_restored_around_suspend() {
     let mut cap = mouse::Capture::new();
     let mut out: Vec<u8> = Vec::new();
     cap.set(true, &mut out).expect("activate");
     assert!(cap.active());
 
     out.clear();
-    let habia = mouse::release_for_suspend(&mut cap, &mut out).expect("release");
-    assert!(habia, "it was set");
+    let had = mouse::release_for_suspend(&mut cap, &mut out).expect("release");
+    assert!(had, "it was set");
     assert!(
         !cap.active(),
         "with the terminal handed over, the capture is not ours"
@@ -1576,7 +1573,7 @@ fn la_captura_se_suelta_y_se_restaura_alrededor_del_suspend() {
         "the terminal was told, not just the struct"
     );
 
-    mouse::restore_after_suspend(&mut cap, habia, &mut out).expect("restore");
+    mouse::restore_after_suspend(&mut cap, had, &mut out).expect("restore");
     assert!(cap.active(), "on return, as it was");
 }
 
@@ -1584,12 +1581,12 @@ fn la_captura_se_suelta_y_se_restaura_alrededor_del_suspend() {
 /// external program does not turn it on: suspend restores the state, not a
 /// default.
 #[test]
-fn el_suspend_no_enciende_una_captura_que_estaba_apagada() {
+fn suspend_does_not_turn_on_a_capture_that_was_off() {
     let mut cap = mouse::Capture::new();
     let mut out: Vec<u8> = Vec::new();
-    let habia = mouse::release_for_suspend(&mut cap, &mut out).expect("release");
-    assert!(!habia);
-    mouse::restore_after_suspend(&mut cap, habia, &mut out).expect("restore");
+    let had = mouse::release_for_suspend(&mut cap, &mut out).expect("release");
+    assert!(!had);
+    mouse::restore_after_suspend(&mut cap, had, &mut out).expect("restore");
     assert!(!cap.active());
     assert!(out.is_empty(), "not one sequence for a no-op");
 }
@@ -1603,7 +1600,7 @@ fn el_suspend_no_enciende_una_captura_que_estaba_apagada() {
 /// before the first frame and with the viewer open — no event that slipped
 /// through would resolve any row.
 #[test]
-fn con_mouse_false_no_hay_captura_ni_manejo() {
+fn with_mouse_false_no_capture_or_handling() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("norte.toml"), "[ui]\nmouse = false\n").expect("write");
     let cfg = norte_config::load(&norte_config::Layers {
@@ -1621,7 +1618,7 @@ fn con_mouse_false_no_hay_captura_ni_manejo() {
 
     let mut app = app_pintada(5);
     mouse::after_frame(&mut app, None, mouse::FrameZones::default());
-    let _ = mouse::handle(&mut app, ev(ABAJO, 5, FILA0 + 3));
+    let _ = mouse::handle(&mut app, ev(DOWN, 5, FILA0 + 3));
     assert_eq!(
         app.panes[0].cursor(),
         0,
@@ -1641,10 +1638,10 @@ fn con_mouse_false_no_hay_captura_ni_manejo() {
 /// other half of the same piece, and `overlay_open`'s rustdoc is where the
 /// rule is written: "the mouse does the same, as one piece."
 #[test]
-fn el_panel_de_diferencias_se_come_el_raton_como_cualquier_overlay() {
+fn the_diff_pane_eats_the_mouse_like_any_overlay() {
     let mut app = app_pintada(5);
-    let dir_antes = [app.panes[0].dir().clone(), app.panes[1].dir().clone()];
-    let cursor_antes = app.panes[0].cursor();
+    let dir_before = [app.panes[0].dir().clone(), app.panes[1].dir().clone()];
+    let cursor_before = app.panes[0].cursor();
 
     app.compare = Some(norte_tui::app::CompareView::new(
         vp("file:///izq"),
@@ -1657,22 +1654,22 @@ fn el_panel_de_diferencias_se_come_el_raton_como_cualquier_overlay() {
     let t0 = std::time::Instant::now();
     // Any click, and the double click that would be a `cd`.
     assert_eq!(
-        mouse::handle_at(&mut app, ev(ABAJO, 5, FILA0 + 1), t0),
+        mouse::handle_at(&mut app, ev(DOWN, 5, FILA0 + 1), t0),
         After::Nothing
     );
     assert_eq!(
         mouse::handle_at(
             &mut app,
-            ev(ABAJO, 5, FILA0 + 1),
+            ev(DOWN, 5, FILA0 + 1),
             t0 + std::time::Duration::from_millis(120)
         ),
         After::Nothing,
         "a double click CANNOT request a nav.enter on a pane you cannot see"
     );
-    assert_eq!(app.panes[0].cursor(), cursor_antes, "nor move its cursor");
+    assert_eq!(app.panes[0].cursor(), cursor_before, "nor move its cursor");
     assert_eq!(
         [app.panes[0].dir().clone(), app.panes[1].dir().clone()],
-        dir_antes
+        dir_before
     );
     assert!(app.compare.is_some(), "and the panel is still where it was");
 }
@@ -1680,19 +1677,19 @@ fn el_panel_de_diferencias_se_come_el_raton_como_cualquier_overlay() {
 /// The sticky window, END-TO-END: `End` and then scrolling up to the top has
 /// to leave the listing showing the start, not stuck where it was.
 #[test]
-fn subir_desde_el_final_acaba_arrastrando_la_ventana() {
+fn dragging_up_from_the_end_ends_up_dragging_the_window() {
     let mut app = app_pintada(60);
     app.panes[0].move_to_end();
-    let _ = pintar(&mut app);
-    let abajo = app.mouse.geometry().expect("geometry")[0].offset;
-    assert!(abajo > 0, "the end scrolls the window: {abajo}");
+    let _ = paint(&mut app);
+    let down = app.mouse.geometry().expect("geometry")[0].offset;
+    assert!(down > 0, "the end scrolls the window: {down}");
 
     // Scroll up ONE row: the window does not move (the cursor goes inside).
     app.panes[0].move_up(1);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(
         app.mouse.geometry().expect("geometry")[0].offset,
-        abajo,
+        down,
         "scrolling up inside the window does not move it"
     );
 
@@ -1700,7 +1697,7 @@ fn subir_desde_el_final_acaba_arrastrando_la_ventana() {
     for _ in 0..60 {
         app.panes[0].move_up(1);
     }
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(app.panes[0].cursor(), 0);
     assert_eq!(
         app.mouse.geometry().expect("geometry")[0].offset,
@@ -1716,37 +1713,37 @@ fn subir_desde_el_final_acaba_arrastrando_la_ventana() {
 /// why a moved border stays where it was left when reopened, with nothing
 /// more.
 #[test]
-fn arrastrar_el_borde_mueve_la_frontera_entre_los_panes() {
+fn dragging_the_edge_moves_the_boundary_between_the_panes() {
     let mut app = app_pintada(5);
-    let _ = pintar(&mut app);
-    let antes = app.mouse.geometry().expect("geometry").to_vec();
-    let (izq_antes, der_antes) = (antes[0].width, antes[1].width);
-    let borde = antes[0].x + antes[0].width;
+    let _ = paint(&mut app);
+    let before = app.mouse.geometry().expect("geometry").to_vec();
+    let (left_before, right_before) = (before[0].width, before[1].width);
+    let edge = before[0].x + before[0].width;
 
     // Grab the border and move it six cells to the left. Six and not
     // twenty: a `browser` declares a minimum of twenty columns, and below
     // that the layout COLLAPSES its split — the pane does not shrink, it
     // disappears. What this test measures is the drag, not the collapse.
-    let destino = borde - 6;
-    let _ = mouse::handle(&mut app, ev(ABAJO, borde, FILA0));
-    let _ = mouse::handle(&mut app, ev(ARRASTRE, destino, FILA0));
-    let _ = mouse::handle(&mut app, ev(ARRIBA, destino, FILA0));
-    let _ = pintar(&mut app);
+    let dest = edge - 6;
+    let _ = mouse::handle(&mut app, ev(DOWN, edge, FILA0));
+    let _ = mouse::handle(&mut app, ev(DRAG, dest, FILA0));
+    let _ = mouse::handle(&mut app, ev(UP, dest, FILA0));
+    let _ = paint(&mut app);
 
-    let ahora = app.mouse.geometry().expect("geometry").to_vec();
+    let now = app.mouse.geometry().expect("geometry").to_vec();
     assert!(
-        ahora[0].width < izq_antes,
-        "the left one shrinks: {izq_antes} -> {}",
-        ahora[0].width
+        now[0].width < left_before,
+        "the left one shrinks: {left_before} -> {}",
+        now[0].width
     );
     assert!(
-        ahora[1].width > der_antes,
-        "and what it loses the other gains: {der_antes} -> {}",
-        ahora[1].width
+        now[1].width > right_before,
+        "and what it loses the other gains: {right_before} -> {}",
+        now[1].width
     );
     assert_eq!(
-        ahora[0].width + ahora[1].width,
-        izq_antes + der_antes,
+        now[0].width + now[1].width,
+        left_before + right_before,
         "the pair occupies the same total: dragging a border does not touch the rest"
     );
 }
@@ -1754,14 +1751,14 @@ fn arrastrar_el_borde_mueve_la_frontera_entre_los_panes() {
 /// And grabbing the border neither points at nor marks anything: grabbing
 /// is not choosing.
 #[test]
-fn agarrar_el_borde_no_selecciona_una_fila() {
+fn grabbing_the_edge_does_not_select_a_row() {
     let mut app = app_pintada(5);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let cursor = app.panes[0].cursor();
     let geom = app.mouse.geometry().expect("geometry").to_vec();
-    let borde = geom[0].x + geom[0].width;
-    let _ = mouse::handle(&mut app, ev(ABAJO, borde, FILA0 + 1));
-    let _ = mouse::handle(&mut app, ev(ARRIBA, borde, FILA0 + 1));
+    let edge = geom[0].x + geom[0].width;
+    let _ = mouse::handle(&mut app, ev(DOWN, edge, FILA0 + 1));
+    let _ = mouse::handle(&mut app, ev(UP, edge, FILA0 + 1));
     assert_eq!(app.panes[0].cursor(), cursor, "the cursor did not move");
     assert_eq!(app.panes[0].marks_len(), 0, "and nothing got marked");
 }
@@ -1773,14 +1770,14 @@ fn agarrar_el_borde_no_selecciona_una_fila() {
 /// keyboard went to another. Pointing at a panel with the mouse means "I
 /// work here now," and that includes the keys.
 #[test]
-fn un_click_en_un_listado_trae_el_teclado_desde_el_sidebar() {
+fn a_click_on_a_listing_brings_the_keyboard_from_the_sidebar() {
     let mut app = app_pintada(5);
     app.toggle_places();
-    let _ = pintar_en(&mut app, 100, 30);
+    let _ = paint_at(&mut app, 100, 30);
     assert_eq!(app.key_owner(), KeyOwner::Places, "the sidebar took it");
 
     let g = app.mouse.geometry().expect("geometry")[0];
-    let after = mouse::handle(&mut app, ev(ABAJO, g.x + 2, g.first_list_row));
+    let after = mouse::handle(&mut app, ev(DOWN, g.x + 2, g.first_list_row));
     assert_eq!(after, After::Nothing);
     assert_eq!(
         app.key_owner(),
@@ -1796,11 +1793,11 @@ fn un_click_en_un_listado_trae_el_teclado_desde_el_sidebar() {
 /// The same gesture for both sides, and through the same path: what decides
 /// whose the keyboard is, is the slot under the pointer.
 #[test]
-fn un_click_en_un_panel_lateral_le_da_el_teclado() {
+fn a_click_on_a_side_pane_gives_it_the_keyboard() {
     let mut app = app_pintada(5);
     app.toggle_processes();
     app.return_keys_to_panes();
-    let _ = pintar_en(&mut app, 100, 30);
+    let _ = paint_at(&mut app, 100, 30);
 
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let id = app.processes_slot().expect("open");
@@ -1810,7 +1807,7 @@ fn un_click_en_un_panel_lateral_le_da_el_teclado() {
         .find(|(s, _)| *s == id)
         .map(|(_, r)| *r)
         .expect("the panel was placed");
-    let _ = mouse::handle(&mut app, ev(ABAJO, r.x + 1, r.y + 1));
+    let _ = mouse::handle(&mut app, ev(DOWN, r.x + 1, r.y + 1));
     assert_eq!(app.key_owner(), KeyOwner::Processes);
 }
 
@@ -1836,7 +1833,7 @@ fn plugin(id: &str, name: &str, category: &str) -> norte_proto::methods::PluginI
 
 /// An `App` with the extension manager open over two plugins, painted at
 /// `w`×`h`. Returns the lines to check the zones against the text.
-fn app_con_gestor(w: u16, h: u16) -> (App, Vec<String>) {
+fn app_with_manager(w: u16, h: u16) -> (App, Vec<String>) {
     let mut app = app_pintada(3);
     app.extensions = Some(norte_tui::app::ExtensionManager {
         plugins: vec![
@@ -1845,22 +1842,22 @@ fn app_con_gestor(w: u16, h: u16) -> (App, Vec<String>) {
         ],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
-    let lineas = pintar_en(&mut app, w, h);
-    (app, lineas)
+    let lines = paint_at(&mut app, w, h);
+    (app, lines)
 }
 
-/// The row and column of the first occurrence of `texto` in what is
+/// The row and column of the first occurrence of `text` in what is
 /// painted.
 ///
 /// `TestBackend::to_string()` wraps each row in quotes: the screen's first
 /// cell is the line's second character.
-fn donde(lineas: &[String], texto: &str) -> (u16, u16) {
-    for (y, l) in lineas.iter().enumerate() {
+fn where_(lines: &[String], text: &str) -> (u16, u16) {
+    for (y, l) in lines.iter().enumerate() {
         let l = l.strip_prefix('"').unwrap_or(l);
-        if let Some(byte) = l.find(texto) {
+        if let Some(byte) = l.find(text) {
             let col = l[..byte].chars().count();
             return (
                 u16::try_from(y).expect("row"),
@@ -1868,7 +1865,7 @@ fn donde(lineas: &[String], texto: &str) -> (u16, u16) {
             );
         }
     }
-    panic!("{texto:?} is not painted:\n{}", lineas.join("\n"));
+    panic!("{text:?} is not painted:\n{}", lines.join("\n"));
 }
 
 /// The extension manager was born mute to the mouse: `overlay_open`
@@ -1877,17 +1874,17 @@ fn donde(lineas: &[String], texto: &str) -> (u16, u16) {
 /// ("press Enter, or the row"). Checked against the PAINTED TEXT: the row
 /// that gets clicked is the one showing "Dos".
 #[test]
-fn clic_en_una_fila_del_gestor_la_elige_y_repetirlo_abre_sus_ajustes() {
-    let (mut app, lineas) = app_con_gestor(100, 24);
-    let (row, col) = donde(&lineas, "Dos v1.0.0");
+fn clicking_a_manager_row_selects_it_and_repeating_it_opens_its_settings() {
+    let (mut app, lines) = app_with_manager(100, 24);
+    let (row, col) = where_(&lines, "Dos v1.0.0");
     assert_eq!(
-        mouse::handle(&mut app, ev(ABAJO, col, row)),
+        mouse::handle(&mut app, ev(DOWN, col, row)),
         After::Nothing,
         "selecting does not talk to the backend"
     );
     assert_eq!(app.extensions.as_ref().unwrap().cursor, 1);
     assert_eq!(
-        mouse::handle(&mut app, ev(ABAJO, col, row)),
+        mouse::handle(&mut app, ev(DOWN, col, row)),
         After::Extension("dialog.confirm"),
         "the already-selected row opens its settings via the SAME command as Enter"
     );
@@ -1896,42 +1893,39 @@ fn clic_en_una_fila_del_gestor_la_elige_y_repetirlo_abre_sus_ajustes() {
 /// The card's buttons fire THE SAME command as their key, and come from
 /// what is painted: the mouse finds "[Disable]" where the frame put it.
 #[test]
-fn los_botones_de_la_ficha_disparan_el_comando_de_su_tecla() {
+fn the_cards_buttons_fire_their_keys_command() {
     // The labels below are `en.ftl`'s, so the language is FIXED before
     // painting: without this the test reads the `LANG` of whoever runs it
-    // and on a Spanish machine looks for "[Disable]" where "[Apagar]" was
+    // and on a Spanish machine looks for "[Disable]" where "[TurnOff]" was
     // painted. Same pattern as `render.rs`; nextest gives one process per
     // test.
     let _ = norte_i18n::force(norte_i18n::Lang::En);
-    let (mut app, lineas) = app_con_gestor(100, 24);
-    for (etiqueta, cmd) in [
+    let (mut app, lines) = app_with_manager(100, 24);
+    for (label, cmd) in [
         ("[Disable]", "dialog.toggle-enabled"),
         ("[Revoke]", "dialog.approve"),
         ("[Settings]", "dialog.confirm"),
         ("[Uninstall]", "dialog.remove"),
     ] {
-        let (row, col) = donde(&lineas, etiqueta);
+        let (row, col) = where_(&lines, label);
         assert_eq!(
-            mouse::handle(&mut app, ev(ABAJO, col + 1, row)),
+            mouse::handle(&mut app, ev(DOWN, col + 1, row)),
             After::Extension(cmd),
-            "{etiqueta}"
+            "{label}"
         );
     }
     // And between two buttons there is nothing: the gap is not a button.
-    let (row, col) = donde(&lineas, "[Disable] [Revoke]");
-    let hueco = col + u16::try_from("[Disable]".len()).unwrap();
-    assert_eq!(
-        mouse::handle(&mut app, ev(ABAJO, hueco, row)),
-        After::Nothing
-    );
+    let (row, col) = where_(&lines, "[Disable] [Revoke]");
+    let slot = col + u16::try_from("[Disable]".len()).unwrap();
+    assert_eq!(mouse::handle(&mut app, ev(DOWN, slot, row)), After::Nothing);
 }
 
 /// The wheel moves the list's cursor, and selecting ANOTHER row with the
 /// previous one's settings open closes them: the card cannot show one
 /// plugin and another one's settings.
 #[test]
-fn la_rueda_mueve_el_cursor_y_cambiar_de_fila_cierra_los_ajustes_ajenos() {
-    let (mut app, lineas) = app_con_gestor(100, 24);
+fn the_wheel_moves_the_cursor_and_changing_row_closes_foreign_settings() {
+    let (mut app, lines) = app_with_manager(100, 24);
     let _ = mouse::handle(&mut app, ev(MouseEventKind::ScrollDown, 50, 10));
     assert_eq!(app.extensions.as_ref().unwrap().cursor, 1);
     let _ = mouse::handle(&mut app, ev(MouseEventKind::ScrollUp, 50, 10));
@@ -1941,8 +1935,8 @@ fn la_rueda_mueve_el_cursor_y_cambiar_de_fila_cierra_los_ajustes_ajenos() {
         plugin_name: "Uno".into(),
         state: norte_frontend::plugin_config::PluginConfigState::new(Vec::new()),
     });
-    let (row, col) = donde(&lineas, "Dos v1.0.0");
-    let _ = mouse::handle(&mut app, ev(ABAJO, col, row));
+    let (row, col) = where_(&lines, "Dos v1.0.0");
+    let _ = mouse::handle(&mut app, ev(DOWN, col, row));
     let mgr = app.extensions.as_ref().unwrap();
     assert_eq!(mgr.cursor, 1);
     assert!(mgr.config.is_none(), "the settings were \"Uno\"'s");
@@ -1952,14 +1946,14 @@ fn la_rueda_mueve_el_cursor_y_cambiar_de_fila_cierra_los_ajustes_ajenos() {
 /// rows are still clickable — with the description below, which is NOT a
 /// row.
 #[test]
-fn en_estrecho_las_filas_se_pulsan_y_la_descripcion_no() {
-    let (mut app, lineas) = app_con_gestor(W, H);
-    let (row, col) = donde(&lineas, "Dos v1.0.0");
-    let _ = mouse::handle(&mut app, ev(ABAJO, col, row));
+fn in_narrow_mode_the_rows_are_clickable_and_the_description_is_not() {
+    let (mut app, lines) = app_with_manager(W, H);
+    let (row, col) = where_(&lines, "Dos v1.0.0");
+    let _ = mouse::handle(&mut app, ev(DOWN, col, row));
     assert_eq!(app.extensions.as_ref().unwrap().cursor, 1);
     // The category header above is not a plugin.
-    let (row, col) = donde(&lineas, "previewer");
-    let _ = mouse::handle(&mut app, ev(ABAJO, col, row));
+    let (row, col) = where_(&lines, "previewer");
+    let _ = mouse::handle(&mut app, ev(DOWN, col, row));
     assert_eq!(
         app.extensions.as_ref().unwrap().cursor,
         1,
@@ -1972,50 +1966,50 @@ fn en_estrecho_las_filas_se_pulsan_y_la_descripcion_no() {
 /// overlay for `overlay_open`'s lock, and both gestures were dropped
 /// entirely.
 #[test]
-fn la_rueda_baja_por_la_ayuda_y_un_clic_elige_pagina() {
+fn the_wheel_scrolls_down_through_help_and_a_click_chooses_a_page() {
     let (w, h) = (100u16, 30u16);
     let area = ratatui::layout::Rect::new(0, 0, w, h);
     let mut app = app_pintada(3);
     norte_tui::overlays::open_help_topic(&mut app, norte_help::Lang::Es, &[], "copying");
-    let refrescar = |app: &mut App| {
-        let (ancho, alto) = ui::help_body_size(area, norte_help::Lang::Es);
-        app.refresh_help(ancho, alto);
-        let _ = pintar_en(app, w, h);
+    let refresh = |app: &mut App| {
+        let (width, alto) = ui::help_body_size(area, norte_help::Lang::Es);
+        app.refresh_help(width, alto);
+        let _ = paint_at(app, w, h);
     };
-    refrescar(&mut app);
+    refresh(&mut app);
     let z = ui::help_zones(&app, area).expect("help is open");
 
     // The wheel over the BODY scrolls it.
-    let antes = app.help.as_ref().expect("open").state.body_scroll();
+    let before = app.help.as_ref().expect("open").state.body_scroll();
     let _ = mouse::handle(
         &mut app,
         ev(MouseEventKind::ScrollDown, z.body.x + 2, z.body.y + 2),
     );
-    refrescar(&mut app);
-    let despues = app.help.as_ref().expect("open").state.body_scroll();
+    refresh(&mut app);
+    let after = app.help.as_ref().expect("open").state.body_scroll();
     assert!(
-        despues > antes,
-        "the wheel scrolled the text down: {antes} → {despues}"
+        after > before,
+        "the wheel scrolled the text down: {before} → {after}"
     );
 
     // A click on a VISIBLE index page that is not the open one selects it.
     let z = ui::help_zones(&app, area).expect("help is open");
     let cursor = app.help.as_ref().expect("open").state.cursor();
-    let &(fila, modelo) = z
+    let &(row, model) = z
         .rows
         .iter()
         .find(|(_, m)| *m != cursor)
         .expect("there is another page in view");
-    let _ = mouse::handle(&mut app, ev(ABAJO, z.sidebar.x + 3, fila));
+    let _ = mouse::handle(&mut app, ev(DOWN, z.sidebar.x + 3, row));
     assert_eq!(
         app.help.as_ref().expect("open").state.cursor(),
-        modelo,
+        model,
         "the click selected THAT row's page"
     );
 
     // And none of this reaches the panes below.
     assert_eq!(
-        mouse::handle(&mut app, ev(ABAJO, 0, 0)),
+        mouse::handle(&mut app, ev(DOWN, 0, 0)),
         After::Nothing,
         "with help in front, a click outside it does nothing"
     );

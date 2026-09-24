@@ -15,9 +15,9 @@
 //! the next key ENTERS whatever is chosen. The name identifies it; the
 //! position only finds it.
 //!
-//! `pub` identifiers in this module (`Estado`/`Quieto`/`Midiendo`/`Hecho`/
-//! `Fallo`, and the `DiskMap` methods `informe`/`elegido`/`estado`/
-//! `apuntar`/`midiendo`/`fallo`/`aterrizar`/`mover`/`elegir`) are Spanish and
+//! `pub` identifiers in this module (`State`/`Idle`/`Measuring`/`Done`/
+//! `Failure`, and the `DiskMap` methods `report`/`chosen`/`state`/
+//! `apuntar`/`measuring`/`failure`/`land`/`mover`/`choose`) are Spanish and
 //! reported for a cross-file rename in phase 2: they are called from
 //! `norte-tui` (`src/jobs/diskmap.rs`, `src/ui/panels.rs`,
 //! `src/screens/side_nav.rs`) and `norte-ui-host`
@@ -33,16 +33,16 @@ use norte_proto::{Segment, TaskId, VPath};
 /// collapsed the three would say "empty" both about a directory nobody has
 /// looked at and about one whose permission was denied.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub enum Estado {
+pub enum State {
     /// Nobody has requested anything yet.
     #[default]
-    Quieto,
+    Idle,
     /// A measurement is running; it can be cancelled.
-    Midiendo(TaskId),
+    Measuring(TaskId),
     /// It finished and what was measured is in the report.
-    Hecho,
+    Done,
     /// It failed, and this is the reason, already translated, to show it.
-    Fallo(String),
+    Failure(String),
 }
 
 /// What a slot's disk map knows right now.
@@ -51,11 +51,11 @@ pub struct DiskMap {
     /// Which directory is being described. `None` = none yet.
     dir: Option<VPath>,
     /// What has been measured. Empty while nothing has landed.
-    informe: FsDirUsageReportResult,
+    report: FsDirUsageReportResult,
     /// The name of the chosen child, if there is one.
-    elegido: Option<Segment>,
+    chosen: Option<Segment>,
     /// What point the measurement is at.
-    estado: Estado,
+    state: State,
 }
 
 impl DiskMap {
@@ -73,14 +73,14 @@ impl DiskMap {
 
     /// What has been measured so far.
     #[must_use]
-    pub fn informe(&self) -> &FsDirUsageReportResult {
-        &self.informe
+    pub fn report(&self) -> &FsDirUsageReportResult {
+        &self.report
     }
 
     /// What point the measurement is at.
     #[must_use]
-    pub fn estado(&self) -> &Estado {
-        &self.estado
+    pub fn state(&self) -> &State {
+        &self.state
     }
 
     /// Points at another directory: forgets what was measured and the
@@ -92,28 +92,28 @@ impl DiskMap {
     /// looking at it.
     pub fn apuntar(&mut self, dir: VPath) {
         self.dir = Some(dir);
-        self.informe = FsDirUsageReportResult::default();
-        self.elegido = None;
-        self.estado = Estado::Quieto;
+        self.report = FsDirUsageReportResult::default();
+        self.chosen = None;
+        self.state = State::Idle;
     }
 
     /// Says that a measurement is running.
-    pub fn midiendo(&mut self, task: TaskId) {
-        self.estado = Estado::Midiendo(task);
+    pub fn measuring(&mut self, task: TaskId) {
+        self.state = State::Measuring(task);
     }
 
     /// The running measurement's task, if there is one (to cancel it).
     #[must_use]
     pub fn task(&self) -> Option<TaskId> {
-        match self.estado {
-            Estado::Midiendo(id) => Some(id),
+        match self.state {
+            State::Measuring(id) => Some(id),
             _ => None,
         }
     }
 
     /// Says why the measurement could not be taken.
-    pub fn fallo(&mut self, motivo: String) {
-        self.estado = Estado::Fallo(motivo);
+    pub fn failure(&mut self, motivo: String) {
+        self.state = State::Failure(motivo);
     }
 
     /// Lands a report —partial or final— onto this map.
@@ -124,27 +124,27 @@ impl DiskMap {
     /// cursor would go jumping from file to file as the children kept
     /// arriving.
     ///
-    /// `listo` distinguishes the last report from the ones in between: it is
+    /// `ready` distinguishes the last report from the ones in between: it is
     /// what decides whether this can be saved to the cache.
-    pub fn aterrizar(&mut self, informe: FsDirUsageReportResult, listo: bool) {
-        let sigue = self
-            .elegido
+    pub fn land(&mut self, informe: FsDirUsageReportResult, ready: bool) {
+        let follows = self
+            .chosen
             .as_ref()
             .is_some_and(|n| informe.children.iter().any(|c| c.name == *n));
-        if !sigue {
-            self.elegido = None;
+        if !follows {
+            self.chosen = None;
         }
-        self.informe = informe;
-        if listo {
-            self.estado = Estado::Hecho;
+        self.report = informe;
+        if ready {
+            self.state = State::Done;
         }
     }
 
     /// The chosen child, if there is one and it is still there.
     #[must_use]
-    pub fn elegido(&self) -> Option<&DirUsageChild> {
-        let n = self.elegido.as_ref()?;
-        self.informe.children.iter().find(|c| c.name == *n)
+    pub fn chosen(&self) -> Option<&DirUsageChild> {
+        let n = self.chosen.as_ref()?;
+        self.report.children.iter().find(|c| c.name == *n)
     }
 
     /// Moves the selection `delta` positions over the NAMED children.
@@ -158,33 +158,33 @@ impl DiskMap {
     /// the edge is a legitimate position to stay at, and wrapping would make
     /// moving down from the last one jump to the other side of the screen.
     pub fn mover(&mut self, delta: isize) {
-        if self.informe.children.is_empty() {
-            self.elegido = None;
+        if self.report.children.is_empty() {
+            self.chosen = None;
             return;
         }
         let actual = self
-            .elegido
+            .chosen
             .as_ref()
-            .and_then(|n| self.informe.children.iter().position(|c| c.name == *n));
-        let nuevo = match actual {
+            .and_then(|n| self.report.children.iter().position(|c| c.name == *n));
+        let new = match actual {
             None => 0,
             Some(i) => {
-                let max = self.informe.children.len().saturating_sub(1);
+                let max = self.report.children.len().saturating_sub(1);
                 let cand = isize::try_from(i).unwrap_or(0).saturating_add(delta);
                 usize::try_from(cand).unwrap_or(0).min(max)
             }
         };
-        self.elegido = self.informe.children.get(nuevo).map(|c| c.name.clone());
+        self.chosen = self.report.children.get(new).map(|c| c.name.clone());
     }
 
     /// Chooses a child by its name —what a click on its rectangle does— and
     /// says whether it existed.
-    pub fn elegir(&mut self, name: &Segment) -> bool {
-        let existe = self.informe.children.iter().any(|c| c.name == *name);
-        if existe {
-            self.elegido = Some(name.clone());
+    pub fn choose(&mut self, name: &Segment) -> bool {
+        let exists = self.report.children.iter().any(|c| c.name == *name);
+        if exists {
+            self.chosen = Some(name.clone());
         }
-        existe
+        exists
     }
 }
 
@@ -225,12 +225,12 @@ mod tests {
     #[test]
     fn the_chosen_one_is_remembered_by_name_and_not_by_position() {
         let mut m = DiskMap::new();
-        m.aterrizar(report(&["a", "b", "c"]), true);
-        assert!(m.elegir(&seg("c")));
+        m.land(report(&["a", "b", "c"]), true);
+        assert!(m.choose(&seg("c")));
         // Measures again and `a` is no longer there: `c` is still chosen even
         // though it is now one position higher.
-        m.aterrizar(report(&["b", "c"]), true);
-        assert_eq!(m.elegido().map(|c| c.name.clone()), Some(seg("c")));
+        m.land(report(&["b", "c"]), true);
+        assert_eq!(m.chosen().map(|c| c.name.clone()), Some(seg("c")));
     }
 
     /// If the chosen one disappears, it is dropped: showing something as
@@ -239,10 +239,10 @@ mod tests {
     #[test]
     fn if_the_chosen_one_disappears_it_is_dropped() {
         let mut m = DiskMap::new();
-        m.aterrizar(report(&["a", "b"]), true);
-        assert!(m.elegir(&seg("a")));
-        m.aterrizar(report(&["b"]), true);
-        assert!(m.elegido().is_none());
+        m.land(report(&["a", "b"]), true);
+        assert!(m.choose(&seg("a")));
+        m.land(report(&["b"]), true);
+        assert!(m.chosen().is_none());
     }
 
     /// The first move chooses: a key that does nothing the first time seems
@@ -250,26 +250,26 @@ mod tests {
     #[test]
     fn the_first_move_chooses_the_first_one() {
         let mut m = DiskMap::new();
-        m.aterrizar(report(&["a", "b"]), true);
+        m.land(report(&["a", "b"]), true);
         m.mover(1);
-        assert_eq!(m.elegido().map(|c| c.name.clone()), Some(seg("a")));
+        assert_eq!(m.chosen().map(|c| c.name.clone()), Some(seg("a")));
     }
 
     /// It is CLAMPED at the ends, it does not wrap.
     #[test]
     fn moving_clamps_at_the_edges() {
         let mut m = DiskMap::new();
-        m.aterrizar(report(&["a", "b", "c"]), true);
-        m.elegir(&seg("c"));
+        m.land(report(&["a", "b", "c"]), true);
+        m.choose(&seg("c"));
         m.mover(1);
         assert_eq!(
-            m.elegido().map(|c| c.name.clone()),
+            m.chosen().map(|c| c.name.clone()),
             Some(seg("c")),
             "all the way down stays down"
         );
-        m.elegir(&seg("a"));
+        m.choose(&seg("a"));
         m.mover(-1);
-        assert_eq!(m.elegido().map(|c| c.name.clone()), Some(seg("a")));
+        assert_eq!(m.chosen().map(|c| c.name.clone()), Some(seg("a")));
     }
 
     /// Pointing at another directory forgets what was measured: the previous
@@ -278,25 +278,25 @@ mod tests {
     #[test]
     fn pointing_at_another_directory_forgets_what_was_measured() {
         let mut m = DiskMap::new();
-        m.aterrizar(report(&["a"]), true);
-        m.elegir(&seg("a"));
+        m.land(report(&["a"]), true);
+        m.choose(&seg("a"));
         m.apuntar(VPath::parse("mem:///other").expect("wire"));
-        assert!(m.informe().children.is_empty());
-        assert!(m.elegido().is_none());
-        assert_eq!(m.estado(), &Estado::Quieto);
+        assert!(m.report().children.is_empty());
+        assert!(m.chosen().is_none());
+        assert_eq!(m.state(), &State::Idle);
     }
 
-    /// A half-done map is not declared finished: `aterrizar(_, false)` leaves
+    /// A half-done map is not declared finished: `land(_, false)` leaves
     /// the state where it was so the panel keeps saying it is measuring.
     #[test]
     fn a_partial_report_does_not_declare_the_measurement_finished() {
         let mut m = DiskMap::new();
-        m.midiendo(TaskId::new(7));
-        m.aterrizar(report(&["a"]), false);
-        assert_eq!(m.estado(), &Estado::Midiendo(TaskId::new(7)));
+        m.measuring(TaskId::new(7));
+        m.land(report(&["a"]), false);
+        assert_eq!(m.state(), &State::Measuring(TaskId::new(7)));
         assert_eq!(m.task(), Some(TaskId::new(7)));
-        m.aterrizar(report(&["a", "b"]), true);
-        assert_eq!(m.estado(), &Estado::Hecho);
+        m.land(report(&["a", "b"]), true);
+        assert_eq!(m.state(), &State::Done);
         assert!(
             m.task().is_none(),
             "once finished there is nothing left to cancel"

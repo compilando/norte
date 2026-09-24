@@ -209,25 +209,25 @@ async fn backend_with_ia() -> anyhow::Result<Backend> {
     // This branch does not go through `run`, so it installs its own — see
     // `JournalWarningStderr`.
     engine.set_journal_warning_sink(Arc::new(JournalWarningStderr));
-    // What every engine carries, AI included (`norte_core::equipo`). The
+    // What every engine carries, AI included (`norte_core::team`). The
     // core resolves the secret (env → keyring → age) and builds the
     // provider; the CLI never touches norte-connect nor sees the key
     // (rule 10). Only the renaming one: the embeddings one would resolve
     // another secret this command does not use.
-    let ia = norte_core::equipo::Ia {
-        renombrado: true,
+    let ia = norte_core::team::Ia {
+        renamed: true,
         embeddings: false,
     };
-    let done = norte_core::equipo::equipar(&engine, &dir, ia).await;
-    if let Err(e) = norte_core::archive_config::aplicar(&engine).await {
+    let done = norte_core::team::equipar(&engine, &dir, ia).await;
+    if let Err(e) = norte_core::archive_config::apply(&engine).await {
         eprintln!(
             "{}",
-            crate::cmd::daemon::warning_text(&norte_core::equipo::Aviso::ArchivoInvalido(
+            crate::cmd::daemon::warning_text(&norte_core::team::Notice::ArchiveInvalid(
                 e.to_string()
             ))
         );
     }
-    if done.ia_renombrado {
+    if done.ia_renamed {
         return Ok(Backend::Embedded(Arc::new(engine)));
     }
     // Here the AI is not optional: it is the command. What is a warning
@@ -235,12 +235,12 @@ async fn backend_with_ia() -> anyhow::Result<Backend> {
     // is a specific reason (`[ai]` broken, a secret that does not
     // resolve), THAT is the error: telling "define a provider" to someone
     // who already defined one sends them looking where it isn't.
-    if let Some(reason) = done.avisos.iter().find(|a| {
+    if let Some(reason) = done.notices.iter().find(|a| {
         matches!(
             a,
-            norte_core::equipo::Aviso::IaInvalida(_)
-                | norte_core::equipo::Aviso::IaNoCargo(_)
-                | norte_core::equipo::Aviso::IaNoDisponible(_)
+            norte_core::team::Notice::IaInvalid(_)
+                | norte_core::team::Notice::IaNoCargo(_)
+                | norte_core::team::Notice::IaNoAvailable(_)
         )
     }) {
         anyhow::bail!("{}", crate::cmd::daemon::warning_text(reason));

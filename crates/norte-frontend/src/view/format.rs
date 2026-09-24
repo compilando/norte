@@ -93,13 +93,13 @@ pub fn human_bytes_short(n: u64) -> String {
 /// nobody notices until they compare two screenshots.
 ///
 /// ```
-/// use norte_frontend::format::hora_utc;
-/// assert_eq!(hora_utc(0), "00:00:00");
+/// use norte_frontend::format::time_utc;
+/// assert_eq!(time_utc(0), "00:00:00");
 /// // And a timestamp BEFORE the epoch does not give a negative time.
-/// assert_eq!(hora_utc(-1), "23:59:59");
+/// assert_eq!(time_utc(-1), "23:59:59");
 /// ```
 #[must_use]
-pub fn hora_utc(epoch_ms: i64) -> String {
+pub fn time_utc(epoch_ms: i64) -> String {
     let sod = epoch_ms.div_euclid(1000).rem_euclid(86_400);
     format!("{:02}:{:02}:{:02}", sod / 3600, (sod % 3600) / 60, sod % 60)
 }

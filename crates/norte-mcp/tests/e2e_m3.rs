@@ -45,7 +45,7 @@ async fn call_tool(b: &Bridge, name: &str, args: serde_json::Value) -> (String, 
 
 /// M3's exit criterion.
 /// REAL daemon with an in-memory journal + `ask` policy + approval router,
-/// with `mem:///proj/informe.txt` seeded. Returns `(tempdir, socket, mem)`.
+/// with `mem:///proj/report.txt` seeded. Returns `(tempdir, socket, mem)`.
 async fn spawn_ask_daemon() -> (tempfile::TempDir, std::path::PathBuf, Arc<MemProvider>) {
     let dir = tempfile::tempdir().expect("tempdir");
     let socket = dir.path().join("d.sock");
@@ -129,7 +129,7 @@ async fn assert_undo_report_clean(human: &Client, task_id: norte_proto::TaskId) 
 
 /// M3's exit criterion, end to end.
 #[tokio::test]
-async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
+async fn m3_exit_criteria_agent_under_ask_with_undo() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
 
     // --- The HUMAN: a User connection that grants, approves and undoes ---
@@ -263,7 +263,7 @@ async fn criterio_de_salida_m3_agente_bajo_ask_con_undo() {
 /// listing below would succeed — and the bridge would have laundered the
 /// actor.
 #[tokio::test]
-async fn el_puente_abre_su_brazo_de_streams_una_sola_vez() {
+async fn the_bridge_opens_its_streams_arm_only_once() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
     let agent = Bridge::connect(&socket, "claude")
         .await
@@ -288,7 +288,7 @@ async fn el_puente_abre_su_brazo_de_streams_una_sola_vez() {
 
 /// Requests and grants READ scope for `roots` (test helper): `compare` goes
 /// through the same `read_gate` as `list`/`stat` (see
-/// `el_puente_abre_su_brazo_de_streams_una_sola_vez`), so a read-only tool
+/// `the_bridge_opens_its_streams_arm_only_once`), so a read-only tool
 /// needs a granted scope just like a mutating one — the op chosen (`copy`)
 /// is irrelevant to `covers_read`, which only looks at the root.
 async fn grant_read_scope(agent: &Bridge, human: &Client, roots: &[&str]) {
@@ -315,7 +315,7 @@ async fn grant_read_scope(agent: &Bridge, human: &Client, roots: &[&str]) {
 /// translated labels: a tool result that changes with the operator's
 /// language is not a contract.
 #[tokio::test]
-async fn compare_devuelve_las_filas_con_valores_de_wire() {
+async fn compare_returns_the_rows_with_wire_values() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
     mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
@@ -359,7 +359,7 @@ async fn compare_devuelve_las_filas_con_valores_de_wire() {
 /// truncation would be worse than the cap — a model reading it as complete
 /// would report two trees as equal without having seen them whole.
 #[tokio::test]
-async fn compare_con_limit_bajo_trunca_y_cancela() {
+async fn compare_with_low_limit_truncates_and_cancels() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     // A tree that is SLOW on purpose: over five plain files the walk ends
     // before the cancellation arrives and the task comes out `Completed`,
@@ -413,10 +413,10 @@ async fn compare_con_limit_bajo_trunca_y_cancela() {
 /// Rule 1 in `compare` (encoding-auditor, task 2 review): a hostile name
 /// that is born as BYTES in the provider travels all the way to the tool's
 /// row as a faithful `to_wire()`, never lossy — full norte-testkit corpus,
-/// same as `nombre_hostil_round_trip_byte_fiel_por_el_puente` covers
+/// same as `hostile_name_round_trips_byte_faithful_through_the_bridge` covers
 /// `list_dir`.
 #[tokio::test]
-async fn compare_nombre_hostil_viaja_como_wire_fiel() {
+async fn compare_hostile_name_travels_faithfully_on_the_wire() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
     mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
@@ -501,7 +501,7 @@ async fn compare_nombre_hostil_viaja_como_wire_fiel() {
 /// The agent sees WHAT a synchronisation would do, and the tool's
 /// description tells it the hash is of no use to anyone else.
 #[tokio::test]
-async fn sync_plan_devuelve_los_pasos_y_no_aplica_nada() {
+async fn sync_plan_returns_the_steps_and_applies_nothing() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     mem.mkdir(&vp("mem:///src")).await.expect("mkdir src");
     mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");
@@ -570,7 +570,7 @@ async fn sync_plan_devuelve_los_pasos_y_no_aplica_nada() {
 
 /// There is no apply tool, and that is the decision, not an oversight.
 #[tokio::test]
-async fn no_existe_una_tool_de_aplicar() {
+async fn there_is_no_apply_tool() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
     let agent = Bridge::connect(&socket, "claude")
         .await
@@ -650,10 +650,10 @@ async fn sync_plan_mode_malformado_o_ausente_es_error_no_default() {
 /// `counts`/`dest_trash`/`blockers` have to stay ABSENT — never zero, which
 /// a model would read as "no blockers" when it really is not known.
 #[tokio::test]
-async fn sync_plan_con_limit_bajo_trunca_y_no_trae_lo_que_no_supo() {
+async fn sync_plan_with_a_low_limit_truncates_and_does_not_bring_what_it_could_not_know() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     // A SLOW source for the same reason as in
-    // `compare_con_limit_bajo_trunca_y_cancela`: over five plain files the
+    // `compare_with_low_limit_truncates_and_cancels`: over five plain files the
     // plan ends before the cancellation arrives. The planner DOES descend
     // orphans on the source side, so an empty destination does not save it
     // the walk.
@@ -729,7 +729,7 @@ async fn sync_plan_con_limit_bajo_trunca_y_no_trae_lo_que_no_supo() {
 /// criterion as `mode`: an empty argument cannot be the short way to ask
 /// for the whole destination to be rewritten.
 #[tokio::test]
-async fn criteria_vacia_es_error_en_las_dos_tools() {
+async fn empty_criteria_is_an_error_in_both_tools() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
     mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
@@ -793,7 +793,7 @@ async fn criteria_vacia_es_error_en_las_dos_tools() {
 /// the rejection it would come out `truncated: true` with an empty list,
 /// indistinguishable from a genuinely truncated tree.
 #[tokio::test]
-async fn limit_cero_es_error_en_las_dos_tools() {
+async fn limit_zero_is_an_error_in_both_tools() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     mem.mkdir(&vp("mem:///a")).await.expect("mkdir a");
     mem.mkdir(&vp("mem:///b")).await.expect("mkdir b");
@@ -917,7 +917,7 @@ async fn wait_task_state(human: &Client, task_id: norte_proto::TaskId) -> norte_
 /// without leaving a trace in the journal (nothing mutates). The bridge
 /// already cancelled on truncation: it is the same fact.
 #[tokio::test]
-async fn una_tool_abandonada_cancela_el_walk_del_daemon() {
+async fn an_abandoned_tool_cancels_the_daemons_walk() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     seed_slow_pair(&mem, 12, Duration::from_millis(50)).await;
 
@@ -960,7 +960,7 @@ async fn una_tool_abandonada_cancela_el_walk_del_daemon() {
 /// looking only at `rows` would read "no differences" into a list that is
 /// only halfway there.
 #[tokio::test]
-async fn una_comparacion_cancelada_por_un_tercero_no_finge_estar_completa() {
+async fn a_comparison_canceled_by_a_third_party_does_not_pretend_to_be_complete() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     seed_slow_pair(&mem, 12, Duration::from_millis(50)).await;
 
@@ -1017,7 +1017,7 @@ async fn una_comparacion_cancelada_por_un_tercero_no_finge_estar_completa() {
 /// cannot apply and has no method to discard, so the cap is reached in
 /// normal use.
 #[tokio::test]
-async fn el_tope_de_planes_retenidos_no_sale_como_error_interno() {
+async fn the_retained_plans_cap_does_not_come_out_as_an_internal_error() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");
     // 17 DIFFERENT sources: every plan needs its own digest, or the spool

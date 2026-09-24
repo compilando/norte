@@ -112,7 +112,7 @@ pub fn restore(term: &mut Tui) -> io::Result<()> {
     // never asked for those pixels. Best-effort, like the rest of this
     // module's error handling: a paint failure must never block the exit
     // this function exists to guarantee.
-    crate::kitty_graphics::borrar_colocada(term.backend_mut());
+    crate::kitty_graphics::delete_placed(term.backend_mut());
     // Disabling raw mode first, same order as `ratatui::try_restore`: it has
     // more side effects than leaving the alternate screen buffer.
     let raw = disable_raw_mode();
@@ -135,14 +135,14 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
         if let Ok(mut out) = open_controlling_terminal() {
-            let _ = crate::alt_menu::soltar_en_panico(&mut out);
+            let _ = crate::alt_menu::drop_on_panic(&mut out);
             // Not one of the plan's four named moments, but the same
             // reasoning as `restore` just above: process-level state exists
             // precisely so the panic hook can undo it without anyone
             // threading it through. Left out, a panic while an image is
             // placed leaves it stuck on the developer's terminal, on top of
             // the very backtrace this hook exists to make readable.
-            crate::kitty_graphics::borrar_colocada(&mut out);
+            crate::kitty_graphics::delete_placed(&mut out);
             let _ = execute!(
                 out,
                 DisableBracketedPaste,

@@ -41,11 +41,11 @@ fn icon_span<'a>(
     name: &[u8],
     kind: EntryKind,
 ) -> Span<'a> {
-    let glifo = decoration.and_then(|d| d.icon.as_deref()).unwrap_or("");
-    let glifo = take_width(glifo, ICON_GUTTER - 1);
-    let relleno = (ICON_GUTTER - 1).saturating_sub(glifo.width());
+    let glyph = decoration.and_then(|d| d.icon.as_deref()).unwrap_or("");
+    let glyph = take_width(glyph, ICON_GUTTER - 1);
+    let relleno = (ICON_GUTTER - 1).saturating_sub(glyph.width());
     Span::styled(
-        format!("{glifo}{} ", " ".repeat(relleno)),
+        format!("{glyph}{} ", " ".repeat(relleno)),
         theme.entry(name, kind),
     )
 }
@@ -89,9 +89,9 @@ pub fn painted_len_and_selection(pane: &Pane) -> (usize, Option<usize>) {
 /// ends up marking the file next door (`funcion-compartida-no-basta`
 /// memory).
 pub(crate) fn painted_rows(offset: usize, total: usize, alto: usize) -> std::ops::Range<usize> {
-    let desde = offset.min(total);
-    let hasta = desde.saturating_add(alto).min(total);
-    desde..hasta
+    let from = offset.min(total);
+    let until = from.saturating_add(alto).min(total);
+    from..until
 }
 
 /// The state ratatui paints the list with, for an already-clipped `window`.
@@ -108,12 +108,12 @@ pub(crate) fn painted_rows(offset: usize, total: usize, alto: usize) -> std::ops
 /// in `Pane::viewport_offset`, and it is the one `pane_geometry` declares to
 /// the mouse: both come from the same place, which is what keeps a click
 /// from resolving to the row next door.
-fn list_state(selected: Option<usize>, ventana: &std::ops::Range<usize>) -> ListState {
+fn list_state(selected: Option<usize>, window: &std::ops::Range<usize>) -> ListState {
     let mut state = ListState::default();
     state.select(
         selected
-            .and_then(|s| s.checked_sub(ventana.start))
-            .filter(|k| *k < ventana.len()),
+            .and_then(|s| s.checked_sub(window.start))
+            .filter(|k| *k < window.len()),
     );
     *state.offset_mut() = 0;
     state
@@ -318,11 +318,11 @@ pub(crate) fn pane_columns(
     // the permissions column the listing sets is painted (spec 2026-09-20).
     catalog: Option<&norte_proto::AttrCatalog>,
 ) -> Vec<norte_frontend::columns::Fitted> {
-    let delante = 3 + if pane.any_icon() { ICON_GUTTER } else { 0 };
-    let quiere = pane
+    let ahead = 3 + if pane.any_icon() { ICON_GUTTER } else { 0 };
+    let wants = pane
         .name_width_p80()
-        .saturating_add(u16::try_from(delante).unwrap_or(u16::MAX));
-    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, quiere, catalog)
+        .saturating_add(u16::try_from(ahead).unwrap_or(u16::MAX));
+    norte_frontend::columns::fitted_columns(settings, pane.dir().scheme(), inner_w, wants, catalog)
 }
 
 /// The pane's border title: where it is, what is happening to it and where
@@ -335,7 +335,7 @@ pub(crate) fn pane_columns(
 /// DESTINATION. Each mark goes OUTSIDE the directory's name on purpose: a
 /// directory named "→" cannot pretend to be the destination.
 ///
-/// `ancho` is the border's: the waiting title IS clipped, because it is the
+/// `width` is the border's: the waiting title IS clipped, because it is the
 /// first one to carry, on purpose, a long text (a remote destination with a
 /// scheme and a host) and ratatui clips on the right WITHOUT marking the
 /// cut. Losing a path's tail is losing which folder it is; losing the head,
@@ -345,7 +345,7 @@ fn pane_title(
     pane: &Pane,
     is_dest: bool,
     busy: Option<&norte_frontend::busy::Busy>,
-    ancho: u16,
+    width: u16,
 ) -> String {
     let (title, title_hostile) =
         norte_frontend::path_display_with(pane.dir(), pane.name_encoding());
@@ -394,7 +394,7 @@ fn pane_title(
     // that mix could not be read ("what is this doing?"). With the spinner
     // next to it, it reads "going here".
     if let Some(b) = busy {
-        let Some(destino) = b.target.as_ref() else {
+        let Some(dest) = b.target.as_ref() else {
             return format!("{} {title}", b.frame());
         };
         // Through `path_display_with` with the PANE's encoding, same as
@@ -403,17 +403,16 @@ fn pane_title(
         // altered-name badge is kept. Rendering it with no badge was
         // painting a masked path with no mark saying it was masked, right
         // where cancel is also offered.
-        let (destino, alterado) = norte_frontend::path_display_with(destino, pane.name_encoding());
+        let (dest, altered) = norte_frontend::path_display_with(dest, pane.name_encoding());
         // 2 cells for the spinner + the space, plus the badge if it carries
         // one.
-        let gastado =
-            2 + usize::from(alterado) * (norte_frontend::display::cells(HOSTILE_BADGE) + 1);
-        let hueco = usize::from(ancho).saturating_sub(gastado);
-        let destino = norte_frontend::middle_ellipsis(&destino, hueco);
-        title = if alterado {
-            format!("{} {HOSTILE_BADGE} {destino}", b.frame())
+        let spent = 2 + usize::from(altered) * (norte_frontend::display::cells(HOSTILE_BADGE) + 1);
+        let slot = usize::from(width).saturating_sub(spent);
+        let dest = norte_frontend::middle_ellipsis(&dest, slot);
+        title = if altered {
+            format!("{} {HOSTILE_BADGE} {dest}", b.frame())
         } else {
-            format!("{} {destino}", b.frame())
+            format!("{} {dest}", b.frame())
         };
     }
     title
@@ -455,16 +454,16 @@ fn clipped_cell(cell: String, content: usize) -> String {
 /// Puts the pyjama stripe under an ODD row, and leaves the even one as it
 /// was.
 ///
-/// `banda` arrives already resolved against the theme: `None` is pyjama
+/// `band` arrives already resolved against the theme: `None` is pyjama
 /// turned off or a theme that does not define it, and both things mean the
 /// same to whoever paints — no stripe.
 ///
 /// The parity is the PAINTED row's. As the `ListItem`'s BASE style, so that
 /// the row's spans are painted on top and `highlight_style` — the cursor —
 /// wins by coming after.
-fn stripe(banda: Option<ratatui::style::Style>, fila: usize, item: ListItem<'_>) -> ListItem<'_> {
-    match banda {
-        Some(style) if fila % 2 == 1 => item.style(style),
+fn stripe(band: Option<ratatui::style::Style>, row: usize, item: ListItem<'_>) -> ListItem<'_> {
+    match band {
+        Some(style) if row % 2 == 1 => item.style(style),
         _ => item,
     }
 }
@@ -561,23 +560,23 @@ pub(crate) fn draw_pane(
     // icon, all of them carry the slot.
     let icons = pane.any_icon();
     let dir_slash = paint_slash(dir_indicator, icons);
-    let ventana = pane_window(pane, area, tabs.is_some(), painted_len);
+    let window = pane_window(pane, area, tabs.is_some(), painted_len);
     // The odd rows' stripe. Resolved ONCE per paint: the role with no
     // color (the theme does not define it) leaves the listing exactly as
     // it was, so the setting being on over a mute theme is not a failure,
     // it is a normal listing.
-    let banda = stripes.then(|| theme.role(Role::Stripe));
+    let band = stripes.then(|| theme.role(Role::Stripe));
     let items: Vec<ListItem<'_>> = match pane.quick_visible() {
         Some(vis) => vis
             .iter()
             .enumerate()
-            .skip(ventana.start)
-            .take(ventana.len())
-            .filter_map(|(fila, &i)| pane.entries().get(i).map(|e| (fila, i, e)))
-            .map(|(fila, i, e)| {
+            .skip(window.start)
+            .take(window.len())
+            .filter_map(|(row, &i)| pane.entries().get(i).map(|e| (row, i, e)))
+            .map(|(row, i, e)| {
                 stripe(
-                    banda,
-                    fila,
+                    band,
+                    row,
                     entry_item(
                         e,
                         theme,
@@ -598,11 +597,11 @@ pub(crate) fn draw_pane(
             .entries()
             .iter()
             .enumerate()
-            .skip(ventana.start)
-            .take(ventana.len())
+            .skip(window.start)
+            .take(window.len())
             .map(|(i, e)| {
                 stripe(
-                    banda,
+                    band,
                     i,
                     entry_item(
                         e,
@@ -647,7 +646,7 @@ pub(crate) fn draw_pane(
         Role::SelectionUnfocused
     };
     let list = List::new(items).highlight_style(theme.role(cursor_role));
-    let mut state = list_state(selected, &ventana);
+    let mut state = list_state(selected, &window);
     frame.render_stateful_widget(list, list_area, &mut state);
 }
 
@@ -1181,7 +1180,7 @@ mod draw_pane_attr_tests {
         let pane = Pane::new(dir.clone(), vec![entry(&dir, "fichero-de-antes")]);
         let theme = TuiTheme::default();
 
-        let pintar = |busy: Option<&Busy>| {
+        let paint = |busy: Option<&Busy>| {
             let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("test terminal");
             terminal
                 .draw(|f| {
@@ -1206,13 +1205,13 @@ mod draw_pane_attr_tests {
             terminal.backend().to_string()
         };
 
-        let destino = VPath::parse("mem:///alli").unwrap();
-        let mut busy = Busy::new(BusyKind::Connecting, Some(destino), Some(0));
+        let dest = VPath::parse("mem:///alli").unwrap();
+        let mut busy = Busy::new(BusyKind::Connecting, Some(dest), Some(0));
         busy.elapsed = norte_frontend::busy::THRESHOLD;
-        let esperando = pintar(Some(&busy));
+        let waiting = paint(Some(&busy));
         assert!(
-            esperando.contains("alli"),
-            "the header does not say the destination: {esperando}"
+            waiting.contains("alli"),
+            "the header does not say the destination: {waiting}"
         );
         // The role marker ALWAYS goes up front, and it is what keeps a
         // directory named "⠋ connecting…" from passing itself off as a
@@ -1223,31 +1222,31 @@ mod draw_pane_attr_tests {
         // themselves, and this test stayed green because it only tested
         // `mem`.
         assert!(
-            esperando.contains('⟨'),
-            "the header lost the scheme marker: {esperando}"
+            waiting.contains('⟨'),
+            "the header lost the scheme marker: {waiting}"
         );
         let local = VPath::parse("file:///alli").unwrap();
         let mut busy_local = Busy::new(BusyKind::Connecting, Some(local), Some(0));
         busy_local.elapsed = norte_frontend::busy::THRESHOLD;
-        let esperando_local = pintar(Some(&busy_local));
+        let waiting_local = paint(Some(&busy_local));
         assert!(
-            esperando_local.contains("/alli"),
-            "a local path carries its slash up front: {esperando_local}"
+            waiting_local.contains("/alli"),
+            "a local path carries its slash up front: {waiting_local}"
         );
         assert!(
-            esperando.contains(busy.frame()),
-            "the header does not carry the spinner: {esperando}"
+            waiting.contains(busy.frame()),
+            "the header does not carry the spinner: {waiting}"
         );
         assert!(
-            esperando.contains("fichero-de-antes"),
-            "the body emptied out while waiting: {esperando}"
+            waiting.contains("fichero-de-antes"),
+            "the body emptied out while waiting: {waiting}"
         );
 
         // With no wait, the header is the usual one and there is no trace
         // of anything.
-        let quieto = pintar(None);
-        assert!(!quieto.contains("alli"), "{quieto}");
-        assert!(!quieto.contains(busy.frame()), "{quieto}");
+        let idle = paint(None);
+        assert!(!idle.contains("alli"), "{idle}");
+        assert!(!idle.contains(busy.frame()), "{idle}");
     }
 
     /// #323, encoding-audit BLOCKER finding: a wait's destination carries the
@@ -1264,13 +1263,13 @@ mod draw_pane_attr_tests {
         let settings = norte_frontend::columns::ColumnsSettings::resolve(
             &norte_config::ColumnsConfig::default(),
         );
-        let aqui = VPath::parse("mem:///aqui").unwrap();
-        let pane = Pane::new(aqui.clone(), vec![entry(&aqui, "x")]);
+        let here = VPath::parse("mem:///aqui").unwrap();
+        let pane = Pane::new(here.clone(), vec![entry(&here, "x")]);
         let theme = TuiTheme::default();
         // The hostile corpus's `rtl_override`: `abc<U+202E>gpj.exe`.
-        let hostil = VPath::parse("mem:///abc%E2%80%AEgpj.exe").unwrap();
+        let hostile = VPath::parse("mem:///abc%E2%80%AEgpj.exe").unwrap();
 
-        let mut busy = Busy::new(BusyKind::Connecting, Some(hostil), Some(0));
+        let mut busy = Busy::new(BusyKind::Connecting, Some(hostile), Some(0));
         busy.elapsed = norte_frontend::busy::THRESHOLD;
         let mut terminal = Terminal::new(TestBackend::new(60, 6)).expect("test terminal");
         terminal
@@ -1293,14 +1292,14 @@ mod draw_pane_attr_tests {
                 );
             })
             .expect("draw");
-        let pintado = terminal.backend().to_string();
+        let painted = terminal.backend().to_string();
         assert!(
-            pintado.contains(HOSTILE_BADGE),
-            "the altered destination was painted with NO badge: {pintado}"
+            painted.contains(HOSTILE_BADGE),
+            "the altered destination was painted with NO badge: {painted}"
         );
         assert!(
-            !pintado.contains('\u{202e}'),
-            "the bidi override reached the terminal raw: {pintado}"
+            !painted.contains('\u{202e}'),
+            "the bidi override reached the terminal raw: {painted}"
         );
     }
 
@@ -1315,13 +1314,13 @@ mod draw_pane_attr_tests {
         let settings = norte_frontend::columns::ColumnsSettings::resolve(
             &norte_config::ColumnsConfig::default(),
         );
-        let aqui = VPath::parse("mem:///aqui").unwrap();
-        let pane = Pane::new(aqui.clone(), vec![entry(&aqui, "x")]);
+        let here = VPath::parse("mem:///aqui").unwrap();
+        let pane = Pane::new(here.clone(), vec![entry(&here, "x")]);
         let theme = TuiTheme::default();
-        let largo =
+        let long =
             VPath::parse("mem:///produccion/equipo/almacen/interno/example/org/carpeta").unwrap();
 
-        let mut busy = Busy::new(BusyKind::Connecting, Some(largo), Some(0));
+        let mut busy = Busy::new(BusyKind::Connecting, Some(long), Some(0));
         busy.elapsed = norte_frontend::busy::THRESHOLD;
         let mut terminal = Terminal::new(TestBackend::new(40, 6)).expect("test terminal");
         terminal
@@ -1344,25 +1343,25 @@ mod draw_pane_attr_tests {
                 );
             })
             .expect("draw");
-        let pintado = terminal.backend().to_string();
+        let painted = terminal.backend().to_string();
         assert!(
-            pintado.contains('…'),
-            "it was clipped with no mark for the cut: {pintado}"
+            painted.contains('…'),
+            "it was clipped with no mark for the cut: {painted}"
         );
         assert!(
-            pintado.contains("carpeta"),
-            "the TAIL was lost, which is what folder it is: {pintado}"
+            painted.contains("carpeta"),
+            "the TAIL was lost, which is what folder it is: {painted}"
         );
     }
 
     /// Paints a listing with pyjama on and returns each row's background,
-    /// top to bottom. `filtro` types a quick search.
-    fn pyjama_backgrounds(nombres: &[&str], filtro: Option<&str>) -> Vec<ratatui::style::Color> {
+    /// top to bottom. `filter` types a quick search.
+    fn pyjama_backgrounds(names: &[&str], filter: Option<&str>) -> Vec<ratatui::style::Color> {
         use norte_theme::{Role, Style, Theme};
         let dir = VPath::parse("mem:///d").expect("vpath");
-        let entradas: Vec<_> = nombres.iter().map(|n| entry(&dir, n)).collect();
-        let mut pane = Pane::new(dir, entradas);
-        if let Some(f) = filtro {
+        let entries: Vec<_> = names.iter().map(|n| entry(&dir, n)).collect();
+        let mut pane = Pane::new(dir, entries);
+        if let Some(f) = filter {
             pane.quick_start(crate::nav::Mode::Filter);
             for c in f.chars() {
                 pane.quick_char(c);
@@ -1413,9 +1412,9 @@ mod draw_pane_attr_tests {
     #[test]
     fn the_pyjama_alternates_the_rows() {
         let fondos = pyjama_backgrounds(&["a0", "a1", "a2", "a3"], None);
-        let banda = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
-        assert_eq!(fondos[1], banda, "row 1 is odd: stripe");
-        assert_eq!(fondos[3], banda, "so is row 3");
+        let band = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
+        assert_eq!(fondos[1], band, "row 1 is odd: stripe");
+        assert_eq!(fondos[3], band, "so is row 3");
         assert_ne!(fondos[2], fondos[1], "row 2 is even: no stripe");
     }
 
@@ -1426,8 +1425,8 @@ mod draw_pane_attr_tests {
     fn the_cursor_beats_the_stripe() {
         // With the cursor on an ODD row, which is where the stripe would be.
         let fondos = pyjama_backgrounds(&["a0", "a1", "a2", "a3"], None);
-        let banda = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
-        assert_ne!(fondos[0], banda, "the cursor's row carries no stripe");
+        let band = ratatui::style::Color::Rgb(0x33, 0x33, 0x33);
+        assert_ne!(fondos[0], band, "the cursor's row carries no stripe");
         assert_ne!(fondos[0], fondos[2], "nor the even rows' plain background");
     }
 
@@ -1573,7 +1572,7 @@ mod column_header_line_tests {
     use norte_frontend::{SortColumn, SortDir, SortSpec};
     use unicode_width::UnicodeWidthStr;
 
-    fn estilo(b: Builtin, align: Align, header: &str) -> ColumnStyle {
+    fn style(b: Builtin, align: Align, header: &str) -> ColumnStyle {
         ColumnStyle {
             align,
             header: Some(header.to_owned()),
@@ -1596,12 +1595,12 @@ mod column_header_line_tests {
             (
                 ColumnId::Builtin(Builtin::Name),
                 6,
-                estilo(Builtin::Name, Align::Left, "N"),
+                style(Builtin::Name, Align::Left, "N"),
             ),
             (
                 ColumnId::Builtin(Builtin::Size),
                 1,
-                estilo(Builtin::Size, Align::Left, "S"),
+                style(Builtin::Size, Align::Left, "S"),
             ),
         ];
         let line = column_header_line(&cols, &sort, None, 0);
@@ -1611,12 +1610,12 @@ mod column_header_line_tests {
             (
                 ColumnId::Builtin(Builtin::Name),
                 6,
-                estilo(Builtin::Name, Align::Left, "N"),
+                style(Builtin::Name, Align::Left, "N"),
             ),
             (
                 ColumnId::Builtin(Builtin::Size),
                 2,
-                estilo(Builtin::Size, Align::Left, "S"),
+                style(Builtin::Size, Align::Left, "S"),
             ),
         ];
         let line = column_header_line(&cols, &sort, None, 0);
@@ -1638,12 +1637,12 @@ mod column_header_line_tests {
             (
                 ColumnId::Builtin(Builtin::Name),
                 8,
-                estilo(Builtin::Name, Align::Left, "Nombre"),
+                style(Builtin::Name, Align::Left, "Nombre"),
             ),
             (
                 ColumnId::Builtin(Builtin::Size),
                 4,
-                estilo(Builtin::Size, Align::Left, "S"),
+                style(Builtin::Size, Align::Left, "S"),
             ),
         ];
         let line = column_header_line(&cols, &sort, None, 3);
@@ -1653,12 +1652,12 @@ mod column_header_line_tests {
             (
                 ColumnId::Builtin(Builtin::Name),
                 2,
-                estilo(Builtin::Name, Align::Left, "N"),
+                style(Builtin::Name, Align::Left, "N"),
             ),
             (
                 ColumnId::Builtin(Builtin::Size),
                 4,
-                estilo(Builtin::Size, Align::Left, "S"),
+                style(Builtin::Size, Align::Left, "S"),
             ),
         ];
         let line = column_header_line(&cols, &sort, None, 3);

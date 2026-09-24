@@ -205,7 +205,7 @@ pub fn scheme_is_read_only(scheme: &str) -> bool {
 ///
 /// The two-step answer both frontends need, in ONE place. Each had written it
 /// out — `norte_tui::app::App::pane_read_only` and the GUI host's
-/// `solo_lectura` — which is the shape ADR 0077 exists to stop: two spellings
+/// `solo_read` — which is the shape ADR 0077 exists to stop: two spellings
 /// of one decision, drifting quietly. `enter_target` moved here for the same
 /// reason and in the same change.
 ///
@@ -479,7 +479,7 @@ pub fn plugin_of_command(command: &str) -> Option<&str> {
 ///
 /// assert!(verdict_with_plugins("plugin:acme.ftp:sync", &facts, &active).is_available());
 /// assert_eq!(
-///     verdict_with_plugins("plugin:otro:sync", &facts, &active).reason(),
+///     verdict_with_plugins("plugin:other:sync", &facts, &active).reason(),
 ///     Some(Reason::PluginInactive)
 /// );
 /// // A built-in command never looks at the set.

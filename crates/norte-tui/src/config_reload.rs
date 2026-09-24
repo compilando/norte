@@ -91,11 +91,11 @@ pub async fn reload_config(
                 // set when the viewer OPENED, and without this cut a `Kitty`
                 // that stops being one on the fly left the pixels already
                 // placed on screen forever. See the rustdoc of
-                // `App::soltar_miniatura_si_deja_de_ser_kitty` for why the
+                // `App::drop_thumbnail_if_no_longer_kitty` for why the
                 // opposite direction is NOT followed here.
-                app.soltar_miniatura_si_deja_de_ser_kitty(crate::viewer_open::modo_efectivo(
+                app.drop_thumbnail_if_no_longer_kitty(crate::viewer_open::modo_effective(
                     app.chrome.images(),
-                    crate::kitty_graphics::soportado(),
+                    crate::kitty_graphics::supported(),
                 ));
                 // The history cap, also hot: lowering it drops the farthest
                 // entries, never what the reader just walked.
@@ -178,7 +178,7 @@ pub async fn reload_config(
                 // same criterion. A rebind that did not reach here would
                 // leave the reader inside the shell pressing the new key.
                 app.subshell_chord = norte_frontend::subshell::detach_chord(&browse);
-                app.terminal_chord = browse.lone_chord(crate::termpanel::COMANDO);
+                app.terminal_chord = browse.lone_chord(crate::termpanel::COMMAND);
                 // K3c: the shortcuts editor, if open, is REFRESHED (not
                 // closed like `help`/`palette`): this reload is usually its
                 // own write coming back through the watcher, and an editor

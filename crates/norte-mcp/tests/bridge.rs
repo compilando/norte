@@ -178,7 +178,7 @@ async fn initialize_ping_y_tools_list() {
 }
 
 #[tokio::test]
-async fn list_dir_y_stat_leen_bajo_scope() {
+async fn list_dir_and_stat_read_under_scope() {
     // READS go through the scope gate just like mutations do (#80): an agent
     // reads ONLY under a granted scope. Granted here beforehand.
     let d = spawn_daemon_allow().await;
@@ -202,7 +202,7 @@ async fn list_dir_y_stat_leen_bajo_scope() {
 /// #80: an agent WITHOUT scope receives the ACTIONABLE denial (mentions
 /// `request_scope`) on reads, just as it already does on `copy`.
 #[tokio::test]
-async fn lecturas_sin_scope_son_accionables() {
+async fn reads_without_scope_are_actionable() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/a.txt", b"hola").await;
@@ -226,7 +226,7 @@ async fn lecturas_sin_scope_son_accionables() {
 }
 
 #[tokio::test]
-async fn read_file_texto_y_binario_fiel() {
+async fn read_file_text_and_binary_faithful() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/texto.txt", b"hola \xc3\xb1").await;
@@ -262,7 +262,7 @@ async fn read_file_texto_y_binario_fiel() {
 }
 
 #[tokio::test]
-async fn copy_con_scope_completa_y_fuera_de_scope_es_accionable() {
+async fn copy_with_scope_completes_and_out_of_scope_is_actionable() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/src.txt", b"hola").await;
@@ -356,7 +356,7 @@ async fn delete_default_trash_y_permanent_explicito() {
 }
 
 #[tokio::test]
-async fn request_scope_devuelve_id_y_hint_humano() {
+async fn request_scope_returns_id_and_a_human_hint() {
     let d = spawn_daemon_allow().await;
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
     let (out, err) = call_tool(
@@ -378,7 +378,7 @@ async fn request_scope_devuelve_id_y_hint_humano() {
 }
 
 #[tokio::test]
-async fn vpath_invalido_es_error_de_tool_local() {
+async fn invalid_vpath_is_a_local_tool_error() {
     let d = spawn_daemon_allow().await;
     let b = Bridge::connect(&d.socket, "claude").await.expect("connect");
     let (out, err) = call_tool(&b, "stat", serde_json::json!({"path": "no-es-un-vpath"})).await;
@@ -391,7 +391,7 @@ async fn vpath_invalido_es_error_de_tool_local() {
 }
 
 #[tokio::test]
-async fn sesion_ilegal_rechazada_en_connect() {
+async fn an_illegal_session_is_rejected_in_connect() {
     let d = spawn_daemon_allow().await;
     let Err(err) = Bridge::connect(&d.socket, "con espacios").await else {
         panic!("the daemon validates the charset in the handshake");
@@ -403,7 +403,7 @@ async fn sesion_ilegal_rechazada_en_connect() {
 /// serializes ITS OWN `FsMoveParams`): moves within scope and the source
 /// disappears.
 #[tokio::test]
-async fn move_renombra_dentro_del_scope() {
+async fn move_renames_within_scope() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/viejo.txt", b"hola").await;
@@ -431,7 +431,7 @@ async fn move_renombra_dentro_del_scope() {
 /// lossy); the agent ECHOES it in copy and the destination has THE SAME
 /// bytes. Full norte-testkit corpus.
 #[tokio::test]
-async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
+async fn hostile_name_round_trips_byte_faithful_through_the_bridge() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     d.mem.mkdir(&vp("mem:///dst")).await.expect("mkdir dst");
@@ -503,7 +503,7 @@ async fn nombre_hostil_round_trip_byte_fiel_por_el_puente() {
 /// binary — the chunk falls to lossy MARKED + byte-exact base64 (never a
 /// loss; the tool's description says to reassemble via base64).
 #[tokio::test]
-async fn read_file_frontera_multibyte_cae_a_base64_fiel() {
+async fn read_file_multibyte_boundary_falls_back_to_faithful_base64() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     // "año…": offset=1,len=1 cuts the ñ (0xC3 0xB1) → chunk [0xC3].
@@ -528,7 +528,7 @@ async fn read_file_frontera_multibyte_cae_a_base64_fiel() {
 /// Single criterion for args (sec MINOR-1 / enc H3): an argument PRESENT
 /// with an illegal type is a tool error — never a silent degradation.
 #[tokio::test]
-async fn args_mal_tipados_son_error_no_degradacion() {
+async fn args_bad_tipados_son_error_no_degradacion() {
     let d = spawn_daemon_allow().await;
     d.mem.mkdir(&vp("mem:///proj")).await.expect("mkdir");
     write_file(&d.mem, "mem:///proj/f.txt", b"x").await;

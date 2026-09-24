@@ -114,13 +114,13 @@ impl Popular {
     }
 
     fn expulsa(&mut self) {
-        let victima = self
+        let victim = self
             .entries
             .iter()
             .enumerate()
             .min_by_key(|(_, e)| (e.visits, e.last))
             .map(|(i, _)| i);
-        if let Some(i) = victima {
+        if let Some(i) = victim {
             self.entries.swap_remove(i);
         }
     }
@@ -326,7 +326,7 @@ mod tests {
     /// because it cannot depend on this crate; this test is what stops the
     /// two ceilings from drifting apart.
     #[test]
-    fn los_topes_de_la_config_son_los_del_historial() {
+    fn the_configs_caps_are_the_historys() {
         use norte_config::load::UiChrome;
         assert_eq!(UiChrome::MIN_HISTORY_SIZE as usize, HISTORY_MIN);
         assert_eq!(UiChrome::MAX_HISTORY_SIZE as usize, HISTORY_MAX);
@@ -334,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn un_replay_o_un_seed_no_cuentan_como_visita() {
+    fn a_replay_or_a_seed_does_not_count_as_a_visit() {
         let (mut h, mut p) = (History::default(), Popular::default());
         let (a, b) = (vp("mem:///a"), vp("mem:///b"));
         assert!(!record_visit(
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn populares_expulsa_la_menos_visitada_y_en_empate_la_mas_vieja() {
+    fn popular_evicts_the_least_visited_and_on_a_tie_the_oldest() {
         let mut p = Popular::default();
         for i in 0..POPULAR_CAP {
             p.visit(&vp(&format!("mem:///d{i}")));
@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn populares_desde_sesion_quita_repetidas_y_respeta_el_tope() {
+    fn popular_from_session_removes_duplicates_and_respects_the_cap() {
         let e = |s: &str, visits, last| PopularEntry {
             path: vp(s),
             visits,
@@ -399,7 +399,7 @@ mod tests {
     }
 
     #[test]
-    fn las_filas_marcan_el_actual_primero_y_la_rama_de_delante() {
+    fn rows_mark_the_current_first_and_the_branch_ahead() {
         let mut h = History::default();
         h.record(vp("mem:///a"));
         h.record(vp("mem:///b"));
@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn el_filtro_casa_por_subsecuencia_sin_mayusculas() {
+    fn the_filter_matches_by_subsequence_case_insensitively() {
         let mut h = History::default();
         h.record(vp("mem:///Documentos/facturas"));
         h.record(vp("mem:///tmp"));
@@ -433,7 +433,7 @@ mod tests {
     }
 
     #[test]
-    fn quitar_una_ruta_borra_su_punto_de_salto() {
+    fn removing_a_path_erases_its_jump_point() {
         let mut h = History::default();
         h.set_jump(vp("mem:///a"));
         assert_eq!(jump_target(&h), Ok(vp("mem:///a")));
@@ -442,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn vaciar_conserva_el_punto_de_salto_y_el_tope() {
+    fn clearing_preserves_the_jump_point_and_the_cap() {
         let mut h = History::with_capacity(10);
         h.record(vp("mem:///a"));
         h.set_jump(vp("mem:///j"));
@@ -453,7 +453,7 @@ mod tests {
     }
 
     #[test]
-    fn el_tope_se_acota_y_al_bajar_se_queda_lo_cercano() {
+    fn the_cap_is_bounded_and_lowering_it_keeps_what_is_near() {
         assert_eq!(History::with_capacity(0).capacity(), HISTORY_MIN);
         assert_eq!(History::with_capacity(9999).capacity(), HISTORY_MAX);
         assert_eq!(History::default().capacity(), HISTORY_DEFAULT);
@@ -473,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn al_bajar_el_tope_la_rama_de_delante_pierde_su_punta_lejana() {
+    fn lowering_the_cap_makes_the_forward_branch_lose_its_far_tip() {
         let mut h = History::with_capacity(10);
         for i in 0..6 {
             h.record(vp(&format!("mem:///d{i}")));
@@ -524,7 +524,7 @@ mod tests {
         /// The invariant that bounds the trail's memory, under any
         /// sequence of operations — including changing the cap on the fly.
         #[test]
-        fn el_invariante_del_rastro_aguanta_cualquier_secuencia(
+        fn the_trail_invariant_holds_up_under_any_sequence(
             ops in proptest::collection::vec(op(), 0..200),
             cap in 0usize..80,
         ) {

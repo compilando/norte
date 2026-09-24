@@ -96,8 +96,8 @@ fn the_status_bar_names_marked_directories_separately() {
 }
 
 /// Review MAJOR M3: the status line has no width budget, so ratatui clips
-/// the TAIL. `omitidas` (an incomplete listing — "is never silent" per its
-/// own comment) and `nombres` (the name-reinterpretation badge — "the user
+/// the TAIL. `skipped` (an incomplete listing — "is never silent" per its
+/// own comment) and `names` (the name-reinterpretation badge — "the user
 /// must know it at all times") are warnings; `marked`/`pruned` is an
 /// informational counter. The warnings must be ordered ahead of the
 /// counter so a long path at a narrow width clips the counter first, not

@@ -33,7 +33,7 @@
 //! #363's problems — and would have them somewhere the reader watches it
 //! happen — so that waits until that hole is closed.
 
-use norte_term::{ColorTerm, Estilo, Pantalla};
+use norte_term::{ColorTerm, Screen, Style};
 
 /// The pane's shell, with its grid. It is `norte-term`'s.
 pub use norte_term::pty::Shell as TermPanel;
@@ -46,7 +46,7 @@ pub const KIND: &str = "terminal";
 /// It is the SAME one that exits, and that is why it lives here instead of
 /// being hand-written in the two places that look it up in the keymap: the
 /// chord that runs it is the only one the pane does not forward to the shell.
-pub const COMANDO: &str = "layout.terminal";
+pub const COMMAND: &str = "layout.terminal";
 
 /// How a pane's shell is started, with what norte decides.
 ///
@@ -56,14 +56,14 @@ pub const COMANDO: &str = "layout.terminal";
 ///
 /// # Errors
 /// Whatever fails opening the pty or launching the shell.
-pub fn abrir(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<TermPanel> {
-    norte_term::pty::Shell::abrir(
-        &norte_term::pty::Arranque {
+pub fn open(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<TermPanel> {
+    norte_term::pty::Shell::open(
+        &norte_term::pty::Startup {
             // `login_shell` refuses to return a relative `$SHELL` and falls
             // back to `/bin/sh` (#302): without that, `portable_pty` would
             // look it up via `cwd`, which here is the directory the reader is
             // looking at.
-            programa: &norte_frontend::shell::login_shell(),
+            program: &norte_frontend::shell::login_shell(),
             dir,
             tam: size,
             // The child knows it is INSIDE norte, just like the subshell and
@@ -90,13 +90,13 @@ pub fn abrir(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<TermPan
 /// the grid no longer carries any control byte, and that is guaranteed by the
 /// grid, not by this code.
 #[must_use]
-pub fn filas<'a>(p: &Pantalla) -> Vec<ratatui::text::Line<'a>> {
+pub fn rows<'a>(p: &Screen) -> Vec<ratatui::text::Line<'a>> {
     use ratatui::text::{Line, Span};
-    let (_, height) = p.tamano();
+    let (_, height) = p.size();
     (0..height)
         .map(|row| {
             Line::from(
-                p.fila_tramos(row)
+                p.row_tramos(row)
                     .into_iter()
                     .map(|(text, style)| Span::styled(text, style_of(style)))
                     .collect::<Vec<Span<'a>>>(),
@@ -105,7 +105,7 @@ pub fn filas<'a>(p: &Pantalla) -> Vec<ratatui::text::Line<'a>> {
         .collect()
 }
 
-/// A terminal [`Estilo`] translated into `ratatui`'s.
+/// A terminal [`Style`] translated into `ratatui`'s.
 ///
 /// An INDEXED color passes through as-is (`Color::Indexed`): on a terminal it
 /// is resolved by whatever palette the reader has set in their emulator,
@@ -115,7 +115,7 @@ pub fn filas<'a>(p: &Pantalla) -> Vec<ratatui::text::Line<'a>> {
 /// This is ANOTHER program's content, not our chrome, and a theme that
 /// changed an `ls --color`'s colors would be lying about what that program
 /// said. Ours is the frame, and the frame is painted by whoever draws it.
-fn style_of(e: Estilo) -> ratatui::style::Style {
+fn style_of(e: Style) -> ratatui::style::Style {
     use ratatui::style::{Modifier, Style};
     let mut s = Style::default();
     if let Some(c) = color_of(e.fg) {
@@ -137,7 +137,7 @@ fn style_of(e: Estilo) -> ratatui::style::Style {
     if e.subrayado {
         m |= Modifier::UNDERLINED;
     }
-    if e.inverso {
+    if e.inverse {
         m |= Modifier::REVERSED;
     }
     if e.tachado {
@@ -149,8 +149,8 @@ fn style_of(e: Estilo) -> ratatui::style::Style {
 fn color_of(c: ColorTerm) -> Option<ratatui::style::Color> {
     use ratatui::style::Color;
     match c {
-        ColorTerm::PorDefecto => None,
-        ColorTerm::Indexado(n) => Some(Color::Indexed(n)),
+        ColorTerm::Default => None,
+        ColorTerm::Indexed(n) => Some(Color::Indexed(n)),
         ColorTerm::Rgb(r, g, b) => Some(Color::Rgb(r, g, b)),
     }
 }
@@ -163,7 +163,7 @@ fn color_of(c: ColorTerm) -> Option<ratatui::style::Color> {
 /// not.
 #[must_use]
 pub fn cursor_en(
-    p: &Pantalla,
+    p: &Screen,
     area: ratatui::layout::Rect,
     has_keyboard: bool,
 ) -> Option<(u16, u16)> {
@@ -171,7 +171,7 @@ pub fn cursor_en(
         return None;
     }
     let (row, col) = p.cursor();
-    let (width, height) = p.tamano();
+    let (width, height) = p.size();
     // The column can equal the width — the "pending wrap" state — and there
     // the cursor is painted in the last cell: it is where a real terminal
     // leaves it.
@@ -188,12 +188,12 @@ mod tests {
     /// emulator's own palette.
     #[test]
     fn a_terminal_style_crosses_over_whole() {
-        let e = Estilo {
-            fg: ColorTerm::Indexado(4),
+        let e = Style {
+            fg: ColorTerm::Indexed(4),
             bg: ColorTerm::Rgb(1, 2, 3),
             negrita: true,
             subrayado: true,
-            ..Estilo::default()
+            ..Style::default()
         };
         let s = style_of(e);
         assert_eq!(s.fg, Some(ratatui::style::Color::Indexed(4)));
@@ -209,9 +209,9 @@ mod tests {
     /// is what makes a `make` in the pane felt across the rest.
     #[test]
     fn equal_cells_group_into_one_span() {
-        let mut p = Pantalla::nueva(10, 1);
+        let mut p = Screen::new(10, 1);
         p.alimentar(b"aaa\x1b[31mbbb");
-        let rows = filas(&p);
+        let rows = rows(&p);
         let spans = &rows[0].spans;
         // Three, not two: after `bbb` four cells are left unwritten, and
         // those carry the DEFAULT style, not red. Grouping them with the red
@@ -229,7 +229,7 @@ mod tests {
     /// here.
     #[test]
     fn the_cursor_is_only_painted_with_the_keyboard_inside() {
-        let p = Pantalla::nueva(10, 3);
+        let p = Screen::new(10, 3);
         let area = ratatui::layout::Rect::new(5, 2, 10, 3);
         assert_eq!(cursor_en(&p, area, false), None);
         assert_eq!(cursor_en(&p, area, true), Some((5, 2)));
@@ -239,7 +239,7 @@ mod tests {
     /// does while it paints.
     #[test]
     fn a_hidden_cursor_is_not_painted() {
-        let mut p = Pantalla::nueva(10, 3);
+        let mut p = Screen::new(10, 3);
         p.alimentar(b"\x1b[?25l");
         let area = ratatui::layout::Rect::new(0, 0, 10, 3);
         assert_eq!(cursor_en(&p, area, true), None);

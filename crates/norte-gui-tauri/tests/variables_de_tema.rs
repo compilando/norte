@@ -3,7 +3,7 @@
 //!
 //! A variable nobody writes does not look broken: it falls back to its
 //! default value and stays there forever. `--warn-fg` was exactly that — a
-//! typo for `warning-fg`, which is what `roles_de_tema` really projects —
+//! typo for `warning-fg`, which is what `theme_roles` really projects —
 //! and the log panel's warnings had been ignoring the theme since it was
 //! written, painted in a `#fc6` sewn into the CSS.
 //!
@@ -22,7 +22,7 @@
 use std::collections::BTreeSet;
 
 /// GEOMETRY and font variables: they never come from the theme, and that is
-/// why they do not have to be in `roles_de_tema`.
+/// why they do not have to be in `theme_roles`.
 const NO_SON_COLOR: &[&str] = &[
     "cell-w",
     "cell-h",
@@ -81,26 +81,26 @@ const HUERFANAS_CONOCIDAS: &[&str] = &[];
 /// guard's two directions are alive with no exception beyond geometry. Stays
 /// for the same reason as `HUERFANAS_CONOCIDAS`: the mechanism has to exist
 /// for the next one that arrives with an owner and a date.
-const PENDIENTES_DE_GASTAR: &[&str] = &[];
+const PENDING_TO_SPEND: &[&str] = &[];
 
 /// The `var(--…)` names that appear in the sheet.
 ///
 /// Searched over the WHOLE text and not line by line because the sheet
 /// splits font stacks: `var(` ends up on one line and `--ui-font` on the
 /// next.
-fn variables_de_la_hoja() -> BTreeSet<String> {
+fn sheet_variables() -> BTreeSet<String> {
     let css = include_str!("../ui/src/style.css");
     let mut out = BTreeSet::new();
-    let mut resto = css;
-    while let Some(i) = resto.find("var(") {
-        resto = &resto[i + "var(".len()..];
-        let t = resto.trim_start();
-        if let Some(nombre) = t.strip_prefix("--") {
-            let fin = nombre
+    let mut rest = css;
+    while let Some(i) = rest.find("var(") {
+        rest = &rest[i + "var(".len()..];
+        let t = rest.trim_start();
+        if let Some(name) = t.strip_prefix("--") {
+            let fin = name
                 .find(|c: char| !c.is_ascii_alphanumeric() && c != '-')
-                .unwrap_or(nombre.len());
+                .unwrap_or(name.len());
             if fin > 0 {
-                out.insert(nombre[..fin].to_owned());
+                out.insert(name[..fin].to_owned());
             }
         }
     }
@@ -110,23 +110,23 @@ fn variables_de_la_hoja() -> BTreeSet<String> {
 /// The AGREEMENT: the variable names the host knows, whether or not the
 /// color exists in a specific theme.
 ///
-/// It is `nombres_de_tema` and not `roles_de_tema(preset_default())` for a
+/// It is `theme_names` and not `theme_roles(preset_default())` for a
 /// reason that cost a badly written test: the ten chrome roles are not in
 /// `Role::CORE`, so the default preset SILENCES them and the sheet derives
 /// them — asking a specific theme would have read that silence as "nobody
 /// feeds that variable" and would have declared as orphans the nine the spec
 /// had just added.
 fn acordadas() -> BTreeSet<String> {
-    norte_ui_host::pickers::nombres_de_tema()
+    norte_ui_host::pickers::theme_names()
         .into_iter()
         .map(str::to_owned)
         .collect()
 }
 
 #[test]
-fn cada_variable_de_color_la_alimenta_el_tema() {
+fn every_color_variable_is_fed_by_the_theme() {
     let acordadas = acordadas();
-    let huerfanas: Vec<String> = variables_de_la_hoja()
+    let huerfanas: Vec<String> = sheet_variables()
         .into_iter()
         .filter(|v| !acordadas.contains(v))
         .filter(|v| !NO_SON_COLOR.contains(&v.as_str()))
@@ -139,15 +139,15 @@ fn cada_variable_de_color_la_alimenta_el_tema() {
 }
 
 #[test]
-fn cada_color_acordado_lo_gasta_la_hoja() {
-    let usadas = variables_de_la_hoja();
-    let sin_gastar: Vec<String> = acordadas()
+fn every_agreed_color_is_spent_by_the_sheet() {
+    let usadas = sheet_variables();
+    let unspent: Vec<String> = acordadas()
         .into_iter()
         .filter(|k| !usadas.contains(k))
-        .filter(|k| !PENDIENTES_DE_GASTAR.contains(&k.as_str()))
+        .filter(|k| !PENDING_TO_SPEND.contains(&k.as_str()))
         .collect();
     assert!(
-        sin_gastar.is_empty(),
-        "colors the host projects that the sheet does not paint: {sin_gastar:?}"
+        unspent.is_empty(),
+        "colors the host projects that the sheet does not paint: {unspent:?}"
     );
 }

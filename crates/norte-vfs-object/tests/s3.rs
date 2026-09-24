@@ -47,7 +47,7 @@ use common::{read_all, write_all};
 /// `copy_native` = server-side `CopyObject`: byte-exact copy of a hostile
 /// name without reading+rewriting.
 #[tokio::test]
-async fn copy_native_byte_exacto_nombre_hostil() {
+async fn copy_native_byte_exact_hostile_name() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, "ñ é+%20.bin".as_bytes());
@@ -70,7 +70,7 @@ async fn copy_native_byte_exacto_nombre_hostil() {
 
 /// Existing destination → `Conflict`, never a silent overwrite.
 #[tokio::test]
-async fn copy_native_destino_existente_es_conflict() {
+async fn copy_native_existing_destination_is_conflict() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, b"a.bin");
@@ -88,7 +88,7 @@ async fn copy_native_destino_existente_es_conflict() {
 
 /// Absent source → `NotFound` (implemented branch, no contract coverage).
 #[tokio::test]
-async fn copy_native_origen_ausente_es_not_found() {
+async fn copy_native_source_ausente_es_not_found() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, b"no-existe.bin");
@@ -98,7 +98,7 @@ async fn copy_native_origen_ausente_es_not_found() {
 
 /// Destination whose parent does NOT exist → `NotFound` (same policy as `write`).
 #[tokio::test]
-async fn copy_native_padre_del_destino_ausente_es_not_found() {
+async fn copy_native_missing_destination_parent_is_not_found() {
     let (p, _op) = fresh().await;
     let r = root();
     let src = child(&r, b"origen.bin");
@@ -113,7 +113,7 @@ async fn copy_native_padre_del_destino_ausente_es_not_found() {
 /// Real multipart: >8 MiB chunk → `CreateMultipartUpload` + `UploadPart` +
 /// `CompleteMultipartUpload` underneath; byte-exact roundtrip.
 #[tokio::test]
-async fn multipart_roundtrip_byte_exacto() {
+async fn multipart_roundtrip_byte_exact() {
     let (p, _op) = fresh().await;
     let f = child(&root(), b"grande.bin");
     let big: Vec<u8> = (0..12 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
@@ -129,7 +129,7 @@ async fn multipart_roundtrip_byte_exacto() {
 /// already uploaded (>8 MiB written) and the key still does not exist;
 /// `abort` = `AbortMultipartUpload`, no trace.
 #[tokio::test]
-async fn multipart_invisible_hasta_commit_y_abort_sin_rastro() {
+async fn multipart_invisible_until_commit_and_abort_leaves_no_trace() {
     let (p, _op) = fresh().await;
     let f = child(&root(), b"invisible.bin");
     let mut sink = p.write(&f).await.expect("write");
@@ -150,7 +150,7 @@ async fn multipart_invisible_hasta_commit_y_abort_sin_rastro() {
 /// If-None-Match travels in the commit (race-free on honest servers, a
 /// better guarantee than ftp's TOCTOU).
 #[tokio::test]
-async fn conditional_write_cierra_la_ventana_de_carrera() {
+async fn conditional_write_closes_the_race_window() {
     let (p, _op) = fresh().await;
     let f = child(&root(), b"conflicto.txt");
     let mut sink_a = p.write(&f).await.expect("write a");
@@ -170,7 +170,7 @@ async fn conditional_write_cierra_la_ventana_de_carrera() {
 
 /// And the simple case: write over an existing key = Conflict ON OPEN.
 #[tokio::test]
-async fn write_sobre_existente_conflict_al_abrir() {
+async fn write_over_existing_conflicts_on_open() {
     let (p, _op) = fresh().await;
     let f = child(&root(), b"ocupado.txt");
     write_all(&p, &f, b"1").await;
@@ -184,7 +184,7 @@ async fn write_sobre_existente_conflict_al_abrir() {
 /// Names S3 allows and the fs harness too — byte-exact via the real S3 API
 /// (INTERIOR spaces, unicode, trailing dot, `+`, a literal `%20`).
 #[tokio::test]
-async fn nombres_s3_byte_exactos() {
+async fn names_s3_byte_exactos() {
     let (p, _op) = fresh().await;
     let r = root();
     for name in [
@@ -229,7 +229,7 @@ async fn nombres_s3_byte_exactos() {
 /// pread: mid range, tail, past-EOF (empty) and clamped len, against real
 /// HTTP range semantics.
 #[tokio::test]
-async fn read_range_semantica_pread() {
+async fn read_range_semantic_pread() {
     use norte_proto::ByteRange;
     let (p, _op) = fresh().await;
     let f = child(&root(), b"rango.bin");

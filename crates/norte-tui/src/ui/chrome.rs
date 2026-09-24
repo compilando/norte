@@ -5,7 +5,7 @@
 //! `tab_zones`) and another PAINTS, because whoever routes a click needs the
 //! geometry without having painted anything.
 
-use norte_frontend::panelbar::cifra;
+use norte_frontend::panelbar::figure;
 use norte_theme::Role;
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -513,7 +513,7 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
     // per frame and would leave the same question answered in two places,
     // free to drift apart.
     if !open.contains(&crate::processes::KIND) {
-        attention.push((crate::processes::KIND, cifra(app.board.rows().len())));
+        attention.push((crate::processes::KIND, figure(app.board.rows().len())));
     }
     // Errors or warnings in the log the reader has not had in front of
     // them: if the panel is open they are already seeing them, so the mark
@@ -527,7 +527,7 @@ pub fn panel_buttons(app: &App, area: Rect) -> Vec<norte_frontend::panelbar::Pan
     {
         attention.push((
             crate::logview::KIND,
-            cifra(r.count_at_or_above(norte_config::logline::LogLevel::Warn)),
+            figure(r.count_at_or_above(norte_config::logline::LogLevel::Warn)),
         ));
     }
     norte_frontend::panelbar::buttons(
@@ -555,7 +555,7 @@ pub fn panel_zones(app: &App, area: Rect) -> Vec<PanelZone> {
 
 /// Paints the panel groups' tab strips (ADR 0134): the one in front with
 /// the title style and underlined, the others dimmed.
-pub(crate) fn draw_tiras_de_paneles(frame: &mut Frame<'_>, app: &App) {
+pub(crate) fn draw_pane_strips(frame: &mut Frame<'_>, app: &App) {
     for (row, tabs) in crate::ui::geometry::panel_tab_strips(app, frame.area()) {
         clear_themed(frame, row, &app.theme);
         let spans: Vec<ratatui::text::Span<'static>> = tabs
@@ -643,7 +643,7 @@ fn panel_bar_zones(app: &App, area: Rect) -> Vec<PanelZone> {
     let buttons = panel_buttons(app, area);
     // In a column, one button per row and the whole rail's width: the same
     // rows `draw_panel_bar` paints.
-    if crate::ui::geometry::barra_en_columna(app) {
+    if crate::ui::geometry::bar_in_column(app) {
         for (y, b) in rail_rows(buttons.len(), bar).into_iter().zip(buttons) {
             out.push(PanelZone {
                 row: y,
@@ -684,7 +684,7 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
         return;
     };
     clear_themed(frame, bar, &app.theme);
-    if crate::ui::geometry::barra_en_columna(app) {
+    if crate::ui::geometry::bar_in_column(app) {
         draw_rail(frame, app, bar);
         return;
     }
@@ -694,7 +694,7 @@ pub(crate) fn draw_panel_bar(frame: &mut Frame<'_>, app: &App) {
     let names = shows_names(app, &buttons, bar);
     // In a COLUMN (spec 2026-09-21) each button is a line with its letter
     // cell — `" S·"`, three wide — and names do not fit.
-    let column = crate::ui::geometry::barra_en_columna(app);
+    let column = crate::ui::geometry::bar_in_column(app);
     let names = names && !column;
     let mut lines: Vec<ratatui::text::Line<'static>> = Vec::new();
     for (i, b) in buttons.into_iter().enumerate() {

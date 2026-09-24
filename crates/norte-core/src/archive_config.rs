@@ -105,14 +105,14 @@ pub fn load_rar_delegate() -> std::io::Result<Option<std::path::PathBuf>> {
 /// `[archive]` ([`load_archive_limits`], [`load_rar_delegate`]).
 ///
 /// Returns the error and leaves it to the caller to decide what it means:
-/// the daemon ([`crate::daemon::componer()`]) aborts startup, same criterion
+/// the daemon ([`crate::daemon::compose()`]) aborts startup, same criterion
 /// as `policy.toml`; the embedded CLI warns and continues with the default
 /// limits. The WHOLE `norte.toml` is read, so any broken section makes it
 /// fail, not just `[archive]`.
 ///
 /// # Errors
 /// Those of reading or validating `norte.toml`.
-pub async fn aplicar(engine: &crate::Engine) -> std::io::Result<()> {
+pub async fn apply(engine: &crate::Engine) -> std::io::Result<()> {
     let limits = crate::blocking::spawn_blocking(load_archive_limits)
         .await
         .map_err(std::io::Error::other)??;

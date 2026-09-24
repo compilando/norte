@@ -23,7 +23,7 @@ fn vp(wire: &str) -> VPath {
 fn search_run(pane: usize) -> SearchRun {
     let (_tx, rx) = tokio::sync::mpsc::channel::<SearchHits>(1);
     let id = norte_proto::TaskId::new(1);
-    let (_progreso, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
+    let (_progress, prx) = tokio::sync::watch::channel(norte_proto::TaskProgress {
         task_id: id,
         kind: norte_proto::TaskKind::Search,
         state: norte_proto::TaskState::Running,
@@ -63,7 +63,7 @@ fn decorate(slot: norte_frontend::layout::SlotId) -> DecorateFetch {
 /// Checks that THAT drain moved and not just any slot: the batch sent by
 /// pane 0's `tx` is picked up from pane 1's slot.
 #[test]
-fn el_intercambio_cruza_los_huecos_del_relleno_en_vuelo() {
+fn the_swap_crosses_the_in_flight_filler_slots() {
     let (tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     f.insert(norte_tui::panel::SLOT_LEFT, Fill { rx });
@@ -110,7 +110,7 @@ fn el_intercambio_cruza_los_huecos_del_relleno_en_vuelo() {
 /// With nothing in flight the reconciliation is harmless: a swap cannot
 /// invent a fill or a fetch where there were none.
 #[test]
-fn el_intercambio_sin_nada_en_vuelo_no_inventa_nada() {
+fn the_swap_with_nothing_in_flight_invents_nothing() {
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
         norte_frontend::layout::BySlot::new();
@@ -139,7 +139,7 @@ fn el_intercambio_sin_nada_en_vuelo_no_inventa_nada() {
 /// that forgot to call it would leave the fill pointing at the wrong pane
 /// with no `App` test noticing.
 #[test]
-fn apply_cd_swapped_reconcilia_el_estado_del_run_loop() {
+fn apply_cd_swapped_reconciles_run_loop_state() {
     let (_tx, rx) = tokio::sync::mpsc::channel::<FillMsg>(1);
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     f.insert(norte_tui::panel::SLOT_RIGHT, Fill { rx });
@@ -171,7 +171,7 @@ fn apply_cd_swapped_reconcilia_el_estado_del_run_loop() {
 /// pane that shows the hits, exactly as a fill keeps its own. If the swap
 /// does not flip it, the hits keep arriving at the neighboring pane.
 #[test]
-fn el_intercambio_voltea_el_pane_de_la_busqueda_viva() {
+fn the_swap_flips_the_pane_with_the_live_search() {
     let mut f: norte_frontend::layout::BySlot<Fill> = norte_frontend::layout::BySlot::new();
     let mut df: norte_frontend::layout::BySlot<DecorateFetch> =
         norte_frontend::layout::BySlot::new();
@@ -209,7 +209,7 @@ fn el_intercambio_voltea_el_pane_de_la_busqueda_viva() {
 /// That is why the flip has to happen INSIDE `reconcile_swap`: once the
 /// harvest has passed there is nothing left to save.
 #[test]
-fn un_intercambio_no_cosecha_la_busqueda_viva() {
+fn a_swap_does_not_harvest_the_live_search() {
     let mut app = App::new(
         Pane::new(vp("file:///izq"), Vec::new()),
         Pane::new(vp("file:///der"), Vec::new()),
@@ -249,7 +249,7 @@ fn un_intercambio_no_cosecha_la_busqueda_viva() {
 /// someone introduced a per-side copy, the swap would leave each pane
 /// watching the other's dir.
 #[test]
-fn watch_targets_sigue_a_los_panes_tras_el_intercambio() {
+fn watch_targets_follows_the_panes_after_the_swap() {
     let mut app = App::new(
         Pane::new(vp("file:///izq"), Vec::new()),
         Pane::new(vp("file:///der"), Vec::new()),

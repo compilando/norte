@@ -434,7 +434,7 @@ fn compose_line(app: &App, area: Rect) -> Composed {
 #[cfg(test)]
 mod tests {
     use super::draw_status;
-    use crate::app::testutil::app_dos_panes;
+    use crate::app::testutil::app_two_panes;
     use norte_frontend::busy::{Busy, BusyKind, THRESHOLD};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -457,7 +457,7 @@ mod tests {
     /// different question.
     #[test]
     fn waiting_overrides_the_previous_message() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.message = Some("copied 1 file".to_string());
         assert!(bar(&app).contains("copied 1 file"));
 
@@ -478,7 +478,7 @@ mod tests {
     /// Contrasted against the painted text.
     #[test]
     fn the_items_go_right_and_are_clickable() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.notices_unread = 3;
         app.chrome.status_items =
             Some(norte_config::StatusItems::parse(&["position", "notices"]).expect("valid"));
@@ -507,7 +507,7 @@ mod tests {
     /// the cursor, goes to the left of the right half and is not clickable.
     #[test]
     fn a_plugins_item_shows_its_column_and_is_not_clickable() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.chrome.status_items =
             Some(norte_config::StatusItems::parse(&["position"]).expect("valid"));
         app.status_plugins = vec![("git".to_owned(), "branch".to_owned())];
@@ -542,7 +542,7 @@ mod tests {
     fn the_session_indicator_says_where_it_lands() {
         use super::compose;
         use crate::ui::text::cells;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         assert!(
             compose(&app, area).session.is_none(),
@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn a_notice_expires_and_leaves_a_clickable_badge() {
         use super::compose;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
         app.chrome.notice_seconds = Some(2);
         app.message = Some("copied 1 file".to_string());
@@ -633,7 +633,7 @@ mod tests {
     fn the_persistent_notice_does_not_cover_the_path_or_the_counter() {
         use super::compose;
         use crate::ui::text::cells;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.session.detached = true;
         let badge = app.session_banner().expect("there is an indicator");
         let area = ratatui::layout::Rect::new(0, 0, 70, 1);
@@ -670,7 +670,7 @@ mod tests {
     fn the_items_do_not_truncate_a_persistent_notice() {
         use super::compose;
         use crate::ui::text::cells;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.session.detached = true;
         let badge = app.session_banner().expect("there is an indicator");
         for pending in ["", "g"] {
@@ -695,7 +695,7 @@ mod tests {
     #[test]
     fn a_truncated_indicator_is_not_clickable() {
         use super::compose;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.session.detached = true;
         let badge = app.session_banner().expect("there is an indicator");
         let width = crate::ui::text::cells(&badge);
@@ -719,7 +719,7 @@ mod tests {
     #[test]
     fn with_an_overlay_in_front_there_is_no_zone() {
         use super::session_zone;
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.session.detached = true;
         let area = ratatui::layout::Rect::new(0, 0, 80, 24);
         assert!(session_zone(&app, area).is_some(), "with no overlay, yes");
@@ -731,7 +731,7 @@ mod tests {
     /// `cd` is exactly the noise that makes nobody look at the indicator.
     #[test]
     fn below_the_threshold_the_bar_does_not_notice() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.message = Some("copied 1 file".to_string());
         let mut busy = Busy::new(BusyKind::Connecting, None, Some(0));
         busy.elapsed = THRESHOLD
@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn the_tasks_item_paints_its_bar_and_is_clickable_whole() {
         use norte_proto::{TaskId, TaskKind, TaskProgress, TaskState};
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.chrome.status_items =
             Some(norte_config::StatusItems::parse(&["tasks"]).expect("valid"));
         let p = TaskProgress {

@@ -397,7 +397,7 @@ mod tests {
     /// candidates — same criterion as `focused_needs_stat` for the normal
     /// pane: a `Dir` has no size an ordinary `stat` resolves.
     #[test]
-    fn compare_size_probe_targets_ignora_dir_y_lo_ya_hidratado() {
+    fn compare_size_probe_targets_ignores_dir_and_already_hydrated() {
         let mut app = App::new(Pane::new(root(), vec![]), Pane::new(root(), vec![]));
         let mut view = CompareView::new(vp("mem:///a"), vp("mem:///b"), 0, None, None);
         view.pane.extend(vec![

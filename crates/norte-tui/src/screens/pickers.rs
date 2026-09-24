@@ -334,7 +334,7 @@ pub fn pane_attr_ids(app: &App) -> Vec<Vec<String>> {
 }
 
 /// Applies the picker's result (#108 7a): session first (in-memory settings
-/// + re-sort of EVERY pane, `apply_scheme_sort` is a no-op where the spec
+/// and re-sort of EVERY pane, `apply_scheme_sort` is a no-op where the spec
 /// does not change), disk after (`config::persist_columns` in
 /// `spawn_blocking` — rule 2). Only the error's CATEGORY goes to the bar,
 /// never the OS's Display (#73). Returns `true` if the painted attr set of

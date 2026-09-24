@@ -32,8 +32,8 @@ pub const WINDOW_EFFECTS: &[&str] = &["backdrop"];
 ///
 /// It is a table and not a sequence of calls because two separate questions
 /// are needed, and they used to be answered together: **which names exist**
-/// (independent of any theme, see [`nombres_de_tema`]) and **what colors THIS
-/// theme has** (see [`roles_de_tema`], which omits what the theme leaves
+/// (independent of any theme, see [`theme_names`]) and **what colors THIS
+/// theme has** (see [`theme_roles`], which omits what the theme leaves
 /// unsaid). Mixed together, a theme that did not define a role made its name
 /// disappear from the list, and the renderer's orphaned-variable guard read
 /// that absence as "nobody feeds that variable".
@@ -105,7 +105,7 @@ const CSS_VARIABLE_MAP: &[(&str, norte_theme::Role, bool)] = {
 /// given theme. This is the AGREEMENT with `style.css`, and the renderer's
 /// orphaned-variable guard checks it (`tests/variables_de_tema.rs`).
 #[must_use]
-pub fn nombres_de_tema() -> Vec<&'static str> {
+pub fn theme_names() -> Vec<&'static str> {
     CSS_VARIABLE_MAP.iter().map(|(n, _, _)| *n).collect()
 }
 
@@ -125,7 +125,7 @@ pub fn nombres_de_tema() -> Vec<&'static str> {
 /// to paint and another to show — is exactly what the original comment said
 /// could not happen. Whoever hosts it consumes this.
 #[must_use]
-pub fn roles_de_tema(theme: &norte_theme::Theme) -> Vec<(String, String)> {
+pub fn theme_roles(theme: &norte_theme::Theme) -> Vec<(String, String)> {
     CSS_VARIABLE_MAP
         .iter()
         .filter_map(|&(name, role, background)| {
@@ -138,7 +138,7 @@ pub fn roles_de_tema(theme: &norte_theme::Theme) -> Vec<(String, String)> {
 
 /// The theme this window currently has set.
 ///
-/// The role → color mapping is [`roles_de_tema`], the same one that feeds the
+/// The role → color mapping is [`theme_roles`], the same one that feeds the
 /// CSS variables of whoever hosts it: what is seen on this screen is what it
 /// paints.
 #[derive(Debug, Clone, Default)]
@@ -158,7 +158,7 @@ pub struct HostTheme {
     /// is no list of names to declare ahead of time. ONE entry's color is
     /// resolved here, against its name's bytes, and travels in its row; which
     /// is what the terminal has always done (`norte_tui::theme`).
-    pub resuelto: norte_theme::Theme,
+    pub resolved: norte_theme::Theme,
     /// The `[ui] theme_light` variant, already resolved, if there is one.
     ///
     /// Variants have existed since V6 and until now only traveled as CSS
@@ -171,16 +171,16 @@ pub struct HostTheme {
     /// `clippy::large_futures`'s threshold — which is not the lint being
     /// fussy: that future moves whole between `await`s. This is cold data,
     /// read once per row.
-    pub variante_clara: Option<Box<norte_theme::Theme>>,
-    /// The `[ui] theme_dark` one. See [`HostTheme::variante_clara`].
-    pub variante_oscura: Option<Box<norte_theme::Theme>>,
+    pub variant_clara: Option<Box<norte_theme::Theme>>,
+    /// The `[ui] theme_dark` one. See [`HostTheme::variant_clara`].
+    pub variant_oscura: Option<Box<norte_theme::Theme>>,
 }
 
 /// How the THEME paints an entry's name (`[files.ext]`, which wins, or
 /// `[files.kind]`).
 ///
 /// All zero = the theme says nothing about it. These are the four attributes
-/// a webview knows how to paint; see [`HostTheme::estilo_de_entrada`] for why
+/// a webview knows how to paint; see [`HostTheme::entry_style`] for why
 /// `bg` and `reverse` are not here.
 // Four INDEPENDENT terminal-style flags, not an enum or packed flags: they
 // are a literal subset of `norte_theme::Style`, which carries this same
@@ -215,7 +215,7 @@ impl HostTheme {
     pub fn de(name: &str, theme: &norte_theme::Theme) -> Self {
         Self {
             name: name.to_owned(),
-            roles: roles_de_tema(theme),
+            roles: theme_roles(theme),
             // Effects the window DOES interpret are not shown as
             // "unsupported": `backdrop` (spec 2026-09-11, V6) is translated
             // by the window's catalog into a CSS variable.
@@ -225,11 +225,11 @@ impl HostTheme {
                 .into_iter()
                 .filter(|e| !WINDOW_EFFECTS.contains(&e.as_str()))
                 .collect(),
-            resuelto: theme.clone(),
+            resolved: theme.clone(),
             // Set by whoever starts up, who is the only one that reads the
             // configuration; `de` builds the BASE theme.
-            variante_clara: None,
-            variante_oscura: None,
+            variant_clara: None,
+            variant_oscura: None,
         }
     }
 
@@ -246,11 +246,11 @@ impl HostTheme {
     #[must_use]
     pub fn for_scheme(&self, dark: bool) -> &norte_theme::Theme {
         let variant = if dark {
-            self.variante_oscura.as_ref()
+            self.variant_oscura.as_ref()
         } else {
-            self.variante_clara.as_ref()
+            self.variant_clara.as_ref()
         };
-        variant.map_or(&self.resuelto, Box::as_ref)
+        variant.map_or(&self.resolved, Box::as_ref)
     }
 
     /// The color and weight an entry's NAME is painted with, according to
@@ -283,12 +283,7 @@ impl HostTheme {
     /// by the cursor, the hover and the mark, and adding a fifth owner would
     /// let the theme hide where the cursor is.
     #[must_use]
-    pub fn estilo_de_entrada(
-        &self,
-        name: &[u8],
-        kind: norte_theme::FileKind,
-        dark: bool,
-    ) -> EntryStyle {
+    pub fn entry_style(&self, name: &[u8], kind: norte_theme::FileKind, dark: bool) -> EntryStyle {
         self.for_scheme(dark)
             .files
             .style_for(name, kind)
@@ -424,7 +419,7 @@ struct Row {
 impl Selector {
     /// The volumes picker, still without its list: it is requested and
     /// arrives later.
-    pub(crate) fn volumenes(slot: u32) -> Self {
+    pub(crate) fn volumes(slot: u32) -> Self {
         Self::volumes_with_title(slot, "picker-volumes-title")
     }
 
@@ -435,7 +430,7 @@ impl Selector {
     /// window's position says so; here, with focus on the other pane, without
     /// the title there is no way to know where it is going to mount until it
     /// mounts (ADR 0058 D9, #293).
-    pub(crate) fn volumenes_de_lado(slot: u32, right: bool) -> Self {
+    pub(crate) fn side_volumes(slot: u32, right: bool) -> Self {
         Self::volumes_with_title(
             slot,
             if right {
@@ -464,7 +459,7 @@ impl Selector {
     /// Empty on open, like the volumes one and with the same race: the list
     /// comes from a response, so its `generation` is what stops a click
     /// painted over one list from being applied to another.
-    pub(crate) fn conexiones(slot: u32) -> Self {
+    pub(crate) fn connections(slot: u32) -> Self {
         Self {
             rows: Vec::new(),
             cursor: 0,
@@ -495,12 +490,12 @@ impl Selector {
     /// where the URL would go. Before 0.84.0 none of them arrived, because a
     /// single bad entry made the call fail and the picker opened empty with
     /// an error.
-    pub(crate) fn con_conexiones(
+    pub(crate) fn with_connections(
         &mut self,
-        conexiones: Vec<norte_proto::methods::ConnectionEntry>,
+        connections: Vec<norte_proto::methods::ConnectionEntry>,
         inservibles: Vec<norte_proto::methods::ConnectionProblem>,
     ) {
-        self.rows = conexiones
+        self.rows = connections
             .into_iter()
             .map(|c| {
                 let (name, name_hostile) = norte_frontend::display_name(c.name.as_bytes());
@@ -551,7 +546,7 @@ impl Selector {
     /// `paint` puts the path on screen — with the pane's reinterpretation,
     /// or with none for the popular ones — and it is decided by whoever knows
     /// which pane the list belongs to.
-    pub(crate) fn historia(
+    pub(crate) fn history(
         slot: u32,
         rows: &[norte_frontend::history::HistoryRow],
         paint: impl Fn(&VPath) -> (String, bool),
@@ -661,12 +656,12 @@ impl Selector {
 
     /// Is this a HISTORY list, a slot's or the popular ones? Asked by
     /// whoever handles `dialog.remove`/`dialog.clear` (spec 2026-09-15 D2).
-    pub(crate) fn es_historia(&self) -> bool {
+    pub(crate) fn es_history(&self) -> bool {
         matches!(self.kind, SelectorKind::History | SelectorKind::Popular)
     }
 
     /// Is it the popular-ones one?
-    pub(crate) fn es_populares(&self) -> bool {
+    pub(crate) fn es_popular(&self) -> bool {
         self.kind == SelectorKind::Popular
     }
 
@@ -676,12 +671,12 @@ impl Selector {
     }
 
     /// The title's Fluent key, to rebuild the list with the same one.
-    pub(crate) fn titulo(&self) -> &'static str {
+    pub(crate) fn title(&self) -> &'static str {
         self.title
     }
 
     /// A history list's filter, if it is being filtered.
-    pub(crate) fn filtro(&self) -> Option<&str> {
+    pub(crate) fn filter(&self) -> Option<&str> {
         self.filter.as_deref()
     }
 
@@ -690,12 +685,12 @@ impl Selector {
     /// Raw and not the view's label: what gets painted is sanitized and
     /// clamped, and removing a favorite by its label would delete the wrong
     /// one — or none — as soon as the name carried bidi or measured too long.
-    pub(crate) fn nombre_crudo(&self) -> Option<&str> {
+    pub(crate) fn name_raw(&self) -> Option<&str> {
         self.rows.get(self.cursor)?.name.as_deref()
     }
 
     /// Feeds in the volumes the host answered with.
-    pub(crate) fn set_volumenes(&mut self, vols: &[norte_proto::methods::Volume], lang: Lang) {
+    pub(crate) fn set_volumes(&mut self, vols: &[norte_proto::methods::Volume], lang: Lang) {
         self.empty_key = "picker-volumes-empty";
         self.rows = vols
             .iter()
@@ -739,7 +734,7 @@ impl Selector {
     }
 
     /// Puts the cursor on a row (a click). Out of range does nothing.
-    pub(crate) fn senalar(&mut self, row: usize) {
+    pub(crate) fn point_at(&mut self, row: usize) {
         if row < self.rows.len() {
             self.cursor = row;
         }
@@ -751,12 +746,12 @@ impl Selector {
     /// anywhere" — a favorite whose path does not parse — which are two
     /// different answers and without this were both answered the same way:
     /// with silence.
-    pub(crate) fn hay_fila(&self) -> bool {
+    pub(crate) fn hay_row(&self) -> bool {
         self.rows.get(self.cursor).is_some()
     }
 
     /// Where the cursor's row navigates to, if there is one.
-    pub(crate) fn elegir(&self) -> Option<VPath> {
+    pub(crate) fn choose(&self) -> Option<VPath> {
         self.rows.get(self.cursor)?.destination.clone()
     }
 
@@ -826,7 +821,7 @@ fn detail_of(v: &norte_proto::methods::Volume, lang: Lang) -> (String, bool) {
 
 #[cfg(test)]
 mod tests {
-    use super::{EntryStyle, HostTheme, nombres_de_tema, roles_de_tema};
+    use super::{EntryStyle, HostTheme, theme_names, theme_roles};
 
     /// **A PAIRED role crosses with both its halves.**
     ///
@@ -838,14 +833,14 @@ mod tests {
     /// losses came out invisible. This was seen painting the real window, not
     /// in a test.
     ///
-    /// The list is checked whole and by hand, per what `roles_de_tema`'s
+    /// The list is checked whole and by hand, per what `theme_roles`'s
     /// rustdoc says: it is an agreement with a style sheet that shares no
     /// types, so removing a key has to go red here instead of being
     /// discovered by looking at the screen.
     #[test]
     fn the_theme_crosses_both_halves_of_the_status_bar() {
         let theme = norte_theme::Theme::preset_default();
-        let roles = roles_de_tema(&theme);
+        let roles = theme_roles(&theme);
         let names: Vec<&str> = roles.iter().map(|(n, _)| n.as_str()).collect();
 
         for half in ["status-bg", "status-fg"] {
@@ -892,12 +887,12 @@ mod tests {
              which are not derived"
         );
 
-        // The agreement with `style.css` is `nombres_de_tema`, not the list
+        // The agreement with `style.css` is `theme_names`, not the list
         // above: the names exist even when the theme does not fill them, and
         // confusing the two is what made the renderer's orphan guard read
         // "nobody feeds this" where it actually said "this theme does not
         // say so".
-        let all_names = nombres_de_tema();
+        let all_names = theme_names();
         for n in &names {
             assert!(
                 all_names.contains(n),
@@ -969,12 +964,12 @@ mod tests {
     #[test]
     fn the_extension_matches_against_bytes_and_survives_a_non_utf8_name() {
         let theme = theme_with_files();
-        let valid = theme.estilo_de_entrada(b"main.rs", norte_theme::FileKind::Regular, false);
+        let valid = theme.entry_style(b"main.rs", norte_theme::FileKind::Regular, false);
         assert_eq!(valid.color, "#d7875f");
 
         // `\xFF.rs`: a lone invalid byte. The extension is still `rs` and the
         // color has to be the SAME.
-        let hostile = theme.estilo_de_entrada(b"\xff.rs", norte_theme::FileKind::Regular, false);
+        let hostile = theme.entry_style(b"\xff.rs", norte_theme::FileKind::Regular, false);
         assert_eq!(
             hostile.color, valid.color,
             "a non-UTF8 name lost its extension's color: someone is decoding \
@@ -989,11 +984,11 @@ mod tests {
     #[test]
     fn the_style_attributes_cross_and_not_just_the_color() {
         let theme = theme_with_files();
-        let zip = theme.estilo_de_entrada(b"backup.zip", norte_theme::FileKind::Regular, false);
+        let zip = theme.entry_style(b"backup.zip", norte_theme::FileKind::Regular, false);
         assert_eq!(zip.color, "#d75f5f");
         assert!(zip.dim, "the theme's `dim = true` did not reach the row");
 
-        let dir = theme.estilo_de_entrada(b"src", norte_theme::FileKind::Dir, false);
+        let dir = theme.entry_style(b"src", norte_theme::FileKind::Dir, false);
         assert!(dir.bold, "a directory is bold");
     }
 
@@ -1015,17 +1010,17 @@ mod tests {
             norte_theme::Theme::from_toml("name = \"o\"\n[files.ext]\nrs = { fg = \"#e2c08d\" }\n")
                 .expect("parses");
         let mut theme = theme_with_files();
-        theme.variante_clara = Some(Box::new(light));
-        theme.variante_oscura = Some(Box::new(dark));
+        theme.variant_clara = Some(Box::new(light));
+        theme.variant_oscura = Some(Box::new(dark));
 
         let kind = norte_theme::FileKind::Regular;
         assert_eq!(
-            theme.estilo_de_entrada(b"main.rs", kind, true).color,
+            theme.entry_style(b"main.rs", kind, true).color,
             "#e2c08d",
             "the desktop asks for dark"
         );
         assert_eq!(
-            theme.estilo_de_entrada(b"main.rs", kind, false).color,
+            theme.entry_style(b"main.rs", kind, false).color,
             "#895503",
             "the desktop asks for light"
         );
@@ -1049,7 +1044,7 @@ mod tests {
 
         // Only the dark one: the light side stays with the base.
         let mut dark_only = theme_with_files();
-        dark_only.variante_oscura = Some(Box::new(
+        dark_only.variant_oscura = Some(Box::new(
             norte_theme::Theme::from_toml("name = \"o\"\n").expect("parses"),
         ));
         assert_eq!(dark_only.for_scheme(true).name.as_deref(), Some("o"));
@@ -1062,7 +1057,7 @@ mod tests {
     #[test]
     fn without_a_rule_there_is_no_color() {
         let theme = theme_with_files();
-        let nothing = theme.estilo_de_entrada(b"notas.txt", norte_theme::FileKind::Regular, false);
+        let nothing = theme.entry_style(b"notas.txt", norte_theme::FileKind::Regular, false);
         assert_eq!(nothing, EntryStyle::default());
     }
 }

@@ -28,7 +28,7 @@ const DOES_NOT_APPLY: &[&str] = &[
     // was half true: the window manager does close it, but `F10` and `q` —
     // the quit keys of all seven presets, and the "Quit" menu entry — did
     // NOTHING in the window. Now they ask to quit through the same path as
-    // the close button (`pedir_salir`), with the same `[ui] confirm_quit`
+    // the close button (`request_exit`), with the same `[ui] confirm_quit`
     // question.
     // "Full screen" is a terminal-shaped answer: hiding the panels to see
     // what is behind them means nothing in a window that IS the manager.
@@ -45,7 +45,7 @@ const DEFERRED: &[(&str, u32)] = &[
     // a row only means something for a list that can be EDITED, and this
     // window's only one was read-only. Since #309 there is one that is —
     // favorites — so it left this list and entered
-    // `IMPLEMENTADOS_DIALOGO`.
+    // `IMPLEMENTADOS_DIALOG`.
     // `layout.preview` was here until #291: it was the only one of the seven
     // in ADR 0058 the window did not paint. Now the `viewer` slot follows
     // the cursor and shows the same viewer as the large one.
@@ -99,7 +99,7 @@ fn every_live_command_is_classified() {
     let done: std::collections::HashSet<&str> = norte_ui_host::commands::IMPLEMENTADOS
         .iter()
         .chain(norte_ui_host::commands::IMPLEMENTADOS_VISOR.iter())
-        .chain(norte_ui_host::commands::IMPLEMENTADOS_DIALOGO.iter())
+        .chain(norte_ui_host::commands::IMPLEMENTADOS_DIALOG.iter())
         .copied()
         .collect();
     let does_not_apply: std::collections::HashSet<&str> = DOES_NOT_APPLY.iter().copied().collect();
@@ -131,7 +131,7 @@ fn nothing_classified_is_built() {
     let done: std::collections::HashSet<&str> = norte_ui_host::commands::IMPLEMENTADOS
         .iter()
         .chain(norte_ui_host::commands::IMPLEMENTADOS_VISOR.iter())
-        .chain(norte_ui_host::commands::IMPLEMENTADOS_DIALOGO.iter())
+        .chain(norte_ui_host::commands::IMPLEMENTADOS_DIALOG.iter())
         .copied()
         .collect();
     for c in DOES_NOT_APPLY.iter().chain(DEFERRED.iter().map(|(c, _)| c)) {

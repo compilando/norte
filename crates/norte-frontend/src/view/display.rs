@@ -164,8 +164,8 @@ pub fn path_display(p: &VPath) -> (String, bool) {
 /// assert_eq!((text.as_str(), hostile), ("⟨mem⟩/CAFÉ.TXT", true));
 ///
 /// // A local one reads the way anyone would write it.
-/// let local = norte_proto::VPath::parse("file:///home/o/notas.txt").unwrap();
-/// assert_eq!(path_display_with(&local, None).0, "/home/o/notas.txt");
+/// let local = norte_proto::VPath::parse("file:///home/o/notes.txt").unwrap();
+/// assert_eq!(path_display_with(&local, None).0, "/home/o/notes.txt");
 /// ```
 #[must_use]
 pub fn path_display_with(
@@ -386,7 +386,7 @@ pub fn ellipsis_at_bytes(s: &str, max_bytes: usize) -> String {
 /// // What already fits comes back INTACT.
 /// assert_eq!(middle_ellipsis("file:///d/a.txt", 46), "file:///d/a.txt");
 /// // What overflows keeps head and tail, and MARKS the cut.
-/// let out = middle_ellipsis("file:///muy/larga/ruta/hacia/final.txt", 20);
+/// let out = middle_ellipsis("file:///muy/long/ruta/hacia/final.txt", 20);
 /// assert!(out.starts_with("file:") && out.ends_with(".txt") && out.contains('…'));
 /// ```
 #[must_use]

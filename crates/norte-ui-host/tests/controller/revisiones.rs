@@ -5,31 +5,29 @@ use super::*;
 // phase 4's exit gate demands it literally).
 // ---------------------------------------------------------------------------
 
-pub(super) async fn host_solo_lectura(
-    backend: Arc<Falso>,
-) -> (UiHost, norte_ui_host::ViewSnapshot) {
+pub(super) async fn host_solo_read(backend: Arc<Fake>) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset_con(
             "orthodox",
-            norte_ui_host::commands::Efectos::SoloLectura,
+            norte_ui_host::commands::Effects::SoloRead,
         )
         .expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::SoloLectura,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::SoloRead,
         log_ring: None,
     })
     .await
@@ -43,9 +41,9 @@ pub(super) async fn host_solo_lectura(
 /// permission.
 #[tokio::test]
 async fn in_read_only_delete_opens_nothing() {
-    let backend = arbol();
-    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
-    let ack = h.dispatch(tecla("F8")).await.expect("host alive");
+    let backend = fake_tree();
+    let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
+    let ack = h.dispatch(press("F8")).await.expect("host alive");
     assert!(
         matches!(ack, ActionAck::Unavailable { .. }),
         "F8 gets answered, not executed: {ack:?}"
@@ -60,9 +58,9 @@ async fn in_read_only_delete_opens_nothing() {
 /// Same with creating a directory.
 #[tokio::test]
 async fn in_read_only_create_creates_nothing() {
-    let backend = arbol();
-    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
-    let ack = h.dispatch(tecla("F7")).await.expect("host alive");
+    let backend = fake_tree();
+    let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
+    let ack = h.dispatch(press("F7")).await.expect("host alive");
     assert!(matches!(ack, ActionAck::Unavailable { .. }), "{ack:?}");
     asentar().await;
     assert!(backend.creados.lock().expect("creados").is_empty());
@@ -72,8 +70,8 @@ async fn in_read_only_create_creates_nothing() {
 /// mutate also cannot approve an agent mutating.
 #[tokio::test]
 async fn in_read_only_there_are_no_approvals_to_answer() {
-    let backend = arbol();
-    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let backend = fake_tree();
+    let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let ack = h
         .dispatch(UiAction::Dialog {
             id: norte_ui_host::ModalId(1),
@@ -99,11 +97,11 @@ async fn in_read_only_there_are_no_approvals_to_answer() {
 /// startup decision, not an amputation of the host.
 #[tokio::test]
 async fn in_full_mode_delete_still_asks_for_confirmation() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host alive");
-    let dialogs = siguientes_dialogos(&mut sub).await;
+    h.dispatch(press("F8")).await.expect("host alive");
+    let dialogs = next_dialogs(&mut sub).await;
     assert_eq!(dialogs.len(), 1);
 }
 
@@ -114,20 +112,20 @@ async fn in_full_mode_delete_still_asks_for_confirmation() {
 /// Navigating to a large directory brings the WHOLE directory, not the first
 /// page.
 ///
-/// `aterriza_en` clears the witness when the first page lands, and the drain
-/// task kept sending its batches with that same witness: `aplicar_lote`
-/// rejected them all. Startup did not see it because `listar_inicial`
+/// `lands_on` clears the witness when the first page lands, and the drain
+/// task kept sending its batches with that same witness: `apply_batch`
+/// rejected them all. Startup did not see it because `list_inicial`
 /// restores the witness by hand.
 #[tokio::test]
 async fn navigating_to_a_large_directory_brings_it_whole() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"docs".to_vec(), true)]);
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"docs".to_vec(), true)]);
     let many: Vec<(Vec<u8>, bool)> = (0..300)
         .map(|i| (format!("f{i:04}.txt").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa/docs", many);
-    let (h, snap) = host_arbol(Arc::new(f)).await;
-    let docs = listado(&snap)
+    f.put("mem:///casa/docs", many);
+    let (h, snap) = host_tree(Arc::new(f)).await;
+    let docs = listing(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
@@ -137,7 +135,7 @@ async fn navigating_to_a_large_directory_brings_it_whole() {
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
-        generation: listado(&snap).generation,
+        generation: listing(&snap).generation,
     })
     .await
     .expect("host alive");
@@ -146,8 +144,8 @@ async fn navigating_to_a_large_directory_brings_it_whole() {
     // snapshot and the next.
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let snap = siguiente_foto(&mut sub).await;
-        if listado(&snap).total_rows == Some(300) {
+        let snap = next_snapshot(&mut sub).await;
+        if listing(&snap).total_rows == Some(300) {
             return;
         }
     }
@@ -162,7 +160,7 @@ async fn navigating_to_a_large_directory_brings_it_whole() {
 #[tokio::test]
 async fn a_row_from_another_generation_does_not_get_marked() {
     let (h, snap) = host(vec!["a", "b", "c"]).await;
-    let old = listado(&snap).generation;
+    let old = listing(&snap).generation;
     // Sorting moves ALL rows and bumps the generation.
     h.dispatch(UiAction::SortBy {
         slot_id: 1,
@@ -197,7 +195,7 @@ async fn a_row_from_another_generation_does_not_get_marked() {
 #[tokio::test]
 async fn an_overflowing_range_does_not_mark_the_whole_listing() {
     let (h, snap) = host(vec!["a", "b", "c", "d", "e"]).await;
-    let generation = listado(&snap).generation;
+    let generation = listing(&snap).generation;
     let ack = h
         .dispatch(UiAction::MarkRange {
             slot_id: 1,
@@ -216,8 +214,8 @@ async fn an_overflowing_range_does_not_mark_the_whole_listing() {
     );
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let snap = siguiente_foto(&mut sub).await;
-    assert_eq!(listado(&snap).marks, 0, "and it marked nothing");
+    let snap = next_snapshot(&mut sub).await;
+    assert_eq!(listing(&snap).marks, 0, "and it marked nothing");
 }
 
 // ---------------------------------------------------------------------------
@@ -231,16 +229,16 @@ async fn an_overflowing_range_does_not_mark_the_whole_listing() {
 /// ceiling that does not rearm itself is a silent ceiling.
 #[tokio::test]
 async fn a_large_window_gets_probed_in_batches_to_the_end() {
-    let mut f = Falso {
+    let mut f = Fake {
         lazy: true,
-        ..Falso::default()
+        ..Fake::default()
     };
     let many: Vec<(Vec<u8>, bool)> = (0..500)
         .map(|i| (format!("f{i:04}.txt").into_bytes(), false))
         .collect();
-    f.pon("mem:///casa", many);
+    f.put("mem:///casa", many);
     let backend = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     h.dispatch(UiAction::SetVisibleRange {
         slot_id: 1,
         first: 0,
@@ -249,7 +247,7 @@ async fn a_large_window_gets_probed_in_batches_to_the_end() {
     .await
     .expect("host alive");
 
-    hasta(&backend, "the 500 entries probed", |f| {
+    until(&backend, "the 500 entries probed", |f| {
         (f.sondeos.lock().expect("sondeos").len() >= 500).then_some(())
     })
     .await;
@@ -264,20 +262,20 @@ async fn a_large_window_gets_probed_in_batches_to_the_end() {
 /// defined.
 #[tokio::test]
 async fn a_probe_from_another_listing_does_not_hydrate() {
-    let mut f = Falso {
+    let mut f = Fake {
         lazy: true,
         // The stat takes a while: there is time to navigate underneath.
         retraso_ms: 120,
-        ..Falso::default()
+        ..Fake::default()
     };
-    f.pon(
+    f.put(
         "mem:///casa",
         vec![(b"docs".to_vec(), true), (b"a.txt".to_vec(), false)],
     );
-    f.pon("mem:///casa/docs", vec![(b"a.txt".to_vec(), false)]);
+    f.put("mem:///casa/docs", vec![(b"a.txt".to_vec(), false)]);
     let backend = Arc::new(f);
-    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
-    let docs = listado(&snap)
+    let (h, snap) = host_tree(Arc::clone(&backend)).await;
+    let docs = listing(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
@@ -287,29 +285,29 @@ async fn a_probe_from_another_listing_does_not_hydrate() {
     h.dispatch(UiAction::Activate {
         slot_id: 1,
         key: docs,
-        generation: listado(&snap).generation,
+        generation: listing(&snap).generation,
     })
     .await
     .expect("host alive");
     // What this case puts in flight: casa's listing, the probe of the
     // OUTER `a.txt` — the one that arrives late and must not hydrate — and
     // docs's listing. It waits for none to still be in flight.
-    hasta(&backend, "the late probe already served", |f| {
-        (f.listados() >= 2 && f.en_calma()).then_some(())
+    until(&backend, "the late probe already served", |f| {
+        (f.listings() >= 2 && f.en_calma()).then_some(())
     })
     .await;
     asentar().await;
 
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let snap = siguiente_foto(&mut sub).await;
+    let snap = next_snapshot(&mut sub).await;
     // The INNER `a.txt` is a different file from the outer `a.txt`; what is
     // checked is that the screen is coherent, not whether it has a size or
     // not.
     assert!(
-        listado(&snap).path_display.ends_with("/docs"),
+        listing(&snap).path_display.ends_with("/docs"),
         "it navigated: {}",
-        listado(&snap).path_display
+        listing(&snap).path_display
     );
 }
 
@@ -322,21 +320,21 @@ async fn a_probe_from_another_listing_does_not_hydrate() {
 /// would stay blank forever.
 #[tokio::test]
 async fn a_provider_returning_another_spelling_does_not_leave_the_cell_blank() {
-    let mut f = Falso {
+    let mut f = Fake {
         lazy: true,
         // The stat answers with the name in UPPERCASE: another spelling of
         // the same thing, like a case-insensitive server would.
         stat_grita: true,
-        ..Falso::default()
+        ..Fake::default()
     };
-    f.pon("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
+    f.put("mem:///casa", vec![(b"a.txt".to_vec(), false)]);
     let backend = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let snap = siguiente_foto(&mut sub).await;
-        let filled = listado(&snap)
+        let snap = next_snapshot(&mut sub).await;
+        let filled = listing(&snap)
             .rows
             .iter()
             .any(|r| r.cells.iter().any(|c| c.text.is_some()));
@@ -359,11 +357,11 @@ async fn a_provider_returning_another_spelling_does_not_leave_the_cell_blank() {
 /// ends up being a file name.
 #[tokio::test]
 async fn the_name_that_is_typed_is_the_one_that_gets_created() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F7")).await.expect("host alive");
-    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(press("F7")).await.expect("host alive");
+    let id = next_dialogs(&mut sub).await[0].id;
 
     // A name with a control character inside: legal on Unix, and what gets
     // created has to be EXACTLY that.
@@ -376,7 +374,7 @@ async fn the_name_that_is_typed_is_the_one_that_gets_created() {
     .expect("host alive");
 
     // What is PAINTED is masked and says so.
-    let painted = siguientes_dialogos(&mut sub).await;
+    let painted = next_dialogs(&mut sub).await;
     assert!(
         painted[0].input_hostile,
         "a name with a direction mark SAYS so: {:?}",
@@ -398,7 +396,7 @@ async fn the_name_that_is_typed_is_the_one_that_gets_created() {
     })
     .await
     .expect("host alive");
-    let created = hasta(&backend, "the queued creation", |f| {
+    let created = until(&backend, "the queued creation", |f| {
         let c = f.creados.lock().expect("creados").clone();
         (!c.is_empty()).then_some(c)
     })
@@ -419,10 +417,10 @@ async fn the_name_that_is_typed_is_the_one_that_gets_created() {
 /// An impossible name is REJECTED instead of trimmed.
 #[tokio::test]
 async fn an_oversized_name_does_not_get_trimmed() {
-    let (h, _snap) = host_arbol(arbol()).await;
+    let (h, _snap) = host_tree(fake_tree()).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F7")).await.expect("host alive");
-    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(press("F7")).await.expect("host alive");
+    let id = next_dialogs(&mut sub).await[0].id;
     let ack = h
         .dispatch(UiAction::DialogInput {
             id,
@@ -446,19 +444,19 @@ async fn an_oversized_name_does_not_get_trimmed() {
 /// renderer PAINTS is `label`; the id only goes into a `data-` attribute.
 #[tokio::test]
 async fn two_columns_masked_the_same_are_still_two() {
-    let backend = arbol();
+    let backend = fake_tree();
     let (h, snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
@@ -469,18 +467,18 @@ async fn two_columns_masked_the_same_are_still_two() {
         // already filtered by `is_valid_attr_id` — an id that is not legal
         // on the wire would take down the whole listing — and plugin ones
         // are filtered by nobody.
-        columns: columnas_de(&[
+        columns: columns_of(&[
             "name",
             "plugin:acme.a\u{200b}b/x",
             "plugin:acme.a\u{202e}b/x",
         ]),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts");
     drop(h);
-    let b = listado(&snap);
+    let b = listing(&snap);
     let ids: Vec<&str> = b.columns.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids.len(), 3, "all three columns get painted: {ids:?}");
     assert_ne!(
@@ -522,30 +520,30 @@ async fn two_columns_masked_the_same_are_still_two() {
 /// it.
 #[tokio::test]
 async fn a_late_viewer_does_not_open_on_its_own() {
-    let mut f = Falso {
+    let mut f = Fake {
         // The read takes a while; there is time to close.
         retraso_ms: 150,
-        ..Falso::default()
+        ..Fake::default()
     };
-    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
-    f.contenido
+    f.put("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    f.content
         .insert("mem:///casa/notas.txt".to_owned(), b"hola\n".to_vec());
     let backend = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     // Before the content arrives, it is closed.
-    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(press("Escape")).await.expect("host alive");
     // The late read already came back: none is left in flight.
-    hasta(&backend, "the late read served", |f| {
+    until(&backend, "the late read served", |f| {
         (f.servidos() >= 2 && f.en_calma()).then_some(())
     })
     .await;
     asentar().await;
 
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let snap = siguiente_foto(&mut sub).await;
+    let snap = next_snapshot(&mut sub).await;
     assert!(
         snap.viewer.is_none(),
         "the viewer does not open on its own after closing it"
@@ -564,23 +562,23 @@ async fn a_layout_with_no_listing_does_not_start() {
         norte_frontend::layout::KindId::new("status"),
     );
     let outcome = UiHost::start(UiHostOptions {
-        backend: arbol(),
+        backend: fake_tree(),
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: no_listing_tree,
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await;
@@ -614,32 +612,32 @@ async fn columns_from_another_scheme_are_not_dead() {
         .collect(),
         ..norte_config::ColumnsConfig::default()
     };
-    let backend = arbol();
+    let backend = fake_tree();
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::HostBackend>,
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
         columns: norte_frontend::columns::ColumnsSettings::resolve(&cfg),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts");
     drop(h);
 
-    let ids: Vec<&str> = listado(&snap)
+    let ids: Vec<&str> = listing(&snap)
         .columns
         .iter()
         .map(|c| c.id.as_str())
@@ -667,8 +665,8 @@ async fn columns_from_another_scheme_are_not_dead() {
 #[tokio::test]
 async fn the_window_gives_up_columns_to_read_the_names() {
     async fn start(width: u16) -> norte_ui_host::ViewSnapshot {
-        let mut f = Falso::default();
-        f.pon(
+        let mut f = Fake::default();
+        f.put(
             "mem:///casa",
             (0..5).map(|i| {
                 (
@@ -688,22 +686,21 @@ async fn the_window_gives_up_columns_to_read_the_names() {
         let (h, snap) = UiHost::start(UiHostOptions {
             backend: Arc::new(f) as Arc<dyn norte_ui_host::HostBackend>,
             initial_dir: dir(),
-            initial_dir_pedido: false,
+            initial_dir_requested: false,
             attach: false,
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-            keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
-                .expect("preset"),
+            keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
             layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
             viewport: (width, 40),
-            settings: ajustes_de_prueba(),
+            settings: test_settings(),
             paths: norte_ui_host::settings::HostPaths::default(),
             theme: norte_ui_host::pickers::HostTheme::default(),
             user_layouts: Vec::new(),
             profile: None,
             columns: norte_frontend::columns::ColumnsSettings::resolve(&cfg),
-            effects: norte_ui_host::commands::Efectos::Completo,
+            effects: norte_ui_host::commands::Effects::Full,
             log_ring: None,
         })
         .await
@@ -713,7 +710,7 @@ async fn the_window_gives_up_columns_to_read_the_names() {
     }
 
     let narrow = Box::pin(start(50)).await;
-    let b = listado(&narrow);
+    let b = listing(&narrow);
     let ids: Vec<&str> = b.columns.iter().map(|c| c.id.as_str()).collect();
     assert_eq!(ids, ["name", "size", "mtime"], "the class gives up first");
     let date = b.columns.iter().find(|c| c.id == "mtime").expect("date");
@@ -728,7 +725,7 @@ async fn the_window_gives_up_columns_to_read_the_names() {
     }
 
     let wide = Box::pin(start(200)).await;
-    let ids: Vec<&str> = listado(&wide)
+    let ids: Vec<&str> = listing(&wide)
         .columns
         .iter()
         .map(|c| c.id.as_str())

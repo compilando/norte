@@ -156,7 +156,7 @@ mod tests {
     }
 
     #[test]
-    fn primer_contacto_es_unknown() {
+    fn primer_contact_es_unknown() {
         let dir = tempfile::tempdir().unwrap();
         let store = KnownHostsStore::at(dir.path().join("kh"));
         let k = key();
@@ -172,7 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn learn_registra_y_check_reconoce() {
+    fn learn_records_and_check_recognizes() {
         let dir = tempfile::tempdir().unwrap();
         let store = KnownHostsStore::at(dir.path().join("kh"));
         let k = key();
@@ -194,7 +194,7 @@ mod tests {
     }
 
     #[test]
-    fn clave_cambiada_es_mismatch() {
+    fn key_cambiada_es_mismatch() {
         let dir = tempfile::tempdir().unwrap();
         let store = KnownHostsStore::at(dir.path().join("kh"));
         let registered = key();
@@ -215,7 +215,7 @@ mod tests {
     /// Mismatch (ADR 0015 D; russh alone, without disambiguating, would
     /// return "not found").
     #[test]
-    fn clave_de_otro_algoritmo_es_mismatch_no_unknown() {
+    fn key_of_another_algorithm_is_a_mismatch_not_unknown() {
         use russh::keys::EcdsaCurve;
         let dir = tempfile::tempdir().unwrap();
         let store = KnownHostsStore::at(dir.path().join("kh"));
@@ -242,7 +242,7 @@ mod tests {
     /// host would become "first contact" again).
     #[cfg(unix)]
     #[test]
-    fn fichero_ilegible_es_error_no_tofu() {
+    fn unreadable_file_is_an_error_not_tofu() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("kh");
@@ -256,7 +256,7 @@ mod tests {
     }
 
     #[test]
-    fn fichero_corrupto_es_error_no_panic() {
+    fn corrupt_file_is_an_error_not_a_panic() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("kh");
         std::fs::write(&path, "example.com ssh-ed25519 not-base64!!\n").unwrap();
@@ -265,7 +265,7 @@ mod tests {
     }
 
     #[test]
-    fn ruta_por_defecto_y_override() {
+    fn default_path_and_override() {
         let dir = Path::new("/cfg");
         assert_eq!(
             resolve_path(dir, None),

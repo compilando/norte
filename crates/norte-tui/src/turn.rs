@@ -151,13 +151,13 @@ pub async fn drain_pending(
     // dispatch because measuring is I/O and this loop owns the backend —
     // same split as the checksums and the comparison.
     if std::mem::take(&mut app.disk_map_stale) {
-        crate::jobs::lanzar_disk_map(app, backend, work).await;
+        crate::jobs::launch_disk_map(app, backend, work).await;
     }
     // Phase 7: the timeline asks for its first page, for the same reason.
     // It is flagged by whoever opens it and by whoever INHERITS it from a
     // saved layout, which is the case that goes through no key at all.
     if std::mem::take(&mut app.timeline_stale) {
-        crate::dispatch::cargar_timeline(app, backend, None).await;
+        crate::dispatch::load_timeline(app, backend, None).await;
     }
     // And entering one of the map's children is a NORMAL `cd`, with its
     // usual return ritual: the map points, and navigating is the same path
@@ -239,7 +239,7 @@ async fn handle_suspension(
         //
         // Still does not close it: between this `stat` and the `exec` there
         // is a gap.
-        if let Some(reason) = crate::gestures::motivo_para_no_lanzar(backend, check_regular).await {
+        if let Some(reason) = crate::gestures::reason_not_to_launch(backend, check_regular).await {
             app.message = Some(reason);
             return;
         }
@@ -358,7 +358,7 @@ async fn handle_subshell(
     if work
         .subshell
         .as_mut()
-        .is_some_and(crate::subshell::Subshell::muerto)
+        .is_some_and(crate::subshell::Subshell::dead)
     {
         work.subshell = None;
     }
@@ -367,7 +367,7 @@ async fn handle_subshell(
             .terminal()
             .and_then(|t| t.size().ok())
             .map_or((80, 24), |s| (s.width, s.height));
-        match crate::subshell::Subshell::arrancar(&dir, size) {
+        match crate::subshell::Subshell::start(&dir, size) {
             Ok(sub) => work.subshell = Some(sub),
             Err(e) => {
                 app.message = Some(ta(
@@ -610,7 +610,7 @@ pub async fn after_frame(
     // One live request per slot, and the next one REPLACES the previous —
     // dropping the receiver is the cancellation — which is the same rule as
     // the preview below.
-    crate::panelplugin::pedir_marco(app, backend, work, painted);
+    crate::panelplugin::request_marco(app, backend, work, painted);
     // L3: the docked viewer follows the active listing's cursor. What is
     // requested comes out of `preview::want`, which returns `None` when the
     // slot was not placed — closed, behind a tab, or collapsed for lack of
@@ -771,13 +771,13 @@ fn spawn_log_probes(app: &mut App, backend: &Backend, work: &mut InFlight) {
     // And it is dropped with no request at all to a daemon that already
     // said it has no log: raising the level of a ring that does not exist
     // is one RPC per keypress whose answer is already known.
-    if let Some(level) = app.log_remote.pide_nivel.take()
-        && app.log_remote.debe_pedir()
+    if let Some(level) = app.log_remote.asks_level.take()
+        && app.log_remote.must_request()
     {
-        work.log_level = Some(spawn_log_level(backend, level, app.log_remote.epoca));
+        work.log_level = Some(spawn_log_level(backend, level, app.log_remote.epoch));
     }
     if work.log_tail.is_some()
-        || !app.log_remote.debe_pedir()
+        || !app.log_remote.must_request()
         || work
             .log_next_at
             .is_some_and(|t| t > tokio::time::Instant::now())
@@ -788,6 +788,6 @@ fn spawn_log_probes(app: &mut App, backend: &Backend, work: &mut InFlight) {
     work.log_tail = Some(spawn_log_tail(
         backend,
         app.log_remote.cursor,
-        app.log_remote.epoca,
+        app.log_remote.epoch,
     ));
 }

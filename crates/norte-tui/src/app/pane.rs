@@ -227,10 +227,10 @@ impl Pane {
     }
 
     /// POINTS AT entry `i`: the cursor, or the filter's selection when a
-    /// live quick search is on. See [`norte_frontend::PaneState::senalar`]
+    /// live quick search is on. See [`norte_frontend::PaneState::point_at`]
     /// — with a filter, `set_cursor` moves something nobody is looking at.
-    pub fn senalar(&mut self, i: usize) {
-        self.state.senalar(i);
+    pub fn point_at(&mut self, i: usize) {
+        self.state.point_at(i);
     }
 
     // --- Cursor + quick mutation delegates (#82) ---
@@ -1134,7 +1134,7 @@ mod tests {
         for f in SearchField::ORDEN {
             d.field = f;
             d.push_char('x');
-            assert!(d.texto(f).ends_with('x'), "{f:?} didn't receive the key");
+            assert!(d.text(f).ends_with('x'), "{f:?} didn't receive the key");
         }
     }
 

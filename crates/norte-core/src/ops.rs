@@ -31,7 +31,7 @@ use crate::scheduler::TaskCtx;
 /// wearing another disguise: an agent writes a file, the human replaces it,
 /// the human undoes the agent's session. With no identity, its replacement
 /// goes to the trash.
-pub(crate) async fn identidad_de(
+pub(crate) async fn identity_of(
     provider: &dyn Provider,
     path: &VPath,
     observer: &Arc<dyn MutationObserver>,
@@ -206,7 +206,7 @@ impl<'a> Dest<'a> {
     /// would be thrown away. Against a remote destination, moreover, each
     /// one is a network trip.
     async fn node_id_for(&self, observer: &Arc<dyn MutationObserver>) -> Option<norte_vfs::NodeId> {
-        if !observer.quiere_identidad() {
+        if !observer.wants_identity() {
             return None;
         }
         self.node_id().await
@@ -225,7 +225,7 @@ impl<'a> Dest<'a> {
                         .node_id(&self.path, norte_vfs::FollowLinks::No)
                         .await
                 }
-                otro => otro,
+                other => other,
             },
             None => {
                 self.provider
@@ -446,7 +446,7 @@ async fn anchor_parent_or_fail(
     })
     .await?;
     match observed {
-        Some(id) if crate::anchor::casa(anchor, id) => Ok(()),
+        Some(id) if crate::anchor::home(anchor, id) => Ok(()),
         Some(_) => {
             tracing::warn!(
                 task_id,
@@ -494,7 +494,7 @@ fn leaf_destination<'a>(
 /// sessions, so for the most common caller there would be nothing to open.
 ///
 /// What the human DID approve is the destination directory: it is what the
-/// pane showed, what `pedir_transferencia` composes `to` from, and what the
+/// pane showed, what `request_transfer` composes `to` from, and what the
 /// dialog names in its own field.
 ///
 /// # What it closes, and what it does not
@@ -625,7 +625,7 @@ async fn open_leaf_root(
             }
         };
         match observed {
-            Some(id) if crate::anchor::casa(anchor, id) => {}
+            Some(id) if crate::anchor::home(anchor, id) => {}
             Some(_) => {
                 tracing::warn!(
                     task_id,
@@ -1128,7 +1128,7 @@ async fn is_the_same_leaf_with_a_different_spelling(
 /// same directory as the other two —the policy gate was consulted about
 /// that parent— and lives as long as two renames take, but it is worth
 /// stating.
-async fn rename_de_ortografia(
+async fn spelling_rename(
     src: &dyn Provider,
     from: &VPath,
     to: &VPath,
@@ -1842,7 +1842,7 @@ async fn hydrate_plan(
 /// The destination disappearing is NOT a far-fetched case and does not need
 /// to happen from within norte: a `rm` from another terminal, another file
 /// manager, or another machine over the same mount is enough.
-pub(crate) async fn dest_sigue_ahi_o_falla(
+pub(crate) async fn dest_still_there_or_fails(
     dst: &dyn Provider,
     root: &dyn norte_vfs::ConfinedRoot,
     path: &VPath,
@@ -1935,7 +1935,7 @@ async fn leaf_with_its_destination_standing(
     let (Some(dir), Some(root)) = (dir, root) else {
         return Ok(());
     };
-    dest_sigue_ahi_o_falla(dst, root, dir, cancel).await
+    dest_still_there_or_fails(dst, root, dir, cancel).await
 }
 
 /// Every how many ENTRIES it re-checks that the destination is still there.
@@ -1944,7 +1944,7 @@ async fn leaf_with_its_destination_standing(
 /// descriptor's `fstat` and the path's resolution) and there are trees of a
 /// hundred thousand small files. Spread over 32 it is negligible time next
 /// to opening, writing, and closing each file.
-pub(crate) const COMPROBAR_RAIZ_CADA: usize = 32;
+pub(crate) const CHECK_ROOT_EACH: usize = 32;
 
 /// …and every how much TIME, which is the other trigger and is needed.
 ///
@@ -1964,7 +1964,7 @@ pub(crate) const COMPROBAR_RAIZ_CADA: usize = 32;
 /// —which was the hole— and not a five-second ceiling on blind writing.
 /// Putting it inside a single file's copy would be another decision, with
 /// another cost, and ADR 0151 did not make it.
-pub(crate) const COMPROBAR_RAIZ_CADA_SEGUNDOS: u64 = 5;
+pub(crate) const CHECK_ROOT_EVERY_SECONDS: u64 = 5;
 
 /// Copies the `from` → `to` tree following an ALREADY walked plan (the walk
 /// is the caller's: move reuses it for the delete — issue #9). The copy
@@ -2039,10 +2039,10 @@ async fn copy_tree(
         // times and was exposed once more to a false positive.
         if let Some(root) = root.as_deref()
             && i > 0
-            && (i % COMPROBAR_RAIZ_CADA == 0
-                || last_check.elapsed().as_secs() >= COMPROBAR_RAIZ_CADA_SEGUNDOS)
+            && (i % CHECK_ROOT_EACH == 0
+                || last_check.elapsed().as_secs() >= CHECK_ROOT_EVERY_SECONDS)
         {
-            dest_sigue_ahi_o_falla(&**dst, root, to, &ctx.cancel).await?;
+            dest_still_there_or_fails(&**dst, root, to, &ctx.cancel).await?;
             last_check = std::time::Instant::now();
         }
         let entry = &pe.entry;
@@ -2083,7 +2083,7 @@ async fn copy_tree(
     // where lying has consequences — a "completed" closes everything and
     // nobody looks again.
     if let Some(root) = root.as_deref() {
-        dest_sigue_ahi_o_falla(&**dst, root, to, &ctx.cancel).await?;
+        dest_still_there_or_fails(&**dst, root, to, &ctx.cancel).await?;
     }
     Ok(skipped)
 }
@@ -2591,7 +2591,7 @@ async fn rename_with_policy(
     // how the wrong one gets lost. With no identity (a provider that does
     // not give one) it falls back to the usual behavior.
     if is_the_same_leaf_with_a_different_spelling(src, from, to, from_id, &ctx.cancel).await {
-        rename_de_ortografia(src, from, to, from_id, observer, ctx).await?;
+        spelling_rename(src, from, to, from_id, observer, ctx).await?;
         return Ok(RenameOutcome::Renamed);
     }
     match opts.on_collision {
@@ -2987,7 +2987,7 @@ pub(crate) async fn mkdir_task(
         Err(e) => return Err(e),
     }
     mkdir_retrying(&Dest::plain(&*provider, path.clone()), &ctx.cancel).await?;
-    let node = identidad_de(&*provider, &path, &observer).await;
+    let node = identity_of(&*provider, &path, &observer).await;
     observer
         .on_mutation(&Mutation::Created { path: &path, node }, &ctx.actor)
         .await?;
@@ -3048,7 +3048,7 @@ pub(crate) async fn create_task(
     // a zero-byte file at the destination. With no `write` in between at all.
     let sink = provider.write(&path).await?;
     sink.commit().await?;
-    let node = identidad_de(&*provider, &path, &observer).await;
+    let node = identity_of(&*provider, &path, &observer).await;
     observer
         .on_mutation(&Mutation::Created { path: &path, node }, &ctx.actor)
         .await?;
@@ -3143,7 +3143,7 @@ pub(crate) async fn write_task(
         if let Some(Some(en)) = &buried {
             match provider.restore_from(en, &path).await {
                 Ok(()) => {
-                    let node = identidad_de(&*provider, &path, &observer).await;
+                    let node = identity_of(&*provider, &path, &observer).await;
                     let _ = observer
                         .on_mutation(&Mutation::Created { path: &path, node }, &ctx.actor)
                         .await;
@@ -3156,7 +3156,7 @@ pub(crate) async fn write_task(
         }
         return Err(e);
     }
-    let node = identidad_de(&*provider, &path, &observer).await;
+    let node = identity_of(&*provider, &path, &observer).await;
     observer
         .on_mutation(&Mutation::Created { path: &path, node }, &ctx.actor)
         .await?;

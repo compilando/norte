@@ -25,13 +25,13 @@ use norte_ui_host::dto::NativeEffect;
 /// What happened to an effect. It is SAID: "copied" over an empty clipboard
 /// is only discovered when the paste lands somewhere else.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Resultado {
+pub enum RunOutcome {
     /// Launched (or written) without error.
-    Hecho,
+    Done,
     /// No program on the PATH knows how to do it.
-    SinPrograma,
+    NoProgram,
     /// There was a program and it failed to start or to write.
-    Fallo,
+    Failure,
 }
 
 /// Consumes the host's native effects until the channel closes.
@@ -71,13 +71,13 @@ pub async fn bombear(
             Ok(NativeEffect::HandoffToTerminal { daemon }) => {
                 let result = tokio::task::spawn_blocking(move || handoff(daemon))
                     .await
-                    .unwrap_or(Resultado::Fallo);
+                    .unwrap_or(RunOutcome::Failure);
                 match result {
-                    Resultado::Hecho => close(),
+                    RunOutcome::Done => close(),
                     other => {
                         let _ = host
                             .dispatch(norte_ui_host::UiAction::HandoffFailed {
-                                no_terminal: matches!(other, Resultado::SinPrograma),
+                                no_terminal: matches!(other, RunOutcome::NoProgram),
                             })
                             .await;
                     }
@@ -105,10 +105,10 @@ pub async fn bombear(
             // others are fire-and-forget, but for this one the host expects a
             // path back, so its answer returns through `dispatch` like any
             // other action — the same door the renderer uses.
-            Ok(NativeEffect::PickDirectory { desde }) => {
+            Ok(NativeEffect::PickDirectory { from }) => {
                 let host = std::sync::Arc::clone(&host);
                 tokio::task::spawn(async move {
-                    let chosen = tokio::task::spawn_blocking(move || pick_directory(&desde))
+                    let chosen = tokio::task::spawn_blocking(move || pick_directory(&from))
                         .await
                         .unwrap_or(None);
                     let _ = host
@@ -130,7 +130,7 @@ pub async fn bombear(
                 tokio::task::spawn(async move {
                     let ran = tokio::task::spawn_blocking(move || run(&argv, cwd.as_deref()))
                         .await
-                        .unwrap_or_else(|_| Ran::fallo(String::new()));
+                        .unwrap_or_else(|_| Ran::failure(String::new()));
                     let _ = host
                         .dispatch(norte_ui_host::UiAction::ProgramFinished {
                             title_key,
@@ -146,7 +146,7 @@ pub async fn bombear(
                 // Without waiting for the result: an `xdg-open` can take
                 // seconds to return, and the next gesture from whoever is
                 // sitting there does not wait for their PDF to open.
-                tokio::task::spawn_blocking(move || ejecutar(&effect));
+                tokio::task::spawn_blocking(move || execute(&effect));
             }
             // Lagged: some gesture was lost, not a piece of screen. It keeps
             // listening, which is the opposite of what the view does.
@@ -158,17 +158,17 @@ pub async fn bombear(
 
 /// Does ONE. Blocks: called from `spawn_blocking`.
 #[must_use]
-pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
-    match efecto {
+pub fn execute(effect: &NativeEffect) -> RunOutcome {
+    match effect {
         NativeEffect::CopyBytes { bytes, .. } => copy_bytes(bytes),
         NativeEffect::OpenPath { path } => open_path(path),
         NativeEffect::OpenTerminal { dir } => terminal(dir),
         // Phase 9: `bombear` handles it, since it is the one that can close
         // the window and notify the host depending on how it turns out. This
-        // is only reached if someone calls `ejecutar` by hand, and then the
+        // is only reached if someone calls `execute` by hand, and then the
         // terminal is simply opened.
         NativeEffect::HandoffToTerminal { daemon } => handoff(*daemon),
-        NativeEffect::Notify { titulo, cuerpo } => notify(titulo, cuerpo),
+        NativeEffect::Notify { title, body } => notify(title, body),
         // Fire-and-forget: the comparator opens its own window and this does
         // not wait. The argv arrives already resolved and interpolated from
         // the host; here it is only launched.
@@ -180,7 +180,7 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
         } => {
             use std::os::unix::ffi::OsStrExt as _;
             let Some((program, args)) = argv.split_first() else {
-                return Resultado::SinPrograma;
+                return RunOutcome::NoProgram;
             };
             let args: Vec<std::ffi::OsString> = args
                 .iter()
@@ -203,7 +203,7 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
         NativeEffect::RunProgram { .. }
         | NativeEffect::PickDirectory { .. }
         | NativeEffect::ThemeChanged { .. }
-        | NativeEffect::CloseWindow => Resultado::SinPrograma,
+        | NativeEffect::CloseWindow => RunOutcome::NoProgram,
     }
 }
 
@@ -211,11 +211,11 @@ pub fn ejecutar(efecto: &NativeEffect) -> Resultado {
 ///
 /// The text arrives ALREADY composed, translated, masked and bounded: nothing
 /// is decided about it here, it is only delivered. A notification that
-/// cannot be given is SAID — `SinPrograma` — instead of swallowed: whoever
+/// cannot be given is SAID — `NoProgram` — instead of swallowed: whoever
 /// believes they will be notified and has no `notify-send` deserves to know,
 /// once.
-fn notify(titulo: &str, cuerpo: &str) -> Resultado {
-    for argv in norte_frontend::shell::notify_candidates(titulo, cuerpo) {
+fn notify(title: &str, body: &str) -> RunOutcome {
+    for argv in norte_frontend::shell::notify_candidates(title, body) {
         let Some((program, args)) = argv.split_first() else {
             continue;
         };
@@ -233,15 +233,15 @@ fn notify(titulo: &str, cuerpo: &str) -> Resultado {
             .stderr(std::process::Stdio::null())
             .status();
         match status {
-            Ok(st) if st.success() => return Resultado::Hecho,
+            Ok(st) if st.success() => return RunOutcome::Done,
             // It exists and it failed: the next one is not tried. Two
             // notifications for the same event is worse than none.
-            Ok(_) => return Resultado::Fallo,
+            Ok(_) => return RunOutcome::Failure,
             // Not on the PATH: try the next one.
             Err(_) => {}
         }
     }
-    Resultado::SinPrograma
+    RunOutcome::NoProgram
 }
 
 /// Opens the DESKTOP's folder picker and returns what was chosen (#284).
@@ -256,12 +256,12 @@ fn notify(titulo: &str, cuerpo: &str) -> Resultado {
 /// Canceling is told apart from choosing by the exit code, not by parsing the
 /// text — a directory can be named like any error message.
 #[must_use]
-fn pick_directory(desde: &norte_proto::VPath) -> Option<String> {
+fn pick_directory(from: &norte_proto::VPath) -> Option<String> {
     // With a REMOTE pane there is no native path to open at, and that blocks
     // nothing: the picker always returns a folder on this machine, and
     // copying from an `sftp://` to a local folder is legitimate. What is lost
     // is the suggestion of where to start, not the operation.
-    let native = norte_vfs::native::vpath_to_native(desde).unwrap_or_else(|_| {
+    let native = norte_vfs::native::vpath_to_native(from).unwrap_or_else(|_| {
         std::env::var_os("HOME")
             .map_or_else(|| std::path::PathBuf::from("/"), std::path::PathBuf::from)
     });
@@ -304,33 +304,33 @@ fn pick_directory(desde: &norte_proto::VPath) -> Option<String> {
 /// what order" is having two answers to the same question. What this window
 /// does NOT have is OSC 52 output, which needs a terminal emulator in front
 /// of it.
-fn copy_bytes(bytes: &[u8]) -> Resultado {
+fn copy_bytes(bytes: &[u8]) -> RunOutcome {
     match norte_frontend::shell::copy_to_clipboard(bytes) {
-        norte_frontend::shell::ClipboardOutcome::Done(_) => Resultado::Hecho,
-        norte_frontend::shell::ClipboardOutcome::NoHelper => Resultado::SinPrograma,
-        norte_frontend::shell::ClipboardOutcome::Failed => Resultado::Fallo,
+        norte_frontend::shell::ClipboardOutcome::Done(_) => RunOutcome::Done,
+        norte_frontend::shell::ClipboardOutcome::NoHelper => RunOutcome::NoProgram,
+        norte_frontend::shell::ClipboardOutcome::Failed => RunOutcome::Failure,
     }
 }
 
 /// Opens `path` with whichever application the desktop chooses.
-fn open_path(path: &norte_proto::VPath) -> Resultado {
+fn open_path(path: &norte_proto::VPath) -> RunOutcome {
     let Ok(native) = norte_vfs::native::vpath_to_native(path) else {
         // The host already checks this; here is the belt: `xdg-open` is not
         // given something that is not on this disk.
-        return Resultado::SinPrograma;
+        return RunOutcome::NoProgram;
     };
     let (program, argv) = norte_frontend::openers::system_opener(&native);
     let Some(path) = norte_frontend::openers::resolve_program(std::ffi::OsStr::new(&program))
     else {
-        return Resultado::SinPrograma;
+        return RunOutcome::NoProgram;
     };
     launch(&path, &argv[1..], None)
 }
 
 /// Opens a terminal sitting in `dir`.
-fn terminal(dir: &norte_proto::VPath) -> Resultado {
+fn terminal(dir: &norte_proto::VPath) -> RunOutcome {
     let Ok(native) = norte_vfs::native::vpath_to_native(dir) else {
-        return Resultado::SinPrograma;
+        return RunOutcome::NoProgram;
     };
     for argv in norte_frontend::shell::terminal_candidates(&native) {
         let Some(program) = argv.first() else {
@@ -344,7 +344,7 @@ fn terminal(dir: &norte_proto::VPath) -> Resultado {
         // list documents.
         return launch(&path, &argv[1..], Some(&native));
     }
-    Resultado::SinPrograma
+    RunOutcome::NoProgram
 }
 
 /// The HANDOFF to the terminal (phase 9): opens an emulator with
@@ -358,9 +358,9 @@ fn terminal(dir: &norte_proto::VPath) -> Resultado {
 /// `--daemon` travels if this window carries it, and it has to: the session
 /// that was just let go of is the daemon's, and an `ntc` against its embedded
 /// core would find nothing.
-fn handoff(daemon: bool) -> Resultado {
+fn handoff(daemon: bool) -> RunOutcome {
     let Some(ntc) = norte_frontend::openers::resolve_program(std::ffi::OsStr::new("ntc")) else {
-        return Resultado::SinPrograma;
+        return RunOutcome::NoProgram;
     };
     // The flags from the SAME place the terminal gets its test that it
     // accepts them (`norte_frontend::handoff`): hand-written in two binaries,
@@ -376,7 +376,7 @@ fn handoff(daemon: bool) -> Resultado {
         };
         return launch(&path, &argv[1..], None);
     }
-    Resultado::SinPrograma
+    RunOutcome::NoProgram
 }
 
 /// What an awaited program left behind (#312).
@@ -392,7 +392,7 @@ struct Ran {
 }
 
 impl Ran {
-    fn fallo(command: String) -> Self {
+    fn failure(command: String) -> Self {
         Self {
             command,
             output: Vec::new(),
@@ -424,7 +424,7 @@ fn run(argv: &[Vec<u8>], cwd: Option<&[u8]>) -> Ran {
         .collect::<Vec<_>>()
         .join(" ");
     let Some((program, rest)) = argv.split_first() else {
-        return Ran::fallo(command);
+        return Ran::failure(command);
     };
     let mut cmd = std::process::Command::new(std::ffi::OsStr::from_bytes(program));
     cmd.args(rest.iter().map(|a| std::ffi::OsStr::from_bytes(a)))
@@ -435,7 +435,7 @@ fn run(argv: &[Vec<u8>], cwd: Option<&[u8]>) -> Ran {
         cmd.current_dir(std::ffi::OsStr::from_bytes(d));
     }
     let Ok(mut child) = cmd.spawn() else {
-        return Ran::fallo(command);
+        return Ran::failure(command);
     };
     // Both pipes are read up to the cap, then waited on with a deadline.
     // Reading first and waiting after: a child that fills its stderr pipe
@@ -486,7 +486,7 @@ fn launch(
     program: &std::path::Path,
     args: &[std::ffi::OsString],
     cwd: Option<&std::path::Path>,
-) -> Resultado {
+) -> RunOutcome {
     let mut cmd = std::process::Command::new(program);
     cmd.args(args)
         .stdin(Stdio::null())
@@ -496,14 +496,14 @@ fn launch(
         cmd.current_dir(d);
     }
     match cmd.spawn() {
-        Ok(_) => Resultado::Hecho,
-        Err(_) => Resultado::Fallo,
+        Ok(_) => RunOutcome::Done,
+        Err(_) => RunOutcome::Failure,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Resultado, ejecutar};
+    use super::{RunOutcome, execute};
     use norte_ui_host::dto::NativeEffect;
 
     /// A location that is NOT on this disk is not handed to the desktop.
@@ -517,14 +517,14 @@ mod tests {
     fn what_is_not_on_this_disk_does_not_launch() {
         let remote = norte_proto::VPath::parse("sftp://maquina/casa/x").expect("vpath");
         assert_eq!(
-            ejecutar(&NativeEffect::OpenPath {
+            execute(&NativeEffect::OpenPath {
                 path: remote.clone()
             }),
-            Resultado::SinPrograma
+            RunOutcome::NoProgram
         );
         assert_eq!(
-            ejecutar(&NativeEffect::OpenTerminal { dir: remote }),
-            Resultado::SinPrograma
+            execute(&NativeEffect::OpenTerminal { dir: remote }),
+            RunOutcome::NoProgram
         );
     }
 
@@ -537,7 +537,7 @@ mod tests {
     /// UTF-8.
     #[test]
     fn copying_bytes_does_not_decode_or_panic() {
-        let r = ejecutar(&NativeEffect::CopyBytes {
+        let r = execute(&NativeEffect::CopyBytes {
             // A name that is not UTF-8: it travels as-is over STDIN, and the
             // clipboard receives the SAME bytes that open that file.
             bytes: vec![b'/', b't', b'm', b'p', b'/', 0xFF, 0xFE],
@@ -545,7 +545,7 @@ mod tests {
         });
         assert!(matches!(
             r,
-            Resultado::Hecho | Resultado::SinPrograma | Resultado::Fallo
+            RunOutcome::Done | RunOutcome::NoProgram | RunOutcome::Failure
         ));
     }
 }

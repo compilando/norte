@@ -28,7 +28,7 @@ use norte_proto::methods::{SESSION_BODY_MAX, Session};
 /// different crates because the core CANNOT depend on the frontend; that
 /// they don't drift apart is checked by a test in `norte-tui`, the only
 /// crate that sees both
-/// (`las_dos_versiones_de_esquema_van_del_brazo`).
+/// (`the_two_schema_versions_go_arm_in_arm`).
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// The largest thing accepted to READ from disk.

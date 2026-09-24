@@ -257,8 +257,8 @@ pub fn submit_command_line(app: &mut App, cmd: &str) {
 ///
 /// Decided BEFORE releasing the session, as in the window: afterward, the
 /// panel's path no longer serves as a key.
-fn destino_tras_desconectar(app: &App, closed: &VPath) -> VPath {
-    norte_frontend::nav::regreso_tras_desconectar(closed, app.history[app.focus()].trail())
+fn dest_after_disconnect(app: &App, closed: &VPath) -> VPath {
+    norte_frontend::nav::regreso_after_disconnect(closed, app.history[app.focus()].trail())
         .unwrap_or_else(norte_frontend::shell::home_vpath)
 }
 
@@ -278,7 +278,7 @@ pub async fn disconnect(app: &mut App, backend: &Backend) {
         app.message = Some(t("msg-disconnect-local"));
         return;
     }
-    let destination = destino_tras_desconectar(app, &dir);
+    let destination = dest_after_disconnect(app, &dir);
     match backend.close_connection(&dir).await {
         Ok(closed) => {
             app.message = Some(t(if closed {
@@ -457,7 +457,7 @@ pub enum EditLaunch {
 /// The suspension that comes out of here carries the created path in
 /// [`PendingShell::check_regular`](crate::app::PendingShell::check_regular):
 /// #303's check is done by the run loop right against the launch, with
-/// [`motivo_para_no_lanzar`], and not here.
+/// [`reason_not_to_launch`], and not here.
 ///
 /// # Errors
 ///
@@ -508,7 +508,7 @@ pub fn edit_created(path: &VPath) -> Result<crate::app::PendingShell, String> {
 /// failure while ASKING (the daemon handed off, a timeout) has its own: calling
 /// it tampering would be a false accusation, and teaching people to ignore
 /// that message is what disables it on the day it is true.
-pub async fn motivo_para_no_lanzar(
+pub async fn reason_not_to_launch(
     backend: &norte_core::backend::Backend,
     path: Option<VPath>,
 ) -> Option<String> {
@@ -892,7 +892,7 @@ mod pane_gestures_tests {
     fn enter_over_a_file_opens_instead_of_doing_nothing() {
         use super::{EnterAction, enter_action};
         use norte_proto::{Entry, EntryKind};
-        let entrada = |wire: &str, kind| Entry {
+        let entry = |wire: &str, kind| Entry {
             attrs: std::collections::BTreeMap::new(),
             path: vp(wire),
             kind,
@@ -905,8 +905,8 @@ mod pane_gestures_tests {
             Pane::new(
                 vp("file:///casa"),
                 vec![
-                    entrada("file:///casa/dentro", EntryKind::Dir),
-                    entrada("file:///casa/bin.dat", EntryKind::File),
+                    entry("file:///casa/dentro", EntryKind::Dir),
+                    entry("file:///casa/bin.dat", EntryKind::File),
                 ],
             ),
             Pane::new(vp("file:///otro"), Vec::new()),
@@ -921,26 +921,26 @@ mod pane_gestures_tests {
         assert_eq!(enter_action(&app), EnterAction::OpenExternal);
 
         // The SAME file on a pane not on this disk: viewer.
-        let mut remoto = App::new(
+        let mut remote = App::new(
             Pane::new(
                 vp("mem:///casa"),
-                vec![entrada("mem:///casa/bin.dat", EntryKind::File)],
+                vec![entry("mem:///casa/bin.dat", EntryKind::File)],
             ),
             Pane::new(vp("mem:///otro"), Vec::new()),
         );
-        remoto.set_focus(0);
+        remote.set_focus(0);
         assert_eq!(
-            enter_action(&remoto),
+            enter_action(&remote),
             EnterAction::View(vp("mem:///casa/bin.dat")),
             "with no native path there is no associated program to hand it to"
         );
 
         // And with nothing under the cursor, nothing.
-        let vacio = App::new(
+        let empty = App::new(
             Pane::new(vp("file:///casa"), Vec::new()),
             Pane::new(vp("file:///otro"), Vec::new()),
         );
-        assert_eq!(enter_action(&vacio), EnterAction::Nothing);
+        assert_eq!(enter_action(&empty), EnterAction::Nothing);
     }
 
     /// `nav.enter` over `..` is GOING UP, and going up is said with its own
@@ -955,19 +955,19 @@ mod pane_gestures_tests {
     fn enter_over_the_up_row_goes_up_not_a_plain_cd() {
         use super::{EnterAction, enter_action};
         use norte_proto::{Entry, EntryKind};
-        let entrada = |wire: &str, kind| Entry {
+        let entry = |wire: &str, kind| Entry {
             attrs: std::collections::BTreeMap::new(),
             path: vp(wire),
             kind,
             size: None,
             mtime_ms: None,
         };
-        let mut izq = Pane::new(
+        let mut left = Pane::new(
             vp("file:///casa/dentro"),
-            vec![entrada("file:///casa/dentro/a.txt", EntryKind::File)],
+            vec![entry("file:///casa/dentro/a.txt", EntryKind::File)],
         );
-        izq.set_parent_row(true);
-        let mut app = App::new(izq, Pane::new(vp("file:///otro"), Vec::new()));
+        left.set_parent_row(true);
+        let mut app = App::new(left, Pane::new(vp("file:///otro"), Vec::new()));
         app.set_focus(0);
         assert!(app.panes[0].is_parent_row(app.panes[0].cursor()));
         assert_eq!(
@@ -989,7 +989,7 @@ mod pane_gestures_tests {
     #[test]
     fn target_mirror_sends_the_folder_under_the_cursor() {
         use norte_proto::{Entry, EntryKind};
-        let entrada = |wire: &str, kind| Entry {
+        let entry = |wire: &str, kind| Entry {
             attrs: std::collections::BTreeMap::new(),
             path: vp(wire),
             kind,
@@ -1000,8 +1000,8 @@ mod pane_gestures_tests {
             Pane::new(
                 vp("mem:///a"),
                 vec![
-                    entrada("mem:///a/dentro", EntryKind::Dir),
-                    entrada("mem:///a/f.txt", EntryKind::File),
+                    entry("mem:///a/dentro", EntryKind::Dir),
+                    entry("mem:///a/f.txt", EntryKind::File),
                 ],
             ),
             Pane::new(vp("mem:///b"), Vec::new()),
@@ -1146,7 +1146,7 @@ mod pane_gestures_tests {
     /// Moves pane 0 to `dir` without going through a `cd` (which needs a
     /// backend): a NEW pane over that dir, the same shape the other test
     /// modules in this file use.
-    fn poner_en(app: &mut App, dir: &str) {
+    fn put_in(app: &mut App, dir: &str) {
         app.panes[0] = Pane::new(vp(dir), Vec::new());
     }
 
@@ -1162,9 +1162,9 @@ mod pane_gestures_tests {
 
         let where_to = back_target(&mut app).expect("there is a trail");
         assert_eq!(where_to, vp("mem:///b"));
-        poner_en(&mut app, "mem:///b");
+        put_in(&mut app, "mem:///b");
         assert_eq!(back_target(&mut app), Some(vp("mem:///a")));
-        poner_en(&mut app, "mem:///a");
+        put_in(&mut app, "mem:///a");
         assert_eq!(back_target(&mut app), None, "the trail ran out");
 
         assert_eq!(forward_target(&mut app), Some(vp("mem:///b")));
@@ -1216,7 +1216,7 @@ mod pane_gestures_tests {
             Some(vp("mem:///a")),
             "the step leaves the search for where the reader was before"
         );
-        poner_en(&mut app, "mem:///a"); // the real cd lands (and harvests the run)
+        put_in(&mut app, "mem:///a"); // the real cd lands (and harvests the run)
         assert_eq!(
             forward_target(&mut app),
             Some(vp("mem:///b")),
@@ -1435,7 +1435,7 @@ mod pane_gestures_tests {
         app.set_focus(0);
         app.history[0].record(vp("mem:///b"));
         let _ = back_target(&mut app); // trail: back=[], fwd=[c]
-        poner_en(&mut app, "mem:///b");
+        put_in(&mut app, "mem:///b");
         let dir = forward_target(&mut app).expect("there is a forward branch");
         assert_eq!(
             (app.history[0].back_len(), app.history[0].fwd_len()),
@@ -1465,7 +1465,7 @@ mod pane_gestures_tests {
         app.history[0].record(vp("mem:///b"));
         let dir = back_target(&mut app).expect("there is a trail");
 
-        // The pane did NOT move: still on C (`poner_en` is not called).
+        // The pane did NOT move: still on C (`put_in` is not called).
         rewind_trail(
             &mut app,
             0,
@@ -1536,7 +1536,7 @@ mod pane_gestures_tests {
         // A previous `nav.back` ALREADY completed: trail back=[a,b], fwd=[d].
         let c = back_target(&mut app).expect("there is a trail");
         assert_eq!(c, vp("mem:///c"));
-        poner_en(&mut app, "mem:///c");
+        put_in(&mut app, "mem:///c");
         assert_eq!(
             (app.history[0].back_len(), app.history[0].fwd_len()),
             (2, 1)
@@ -1602,7 +1602,7 @@ mod pane_gestures_tests {
     #[test]
     fn an_abandoned_retry_rewinds_the_step_exactly_once() {
         let (mut app, dir) = app_con_paso_suspendido();
-        let (back_dado, fwd_dado) = (app.history[0].back_len(), app.history[0].fwd_len());
+        let (back_given, fwd_given) = (app.history[0].back_len(), app.history[0].fwd_len());
 
         settle_suspended_trail(
             &mut app,
@@ -1614,7 +1614,7 @@ mod pane_gestures_tests {
 
         assert_eq!(
             (app.history[0].back_len(), app.history[0].fwd_len()),
-            (back_dado + 1, fwd_dado - 1),
+            (back_given + 1, fwd_given - 1),
             "the step comes back ONCE: one more behind, one less ahead \
              (two rewinds would give (3, 0) and eat the reader's branch)"
         );
@@ -1719,11 +1719,11 @@ mod open_tests {
     use crate::app::Pane;
     use norte_proto::{Entry, EntryKind, Segment, VPath};
 
-    fn pane_con(nombre: &str) -> Pane {
+    fn pane_con(name: &str) -> Pane {
         let dir = VPath::parse("file:///d").expect("test wire");
         let entry = Entry {
             attrs: std::collections::BTreeMap::new(),
-            path: dir.join(Segment::new(nombre.as_bytes().to_vec()).unwrap()),
+            path: dir.join(Segment::new(name.as_bytes().to_vec()).unwrap()),
             kind: EntryKind::File,
             size: Some(1),
             mtime_ms: None,
@@ -1783,14 +1783,14 @@ mod open_tests {
     /// surprise wearing a different face.
     #[test]
     fn both_of_f4s_paths_open_in_the_panes_directory() {
-        for (nombre, config) in [
+        for (name, config) in [
             ("informe.pdf", None),
             (
                 "notas.txt",
                 Some("[[opener]]\nmime = \"text/*\"\ncommand = [\"bat\", \"%f\"]\n"),
             ),
         ] {
-            let mut app = App::new(pane_con(nombre), pane_con("otro.txt"));
+            let mut app = App::new(pane_con(name), pane_con("otro.txt"));
             if let Some(c) = config {
                 app.openers =
                     norte_frontend::openers::OpenersConfig::parse(c).expect("test config");
@@ -1802,7 +1802,7 @@ mod open_tests {
             assert_eq!(
                 pending.cwd.as_deref(),
                 Some(expected.as_path()),
-                "{nombre}: the child opens where the reader is looking"
+                "{name}: the child opens where the reader is looking"
             );
         }
     }
@@ -1836,7 +1836,7 @@ mod disconnect_tests {
     }
 
     /// A panel planted on `sftp://srv/b` with the trail passed to it.
-    fn app_remota(trail: &[&str]) -> App {
+    fn app_remote(trail: &[&str]) -> App {
         let mut app = App::new(
             Pane::new(vp("sftp://srv/b"), Vec::new()),
             Pane::new(vp("file:///tmp"), Vec::new()),
@@ -1853,9 +1853,9 @@ mod disconnect_tests {
     /// own the same key left the panel in two different places.
     #[test]
     fn the_destination_comes_from_the_trail_like_in_the_window() {
-        let app = app_remota(&["file:///home/o", "sftp://srv/a"]);
+        let app = app_remote(&["file:///home/o", "sftp://srv/a"]);
         assert_eq!(
-            destino_tras_desconectar(&app, &vp("sftp://srv/b")),
+            dest_after_disconnect(&app, &vp("sftp://srv/b")),
             vp("file:///home/o"),
             "skips the machine that is closing"
         );
@@ -1865,9 +1865,9 @@ mod disconnect_tests {
     /// the window does — and what this function ALWAYS did.
     #[test]
     fn with_no_foreign_trail_it_falls_back_home() {
-        let app = app_remota(&["sftp://srv/a"]);
+        let app = app_remote(&["sftp://srv/a"]);
         assert_eq!(
-            destino_tras_desconectar(&app, &vp("sftp://srv/b")),
+            dest_after_disconnect(&app, &vp("sftp://srv/b")),
             norte_frontend::shell::home_vpath(),
         );
     }
@@ -1937,7 +1937,7 @@ mod edit_tests {
         assert!(edit_under_cursor(&app).is_err());
     }
 
-    /// An embedded backend with the local provider: `motivo_para_no_lanzar`
+    /// An embedded backend with the local provider: `reason_not_to_launch`
     /// asks `fs.stat` (#303), so its tests need real disk.
     fn backend_local() -> norte_core::backend::Backend {
         let engine = norte_core::Engine::new();
@@ -1954,9 +1954,9 @@ mod edit_tests {
     #[test]
     fn the_created_files_editor_targets_the_requested_path() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let fichero = dir.path().join("notas.txt");
-        std::fs::write(&fichero, b"").expect("create");
-        let creado = norte_vfs::native::vpath_from_native(&fichero).expect("native");
+        let file = dir.path().join("notas.txt");
+        std::fs::write(&file, b"").expect("create");
+        let creado = norte_vfs::native::vpath_from_native(&file).expect("native");
 
         let pending = edit_created(&creado).expect("local");
         assert_eq!(
@@ -1967,7 +1967,7 @@ mod edit_tests {
         assert_eq!(pending.argv.len(), 2, "program and path, no shell line");
         assert_eq!(
             pending.argv[1],
-            fichero.clone().into_os_string(),
+            file.clone().into_os_string(),
             "the path travels as its own argument"
         );
         assert!(!pending.wait_for_key, "an editor sees itself out");
@@ -1986,8 +1986,8 @@ mod edit_tests {
     /// an editor over something that cannot be named is not the way out.
     #[test]
     fn with_no_native_form_no_editor_opens() {
-        let remoto = VPath::parse("sftp://srv/notas.txt").expect("wire");
-        assert!(edit_created(&remoto).is_err());
+        let remote = VPath::parse("sftp://srv/notas.txt").expect("wire");
+        assert!(edit_created(&remote).is_err());
     }
 
     /// #303: between creating the file and opening the editor, someone who
@@ -2003,15 +2003,15 @@ mod edit_tests {
     #[tokio::test]
     async fn a_symlink_planted_between_creating_and_launching_is_not_edited() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let secreto = dir.path().join("secreto");
-        std::fs::write(&secreto, b"de otro").expect("create");
+        let secret = dir.path().join("secreto");
+        std::fs::write(&secret, b"de otro").expect("create");
         let creado_nativo = dir.path().join("notas.txt");
         // What norte created, already unlinked and replaced by the link.
-        std::os::unix::fs::symlink(&secreto, &creado_nativo).expect("symlink");
+        std::os::unix::fs::symlink(&secret, &creado_nativo).expect("symlink");
         let creado = norte_vfs::native::vpath_from_native(&creado_nativo).expect("native");
 
         assert_eq!(
-            motivo_para_no_lanzar(&backend_local(), Some(creado)).await,
+            reason_not_to_launch(&backend_local(), Some(creado)).await,
             Some(t("msg-edit-created-changed")),
             "a link is not the file that was created"
         );
@@ -2022,21 +2022,21 @@ mod edit_tests {
     #[tokio::test]
     async fn neither_a_directory_nor_a_gap_gets_launched() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let carpeta = dir.path().join("notas.txt");
-        std::fs::create_dir(&carpeta).expect("mkdir");
-        let como_dir = norte_vfs::native::vpath_from_native(&carpeta).expect("native");
+        let folder = dir.path().join("notas.txt");
+        std::fs::create_dir(&folder).expect("mkdir");
+        let as_dir = norte_vfs::native::vpath_from_native(&folder).expect("native");
         let ausente =
             norte_vfs::native::vpath_from_native(&dir.path().join("no-esta")).expect("native");
 
         let backend = backend_local();
         assert_eq!(
-            motivo_para_no_lanzar(&backend, Some(como_dir)).await,
+            reason_not_to_launch(&backend, Some(as_dir)).await,
             Some(t("msg-edit-created-changed"))
         );
         // And the one that is no longer there does NOT count as "could not
         // ask": a provider's `NotFound` is an answer, not a failure to ask.
         assert_eq!(
-            motivo_para_no_lanzar(&backend, Some(ausente)).await,
+            reason_not_to_launch(&backend, Some(ausente)).await,
             Some(t("msg-edit-created-changed"))
         );
     }
@@ -2046,13 +2046,13 @@ mod edit_tests {
     #[tokio::test]
     async fn what_is_still_the_file_launches_and_what_asks_nothing_does_too() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let fichero = dir.path().join("notas.txt");
-        std::fs::write(&fichero, b"").expect("create");
-        let creado = norte_vfs::native::vpath_from_native(&fichero).expect("native");
+        let file = dir.path().join("notas.txt");
+        std::fs::write(&file, b"").expect("create");
+        let creado = norte_vfs::native::vpath_from_native(&file).expect("native");
 
         let backend = backend_local();
-        assert_eq!(motivo_para_no_lanzar(&backend, Some(creado)).await, None);
-        assert_eq!(motivo_para_no_lanzar(&backend, None).await, None);
+        assert_eq!(reason_not_to_launch(&backend, Some(creado)).await, None);
+        assert_eq!(reason_not_to_launch(&backend, None).await, None);
     }
 
     /// And over a local file the editor's argv comes out with the path
@@ -2142,10 +2142,10 @@ mod compare_files_tests {
     use crate::app::Pane;
     use norte_proto::{Entry, EntryKind, Segment, VPath};
 
-    fn entrada(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
+    fn entry(dir: &VPath, name: &str, kind: EntryKind) -> Entry {
         Entry {
             attrs: std::collections::BTreeMap::new(),
-            path: dir.join(Segment::new(nombre.as_bytes().to_vec()).expect("segmento")),
+            path: dir.join(Segment::new(name.as_bytes().to_vec()).expect("segmento")),
             kind,
             size: Some(1),
             mtime_ms: None,
@@ -2158,24 +2158,24 @@ mod compare_files_tests {
             Pane::new(
                 dir.clone(),
                 vec![
-                    entrada(&dir, "a.txt", EntryKind::File),
-                    entrada(&dir, "b.txt", EntryKind::File),
+                    entry(&dir, "a.txt", EntryKind::File),
+                    entry(&dir, "b.txt", EntryKind::File),
                 ],
             ),
-            Pane::new(dir.clone(), vec![entrada(&dir, "c.txt", EntryKind::File)]),
+            Pane::new(dir.clone(), vec![entry(&dir, "c.txt", EntryKind::File)]),
         )
     }
 
-    /// Marks the entry whose base name is `nombre`, whatever its index is
+    /// Marks the entry whose base name is `name`, whatever its index is
     /// after sorting (directories come first, and the `..` row in front).
-    fn marcar(app: &mut App, pane: usize, nombre: &str) {
+    fn mark(app: &mut App, pane: usize, name: &str) {
         let i = app.panes[pane]
             .entries()
             .iter()
             .position(|e| {
                 e.path
                     .file_name()
-                    .is_some_and(|s| s.as_bytes() == nombre.as_bytes())
+                    .is_some_and(|s| s.as_bytes() == name.as_bytes())
             })
             .expect("the entry is in the listing");
         app.panes[pane].set_mark(i, true);
@@ -2188,12 +2188,12 @@ mod compare_files_tests {
     #[test]
     fn with_nothing_configured_it_is_diff_dash_u_and_waits_for_a_key() {
         let app = app_local();
-        let EditLaunch::Shell(pendiente) = compare_files(&app).expect("one from each panel") else {
+        let EditLaunch::Shell(pending) = compare_files(&app).expect("one from each panel") else {
             panic!("with no `[ui] diff` it goes through the shell");
         };
-        assert!(pendiente.wait_for_key, "the output stays on screen");
+        assert!(pending.wait_for_key, "the output stays on screen");
         assert_eq!(
-            pendiente.argv,
+            pending.argv,
             vec![
                 std::ffi::OsString::from("diff"),
                 std::ffi::OsString::from("-u"),
@@ -2213,12 +2213,12 @@ mod compare_files_tests {
             command: vec!["meld".to_owned(), "%F".to_owned()],
             detached: true,
         });
-        let EditLaunch::Open(pendiente) = compare_files(&app).expect("two files") else {
+        let EditLaunch::Open(pending) = compare_files(&app).expect("two files") else {
             panic!("with `[ui] diff` it goes through the openers' path");
         };
-        assert!(pendiente.detached, "a window does not suspend the terminal");
-        assert_eq!(pendiente.program, "meld");
-        assert_eq!(pendiente.argv.len(), 3, "binary + the two files");
+        assert!(pending.detached, "a window does not suspend the terminal");
+        assert_eq!(pending.program, "meld");
+        assert_eq!(pending.argv.len(), 3, "binary + the two files");
     }
 
     /// Two MARKED in the focused panel outrank the other one's cursor: it is
@@ -2228,13 +2228,13 @@ mod compare_files_tests {
         let mut app = app_local();
         let dir = VPath::parse("file:///d").expect("wire");
         let _ = &dir;
-        marcar(&mut app, 0, "a.txt");
-        marcar(&mut app, 0, "b.txt");
-        let EditLaunch::Shell(pendiente) = compare_files(&app).expect("two marked") else {
+        mark(&mut app, 0, "a.txt");
+        mark(&mut app, 0, "b.txt");
+        let EditLaunch::Shell(pending) = compare_files(&app).expect("two marked") else {
             panic!("with no `[ui] diff` it goes through the shell");
         };
         assert_eq!(
-            pendiente.argv[3],
+            pending.argv[3],
             std::ffi::OsString::from("/d/b.txt"),
             "the second is the other MARKED one, not the opposite panel's"
         );
@@ -2249,14 +2249,14 @@ mod compare_files_tests {
             Pane::new(
                 dir.clone(),
                 vec![
-                    entrada(&dir, "a.txt", EntryKind::File),
-                    entrada(&dir, "sub", EntryKind::Dir),
+                    entry(&dir, "a.txt", EntryKind::File),
+                    entry(&dir, "sub", EntryKind::Dir),
                 ],
             ),
-            Pane::new(dir.clone(), vec![entrada(&dir, "c.txt", EntryKind::File)]),
+            Pane::new(dir.clone(), vec![entry(&dir, "c.txt", EntryKind::File)]),
         );
-        marcar(&mut app, 0, "a.txt");
-        marcar(&mut app, 0, "sub");
+        mark(&mut app, 0, "a.txt");
+        mark(&mut app, 0, "sub");
         assert!(compare_files(&app).is_err());
     }
 
@@ -2264,17 +2264,14 @@ mod compare_files_tests {
     /// opening and editing do.
     #[test]
     fn a_remote_pane_says_so_instead_of_trying() {
-        let remoto = VPath::parse("sftp://srv/d").expect("wire");
+        let remote = VPath::parse("sftp://srv/d").expect("wire");
         let local = VPath::parse("file:///d").expect("wire");
         let app = App::new(
             Pane::new(
-                remoto.clone(),
-                vec![entrada(&remoto, "a.txt", EntryKind::File)],
+                remote.clone(),
+                vec![entry(&remote, "a.txt", EntryKind::File)],
             ),
-            Pane::new(
-                local.clone(),
-                vec![entrada(&local, "c.txt", EntryKind::File)],
-            ),
+            Pane::new(local.clone(), vec![entry(&local, "c.txt", EntryKind::File)]),
         );
         assert!(compare_files(&app).is_err());
     }

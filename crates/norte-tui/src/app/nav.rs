@@ -385,7 +385,7 @@ mod tests {
     /// Confirm returns the destination and closes, Cancel closes.
     #[test]
     fn nav_popup_history_navigates_confirms_and_cancels() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.history[0].push(vp("mem:///one"));
         app.history[0].push(vp("mem:///two"));
         app.open_nav_popup(NavPopupKind::History);
@@ -418,7 +418,7 @@ mod tests {
     #[test]
     fn nav_popup_hotlist_invalid_item_does_not_confirm() {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.hotlist = vec![crate::config::HotlistItem {
             name: "broken".into(),
             target: Err("err-invalid-path".into()),
@@ -440,7 +440,7 @@ mod tests {
     /// serves as key and the local delete refreshes the items.
     #[test]
     fn nav_popup_hotlist_input_and_deletion() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.hotlist = vec![
             crate::config::HotlistItem {
                 name: "one".into(),
@@ -482,7 +482,7 @@ mod tests {
     /// would delete ANOTHER favorite: config loss).
     #[test]
     fn d_with_desynced_popup_clears_the_shown_one() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.hotlist = vec![
             crate::config::HotlistItem {
                 name: "one".into(),
@@ -539,7 +539,7 @@ mod tests {
     #[test]
     fn history_marks_the_current_one_and_remove_or_clear_redo_it() {
         let _ = norte_i18n::force(norte_i18n::Lang::Es);
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let here = app.panes[0].dir().clone();
         app.history[0].push(vp("mem:///one"));
         app.history[0].push(vp("mem:///two"));
@@ -589,7 +589,7 @@ mod tests {
     /// other one, and opening on the other panel points at the focus.
     #[test]
     fn one_sides_history_freezes_the_side() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.history[1].push(vp("mem:///right"));
         app.open_side_history(1);
         let p = app.nav_popup.as_ref().unwrap();
@@ -601,7 +601,7 @@ mod tests {
     /// D6: popular entries are listed by visits.
     #[test]
     fn popular_ones_are_ranked_by_visits() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.popular.visit(&vp("mem:///little"));
         app.popular.visit(&vp("mem:///lots"));
         app.popular.visit(&vp("mem:///lots"));
@@ -616,7 +616,7 @@ mod tests {
     /// hotlist name to delete.
     #[test]
     fn nav_popup_history_adds_the_row_as_a_favorite() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.history[0].push(vp("mem:///one"));
         app.open_nav_popup(NavPopupKind::History);
         assert_eq!(app.nav_popup_add_target(), Some(vp("mem:///one")));
@@ -632,7 +632,7 @@ mod tests {
     /// and removing it returns it whole.
     #[test]
     fn the_history_filter_rebuilds_the_list() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.history[0].push(vp("mem:///photos/2024"));
         app.history[0].push(vp("mem:///invoices"));
         app.history[0].push(vp("mem:///music"));
@@ -651,7 +651,7 @@ mod tests {
     /// the end (same semantics as persist/load) and refreshes the popup.
     #[test]
     fn hotlist_apply_saved_replaces_or_adds() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.hotlist = vec![crate::config::HotlistItem {
             name: "one".into(),
             target: Ok(vp("mem:///old")),
@@ -673,7 +673,7 @@ mod tests {
     /// a prefix — never raw bidi/controls in the popup (spec §6).
     #[test]
     fn nav_popup_sanitizes_hostile_paths() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.history[0].push(vp("mem:///evil%E2%80%AEdir"));
         app.open_nav_popup(NavPopupKind::History);
         let display = app
@@ -834,7 +834,7 @@ mod tests {
     /// the badge (before, `display_name`'s flag was discarded in that arm).
     #[test]
     fn invalid_hotlist_with_hostile_name_carries_a_badge() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.hotlist = vec![crate::config::HotlistItem {
             name: "evil\u{202E}name".into(),
             target: Err("err-invalid-path".into()),

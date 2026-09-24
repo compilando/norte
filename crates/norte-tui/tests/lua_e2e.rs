@@ -1,6 +1,6 @@
 //! E2E for the M4 Lua acceptance criterion described in ADR 0026: a
 //! REALISTIC `init.lua` registers a command that copies the selection to
-//! the other pane while renaming (`copia-<basename>`), all through
+//! the other pane while renaming (`copy-<basename>`), all through
 //! `Backend` → engine (journal + policy + undo); no terminal (`lua_fs.rs`'s
 //! `backend_mem` pattern). Covers: the byte-exact happy path, a hostile
 //! name (raw `0xFF` bytes), clean cancellation through the full E2E route,
@@ -83,7 +83,7 @@ fn ctx(selection: Vec<VPath>) -> PaneCtx {
     }
 }
 
-async fn invoke_copiar_sel(h: &LuaHost, backend: &Backend, selection: Vec<VPath>) -> RunOutcome {
+async fn invoke_copy_sel(h: &LuaHost, backend: &Backend, selection: Vec<VPath>) -> RunOutcome {
     let run = h
         .invoke(
             "copiar-sel",
@@ -98,13 +98,13 @@ async fn invoke_copiar_sel(h: &LuaHost, backend: &Backend, selection: Vec<VPath>
 /// Acceptance criterion, happy path: the whole selection ends up in the
 /// other pane, renamed and BYTE-EXACT — all through the engine.
 #[tokio::test]
-async fn copia_la_seleccion_al_otro_pane_renombrada() {
+async fn copies_the_selection_to_the_other_pane_renamed() {
     let (backend, mem) = backend_mem().await;
     write_file(&mem, "mem:///a", b"contenido de a").await;
     write_file(&mem, "mem:///b", b"be").await;
     let h = host_con_init();
 
-    let outcome = invoke_copiar_sel(&h, &backend, vec![vp("mem:///a"), vp("mem:///b")]).await;
+    let outcome = invoke_copy_sel(&h, &backend, vec![vp("mem:///a"), vp("mem:///b")]).await;
     match outcome {
         RunOutcome::Ok { messages } => {
             assert_eq!(messages, vec!["copiado".to_string()]);
@@ -113,28 +113,28 @@ async fn copia_la_seleccion_al_otro_pane_renombrada() {
     }
 
     // Asserts through Backend (the same surface the script uses).
-    for (wire, contenido) in [
+    for (wire, content) in [
         ("mem:///dst/copia-a", &b"contenido de a"[..]),
         ("mem:///dst/copia-b", &b"be"[..]),
     ] {
         assert!(backend.stat(&vp(wire)).await.is_ok(), "{wire} exists");
         let bytes = backend.read(&vp(wire), None).await.expect("read");
-        assert_eq!(bytes, contenido, "{wire} byte-exact");
+        assert_eq!(bytes, content, "{wire} byte-exact");
     }
 }
 
 /// Hostile name: raw `0xFF` bytes (non-UTF8). `selection()` delivers it in
 /// wire form (`mem:///%FF`), the Lua basename operates over those ASCII
 /// bytes and the concatenation re-parses as wire → the destination is
-/// `copia-<0xFF>` with the RAW byte, checked with the same `VPath` as in
+/// `copy-<0xFF>` with the RAW byte, checked with the same `VPath` as in
 /// `lua_fs.rs` (rule 1: zero UTF-8 assumption along the whole path).
 #[tokio::test]
-async fn nombre_hostil_bytes_crudos_round_trip() {
+async fn hostile_name_raw_bytes_round_trip() {
     let (backend, mem) = backend_mem().await;
     write_file(&mem, "mem:///%FF", b"hostil").await;
     let h = host_con_init();
 
-    let outcome = invoke_copiar_sel(&h, &backend, vec![vp("mem:///%FF")]).await;
+    let outcome = invoke_copy_sel(&h, &backend, vec![vp("mem:///%FF")]).await;
     assert!(matches!(outcome, RunOutcome::Ok { .. }), "{outcome:?}");
 
     let dst = vp("mem:///dst/copia-%FF");
@@ -156,7 +156,7 @@ async fn nombre_hostil_bytes_crudos_round_trip() {
 /// with the clock paused the runtime advances time when idle (deterministic
 /// and instant, with no wall-clock races).
 #[tokio::test(start_paused = true)]
-async fn esc_cancela_limpio_sin_destino_a_medias() {
+async fn esc_cancels_cleanly_without_a_half_finished_destination() {
     let (backend, mem) = backend_mem().await;
     write_file(&mem, "mem:///a", b"contenido de a").await;
     mem.faults()
@@ -194,7 +194,7 @@ async fn esc_cancela_limpio_sin_destino_a_medias() {
 /// undo's full mechanics — everything goes through `Backend`, there is no
 /// separate path to test here).
 #[tokio::test]
-async fn el_copy_del_comando_deja_rastro_deshacible_en_el_journal() {
+async fn the_command_copy_leaves_an_undoable_trail_in_the_journal() {
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("journal open"),
     ));
@@ -206,7 +206,7 @@ async fn el_copy_del_comando_deja_rastro_deshacible_en_el_journal() {
     write_file(&mem, "mem:///a", b"contenido de a").await;
     let h = host_con_init();
 
-    let outcome = invoke_copiar_sel(&h, &backend, vec![vp("mem:///a")]).await;
+    let outcome = invoke_copy_sel(&h, &backend, vec![vp("mem:///a")]).await;
     assert!(matches!(outcome, RunOutcome::Ok { .. }), "{outcome:?}");
 
     let entries = journal.journal().entries().await.expect("entries");
@@ -218,7 +218,7 @@ async fn el_copy_del_comando_deja_rastro_deshacible_en_el_journal() {
         .expect("revertible_for");
     // Hardened (rust review): "not empty" is not enough — SOME revertible
     // entry is EXACTLY this copy's: User actor and the path of the
-    // DESTINATION created (`dst/copia-a`, wire form).
+    // DESTINATION created (`dst/copy-a`, wire form).
     assert!(
         revertibles.iter().any(|e| {
             e.actor_kind == "user"

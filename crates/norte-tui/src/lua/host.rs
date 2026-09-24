@@ -117,14 +117,14 @@ pub async fn load_lua(app: &mut App, layers: &Layers) -> Option<LuaHost> {
         // The kind travels PER DIR (debt #75 closed): it used to be
         // inferred by position and the LABEL failed on Windows without
         // ProgramData (APPDATA stayed "system").
-        match lua_de_esta_capa(layer) {
-            LuaDeCapa::TrasConfianza => load_lua_project(app, &host, dir.clone()).await,
-            LuaDeCapa::Ignorada => {
+        match lua_of_this_layer(layer) {
+            LayerLua::AfterTrust => load_lua_project(app, &host, dir.clone()).await,
+            LayerLua::Ignorada => {
                 if matches!(read_optional_bytes(dir.join("init.lua")).await, Ok(Some(_))) {
                     app.message = Some(t("err-lua-profile-ignored"));
                 }
             }
-            LuaDeCapa::SeEjecuta => match read_optional_bytes(dir.join("init.lua")).await {
+            LayerLua::Runs => match read_optional_bytes(dir.join("init.lua")).await {
                 Ok(Some(bytes)) => eval_lua_layer(app, &host, &bytes, layer),
                 Ok(None) => {}
                 Err(e) => {
@@ -144,12 +144,12 @@ pub async fn load_lua(app: &mut App, layers: &Layers) -> Option<LuaHost> {
 
 /// What to do with a layer's `init.lua`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LuaDeCapa {
+pub(crate) enum LayerLua {
     /// Evaluated without further ado: the layer belongs to the reader and
     /// nobody handed it to them.
-    SeEjecuta,
+    Runs,
     /// Only evaluated after ADR 0026's TOFU.
-    TrasConfianza,
+    AfterTrust,
     /// Never evaluated, and it says so.
     Ignorada,
 }
@@ -172,11 +172,11 @@ pub(crate) enum LuaDeCapa {
 /// from a LIST with the program already running, and the very same file
 /// reached as a profile would not even pass the TOFU that IS required of
 /// one from a repository.
-pub(crate) const fn lua_de_esta_capa(layer: Layer) -> LuaDeCapa {
+pub(crate) const fn lua_of_this_layer(layer: Layer) -> LayerLua {
     match layer {
-        Layer::System | Layer::User => LuaDeCapa::SeEjecuta,
-        Layer::Profile => LuaDeCapa::Ignorada,
-        Layer::Project => LuaDeCapa::TrasConfianza,
+        Layer::System | Layer::User => LayerLua::Runs,
+        Layer::Profile => LayerLua::Ignorada,
+        Layer::Project => LayerLua::AfterTrust,
     }
 }
 
@@ -467,7 +467,7 @@ pub fn refresh_lua_status(app: &mut App, lua_host: Option<&LuaHost>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{Layer, LuaDeCapa, lua_de_esta_capa};
+    use super::{Layer, LayerLua, lua_of_this_layer};
 
     /// A PROFILE's `init.lua` does not execute.
     ///
@@ -478,15 +478,15 @@ mod tests {
     /// D2's whitelist never granted it `init.lua`.
     #[test]
     fn a_profile_does_not_execute_init_lua() {
-        assert_eq!(lua_de_esta_capa(Layer::Profile), LuaDeCapa::Ignorada);
+        assert_eq!(lua_of_this_layer(Layer::Profile), LayerLua::Ignorada);
     }
 
     /// And the other three do not change: system and user belong to the
     /// reader, and the project still requires trust (ADR 0026).
     #[test]
     fn the_other_layers_do_not_change() {
-        assert_eq!(lua_de_esta_capa(Layer::System), LuaDeCapa::SeEjecuta);
-        assert_eq!(lua_de_esta_capa(Layer::User), LuaDeCapa::SeEjecuta);
-        assert_eq!(lua_de_esta_capa(Layer::Project), LuaDeCapa::TrasConfianza);
+        assert_eq!(lua_of_this_layer(Layer::System), LayerLua::Runs);
+        assert_eq!(lua_of_this_layer(Layer::User), LayerLua::Runs);
+        assert_eq!(lua_of_this_layer(Layer::Project), LayerLua::AfterTrust);
     }
 }

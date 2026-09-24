@@ -84,7 +84,7 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
 /// Exists for a specific, bounded reason: knowing which is the next sibling
 /// requires classifying candidates that have not been read yet, and reading
 /// all of them to find out would cost one read —and on a remote provider, one
-/// round trip— per file that gets discarded. So [`hermana`]'s ladder is
+/// round trip— per file that gets discarded. So [`sibling`]'s ladder is
 /// walked by extension and the viewer's MODE keeps being decided by content,
 /// as always: a `.jpg` that is not one still opens, and opens as whatever it
 /// really is.
@@ -100,8 +100,8 @@ pub fn image_format(bytes: &[u8]) -> Option<ImageFmt> {
 ///
 /// ```
 /// use norte_frontend::viewer::{ImageFmt, image_format_by_name};
-/// assert_eq!(image_format_by_name(b"foto.JPG"), Some(ImageFmt::Jpeg));
-/// assert_eq!(image_format_by_name(b"notas.md"), None);
+/// assert_eq!(image_format_by_name(b"snapshot.JPG"), Some(ImageFmt::Jpeg));
+/// assert_eq!(image_format_by_name(b"notes.md"), None);
 /// assert_eq!(image_format_by_name(b"sin_extension"), None);
 /// ```
 #[must_use]
@@ -130,27 +130,27 @@ pub fn image_format_by_name(name: &[u8]) -> Option<ImageFmt> {
 /// reader would be left guessing why their `.md` does not lead to their
 /// `.txt`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Clase {
+pub enum Class {
     /// An image of the kind this viewer knows how to paint.
     Imagen,
     /// Everything else that can be opened: text, binary, whatever.
-    Otro,
+    Other,
 }
 
 /// A name's class, by extension. See [`image_format_by_name`] for why the
 /// name rules here and not the content.
 ///
 /// ```
-/// use norte_frontend::viewer::{Clase, clase_por_nombre};
-/// assert_eq!(clase_por_nombre(b"foto.png"), Clase::Imagen);
-/// assert_eq!(clase_por_nombre(b"LEEME"), Clase::Otro);
+/// use norte_frontend::viewer::{Class, class_by_name};
+/// assert_eq!(class_by_name(b"snapshot.png"), Class::Imagen);
+/// assert_eq!(class_by_name(b"LEEME"), Class::Other);
 /// ```
 #[must_use]
-pub fn clase_por_nombre(name: &[u8]) -> Clase {
+pub fn class_by_name(name: &[u8]) -> Class {
     if image_format_by_name(name).is_some() {
-        Clase::Imagen
+        Class::Imagen
     } else {
-        Clase::Otro
+        Class::Other
     }
 }
 
@@ -188,7 +188,7 @@ pub fn clase_por_nombre(name: &[u8]) -> Clase {
 /// there is no ladder to walk and the answer is `None`.
 ///
 /// ```
-/// use norte_frontend::viewer::{Clase, hermana};
+/// use norte_frontend::viewer::{Class, sibling};
 /// use norte_proto::{Entry, EntryKind, VPath};
 ///
 /// let row = |wire: &str, kind| Entry {
@@ -200,23 +200,23 @@ pub fn clase_por_nombre(name: &[u8]) -> Clase {
 /// };
 /// let listing = [
 ///     row("mem:///a.jpg", EntryKind::File),
-///     row("mem:///notas.md", EntryKind::File),
+///     row("mem:///notes.md", EntryKind::File),
 ///     row("mem:///b.png", EntryKind::File),
 /// ];
 /// // From the photo, "next image" skips the text in between.
-/// assert_eq!(hermana(&listing, None, 0, true, Clase::Imagen), Some(2));
+/// assert_eq!(sibling(&listing, None, 0, true, Class::Imagen), Some(2));
 /// // And from the last one there is nothing more: it does not go back to the first.
-/// assert_eq!(hermana(&listing, None, 2, true, Clase::Imagen), None);
+/// assert_eq!(sibling(&listing, None, 2, true, Class::Imagen), None);
 /// // With a filter that leaves only the first one, there is no next.
-/// assert_eq!(hermana(&listing, Some(&[0]), 0, true, Clase::Imagen), None);
+/// assert_eq!(sibling(&listing, Some(&[0]), 0, true, Class::Imagen), None);
 /// ```
 #[must_use]
-pub fn hermana(
+pub fn sibling(
     entries: &[Entry],
     visible: Option<&[usize]>,
     from: usize,
     forward: bool,
-    wanted: Clase,
+    wanted: Class,
 ) -> Option<usize> {
     let step = |i: usize| {
         if forward {
@@ -230,7 +230,7 @@ pub fn hermana(
     let valid = |i: usize| {
         entries.get(i).is_some_and(|e| {
             e.kind == EntryKind::File
-                && clase_por_nombre(
+                && class_by_name(
                     e.path
                         .file_name()
                         .map_or(&[][..], norte_proto::Segment::as_bytes),
@@ -912,7 +912,7 @@ impl Viewer {
     /// It is the different question [`Viewer::is_image`] does not answer:
     /// that one says "this viewer is PAINTING an image" and turns `false`
     /// the moment a plugin previewer replaces the raw view. To decide a
-    /// sibling's class ([`hermana`]), it is necessary to know what the FILE
+    /// sibling's class ([`sibling`]), it is necessary to know what the FILE
     /// is, which does not change because a plugin won — it is the same
     /// distinction the TUI already made by hand, calling [`image_format`]
     /// over the bytes before letting the previewers act.
@@ -927,7 +927,7 @@ impl Viewer {
     /// the file, so they cannot find it out on their own: whoever calls them
     /// does have the bytes (or the previous viewer) at hand and says so
     /// here. Without this, opening a photo with an approved image previewer
-    /// left it classified as "not an image", and [`hermana`]'s reel skipped
+    /// left it classified as "not an image", and [`sibling`]'s reel skipped
     /// right past EVERY photo.
     pub fn set_image_by_bytes(&mut self, si: bool) {
         self.image_bytes = si;
@@ -1151,8 +1151,7 @@ fn hex_rows(bytes: &[u8], scroll: usize, height: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        Clase, PIXEL_BUDGET, Viewer, clase_por_nombre, hermana, image_dimensions,
-        image_format_by_name,
+        Class, PIXEL_BUDGET, Viewer, class_by_name, image_dimensions, image_format_by_name, sibling,
     };
     use norte_proto::{Entry, EntryKind, VPath};
 
@@ -1482,7 +1481,7 @@ mod tests {
     /// through (`is_control` only covered C0/C1; now `is_terminal_hazard`).
     /// GPUI reorders bidi.
     #[test]
-    fn the_text_viewer_does_not_paint_raw_bidi_or_invisibles() {
+    fn the_text_viewer_does_not_paint_raw_bidi_or_invisible() {
         let hostile = "needle \u{202E}elttahs\u{2066} z\u{200B}w\u{2028}end"
             .as_bytes()
             .to_vec();
@@ -1701,14 +1700,14 @@ mod tests {
     #[test]
     fn the_next_sibling_skips_what_is_not_its_class() {
         let l = listing(&["a.jpg", "notes.md", "b.png", "c.webp"]);
-        assert_eq!(hermana(&l, None, 0, true, Clase::Imagen), Some(2));
-        assert_eq!(hermana(&l, None, 2, true, Clase::Imagen), Some(3));
+        assert_eq!(sibling(&l, None, 0, true, Class::Imagen), Some(2));
+        assert_eq!(sibling(&l, None, 2, true, Class::Imagen), Some(3));
         // And the other way round, by the same rule.
-        assert_eq!(hermana(&l, None, 3, false, Clase::Imagen), Some(2));
-        assert_eq!(hermana(&l, None, 2, false, Clase::Imagen), Some(0));
+        assert_eq!(sibling(&l, None, 3, false, Class::Imagen), Some(2));
+        assert_eq!(sibling(&l, None, 2, false, Class::Imagen), Some(0));
         // Reading text looks for text, and then the photos are what's left over.
-        assert_eq!(hermana(&l, None, 1, true, Clase::Otro), None);
-        assert_eq!(hermana(&l, None, 3, false, Clase::Otro), Some(1));
+        assert_eq!(sibling(&l, None, 1, true, Class::Other), None);
+        assert_eq!(sibling(&l, None, 3, false, Class::Other), Some(1));
     }
 
     /// **It does not wrap**: at the end it says there is no more, instead of
@@ -1717,19 +1716,19 @@ mod tests {
     fn it_does_not_wrap_at_either_end() {
         let l = listing(&["a.png", "b.png"]);
         assert_eq!(
-            hermana(&l, None, 1, true, Clase::Imagen),
+            sibling(&l, None, 1, true, Class::Imagen),
             None,
             "does not wrap around"
         );
         assert_eq!(
-            hermana(&l, None, 0, false, Clase::Imagen),
+            sibling(&l, None, 0, false, Class::Imagen),
             None,
             "nor backward"
         );
         // And an index outside the listing is not a panic, it is "there is none".
-        assert_eq!(hermana(&l, None, 99, true, Clase::Imagen), None);
-        assert_eq!(hermana(&l, None, 99, false, Clase::Imagen), None);
-        assert_eq!(hermana(&[], None, 0, true, Clase::Imagen), None);
+        assert_eq!(sibling(&l, None, 99, true, Class::Imagen), None);
+        assert_eq!(sibling(&l, None, 99, false, Class::Imagen), None);
+        assert_eq!(sibling(&[], None, 0, true, Class::Imagen), None);
     }
 
     /// **A directory is not a sibling**, and that includes the `..` row the
@@ -1750,12 +1749,12 @@ mod tests {
             row_entry("mem:///casa/b.png", EntryKind::File),
         ];
         assert_eq!(
-            hermana(&l, None, 1, true, Clase::Imagen),
+            sibling(&l, None, 1, true, Class::Imagen),
             Some(5),
             "skips the folder, the symlink and the fifo"
         );
         assert_eq!(
-            hermana(&l, None, 1, false, Clase::Imagen),
+            sibling(&l, None, 1, false, Class::Imagen),
             None,
             "and backward there is only the `..` row, which is not a sibling"
         );
@@ -1769,12 +1768,12 @@ mod tests {
     fn the_class_is_what_the_caller_asks_for_not_the_starting_extension() {
         let l = listing(&["roll.dat", "b.png"]);
         assert_eq!(
-            hermana(&l, None, 0, true, Clase::Imagen),
+            sibling(&l, None, 0, true, Class::Imagen),
             Some(1),
             "opened as an image by its bytes, looks for images"
         );
         assert_eq!(
-            hermana(&l, None, 0, true, Clase::Otro),
+            sibling(&l, None, 0, true, Class::Other),
             None,
             "and the same row, read as text, has no text siblings"
         );
@@ -1785,14 +1784,14 @@ mod tests {
     /// other.
     #[test]
     fn the_extension_rules_in_any_case_and_over_raw_bytes() {
-        assert_eq!(clase_por_nombre(b"FOTO.JPG"), Clase::Imagen);
-        assert_eq!(clase_por_nombre(b"foto.JpEg"), Clase::Imagen);
-        assert_eq!(clase_por_nombre(b"caf\xe9\xff.png"), Clase::Imagen);
-        assert_eq!(clase_por_nombre(b"sin_extension"), Clase::Otro);
-        assert_eq!(clase_por_nombre(b"archivo.tar.gz"), Clase::Otro);
+        assert_eq!(class_by_name(b"FOTO.JPG"), Class::Imagen);
+        assert_eq!(class_by_name(b"foto.JpEg"), Class::Imagen);
+        assert_eq!(class_by_name(b"caf\xe9\xff.png"), Class::Imagen);
+        assert_eq!(class_by_name(b"sin_extension"), Class::Other);
+        assert_eq!(class_by_name(b"archivo.tar.gz"), Class::Other);
         assert_eq!(
-            clase_por_nombre(b".png"),
-            Clase::Imagen,
+            class_by_name(b".png"),
+            Class::Imagen,
             "hidden, but an image"
         );
         // An extension that is not UTF-8 matches nothing.

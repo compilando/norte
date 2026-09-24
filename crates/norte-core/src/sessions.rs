@@ -78,7 +78,7 @@ struct Cooldown {
     /// presses again inside the backoff window, and the second attempt is
     /// served from this cache with no flag — so it never goes through the
     /// observer and the answer is the bare category again.
-    last_causa: Option<Box<crate::connect::Causa>>,
+    last_cause: Option<Box<crate::connect::Cause>>,
 }
 
 const BACKOFF_INITIAL: Duration = Duration::from_secs(1);
@@ -227,7 +227,7 @@ impl SessionPool {
             if let Some(c) = cooldown.get_mut(&cache_key) {
                 if now < c.until {
                     let err = c.last_err.clone();
-                    let cause = c.last_causa.clone();
+                    let cause = c.last_cause.clone();
                     // Outside the lock: the observer is foreign code, and
                     // this is the same rule as the normal path.
                     drop(cooldown);
@@ -376,13 +376,13 @@ fn count_the_failure(
     observer: Option<&Arc<dyn crate::connect::ConnectionObserver>>,
     scheme: &str,
     authority: &str,
-    causa: Option<Box<crate::connect::Causa>>,
+    cause: Option<Box<crate::connect::Cause>>,
 ) {
-    let (Some(obs), Some(causa)) = (observer, causa) else {
+    let (Some(obs), Some(cause)) = (observer, cause) else {
         return;
     };
     obs.on_connection_failure(&crate::connect::ConnectionFailure {
-        conn: causa.conn,
+        conn: cause.conn,
         scheme: scheme.to_owned(),
         // The authority WITHOUT userinfo (rule 10): whatever comes before
         // the LAST `@` is the user, and it doesn't go out. Same "the last
@@ -391,8 +391,8 @@ fn count_the_failure(
         // is a diagnostic, and which port couldn't be reached is part of
         // the answer.
         host: authority.rsplit('@').next().unwrap_or(authority).to_owned(),
-        reason: causa.reason,
-        detail: causa.detail,
+        reason: cause.reason,
+        detail: cause.detail,
     });
 }
 
@@ -464,7 +464,7 @@ fn spawn_dial_job(job: DialJob) {
                 let _ = job.tx.send(Some(Ok(provider)));
             }
             Some(Err(dial)) => {
-                let crate::connect::DialError { error: e, causa } = dial;
+                let crate::connect::DialError { error: e, cause } = dial;
                 let mut connecting = pool.connecting.lock().expect("connecting lock sound");
                 let current = connecting
                     .get(&job.cache_key)
@@ -493,14 +493,14 @@ fn spawn_dial_job(job: DialJob) {
                             until: now,
                             next: BACKOFF_INITIAL,
                             last_err: e.clone(),
-                            last_causa: None,
+                            last_cause: None,
                         });
                         entry.until = now + entry.next;
                         entry.next = (entry.next * 2).min(BACKOFF_MAX);
                         entry.last_err = e.clone();
                         // #322: and the why, so it can be repeated while
                         // this entry serves the error with no new flag.
-                        entry.last_causa.clone_from(&causa);
+                        entry.last_cause.clone_from(&cause);
                     } else {
                         // Actionable error (TOFU, auth, path): no cooldown
                         // — the user fixes it and retries instantly.
@@ -520,7 +520,7 @@ fn spawn_dial_job(job: DialJob) {
                 // Outside the locks, also like #44: the observer is
                 // foreign code and no lock is held for it while it runs.
                 if current {
-                    count_the_failure(job.observer.as_ref(), &job.scheme, &job.authority, causa);
+                    count_the_failure(job.observer.as_ref(), &job.scheme, &job.authority, cause);
                 }
                 let _ = job.tx.send(Some(Err(e)));
             }

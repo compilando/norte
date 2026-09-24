@@ -1572,12 +1572,12 @@ mod tests {
         pane.extend(vec![row_id(1, Same), row_id(2, OnlyLeft)]);
         pane.extend(vec![row_id(3, Same), row_id(4, Error)]);
         for category in CATEGORIES {
-            let recuento = pane
+            let count = pane
                 .rows()
                 .iter()
                 .filter(|r| Category::of(r.verdict) == category)
                 .count();
-            assert_eq!(pane.count_of(category), recuento, "{category:?}");
+            assert_eq!(pane.count_of(category), count, "{category:?}");
         }
     }
 
@@ -1800,7 +1800,7 @@ mod tests {
     /// translation — and never glued to the name: what gets glued to a
     /// name is something a name can forge.
     #[test]
-    fn la_linea_de_estado_explica_la_pareja_seleccionada() {
+    fn the_status_line_explains_the_selected_pair() {
         use norte_proto::methods::PairTransform;
 
         let build = |paired: Option<PairTransform>| {

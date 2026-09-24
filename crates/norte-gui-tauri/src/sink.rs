@@ -109,7 +109,7 @@ mod tests {
     /// What comes in through the subscription comes out in the SAME order.
     #[tokio::test]
     async fn order_is_respected() {
-        let (host, _snap) = crate::commands::tests_soporte::host_de_prueba().await;
+        let (host, _snap) = crate::commands::tests_support::test_host().await;
         let sub = host.subscribe();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let sink = Fake {
@@ -149,7 +149,7 @@ mod tests {
         let (tx, rx) = tokio::sync::broadcast::channel(8);
         drop(rx);
         let _ = tx.send(notice(1));
-        let (host, _snap) = crate::commands::tests_soporte::host_de_prueba().await;
+        let (host, _snap) = crate::commands::tests_support::test_host().await;
         let sub = host.subscribe();
         let sink = Fake {
             seen: Arc::new(Mutex::new(Vec::new())),

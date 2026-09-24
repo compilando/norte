@@ -90,10 +90,10 @@ fn a_refresh_under_open_help_refreezes_the_facts() {
 #[test]
 fn a_task_that_speaks_through_its_report_does_not_say_done() {
     use norte_proto::TaskKind;
-    use norte_tui::refresh::habla_por_su_informe;
+    use norte_tui::refresh::speaks_through_its_report;
 
     assert!(
-        habla_por_su_informe(TaskKind::Checksum),
+        speaks_through_its_report(TaskKind::Checksum),
         "checksums answer with their report, not with their state"
     );
     for other in [
@@ -103,7 +103,7 @@ fn a_task_that_speaks_through_its_report_does_not_say_done() {
         TaskKind::Pack,
     ] {
         assert!(
-            !habla_por_su_informe(other),
+            !speaks_through_its_report(other),
             "a mutation does finish with a `done`: {other:?}"
         );
     }

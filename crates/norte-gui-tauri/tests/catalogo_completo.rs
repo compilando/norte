@@ -33,19 +33,19 @@ const LLAMADAS: &[&str] = &["this.t(", "screen.t(", "tr("];
 ///
 /// A call site whose argument is NOT a literal is required to be registered
 /// in [`COMPUESTAS`]: silently ignoring it is what let the templates through.
-fn claves_pedidas() -> BTreeSet<String> {
+fn keys_pedidas() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    for (nombre, fuente) in FUENTES {
+    for (name, source) in FUENTES {
         for llamada in LLAMADAS {
-            let mut desde = 0usize;
-            while let Some(i) = fuente[desde..].find(llamada) {
-                let inicio = desde + i + llamada.len();
-                desde = inicio;
+            let mut from = 0usize;
+            while let Some(i) = source[from..].find(llamada) {
+                let start = from + i + llamada.len();
+                from = start;
                 // The WHOLE argument, up to the closing parenthesis: a
                 // `t(a ? "x" : "y")` asks for TWO keys, and keeping only the
                 // first — or none — is the usual hole.
-                let arg = argumento(&fuente[inicio..]);
-                let literales = comillas(arg);
+                let arg = argumento(&source[start..]);
+                let literales = quotes(arg);
                 if !literales.is_empty() {
                     out.extend(literales);
                     continue;
@@ -58,7 +58,7 @@ fn claves_pedidas() -> BTreeSet<String> {
                 assert!(
                     COMPUESTAS.iter().any(|(p, _)| arg.contains(p))
                         || DEL_HOST.iter().any(|v| arg.starts_with(v)),
-                    "{nombre}: `{llamada}{arg}` asks for a key this test \
+                    "{name}: `{llamada}{arg}` asks for a key this test \
                      cannot resolve and that is not in `COMPUESTAS`. A key \
                      the sweep does not see gets painted as its own \
                      identifier the day it is missing, and that is exactly \
@@ -71,34 +71,34 @@ fn claves_pedidas() -> BTreeSet<String> {
 }
 
 /// A call's argument, from right after its `(` to the `)` that closes it.
-fn argumento(resto: &str) -> &str {
-    let mut nivel = 1i32;
-    for (i, c) in resto.char_indices() {
+fn argumento(rest: &str) -> &str {
+    let mut level = 1i32;
+    for (i, c) in rest.char_indices() {
         match c {
-            '(' => nivel += 1,
+            '(' => level += 1,
             ')' => {
-                nivel -= 1;
-                if nivel == 0 {
-                    return &resto[..i];
+                level -= 1;
+                if level == 0 {
+                    return &rest[..i];
                 }
             }
             _ => {}
         }
     }
-    resto
+    rest
 }
 
 /// The double-quoted literals in a chunk of TypeScript.
-fn comillas(s: &str) -> Vec<String> {
+fn quotes(s: &str) -> Vec<String> {
     let mut out = Vec::new();
-    let mut resto = s;
-    while let Some(i) = resto.find('"') {
-        resto = &resto[i + 1..];
-        let Some(fin) = resto.find('"') else {
+    let mut rest = s;
+    while let Some(i) = rest.find('"') {
+        rest = &rest[i + 1..];
+        let Some(fin) = rest.find('"') else {
             break;
         };
-        out.push(resto[..fin].to_owned());
-        resto = &resto[fin + 1..];
+        out.push(rest[..fin].to_owned());
+        rest = &rest[fin + 1..];
     }
     out
 }
@@ -136,7 +136,7 @@ const COMPUESTAS: &[(&str, &[&str])] = &[
     // breaks here, which is where it needs to be noticed that it is missing
     // its string.
     ("log-level-", &["error", "warn", "info", "debug", "trace"]),
-    // The suffix is `TaskView::kind`, produced by `clase_de_task` in the host
+    // The suffix is `TaskView::kind`, produced by `task_class` in the host
     // with an exhaustive `match`: this list is that `match`'s other half,
     // and a new `TaskKind` variant breaks there first.
     (
@@ -165,45 +165,45 @@ const COMPUESTAS: &[(&str, &[&str])] = &[
 ];
 
 #[test]
-fn el_renderer_no_pide_ninguna_clave_que_no_exista() {
+fn the_renderer_does_not_ask_for_any_key_that_does_not_exist() {
     let existentes: BTreeSet<String> = [norte_i18n::Lang::En, norte_i18n::Lang::Es]
         .into_iter()
         .flat_map(norte_i18n::message_ids)
         .collect();
 
-    let mut faltan: Vec<String> = claves_pedidas()
+    let mut missing: Vec<String> = keys_pedidas()
         .into_iter()
         .filter(|k| !existentes.contains(k))
         .collect();
-    for (prefijo, sufijos) in COMPUESTAS {
+    for (prefix, sufijos) in COMPUESTAS {
         for s in *sufijos {
-            let clave = format!("{prefijo}{s}");
-            if !existentes.contains(&clave) {
-                faltan.push(clave);
+            let key = format!("{prefix}{s}");
+            if !existentes.contains(&key) {
+                missing.push(key);
             }
         }
     }
     assert!(
-        faltan.is_empty(),
+        missing.is_empty(),
         "the renderer paints these keys as-is, because they are not in the \
-         catalogue: {faltan:?}"
+         catalogue: {missing:?}"
     );
 }
 
 /// And the catalogue's two halves say the same thing: a key that is only in
 /// one language is a window that speaks two.
 #[test]
-fn los_dos_idiomas_tienen_las_mismas_claves() {
+fn both_languages_have_the_same_keys() {
     let en: BTreeSet<String> = norte_i18n::message_ids(norte_i18n::Lang::En)
         .into_iter()
         .collect();
     let es: BTreeSet<String> = norte_i18n::message_ids(norte_i18n::Lang::Es)
         .into_iter()
         .collect();
-    let falta_en_castellano: Vec<&String> = en.difference(&es).collect();
-    let falta_en_ingles: Vec<&String> = es.difference(&en).collect();
+    let missing_in_spanish: Vec<&String> = en.difference(&es).collect();
+    let missing_in_english: Vec<&String> = es.difference(&en).collect();
     assert!(
-        falta_en_castellano.is_empty() && falta_en_ingles.is_empty(),
-        "only in English: {falta_en_castellano:?}; only in Spanish: {falta_en_ingles:?}"
+        missing_in_spanish.is_empty() && missing_in_english.is_empty(),
+        "only in English: {missing_in_spanish:?}; only in Spanish: {missing_in_english:?}"
     );
 }

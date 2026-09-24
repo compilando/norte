@@ -4,7 +4,7 @@
 //! re-export (GUI-c T2) — not a local copy: if the extraction broke
 //! something, these tests would catch it just the same.
 
-use norte_tui::keymap::{COMMANDS as COMANDOS, KeyCode};
+use norte_tui::keymap::{COMMANDS, KeyCode};
 use norte_tui::keymap::{
     Chord, Count, Effective, KeymapError, Mods, Resolution, Resolver, Screen, parse_chord,
     parse_keymap,
@@ -75,7 +75,7 @@ fn parse_de_chords() {
 /// behavior before GUI-c T2; now it lives in `Chord::new` itself, neutral,
 /// and the `chord_from_crossterm` adapter inherits it for free.
 #[test]
-fn chord_new_normaliza_shift_en_chars_pero_no_en_otras_teclas() {
+fn chord_new_normalizes_shift_in_chars_but_not_in_other_keys() {
     let c = Chord::new(
         Mods {
             shift: true,
@@ -105,7 +105,7 @@ fn chord_new_normaliza_shift_en_chars_pero_no_en_otras_teclas() {
 }
 
 #[test]
-fn resuelve_secuencias_multi_tecla() {
+fn resolves_multi_key_sequences() {
     let preset = r#"
         [pane]
         keymap = [
@@ -153,7 +153,7 @@ fn resuelve_secuencias_multi_tecla() {
 }
 
 #[test]
-fn esc_cancela_la_secuencia_pendiente() {
+fn esc_cancels_the_pending_sequence() {
     let preset = r#"
         [pane]
         keymap = [
@@ -177,7 +177,7 @@ fn esc_cancela_la_secuencia_pendiente() {
 }
 
 #[test]
-fn prefijo_ambiguo_es_error_de_carga() {
+fn ambiguous_prefix_is_a_load_error() {
     let preset = r#"
         [pane]
         keymap = [
@@ -205,7 +205,7 @@ fn shift_con_char_es_error_diagnosticable() {
 }
 
 #[test]
-fn lista_equivocada_en_una_capa_es_error() {
+fn wrong_list_in_a_layer_is_an_error() {
     // User with `keymap` (instead of prepend/append): an error, not silence.
     let preset = r#"
         [pane]
@@ -235,7 +235,7 @@ fn lista_equivocada_en_una_capa_es_error() {
 }
 
 #[test]
-fn la_especificidad_de_contexto_prevalece_sobre_la_capa() {
+fn context_specificity_prevails_over_the_layer() {
     // ADR 0006 (disambiguated in phase 4): layers merge PER context; among
     // contexts the specific one wins. A user append in [pane] overrides the
     // preset's [global] keymap…
@@ -273,7 +273,7 @@ fn la_especificidad_de_contexto_prevalece_sobre_la_capa() {
 }
 
 #[test]
-fn esc_dentro_de_secuencia_es_error_de_carga() {
+fn esc_inside_sequence_is_a_load_error() {
     let preset = r#"
         [pane]
         keymap = [{ on = ["a", "esc"], run = "cursor.up" }]
@@ -285,7 +285,7 @@ fn esc_dentro_de_secuencia_es_error_de_carga() {
 }
 
 #[test]
-fn comando_desconocido_es_error_de_carga() {
+fn unknown_command_is_a_load_error() {
     let preset = r#"
         [pane]
         keymap = [{ on = ["x"], run = "comando.inventado" }]
@@ -304,7 +304,7 @@ fn comando_desconocido_es_error_de_carga() {
 /// that could never register is diagnosable broken config, not a silently
 /// dead binding.
 #[test]
-fn lua_prefijado_pasa_la_validacion_de_comandos() {
+fn prefixed_lua_passes_command_validation() {
     let preset = r#"
         [pane]
         keymap = [{ on = ["x"], run = "lua:mi-comando.v2" }]
@@ -336,7 +336,7 @@ fn lua_prefijado_pasa_la_validacion_de_comandos() {
 }
 
 #[test]
-fn capas_yazi_prepend_pisa_y_append_solo_anade() {
+fn yazi_layers_prepend_overrides_and_append_only_adds() {
     let preset = r#"
         [pane]
         keymap = [
@@ -381,7 +381,7 @@ fn capas_yazi_prepend_pisa_y_append_solo_anade() {
 }
 
 #[test]
-fn el_contexto_especifico_pisa_al_global_por_secuencia_exacta() {
+fn specific_context_overrides_global_by_exact_sequence() {
     let preset = r#"
         [global]
         keymap = [
@@ -410,51 +410,51 @@ fn el_contexto_especifico_pisa_al_global_por_secuencia_exacta() {
 }
 
 #[test]
-fn los_tres_presets_de_fabrica_cargan_y_cubren_lo_basico() {
-    for (nombre, preset) in norte_tui::keymap::presets() {
-        let eff = Effective::build(&preset, None, COMANDOS)
-            .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
+fn the_three_factory_presets_load_and_cover_the_basics() {
+    for (name, preset) in norte_tui::keymap::presets() {
+        let eff = Effective::build(&preset, None, COMMANDS)
+            .unwrap_or_else(|e| panic!("preset {name}: {e:?}"));
         let mut r = Resolver::new(eff.clone());
         // Every preset must be able to quit and switch pane. `alt+f4` is
         // Total Commander's real quit (K2b): its F10 means "activate/leave
         // the menu," not quit, so it does NOT share it with q/f10/ctrl+q.
-        let quit_posible = ["q", "f10", "ctrl+q", "alt+f4"].iter().any(|k| {
+        let quit_possible = ["q", "f10", "ctrl+q", "alt+f4"].iter().any(|k| {
             let res = r.push(parse_chord(k).unwrap());
             res == Resolution::Run {
                 command: "app.quit".into(),
                 count: Count::None,
             }
         });
-        assert!(quit_posible, "preset {nombre}: no way to quit");
+        assert!(quit_possible, "preset {name}: no way to quit");
         assert_eq!(
             r.push(parse_chord("tab").unwrap()),
             Resolution::Run {
                 command: "pane.switch".into(),
                 count: Count::None
             },
-            "preset {nombre}: Tab is sacred (spec)"
+            "preset {name}: Tab is sacred (spec)"
         );
     }
 }
 
 #[test]
-fn los_presets_ligan_las_operaciones_de_archivo() {
-    for (nombre, preset) in norte_tui::keymap::presets() {
-        let eff = Effective::build(&preset, None, COMANDOS)
-            .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
+fn presets_bind_file_operations() {
+    for (name, preset) in norte_tui::keymap::presets() {
+        let eff = Effective::build(&preset, None, COMMANDS)
+            .unwrap_or_else(|e| panic!("preset {name}: {e:?}"));
         let mut r = Resolver::new(eff.clone());
-        for (tecla, cmd) in [
+        for (key, cmd) in [
             ("f5", "pane.copy"),
             ("f6", "pane.move"),
             ("f8", "pane.delete"),
         ] {
             assert_eq!(
-                r.push(parse_chord(tecla).unwrap()),
+                r.push(parse_chord(key).unwrap()),
                 Resolution::Run {
                     command: cmd.into(),
                     count: Count::None
                 },
-                "preset {nombre}: {tecla}"
+                "preset {name}: {key}"
             );
         }
     }
@@ -462,12 +462,12 @@ fn los_presets_ligan_las_operaciones_de_archivo() {
     // neither Total Commander nor Krusader document a cancel-task key in
     // their sources (K2b rule 1), so one is not invented there — this
     // second loop stays within the three native presets.
-    for (nombre, preset) in norte_tui::keymap::presets()
+    for (name, preset) in norte_tui::keymap::presets()
         .into_iter()
         .filter(|(n, _)| matches!(*n, "orthodox" | "vim" | "cua"))
     {
-        let eff = Effective::build(&preset, None, COMANDOS)
-            .unwrap_or_else(|e| panic!("preset {nombre}: {e:?}"));
+        let eff = Effective::build(&preset, None, COMMANDS)
+            .unwrap_or_else(|e| panic!("preset {name}: {e:?}"));
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("ctrl+k").unwrap()),
@@ -475,13 +475,13 @@ fn los_presets_ligan_las_operaciones_de_archivo() {
                 command: "task.cancel".into(),
                 count: Count::None
             },
-            "preset {nombre}: ctrl+k"
+            "preset {name}: ctrl+k"
         );
     }
 }
 
 #[test]
-fn capas_multiples_se_pliegan_por_precedencia() {
+fn multiple_layers_fold_by_precedence() {
     // ADR 0007: higher layers' prepends first; appends the same.
     let preset = parse_keymap(
         r#"
@@ -490,7 +490,7 @@ fn capas_multiples_se_pliegan_por_precedencia() {
     "#,
     )
     .unwrap();
-    let sistema = parse_keymap(
+    let system = parse_keymap(
         r#"
         [pane]
         prepend_keymap = [{ on = ["j"], run = "cursor.up" }]
@@ -498,7 +498,7 @@ fn capas_multiples_se_pliegan_por_precedencia() {
     "#,
     )
     .unwrap();
-    let usuario = parse_keymap(
+    let user = parse_keymap(
         r#"
         [pane]
         prepend_keymap = [{ on = ["j"], run = "cursor.top" }]
@@ -507,7 +507,7 @@ fn capas_multiples_se_pliegan_por_precedencia() {
     )
     .unwrap();
     // Capas en precedencia ASCENDENTE: sistema, usuario.
-    let eff = Effective::build_layered(&preset, &[sistema, usuario], COMANDOS).unwrap();
+    let eff = Effective::build_layered(&preset, &[system, user], COMMANDS).unwrap();
     let mut r = Resolver::new(eff);
     assert_eq!(
         r.push(parse_chord("j").unwrap()),
@@ -528,7 +528,7 @@ fn capas_multiples_se_pliegan_por_precedencia() {
 }
 
 #[test]
-fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
+fn the_viewer_context_merges_for_its_screen() {
     let preset = parse_keymap(
         r#"
         [global]
@@ -541,7 +541,7 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
     )
     .unwrap();
     // In Browse, the global q rules and enter exists.
-    let browse = Effective::build_for(&preset, &[], COMANDOS, Screen::Browse).unwrap();
+    let browse = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse).unwrap();
     let mut r = Resolver::new(browse);
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
@@ -558,7 +558,7 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
         }
     );
     // In Viewer, its specific q OVERRIDES global and enter does NOT exist.
-    let viewer = Effective::build_for(&preset, &[], COMANDOS, Screen::Viewer).unwrap();
+    let viewer = Effective::build_for(&preset, &[], COMMANDS, Screen::Viewer).unwrap();
     let mut r = Resolver::new(viewer);
     assert_eq!(
         r.push(parse_chord("q").unwrap()),
@@ -579,7 +579,7 @@ fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
 /// string that was left announced a key (`q`) keymap routing no longer
 /// accepts.
 #[test]
-fn todo_comando_tiene_ayuda_traducida() {
+fn every_command_has_translated_help() {
     use norte_tui::keymap::help_id;
     let ids_decoracion = [
         "help-title".to_owned(),
@@ -590,7 +590,7 @@ fn todo_comando_tiene_ayuda_traducida() {
         "help-section-browse".to_owned(),
         "help-section-viewer".to_owned(),
     ];
-    let ids = COMANDOS.iter().map(|cmd| help_id(cmd));
+    let ids = COMMANDS.iter().map(|cmd| help_id(cmd));
     for id in ids.chain(ids_decoracion) {
         for lang in [norte_i18n::Lang::Es, norte_i18n::Lang::En] {
             let text = norte_i18n::t_in(lang, &id);
@@ -625,7 +625,7 @@ fn todo_comando_tiene_ayuda_traducida() {
 /// topic is ever filed under that tag, its header DOES paint and this sweep
 /// asks for it again.
 #[test]
-fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
+fn every_help_group_header_has_a_translated_label() {
     use norte_frontend::help::{HelpState, SidebarRow};
 
     let mut seen = 0usize;
@@ -672,7 +672,7 @@ fn toda_cabecera_de_grupo_de_la_ayuda_tiene_etiqueta_traducida() {
 /// in `DIALOG_COMMANDS` with no `dialog-cmd-*` fails here, never silently
 /// in the footer.
 #[test]
-fn todo_dialog_command_tiene_etiqueta_traducida() {
+fn every_dialog_command_has_a_translated_label() {
     use norte_tui::keymap::{DIALOG_COMMANDS, dialog_hint_id};
     for cmd in DIALOG_COMMANDS {
         let id = dialog_hint_id(cmd);
@@ -688,7 +688,7 @@ fn todo_dialog_command_tiene_etiqueta_traducida() {
 /// with the command that wins (what the key really does, not what the
 /// preset says).
 #[test]
-fn bindings_expuestos_reflejan_las_capas() {
+fn exposed_bindings_reflect_the_layers() {
     let preset = parse_keymap(
         r#"
         [pane]
@@ -707,7 +707,7 @@ fn bindings_expuestos_reflejan_las_capas() {
     "#,
     )
     .unwrap();
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMANDOS).unwrap();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMMANDS).unwrap();
     let b = eff.bindings();
     // Shadowed: "j" just ONCE and the user's prepend wins.
     let jotas: Vec<_> = b.iter().filter(|(seq, _)| seq == "j").collect();
@@ -731,7 +731,7 @@ fn bindings_expuestos_reflejan_las_capas() {
 /// rebinds to builtins keep working; the same binding in a user layer DOES
 /// resolve.
 #[test]
-fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
+fn project_keymap_lua_is_discarded_with_a_warning() {
     let preset = parse_keymap(
         r#"
         [pane]
@@ -739,17 +739,17 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
     "#,
     )
     .unwrap();
-    let capa = r#"
+    let layer = r#"
         [pane]
         prepend_keymap = [{ on = ["j"], run = "lua:pwn" }]
     "#;
 
     // PROJECT layer: the lua: binding is discarded — the key falls to the
     // preset's builtin — and it is counted for the warning.
-    let mut proyecto = parse_keymap(capa).unwrap();
-    proyecto.mark_project();
+    let mut project = parse_keymap(layer).unwrap();
+    project.mark_project();
     let known = norte_tui::shortcuts_editor::known_commands(Screen::Browse);
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), &known)
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&project), &known)
         .expect("discarding is not a load error");
     assert_eq!(eff.discarded_lua_bindings(), 1, "counted for the warning");
     let mut r = Resolver::new(eff);
@@ -763,8 +763,8 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
     );
 
     // The SAME binding in a USER layer (unmarked): resolves normally.
-    let usuario = parse_keymap(capa).unwrap();
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&usuario), &known).unwrap();
+    let user = parse_keymap(layer).unwrap();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), &known).unwrap();
     assert_eq!(eff.discarded_lua_bindings(), 0);
     let mut r = Resolver::new(eff);
     assert_eq!(
@@ -778,15 +778,15 @@ fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
 
     // Project rebind to a BUILTIN: still works (the discard is ONLY for
     // `lua:` — innocuous project config is not broken).
-    let mut proyecto = parse_keymap(
+    let mut project = parse_keymap(
         r#"
         [pane]
         prepend_keymap = [{ on = ["x"], run = "cursor.up" }]
     "#,
     )
     .unwrap();
-    proyecto.mark_project();
-    let eff = Effective::build_layered(&preset, std::slice::from_ref(&proyecto), COMANDOS).unwrap();
+    project.mark_project();
+    let eff = Effective::build_layered(&preset, std::slice::from_ref(&project), COMMANDS).unwrap();
     assert_eq!(eff.discarded_lua_bindings(), 0);
     let mut r = Resolver::new(eff);
     assert_eq!(

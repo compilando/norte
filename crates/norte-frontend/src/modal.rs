@@ -544,8 +544,8 @@ pub fn approval_ready(plan_confirmable: bool, seen: usize, total: usize) -> bool
 /// use norte_proto::VPath;
 /// use norte_frontend::overflow_hostile;
 ///
-/// let clean = VPath::parse("file:///casa/a.txt").unwrap();
-/// let weird = VPath::parse("file:///casa/a%E2%80%AE.txt").unwrap();
+/// let clean = VPath::parse("file:///home/a.txt").unwrap();
+/// let weird = VPath::parse("file:///home/a%E2%80%AE.txt").unwrap();
 ///
 /// // The hostile one is SHOWN: the badge is its own, not the summary's.
 /// assert!(!overflow_hostile(&[weird.clone(), clean.clone()], 2));
@@ -574,11 +574,11 @@ pub fn overflow_hostile(paths: &[VPath], skip: usize) -> bool {
 ///
 /// ```
 /// use norte_frontend::redacted_hostile;
-/// assert!(!redacted_hostile("casa/a.txt"));
+/// assert!(!redacted_hostile("home/a.txt"));
 /// // What the daemon already substituted.
-/// assert!(redacted_hostile("casa/a\u{FFFD}.txt"));
+/// assert!(redacted_hostile("home/a\u{FFFD}.txt"));
 /// // And what arrives whole and has to be masked here.
-/// assert!(redacted_hostile("casa/a\u{200B}.txt"));
+/// assert!(redacted_hostile("home/a\u{200B}.txt"));
 /// ```
 #[must_use]
 pub fn redacted_hostile(text: &str) -> bool {

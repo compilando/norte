@@ -237,7 +237,7 @@ struct Query {
     /// me the settings of something that is not there". Ignoring the
     /// operator would show the whole list and the reader would read that as
     /// "here is everything you asked for".
-    imposible: bool,
+    impossible: bool,
 }
 
 impl Query {
@@ -272,7 +272,7 @@ impl Query {
             } else if let Some(name) = text.strip_prefix("@section:") {
                 match section_by_name(name) {
                     Some(s) => q.sections.push(s),
-                    None => q.imposible = true,
+                    None => q.impossible = true,
                 }
             } else {
                 rest.push(token);
@@ -284,7 +284,7 @@ impl Query {
 
     /// Does this row pass the filter? `fold` is its already-folded haystack.
     fn matches(&self, row: &Row, fold: &str) -> bool {
-        if self.imposible {
+        if self.impossible {
             return false;
         }
         if self.only_modified && !row.modified {

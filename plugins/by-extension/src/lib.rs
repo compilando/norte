@@ -61,7 +61,7 @@ mod guest {
             Ok(names
                 .into_iter()
                 .filter_map(|n| {
-                    super::destino(&n).map(|proposed_rel| Proposal {
+                    super::destination(&n).map(|proposed_rel| Proposal {
                         current: n,
                         proposed_rel,
                     })

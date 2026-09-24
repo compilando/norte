@@ -101,9 +101,9 @@ impl Tree {
     /// let vp = |w: &str| VPath::parse(w).unwrap();
     /// let home = vp("file:///home/ana");
     /// let mut t = Tree::default();
-    /// t.anchor_near(&vp("file:///home/ana/fotos/2026"), &home);
+    /// t.anchor_near(&vp("file:///home/ana/snapshots/2026"), &home);
     /// assert_eq!(t.root(), Some(&home));
-    /// assert_eq!(t.revealing(), Some(&vp("file:///home/ana/fotos/2026")));
+    /// assert_eq!(t.revealing(), Some(&vp("file:///home/ana/snapshots/2026")));
     /// // Outside home, the provider's root.
     /// let mut t = Tree::default();
     /// t.anchor_near(&vp("file:///etc/ssh"), &home);
@@ -139,13 +139,13 @@ impl Tree {
     /// use norte_proto::VPath;
     /// let vp = |w: &str| VPath::parse(w).unwrap();
     /// let mut t = Tree::default();
-    /// t.anchor_near(&vp("mem:///casa"), &vp("file:///home/ana"));
+    /// t.anchor_near(&vp("mem:///home"), &vp("file:///home/ana"));
     /// assert_eq!(t.root(), Some(&vp("mem:///")));
     /// t.branch_unreadable(vp("mem:///"));
-    /// assert_eq!(t.root(), Some(&vp("mem:///casa")), "goes back to the listing");
+    /// assert_eq!(t.root(), Some(&vp("mem:///home")), "goes back to the listing");
     /// // Another unreadable branch is just marked empty.
-    /// t.branch_unreadable(vp("mem:///casa/cerrada"));
-    /// assert_eq!(t.root(), Some(&vp("mem:///casa")));
+    /// t.branch_unreadable(vp("mem:///home/closed"));
+    /// assert_eq!(t.root(), Some(&vp("mem:///home")));
     /// ```
     pub fn branch_unreadable(&mut self, dir: VPath) {
         if self.root.as_ref() == Some(&dir)
@@ -452,7 +452,7 @@ mod tests {
         VPath::parse(w).expect("wire")
     }
 
-    fn con_raiz() -> Tree {
+    fn with_root() -> Tree {
         let mut t = Tree::default();
         t.anchor(vp("mem:///r"));
         t
@@ -461,8 +461,8 @@ mod tests {
     /// The first thing needed is the root, and once that is there, next is
     /// whatever the reader has opened: one per turn, top to bottom.
     #[test]
-    fn pide_la_raiz_y_luego_lo_que_se_abre() {
-        let mut t = con_raiz();
+    fn asks_for_the_root_and_then_what_gets_opened() {
+        let mut t = with_root();
         assert_eq!(t.wants(), Some(vp("mem:///r")));
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
         assert_eq!(t.wants(), None, "nothing open, nothing to request");
@@ -474,8 +474,8 @@ mod tests {
     /// A directory already listed is not requested again even if it is
     /// folded and opened again: its content does not change by folding it.
     #[test]
-    fn lo_leido_no_se_vuelve_a_pedir() {
-        let mut t = con_raiz();
+    fn what_was_read_is_not_requested_again() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         t.down();
         t.expand();
@@ -489,8 +489,8 @@ mod tests {
     /// Rows come out in paint order, with their depth, and a folded branch
     /// hides its own.
     #[test]
-    fn las_filas_llevan_su_profundidad_y_lo_plegado_no_sale() {
-        let mut t = con_raiz();
+    fn rows_carry_their_depth_and_folded_ones_do_not_show() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/x")]);
         assert_eq!(
@@ -510,8 +510,8 @@ mod tests {
     /// paints them differently: saying "leaf" about something unread is
     /// making up the answer.
     #[test]
-    fn no_leido_y_sin_hijos_no_son_lo_mismo() {
-        let mut t = con_raiz();
+    fn unread_and_childless_are_not_the_same() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         assert_eq!(t.rows()[1].children, None, "nothing known about `a` yet");
         t.insert_children(vp("mem:///r/a"), Vec::new());
@@ -525,8 +525,8 @@ mod tests {
     /// Changing root discards what was read: another tree's open branches
     /// say nothing about this one.
     #[test]
-    fn cambiar_de_raiz_vacia_lo_leido() {
-        let mut t = con_raiz();
+    fn changing_root_empties_what_was_read() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         t.down();
         t.expand();
@@ -540,8 +540,8 @@ mod tests {
     /// NOT close what might be open elsewhere in the tree: re-anchoring on
     /// every `cd` was exactly what made keeping the panel open useless.
     #[test]
-    fn seguir_revela_la_rama_y_conserva_lo_abierto() {
-        let mut t = con_raiz();
+    fn following_reveals_the_branch_and_preserves_what_is_open() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
         // `b` stays open: it is the sibling that must not be closed.
         t.set_cursor(2);
@@ -575,7 +575,7 @@ mod tests {
     /// everything already read is still under the new root — and throwing
     /// it away was free to avoid and cost another listing besides.
     #[test]
-    fn seguir_hacia_arriba_sube_la_raiz_sin_vaciar() {
+    fn following_upward_raises_the_root_without_emptying_it() {
         let mut t = Tree::default();
         t.anchor(vp("mem:///r/a"));
         t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
@@ -618,7 +618,7 @@ mod tests {
     /// The root climbs to the common ancestor once and stays there, so the
     /// second turn no longer moves anything.
     #[test]
-    fn seguir_a_un_hermano_sube_al_ancestro_comun_una_vez() {
+    fn following_a_sibling_rises_to_the_common_ancestor_once() {
         let mut t = Tree::default();
         t.anchor(vp("mem:///r/a"));
         t.insert_children(vp("mem:///r/a"), vec![vp("mem:///r/a/y")]);
@@ -659,8 +659,8 @@ mod tests {
     /// ancestor, and another machine's branches say nothing about this
     /// one.
     #[test]
-    fn seguir_a_otro_provider_reancla() {
-        let mut t = con_raiz();
+    fn following_to_another_provider_re_anchors() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         t.follow(&vp("file:///otro/z"));
         assert_eq!(t.root(), Some(&vp("file:///otro/z")));
@@ -673,8 +673,8 @@ mod tests {
     /// cursor the reader moved by hand to look at another branch is
     /// theirs.
     #[test]
-    fn seguir_dos_veces_al_mismo_sitio_no_toca_el_cursor() {
-        let mut t = con_raiz();
+    fn following_twice_to_the_same_place_does_not_touch_the_cursor() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a"), vp("mem:///r/b")]);
         assert!(t.follow(&vp("mem:///r/a")), "the first time does move");
         assert_eq!(t.selected(), Some(vp("mem:///r/a")));
@@ -692,8 +692,8 @@ mod tests {
     /// known: a branch's listing is capped, so the needed child can be
     /// left out and the target would hang forever.
     #[test]
-    fn un_objetivo_que_no_va_a_llegar_se_suelta() {
-        let mut t = con_raiz();
+    fn a_target_that_will_never_arrive_is_released() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         t.follow(&vp("mem:///r/a/y"));
         assert_eq!(t.revealing(), Some(&vp("mem:///r/a/y")));
@@ -709,8 +709,8 @@ mod tests {
     /// row finally exists, not at the deepest ancestor there happened to
     /// be.
     #[test]
-    fn seguir_una_rama_sin_listar_espera_a_que_llegue() {
-        let mut t = con_raiz();
+    fn following_an_unlisted_branch_waits_for_it_to_arrive() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
 
         t.follow(&vp("mem:///r/a/y"));
@@ -725,8 +725,8 @@ mod tests {
 
     /// Following the root itself changes nothing's place.
     #[test]
-    fn seguir_a_la_propia_raiz_no_tira_nada() {
-        let mut t = con_raiz();
+    fn following_to_its_own_root_drops_nothing() {
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         t.set_cursor(1);
         t.expand();
@@ -741,12 +741,12 @@ mod tests {
     /// The cursor does not run off either end, and over an empty tree it
     /// selects nothing.
     #[test]
-    fn el_cursor_se_queda_dentro() {
+    fn the_cursor_stays_inside() {
         let mut t = Tree::default();
         t.down();
         assert_eq!(t.cursor(), 0);
         assert_eq!(t.selected(), None);
-        let mut t = con_raiz();
+        let mut t = with_root();
         t.insert_children(vp("mem:///r"), vec![vp("mem:///r/a")]);
         t.down();
         t.down();

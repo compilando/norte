@@ -886,7 +886,7 @@ impl Daemon {
         // persisted, which is what a test wants; with it, whoever fails to
         // get the lock starts WITH the screen and without a writer — clones
         // it and runs detached.
-        let (session_lock, sesion, escribible) = open_session(cfg.state_dir.clone()).await?;
+        let (session_lock, session, escribible) = open_session(cfg.state_dir.clone()).await?;
         // Persisting is THREE things at once: there is somewhere to, the
         // right is held, and what is on disk is not from a newer binary.
         // What is computed here is the STARTUP, not the whole lifetime
@@ -929,7 +929,7 @@ impl Daemon {
             column_pool: Arc::new(crate::plugins::ColumnPool::default()),
             log_ring: std::sync::OnceLock::new(),
             directed_feeds: Mutex::new(HashMap::new()),
-            ui_session: Arc::new(crate::ui_session::SessionStore::new(sesion)),
+            ui_session: Arc::new(crate::ui_session::SessionStore::new(session)),
             session_persists: Arc::clone(&session_persists),
             session_flush: Arc::clone(&session_flush),
         });
@@ -1078,13 +1078,13 @@ impl Daemon {
         // aborting, i.e. the task keeps going — writing the file with the
         // lock already released. The error is stored and returned AFTER
         // shutting down.
-        let mut fallo: Option<std::io::Error> = None;
+        let mut failure: Option<std::io::Error> = None;
         loop {
             tokio::select! {
                 accepted = self.listener.accept() => {
                     let (stream, _addr) = match accepted {
                         Ok(v) => v,
-                        Err(e) => { fallo = Some(e); break }
+                        Err(e) => { failure = Some(e); break }
                     };
                     // The idleness keepalive does NOT count unauthenticated
                     // connections (serve resets it after auth); the
@@ -1163,10 +1163,10 @@ impl Daemon {
         // own. Nobody loses anything: with the listener already dead, the
         // path only served to give `ECONNREFUSED` instead of `NotFound`.
         let socket_path = self.socket_path.clone();
-        let socket_para_borrar = socket_path.clone();
+        let socket_for_delete = socket_path.clone();
         // Rule 2: not a single synchronous unlink on the runtime.
         let _ =
-            crate::blocking::spawn_blocking(move || std::fs::remove_file(socket_para_borrar)).await;
+            crate::blocking::spawn_blocking(move || std::fs::remove_file(socket_for_delete)).await;
         let mut hard_done = false;
         loop {
             if shared.hard_shutdown.is_cancelled() && !hard_done {
@@ -1190,11 +1190,11 @@ impl Daemon {
         // waits for it to finish writing. With a deadline: a client that does
         // not read can have a full socket, and it no longer holds up
         // shutdown.
-        let plazo = tokio::time::Instant::now() + CONNECTION_DRAIN;
+        let deadline = tokio::time::Instant::now() + CONNECTION_DRAIN;
         while shared.connections.load(Ordering::SeqCst) > 0 {
-            if tokio::time::Instant::now() >= plazo {
+            if tokio::time::Instant::now() >= deadline {
                 tracing::warn!(
-                    abiertas = shared.connections.load(Ordering::SeqCst),
+                    open = shared.connections.load(Ordering::SeqCst),
                     "shutdown without waiting for connections that never finish writing"
                 );
                 break;
@@ -1203,7 +1203,7 @@ impl Daemon {
         }
         let _ = socket_path;
         tracing::info!("daemon shut down");
-        match fallo {
+        match failure {
             Some(e) => Err(DaemonError::Io(e)),
             None => Ok(()),
         }
@@ -1274,8 +1274,8 @@ async fn session_writer(
     persiste: Arc<AtomicBool>,
     inicial: WriteState,
 ) {
-    let mut estado = inicial;
-    if matches!(estado, WriteState::Surrendered) {
+    let mut state = inicial;
+    if matches!(state, WriteState::Surrendered) {
         // The bind held the lock and the file was from a newer binary: it
         // was released while building the state and is not retried. The task
         // ENDS here instead of spinning a once-a-second timer for the whole
@@ -1296,21 +1296,21 @@ async fn session_writer(
                 // polling that very lock — and `select!` can pick this branch
                 // with the token already cancelled.
                 if !stop.is_cancelled() {
-                    estado = estado.retry(&dir, &store, &persiste).await;
+                    state = state.retry(&dir, &store, &persiste).await;
                 }
-                if estado.writes() {
+                if state.writes() {
                     flush_session(&store, &dir).await;
                 }
             }
             () = flush.notified() => {
-                if estado.writes() {
+                if state.writes() {
                     flush_session(&store, &dir).await;
                 }
             }
             () = stop.cancelled() => {
                 // The last one, and so the one that matters: this is where
                 // the screen survives a handoff.
-                if estado.writes() {
+                if state.writes() {
                     flush_session(&store, &dir).await;
                 }
                 break;
@@ -1320,7 +1320,7 @@ async fn session_writer(
     // Explicit: the lock is released when the task ends, and orderly shutdown
     // WAITS for it exactly for this — the handoff's successor has to find the
     // file written and the lock free.
-    drop(estado);
+    drop(state);
 }
 
 /// The right to write the session, as seen by the writer (#237).
@@ -1422,16 +1422,16 @@ impl WriteState {
         let Self::Detached { avisado, ticks } = self else {
             return self;
         };
-        let siguiente = ticks.saturating_add(1);
+        let next = ticks.saturating_add(1);
         if !Self::should_retry(ticks) {
             return Self::Detached {
                 avisado,
-                ticks: siguiente,
+                ticks: next,
             };
         }
         let d = dir.to_path_buf();
         // Rule 2: the lock and the read are disk I/O.
-        let intento = crate::blocking::spawn_blocking(move || {
+        let attempt = crate::blocking::spawn_blocking(move || {
             let Some(lock) = crate::ui_session::disk::lock(&d)? else {
                 return Ok::<_, std::io::Error>(None);
             };
@@ -1440,7 +1440,7 @@ impl WriteState {
             Ok(Some((lock, recuperada)))
         })
         .await;
-        let tomado = match intento {
+        let tomado = match attempt {
             Ok(Ok(v)) => v,
             Ok(Err(e)) => {
                 if !avisado {
@@ -1448,7 +1448,7 @@ impl WriteState {
                 }
                 return Self::Detached {
                     avisado: true,
-                    ticks: siguiente,
+                    ticks: next,
                 };
             }
             Err(e) => {
@@ -1457,14 +1457,14 @@ impl WriteState {
                 }
                 return Self::Detached {
                     avisado: true,
-                    ticks: siguiente,
+                    ticks: next,
                 };
             }
         };
         let Some((lock, recuperada)) = tomado else {
             return Self::Detached {
                 avisado,
-                ticks: siguiente,
+                ticks: next,
             };
         };
         if !recuperada.writable {
@@ -1488,10 +1488,10 @@ async fn flush_session(store: &Arc<crate::ui_session::SessionStore>, dir: &Path)
     };
     let dir = dir.to_path_buf();
     // Rule 2: the write is disk I/O and goes to a blocking pool.
-    let escrito =
+    let written =
         crate::blocking::spawn_blocking(move || crate::ui_session::disk::write(&dir, &session))
             .await;
-    match escrito {
+    match written {
         Ok(Ok(())) => {}
         // `take_dirty` already took the dirty flag away, so a failure
         // WITHOUT marking it again is never retried: the next tick would see
@@ -1755,7 +1755,7 @@ fn peer_allowed(peer_uid: u32, daemon_uid: u32) -> bool {
 fn spawn_connection(stream: UnixStream, shared: Arc<Shared>) {
     // ROOT: each `rpc` of this connection is a root (ADR 0127). Inheriting,
     // they would all hang off `run`, the span of the daemon's whole life.
-    crate::blocking::spawn_raiz(async move {
+    crate::blocking::spawn_root(async move {
         // Auth BEFORE reading a single byte (ADR 0011).
         let peer = match stream.peer_cred() {
             Ok(cred) => cred,
@@ -1995,7 +1995,7 @@ async fn handle_fs_stat(
 /// cursor continuation IGNORES `p.attrs` (the retained stream was born with
 /// its options — resending them changes nothing, though the validation does
 /// run).
-#[tracing::instrument(level = "debug", skip_all, fields(path = %p.path.display_lossy(), paginado = p.cursor.is_some()))]
+#[tracing::instrument(level = "debug", skip_all, fields(path = %p.path.display_lossy(), paged = p.cursor.is_some()))]
 async fn handle_fs_list(
     p: methods::FsListParams,
     conn: &mut ConnState,
@@ -3414,14 +3414,14 @@ fn handle_policy_decide(
     // reason inside an English `message` no frontend can classify.
     use crate::daemon::approvals::Decision;
     let reason = match shared.approvals.decide(p.approval_id, p.approve) {
-        Decision::Aplicada => {
+        Decision::Applied => {
             // Security effect (M3-5 audit material): who decided what.
             tracing::info!("policy approval decided by the human");
             return to_value(&methods::PolicyDecideResult {});
         }
         Decision::Vencida => "expired",
         Decision::YaDecidida => "already-decided",
-        Decision::Desconocida => "unknown",
+        Decision::Unknown => "unknown",
     };
     Err(RpcError::from(norte_proto::Error::ApprovalGone {
         reason: reason.to_owned(),
@@ -4388,9 +4388,9 @@ async fn handle_plugin_panel_render(
                 dir: &dir,
                 climb,
                 kind: &kind,
-                contexto: &context,
+                context: &context,
                 state: &state,
-                evento: &event,
+                event: &event,
             },
         )
     })

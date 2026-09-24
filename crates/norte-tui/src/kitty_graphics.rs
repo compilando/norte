@@ -3,11 +3,11 @@
 //! IMAGE protocol: asked once, at startup, and cached.
 //!
 //! T4 (WOW phase 5) adds what actually paints: [`escape_colocar`]/
-//! [`escape_borrar`] are the pure escapes — no I/O here, that runs in the run
-//! loop, which owns the terminal — and [`marcar_colocada`]/[`borrar_colocada`]
+//! [`escape_delete`] are the pure escapes — no I/O here, that runs in the run
+//! loop, which owns the terminal — and [`mark_placed`]/[`delete_placed`]
 //! keep count of which id is placed RIGHT NOW on the real terminal. That
 //! count is PROCESS state, like `alt_menu::REQUESTED` (private, not linked
-//! from here — the same reason [`consultar_soporte`] documents below):
+//! from here — the same reason [`query_support`] documents below):
 //! yielding the terminal, an `Esc` that closes the viewer, and exiting all
 //! need to be able to erase WITHOUT anyone passing them the `App` — the `App`
 //! decides WHAT should be seen, this keeps count of what is really on
@@ -75,12 +75,12 @@ fn is_our_ok(body: &str) -> bool {
 }
 
 /// What the terminal answered, asked ONCE.
-static SOPORTE: OnceLock<bool> = OnceLock::new();
+static SUPPORT: OnceLock<bool> = OnceLock::new();
 
 /// Asks the terminal whether it can paint graphics, and caches the answer.
 ///
 /// Called at STARTUP, with raw mode already set and before the loop raises
-/// its event reader, for the same two reasons `alt_menu::consultar_soporte`
+/// its event reader, for the same two reasons `alt_menu::query_support`
 /// already documents: with the reader alive, that thread holds the lock and
 /// the query gives up; and under `--pick` stdout is the caller's data pipe,
 /// so with no terminal on stdout it does not ask.
@@ -96,20 +96,20 @@ static SOPORTE: OnceLock<bool> = OnceLock::new();
 /// speak the protocol silently ignores the first one, and without the second
 /// there would be nothing to wait for — the probe would always time out, and
 /// startup would pay that delay on every terminal without support.
-pub fn consultar_soporte() -> bool {
-    *SOPORTE.get_or_init(|| {
+pub fn query_support() -> bool {
+    *SUPPORT.get_or_init(|| {
         if !io::stdout().is_terminal() {
             return false;
         }
-        preguntar().unwrap_or(false)
+        ask().unwrap_or(false)
     })
 }
 
-/// [`consultar_soporte`]'s answer, without asking. If it was never asked,
+/// [`query_support`]'s answer, without asking. If it was never asked,
 /// "no".
 #[must_use]
-pub fn soportado() -> bool {
-    SOPORTE.get().copied().unwrap_or(false)
+pub fn supported() -> bool {
+    SUPPORT.get().copied().unwrap_or(false)
 }
 
 /// How many RAW bytes (before base64) each chunk of an APC carries.
@@ -146,7 +146,7 @@ const CHUNK_RAW_BYTES: usize = 3 * 1024;
 /// the PNG does not fit its cap. kitty's protocol has no `f=` key for JPEG or
 /// WebP — only PNG (100) or raw raster (24/32) — so sending either of those
 /// two with `f=100` does not fail with a readable error: kitty rejects it
-/// silently. `viewer_open::imagen_desde_miniatura` is what filters BEFORE
+/// silently. `viewer_open::imagen_from_thumbnail` is what filters BEFORE
 /// `bytes` reaches here (branch review, finding 1): everything that passes
 /// through this function is already PNG. The bytes go in base64 because an
 /// APC ends in `\x1b\\` and a PNG perfectly normally contains that pair:
@@ -184,7 +184,7 @@ pub fn escape_colocar(
     id: u32,
     bytes: &[u8],
     rect: Rect,
-    crop: Option<crate::viewer_open::Recorte>,
+    crop: Option<crate::viewer_open::Crop>,
 ) -> String {
     let engine = base64::engine::general_purpose::STANDARD;
     // `chunks` on an empty slice produces no chunk at all, and a zero-byte
@@ -243,18 +243,18 @@ pub fn escape_colocar(
 /// [`escape_colocar`].
 ///
 /// ```
-/// use norte_tui::kitty_graphics::escape_borrar;
-/// assert!(escape_borrar(7).contains("i=7"));
+/// use norte_tui::kitty_graphics::escape_delete;
+/// assert!(escape_delete(7).contains("i=7"));
 /// ```
 #[must_use]
-pub fn escape_borrar(id: u32) -> String {
+pub fn escape_delete(id: u32) -> String {
     format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\")
 }
 
 /// The id of the image placed RIGHT NOW on the real terminal, or `0` if
 /// there is none — PROCESS state, like [`crate::alt_menu`]'s
 /// `REQUESTED`/`YIELDED`: `0` is not a valid id because
-/// [`crate::viewer_open::ImagenColocada::id`] starts at 1, so it serves as a
+/// [`crate::viewer_open::ImagenPlaced::id`] starts at 1, so it serves as a
 /// sentinel without wrapping an atomic in an `Option`.
 static PLACED: AtomicU32 = AtomicU32::new(0);
 
@@ -263,7 +263,7 @@ static PLACED: AtomicU32 = AtomicU32::new(0);
 /// Called by the run loop right after successfully writing [`escape_colocar`]
 /// — never before, or a write failure would leave this count believing an
 /// image is up that the terminal never saw.
-pub fn marcar_colocada(id: u32) {
+pub fn mark_placed(id: u32) {
     PLACED.store(id, Ordering::Relaxed);
 }
 
@@ -274,7 +274,7 @@ pub fn marcar_colocada(id: u32) {
 /// resent its thumbnail (up to 1920 px on a side, in base64) on every
 /// `session_tick` (once a second), with an erase+place flicker thrown in.
 #[must_use]
-pub fn ya_colocada(id: u32) -> bool {
+pub fn ya_placed(id: u32) -> bool {
     PLACED.load(Ordering::Relaxed) == id
 }
 
@@ -292,13 +292,13 @@ pub fn ya_colocada(id: u32) -> bool {
 /// terminal ([`crate::suspend::suspend_terminal`]) and exiting
 /// ([`crate::tty::restore`]) call it here directly because neither of the two
 /// is guaranteed a following frame to make that diff.
-pub fn borrar_colocada(out: &mut impl Write) {
+pub fn delete_placed(out: &mut impl Write) {
     let id = PLACED.swap(0, Ordering::Relaxed);
     if id == 0 {
         return;
     }
     match out
-        .write_all(escape_borrar(id).as_bytes())
+        .write_all(escape_delete(id).as_bytes())
         .and_then(|()| out.flush())
     {
         Ok(()) => {}
@@ -317,7 +317,7 @@ pub fn borrar_colocada(out: &mut impl Write) {
 /// runs out.
 ///
 /// A failure opening or writing the control terminal reads as "no" from
-/// [`consultar_soporte`]: a presentation probe must not bring down startup.
+/// [`query_support`]: a presentation probe must not bring down startup.
 ///
 /// `/dev/tty` has no `read_timeout` like a socket (rule 5: a real `poll` is
 /// `unsafe`, and that `unsafe` belongs only to `norte-vfs-local`), so the read
@@ -350,7 +350,7 @@ pub fn borrar_colocada(out: &mut impl Write) {
 /// than [`DEADLINE`] (200 ms) AND that also take so long to answer that they
 /// manage to overlap with the event reader's startup — not observed in this
 /// task's local tests (tmux, kitty).
-fn preguntar() -> io::Result<bool> {
+fn ask() -> io::Result<bool> {
     let mut tty = std::fs::OpenOptions::new()
         .read(true)
         .write(true)

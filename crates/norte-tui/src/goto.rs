@@ -14,15 +14,15 @@
 //! else.
 
 use norte_frontend::goto::{
-    FixedSource, Goto, GotoRow, GotoSource, RutaSource, SECCION_COMANDOS, SECCION_CONEXIONES,
-    SECCION_FAVORITOS, SECCION_HISTORIA, SECCION_INDICE, SECCION_POPULARES, TRAIDAS_POR_LISTA,
-    fila_conexion, fila_ruta, filas_de_comandos,
+    BROUGHT_BY_LIST, FixedSource, Goto, GotoRow, GotoSource, PathSource, SECTION_COMMANDS,
+    SECTION_CONNECTIONS, SECTION_FAVORITES, SECTION_HISTORY, SECTION_INDEX, SECTION_POPULAR,
+    command_rows, row_connection, row_path,
 };
 use norte_i18n::t;
 
 use crate::app::App;
 
-pub use norte_frontend::goto::{Accion, MINIMO_PARA_EL_INDICE};
+pub use norte_frontend::goto::{Action, MINIMUM_FOR_THE_INDEX};
 
 /// The SYNCHRONOUS sources: the lists the TUI already has in memory.
 ///
@@ -40,7 +40,7 @@ pub fn fuentes(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoS
     // The typed path. Its detail says what is about to happen, because the
     // row IS the query, and without that it would look like it did not
     // understand what you typed.
-    out.push(Box::new(RutaSource::new(t("goto-path-desc"))));
+    out.push(Box::new(PathSource::new(t("goto-path-desc"))));
 
     // History of the focused pane: no filter (the model filters) and no
     // current directory, which nobody wants to go to. It is the ONLY section
@@ -50,17 +50,17 @@ pub fn fuentes(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoS
         norte_frontend::history::history_rows(&app.history[focus], &current, "", enc)
             .into_iter()
             .filter(|r| r.mark != norte_frontend::history::HistoryMark::Current)
-            .take(TRAIDAS_POR_LISTA)
-            .map(|r| fila_ruta(SECCION_HISTORIA.id, None, &r.path, enc))
+            .take(BROUGHT_BY_LIST)
+            .map(|r| row_path(SECTION_HISTORY.id, None, &r.path, enc))
             .collect();
-    out.push(Box::new(FixedSource::new(SECCION_HISTORIA, history)));
+    out.push(Box::new(FixedSource::new(SECTION_HISTORY, history)));
 
     let popular: Vec<GotoRow> = norte_frontend::history::popular_rows(&app.popular, &current, "")
         .into_iter()
-        .take(TRAIDAS_POR_LISTA)
-        .map(|r| fila_ruta(SECCION_POPULARES.id, None, &r.path, None))
+        .take(BROUGHT_BY_LIST)
+        .map(|r| row_path(SECTION_POPULAR.id, None, &r.path, None))
         .collect();
-    out.push(Box::new(FixedSource::new(SECCION_POPULARES, popular)));
+    out.push(Box::new(FixedSource::new(SECTION_POPULAR, popular)));
 
     // A favorite whose destination fails to parse is NOT offered: the sites
     // list already says so via its error, and here a row that cannot lead
@@ -72,50 +72,50 @@ pub fn fuentes(app: &App, connections: &[(String, String)]) -> Vec<Box<dyn GotoS
             it.target
                 .as_ref()
                 .ok()
-                .map(|p| fila_ruta(SECCION_FAVORITOS.id, Some(&it.name), p, None))
+                .map(|p| row_path(SECTION_FAVORITES.id, Some(&it.name), p, None))
         })
         .collect();
-    out.push(Box::new(FixedSource::new(SECCION_FAVORITOS, favorites)));
+    out.push(Box::new(FixedSource::new(SECTION_FAVORITES, favorites)));
 
     let connections: Vec<GotoRow> = connections
         .iter()
-        .map(|(name, url)| fila_conexion(name, url))
+        .map(|(name, url)| row_connection(name, url))
         .collect();
-    out.push(Box::new(FixedSource::new(SECCION_CONEXIONES, connections)));
+    out.push(Box::new(FixedSource::new(SECTION_CONNECTIONS, connections)));
 
     // The commands, the SAME ones the palette offers in this context: the
     // palette already resolves what can run with the viewer open.
-    let commands = filas_de_comandos(crate::palette::rows_for_context(
+    let commands = command_rows(crate::palette::rows_for_context(
         &app.palette_rows,
         app.viewer.is_some(),
     ));
     out.push(Box::new(
-        FixedSource::new(SECCION_COMANDOS, commands).solo_con_consulta(),
+        FixedSource::new(SECTION_COMMANDS, commands).only_with_query(),
     ));
 
     out
 }
 
 /// Feeds `goto` what the index answered.
-pub fn poner_indice(app: &mut App, hits: &[norte_proto::methods::SemanticHit]) {
-    let rows = norte_frontend::goto::filas_del_indice(hits);
+pub fn set_index(app: &mut App, hits: &[norte_proto::methods::SemanticHit]) {
+    let rows = norte_frontend::goto::index_rows(hits);
     if let Some(goto) = &mut app.goto {
         // `ya_filtrada`: the index matched by MEANING, and running the
         // query's subsequence over it again would throw away exactly what
         // makes it useful.
-        goto.reemplazar_seccion(SECCION_INDICE, rows, true);
+        goto.replace_section(SECTION_INDEX, rows, true);
     }
 }
 
 /// What to do with the row the reader just confirmed — the decision belongs
-/// to the shared model ([`norte_frontend::goto::accion`]).
+/// to the shared model ([`norte_frontend::goto::action`]).
 #[must_use]
-pub fn accion(_app: &App, key: &str) -> Accion {
-    norte_frontend::goto::accion(key)
+pub fn action(_app: &App, key: &str) -> Action {
+    norte_frontend::goto::action(key)
 }
 
 /// Opens the screen with the given sources.
-pub fn abrir(app: &mut App, connections: &[(String, String)]) {
+pub fn open(app: &mut App, connections: &[(String, String)]) {
     let sources = fuentes(app, connections);
     app.goto = Some(Goto::new(sources));
 }

@@ -18,11 +18,11 @@ pub(super) const KIND: &str = "timeline";
 /// How many rows are requested per page: the same as the TUI's. Well below
 /// the protocol's cap, because this is a screen that is read and whatever
 /// does not fit is requested on reaching the bottom.
-const POR_PAGINA: u32 = 50;
+const PER_PAGE: u32 = 50;
 
 /// What a timeline slot has, and what it is requesting.
 #[derive(Default)]
-pub(super) struct EstadoLinea {
+pub(super) struct StateLine {
     /// The rows and the cursor. The SHARED state.
     model: norte_frontend::timeline::Timeline,
     /// The request in flight: its token and where it was requested from.
@@ -52,7 +52,7 @@ pub(super) struct EstadoLinea {
     return_to: Option<i64>,
 }
 
-impl Estado {
+impl State {
     /// Requests whatever the placed timelines are missing: the first page
     /// when their slot appears, and the next one when the cursor reaches the
     /// last loaded row.
@@ -64,26 +64,26 @@ impl Estado {
     /// the panel REREADS the history: anything could have happened in
     /// between — it is normal to do things with the panel closed — and one
     /// that shows what was there a while ago is worse than an empty one.
-    pub(super) fn sondear_lineas(
+    pub(super) fn sondear_lines(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let slots: Vec<u32> = self
-            .reparto
+            .split
             .placements
             .iter()
-            .filter(|(slot, _)| kind_de(&self.arbol, *slot).is_some_and(|k| k.as_str() == KIND))
+            .filter(|(slot, _)| kind_de(&self.tree, *slot).is_some_and(|k| k.as_str() == KIND))
             .map(|(SlotId(id), _)| *id)
             .collect();
-        if slots.is_empty() && self.lineas.is_empty() {
+        if slots.is_empty() && self.lines.is_empty() {
             return;
         }
         // A `SlotId` gets reused: without pruning, a new slot would inherit
         // another one's history.
-        self.lineas.retain(|id, _| slots.contains(id));
+        self.lines.retain(|id, _| slots.contains(id));
         for id in slots {
-            let state = self.lineas.entry(id).or_default();
+            let state = self.lines.entry(id).or_default();
             if state.in_flight.is_some() || state.reason.is_some() {
                 continue;
             }
@@ -106,15 +106,15 @@ impl Estado {
             };
             self.token += 1;
             let token = RequestToken(self.token);
-            if let Some(e) = self.lineas.get_mut(&id) {
+            if let Some(e) = self.lines.get_mut(&id) {
                 e.in_flight = Some((token, from));
             }
             let backend = Arc::clone(backend);
             let mailbox = mailbox.clone();
             tokio::spawn(async move {
                 let res = match tokio::time::timeout(
-                    PLAZO_PLUGINS,
-                    backend.journal_list(from, POR_PAGINA),
+                    DEADLINE_PLUGINS,
+                    backend.journal_list(from, PER_PAGE),
                 )
                 .await
                 {
@@ -122,7 +122,7 @@ impl Estado {
                     Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
                 };
                 let _ = mailbox
-                    .send(Mensaje::Fondo(Box::new(Fondo::PaginaDeLinea(
+                    .send(Message::Background(Box::new(Background::TimelinePage(
                         id, token, from, res,
                     ))))
                     .await;
@@ -132,7 +132,7 @@ impl Estado {
 
     /// Lands a page: it is used if the token is that of THAT slot's last
     /// request, and discarded otherwise.
-    pub(super) fn aterrizar_pagina(
+    pub(super) fn land_page(
         &mut self,
         slot: u32,
         token: RequestToken,
@@ -140,7 +140,7 @@ impl Estado {
         res: Result<norte_proto::methods::JournalListResult, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         let lang = self.lang;
-        let state = self.lineas.get_mut(&slot)?;
+        let state = self.lines.get_mut(&slot)?;
         if state.in_flight.map(|(t, _)| t) != Some(token) {
             return None;
         }
@@ -183,7 +183,7 @@ impl Estado {
             }
         }
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }
 
     /// Requests the first page again for the open timelines, keeping the
@@ -193,8 +193,8 @@ impl Estado {
     /// a side slot — whatever was just done, or undone, has to show up. The
     /// ceiling (`upto_seq`) already keeps an undo from going past what was
     /// counted; this is for what was counted to be what is current.
-    pub(super) fn recargar_lineas(&mut self) {
-        for state in self.lineas.values_mut() {
+    pub(super) fn reload_lines(&mut self) {
+        for state in self.lines.values_mut() {
             if !state.requested || state.in_flight.is_some() {
                 continue;
             }
@@ -207,50 +207,50 @@ impl Estado {
     }
 
     /// The timeline slot with focus, if one has it.
-    fn linea_enfocada(&self) -> Option<u32> {
+    fn line_enfocada(&self) -> Option<u32> {
         let SlotId(id) = self.roles.get(RoleId::Active)?;
-        kind_de(&self.arbol, SlotId(id))
+        kind_de(&self.tree, SlotId(id))
             .is_some_and(|k| k.as_str() == KIND)
             .then_some(id)
     }
 
     /// Whether the timeline has focus (and therefore `Enter` belongs to it).
-    pub(super) fn linea_tiene_el_foco(&self) -> bool {
-        self.linea_enfocada().is_some()
+    pub(super) fn the_line_has_focus(&self) -> bool {
+        self.line_enfocada().is_some()
     }
 
     /// Movement, with the timeline focused. Only the THREE movement effects
     /// are its own; everything else — the tab key that exits it, above all —
     /// goes its own way.
-    pub(super) fn efecto_en_linea(
+    pub(super) fn timeline_effect(
         &mut self,
-        efecto: Efecto,
+        effect: Effect,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
         if !matches!(
-            efecto,
-            Efecto::Cursor(_) | Efecto::Pagina(_) | Efecto::Extremo { .. }
+            effect,
+            Effect::Cursor(_) | Effect::Page(_) | Effect::Extremo { .. }
         ) {
             return None;
         }
-        let id = self.linea_enfocada()?;
-        let state = self.lineas.get_mut(&id)?;
+        let id = self.line_enfocada()?;
+        let state = self.lines.get_mut(&id)?;
         // Up to the last row that CROSSES the bridge: beyond that, the cursor
         // would point at a row the renderer does not have.
         let rows = state.model.len().min(crate::bridge::MAX_ROWS_PER_BATCH);
         // Moving is what authorizes requesting a failed page again.
         state.retry = true;
         if rows == 0 {
-            return Some((self.aplicada(), Vec::new()));
+            return Some((self.applied(), Vec::new()));
         }
         let total = i64::try_from(rows).unwrap_or(i64::MAX);
         let current = i64::try_from(state.model.cursor()).unwrap_or(0);
-        let target = match efecto {
-            Efecto::Cursor(n) => current.saturating_add(n.clamp(-total, total)),
+        let target = match effect {
+            Effect::Cursor(n) => current.saturating_add(n.clamp(-total, total)),
             // A page is ten rows, like the TUI's list when it does not know
             // how tall it is: jumping further than there is means nothing.
-            Efecto::Pagina(n) => current.saturating_add(n.clamp(-total, total).saturating_mul(10)),
-            Efecto::Extremo { al_final: false } => 0,
-            Efecto::Extremo { al_final: true } => total - 1,
+            Effect::Page(n) => current.saturating_add(n.clamp(-total, total).saturating_mul(10)),
+            Effect::Extremo { al_final: false } => 0,
+            Effect::Extremo { al_final: true } => total - 1,
             _ => return None,
         };
         state
@@ -258,8 +258,8 @@ impl Estado {
             .set_cursor(usize::try_from(target.max(0)).unwrap_or(0));
         let snap = self.snapshot();
         Some((
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         ))
     }
 
@@ -269,26 +269,24 @@ impl Estado {
     /// A cut that takes nothing back does NOT open a dialog: asking "are you
     /// sure?" about something that is not going to happen teaches saying yes
     /// without reading.
-    pub(super) fn preguntar_deshacer_hasta(
-        &mut self,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(id) = self.linea_enfocada() else {
-            return (self.aplicada(), Vec::new());
+    pub(super) fn ask_undo_until(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(id) = self.line_enfocada() else {
+            return (self.applied(), Vec::new());
         };
-        let Some(state) = self.lineas.get(&id) else {
-            return (self.aplicada(), Vec::new());
+        let Some(state) = self.lines.get(&id) else {
+            return (self.applied(), Vec::new());
         };
-        let (Some(seq), summary) = (state.model.corte(), state.model.resumen()) else {
-            return (self.aplicada(), Vec::new());
+        let (Some(seq), summary) = (state.model.cutoff(), state.model.summary()) else {
+            return (self.applied(), Vec::new());
         };
         // The ceiling freezes NOW, with the count that is about to be shown:
         // the undo does not go past what this question counted.
         let ceiling = state.model.techo();
-        if summary.no_hace_nada() {
-            return (self.aplicada(), self.decir("timeline-undo-nothing"));
+        if summary.no_does_nothing() {
+            return (self.applied(), self.say("timeline-undo-nothing"));
         }
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
         let line = |text: String| crate::dto::DialogLine {
             text: clamp_display(text),
@@ -302,14 +300,14 @@ impl Estado {
             line(norte_i18n::ta_in(
                 self.lang,
                 "timeline-undo-count",
-                &[("n", &summary.a_deshacer.to_string())],
+                &[("n", &summary.to_undo.to_string())],
             )),
         ];
-        if summary.irreversibles > 0 {
+        if summary.irreversible > 0 {
             body.push(line(norte_i18n::ta_in(
                 self.lang,
                 "timeline-undo-skipped",
-                &[("n", &summary.irreversibles.to_string())],
+                &[("n", &summary.irreversible.to_string())],
             )));
         }
         if summary.ajenas > 0 {
@@ -319,8 +317,8 @@ impl Estado {
                 &[("n", &summary.ajenas.to_string())],
             )));
         }
-        let modal = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let modal = ModalId(self.next_modal);
+        self.next_modal += 1;
         let view = DialogView {
             id: modal,
             title_key: "timeline-undo-title".to_owned(),
@@ -352,55 +350,55 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id: modal,
             vista: view,
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::DeshacerHasta {
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::UndoUntil {
                 seq,
                 techo: ceiling,
             }),
         });
         let change = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// The human read the count and said yes: it runs as an undo Task, with
     /// the usual progress and cancellation. What happened is told by its
-    /// report, which this window already shows (`informe_de_undo`).
-    pub(super) fn deshacer_hasta(
+    /// report, which this window already shows (`undo_report`).
+    pub(super) fn undo_until(
         &mut self,
         seq: i64,
         techo: Option<i64>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         // With no known scope, like a session's: what is on screen is
         // relisted.
-        let visible = self.dirs_visibles();
+        let visible = self.dirs_visible();
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
             match backend.undo_after(seq, techo).await {
                 Ok(task) => {
                     let _ = mailbox
-                        .send(Mensaje::TaskNueva(Box::new((task, visible, None))))
+                        .send(Message::TaskNew(Box::new((task, visible, None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = mailbox.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = mailbox.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
-        self.decir("msg-timeline-undo-running")
+        self.say("msg-timeline-undo-running")
     }
 
     /// A timeline's projection.
-    pub(super) fn vista_de_linea(&self, id: u32) -> crate::dto::TimelineSlotView {
-        let state = self.lineas.get(&id);
+    pub(super) fn timeline_view(&self, id: u32) -> crate::dto::TimelineSlotView {
+        let state = self.lines.get(&id);
         let rows: Vec<crate::dto::TimelineRowView> = state
             .map(|e| {
                 e.model
@@ -420,7 +418,7 @@ impl Estado {
                             tail.push(norte_i18n::t_in(self.lang, "timeline-irreversible"));
                         }
                         crate::dto::TimelineRowView {
-                            time: norte_frontend::format::hora_utc(f.ts_ms),
+                            time: norte_frontend::format::time_utc(f.ts_ms),
                             actor: clamp_display(f.actor_kind.clone()),
                             op: clamp_display(f.op.clone()),
                             path: clamp_display(norte_frontend::timeline::path_label(&f.path)),
@@ -434,14 +432,14 @@ impl Estado {
         let empty = match state {
             Some(e) if e.reason.is_some() => e.reason.clone().unwrap_or_default(),
             // "Nothing has been done yet" only when it HAS BEEN CHECKED.
-            Some(e) if e.model.cargada() => norte_i18n::t_in(self.lang, "timeline-empty"),
+            Some(e) if e.model.loaded() => norte_i18n::t_in(self.lang, "timeline-empty"),
             _ => norte_i18n::t_in(self.lang, "timeline-loading"),
         };
-        let read_only = self.efectos == crate::commands::Efectos::SoloLectura;
+        let read_only = self.effects == crate::commands::Effects::SoloRead;
         let footer = state
             .filter(|e| !e.model.is_empty())
             .map(|e| {
-                let summary = e.model.resumen();
+                let summary = e.model.summary();
                 // A page that did not arrive is said here: the rows that did
                 // arrive occupy the slot, so the reason has nowhere else to
                 // be seen.
@@ -451,13 +449,13 @@ impl Estado {
                     // A footer that promises to undo in a window that is not
                     // going to do it teaches you not to trust the footer.
                     norte_i18n::t_in(self.lang, "host-read-only")
-                } else if summary.no_hace_nada() {
+                } else if summary.no_does_nothing() {
                     norte_i18n::t_in(self.lang, "timeline-undo-nothing")
                 } else {
                     norte_i18n::ta_in(
                         self.lang,
                         "timeline-undo-count",
-                        &[("n", &summary.a_deshacer.to_string())],
+                        &[("n", &summary.to_undo.to_string())],
                     )
                 }
             })

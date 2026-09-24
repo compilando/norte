@@ -167,7 +167,7 @@ pub enum ConnectError {
     /// the minimum for `rsa-sha2-*`; OpenSSH has refused to generate them
     /// since 2017.
     #[error(
-        "key {} has a {bits}-bit RSA modulus and at least {minimo} are required: \
+        "key {} has a {bits}-bit RSA modulus and at least {min} are required: \
          ask the server administrator for a new key (`ssh-keygen -t ed25519`, or \
          `-t rsa -b 4096` if that server does not support anything else)",
         path.display()
@@ -178,7 +178,7 @@ pub enum ConnectError {
         /// The bits it has.
         bits: usize,
         /// The bits required.
-        minimo: usize,
+        min: usize,
     },
     /// RSA key allowed (`allow_rsa`), but the server only accepts `ssh-rsa`
     /// signatures with SHA-1. ADR 0150's opt-in opens up RSA, never SHA-1.
@@ -284,7 +284,7 @@ impl ConnectError {
                   —its sentence interpolates the USER, not third-party text— and \
                   that comment is what needs re-reading when adding a variant"
     )]
-    pub fn detalle_publico(&self) -> Option<String> {
+    pub fn detail_publico(&self) -> Option<String> {
         match self {
             Self::Secret { .. }
             | Self::SecretEmpty { .. }
@@ -399,7 +399,7 @@ mod tests {
     /// RESOLVED port): that is what makes the error→trust mapping in the
     /// frontend unambiguous (ADR 0015 D).
     #[test]
-    fn tofu_va_uno_a_uno_al_proto() {
+    fn tofu_maps_one_to_one_to_the_proto() {
         let e = ConnectError::HostKeyUnknown {
             host: "h".into(),
             port: 2222,
@@ -423,7 +423,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_degrada_a_permission_denied() {
+    fn auth_degrades_to_permission_denied() {
         let e = ConnectError::AuthFailed {
             user: "u".into(),
             host: "h".into(),
@@ -442,7 +442,7 @@ mod tests {
     /// undo that through the same notification, and its closed `reason`
     /// already says the same thing.
     #[test]
-    fn el_usuario_no_sale_en_el_detalle_de_un_rechazo() {
+    fn the_user_does_not_appear_in_a_rejections_detail() {
         let e = ConnectError::AuthFailed {
             user: "alice".into(),
             host: "servidor.example".into(),
@@ -452,7 +452,7 @@ mod tests {
             "the internal message is still useful in the log"
         );
         assert_eq!(
-            e.detalle_publico(),
+            e.detail_publico(),
             None,
             "but it does not cross the wire: {e}"
         );
@@ -470,32 +470,30 @@ mod tests {
     /// what to type, and interpolates nothing — it has no fields. What this
     /// test is after is interpolated data, not the `@` character itself.
     #[test]
-    fn ninguna_frase_publicable_interpola_userinfo() {
-        const USUARIO: &str = "CENTINELA-USUARIO";
+    fn no_publishable_phrase_interpolates_userinfo() {
+        const USER: &str = "CENTINELA-USUARIO";
         let publicables = [
-            ConnectError::Secret {
-                conn: USUARIO.into(),
-            },
+            ConnectError::Secret { conn: USER.into() },
             ConnectError::SecretEmpty {
-                conn: USUARIO.into(),
+                conn: USER.into(),
                 origin: SecretOrigin::Env,
             },
             ConnectError::SecretNotUtf8 {
-                conn: USUARIO.into(),
+                conn: USER.into(),
                 origin: SecretOrigin::Env,
             },
             ConnectError::SecretStore("the store did not open"),
             ConnectError::Agent("the agent is not responding"),
         ];
         for e in &publicables {
-            let d = e.detalle_publico().expect("this variant publishes");
+            let d = e.detail_publico().expect("this variant publishes");
             assert!(
-                !d.contains(&format!("{USUARIO}@")) && !d.contains(&format!("@{USUARIO}")),
+                !d.contains(&format!("{USER}@")) && !d.contains(&format!("@{USER}")),
                 "a publishable sentence interpolates something shaped like userinfo: {d}"
             );
         }
         assert_eq!(
-            ConnectError::MissingUser.detalle_publico().as_deref(),
+            ConnectError::MissingUser.detail_publico().as_deref(),
             Some(
                 "the connection does not specify a user (use user@host) and there is no $USER in the environment"
             ),

@@ -351,7 +351,7 @@ mod tests {
     fn a_sort_key_only_touches_the_panel_with_focus() {
         use norte_frontend::{SortColumn, SortDir};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let other = app.panes[1].sort();
         app.sort_focused_by(SortColumn::Size);
         assert_eq!(app.focused().sort().column, SortColumn::Size);
@@ -379,7 +379,7 @@ mod tests {
     fn a_sort_key_does_not_touch_dirs_first() {
         use norte_frontend::SortColumn;
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let mut spec = app.focused().sort();
         spec.dirs_first = false;
         app.focused_mut().set_sort(spec);

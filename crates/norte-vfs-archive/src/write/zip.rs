@@ -120,7 +120,7 @@ impl ZipWriter {
     /// gigabytes of disk nowhere.
     #[cfg(test)]
     #[must_use]
-    pub(super) fn desde(pos: u64, level: u32) -> Self {
+    pub(super) fn from(pos: u64, level: u32) -> Self {
         let mut w = Self::new(level);
         w.delivered = pos;
         w
@@ -142,11 +142,11 @@ impl ZipWriter {
     ///
     /// # Errors
     ///
-    /// [`PackError::Nombre`] if the name doesn't fit the format's 16 bits,
+    /// [`PackError::Name`] if the name doesn't fit the format's 16 bits,
     /// or if an entry is already open.
     pub fn begin(&mut self, entry: &PackEntry) -> Result<(), PackError> {
         if self.current.is_some() {
-            return Err(PackError::Estado);
+            return Err(PackError::State);
         }
         let mut name = entry.name.clone();
         if entry.dir && !name.ends_with(b"/") {
@@ -154,7 +154,7 @@ impl ZipWriter {
             name.push(b'/');
         }
         if u16::try_from(name.len()).is_err() {
-            return Err(PackError::Nombre);
+            return Err(PackError::Name);
         }
         // **Bit 11 only if the name IS UTF-8** (rule 1). Our reader keeps
         // the raw bytes and doesn't look at the bit, so the round trip is
@@ -242,10 +242,10 @@ impl ZipWriter {
     ///
     /// # Errors
     ///
-    /// [`PackError::Estado`] with no entry open, [`PackError::Io`] if the
+    /// [`PackError::State`] with no entry open, [`PackError::Io`] if the
     /// compressor fails.
     pub fn data(&mut self, chunk: &[u8]) -> Result<(), PackError> {
-        let current = self.current.as_mut().ok_or(PackError::Estado)?;
+        let current = self.current.as_mut().ok_or(PackError::State)?;
         current.crc.update(chunk);
         current.uncomp += chunk.len() as u64;
         match &mut current.body {
@@ -270,10 +270,10 @@ impl ZipWriter {
     ///
     /// # Errors
     ///
-    /// [`PackError::Estado`] with no entry open, [`PackError::Io`] if the
+    /// [`PackError::State`] with no entry open, [`PackError::Io`] if the
     /// compressor fails to finish.
     pub fn end(&mut self) -> Result<(), PackError> {
-        let mut current = self.current.take().ok_or(PackError::Estado)?;
+        let mut current = self.current.take().ok_or(PackError::State)?;
         if let Body::Deflate(enc) = &mut current.body {
             let tail = enc.try_finish().map(|()| std::mem::take(enc.get_mut()));
             let tail = tail.map_err(|_| PackError::Io)?;
@@ -321,10 +321,10 @@ impl ZipWriter {
     ///
     /// # Errors
     ///
-    /// [`PackError::Estado`] if an entry is still open.
+    /// [`PackError::State`] if an entry is still open.
     pub fn finish(&mut self) -> Result<(), PackError> {
         if self.current.is_some() {
-            return Err(PackError::Estado);
+            return Err(PackError::State);
         }
         let cd_offset = self.pos();
         let done = std::mem::take(&mut self.done);
@@ -519,7 +519,7 @@ mod tests {
     /// and all THREE fixed fields go to the sentinel.
     ///
     /// With only the offset marked, a conforming reader — ours among them
-    /// — reads the extra's first u64 (the UNcompressed size) as if it
+    /// — reads the extra's first u64 (the **un**compressed size) as if it
     /// were the offset, jumps there, doesn't find the local header's
     /// signature and returns `Corrupt`. A zip over 4 GiB with small
     /// members is about the most common thing there is, and nobody could
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn an_entry_beyond_4gib_marks_all_three_fields() {
         const HIGH: u64 = 0x1_0000_0000;
-        let mut w = ZipWriter::desde(HIGH, 0);
+        let mut w = ZipWriter::from(HIGH, 0);
         w.begin(&PackEntry::file(b"x".to_vec(), 4)).expect("opens");
         w.data(b"data").expect("data");
         w.end().expect("closes");

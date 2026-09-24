@@ -151,7 +151,7 @@ mod tests {
     /// result to a pane that closed is not recovering anything: it is
     /// acting on a ghost, and in the neighboring position.
     #[test]
-    fn lo_que_el_arbol_no_menciona_se_tira() {
+    fn what_the_tree_does_not_mention_is_dropped() {
         let mut m: BySlot<u32> = BySlot::new();
         m.insert(SlotId(1), 10);
         m.insert(SlotId(2), 20);
@@ -163,7 +163,7 @@ mod tests {
     /// A HIDDEN tab is still in the tree, so its in-flight work is not
     /// dropped: it is still theirs and still has somewhere to land.
     #[test]
-    fn una_pestana_oculta_conserva_lo_suyo() {
+    fn a_hidden_tab_keeps_its_own() {
         let mut m: BySlot<u32> = BySlot::new();
         m.insert(SlotId(2), 20);
         let tree = Node::Tabs {
@@ -175,7 +175,7 @@ mod tests {
     }
 
     #[test]
-    fn entry_crea_por_defecto_y_iter_va_en_orden() {
+    fn entry_creates_by_default_and_iter_goes_in_order() {
         let mut m: BySlot<u32> = BySlot::new();
         *m.entry(SlotId(3)) += 1;
         *m.entry(SlotId(1)) += 5;
@@ -188,7 +188,7 @@ mod tests {
     /// A `Split` changes nothing: what decides is which slots there are, not
     /// how they are laid out.
     #[test]
-    fn la_forma_del_arbol_no_decide_nada_aqui() {
+    fn the_trees_shape_decides_nothing_here() {
         let mut m: BySlot<u32> = BySlot::new();
         m.insert(SlotId(1), 1);
         m.insert(SlotId(2), 2);

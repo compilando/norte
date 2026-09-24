@@ -39,37 +39,37 @@ pub struct GotoSection {
 
 /// The path the reader just typed. Goes FIRST because it is what they just
 /// wrote: no list outranks that.
-pub const SECCION_RUTA: GotoSection = GotoSection {
+pub const SECTION_PATH: GotoSection = GotoSection {
     id: "path",
     title_key: "goto-section-path",
 };
 
 /// Where this panel has been.
-pub const SECCION_HISTORIA: GotoSection = GotoSection {
+pub const SECTION_HISTORY: GotoSection = GotoSection {
     id: "history",
     title_key: "goto-section-history",
 };
 
 /// Where it comes back to most.
-pub const SECCION_POPULARES: GotoSection = GotoSection {
+pub const SECTION_POPULAR: GotoSection = GotoSection {
     id: "popular",
     title_key: "goto-section-popular",
 };
 
 /// The places saved by hand.
-pub const SECCION_FAVORITOS: GotoSection = GotoSection {
+pub const SECTION_FAVORITES: GotoSection = GotoSection {
     id: "favorites",
     title_key: "goto-section-favorites",
 };
 
 /// The configured remote connections.
-pub const SECCION_CONEXIONES: GotoSection = GotoSection {
+pub const SECTION_CONNECTIONS: GotoSection = GotoSection {
     id: "connections",
     title_key: "goto-section-connections",
 };
 
 /// The catalogue's commands — the usual palette, here as one more section.
-pub const SECCION_COMANDOS: GotoSection = GotoSection {
+pub const SECTION_COMMANDS: GotoSection = GotoSection {
     id: "commands",
     title_key: "goto-section-commands",
 };
@@ -78,7 +78,7 @@ pub const SECCION_COMANDOS: GotoSection = GotoSection {
 /// core, not a list in memory) and that is why it goes last: a section
 /// that appears mid-typing must not push down what the reader was already
 /// looking at.
-pub const SECCION_INDICE: GotoSection = GotoSection {
+pub const SECTION_INDEX: GotoSection = GotoSection {
     id: "index",
     title_key: "goto-section-index",
 };
@@ -90,13 +90,13 @@ pub const SECCION_INDICE: GotoSection = GotoSection {
 /// do — and a list that reorders itself is a list where nothing can be
 /// learned about where anything is.
 pub const ORDEN: &[GotoSection] = &[
-    SECCION_RUTA,
-    SECCION_HISTORIA,
-    SECCION_POPULARES,
-    SECCION_FAVORITOS,
-    SECCION_CONEXIONES,
-    SECCION_COMANDOS,
-    SECCION_INDICE,
+    SECTION_PATH,
+    SECTION_HISTORY,
+    SECTION_POPULAR,
+    SECTION_FAVORITES,
+    SECTION_CONNECTIONS,
+    SECTION_COMMANDS,
+    SECTION_INDEX,
 ];
 
 /// A "go to" row.
@@ -131,7 +131,7 @@ pub struct GotoRow {
 /// `query` is passed in case the source knows how to filter BETTER than the
 /// generic subsequence (the semantic index asks the core with it, and the
 /// typed path IS the query). A source with nothing special to do can
-/// return everything: [`Goto::refrescar`] filters afterward, so filtering
+/// return everything: [`Goto::refresh`] filters afterward, so filtering
 /// is a single thing for all of them.
 pub trait GotoSource {
     /// The section its rows fall into.
@@ -159,7 +159,7 @@ pub trait GotoSource {
     /// where they can go, not what verbs exist. As soon as they type
     /// something they come back, and the whole catalogue still lives in
     /// the palette, which is its own screen.
-    fn solo_con_consulta(&self) -> bool {
+    fn only_with_query(&self) -> bool {
         false
     }
 }
@@ -170,7 +170,7 @@ pub trait GotoSource {
 /// has its own screen for skimming, which also lets entries be deleted.
 /// The cap lives here, in the model, and not in each source, because if it
 /// lived in each source the next one would forget to add it.
-pub const TOPE_POR_SECCION: usize = 12;
+pub const CAP_PER_SECTION: usize = 12;
 
 /// A source with the rows already made: a snapshot of a list the frontend
 /// already had in memory (history, favorites, commands…).
@@ -182,7 +182,7 @@ pub struct FixedSource {
     section: GotoSection,
     rows: Vec<GotoRow>,
     ya_filtrada: bool,
-    solo_con_consulta: bool,
+    only_with_query: bool,
 }
 
 impl FixedSource {
@@ -193,7 +193,7 @@ impl FixedSource {
             section,
             rows,
             ya_filtrada: false,
-            solo_con_consulta: false,
+            only_with_query: false,
         }
     }
 
@@ -205,16 +205,16 @@ impl FixedSource {
             section,
             rows,
             ya_filtrada: false,
-            solo_con_consulta: false,
+            only_with_query: false,
         }
         .con_ya_filtrada()
     }
 
     /// Declares that this source only contributes with something typed
-    /// (see [`GotoSource::solo_con_consulta`]).
+    /// (see [`GotoSource::only_with_query`]).
     #[must_use]
-    pub fn solo_con_consulta(mut self) -> Self {
-        self.solo_con_consulta = true;
+    pub fn only_with_query(mut self) -> Self {
+        self.only_with_query = true;
         self
     }
 
@@ -236,8 +236,8 @@ impl GotoSource for FixedSource {
     fn ya_filtrada(&self) -> bool {
         self.ya_filtrada
     }
-    fn solo_con_consulta(&self) -> bool {
-        self.solo_con_consulta
+    fn only_with_query(&self) -> bool {
+        self.only_with_query
     }
 }
 
@@ -246,13 +246,13 @@ impl GotoSource for FixedSource {
 ///
 /// It is the only source with no list behind it — its row IS what the
 /// reader just wrote — and that is why it lives here and not in a
-/// frontend: the decision of what counts as a path ([`parece_ruta`]) is a
+/// frontend: the decision of what counts as a path ([`looks_path`]) is a
 /// single one for both.
-pub struct RutaSource {
+pub struct PathSource {
     desc: String,
 }
 
-impl RutaSource {
+impl PathSource {
     /// The source, with the detail line that goes with the row (already
     /// translated by the caller: this module does not choose a language).
     #[must_use]
@@ -261,20 +261,20 @@ impl RutaSource {
     }
 }
 
-impl GotoSource for RutaSource {
+impl GotoSource for PathSource {
     fn section(&self) -> GotoSection {
-        SECCION_RUTA
+        SECTION_PATH
     }
     fn rows(&self, query: &str) -> Vec<GotoRow> {
-        parece_ruta(query).map_or_else(Vec::new, |ruta| {
+        looks_path(query).map_or_else(Vec::new, |path| {
             vec![GotoRow {
-                section: SECCION_RUTA.id,
-                key: format!("{K_RUTA}{ruta}"),
+                section: SECTION_PATH.id,
+                key: format!("{K_PATH}{path}"),
                 // What was typed is painted AS IS. It belongs to the
                 // reader themself, so there is nothing to mask; and
                 // changing it while they write is the worst way to tell
                 // them they made a mistake.
-                text: ruta.to_owned(),
+                text: path.to_owned(),
                 desc: self.desc.clone(),
                 hostile: false,
             }]
@@ -282,7 +282,7 @@ impl GotoSource for RutaSource {
     }
     /// The path row does not go through the filter: it IS the query, and
     /// asking what was typed whether it resembles itself cannot say
-    /// anything useful. It is already trimmed when built (`parece_ruta`
+    /// anything useful. It is already trimmed when built (`looks_path`
     /// does `trim`), and that trim alone would be enough for the generic
     /// filter to throw it out.
     fn ya_filtrada(&self) -> bool {
@@ -336,7 +336,7 @@ impl Goto {
             lines: Vec::new(),
             cursor: 0,
         };
-        goto.refrescar();
+        goto.refresh();
         goto
     }
 
@@ -345,7 +345,7 @@ impl Goto {
     /// The cursor stays on the FIRST row: the query changed, so what was
     /// under the cursor is probably gone, and leaving it where it was is
     /// how an Enter ends up going somewhere the reader never got to read.
-    pub fn refrescar(&mut self) {
+    pub fn refresh(&mut self) {
         let q = self.query.to_lowercase();
         self.rows.clear();
         self.lines.clear();
@@ -355,7 +355,7 @@ impl Goto {
                 if source.section().id != section.id {
                     continue;
                 }
-                if source.solo_con_consulta() && q.is_empty() {
+                if source.only_with_query() && q.is_empty() {
                     continue;
                 }
                 let raw = source.rows(&self.query);
@@ -371,14 +371,14 @@ impl Goto {
             if from_this.is_empty() {
                 continue;
             }
-            from_this.truncate(TOPE_POR_SECCION);
+            from_this.truncate(CAP_PER_SECTION);
             self.lines.push(GotoLine::Header(*section));
             for row in from_this {
                 self.lines.push(GotoLine::Row(self.rows.len()));
                 self.rows.push(row);
             }
         }
-        self.cursor = self.primera_fila().unwrap_or(0);
+        self.cursor = self.first_row().unwrap_or(0);
     }
 
     /// Replaces a section's rows with others, and repaints.
@@ -393,12 +393,7 @@ impl Goto {
     /// Letting a late answer move the cursor is how an Enter ends up
     /// somewhere the reader did not choose: they typed, read, went to
     /// confirm, and the index arrived in between.
-    pub fn reemplazar_seccion(
-        &mut self,
-        section: GotoSection,
-        rows: Vec<GotoRow>,
-        ya_filtrada: bool,
-    ) {
+    pub fn replace_section(&mut self, section: GotoSection, rows: Vec<GotoRow>, ya_filtrada: bool) {
         self.sources.retain(|s| s.section().id != section.id);
         self.sources.push(if ya_filtrada {
             Box::new(FixedSource::ya_filtrada(section, rows))
@@ -406,7 +401,7 @@ impl Goto {
             Box::new(FixedSource::new(section, rows))
         });
         let before = self.selected().cloned();
-        self.refrescar();
+        self.refresh();
         if let Some(before) = before
             && let Some(i) = self.lines.iter().position(|l| match l {
                 GotoLine::Row(i) => self.rows.get(*i) == Some(&before),
@@ -418,7 +413,7 @@ impl Goto {
     }
 
     /// The index of the first line that is a row, if there is one.
-    fn primera_fila(&self) -> Option<usize> {
+    fn first_row(&self) -> Option<usize> {
         self.lines
             .iter()
             .position(|l| matches!(l, GotoLine::Row(_)))
@@ -427,13 +422,13 @@ impl Goto {
     /// Types a character into the query.
     pub fn push_char(&mut self, c: char) {
         self.query.push(c);
-        self.refrescar();
+        self.refresh();
     }
 
     /// Deletes the query's last character.
     pub fn backspace(&mut self) {
         self.query.pop();
-        self.refrescar();
+        self.refresh();
     }
 
     /// The query as is.
@@ -521,7 +516,7 @@ impl Goto {
 /// whether that backend exists: here it is only decided whether to offer
 /// the row.
 #[must_use]
-pub fn parece_ruta(query: &str) -> Option<&str> {
+pub fn looks_path(query: &str) -> Option<&str> {
     let q = query.trim();
     if q.is_empty() {
         return None;
@@ -547,27 +542,27 @@ pub const K_IR: &str = "go:";
 /// Prefix of a row that leads to a catalogue command.
 pub const K_CMD: &str = "cmd:";
 /// Prefix of the TYPED PATH row, which still needs resolving. Set by
-/// [`RutaSource`].
-pub const K_RUTA: &str = "path:";
+/// [`PathSource`].
+pub const K_PATH: &str = "path:";
 
 /// How many rows are pulled from each long list BEFORE filtering.
 ///
-/// Not the visible cap — that is [`TOPE_POR_SECCION`], and the model
+/// Not the visible cap — that is [`CAP_PER_SECTION`], and the model
 /// applies it to every section alike — but how many entries from a list of
 /// hundreds are offered to the filter. Looser than the paint one on
 /// purpose: filtering over forty finds things filtering over twelve would
 /// not, and the model trims the leftovers afterward.
-pub const TRAIDAS_POR_LISTA: usize = 40;
+pub const BROUGHT_BY_LIST: usize = 40;
 
 /// From how many characters onward the index gets asked.
 ///
 /// With fewer, the answer cannot be good — one or two letters are not a
 /// semantic query — and every question is a call to a provider that costs
 /// time and can cost money.
-pub const MINIMO_PARA_EL_INDICE: usize = 3;
+pub const MINIMUM_FOR_THE_INDEX: usize = 3;
 
 /// How many results are requested from the index.
-pub const TOPE_DEL_INDICE: u32 = 8;
+pub const INDEX_CAP: u32 = 8;
 
 /// A row toward a known directory.
 ///
@@ -578,9 +573,9 @@ pub const TOPE_DEL_INDICE: u32 = 8;
 /// mojibake. It is the same rule `popular_rows` already wrote where it
 /// lives.
 #[must_use]
-pub fn fila_ruta(
+pub fn row_path(
     section: &'static str,
-    nombre: Option<&str>,
+    name: Option<&str>,
     path: &norte_proto::VPath,
     enc: Option<norte_encoding::NameEncoding>,
 ) -> GotoRow {
@@ -588,7 +583,7 @@ pub fn fila_ruta(
     // The name the reader gave it (a favorite, a connection) goes IN FRONT
     // and the path behind: it is searched for by the name one chose
     // oneself, and the path confirms it is the one believed to be.
-    let (text, desc, hostile) = match nombre {
+    let (text, desc, hostile) = match name {
         Some(n) => {
             let (nt, nh) = crate::display_name(n.as_bytes());
             (nt, texto, nh || hostil)
@@ -614,14 +609,14 @@ pub fn fila_ruta(
 /// that does not parse, on the other hand, is not offered: the places list
 /// already shows it with its error.
 #[must_use]
-pub fn fila_conexion(nombre: &str, url: &str) -> GotoRow {
+pub fn row_connection(name: &str, url: &str) -> GotoRow {
     let (texto, hostil) = norte_proto::VPath::parse(url).map_or_else(
         |_| (norte_encoding::mask_terminal_hazards(url), true),
         |p| crate::path_display_with(&p, None),
     );
-    let (nt, nh) = crate::display_name(nombre.as_bytes());
+    let (nt, nh) = crate::display_name(name.as_bytes());
     GotoRow {
-        section: SECCION_CONEXIONES.id,
+        section: SECTION_CONNECTIONS.id,
         key: format!("{K_IR}{url}"),
         text: nt,
         desc: texto,
@@ -633,10 +628,10 @@ pub fn fila_conexion(nombre: &str, url: &str) -> GotoRow {
 /// offers in that context, because two command lists computed separately
 /// diverge.
 #[must_use]
-pub fn filas_de_comandos(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
+pub fn command_rows(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
     rows.into_iter()
         .map(|r| GotoRow {
-            section: SECCION_COMANDOS.id,
+            section: SECTION_COMMANDS.id,
             key: format!("{K_CMD}{}", r.key),
             text: r.text,
             desc: r.desc,
@@ -652,22 +647,22 @@ pub fn filas_de_comandos(rows: Vec<crate::palette::Row>) -> Vec<GotoRow> {
 /// reinterpretation, like the popular ones: what the index returns can be
 /// anywhere, not in the focused panel.
 #[must_use]
-pub fn filas_del_indice(hits: &[norte_proto::methods::SemanticHit]) -> Vec<GotoRow> {
+pub fn index_rows(hits: &[norte_proto::methods::SemanticHit]) -> Vec<GotoRow> {
     hits.iter()
-        .map(|h| fila_ruta(SECCION_INDICE.id, None, &h.path, None))
+        .map(|h| row_path(SECTION_INDEX.id, None, &h.path, None))
         .collect()
 }
 
 /// What confirming a row means.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Accion {
+pub enum Action {
     /// Navigate the focused panel to this directory.
     Ir(norte_proto::VPath),
     /// Run this catalogue command, as if its key had been pressed.
-    Comando(String),
+    Command(String),
     /// The row leads nowhere resolvable — a typed path that does not
     /// parse, above all. Carries the message's key.
-    Nada(&'static str),
+    Nothing(&'static str),
 }
 
 /// What to do with the row the reader just confirmed.
@@ -678,24 +673,24 @@ pub enum Accion {
 /// is the only one that did not come out of a list that already existed.
 ///
 /// ```
-/// use norte_frontend::goto::{Accion, accion};
-/// assert_eq!(accion("cmd:app.quit"), Accion::Comando("app.quit".to_owned()));
-/// assert!(matches!(accion("go:file:///tmp"), Accion::Ir(_)));
-/// assert!(matches!(accion("otra cosa"), Accion::Nada(_)));
+/// use norte_frontend::goto::{Action, action};
+/// assert_eq!(action("cmd:app.quit"), Action::Command("app.quit".to_owned()));
+/// assert!(matches!(action("go:file:///tmp"), Action::Ir(_)));
+/// assert!(matches!(action("other cosa"), Action::Nothing(_)));
 /// ```
 #[must_use]
-pub fn accion(key: &str) -> Accion {
+pub fn action(key: &str) -> Action {
     if let Some(cmd) = key.strip_prefix(K_CMD) {
-        return Accion::Comando(cmd.to_owned());
+        return Action::Command(cmd.to_owned());
     }
     if let Some(wire) = key.strip_prefix(K_IR) {
         return norte_proto::VPath::parse(wire)
-            .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir);
+            .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir);
     }
-    if let Some(texto) = key.strip_prefix(K_RUTA) {
+    if let Some(texto) = key.strip_prefix(K_PATH) {
         return resolver_tecleada(texto);
     }
-    Accion::Nada("msg-goto-bad-path")
+    Action::Nothing("msg-goto-bad-path")
 }
 
 /// Resolves the path the reader typed.
@@ -706,10 +701,10 @@ pub fn accion(key: &str) -> Accion {
 /// as local, and one with a scheme is parsed as is — if the backend does
 /// not exist, the core says so, which beats navigating to something other
 /// than what was typed.
-fn resolver_tecleada(texto: &str) -> Accion {
+fn resolver_tecleada(texto: &str) -> Action {
     let expanded = if texto == "~" || texto.starts_with("~/") {
         let Some(home) = std::env::var_os("HOME") else {
-            return Accion::Nada("msg-goto-no-home");
+            return Action::Nothing("msg-goto-no-home");
         };
         let mut p = std::path::PathBuf::from(home);
         if let Some(rest) = texto.strip_prefix("~/") {
@@ -721,33 +716,33 @@ fn resolver_tecleada(texto: &str) -> Accion {
     } else {
         // With a scheme: the wire is already a wire.
         return norte_proto::VPath::parse(texto)
-            .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir);
+            .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir);
     };
     norte_vfs::native::vpath_from_native(&expanded)
-        .map_or(Accion::Nada("msg-goto-bad-path"), Accion::Ir)
+        .map_or(Action::Nothing("msg-goto-bad-path"), Action::Ir)
 }
 
 #[cfg(test)]
 mod despacho_tests {
-    use super::{Accion, K_CMD, K_IR, K_RUTA, accion};
+    use super::{Action, K_CMD, K_IR, K_PATH, action};
     use norte_proto::VPath;
 
     /// Each `key` prefix goes its own way, and none is confused with
     /// another: the `key` is never painted, so this is the only thing that
     /// decides where an Enter leads.
     #[test]
-    fn cada_prefijo_resuelve_a_lo_suyo() {
+    fn every_prefix_resolves_to_its_own() {
         assert_eq!(
-            accion(&format!("{K_CMD}app.quit")),
-            Accion::Comando("app.quit".to_owned())
+            action(&format!("{K_CMD}app.quit")),
+            Action::Command("app.quit".to_owned())
         );
         assert_eq!(
-            accion(&format!("{K_IR}file:///tmp")),
-            Accion::Ir(VPath::parse("file:///tmp").expect("wire"))
+            action(&format!("{K_IR}file:///tmp")),
+            Action::Ir(VPath::parse("file:///tmp").expect("wire"))
         );
         assert_eq!(
-            accion(&format!("{K_RUTA}/tmp")),
-            Accion::Ir(VPath::parse("file:///tmp").expect("wire"))
+            action(&format!("{K_PATH}/tmp")),
+            Action::Ir(VPath::parse("file:///tmp").expect("wire"))
         );
     }
 
@@ -755,23 +750,23 @@ mod despacho_tests {
     /// said, instead of navigating to anything else. An unknown scheme
     /// DOES parse: it is the core that says nobody can serve it.
     #[test]
-    fn una_ruta_tecleada_que_no_parsea_se_dice() {
+    fn a_typed_path_that_does_not_parse_is_reported() {
         assert!(
-            matches!(accion(&format!("{K_RUTA}sftp://h//x")), Accion::Nada(_)),
+            matches!(action(&format!("{K_PATH}sftp://h//x")), Action::Nothing(_)),
             "an empty segment is not a path"
         );
-        assert!(matches!(accion("otra cosa"), Accion::Nada(_)));
+        assert!(matches!(action("otra cosa"), Action::Nothing(_)));
         assert!(matches!(
-            accion(&format!("{K_RUTA}noexiste://h/x")),
-            Accion::Ir(_)
+            action(&format!("{K_PATH}noexiste://h/x")),
+            Action::Ir(_)
         ));
     }
 
     /// `~` expands against the process's HOME, not the panel: home is a
     /// single place.
     #[test]
-    fn la_casa_no_depende_del_panel() {
-        let Accion::Ir(p) = accion(&format!("{K_RUTA}~")) else {
+    fn home_does_not_depend_on_the_pane() {
+        let Action::Ir(p) = action(&format!("{K_PATH}~")) else {
             panic!("`~` has to resolve as long as there is a HOME");
         };
         let home = std::env::var("HOME").expect("HOME in the test environment");
@@ -786,8 +781,8 @@ mod despacho_tests {
 #[cfg(test)]
 mod tests {
     use super::{
-        Goto, GotoLine, GotoRow, GotoSection, GotoSource, SECCION_COMANDOS, SECCION_HISTORIA,
-        SECCION_INDICE, TOPE_POR_SECCION, parece_ruta,
+        CAP_PER_SECTION, Goto, GotoLine, GotoRow, GotoSection, GotoSource, SECTION_COMMANDS,
+        SECTION_HISTORY, SECTION_INDEX, looks_path,
     };
 
     /// A fake source with fixed rows.
@@ -795,7 +790,7 @@ mod tests {
         section: GotoSection,
         texts: Vec<&'static str>,
         ya_filtrada: bool,
-        solo_con_consulta: bool,
+        only_with_query: bool,
     }
 
     impl GotoSource for Fixed {
@@ -817,8 +812,8 @@ mod tests {
         fn ya_filtrada(&self) -> bool {
             self.ya_filtrada
         }
-        fn solo_con_consulta(&self) -> bool {
-            self.solo_con_consulta
+        fn only_with_query(&self) -> bool {
+            self.only_with_query
         }
     }
 
@@ -827,17 +822,17 @@ mod tests {
             section,
             texts: texts.to_vec(),
             ya_filtrada: false,
-            solo_con_consulta: false,
+            only_with_query: false,
         })
     }
 
     /// Sections come out in [`ORDEN`]'s order, not the order the sources
     /// were registered in: what is learned is where each thing is.
     #[test]
-    fn las_secciones_salen_en_el_orden_fijo() {
+    fn sections_come_out_in_fixed_order() {
         let goto = Goto::new(vec![
-            source(SECCION_COMANDOS, &["app.quit"]),
-            source(SECCION_HISTORIA, &["/etc"]),
+            source(SECTION_COMMANDS, &["app.quit"]),
+            source(SECTION_HISTORY, &["/etc"]),
         ]);
         let headers: Vec<&str> = goto
             .lines()
@@ -853,10 +848,10 @@ mod tests {
     /// A section with no rows paints no header: an empty header says
     /// there is something where there is nothing.
     #[test]
-    fn una_seccion_vacia_no_pinta_cabecera() {
+    fn an_empty_section_paints_no_header() {
         let mut goto = Goto::new(vec![
-            source(SECCION_COMANDOS, &["app.quit"]),
-            source(SECCION_HISTORIA, &["/etc"]),
+            source(SECTION_COMMANDS, &["app.quit"]),
+            source(SECTION_HISTORY, &["/etc"]),
         ]);
         for c in "quit".chars() {
             goto.push_char(c);
@@ -874,10 +869,10 @@ mod tests {
 
     /// The cursor never lands on a header, whether going down or up.
     #[test]
-    fn el_cursor_salta_las_cabeceras() {
+    fn the_cursor_skips_the_headers() {
         let mut goto = Goto::new(vec![
-            source(SECCION_HISTORIA, &["/etc", "/var"]),
-            source(SECCION_COMANDOS, &["app.quit"]),
+            source(SECTION_HISTORY, &["/etc", "/var"]),
+            source(SECTION_COMMANDS, &["app.quit"]),
         ]);
         let mut seen = Vec::new();
         for _ in 0..5 {
@@ -905,14 +900,14 @@ mod tests {
     /// through the subsequence again: its results match by meaning, and
     /// the query's letters may not be in the name.
     #[test]
-    fn una_fuente_ya_filtrada_no_se_vuelve_a_filtrar() {
+    fn an_already_filtered_source_is_not_filtered_again() {
         let index = Box::new(Fixed {
-            section: SECCION_INDICE,
+            section: SECTION_INDEX,
             texts: vec!["la factura del gas"],
             ya_filtrada: true,
-            solo_con_consulta: false,
+            only_with_query: false,
         });
-        let mut goto = Goto::new(vec![index, source(SECCION_HISTORIA, &["/etc"])]);
+        let mut goto = Goto::new(vec![index, source(SECTION_HISTORY, &["/etc"])]);
         for c in "recibo".chars() {
             goto.push_char(c);
         }
@@ -926,8 +921,8 @@ mod tests {
     /// Typing moves the cursor to the first row of what is NOW visible.
     /// Leaving it where it was is how an Enter goes somewhere nobody read.
     #[test]
-    fn escribir_devuelve_el_cursor_arriba() {
-        let mut goto = Goto::new(vec![source(SECCION_HISTORIA, &["/etc", "/var"])]);
+    fn typing_returns_the_cursor_up() {
+        let mut goto = Goto::new(vec![source(SECTION_HISTORY, &["/etc", "/var"])]);
         goto.down();
         assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("/var"));
         goto.push_char('e');
@@ -938,15 +933,15 @@ mod tests {
     /// under the reader's finger: they typed, read and went to confirm,
     /// and a new section arrived in between.
     #[test]
-    fn una_seccion_que_llega_tarde_no_mueve_el_cursor() {
-        let mut goto = Goto::new(vec![source(SECCION_HISTORIA, &["/etc", "/var"])]);
+    fn a_section_that_arrives_late_does_not_move_the_cursor() {
+        let mut goto = Goto::new(vec![source(SECTION_HISTORY, &["/etc", "/var"])]);
         goto.down();
         assert_eq!(goto.selected().map(|r| r.text.as_str()), Some("/var"));
 
-        goto.reemplazar_seccion(
-            SECCION_INDICE,
+        goto.replace_section(
+            SECTION_INDEX,
             vec![GotoRow {
-                section: SECCION_INDICE.id,
+                section: SECTION_INDEX.id,
                 key: "x".to_owned(),
                 text: "lo que encontró el índice".to_owned(),
                 desc: String::new(),
@@ -966,13 +961,13 @@ mod tests {
     /// And a new answer REPLACES the previous one: two answers to
     /// different queries together describe neither.
     #[test]
-    fn una_seccion_asincrona_se_sustituye_no_se_acumula() {
-        let mut goto = Goto::new(vec![source(SECCION_HISTORIA, &["/etc"])]);
+    fn an_async_section_replaces_it_does_not_accumulate() {
+        let mut goto = Goto::new(vec![source(SECTION_HISTORY, &["/etc"])]);
         for text in ["primera", "segunda"] {
-            goto.reemplazar_seccion(
-                SECCION_INDICE,
+            goto.replace_section(
+                SECTION_INDEX,
                 vec![GotoRow {
-                    section: SECCION_INDICE.id,
+                    section: SECTION_INDEX.id,
                     key: text.to_owned(),
                     text: text.to_owned(),
                     desc: String::new(),
@@ -984,7 +979,7 @@ mod tests {
         let from_index: Vec<&str> = goto
             .rows()
             .iter()
-            .filter(|r| r.section == SECCION_INDICE.id)
+            .filter(|r| r.section == SECTION_INDEX.id)
             .map(|r| r.text.as_str())
             .collect();
         assert_eq!(from_index, vec!["segunda"]);
@@ -995,14 +990,14 @@ mod tests {
     /// hundreds of verbs would bury the destination lists above them. With
     /// one letter, they come back.
     #[test]
-    fn los_comandos_no_salen_hasta_que_se_escribe() {
+    fn commands_do_not_show_until_typed() {
         let commands = Box::new(Fixed {
-            section: SECCION_COMANDOS,
+            section: SECTION_COMMANDS,
             texts: vec!["app.quit"],
             ya_filtrada: false,
-            solo_con_consulta: true,
+            only_with_query: true,
         });
-        let mut goto = Goto::new(vec![commands, source(SECCION_HISTORIA, &["/etc"])]);
+        let mut goto = Goto::new(vec![commands, source(SECTION_HISTORY, &["/etc"])]);
         assert_eq!(goto.len(), 1, "only history");
 
         goto.push_char('q');
@@ -1014,32 +1009,28 @@ mod tests {
         );
     }
 
-    /// No section goes past [`TOPE_POR_SECCION`] rows: a longer list is
+    /// No section goes past [`CAP_PER_SECTION`] rows: a longer list is
     /// not read, and its own screens exist for skimming it whole.
     #[test]
-    fn ninguna_seccion_pasa_del_tope() {
-        let many: Vec<&'static str> = vec!["/x"; TOPE_POR_SECCION * 3];
-        let goto = Goto::new(vec![source(SECCION_HISTORIA, &many)]);
-        assert_eq!(goto.len(), TOPE_POR_SECCION);
+    fn no_section_exceeds_the_cap() {
+        let many: Vec<&'static str> = vec!["/x"; CAP_PER_SECTION * 3];
+        let goto = Goto::new(vec![source(SECTION_HISTORY, &many)]);
+        assert_eq!(goto.len(), CAP_PER_SECTION);
     }
 
     /// The three shapes that ARE a path, and the ones that are not.
     #[test]
-    fn que_cuenta_como_ruta_tecleada() {
-        assert_eq!(parece_ruta("/etc"), Some("/etc"));
-        assert_eq!(parece_ruta("~"), Some("~"));
-        assert_eq!(parece_ruta("~/notas"), Some("~/notas"));
-        assert_eq!(parece_ruta("sftp://host/tmp"), Some("sftp://host/tmp"));
-        assert_eq!(parece_ruta("  /etc  "), Some("/etc"), "gets trimmed");
+    fn what_counts_as_a_typed_path() {
+        assert_eq!(looks_path("/etc"), Some("/etc"));
+        assert_eq!(looks_path("~"), Some("~"));
+        assert_eq!(looks_path("~/notas"), Some("~/notas"));
+        assert_eq!(looks_path("sftp://host/tmp"), Some("sftp://host/tmp"));
+        assert_eq!(looks_path("  /etc  "), Some("/etc"), "gets trimmed");
 
-        assert_eq!(parece_ruta(""), None);
-        assert_eq!(parece_ruta("etc"), None, "relative: not known from where");
-        assert_eq!(parece_ruta("~notas"), None, "nobody's home");
-        assert_eq!(parece_ruta("://x"), None, "no scheme, no backend");
-        assert_eq!(
-            parece_ruta("sftp://"),
-            None,
-            "no destination, nowhere to go"
-        );
+        assert_eq!(looks_path(""), None);
+        assert_eq!(looks_path("etc"), None, "relative: not known from where");
+        assert_eq!(looks_path("~notas"), None, "nobody's home");
+        assert_eq!(looks_path("://x"), None, "no scheme, no backend");
+        assert_eq!(looks_path("sftp://"), None, "no destination, nowhere to go");
     }
 }

@@ -277,22 +277,22 @@ async fn connected_agent(d: &TestDaemon, session: &str) -> Client {
 // grouped by the method family each test exercises. The helpers are
 // `pub(super)` and travel between files via `use x::*`.
 
-mod busqueda;
 mod compare_sync;
 mod fs_ops;
 mod index_ai;
-mod listado;
+mod listing;
 mod plugins;
 mod policy;
 mod rename;
-mod sesion;
+mod search;
+mod session;
 mod tasks;
 
 use compare_sync::*;
 use fs_ops::*;
-use listado::*;
+use listing::*;
 use plugins::*;
 use policy::*;
 use rename::*;
-use sesion::*;
+use session::*;
 use tasks::*;

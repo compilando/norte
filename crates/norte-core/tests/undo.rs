@@ -149,7 +149,7 @@ async fn creating_over_something_that_exists_fails_without_touching_it() {
         .expect("still there");
     assert_eq!(
         e.size,
-        Some(21),
+        Some(20),
         "and with its bytes intact: the failure emptied nothing"
     );
 }

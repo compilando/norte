@@ -312,6 +312,10 @@ async fn a_failure_of_the_inner_provider_is_not_disguised_as_corrupt() {
 /// must get `Corrupt` after the partial bytes, never a silently short
 /// file (parity with zip #95.4 and targz FIX-1).
 #[tokio::test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario end to end; one line over since the English names made rustfmt wrap"
+)]
 async fn a_short_tar_passthrough_is_corrupt_not_short_data() {
     use bytes::Bytes;
     use norte_proto::{ByteRange as BR, Capabilities, Entry as PEntry};

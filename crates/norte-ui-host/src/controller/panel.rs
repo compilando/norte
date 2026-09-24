@@ -1,70 +1,70 @@
 //! The panel: cursor, marks, focus, sort order and columns.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// Moves the slot's cursor, clamping at the ends.
     pub(super) fn mover_cursor(
         &mut self,
         slot_id: u32,
         delta: i64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if slot_id != self.activo() {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        if slot_id != self.active() {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
-        if self.hueco().pane.entries().is_empty() {
-            return (self.aplicada(), Vec::new());
+        if self.slot().pane.entries().is_empty() {
+            return (self.applied(), Vec::new());
         }
-        let current = i128::try_from(self.hueco().pane.cursor()).unwrap_or(0);
-        let last = i128::try_from(self.hueco().pane.entries().len() - 1).unwrap_or(0);
+        let current = i128::try_from(self.slot().pane.cursor()).unwrap_or(0);
+        let last = i128::try_from(self.slot().pane.entries().len() - 1).unwrap_or(0);
         let target = (current + i128::from(delta)).clamp(0, last);
         let i = usize::try_from(target).unwrap_or(0);
-        self.hueco_mut().pane.set_cursor(i);
-        (self.aplicada(), vec![self.parche_cursor()])
+        self.slot_mut().pane.set_cursor(i);
+        (self.applied(), vec![self.parche_cursor()])
     }
 
     /// Puts the cursor on a specific row (a click).
-    pub(super) fn poner_cursor(
+    pub(super) fn set_cursor(
         &mut self,
         slot_id: u32,
         key: RowKey,
         generation: u64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(i) = self.fila_de(slot_id, key, generation) else {
+        let Some(i) = self.row_of(slot_id, key, generation) else {
             // A row that no longer exists: the listing changed under the
             // click. Neither interpreted nor an error.
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        self.hueco_mut().pane.set_cursor(i);
-        (self.aplicada(), vec![self.parche_filas()])
+        self.slot_mut().pane.set_cursor(i);
+        (self.applied(), vec![self.parche_rows()])
     }
 
     /// Marks or unmarks a row.
-    pub(super) fn marcar(
+    pub(super) fn mark(
         &mut self,
         slot_id: u32,
         key: RowKey,
         generation: u64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(i) = self.fila_de(slot_id, key, generation) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        let Some(i) = self.row_of(slot_id, key, generation) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         let marked = self
-            .hueco()
+            .slot()
             .pane
             .entries()
             .get(i)
-            .is_some_and(|e| self.hueco().pane.is_marked(e));
-        self.hueco_mut().pane.set_mark(i, !marked);
-        (self.aplicada(), vec![self.parche_filas()])
+            .is_some_and(|e| self.slot().pane.is_marked(e));
+        self.slot_mut().pane.set_mark(i, !marked);
+        (self.applied(), vec![self.parche_rows()])
     }
 
     /// The row an action names, if the slot is the active one and the key
@@ -75,18 +75,18 @@ impl Estado {
     /// different file. A filler batch that lands between painting and the
     /// click reorders the listing and bumps the epoch; without this
     /// comparison, the click marks whatever fell on that row.
-    pub(super) fn fila_de(&self, slot_id: u32, key: RowKey, generation: u64) -> Option<usize> {
-        if slot_id != self.activo() || self.hueco().pane.listing_epoch() != generation {
+    pub(super) fn row_of(&self, slot_id: u32, key: RowKey, generation: u64) -> Option<usize> {
+        if slot_id != self.active() || self.slot().pane.listing_epoch() != generation {
             return None;
         }
-        self.fila_valida(key)
+        self.row_valid(key)
     }
 
     /// This frontend does not mutate yet, and it SAYS so.
     ///
     /// A mute key is worse than a "not here": a user who presses F8 and sees
     /// nothing does not know whether they deleted something.
-    pub(super) fn no_muta() -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn no_mutates() -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         (
             ActionAck::Unavailable {
                 reason_key: "host-read-only".to_owned(),
@@ -97,15 +97,15 @@ impl Estado {
 
     /// Moves focus to the next focusable slot, or to the previous one.
     ///
-    /// With `solo_listados`, the side panels are skipped: it is `pane.switch`,
+    /// With `solo_listings`, the side panels are skipped: it is `pane.switch`,
     /// the orthodox `Tab`, and what it answers is "the other panel". Without
     /// it, it is `layout.focus-next`, the whole screen's walk.
-    pub(super) fn mover_foco(
+    pub(super) fn mover_focus(
         &mut self,
-        atras: bool,
-        solo_listados: bool,
+        back: bool,
+        solo_listings: bool,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // The walk is the SHARED one: `focus_order` already skips what is not
         // visible and what does not take focus (a status bar does not
@@ -118,8 +118,8 @@ impl Estado {
         // with the keyboard inside it would stop following anything — so
         // stopping there is a stop no key gets you out of. It is skipped,
         // and it comes back around anyway because the walk cycles.
-        let current = SlotId(self.enfocado());
-        let next = self.siguiente_del_anillo(current, atras, solo_listados);
+        let current = SlotId(self.focused());
+        let next = self.next_in_ring(current, back, solo_listings);
         let Some(SlotId(id)) = next else {
             // A single slot: there is nowhere to go, and saying so is more
             // honest than pretending something happened.
@@ -139,18 +139,18 @@ impl Estado {
         // previous panel's branch.
         //
         // Only if the tree REALLY moved. Landing on the places bar does not
-        // move it — `seguir_ramas` only follows a listing — and sending the
+        // move it — `follow_branches` only follows a listing — and sending the
         // whole screen for that is paying for a snapshot for a layout patch.
-        let active = self.activo();
-        if self.seguir_ramas(active, backend, mailbox) {
+        let active = self.active();
+        if self.follow_branches(active, backend, mailbox) {
             let snap = self.snapshot();
             return (
-                self.aplicada(),
-                vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+                self.applied(),
+                vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
             );
         }
-        let change = ViewChange::Layout(self.disposicion());
-        (self.aplicada(), vec![self.parche(vec![change])])
+        let change = ViewChange::Layout(self.layout());
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Drags the border between `slot` and the slot next to it to `cells`.
@@ -165,66 +165,66 @@ impl Estado {
     /// when one starts where the other ends. With no neighbor there is no
     /// border, and then this is not a drag but a race with an earlier
     /// layout.
-    pub(super) fn arrastrar_borde(
+    pub(super) fn drag_edge(
         &mut self,
         slot: u32,
         cells: u16,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some((_, ra)) = self
-            .reparto
+            .split
             .placements
             .iter()
             .find(|(SlotId(id), _)| *id == slot)
             .copied()
         else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         // The neighbor: the one that starts exactly where this one ends, on
         // one of the two axes.
-        let right = self.reparto.placements.iter().find(|(_, r)| {
+        let right = self.split.placements.iter().find(|(_, r)| {
             r.x == ra.x + ra.width && r.y < ra.y + ra.height && ra.y < r.y + r.height
         });
-        let below = self.reparto.placements.iter().find(|(_, r)| {
+        let below = self.split.placements.iter().find(|(_, r)| {
             r.y == ra.y + ra.height && r.x < ra.x + ra.width && ra.x < r.x + r.width
         });
         let (neighbor, axis) = match (right, below) {
             (Some((b, _)), _) => (*b, norte_frontend::layout::Dir::Horizontal),
             (None, Some((b, _))) => (*b, norte_frontend::layout::Dir::Vertical),
-            (None, None) => return (Self::obsoleta(StaleAction::Generation), Vec::new()),
+            (None, None) => return (Self::stale(StaleAction::Generation), Vec::new()),
         };
         // The real pair is the layout's, where both are neighbors, and it is
         // measured WHOLE: the border between the second listing and the
         // details separates the body from the details, not that listing from
         // them.
-        let Some((left_slot, right_slot)) = self.arbol.border_pair(SlotId(slot), neighbor) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        let Some((left_slot, right_slot)) = self.tree.border_pair(SlotId(slot), neighbor) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         let Some((start, length)) =
-            norte_frontend::layout::border_span(&self.reparto, &left_slot, &right_slot, axis)
+            norte_frontend::layout::border_span(&self.split, &left_slot, &right_slot, axis)
         else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         if length == 0 {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let frac = f32::from(cells.saturating_sub(start)) / f32::from(length);
         let tree = self
-            .arbol
+            .tree
             .drag_border_between(SlotId(slot), neighbor, frac, length);
-        if tree == self.arbol {
+        if tree == self.tree {
             // The border did not move: neither snapshot nor patch. A drag
             // fires one event per pixel, and repainting the whole screen for
             // each would be paying for a snapshot for a hand tremor.
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         }
-        self.aplicar_disposicion(tree, backend, mailbox)
+        self.apply_layout(tree, backend, mailbox)
     }
 
     /// The shared walk's next slot that qualifies as a stop.
     ///
-    /// With `solo_listados`, only `browser`s; without it, any that TAKES
+    /// With `solo_listings`, only `browser`s; without it, any that TAKES
     /// KEYS. What is focusable is not what takes keys: the attribute sheet is
     /// the first and not the second — it follows the listing's cursor, and
     /// with the keyboard inside it would stop following anything — so
@@ -233,24 +233,24 @@ impl Estado {
     /// Goes around at most once: if none qualifies — a screen that only has
     /// an attribute sheet, which the layout allows — it returns `None`
     /// instead of spinning forever.
-    pub(super) fn siguiente_del_anillo(
+    pub(super) fn next_in_ring(
         &self,
-        desde: SlotId,
-        atras: bool,
-        solo_listados: bool,
+        from: SlotId,
+        back: bool,
+        solo_listings: bool,
     ) -> Option<SlotId> {
-        let mut current = desde;
-        for _ in 0..self.reparto.focus_order.len() {
-            let next = if atras {
-                norte_frontend::layout::focus_prev(&self.reparto, current)?
+        let mut current = from;
+        for _ in 0..self.split.focus_order.len() {
+            let next = if back {
+                norte_frontend::layout::focus_prev(&self.split, current)?
             } else {
-                norte_frontend::layout::focus_next(&self.reparto, current)?
+                norte_frontend::layout::focus_next(&self.split, current)?
             };
-            if next == desde {
+            if next == from {
                 return None; // went all the way around without finding one
             }
-            let qualifies = kind_de(&self.arbol, next).is_some_and(|k| {
-                if solo_listados {
+            let qualifies = kind_de(&self.tree, next).is_some_and(|k| {
+                if solo_listings {
                     k == norte_frontend::layout::KindId::browser()
                 } else {
                     self.kinds.get(&k).is_some_and(|d| d.takes_keys)
@@ -265,13 +265,13 @@ impl Estado {
     }
 
     /// Designates ANOTHER visible slot as the target of the next operation.
-    pub(super) fn designar_destino(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn designar_dest(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // The next one that is NOT the focused one: designating yourself as
         // the target is asking a copy to copy onto itself. Same rule as the
         // TUI's.
-        let active = self.activo();
+        let active = self.active();
         let candidates: Vec<u32> = self
-            .huecos
+            .slots
             .keys()
             .copied()
             .filter(|id| *id != active && !self.oculto(*id))
@@ -290,8 +290,8 @@ impl Estado {
             );
         };
         self.roles.set(RoleId::Target, SlotId(id));
-        let change = ViewChange::Layout(self.disposicion());
-        (self.aplicada(), vec![self.parche(vec![change])])
+        let change = ViewChange::Layout(self.layout());
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Sorts a listing by a column, with the shared rule.
@@ -299,26 +299,26 @@ impl Estado {
     /// The id travels as text because that is how its header travelled;
     /// what it means — and whether it reverses or starts over — is resolved
     /// by `norte-frontend`, not a table here (ADR 0066, decision D14).
-    pub(super) fn ordenar_por(
+    pub(super) fn sort_by(
         &mut self,
         slot_id: u32,
         column: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         use norte_frontend::columns::{ColumnId, sort_column_id};
-        if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        if !self.slots.contains_key(&slot_id) || self.oculto(slot_id) {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         // The ones for this slot's SCHEME, not only the painted ones: the fit
         // (ADR 0124) may have dropped one, and sorting by it still makes
         // sense — it is the same thing the sort menu offers.
         let configured = self
-            .huecos
+            .slots
             .get(&slot_id)
-            .map(|h| self.columnas_de(h.pane.dir()))
+            .map(|h| self.columns_of(h.pane.dir()))
             .unwrap_or_default();
         let col = configured
             .iter()
-            .find(|c| identidad_de_columna(c) == *column)
+            .find(|c| column_identity(c) == *column)
             .and_then(sort_column_id)
             .or_else(|| {
                 // An id that is not configured but IS a known column can
@@ -341,7 +341,7 @@ impl Estado {
                 Vec::new(),
             );
         };
-        self.ordenar_por_columna(slot_id, col)
+        self.sort_by_column(slot_id, col)
     }
 
     /// Sorts a listing by an already resolved column.
@@ -351,13 +351,13 @@ impl Estado {
     /// the active column reverses and a new one starts ascending, because
     /// what decides that is `SortSpec::after_click` and not a table per
     /// surface.
-    pub(super) fn ordenar_por_columna(
+    pub(super) fn sort_by_column(
         &mut self,
         slot_id: u32,
         col: norte_frontend::SortColumn,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(h) = self.huecos.get_mut(&slot_id) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        let Some(h) = self.slots.get_mut(&slot_id) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         let spec = h.pane.sort().after_click(col);
         h.pane.set_sort(spec);
@@ -365,17 +365,14 @@ impl Estado {
         // whole window travels — AND the header's sort mark. Without the
         // second, the listing repainted in the new order and the `▲` kept
         // describing the previous one.
-        let rows_change = self.parche_filas_de(slot_id);
-        let headers = self
-            .huecos
-            .get(&slot_id)
-            .map(|h| self.cabeceras(slot_id, h));
+        let rows_change = self.patch_rows_of(slot_id);
+        let headers = self.slots.get(&slot_id).map(|h| self.headers(slot_id, h));
         let mut outgoing = vec![rows_change];
         if let Some(columns) = headers {
             let change = ViewChange::Columns { slot_id, columns };
             outgoing.push(self.parche(vec![change]));
         }
-        (self.aplicada(), outgoing)
+        (self.applied(), outgoing)
     }
 
     /// The columns configured for a slot's scheme.
@@ -383,8 +380,8 @@ impl Estado {
     /// By SCHEME and not once on startup: `[ui.columns.schemes.sftp]` is real
     /// configuration, and resolving it on startup left it dead the moment the
     /// panel navigated somewhere else.
-    pub(super) fn columnas_de(&self, dir: &VPath) -> Vec<norte_frontend::columns::ColumnId> {
-        self.columnas
+    pub(super) fn columns_of(&self, dir: &VPath) -> Vec<norte_frontend::columns::ColumnId> {
+        self.columns
             .layout_items_for(dir.scheme())
             .into_iter()
             .map(|(id, _)| id)
@@ -397,7 +394,7 @@ impl Estado {
     /// asked for, and an `attr:` column that is not requested stays blank
     /// forever.
     pub(super) fn attrs_de(&self, dir: &VPath) -> Vec<String> {
-        self.columnas.attr_ids_for(dir.scheme())
+        self.columns.attr_ids_for(dir.scheme())
     }
 
     /// The listing's headers, with the label already translated and the sort
@@ -406,11 +403,11 @@ impl Estado {
     /// `header_label` and `sort_column_id` are the SAME functions the TUI
     /// uses: what a column is called and whether it sorts cannot depend on
     /// who paints it.
-    // TODO(translation): review — this paragraph describes `cabeceras`
+    // TODO(translation): review — this paragraph describes `headers`
     /// (right after it), but the item before it is a leftover one-line doc
     /// ("A single listing's projection") that seems to belong to `browser`,
     /// further down; it looks like a stale fragment left by an earlier edit.
-    /// The columns painted in `hueco`, fitted so their names can be read: the
+    /// The columns painted in `slot`, fitted so their names can be read: the
     /// SAME rule as the terminal's (`norte_frontend::columns::fitted_columns`),
     /// over the width in cells the layout gives the slot.
     ///
@@ -419,19 +416,19 @@ impl Estado {
     /// and, if there are any, the icons. A slot the layout does not place
     /// paints all its columns: there is no width to decide with, and dropping
     /// one without knowing is dropping for the sake of dropping.
-    pub(super) fn ajuste_de(
+    pub(super) fn setting_of(
         &self,
         slot: u32,
-        hueco: &Hueco,
+        hueco: &Slot,
     ) -> Vec<norte_frontend::columns::Fitted> {
         use norte_frontend::columns::fitted_columns;
         let scheme = hueco.pane.dir().scheme();
         // This pane's catalogue: decides whether the permissions column the
         // listing sets is painted (spec 2026-09-20). The SAME one that feeds
         // the headers, so width and header do not disagree.
-        let catalog = self.catalogo_de(hueco.pane.dir());
+        let catalog = self.catalog_of(hueco.pane.dir());
         let width = self
-            .reparto
+            .split
             .placements
             .iter()
             .find(|(s, _)| s.0 == slot)
@@ -441,27 +438,27 @@ impl Estado {
                 let lead: u16 = 2 + if hueco.pane.any_icon() { 3 } else { 0 };
                 let wants = hueco.pane.name_width_p80().saturating_add(lead);
                 fitted_columns(
-                    &self.columnas,
+                    &self.columns,
                     scheme,
                     width.saturating_sub(4),
                     wants,
                     catalog,
                 )
             }
-            None => fitted_columns(&self.columnas, scheme, u16::MAX / 2, 0, catalog),
+            None => fitted_columns(&self.columns, scheme, u16::MAX / 2, 0, catalog),
         }
     }
 
-    pub(super) fn cabeceras(&self, slot: u32, hueco: &Hueco) -> Vec<ColumnHeader> {
+    pub(super) fn headers(&self, slot: u32, hueco: &Slot) -> Vec<ColumnHeader> {
         use norte_frontend::columns::{header_label_in, sort_column_id};
         let spec = hueco.pane.sort();
-        let catalog = self.catalogo_de(hueco.pane.dir());
+        let catalog = self.catalog_of(hueco.pane.dir());
         let scheme = hueco.pane.dir().scheme().to_owned();
         // Each column's width policy, ONCE per header: only the fixed one
         // travels (bridge 64); `auto` and `flex` paint at whatever they
         // measure, which is what this window used to do with all of them.
-        let policies = self.columnas.layout_items_for(&scheme);
-        self.ajuste_de(slot, hueco)
+        let policies = self.columns.layout_items_for(&scheme);
+        self.setting_of(slot, hueco)
             .iter()
             .map(|f| {
                 let id = &f.id;
@@ -488,7 +485,7 @@ impl Estado {
                 // `apply_plugin_headers`: without it the header showed the id
                 // (`ORG.NORTE.SIZE-BAR/BAR` instead of "Size").
                 let style = self
-                    .columnas
+                    .columns
                     .style_for_id(&scheme, id, catalog)
                     .compacted(f.compact);
                 let sortable_id = sort_column_id(id);
@@ -507,7 +504,7 @@ impl Estado {
                         .to_owned()
                     });
                 ColumnHeader {
-                    id: identidad_de_columna(id),
+                    id: column_identity(id),
                     // With THIS host's language, not the process's: the two
                     // do not have to match, and half a screen in each
                     // language is worse than no translation at all.
@@ -533,49 +530,49 @@ impl Estado {
     /// `[ui.columns] spec.width` outside the actor; and since it belongs to
     /// the column and not the slot, EVERY slot's header comes back, which is
     /// what the terminal will also see on its next load.
-    pub(super) fn redimensionar_columna(
+    pub(super) fn resize_column(
         &mut self,
         slot_id: u32,
         column: &str,
         cells: u16,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        if !self.slots.contains_key(&slot_id) || self.oculto(slot_id) {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         // Against the FIT, not against what is configured (ADR 0124): a drag
         // arriving after the column was dropped would fix its width, and a
         // fixed width takes it off the ladder forever — the name would go
         // back to being cut off by an old event.
         let painted = self
-            .huecos
+            .slots
             .get(&slot_id)
-            .map(|h| self.ajuste_de(slot_id, h))
+            .map(|h| self.setting_of(slot_id, h))
             .unwrap_or_default()
             .iter()
-            .any(|f| identidad_de_columna(&f.id) == column);
+            .any(|f| column_identity(&f.id) == column);
         if !painted {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
-        let cells = self.columnas.apply_width(column, cells);
-        self.persistir_ancho(column, cells, mailbox);
+        let cells = self.columns.apply_width(column, cells);
+        self.persistir_width(column, cells, mailbox);
         let changes: Vec<ViewChange> = self
-            .huecos
+            .slots
             .iter()
             .map(|(id, h)| ViewChange::Columns {
                 slot_id: *id,
-                columns: self.cabeceras(*id, h),
+                columns: self.headers(*id, h),
             })
             .collect();
-        (self.aplicada(), vec![self.parche(changes)])
+        (self.applied(), vec![self.parche(changes)])
     }
 
-    /// Writes the width outside the actor, like the theme (`persistir_tema`):
+    /// Writes the width outside the actor, like the theme (`persistir_theme`):
     /// `persist_column_width` takes a cross-process lock and doing it here
     /// would freeze the window. Only the failure comes back through the
     /// mailbox.
-    fn persistir_ancho(&mut self, column: &str, cells: u16, mailbox: &mpsc::Sender<Mensaje>) {
-        let Some(dir) = self.dir_de_escritura() else {
+    fn persistir_width(&mut self, column: &str, cells: u16, mailbox: &mpsc::Sender<Message>) {
+        let Some(dir) = self.write_dir() else {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "host-no-config-dir",
@@ -587,9 +584,9 @@ impl Estado {
         tokio::task::spawn_blocking(move || {
             let key = match norte_config::persist_column_width(&dir, &column, cells) {
                 Ok(_) => None,
-                Err(e) => Some(clave_de_io(&e)),
+                Err(e) => Some(io_key(&e)),
             };
-            let _ = mailbox.blocking_send(Mensaje::AnchoPersistido(key));
+            let _ = mailbox.blocking_send(Message::WidthPersistido(key));
         });
     }
 
@@ -597,9 +594,9 @@ impl Estado {
     /// A listing's HEADER fields, derived ONCE.
     ///
     /// Read by the snapshot ([`Self::browser`]) and the patch
-    /// ([`Self::cabecera_de`]). Two derivations of the same fact is where half
+    /// ([`Self::header_of`]). Two derivations of the same fact is where half
     /// a parity audit came from, so there is a single one here.
-    pub(super) fn cabecera_de(&self, id: u32, hueco: &Hueco) -> crate::dto::ViewChange {
+    pub(super) fn header_of(&self, id: u32, hueco: &Slot) -> crate::dto::ViewChange {
         // With the SAME reinterpretation as the rows: painting the header
         // with the raw bytes while the rows go transcoded leaves
         // `pane.names-encoding` half-done — the mojibake stays up top and the
@@ -647,11 +644,8 @@ impl Estado {
                 self.lang,
             )),
             footer: clamp_display(self.pie_con(hueco, &marks)),
-            path_segments: Self::migas_de(hueco),
-            used_ratio: norte_frontend::space::used_ratio_for(
-                hueco.pane.dir(),
-                &self.volumenes_pie,
-            ),
+            path_segments: Self::crumbs_of(hueco),
+            used_ratio: norte_frontend::space::used_ratio_for(hueco.pane.dir(), &self.volumes_pie),
             marks: hueco.pane.marks_len() as u64,
             mark_ruler: marks.ruler,
         }
@@ -662,7 +656,7 @@ impl Estado {
     /// treated as such. The root carries the scheme and, if there is one, the
     /// authority, in the same shape as `path_display` (`⟨file⟩`,
     /// `⟨sftp⟩host`).
-    fn migas_de(hueco: &Hueco) -> Vec<String> {
+    fn crumbs_of(hueco: &Slot) -> Vec<String> {
         let dir = hueco.pane.dir();
         let root = match dir.authority() {
             Some(a) => format!("⟨{}⟩{}", dir.scheme(), a),
@@ -678,7 +672,7 @@ impl Estado {
 
     /// A listing's footer (spec 2026-09-10), drafted by the shared crate;
     /// empty with `[ui] pane_footer` off.
-    pub(super) fn pie_de(&self, hueco: &Hueco) -> String {
+    pub(super) fn pie_de(&self, hueco: &Slot) -> String {
         if !self.config.common.ui_chrome.pane_footer() {
             return String::new();
         }
@@ -688,7 +682,7 @@ impl Estado {
     /// The footer with the marks already summarized: the header requests it
     /// together with its own summary and does not need to walk the listing
     /// again.
-    fn pie_con(&self, hueco: &Hueco, marks: &norte_frontend::MarksSummary) -> String {
+    fn pie_con(&self, hueco: &Slot, marks: &norte_frontend::MarksSummary) -> String {
         if !self.config.common.ui_chrome.pane_footer() {
             return String::new();
         }
@@ -699,31 +693,33 @@ impl Estado {
             bytes: marks.bytes,
             dirs: marks.dirs,
         };
-        let free = norte_frontend::space::free_for(hueco.pane.dir(), &self.volumenes_pie);
+        let free = norte_frontend::space::free_for(hueco.pane.dir(), &self.volumes_pie);
         norte_frontend::footer::pane_footer(counts, marked, free, self.lang)
     }
 
     /// Requests the volumes for the footer, if the footer is on and there is
     /// no request already in flight. Called on a listing landing: that is
     /// when the panel may have changed volume.
-    pub(super) fn pedir_volumenes_de_pie(
+    pub(super) fn request_footer_volumes(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        if !self.config.common.ui_chrome.pane_footer() || self.pie_en_vuelo {
+        if !self.config.common.ui_chrome.pane_footer() || self.footer_in_flight {
             return;
         }
-        self.pie_en_vuelo = true;
+        self.footer_in_flight = true;
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.volumes()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.volumes()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = mailbox
-                .send(Mensaje::Fondo(Box::new(Fondo::VolumenesDePie(res))))
+                .send(Message::Background(Box::new(Background::FooterVolumes(
+                    res,
+                ))))
                 .await;
         });
     }
@@ -732,29 +728,29 @@ impl Estado {
     /// footer changes with them, its header travels again. A failure leaves
     /// the cache as it was: the footer stays quiet about the space rather
     /// than making it up.
-    pub(super) fn aplicar_volumenes_de_pie(
+    pub(super) fn apply_footer_volumes(
         &mut self,
         res: Result<Vec<norte_proto::methods::Volume>, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        self.pie_en_vuelo = false;
+        self.footer_in_flight = false;
         let vols = res.ok()?;
         let before: Vec<(u32, String)> = self
-            .huecos
+            .slots
             .iter()
             .map(|(id, h)| (*id, self.pie_de(h)))
             .collect();
-        self.volumenes_pie = vols;
+        self.volumes_pie = vols;
         let changes: Vec<ViewChange> = before
             .into_iter()
             .filter_map(|(id, old)| {
-                let h = self.huecos.get(&id)?;
-                (self.pie_de(h) != old).then(|| self.cabecera_de(id, h))
+                let h = self.slots.get(&id)?;
+                (self.pie_de(h) != old).then(|| self.header_of(id, h))
             })
             .collect();
         (!changes.is_empty()).then(|| self.parche(changes))
     }
 
-    pub(super) fn browser(&self, id: u32, hueco: &Hueco) -> BrowserSlotView {
+    pub(super) fn browser(&self, id: u32, hueco: &Slot) -> BrowserSlotView {
         // NO `..`: the snapshot has to carry the same as the patch, and a
         // wildcard here is exactly how a new header field is left out of the
         // first paint with nothing complaining about it.
@@ -773,19 +769,19 @@ impl Estado {
             used_ratio,
             marks,
             mark_ruler,
-        } = self.cabecera_de(id, hueco)
+        } = self.header_of(id, hueco)
         else {
             unreachable!("`cabecera_de` builds that variant")
         };
         BrowserSlotView {
             slot_id: id,
             generation: hueco.pane.listing_epoch(),
-            progress: self.progreso_de_hueco(hueco),
+            progress: self.slot_progress(hueco),
             path_display,
             path_hostile,
             total_rows: Some(hueco.pane.entries().len() as u64),
-            first_visible: hueco.primera_visible,
-            rows: self.filas_de(id, hueco),
+            first_visible: hueco.first_visible,
+            rows: self.rows_of(id, hueco),
             icon_column: hueco.pane.any_icon(),
             cursor: (!hueco.pane.entries().is_empty())
                 .then_some(RowKey(hueco.pane.cursor() as u64)),
@@ -800,8 +796,8 @@ impl Estado {
             footer,
             path_segments,
             used_ratio,
-            columns: self.cabeceras(id, hueco),
-            state: hueco.estado.clone(),
+            columns: self.headers(id, hueco),
+            state: hueco.state.clone(),
             quick: hueco.pane.quick().map(|q| crate::dto::QuickView {
                 query: clamp_display(q.query_display()),
                 mode: match q.mode() {

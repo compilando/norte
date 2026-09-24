@@ -189,7 +189,7 @@ async fn connect_err(
 /// Full TOFU cycle: first contact → `HostKeyUnknown` with a fingerprint,
 /// explicit trust → real connection and sftp handshake.
 #[tokio::test]
-async fn tofu_desconocida_trust_y_conexion() {
+async fn unknown_tofu_trust_and_connect() {
     let host_key = key();
     let fp_real = fingerprint(host_key.public_key());
     let port = spawn_server(host_key, None).await;
@@ -224,7 +224,7 @@ async fn tofu_desconocida_trust_y_conexion() {
 /// Trust re-verifies the fingerprint against the host's REAL key
 /// (anti-TOCTOU): a fingerprint that does not match registers nothing.
 #[tokio::test]
-async fn trust_con_fingerprint_incorrecto_no_registra() {
+async fn trust_with_wrong_fingerprint_does_not_register() {
     let host_key = key();
     let port = spawn_server(host_key, None).await;
     let dir = tempfile::tempdir().unwrap();
@@ -308,7 +308,7 @@ async fn password_incorrecta_es_auth_failed() {
 /// arrives as a `Secret` (resolved by the `SecretResolver` in the real
 /// flow).
 #[tokio::test]
-async fn auth_por_clave_ed25519_cifrada() {
+async fn auth_by_encrypted_ed25519_key() {
     let host_key = key();
     let fp = fingerprint(host_key.public_key());
     let client_key = key();
@@ -344,7 +344,7 @@ async fn auth_por_clave_ed25519_cifrada() {
 /// An RSA key is rejected BEFORE touching the network, with an error that
 /// recommends ed25519 (ADR 0015 E, closes #36 / RUSTSEC-2023-0071).
 #[tokio::test]
-async fn clave_rsa_rechazada_sin_red() {
+async fn rsa_key_rejected_without_network() {
     let dir = tempfile::tempdir().unwrap();
     let key_path = dir.path().join("id_rsa");
     std::fs::write(&key_path, RSA_FIXTURE).unwrap();
@@ -391,7 +391,7 @@ fn spec_rsa(dir: &Path, port: u16, allow_rsa: bool) -> ConnectionSpec {
 /// default authenticates, signing with rsa-sha2 negotiated via
 /// `server-sig-algs`.
 #[tokio::test]
-async fn clave_rsa_con_allow_rsa_autentica() {
+async fn rsa_key_with_allow_rsa_authenticates() {
     let host_key = key();
     let fp = fingerprint(host_key.public_key());
     let rsa = PrivateKey::from_openssh(RSA_FIXTURE).expect("RSA fixture");
@@ -425,7 +425,7 @@ const RSA_1024_FIXTURE: &str = include_str!("fixtures/id_rsa_1024_test");
 /// and whoever signed off on the opt-in was carrying it without anyone
 /// telling them.
 #[tokio::test]
-async fn una_clave_rsa_de_1024_se_rechaza_aunque_allow_rsa_este_puesto() {
+async fn a_1024_bit_rsa_key_is_rejected_even_with_allow_rsa_set() {
     let host_key = key();
     let fp = fingerprint(host_key.public_key());
     let rsa = PrivateKey::from_openssh(RSA_1024_FIXTURE).expect("1024-bit RSA fixture");
@@ -447,9 +447,9 @@ async fn una_clave_rsa_de_1024_se_rechaza_aunque_allow_rsa_este_puesto() {
 
     let err = connect_err(&conn, &spec, None).await;
     match err {
-        ConnectError::RsaTooSmall { bits, minimo, .. } => {
+        ConnectError::RsaTooSmall { bits, min, .. } => {
             assert_eq!(bits, 1024, "says how many it has");
-            assert_eq!(minimo, 2048, "and how many are needed");
+            assert_eq!(min, 2048, "and how many are needed");
         }
         other => panic!("should have said the modulus is short, was {other:?}"),
     }
@@ -458,7 +458,7 @@ async fn una_clave_rsa_de_1024_se_rechaza_aunque_allow_rsa_este_puesto() {
 /// A server that only accepts `ssh-rsa` (SHA-1 signature) is rejected with
 /// its own error: the opt-in opens up RSA, NEVER SHA-1.
 #[tokio::test]
-async fn clave_rsa_contra_servidor_solo_sha1_es_error() {
+async fn rsa_key_against_sha1_only_server_is_an_error() {
     let host_key = key();
     let fp = fingerprint(host_key.public_key());
     let rsa = PrivateKey::from_openssh(RSA_FIXTURE).expect("RSA fixture");
@@ -480,7 +480,7 @@ async fn clave_rsa_contra_servidor_solo_sha1_es_error() {
 
 /// Auth via SSH agent (in-process, same protocol as a real ssh-agent).
 #[tokio::test]
-async fn auth_por_agente() {
+async fn auth_by_agent() {
     let host_key = key();
     let fp = fingerprint(host_key.public_key());
     let client_key = key();
@@ -525,9 +525,9 @@ async fn auth_por_agente() {
 /// file with two conflicting keys and the check stuck in a perpetual
 /// Mismatch despite a trust that reported success.)
 #[tokio::test]
-async fn trust_sobre_clave_registrada_distinta_es_error() {
+async fn trust_over_a_different_registered_key_is_an_error() {
     let host_key = key();
-    let fp_nueva = fingerprint(host_key.public_key());
+    let fp_new = fingerprint(host_key.public_key());
     let port = spawn_server(host_key, None).await;
     let dir = tempfile::tempdir().unwrap();
     let old = key().public_key().to_openssh().unwrap();
@@ -536,7 +536,7 @@ async fn trust_sobre_clave_registrada_distinta_es_error() {
     let conn = connector(dir.path());
 
     let err = conn
-        .trust_host_key("127.0.0.1", port, &fp_nueva)
+        .trust_host_key("127.0.0.1", port, &fp_new)
         .await
         .unwrap_err();
     assert!(
@@ -550,7 +550,7 @@ async fn trust_sobre_clave_registrada_distinta_es_error() {
 
 /// With no agent available, `auth = "agent"` is a clear error, not a hang.
 #[tokio::test]
-async fn agente_ausente_es_error_claro() {
+async fn missing_agent_is_a_clear_error() {
     let dir = tempfile::tempdir().unwrap();
     let conn = connector(dir.path()); // agent_socket: None
     let spec = ConnectionSpec {

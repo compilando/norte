@@ -25,7 +25,7 @@ fn app() -> App {
 
 /// The IN-SESSION half of `apply_picked_columns` (main.rs): in-memory
 /// settings (list+sort and cycled formats, #108 7b) + re-sort of both panes.
-fn aplicar(app: &mut App, picked: &norte_frontend::columns_picker::Picked) {
+fn apply(app: &mut App, picked: &norte_frontend::columns_picker::Picked) {
     app.columns.apply_picked(
         picked.scheme_target.as_deref(),
         &picked.ids,
@@ -85,7 +85,7 @@ fn builtins(app: &App) -> Vec<Builtin> {
 /// mtime asc and the hermetic dir's `norte.toml` carries `[ui.columns]`
 /// with `column = "mtime"`.
 #[test]
-fn picker_ordena_y_persiste() {
+fn picker_sorts_and_persists() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut app = app();
     app.open_columns_picker(&[]);
@@ -99,7 +99,7 @@ fn picker_ordena_y_persiste() {
     }
     let picked = app.columns_picker.as_ref().expect("picker open").finish();
     app.columns_picker = None; // confirm closes the overlay
-    aplicar(&mut app, &picked);
+    apply(&mut app, &picked);
     let sort = app.focused().sort();
     assert_eq!(
         sort.column,
@@ -116,7 +116,7 @@ fn picker_ordena_y_persiste() {
 /// Open → turn off size → confirm: the scheme's `layout_items_for` no
 /// longer carries `Size` and the file persists `default` with no `"size"`.
 #[test]
-fn picker_toggle_persiste_la_lista() {
+fn picker_toggle_persists_the_list() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut app = app();
     app.open_columns_picker(&[]);
@@ -133,7 +133,7 @@ fn picker_toggle_persiste_la_lista() {
         "only the enabled ones travel (kind was already off)"
     );
     assert_eq!(picked.scheme_target, None, "no override → default");
-    aplicar(&mut app, &picked);
+    apply(&mut app, &picked);
     assert_eq!(
         builtins(&app),
         vec![Builtin::Name, Builtin::Mtime],
@@ -150,7 +150,7 @@ fn picker_toggle_persiste_la_lista() {
 /// (`style_for` sees it instantly) and persists a `[[ui.columns.spec]]`
 /// with `id = "size"`, `format = "si"` that the real `load` rereads.
 #[test]
-fn picker_cicla_formato_y_persiste_spec() {
+fn picker_cycles_format_and_persists_the_spec() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut app = app();
     app.open_columns_picker(&[]);
@@ -163,7 +163,7 @@ fn picker_cicla_formato_y_persiste_spec() {
     let picked = app.columns_picker.as_ref().expect("picker open").finish();
     app.columns_picker = None;
     assert_eq!(picked.formats, vec![("size".to_owned(), "si".to_owned())]);
-    aplicar(&mut app, &picked);
+    apply(&mut app, &picked);
     assert_eq!(
         app.columns.style_for("file", Builtin::Size).size_format,
         norte_frontend::columns::SizeFormat::Si,
@@ -192,11 +192,11 @@ fn picker_cicla_formato_y_persiste_spec() {
 /// Esc discards: neither the session settings nor disk change —
 /// `dialog.cancel` in `on_columns_key` drops the overlay with NO `finish`.
 #[test]
-fn picker_cancel_no_toca_nada() {
+fn picker_cancel_touches_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");
     let mut app = app();
     let before = builtins(&app);
-    let sort_antes = app.focused().sort();
+    let sort_before = app.focused().sort();
     app.open_columns_picker(&[]);
     {
         let p = app.columns_picker.as_mut().expect("picker open");
@@ -208,7 +208,7 @@ fn picker_cancel_no_toca_nada() {
     assert_eq!(builtins(&app), before, "cancel does not touch the layout");
     assert_eq!(
         app.focused().sort(),
-        sort_antes,
+        sort_before,
         "cancel does not touch the sort"
     );
     assert!(

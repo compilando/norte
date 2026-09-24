@@ -20,44 +20,44 @@ pub enum Modo {
     /// Pixels via the terminal's protocol.
     Kitty,
     /// Half blocks, placed by an approved previewer.
-    Bloques,
+    Blocks,
     /// Nothing: the viewer keeps the bytes.
-    Nada,
+    Nothing,
 }
 
 /// Resolves `[ui] images` against what the probe answered.
 ///
-/// `Bloques` is NOT a branch that does anything: it is "do nothing
+/// `Blocks` is NOT a branch that does anything: it is "do nothing
 /// special", and the image previewer — if approved and enabled — already
-/// paints. That is why `Bloques` and `Nada` look so alike here and are told
+/// paints. That is why `Blocks` and `Nothing` look so alike here and are told
 /// apart in the help: with `off` the reader asked for hexview; with
 /// `blocks` they asked for half blocks and what is missing is approving the
 /// plugin.
 #[must_use]
-pub fn modo_efectivo(cfg: norte_config::Images, soporta: bool) -> Modo {
+pub fn modo_effective(cfg: norte_config::Images, supports: bool) -> Modo {
     match cfg {
-        norte_config::Images::Off => Modo::Nada,
+        norte_config::Images::Off => Modo::Nothing,
         norte_config::Images::Kitty => Modo::Kitty,
-        norte_config::Images::Auto if soporta => Modo::Kitty,
+        norte_config::Images::Auto if supports => Modo::Kitty,
         // `Blocks` and `Auto`'s fallback with no support are the SAME
         // branch (clippy `match_same_arms`): both want "do not paint
         // pixels, let the previewer do it" — the distinction lives in the
         // help, not in the code.
-        norte_config::Images::Blocks | norte_config::Images::Auto => Modo::Bloques,
+        norte_config::Images::Blocks | norte_config::Images::Auto => Modo::Blocks,
     }
 }
 
 /// The viewer bar's notice when the slot has nobody to paint the image.
 ///
 /// The real pilot found this hole: with no approved previewer, a PNG in
-/// `Modo::Bloques` falls back to hexview exactly like a file nobody knows
+/// `Modo::Blocks` falls back to hexview exactly like a file nobody knows
 /// how to interpret, and nothing on screen tells the two cases apart. A
 /// silent hexview is indistinguishable from "norte does not know how".
 ///
-/// `no_hace_falta_avisar` is `true` when this slot does NOT need the
+/// `no_need_to_warn` is `true` when this slot does NOT need the
 /// notice. The caller decides WHAT that means depending on `modo` —
-/// passing [`no_hace_falta_avisar_de_imagen`] in [`Modo::Bloques`] or
-/// [`no_hace_falta_avisar_de_miniatura`] in [`Modo::Kitty`] — instead of
+/// passing [`no_need_to_warn_about_image`] in [`Modo::Blocks`] or
+/// [`no_need_to_warn_about_thumbnail`] in [`Modo::Kitty`] — instead of
 /// repeating the expression inline at the call site (fix round 1, phase 5:
 /// a `hay_previewer` computed there, under that name, invited
 /// "simplifying" it to `viewer.preview_plugin().is_some()`, which loses
@@ -67,38 +67,34 @@ pub fn modo_efectivo(cfg: norte_config::Images, soporta: bool) -> Modo {
 /// that in [`Modo::Kitty`] "the terminal already paints pixels on its
 /// own… there is nothing to approve." That is FALSE — the bytes Kitty
 /// places come from a `thumbnail` plugin (`plugins/image-thumb`), just as
-/// optional and approvable as [`Modo::Bloques`]'s `previewer`; with none
+/// optional and approvable as [`Modo::Blocks`]'s `previewer`; with none
 /// approved the reader is left on hexview just as silently as in the other
 /// branch, which is exactly the hole this function exists to close. Both
 /// modes now warn, with DIFFERENT texts: they ask to approve different
 /// EXTENSIONS, and sending the reader to approve the wrong one is worse
-/// than not warning. In [`Modo::Nada`] the reader asked for hexview
+/// than not warning. In [`Modo::Nothing`] the reader asked for hexview
 /// themselves (`images = "off"`): there is nothing to approve there and no
 /// warning is given.
 #[must_use]
-pub fn aviso_de_imagen(
-    modo: Modo,
-    no_hace_falta_avisar: bool,
-    formato_ajeno: bool,
-) -> Option<String> {
-    if no_hace_falta_avisar {
+pub fn image_notice(modo: Modo, no_need_to_warn: bool, format_foreign: bool) -> Option<String> {
+    if no_need_to_warn {
         return None;
     }
     match modo {
-        Modo::Bloques => Some(t("viewer-image-needs-previewer")),
+        Modo::Blocks => Some(t("viewer-image-needs-previewer")),
         // The two reasons there are no pixels in Kitty ask for DIFFERENT
         // things from the reader, and only one is fixed from F12. Sending
         // them to approve what is already approved is worse than saying
         // nothing: the reader goes, finds everything in order, and is left
         // with no clue.
-        Modo::Kitty if formato_ajeno => Some(t("viewer-image-thumbnail-format")),
+        Modo::Kitty if format_foreign => Some(t("viewer-image-thumbnail-format")),
         Modo::Kitty => Some(t("viewer-image-needs-thumbnail")),
-        Modo::Nada => None,
+        Modo::Nothing => None,
     }
 }
 
-/// Whether `viewer` does NOT need [`aviso_de_imagen`]'s notice in
-/// [`Modo::Bloques`] — the second parameter that call site passes it when
+/// Whether `viewer` does NOT need [`image_notice`]'s notice in
+/// [`Modo::Blocks`] — the second parameter that call site passes it when
 /// the mode is that one.
 ///
 /// It is `!viewer.is_image()`, and [`Viewer::is_image`] already ANDs the
@@ -114,26 +110,26 @@ pub fn aviso_de_imagen(
 /// replaced the view — but the sibling trap exists: do not "fix" it to
 /// `viewer.preview_plugin().is_some()` thinking it more honest. That loses
 /// the non-image half and would warn about a missing IMAGE previewer for
-/// any file that is not an image in `Modo::Bloques` — exactly the
+/// any file that is not an image in `Modo::Blocks` — exactly the
 /// regression centralizing this computation here, under this name, exists
 /// to prevent.
 ///
-/// See [`no_hace_falta_avisar_de_miniatura`] for [`Modo::Kitty`]'s
+/// See [`no_need_to_warn_about_thumbnail`] for [`Modo::Kitty`]'s
 /// counterpart, which asks for a `thumbnail` plugin, not a `previewer`.
 #[must_use]
-pub fn no_hace_falta_avisar_de_imagen(viewer: &Viewer) -> bool {
+pub fn no_need_to_warn_about_image(viewer: &Viewer) -> bool {
     !viewer.is_image()
 }
 
-/// Whether `viewer` does NOT need [`aviso_de_imagen`]'s notice in
-/// [`Modo::Kitty`] — [`no_hace_falta_avisar_de_imagen`]'s counterpart for
+/// Whether `viewer` does NOT need [`image_notice`]'s notice in
+/// [`Modo::Kitty`] — [`no_need_to_warn_about_image`]'s counterpart for
 /// the `thumbnail` plugin instead of the `previewer`.
 ///
 /// `true` when EITHER of two different things already makes the notice
 /// unneeded: `!viewer.is_image()` — the file is not an image, or it IS but
 /// a plugin previewer already replaced the raw view and half blocks are
 /// already being painted ("if the image is already being seen… there is
-/// nothing to warn about", same as in [`Modo::Bloques`]) — OR `imagen`
+/// nothing to warn about", same as in [`Modo::Blocks`]) — OR `imagen`
 /// carries a thumbnail already PLACED for THIS file. Comparing `imagen`'s
 /// `path` against `viewer`'s matters: the reader may still be looking at
 /// one file's hexview while ANOTHER's (the one they were looking at
@@ -141,7 +137,7 @@ pub fn no_hace_falta_avisar_de_imagen(viewer: &Viewer) -> bool {
 /// the run loop to erase it — that old thumbnail says nothing about
 /// whether THIS file has its own.
 #[must_use]
-pub fn no_hace_falta_avisar_de_miniatura(viewer: &Viewer, imagen: Option<&ImagenColocada>) -> bool {
+pub fn no_need_to_warn_about_thumbnail(viewer: &Viewer, imagen: Option<&ImagenPlaced>) -> bool {
     !viewer.is_image() || imagen.is_some_and(|imagen| imagen.path == viewer.path)
 }
 
@@ -151,13 +147,13 @@ pub fn no_hace_falta_avisar_de_miniatura(viewer: &Viewer, imagen: Option<&Imagen
 /// and both frontends share it, and the window already has its own path to
 /// thumbnails — putting a TUI field there would dirty a shared surface.
 #[derive(Debug, Clone)]
-pub struct ImagenColocada {
+pub struct ImagenPlaced {
     /// The file this thumbnail belongs to — to know whether it is still
     /// the one the viewer shows once the reader has already moved to
     /// another one.
     pub path: VPath,
     /// The encoded bytes the plugin returned — ALWAYS `"image/png"` (see
-    /// [`imagen_desde_miniatura`]): it is the only format kitty knows how
+    /// [`imagen_from_thumbnail`]): it is the only format kitty knows how
     /// to place with `f=100`, so nothing that gets here is anything else.
     pub bytes: Vec<u8>,
     /// The mimetype the plugin said — stored so the invariant above
@@ -176,21 +172,21 @@ pub struct ImagenColocada {
     /// with zoom, two frames can occupy the same cells and show different
     /// pieces of the image, and comparing only the rect would leave the
     /// screen looking still while the reader moves around inside it.
-    pub puesta_en: Option<Colocacion>,
+    pub placed_in: Option<Placement>,
 }
 
 /// Where the image goes and which part of it is seen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Colocacion {
+pub struct Placement {
     /// The cells it occupies.
     pub rect: ratatui::layout::Rect,
     /// The piece of the raster that is shown, in pixels. `None` = whole.
-    pub recorte: Option<Recorte>,
+    pub crop: Option<Crop>,
 }
 
 /// A piece of the raster, in the image's own pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Recorte {
+pub struct Crop {
     /// Offset from the left.
     pub x: u32,
     /// Offset from the top.
@@ -217,19 +213,19 @@ pub struct Recorte {
 /// `pan_x`/`pan_y` are the requested offset, in cells; they are translated
 /// into raster pixels and clamped so the piece does not go out of bounds.
 #[must_use]
-pub fn colocacion(
+pub fn placement(
     zoom_pct: u16,
     slot: ratatui::layout::Rect,
     width: u32,
     height: u32,
     pan_x: usize,
     pan_y: usize,
-) -> Colocacion {
+) -> Placement {
     use ratatui::layout::Rect;
     if slot.is_empty() || width == 0 || height == 0 {
-        return Colocacion {
+        return Placement {
             rect: slot,
-            recorte: None,
+            crop: None,
         };
     }
     if zoom_pct < 100 {
@@ -241,19 +237,19 @@ pub fn colocacion(
                 .unwrap_or(u16::MAX)
                 .max(1)
         };
-        return Colocacion {
+        return Placement {
             rect: Rect {
                 width: scale(slot.width),
                 height: scale(slot.height),
                 ..slot
             },
-            recorte: None,
+            crop: None,
         };
     }
     if zoom_pct == 100 {
-        return Colocacion {
+        return Placement {
             rect: slot,
-            recorte: None,
+            crop: None,
         };
     }
     // Zooming in: the visible piece is the inverse of the zoom, and at
@@ -274,16 +270,16 @@ pub fn colocacion(
         .unwrap_or(u32::MAX)
         .saturating_mul(step_y)
         .min(height - h);
-    Colocacion {
+    Placement {
         rect: slot,
-        recorte: Some(Recorte { x, y, w, h }),
+        crop: Some(Crop { x, y, w, h }),
     }
 }
 
 /// What came out of requesting a file's thumbnail, with the REASON when
 /// there is none to place.
 ///
-/// An `Option<ImagenColocada>` used to say "there is none" and nothing
+/// An `Option<ImagenPlaced>` used to say "there is none" and nothing
 /// more, and the two "there is none"s ask for different things from the
 /// reader: with no approved `thumbnail` plugin one has to go to F12 and
 /// approve it; with one approved that answered in JPEG there is nothing to
@@ -291,25 +287,25 @@ pub fn colocacion(
 /// looks fine. A viewer that asks for the impossible is worse than a
 /// silent one.
 #[derive(Debug, Clone, Default)]
-pub enum Miniatura {
+pub enum Thumbnail {
     /// There was none: no approved and enabled `thumbnail` plugin, the
     /// call failed, or the mode did not ask for a thumbnail.
     #[default]
     Ninguna,
     /// A plugin answered, but in a format kitty does not know how to
-    /// place — PNG only — so it was dropped ([`imagen_desde_miniatura`]).
-    FormatoAjeno,
+    /// place — PNG only — so it was dropped ([`imagen_from_thumbnail`]).
+    FormatForeign,
     /// Ready to place.
-    Colocable(ImagenColocada),
+    Colocable(ImagenPlaced),
 }
 
-impl Miniatura {
+impl Thumbnail {
     /// The image, if there is one; drops the reason.
     #[must_use]
-    pub fn colocable(self) -> Option<ImagenColocada> {
+    pub fn colocable(self) -> Option<ImagenPlaced> {
         match self {
             Self::Colocable(imagen) => Some(imagen),
-            Self::Ninguna | Self::FormatoAjeno => None,
+            Self::Ninguna | Self::FormatForeign => None,
         }
     }
 }
@@ -325,8 +321,8 @@ fn mint_image_id() -> u32 {
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Converts what `plugin.thumbnail` returned into an [`ImagenColocada`], or
-/// says WHY there is none to place ([`Miniatura`]).
+/// Converts what `plugin.thumbnail` returned into an [`ImagenPlaced`], or
+/// says WHY there is none to place ([`Thumbnail`]).
 ///
 /// Branch review, finding 1: `escape_colocar` sends a FIXED `f=100` — kitty's
 /// protocol has no `f=` key for JPEG nor for WebP, only PNG (100) or raw
@@ -336,34 +332,34 @@ fn mint_image_id() -> u32 {
 /// JPEG quality 85 when the PNG does not fit in 4 MiB, easy with this
 /// viewer's `max_edge` of up to 1920 px). Without this filter, a JPEG
 /// travels with a header that says PNG: kitty rejects it, `q=2` silences
-/// the error, [`crate::kitty_graphics::marcar_colocada`] already noted the
-/// id so nobody retries, and [`no_hace_falta_avisar_de_miniatura`] sees an
-/// [`ImagenColocada`] for this file and silences the notice — an empty
+/// the error, [`crate::kitty_graphics::mark_placed`] already noted the
+/// id so nobody retries, and [`no_need_to_warn_about_thumbnail`] sees an
+/// [`ImagenPlaced`] for this file and silences the notice — an empty
 /// viewer with no trace of why.
 ///
 /// Dropping it returns the notice, but the "an extension needs approving"
 /// notice is FALSE in this specific case: the extension is approved and
 /// enabled, it answered, and what does not work is its format. Sending the
 /// reader to F12 to approve what is already approved is a dead end. That
-/// is why this returns [`Miniatura::FormatoAjeno`] and not a `None` with
+/// is why this returns [`Thumbnail::FormatForeign`] and not a `None` with
 /// no reason: the notice that comes out then is a different one and says
 /// what is happening.
 #[must_use]
-pub fn imagen_desde_miniatura(
+pub fn imagen_from_thumbnail(
     path: &VPath,
     thumb: norte_proto::methods::PluginThumbnail,
-) -> Miniatura {
+) -> Thumbnail {
     if thumb.mimetype != "image/png" {
-        return Miniatura::FormatoAjeno;
+        return Thumbnail::FormatForeign;
     }
-    Miniatura::Colocable(ImagenColocada {
+    Thumbnail::Colocable(ImagenPlaced {
         path: path.clone(),
         bytes: thumb.bytes,
         mimetype: thumb.mimetype,
         width: thumb.width,
         height: thumb.height,
         id: mint_image_id(),
-        puesta_en: None,
+        placed_in: None,
     })
 }
 
@@ -384,12 +380,12 @@ impl App {
         // And the reason there was no image: with no viewer there is
         // nobody to warn, and leaving it set would make the NEXT viewer for
         // the same file inherit a notice nobody has re-checked.
-        self.viewer_miniatura_ajena = None;
+        self.viewer_thumbnail_foreign = None;
         // `viewer_modo` with no viewer means nothing — it is left at
-        // `Nada` like `App::new`, so a stale `viewer_modo` (Finding 3) does
+        // `Nothing` like `App::new`, so a stale `viewer_modo` (Finding 3) does
         // not survive this viewer and confuse whichever one opens next
         // before `open_viewer` sets it again.
-        self.viewer_modo = Modo::Nada;
+        self.viewer_modo = Modo::Nothing;
     }
 
     /// Releases the placed thumbnail when the EFFECTIVE mode (just
@@ -406,18 +402,18 @@ impl App {
     ///
     /// On purpose it does NOTHING in the opposite direction
     /// (`blocks`/`off` → `kitty`, or any change while already in
-    /// `Bloques`/`Nada`): updating the pinned mode there would resurrect the
+    /// `Blocks`/`Nothing`): updating the pinned mode there would resurrect the
     /// same review's other hole — the "an extension needs approving for
     /// thumbnails" notice would show for a file the new mode NEVER asked
     /// one for. Returns whether it released something, only so the caller
     /// can log it if it wants to; nobody uses it today.
-    pub fn soltar_miniatura_si_deja_de_ser_kitty(&mut self, modo_efectivo: Modo) -> bool {
-        if self.viewer.is_none() || self.viewer_modo != Modo::Kitty || modo_efectivo == Modo::Kitty
+    pub fn drop_thumbnail_if_no_longer_kitty(&mut self, modo_effective: Modo) -> bool {
+        if self.viewer.is_none() || self.viewer_modo != Modo::Kitty || modo_effective == Modo::Kitty
         {
             return false;
         }
         self.viewer_imagen = None;
-        self.viewer_modo = modo_efectivo;
+        self.viewer_modo = modo_effective;
         true
     }
 }
@@ -461,11 +457,11 @@ pub async fn viewer_sibling(
     events: &mut crate::console::Console<'_>,
     forward: bool,
 ) {
-    let acoplado = app.key_owner() == crate::app::KeyOwner::Preview;
+    let docked = app.key_owner() == crate::app::KeyOwner::Preview;
     // What is open and what class it is. The class is told by the BYTES
     // the viewer already read, not the extension: a photo saved as `.dat`
     // still leads to the next photo.
-    let actual = if acoplado {
+    let actual = if docked {
         app.preview_slot()
             .and_then(|id| app.panes.preview(id))
             .and_then(|p| {
@@ -479,13 +475,13 @@ pub async fn viewer_sibling(
             .as_ref()
             .map(|v| (v.path.clone(), v.is_image_by_bytes()))
     };
-    let Some((abierta, es_imagen)) = actual else {
+    let Some((open, es_imagen)) = actual else {
         return;
     };
     let quiero = if es_imagen {
-        norte_frontend::viewer::Clase::Imagen
+        norte_frontend::viewer::Class::Imagen
     } else {
-        norte_frontend::viewer::Clase::Otro
+        norte_frontend::viewer::Class::Other
     };
     // Which listing the ladder comes from. With the DOCKED viewer, the one
     // that slot FOLLOWS — which is not always the focused one; with the
@@ -493,7 +489,7 @@ pub async fn viewer_sibling(
     // uses to decide what the preview shows, and it has to be: looking at
     // a different listing would move a panel's cursor and leave the
     // preview exactly as it was.
-    let seguido = if acoplado {
+    let seguido = if docked {
         let mut diags = Vec::new();
         app.preview_slot().and_then(|slot| {
             norte_frontend::layout::resolve_follow(&app.layout, slot, &app.roles, &mut diags)
@@ -512,19 +508,19 @@ pub async fn viewer_sibling(
     let entries = pane.entries();
     // Only by what the reader SEES: with a live filter the ladder is its
     // own.
-    let visibles = pane.quick_visible();
-    let destino = entries
+    let visible = pane.quick_visible();
+    let dest = entries
         .iter()
-        .position(|e| e.path == abierta)
-        .and_then(|from| norte_frontend::viewer::hermana(entries, visibles, from, forward, quiero))
+        .position(|e| e.path == open)
+        .and_then(|from| norte_frontend::viewer::sibling(entries, visible, from, forward, quiero))
         .and_then(|i| entries.get(i).map(|e| (i, e.path.clone())));
-    let Some((fila, path)) = destino else {
+    let Some((row, path)) = dest else {
         app.message = Some(t("msg-viewer-no-sibling"));
         return;
     };
     // A previous "no more" cannot survive a jump that DID happen.
     app.message = None;
-    // `senalar` and not `set_cursor`: with a live filter what is pointed
+    // `point_at` and not `set_cursor`: with a live filter what is pointed
     // at is the quick search's selection, and the docked one follows THAT.
     // It is ALWAYS pointed at, which is what makes the docked one notice
     // and what leaves the listing where the reader was looking when they
@@ -532,12 +528,12 @@ pub async fn viewer_sibling(
     match seguido {
         Some(id) => {
             if let Some(p) = app.panes.browser_mut(id) {
-                p.senalar(fila);
+                p.point_at(row);
             }
         }
-        None => app.focused_mut().senalar(fila),
+        None => app.focused_mut().point_at(row),
     }
-    if !acoplado {
+    if !docked {
         open_viewer(app, backend, events, path).await;
     }
 }
@@ -572,7 +568,7 @@ pub async fn viewer_for(
     backend: &Backend,
     path: &VPath,
     modo: Modo,
-) -> Result<(Viewer, Miniatura), Error> {
+) -> Result<(Viewer, Thumbnail), Error> {
     // The terminal's width is the full-screen viewer's, and it is what an
     // image previewer uses to shrink (proto 0.66.0). With no terminal —
     // tests, a pipe — there is no hint and the guest picks its own width.
@@ -586,10 +582,10 @@ pub async fn viewer_for(
 /// is narrower than the screen).
 ///
 /// `modo` also decides whether the thumbnail is requested
-/// ([`ImagenColocada`]): only when the BYTES say it is an image
+/// ([`ImagenPlaced`]): only when the BYTES say it is an image
 /// ([`norte_frontend::viewer::image_format`]) AND the mode is
-/// [`Modo::Kitty`]. With [`Modo::Bloques`] or [`Modo::Nada`] nothing is
-/// requested here — `Bloques` is painted by the plugin previewer through
+/// [`Modo::Kitty`]. With [`Modo::Blocks`] or [`Modo::Nothing`] nothing is
+/// requested here — `Blocks` is painted by the plugin previewer through
 /// its normal path (`plugin_preview_styled` below), not this one.
 ///
 /// On purpose `viewer.is_image()` is NOT used: that getter is `false` the
@@ -610,7 +606,7 @@ pub async fn viewer_for_width(
     path: &VPath,
     columns: Option<u32>,
     modo: Modo,
-) -> Result<(Viewer, Miniatura), Error> {
+) -> Result<(Viewer, Thumbnail), Error> {
     let (bytes, truncated) = read_head(backend, path).await?;
     // By BYTES, before the plugin preview chain — which can replace the
     // whole raw view — gets a chance to hide the format. See the rustdoc
@@ -635,7 +631,7 @@ pub async fn viewer_for_width(
     // FILE is does not change because a plugin won, and the reel
     // (`viewer.next`) depends on that.
     viewer.set_image_by_bytes(es_imagen);
-    let miniatura = if es_imagen && modo == Modo::Kitty {
+    let thumbnail = if es_imagen && modo == Modo::Kitty {
         // The larger side in PIXELS that fits in the slot. A terminal cell
         // is roughly 8x16 px and there is no portable way to ask, so it is
         // estimated: overshooting only costs the terminal shrinking it,
@@ -646,13 +642,13 @@ pub async fn viewer_for_width(
             .await
             .ok()
             .flatten()
-            .map_or(Miniatura::Ninguna, |thumb| {
-                imagen_desde_miniatura(path, thumb)
+            .map_or(Thumbnail::Ninguna, |thumb| {
+                imagen_from_thumbnail(path, thumb)
             })
     } else {
-        Miniatura::Ninguna
+        Thumbnail::Ninguna
     };
-    Ok((viewer, miniatura))
+    Ok((viewer, thumbnail))
 }
 
 /// Opens the full-screen viewer reading the HEADER via the core (rule 7),
@@ -673,20 +669,20 @@ pub async fn open_viewer(
         Some(path.clone()),
         Some(app.focus()),
     ));
-    let modo = modo_efectivo(app.chrome.images(), crate::kitty_graphics::soportado());
+    let modo = modo_effective(app.chrome.images(), crate::kitty_graphics::supported());
     let waited =
         crate::console::wait_painting(events, app, started, viewer_for(backend, &path, modo)).await;
     app.busy = None;
     match waited {
-        Waited::Done(Ok((viewer, miniatura))) => {
+        Waited::Done(Ok((viewer, thumbnail))) => {
             // The mismatched format is noted BEFORE consuming the
             // thumbnail, and against THIS path: it is what tells apart
             // "there is no thumbnail extension" from "there is one, it
             // answered, and its format does not work."
-            app.viewer_miniatura_ajena =
-                matches!(miniatura, Miniatura::FormatoAjeno).then(|| path.clone());
+            app.viewer_thumbnail_foreign =
+                matches!(thumbnail, Thumbnail::FormatForeign).then(|| path.clone());
             app.viewer = Some(viewer);
-            app.viewer_imagen = miniatura.colocable();
+            app.viewer_imagen = thumbnail.colocable();
             // Finding 3: the mode the thumbnail was REQUESTED with, set
             // here and not recomputed later — see `App::viewer_modo`'s
             // rustdoc.

@@ -229,7 +229,7 @@ async fn setup_con_root(
 /// 1024: that is what distinguishes deducting the prefix from not
 /// deducting it.
 #[tokio::test]
-async fn el_presupuesto_de_key_descuenta_el_prefijo_root() {
+async fn the_key_budget_deducts_the_root_prefix() {
     let prefix = "equipo/proyecto/";
     let (_c, p, _op) = setup_con_root(&format!("/{prefix}")).await;
     let r = root();
@@ -284,11 +284,11 @@ async fn el_presupuesto_de_key_descuenta_el_prefijo_root() {
 /// piece; this pins that the normal path does not trigger it and leaves
 /// the case written down.
 #[tokio::test]
-async fn una_siembra_bajo_el_root_no_revienta_el_listado() {
+async fn seeding_under_the_root_does_not_blow_up_the_listing() {
     let (_c, p, op) = setup_con_root("/equipo/proyecto/").await;
     let r = root();
     // The Operator already carries the root: this key is
-    // `equipo/proyecto/desde-fuera/a.txt`.
+    // `team/project/from-outside/a.txt`.
     op.write("desde-fuera/a.txt", b"contenido".to_vec())
         .await
         .expect("seed");
@@ -318,7 +318,7 @@ async fn una_siembra_bajo_el_root_no_revienta_el_listado() {
 /// opendal would trim it, #48), an empty segment (`dir//x`) and an
 /// empty-directory marker.
 #[tokio::test]
-async fn keys_sembradas_desde_fuera_que_nosotros_no_creariamos() {
+async fn keys_seeded_from_outside_that_we_would_not_create() {
     let (_c, p, op) = setup().await;
     let r = root();
 
@@ -371,7 +371,7 @@ async fn keys_sembradas_desde_fuera_que_nosotros_no_creariamos() {
 /// the test pins it for what it is, a difference between servers, instead
 /// of leaving the claim unchecked.
 #[tokio::test]
-async fn las_fixtures_largas_del_corpus_contra_s3_real() {
+async fn the_corpus_long_fixtures_against_real_s3() {
     let (_c, p, _op) = setup().await;
     let r = root();
     let corpus = norte_testkit::corpus::hostile_names();

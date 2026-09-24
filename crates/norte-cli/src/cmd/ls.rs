@@ -117,7 +117,7 @@ mod tests {
     /// third-party text — RTL override/ZWJ escaped, non-UTF-8 bytes via
     /// lossy+escape, never raw in the terminal.
     #[test]
-    fn render_attr_value_neutralizes_hostiles() {
+    fn render_attr_value_neutralizes_hostile() {
         use norte_proto::AttrValue;
         // The synthetic MemProvider's canonical hostile values.
         let text = render_attr_value(&AttrValue::Text("\u{202e}atón\u{202c} a\u{200d}b".into()));

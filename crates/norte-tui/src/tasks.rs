@@ -344,20 +344,20 @@ mod has_active_tests {
     }
 
     #[test]
-    fn vacio_no_esta_activo() {
+    fn empty_is_not_active() {
         let board = TaskBoard::default();
         assert!(!board.has_active());
     }
 
     #[test]
-    fn una_fila_en_vuelo_es_activa() {
+    fn an_in_flight_row_is_active() {
         let mut board = TaskBoard::default();
         board.push(&task_ref(1, TaskState::Running), None);
         assert!(board.has_active());
     }
 
     #[test]
-    fn todas_las_filas_terminales_no_es_activa() {
+    fn all_terminal_rows_it_is_not_active() {
         let mut board = TaskBoard::default();
         board.push(&task_ref(1, TaskState::Completed), None);
         board.push(&task_ref(2, TaskState::Cancelled), None);

@@ -10,11 +10,11 @@
 //!   `connect_or_spawn`).
 
 pub mod approvals;
-pub mod componer;
+pub mod compose;
 mod server;
 
 pub use approvals::DaemonApprovalResolver;
-pub use componer::componer;
+pub use compose::compose;
 pub use server::{Daemon, DaemonConfig};
 
 // The CLIENT side has lived in `norte-client` since ADR 0066: the SDK cannot

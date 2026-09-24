@@ -360,7 +360,7 @@ use serde::{Deserialize, Serialize};
 ///   and **does not carry its command**: the renderer sends the CELL with
 ///   the `panel_click { slot_id, row, col }` action and the host resolves
 ///   against the frame it holds which zone it was and which command
-///   applies, filtered by `norte_frontend::frame::zona_puede`. A command
+///   applies, filtered by `norte_frontend::frame::zone_can`. A command
 ///   traveling over the wire would be a command anyone talking to the
 ///   renderer could send, and the plugin chooses the label AND the
 ///   command with nothing tying them together. Empty `lines` is the panel
@@ -780,9 +780,9 @@ pub enum ActionAck {
 /// assert_eq!(clamp_display("café.txt".to_owned()), "café.txt");
 ///
 /// // What does not is clamped AND marked.
-/// let largo = clamp_display("a".repeat(MAX_STRING_BYTES * 2));
-/// assert!(largo.len() <= MAX_STRING_BYTES);
-/// assert!(largo.ends_with('…'));
+/// let long = clamp_display("a".repeat(MAX_STRING_BYTES * 2));
+/// assert!(long.len() <= MAX_STRING_BYTES);
+/// assert!(long.ends_with('…'));
 /// ```
 #[must_use]
 pub fn clamp_display(s: String) -> String {

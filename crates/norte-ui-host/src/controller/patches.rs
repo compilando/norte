@@ -1,17 +1,17 @@
 //! Patches: what crosses the bridge and with which generation.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
-    pub(super) fn aplicada(&self) -> ActionAck {
+impl State {
+    pub(super) fn applied(&self) -> ActionAck {
         // The sequence number that will reflect it: the next one emitted.
         ActionAck::Applied {
             sequence: self.sequence + 1,
@@ -19,19 +19,19 @@ impl Estado {
     }
 
     /// A normal race between what the renderer believed and what is there.
-    pub(super) fn obsoleta(reason: StaleAction) -> ActionAck {
+    pub(super) fn stale(reason: StaleAction) -> ActionAck {
         ActionAck::Stale { reason }
     }
 
-    pub(super) fn sobre(&mut self, u: UiUpdate) -> BridgeEnvelope<UiUpdate> {
+    pub(super) fn over(&mut self, u: UiUpdate) -> BridgeEnvelope<UiUpdate> {
         // A whole snapshot carries the bar inside: it is the last thing the
         // renderer saw of it, and what the next patch compares against.
         if let UiUpdate::Snapshot(s) = &u {
-            self.ultima_barra = Some(s.panel_bar.clone());
-            self.ultimos_elementos = Some(s.status_items.clone());
+            self.ultima_bar = Some(s.panel_bar.clone());
+            self.last_items = Some(s.status_items.clone());
             // The snapshot was assembled with the CURRENT layout
-            // (`ajuste_de` is pure).
-            let _ = self.ajustes_movidos();
+            // (`setting_of` is pure).
+            let _ = self.settings_movidos();
         }
         self.sequence += 1;
         BridgeEnvelope::new(self.instance.clone(), self.sequence, u)
@@ -45,38 +45,38 @@ impl Estado {
         // compared against the last one that crossed. A panel opened by key,
         // by menu, by palette, or by the bar itself updates the bar the same
         // way.
-        let bar = self.vista_barra_de_paneles();
-        if self.ultima_barra.as_ref() != Some(&bar) {
+        let bar = self.view_pane_bar();
+        if self.ultima_bar.as_ref() != Some(&bar) {
             changes.push(ViewChange::PanelBar {
                 panel_bar: bar.clone(),
             });
-            self.ultima_barra = Some(bar);
+            self.ultima_bar = Some(bar);
         }
         // And the status bar items (ADR 0132), by the same mechanism: the
         // cursor, the marks, the sort order, and the board move them, and
         // none of those paths knows there is a bar counting them.
-        let items = self.vista_elementos_de_estado();
-        if self.ultimos_elementos.as_ref() != Some(&items) {
+        let items = self.status_items_view();
+        if self.last_items.as_ref() != Some(&items) {
             changes.push(ViewChange::StatusItems {
                 status_items: items.clone(),
             });
-            self.ultimos_elementos = Some(items);
+            self.last_items = Some(items);
         }
         // And every slot's column layout: the slot's width and the listing's
         // names move them, and none of the paths that change those sends a
         // header. Header and rows go TOGETHER, behind whatever the patch
         // already carried, so they take precedence over it.
-        for slot in self.ajustes_movidos() {
-            if let Some(h) = self.huecos.get(&slot) {
+        for slot in self.settings_movidos() {
+            if let Some(h) = self.slots.get(&slot) {
                 changes.push(ViewChange::Columns {
                     slot_id: slot,
-                    columns: self.cabeceras(slot, h),
+                    columns: self.headers(slot, h),
                 });
             }
-            changes.push(self.cambio_de_filas_de(slot));
+            changes.push(self.row_change_for(slot));
         }
         let base = self.sequence;
-        self.sobre(UiUpdate::Patch(ViewPatch {
+        self.over(UiUpdate::Patch(ViewPatch {
             base_sequence: base,
             changes,
         }))
@@ -84,22 +84,22 @@ impl Estado {
 
     /// Only the visible window travels: a directory with a hundred thousand
     /// entries does not cross the bridge to paint forty rows.
-    pub(super) fn filas_visibles(&self) -> Vec<RowView> {
-        self.filas_de(self.activo(), self.hueco())
+    pub(super) fn rows_visible(&self) -> Vec<RowView> {
+        self.rows_of(self.active(), self.slot())
     }
 
     /// Any slot's visible rows.
-    pub(super) fn filas_de(&self, slot: u32, hueco: &Hueco) -> Vec<RowView> {
-        let first = usize::try_from(hueco.primera_visible).unwrap_or(0);
-        let count = usize::try_from(hueco.visibles).unwrap_or(0);
+    pub(super) fn rows_of(&self, slot: u32, hueco: &Slot) -> Vec<RowView> {
+        let first = usize::try_from(hueco.first_visible).unwrap_or(0);
+        let count = usize::try_from(hueco.visible).unwrap_or(0);
         // ONCE per batch, not once per row: it walks the whole task map and
-        // clones a `VPath` per live task. Inside `fila` that was one walk and
+        // clones a `VPath` per live task. Inside `row` that was one walk and
         // one clone per VISIBLE entry, on every repaint, and the repaints are
         // triggered by exactly what fills that list: progress.
-        let operands = self.operandos_vivos();
+        let operands = self.operandos_alive();
         // And the column layout, for the same reason: the header and every
         // row of the batch have to come from the SAME one.
-        let fitted_columns = self.ajuste_de(slot, hueco);
+        let fitted_columns = self.setting_of(slot, hueco);
         hueco
             .pane
             .entries()
@@ -107,7 +107,7 @@ impl Estado {
             .enumerate()
             .skip(first)
             .take(count.min(MAX_ROWS_PER_BATCH))
-            .map(|(i, e)| self.fila(hueco, i, e, &operands, &fitted_columns))
+            .map(|(i, e)| self.row(hueco, i, e, &operands, &fitted_columns))
             .collect()
     }
 
@@ -115,15 +115,15 @@ impl Estado {
     /// that moves the indices — a re-listing, a re-sort, a hidden-files
     /// filter — not only on changing directory.
     pub(super) fn generacion(&self) -> u64 {
-        self.hueco().pane.listing_epoch()
+        self.slot().pane.listing_epoch()
     }
 
     /// Moving the cursor sends the cursor, not the listing.
     pub(super) fn parche_cursor(&mut self) -> BridgeEnvelope<UiUpdate> {
         let change = ViewChange::Cursor {
-            slot_id: self.activo(),
+            slot_id: self.active(),
             generation: self.generacion(),
-            cursor: Some(RowKey(self.hueco().pane.cursor() as u64)),
+            cursor: Some(RowKey(self.slot().pane.cursor() as u64)),
         };
         self.parche(vec![change])
     }
@@ -165,25 +165,25 @@ impl Estado {
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         if self.oculto(slot) {
             return;
         }
         let columns = self
-            .huecos
+            .slots
             .get(&slot)
             // The painted ones and the status bar's (ADR 0137): the SAME
             // list the TUI requests.
             .map(|h| {
                 norte_frontend::columns::plugin_requests(
-                    &self.columnas,
+                    &self.columns,
                     &self.config.common.ui_status_plugins,
                     h.pane.dir().scheme(),
                 )
             })
             .unwrap_or_default();
-        let Some(hueco) = self.huecos.get_mut(&slot) else {
+        let Some(hueco) = self.slots.get_mut(&slot) else {
             return;
         };
         // One batch per slot, checked BEFORE choosing candidates: the other
@@ -193,8 +193,8 @@ impl Estado {
         if hueco.adornando {
             return;
         }
-        let first = usize::try_from(hueco.primera_visible).unwrap_or(0);
-        let count = usize::try_from(hueco.visibles).unwrap_or(0);
+        let first = usize::try_from(hueco.first_visible).unwrap_or(0);
+        let count = usize::try_from(hueco.visible).unwrap_or(0);
         let (candidates, kinds): (Vec<VPath>, Vec<norte_proto::EntryKind>) = hueco
             .pane
             .entries()
@@ -213,7 +213,7 @@ impl Estado {
         let dir = hueco.pane.dir().clone();
         hueco.adornando = true;
         let generation = hueco.gen_adornos;
-        let cancel_flag = hueco.cancelar_sondeo.clone();
+        let cancel_flag = hueco.cancel_probe.clone();
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
@@ -222,19 +222,14 @@ impl Estado {
                 .await
                 .unwrap_or_default();
             let decorations = norte_frontend::merge_decorations(&candidates, &raw);
-            let (cells, labels) = celdas_de_plugin(&backend, &columns, &candidates, || {
+            let (cells, labels) = plugin_cells(&backend, &columns, &candidates, || {
                 cancel_flag.load(std::sync::atomic::Ordering::SeqCst)
             })
             .await;
             let _ = mailbox
-                .send(Mensaje::Fondo(Box::new(Fondo::Adornos(Box::new((
-                    generation,
-                    slot,
-                    dir,
-                    decorations,
-                    cells,
-                    labels,
-                ))))))
+                .send(Message::Background(Box::new(Background::Adornos(
+                    Box::new((generation, slot, dir, decorations, cells, labels)),
+                ))))
                 .await;
         });
     }
@@ -243,14 +238,14 @@ impl Estado {
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let attrs = self
-            .huecos
+            .slots
             .get(&slot)
             .map(|h| self.attrs_de(h.pane.dir()))
             .unwrap_or_default();
-        let Some(hueco) = self.huecos.get_mut(&slot) else {
+        let Some(hueco) = self.slots.get_mut(&slot) else {
             return;
         };
         // One probe per slot, and it is checked BEFORE choosing candidates:
@@ -262,8 +257,8 @@ impl Estado {
         if hueco.sondeando {
             return;
         }
-        let first = usize::try_from(hueco.primera_visible).unwrap_or(0);
-        let count = usize::try_from(hueco.visibles).unwrap_or(0);
+        let first = usize::try_from(hueco.first_visible).unwrap_or(0);
+        let count = usize::try_from(hueco.visible).unwrap_or(0);
         let candidates: Vec<VPath> = hueco
             .pane
             .needs_stat_at(first..first.saturating_add(count))
@@ -279,7 +274,7 @@ impl Estado {
         }
         let dir = hueco.pane.dir().clone();
         hueco.sondeando = true;
-        let cancel_flag = hueco.cancelar_sondeo.clone();
+        let cancel_flag = hueco.cancel_probe.clone();
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
@@ -294,7 +289,7 @@ impl Estado {
                     let attrs = attrs.clone();
                     async move {
                         let stat = backend.stat(p.clone(), attrs);
-                        match tokio::time::timeout(PLAZO_SONDEO, stat).await {
+                        match tokio::time::timeout(DEADLINE_PROBE, stat).await {
                             // A probe that fails or takes too long is not a
                             // screen error: that cell stays blank and is not
                             // requested again.
@@ -303,7 +298,7 @@ impl Estado {
                         }
                     }
                 })
-                .buffer_unordered(SONDEOS_A_LA_VEZ)
+                .buffer_unordered(POLLS_AT_ONCE)
                 .filter_map(|x| async move { x })
                 .collect()
                 .await;
@@ -311,12 +306,12 @@ impl Estado {
                 // The listing changed while probing: what comes back does not
                 // describe the screen that is there.
                 let _ = mailbox
-                    .send(Mensaje::Hidratado(Box::new((dir, slot, Vec::new()))))
+                    .send(Message::Hidratado(Box::new((dir, slot, Vec::new()))))
                     .await;
                 return;
             }
             let _ = mailbox
-                .send(Mensaje::Hidratado(Box::new((dir, slot, probes))))
+                .send(Message::Hidratado(Box::new((dir, slot, probes))))
                 .await;
         });
     }
@@ -325,14 +320,14 @@ impl Estado {
     ///
     /// `None` if the slot disappeared or the batch is from a navigation
     /// already superseded: pasting it would mix two trees on one screen.
-    pub(super) fn aplicar_lote(
+    pub(super) fn apply_batch(
         &mut self,
         slot: u32,
         token: RequestToken,
         batch: Vec<Entry>,
         last: bool,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let hueco = self.huecos.get_mut(&slot)?;
+        let hueco = self.slots.get_mut(&slot)?;
         if hueco.drenando != Some(token) {
             // A batch from a navigation already superseded: pasting it would
             // mix two trees on one screen.
@@ -342,7 +337,7 @@ impl Estado {
             // The stream is done: this slot is no longer growing.
             hueco.drenando = None;
         }
-        if batch.is_empty() && !hueco.filas_por_publicar {
+        if batch.is_empty() && !hueco.rows_to_publish {
             // Nothing to paste and nothing pending: the stream closed with no
             // leftover.
             return None;
@@ -356,19 +351,19 @@ impl Estado {
         // rows: what was being mixed in fell well below the visible window
         // (#252).
         let before = self
-            .huecos
+            .slots
             .get(&slot)
-            .map(|h| self.filas_de(slot, h))
+            .map(|h| self.rows_of(slot, h))
             .unwrap_or_default();
         if !batch.is_empty()
-            && let Some(hueco) = self.huecos.get_mut(&slot)
+            && let Some(hueco) = self.slots.get_mut(&slot)
         {
             hueco.pane.extend(batch);
         }
         let after = self
-            .huecos
+            .slots
             .get(&slot)
-            .map(|h| self.filas_de(slot, h))
+            .map(|h| self.rows_of(slot, h))
             .unwrap_or_default();
         // Staying quiet about a patch is not free: `extend` bumps the
         // listing's EPOCH and the renderer names every row by the epoch it
@@ -378,15 +373,15 @@ impl Estado {
         // even if it comes in empty, which happens when the rest is an exact
         // multiple of the batch — settles the debt.
         let silenced = !last && before == after;
-        if let Some(h) = self.huecos.get_mut(&slot) {
+        if let Some(h) = self.slots.get_mut(&slot) {
             // Withheld: debt remains. Published: the debt is settled, because
             // the patch carries the CURRENT epoch.
-            h.filas_por_publicar = silenced;
+            h.rows_to_publish = silenced;
         }
         if silenced {
             return None;
         }
-        Some(self.parche_filas_de(slot))
+        Some(self.patch_rows_of(slot))
     }
 
     /// Pastes what a probe found out onto the listing that requested it.
@@ -394,13 +389,13 @@ impl Estado {
     /// `None` if there is nothing to repaint: the slot disappeared, or the
     /// listing that was probed has already been superseded — pasting sizes
     /// onto it would be lying about what is visible.
-    pub(super) fn aplicar_sondas(
+    pub(super) fn apply_sondas(
         &mut self,
         slot: u32,
         dir: &VPath,
         probes: &[(VPath, Entry)],
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let hueco = self.huecos.get_mut(&slot)?;
+        let hueco = self.slots.get_mut(&slot)?;
         // The flag is lowered ONLY if what arrives describes this listing. A
         // cancelled batch landing late used to lower the NEW batch's flag,
         // and then `sondear` would let a second one launch on the same slot.
@@ -420,31 +415,31 @@ impl Estado {
             // retried.
             hueco.pane.hydrate(requested, e.size, e.mtime_ms);
         }
-        Some(self.parche_filas_de(slot))
+        Some(self.patch_rows_of(slot))
     }
 
     /// A specific slot's visible rows, not the one with focus.
-    pub(super) fn parche_filas_de(&mut self, slot: u32) -> BridgeEnvelope<UiUpdate> {
-        let change = self.cambio_de_filas_de(slot);
+    pub(super) fn patch_rows_of(&mut self, slot: u32) -> BridgeEnvelope<UiUpdate> {
+        let change = self.row_change_for(slot);
         // The header goes WITH the rows: `pane.names-encoding` retranscribes
         // the path the same way as the names, and hiding moves entries in and
         // out of the listing. Sending only the rows left the title with the
         // old reading.
         let header = self
-            .huecos
+            .slots
             .get(&slot)
-            .map(|h| self.cabecera_de(slot, h))
+            .map(|h| self.header_of(slot, h))
             .into_iter();
         self.parche(std::iter::once(change).chain(header).collect())
     }
 
     /// Any slot's ROW change, unwrapped.
-    fn cambio_de_filas_de(&self, slot: u32) -> ViewChange {
-        let (generation, first, rows, total, icons) = match self.huecos.get(&slot) {
+    fn row_change_for(&self, slot: u32) -> ViewChange {
+        let (generation, first, rows, total, icons) = match self.slots.get(&slot) {
             Some(h) => (
                 h.pane.listing_epoch(),
-                h.primera_visible,
-                self.filas_de(slot, h),
+                h.first_visible,
+                self.rows_of(slot, h),
                 Some(h.pane.entries().len() as u64),
                 h.pane.any_icon(),
             ),
@@ -465,56 +460,56 @@ impl Estado {
 
     /// The slots whose column layout is no longer the last one that crossed,
     /// with the new one already noted as crossed.
-    fn ajustes_movidos(&mut self) -> Vec<u32> {
+    fn settings_movidos(&mut self) -> Vec<u32> {
         let now: Vec<(u32, Vec<norte_frontend::columns::Fitted>)> = self
-            .huecos
+            .slots
             .iter()
-            .map(|(id, h)| (*id, self.ajuste_de(*id, h)))
+            .map(|(id, h)| (*id, self.setting_of(*id, h)))
             .collect();
         let mut moved = Vec::new();
         for (id, fit) in now {
-            if self.ultimo_ajuste.get(&id) != Some(&fit) {
-                self.ultimo_ajuste.insert(id, fit);
+            if self.last_setting.get(&id) != Some(&fit) {
+                self.last_setting.insert(id, fit);
                 moved.push(id);
             }
         }
-        self.ultimo_ajuste
-            .retain(|id, _| self.huecos.contains_key(id));
+        self.last_setting
+            .retain(|id, _| self.slots.contains_key(id));
         moved
     }
 
     /// What a mark or a scroll changes: the visible rows.
-    pub(super) fn parche_filas(&mut self) -> BridgeEnvelope<UiUpdate> {
-        let change = self.cambio_de_filas();
-        let header = self.cabecera_de(self.activo(), self.hueco());
+    pub(super) fn parche_rows(&mut self) -> BridgeEnvelope<UiUpdate> {
+        let change = self.row_change();
+        let header = self.header_of(self.active(), self.slot());
         self.parche(vec![change, header])
     }
 
     /// The active slot's ROW change, unwrapped: for whoever has to send it
     /// alongside others in the same patch.
-    pub(super) fn cambio_de_filas(&self) -> ViewChange {
+    pub(super) fn row_change(&self) -> ViewChange {
         ViewChange::Rows {
-            slot_id: self.activo(),
+            slot_id: self.active(),
             generation: self.generacion(),
-            first_visible: self.hueco().primera_visible,
-            rows: self.filas_visibles(),
-            icon_column: self.hueco().pane.any_icon(),
+            first_visible: self.slot().first_visible,
+            rows: self.rows_visible(),
+            icon_column: self.slot().pane.any_icon(),
             // Marking or hiding does not only change which rows are visible:
             // `toggle-hidden` moves entries in and out of the listing, so the
             // total and the scroll height move with them.
-            total_rows: Some(self.hueco().pane.entries().len() as u64),
+            total_rows: Some(self.slot().pane.entries().len() as u64),
         }
     }
 
     /// A listing row, with the live operands ALREADY computed.
     ///
-    /// They are received instead of requested: `operandos_vivos` walks the
+    /// They are received instead of requested: `operandos_alive` walks the
     /// task map and clones a path per live task, and doing that per row
     /// turned a fifty-row repaint with twenty tasks into a thousand walks and
     /// a thousand clones.
-    pub(super) fn fila(
+    pub(super) fn row(
         &self,
-        hueco: &Hueco,
+        hueco: &Slot,
         i: usize,
         e: &Entry,
         operands: &[(VPath, Option<u8>)],
@@ -549,10 +544,10 @@ impl Estado {
         // The mapping belongs to `norte-frontend` and not here: both
         // frontends need it and it is the SAME decision, which written twice
         // diverges silently (ADR 0077).
-        let style = self.tema.estilo_de_entrada(
+        let style = self.theme.entry_style(
             bytes,
             norte_frontend::theme::file_kind_of(e.kind),
-            self.esquema_oscuro,
+            self.scheme_dark,
         );
         RowView {
             key: RowKey(i as u64),
@@ -573,7 +568,7 @@ impl Estado {
             ),
             selected: i == hueco.pane.cursor(),
             marked: hueco.pane.is_marked(e),
-            cells: self.celdas(hueco, e, columns),
+            cells: self.cells(hueco, e, columns),
             badge: decoration
                 .and_then(|d| d.badge.clone())
                 .map(clamp_display)
@@ -600,7 +595,7 @@ impl Estado {
     /// The path is the LAST progress's (`current`), which is what the wire
     /// says is being touched right now; a finished task does not count,
     /// because its row is no longer waiting on anyone.
-    pub(super) fn operandos_vivos(&self) -> Vec<(VPath, Option<u8>)> {
+    pub(super) fn operandos_alive(&self) -> Vec<(VPath, Option<u8>)> {
         self.tasks
             .values()
             .filter(|t| !Self::terminal(t.vista.state))
@@ -608,7 +603,7 @@ impl Estado {
                 // The LIVE progress and not the view: the view is a snapshot
                 // projected when the mailbox message goes out, and a
                 // listing's row is painted far more often than that.
-                let p = t.progreso.borrow();
+                let p = t.progress.borrow();
                 p.current
                     .as_ref()
                     .map(|path| (path.clone(), norte_frontend::tasks::progress_pct(&p)))
@@ -617,7 +612,7 @@ impl Estado {
     }
 
     /// A path's location's catalogue, if it has arrived yet.
-    pub(super) fn catalogo_de(&self, path: &VPath) -> Option<&norte_proto::AttrCatalog> {
+    pub(super) fn catalog_of(&self, path: &VPath) -> Option<&norte_proto::AttrCatalog> {
         self.catalogos.get(path.scheme())
     }
 
@@ -629,16 +624,16 @@ impl Estado {
     /// provider did not send — and it travels as such: never a manufactured
     /// `0`.
     ///
-    /// Only the ones in `columnas`, the slot's layout (`ajuste_de`): a cell
+    /// Only the ones in `columns`, the slot's layout (`setting_of`): a cell
     /// for a column the header dropped would paint with no width.
-    pub(super) fn celdas(
+    pub(super) fn cells(
         &self,
-        hueco: &Hueco,
+        hueco: &Slot,
         e: &Entry,
         columns: &[norte_frontend::columns::Fitted],
     ) -> Vec<crate::dto::CellView> {
         use norte_frontend::columns::{ColumnId, styled_cell_in};
-        let now = ahora_ms();
+        let now = now_ms();
         let scheme = hueco.pane.dir().scheme().to_owned();
         columns
             .iter()
@@ -671,15 +666,15 @@ impl Estado {
                         other,
                         now,
                         &self
-                            .columnas
-                            .style_for_id(&scheme, other, self.catalogo_de(&e.path))
+                            .columns
+                            .style_for_id(&scheme, other, self.catalog_of(&e.path))
                             .compacted(f.compact),
                         self.lang,
                     ),
                 };
                 crate::dto::CellView {
                     // Identity: whole or empty, never truncated.
-                    column: identidad_de_columna(col),
+                    column: column_identity(col),
                     text: text.map(clamp_display),
                 }
             })

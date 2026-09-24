@@ -170,7 +170,7 @@ mod tests {
     /// shapes: the bare mode, the recursive one, the recursive one with a
     /// folders mode, and the invalid one.
     #[test]
-    fn el_campo_lee_las_formas_de_chmod() {
+    fn the_field_reads_the_chmod_forms() {
         let solo = parse_request("755").expect("mode");
         assert_eq!(
             (solo.mode, solo.recursive, solo.dir_mode),
@@ -180,9 +180,9 @@ mod tests {
         let rec = parse_request("-R 700").expect("mode");
         assert_eq!((rec.mode, rec.recursive, rec.dir_mode), (0o700, true, None));
 
-        let dos = parse_request("-R 644,755").expect("mode");
+        let two = parse_request("-R 644,755").expect("mode");
         assert_eq!(
-            (dos.mode, dos.recursive, dos.dir_mode),
+            (two.mode, two.recursive, two.dir_mode),
             (0o644, true, Some(0o755))
         );
 
@@ -197,7 +197,7 @@ mod tests {
     /// And the mode's errors are still the same in both positions: an
     /// unreadable folders mode is not swallowed.
     #[test]
-    fn un_modo_de_carpetas_invalido_no_se_traga() {
+    fn an_invalid_folder_mode_is_not_swallowed() {
         assert_eq!(parse_request("-R 644,8"), Err(ModeError::NotOctal));
         assert_eq!(parse_request("-R 644,77777"), Err(ModeError::TooBig));
         assert_eq!(parse_request("-R"), Err(ModeError::NotOctal), "no mode");
@@ -206,7 +206,7 @@ mod tests {
     /// The space after `-R` is not mandatory nor does it have to be one:
     /// what is typed in a field carries whatever spaces it carries.
     #[test]
-    fn el_espacio_tras_la_bandera_da_igual() {
+    fn the_space_after_the_flag_does_not_matter() {
         for text in ["-R755", "-R 755", "-R   755", "  -R 755  "] {
             let r = parse_request(text).unwrap_or_else(|e| panic!("{text}: {e:?}"));
             assert_eq!((r.mode, r.recursive), (0o755, true), "{text}");
@@ -223,12 +223,12 @@ mod tests {
     }
 
     #[test]
-    fn el_espacio_alrededor_no_estorba() {
+    fn the_surrounding_space_does_not_get_in_the_way() {
         assert_eq!(parse_mode("  644 "), Ok(0o644));
     }
 
     #[test]
-    fn los_digitos_que_no_son_octales_se_rechazan() {
+    fn non_octal_digits_are_rejected() {
         for bad in ["8", "9", "75a", "-1", "", "   ", "0x1ff"] {
             assert_eq!(parse_mode(bad), Err(ModeError::NotOctal), "{bad:?}");
         }
@@ -238,20 +238,20 @@ mod tests {
     /// with 644", and setting it whole would be asking to change what
     /// class it is.
     #[test]
-    fn los_bits_de_clase_no_caben() {
+    fn the_class_bits_do_not_fit() {
         assert_eq!(parse_mode("100644"), Err(ModeError::TooBig));
         assert_eq!(parse_mode("10000"), Err(ModeError::TooBig));
     }
 
     #[test]
-    fn ida_y_vuelta() {
+    fn round_trip() {
         for m in [0o644, 0o755, 0o600, 0o4755, 0o1777, 0] {
             assert_eq!(parse_mode(&format_mode(m)), Ok(m));
         }
     }
 
     #[test]
-    fn el_modo_sale_del_atributo_del_listado() {
+    fn the_mode_comes_from_the_listing_attribute() {
         let mut e = norte_proto::Entry {
             attrs: std::collections::BTreeMap::new(),
             path: norte_proto::VPath::parse("file:///a").expect("wire"),

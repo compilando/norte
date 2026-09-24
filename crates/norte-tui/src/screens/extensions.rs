@@ -192,10 +192,10 @@ fn button_arrow(app: &mut App, mods: KeyModifiers, code: KeyCode) -> bool {
     }
     let buttons = crate::mouse::painted_extension_buttons(app).len();
     if let Some(mgr) = &mut app.extensions {
-        mgr.foco = if code == KeyCode::Right {
-            crate::app::siguiente_foco(mgr.foco, buttons)
+        mgr.focus = if code == KeyCode::Right {
+            crate::app::next_focus(mgr.focus, buttons)
         } else {
-            crate::app::anterior_foco(mgr.foco, buttons)
+            crate::app::anterior_focus(mgr.focus, buttons)
         };
     }
     true
@@ -209,7 +209,7 @@ fn button_arrow(app: &mut App, mods: KeyModifiers, code: KeyCode) -> bool {
 /// frame and the key, and firing "the fourth button" of a card that now has
 /// three would fire a different verb from the one that was read.
 fn focused_button(app: &App) -> Option<String> {
-    let crate::app::ExtFoco::Boton(i) = app.extensions.as_ref()?.foco else {
+    let crate::app::ExtFocus::Button(i) = app.extensions.as_ref()?.focus else {
         return None;
     };
     crate::mouse::painted_extension_buttons(app)
@@ -331,7 +331,7 @@ async fn on_extensions_list_cmd(app: &mut App, backend: &Backend, cmd: &str) {
     if cmd == "dialog.pane" {
         let buttons = crate::mouse::painted_extension_buttons(app).len();
         if let Some(mgr) = &mut app.extensions {
-            mgr.foco = crate::app::siguiente_foco(mgr.foco, buttons);
+            mgr.focus = crate::app::next_focus(mgr.focus, buttons);
         }
         return;
     }
@@ -485,7 +485,7 @@ mod extensions_help_tests {
             errors: Vec::new(),
             cursor: 0,
             config: None,
-            foco: crate::app::ExtFoco::Lista,
+            focus: crate::app::ExtFocus::List,
         });
         app
     }
@@ -561,7 +561,7 @@ async fn revoke_or_say(app: &mut App, backend: &Backend, id: &str) {
 /// Uninstalls — already confirmed by a human who read what is lost (ADR
 /// 0104) — and RE-LISTS. A failure is reported and re-listed anyway, for
 /// the same reason as granting: the screen shows what the core believes.
-pub(crate) async fn desinstalar_confirmada(app: &mut App, backend: &Backend, id: &str) {
+pub(crate) async fn uninstall_confirmada(app: &mut App, backend: &Backend, id: &str) {
     match backend.plugins_uninstall(id).await {
         Ok(_) => relist_extensions(app, backend).await,
         Err(e) => {
@@ -572,7 +572,7 @@ pub(crate) async fn desinstalar_confirmada(app: &mut App, backend: &Backend, id:
 }
 
 /// Grants approval — already confirmed by a human — and RE-LISTS.
-pub(crate) async fn conceder_aprobacion(
+pub(crate) async fn grant_approval(
     app: &mut App,
     backend: &Backend,
     id: &str,
@@ -631,7 +631,7 @@ fn broken_key(e: &norte_proto::methods::PluginLoadError) -> Vec<u8> {
 /// catalogue gets reordered (the core sorts it by category and id) and
 /// uninstalling removes a row, so a cursor by position leaves the reader
 /// pointing at another, and the next `e` would enable an extension nobody
-/// chose. It is what the host already does in `Extensiones::set_catalogo`.
+/// chose. It is what the host already does in `Extensions::set_catalog`.
 fn cursor_after_relist(
     chosen_id: Option<&str>,
     chosen_broken: Option<&[u8]>,
@@ -678,10 +678,10 @@ async fn relist_extensions(app: &mut App, backend: &Backend) {
     // would return the keyboard to the list right when the reader just used
     // the card. What the button says can change (turn on ↔ turn off); how
     // many there are, not.
-    let foco = app
+    let focus = app
         .extensions
         .as_ref()
-        .map_or_else(Default::default, |m| m.foco);
+        .map_or_else(Default::default, |m| m.focus);
     match backend.plugins_list().await {
         Ok(list) => {
             let mut plugins = list.plugins;
@@ -703,7 +703,7 @@ async fn relist_extensions(app: &mut App, backend: &Backend) {
                 errors: list.errors,
                 cursor,
                 config,
-                foco,
+                focus,
             });
         }
         Err(e) => app.message = Some(error_message(&e)),
@@ -803,7 +803,7 @@ mod approval_tests {
             errors: Vec::new(),
             cursor: 0,
             config: None,
-            foco: crate::app::ExtFoco::Lista,
+            focus: crate::app::ExtFocus::List,
         });
         app
     }
@@ -920,9 +920,9 @@ mod approval_tests {
 /// The manager's `tab` ring, with the screen already in front of it: which
 /// stops it has and what Enter fires at each one.
 #[cfg(test)]
-mod foco_tests {
+mod focus_tests {
     use super::App;
-    use crate::app::{ExtFoco, ExtensionManager, Modal, Pane};
+    use crate::app::{ExtFocus, ExtensionManager, Modal, Pane};
     use crossterm::event::{KeyCode, KeyModifiers};
     use ratatui::layout::Rect;
 
@@ -954,7 +954,7 @@ mod foco_tests {
             errors: Vec::new(),
             cursor: 0,
             config: None,
-            foco: ExtFoco::Lista,
+            focus: ExtFocus::List,
         });
         let area = Rect {
             x: 0,
@@ -979,8 +979,8 @@ mod foco_tests {
         norte_core::backend::Backend::Embedded(std::sync::Arc::new(norte_core::Engine::new()))
     }
 
-    fn foco(app: &App) -> ExtFoco {
-        app.extensions.as_ref().expect("manager open").foco
+    fn focus(app: &App) -> ExtFocus {
+        app.extensions.as_ref().expect("manager open").focus
     }
 
     /// `tab` moves focus from the list to the card's first button. Before
@@ -990,11 +990,11 @@ mod foco_tests {
     #[tokio::test]
     async fn tab_moves_focus_to_the_first_button() {
         let mut app = painted_app(100);
-        assert_eq!(foco(&app), ExtFoco::Lista);
+        assert_eq!(focus(&app), ExtFocus::List);
 
         super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
 
-        assert_eq!(foco(&app), ExtFoco::Boton(0));
+        assert_eq!(focus(&app), ExtFocus::Button(0));
     }
 
     /// With no card painted — narrow box — `tab` moves nothing: the stops
@@ -1010,7 +1010,7 @@ mod foco_tests {
 
         super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
 
-        assert_eq!(foco(&app), ExtFoco::Lista);
+        assert_eq!(focus(&app), ExtFocus::List);
     }
 
     /// With focus on the SECOND button, Enter fires that button —
@@ -1022,7 +1022,7 @@ mod foco_tests {
         for _ in 0..2 {
             super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
         }
-        assert_eq!(foco(&app), ExtFoco::Boton(1));
+        assert_eq!(focus(&app), ExtFocus::Button(1));
         let cmd = super::focused_button(&app).expect("focus points at a painted button");
         assert_eq!(cmd, "dialog.approve", "the card's second button");
 
@@ -1043,7 +1043,7 @@ mod foco_tests {
     async fn an_out_of_bounds_focus_fires_no_other_verb() {
         let mut app = painted_app(100);
         if let Some(mgr) = &mut app.extensions {
-            mgr.foco = ExtFoco::Boton(99);
+            mgr.focus = ExtFocus::Button(99);
         }
 
         assert_eq!(super::focused_button(&app), None);
@@ -1062,13 +1062,13 @@ mod foco_tests {
             KeyModifiers::NONE,
             KeyCode::Right
         ));
-        assert_eq!(foco(&app), ExtFoco::Boton(0));
+        assert_eq!(focus(&app), ExtFocus::Button(0));
         assert!(super::button_arrow(
             &mut app,
             KeyModifiers::NONE,
             KeyCode::Right
         ));
-        assert_eq!(foco(&app), ExtFoco::Boton(1));
+        assert_eq!(focus(&app), ExtFocus::Button(1));
         assert!(super::button_arrow(
             &mut app,
             KeyModifiers::NONE,
@@ -1079,13 +1079,13 @@ mod foco_tests {
             KeyModifiers::NONE,
             KeyCode::Left
         ));
-        assert_eq!(foco(&app), ExtFoco::Lista);
+        assert_eq!(focus(&app), ExtFocus::List);
         assert!(super::button_arrow(
             &mut app,
             KeyModifiers::NONE,
             KeyCode::Left
         ));
-        assert_eq!(foco(&app), ExtFoco::Boton(buttons - 1));
+        assert_eq!(focus(&app), ExtFocus::Button(buttons - 1));
 
         assert!(
             !super::button_arrow(&mut app, KeyModifiers::NONE, KeyCode::Down),
@@ -1106,7 +1106,7 @@ mod foco_tests {
         for exit in ["tab", "left"] {
             let mut app = painted_app(100);
             if let Some(mgr) = &mut app.extensions {
-                mgr.foco = ExtFoco::Boton(2);
+                mgr.focus = ExtFocus::Button(2);
                 mgr.config = Some(crate::app::PluginConfigPanel {
                     plugin_id: "org.acme.demo".into(),
                     plugin_name: "Demo".into(),
@@ -1126,7 +1126,7 @@ mod foco_tests {
 
             let mgr = app.extensions.as_ref().expect("manager still open");
             assert!(mgr.config.is_none(), "{exit} closes settings");
-            assert_eq!(mgr.foco, ExtFoco::Boton(2), "{exit}: focus is not lost");
+            assert_eq!(mgr.focus, ExtFocus::Button(2), "{exit}: focus is not lost");
         }
     }
 
@@ -1137,10 +1137,10 @@ mod foco_tests {
     async fn moving_down_the_list_returns_focus() {
         let mut app = painted_app(100);
         super::on_extensions_list_cmd(&mut app, &backend(), "dialog.pane").await;
-        assert_eq!(foco(&app), ExtFoco::Boton(0));
+        assert_eq!(focus(&app), ExtFocus::Button(0));
 
         super::on_extensions_list_cmd(&mut app, &backend(), "dialog.down").await;
 
-        assert_eq!(foco(&app), ExtFoco::Lista);
+        assert_eq!(focus(&app), ExtFocus::List);
     }
 }

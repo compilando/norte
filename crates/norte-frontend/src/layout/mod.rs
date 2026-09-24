@@ -184,7 +184,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn un_arbol_con_ids_repetidos_no_se_usa() {
+    fn a_tree_with_repeated_ids_is_not_used() {
         let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
@@ -202,7 +202,7 @@ mod tests {
     /// Sizes are index-parallel: one short and layout would paint a slot
     /// somewhere wrong instead of failing.
     #[test]
-    fn los_tamanos_tienen_que_ser_tantos_como_hijos() {
+    fn sizes_must_be_as_many_as_children() {
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1)],
@@ -226,7 +226,7 @@ mod tests {
     /// access panicked (#242). Persisted in the session, it panicked on
     /// EVERY startup.
     #[test]
-    fn un_arbol_sin_listado_no_es_una_disposicion() {
+    fn a_tree_without_a_listing_is_not_a_layout() {
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
@@ -243,7 +243,7 @@ mod tests {
     /// based on where the focus was when it was saved would reject healthy
     /// layouts.
     #[test]
-    fn un_listado_en_una_pestana_oculta_cuenta() {
+    fn a_listing_in_a_hidden_tab_counts() {
         let tree = Node::Tabs {
             active: 1,
             children: vec![
@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn un_arbol_sano_valida() {
+    fn a_healthy_tree_validates() {
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1)],

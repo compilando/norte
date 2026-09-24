@@ -638,7 +638,7 @@ mod shortcuts_editor_tests {
             ],
         };
         let cfg = config::load(&layers).expect("load");
-        let mut app = app_vacia();
+        let mut app = app_empty();
         app.active_profile = Some(std::ffi::OsString::from("work"));
 
         assert_eq!(
@@ -662,7 +662,7 @@ mod shortcuts_editor_tests {
             dirs: vec![(user.path().to_path_buf(), Layer::User)],
         };
         let cfg = config::load(&layers).expect("load");
-        let app = app_vacia();
+        let app = app_empty();
 
         assert_eq!(
             super::rebind_dir(&app, &cfg, None, Screen::Browse).as_deref(),
@@ -674,7 +674,7 @@ mod shortcuts_editor_tests {
         parse_chord(s).expect("chord")
     }
 
-    fn app_vacia() -> super::App {
+    fn app_empty() -> super::App {
         let d = norte_proto::VPath::parse("file:///x").expect("test wire");
         super::App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()))
     }
@@ -791,7 +791,7 @@ mod shortcuts_editor_tests {
         let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
         let sc = editor_at(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
-        let mut app = app_vacia();
+        let mut app = app_empty();
         app.shortcuts = Some(sc);
         let m = Maps {
             browse: &browse,
@@ -905,7 +905,7 @@ mod shortcuts_editor_tests {
             viewer: &viewer,
             dialog: &dialog,
         };
-        let mut app = app_vacia();
+        let mut app = app_empty();
         app.shortcuts = Some(editor_at(
             &browse,
             &viewer,
@@ -987,7 +987,7 @@ mod shortcuts_editor_tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let (_layers, cfg) = config_in(dir.path());
         let (browse, viewer, dialog) = maps(&cfg);
-        let mut app = app_vacia();
+        let mut app = app_empty();
         let mut sc = editor_at(&browse, &viewer, &dialog, Screen::Browse, "pane.mkdir");
         assert!(sc.begin_capture());
         app.shortcuts = Some(sc);

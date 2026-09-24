@@ -243,7 +243,7 @@ pub const PLUGIN_DESCRIPTION_WIRE_CAP: usize = 280;
 /// ```
 /// use norte_frontend::help_badge::plugin_description;
 ///
-/// assert_eq!(plugin_description("Sirve ficheros por FTP"), "Sirve ficheros por FTP");
+/// assert_eq!(plugin_description("Serves ficheros por FTP"), "Serves ficheros por FTP");
 /// assert!(!plugin_description("a\u{7}b").contains('\u{7}'));
 /// ```
 #[must_use]

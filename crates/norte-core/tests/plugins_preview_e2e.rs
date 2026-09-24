@@ -317,7 +317,7 @@ fn target_installed(target: &str) -> bool {
 // (`daemon::server::handle_plugin_preview_styled`, wired in this same
 // task) without that problem — the daemon's `plugins_dir` CAN be
 // parameterized by a test (`DaemonConfig`), as
-// `spawn_daemon_plugins_ok_y_roto` in `tests/daemon.rs` already proves.
+// `spawn_daemon_plugins_ok_and_broken` in `tests/daemon.rs` already proves.
 #[cfg(unix)]
 mod styled {
     use std::sync::Arc;

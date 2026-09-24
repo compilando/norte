@@ -50,8 +50,8 @@ pub struct ExtensionManager {
     /// back to the plugin list (never the whole overlay).
     pub config: Option<PluginConfigPanel>,
     /// Where the keys go inside the manager: the list, or one of the
-    /// card's buttons ([`ExtFoco`]). `dialog.pane` — `tab` — moves it.
-    pub foco: ExtFoco,
+    /// card's buttons ([`ExtFocus`]). `dialog.pane` — `tab` — moves it.
+    pub focus: ExtFocus,
 }
 
 /// Where the extension manager's focus is: the plugin list, or button `n`
@@ -63,45 +63,45 @@ pub struct ExtensionManager {
 /// Each button keeps its own key; this is the path for whoever walks the
 /// screen with `tab` instead of remembering five letters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ExtFoco {
+pub enum ExtFocus {
     /// The keys move the list's cursor (the usual thing).
     #[default]
-    Lista,
+    List,
     /// The keys go to button `n` of the card; `dialog.confirm` fires it.
-    Boton(usize),
+    Button(usize),
 }
 
 /// `tab`'s ring's next stop: the list, then each button, and back to the
 /// list.
 ///
-/// `botones` is how many buttons the LAST frame painted, not how many the
+/// `buttons` is how many buttons the LAST frame painted, not how many the
 /// card would have if it fit: with a narrow box there's no card, and then
 /// the ring has a single stop and `tab` does nothing. Moving focus to
 /// something not on screen is a keyboard moving what nobody sees, which is
 /// exactly the bug this ring exists to fix.
 #[must_use]
-pub fn siguiente_foco(foco: ExtFoco, botones: usize) -> ExtFoco {
-    if botones == 0 {
-        return ExtFoco::Lista;
+pub fn next_focus(focus: ExtFocus, buttons: usize) -> ExtFocus {
+    if buttons == 0 {
+        return ExtFocus::List;
     }
-    match foco {
-        ExtFoco::Lista => ExtFoco::Boton(0),
-        ExtFoco::Boton(i) if i + 1 < botones => ExtFoco::Boton(i + 1),
-        ExtFoco::Boton(_) => ExtFoco::Lista,
+    match focus {
+        ExtFocus::List => ExtFocus::Button(0),
+        ExtFocus::Button(i) if i + 1 < buttons => ExtFocus::Button(i + 1),
+        ExtFocus::Button(_) => ExtFocus::List,
     }
 }
 
 /// The PREVIOUS stop of the same ring (`←`): the exact inverse of
-/// [`siguiente_foco`], so from the list it jumps to the last button.
+/// [`next_focus`], so from the list it jumps to the last button.
 #[must_use]
-pub fn anterior_foco(foco: ExtFoco, botones: usize) -> ExtFoco {
-    if botones == 0 {
-        return ExtFoco::Lista;
+pub fn anterior_focus(focus: ExtFocus, buttons: usize) -> ExtFocus {
+    if buttons == 0 {
+        return ExtFocus::List;
     }
-    match foco {
-        ExtFoco::Lista => ExtFoco::Boton(botones - 1),
-        ExtFoco::Boton(0) => ExtFoco::Lista,
-        ExtFoco::Boton(i) => ExtFoco::Boton(i.min(botones) - 1),
+    match focus {
+        ExtFocus::List => ExtFocus::Button(buttons - 1),
+        ExtFocus::Button(0) => ExtFocus::List,
+        ExtFocus::Button(i) => ExtFocus::Button(i.min(buttons) - 1),
     }
 }
 
@@ -128,7 +128,7 @@ impl ExtensionManager {
     /// would be a button no longer about what's being looked at.
     pub fn up(&mut self) {
         self.cursor = self.cursor.saturating_sub(1);
-        self.foco = ExtFoco::Lista;
+        self.focus = ExtFocus::List;
     }
 
     /// Moves the cursor down (clamped at the last row: the ones that didn't
@@ -137,7 +137,7 @@ impl ExtensionManager {
     pub fn down(&mut self) {
         let max = (self.plugins.len() + self.errors.len()).saturating_sub(1);
         self.cursor = (self.cursor + 1).min(max);
-        self.foco = ExtFoco::Lista;
+        self.focus = ExtFocus::List;
     }
 
     /// The plugin under the cursor, if there is one.
@@ -308,7 +308,7 @@ mod clamp_plugin_descriptions_tests {
     /// The RTL override never survives the clamp raw — it gets masked here,
     /// not on every frame of the extension manager.
     #[test]
-    fn enmascara_override_rtl() {
+    fn masks_override_rtl() {
         let mut plugins = vec![plugin(Some("abc\u{202E}gpj.exe"))];
         clamp_plugin_descriptions(&mut plugins);
         let d = plugins[0].description.as_deref().unwrap();
@@ -319,28 +319,28 @@ mod clamp_plugin_descriptions_tests {
 
 /// The manager's `tab` ring: the list, each button, the list.
 #[cfg(test)]
-mod siguiente_foco_tests {
-    use super::{ExtFoco, siguiente_foco};
+mod next_focus_tests {
+    use super::{ExtFocus, next_focus};
 
     /// With four buttons, `tab` walks them in order and returns to the
     /// list: five presses close the ring, not one stop too many.
     #[test]
     fn the_ring_walks_the_buttons_and_comes_back() {
-        let mut f = ExtFoco::Lista;
-        let walk: Vec<ExtFoco> = (0..5)
+        let mut f = ExtFocus::List;
+        let walk: Vec<ExtFocus> = (0..5)
             .map(|_| {
-                f = siguiente_foco(f, 4);
+                f = next_focus(f, 4);
                 f
             })
             .collect();
         assert_eq!(
             walk,
             vec![
-                ExtFoco::Boton(0),
-                ExtFoco::Boton(1),
-                ExtFoco::Boton(2),
-                ExtFoco::Boton(3),
-                ExtFoco::Lista,
+                ExtFocus::Button(0),
+                ExtFocus::Button(1),
+                ExtFocus::Button(2),
+                ExtFocus::Button(3),
+                ExtFocus::List,
             ]
         );
     }
@@ -350,8 +350,8 @@ mod siguiente_foco_tests {
     /// focusing something not on screen.
     #[test]
     fn with_no_buttons_painted_focus_stays_on_the_list() {
-        assert_eq!(siguiente_foco(ExtFoco::Lista, 0), ExtFoco::Lista);
-        assert_eq!(siguiente_foco(ExtFoco::Boton(2), 0), ExtFoco::Lista);
+        assert_eq!(next_focus(ExtFocus::List, 0), ExtFocus::List);
+        assert_eq!(next_focus(ExtFocus::Button(2), 0), ExtFocus::List);
     }
 
     /// A focus left pointing past the buttons that are now painted — the
@@ -359,6 +359,6 @@ mod siguiente_foco_tests {
     /// goes back to the list instead of staying out of range.
     #[test]
     fn an_overrun_focus_returns_to_the_list() {
-        assert_eq!(siguiente_foco(ExtFoco::Boton(9), 4), ExtFoco::Lista);
+        assert_eq!(next_focus(ExtFocus::Button(9), 4), ExtFocus::List);
     }
 }

@@ -39,7 +39,7 @@ fn ctx(cwd: &str) -> PaneCtx {
 #[tokio::test]
 async fn copy_list_stat_from_lua() {
     let (backend, mem) = backend_mem();
-    write_file(&mem, "mem:///a", b"data").await;
+    write_file(&mem, "mem:///a", b"bytes").await;
     let h = LuaHost::new().expect("lua");
     let out = h
         .run_script_for_test(

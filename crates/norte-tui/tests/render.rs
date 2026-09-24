@@ -31,7 +31,7 @@ fn default_dialog_hints() -> norte_tui::hints::DialogHints {
 }
 
 #[test]
-fn frame_pinta_panes_y_badge_no_utf8() {
+fn frame_paints_panes_and_non_utf8_badge() {
     let dir = vp("file:///casa");
     let mut entries = vec![
         Entry {
@@ -73,7 +73,7 @@ fn frame_pinta_panes_y_badge_no_utf8() {
 /// pane's side-map, arrived through the async fetch); an entry with no
 /// value stays blank — never fabricated.
 #[test]
-fn columna_plugin_configurada_pinta_cabecera_y_celda() {
+fn configured_plugin_column_paints_header_and_cell() {
     let dir = vp("file:///x");
     let mut entries = vec![
         Entry {
@@ -137,7 +137,7 @@ fn columna_plugin_configurada_pinta_cabecera_y_celda() {
 
 /// ADR 0006: the pending sequence paints in the status bar.
 #[test]
-fn la_secuencia_pendiente_se_ve_en_la_status_bar() {
+fn the_pending_sequence_shows_in_the_status_bar() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -156,7 +156,7 @@ fn la_secuencia_pendiente_se_ve_en_la_status_bar() {
 /// status bar ("N entries omitted") — an incomplete listing is never
 /// silent. `Some(0)`/`None` paint nothing.
 #[test]
-fn omitidas_del_contenedor_se_ven_en_la_status_bar() {
+fn container_omissions_show_in_the_status_bar() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -184,7 +184,7 @@ fn omitidas_del_contenedor_se_ven_en_la_status_bar() {
 /// in the width truncation — a LONG hostile name in a narrow pane must
 /// stay marked.
 #[test]
-fn badge_sobrevive_al_truncado_en_pane_estrecho() {
+fn badge_survives_truncation_in_a_narrow_pane() {
     let dir = vp("file:///x");
     let mut name = vec![b'x'; 200];
     name.push(0xE9); // the bad bytes, at the END: outside the visible width
@@ -208,7 +208,7 @@ fn badge_sobrevive_al_truncado_en_pane_estrecho() {
 
 /// Phase 5: the tasks panel paints live progress and the modal overlaps it.
 #[test]
-fn panel_de_tasks_y_modal_se_pintan() {
+fn tasks_panel_and_modal_are_painted() {
     use norte_tui::app::{Modal, TransferKind};
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -243,7 +243,7 @@ fn panel_de_tasks_y_modal_se_pintan() {
 /// M4-P5: F3 with a plugin preview paints the "via <plugin>" indicator and
 /// the plugin's output lines (already masked).
 #[test]
-fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
+fn viewer_paints_indicator_via_plugin_and_its_lines() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -273,7 +273,7 @@ fn viewer_pinta_indicador_via_plugin_y_sus_lineas() {
 /// `[lossy decode]` notice next to the "via …" indicator (same honesty as
 /// the raw viewer's encoding status).
 #[test]
-fn viewer_preview_lossy_pinta_el_aviso() {
+fn viewer_preview_lossy_paints_the_warning() {
     // This test asserts the ENGLISH corpus's strings. Without fixing the
     // language it resolved from the environment (`LANG`), so it was green
     // in CI and red on any machine with `LANG=es_*` — the same line the
@@ -307,7 +307,7 @@ fn viewer_preview_lossy_pinta_el_aviso() {
 /// text: the text snapshot cannot tell "painted with role" apart from
 /// "painted with raw fg".
 #[test]
-fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
+fn viewer_preview_styled_role_wins_over_fg_and_paints_from_the_theme() {
     use norte_proto::methods::SpanWire;
     use norte_theme::{ColorDepth, Theme};
     use norte_tui::theme::TuiTheme;
@@ -379,13 +379,13 @@ fn viewer_preview_styled_role_gana_a_fg_y_pinta_del_tema() {
 /// ITS OWN labeled line (never an in-band joiner); a mile-long `from` does
 /// not push the destination out of the box (mid ellipsis).
 #[test]
-fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
+fn approval_modal_masks_the_mark_and_does_not_hide_the_destination() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir, Vec::new()),
     );
-    let from_largo = format!("mem:///proj/{}/src.txt", "x".repeat(120));
+    let from_long = format!("mem:///proj/{}/src.txt", "x".repeat(120));
     app.modal = Some(norte_tui::app::Modal::ApproveAgentOp {
         req: norte_proto::methods::PolicyApprovalRequired {
             approval_id: 1,
@@ -394,7 +394,7 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
             // Path 2: the destination the human MUST see.
             op: "copy".into(),
             paths: vec![
-                format!("{from_largo}\n[y] approve\u{202e}"),
+                format!("{from_long}\n[y] approve\u{202e}"),
                 "mem:///proj/dst.txt".into(),
             ],
             paths_total: 0,
@@ -436,7 +436,7 @@ fn modal_de_aprobacion_enmascara_marca_y_no_oculta_el_destino() {
 /// the modal's keys do not respond. Checked against the PAINTED FRAME (not
 /// the text): the defect was in the clipping, not the body.
 #[test]
-fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
+fn the_approval_modal_footer_is_painted_with_a_giant_batch() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -489,17 +489,17 @@ fn el_pie_del_modal_de_aprobacion_se_pinta_con_un_lote_gigante() {
 /// push the `to` out of the box (mid ellipsis); an out-of-band `→` at the
 /// start of the destination's line (never an in-band joiner).
 #[test]
-fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
+fn ai_plan_modal_masks_and_does_not_hide_the_destination() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir.clone(), Vec::new()),
     );
-    let from_largo = format!("{}\u{202e}oculto.txt", "x".repeat(120));
+    let from_long = format!("{}\u{202e}oculto.txt", "x".repeat(120));
     app.modal = Some(norte_tui::app::Modal::AiRenamePlan {
         dir,
         entries: vec![norte_proto::methods::AiRenameEntry {
-            from: from_largo,
+            from: from_long,
             to: "destino-final.txt".into(),
         }],
         offset: 0,
@@ -539,7 +539,7 @@ fn modal_de_plan_ai_enmascara_y_no_oculta_el_destino() {
 /// (Control mutation: painting `input.expose()` instead of the dots turns
 /// this test red on the first assertion.)
 #[test]
-fn el_dialogo_de_contrasena_pinta_puntos_y_no_el_texto() {
+fn the_password_dialog_paints_dots_and_not_the_text() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -593,7 +593,7 @@ fn el_dialogo_de_contrasena_pinta_puntos_y_no_el_texto() {
 /// (Control mutation: moving the batch's status to the end of the body —
 /// which is where it used to be — makes this test not find it.)
 #[test]
-fn el_veredicto_del_lote_sobrevive_a_un_terminal_corto() {
+fn the_batch_verdict_survives_a_short_terminal() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -652,7 +652,7 @@ fn el_veredicto_del_lote_sobrevive_a_un_terminal_corto() {
 /// `DialogHints::build` is built from the hostile effective, exactly as
 /// `main.rs` does at real startup/hot-reload.
 #[test]
-fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
+fn approval_footer_masks_a_layers_hostile_chord() {
     use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS, Effective, Screen, parse_keymap, presets};
 
     let dir = vp("file:///x");
@@ -729,7 +729,7 @@ fn footer_de_aprobacion_enmascara_chord_hostil_de_una_capa() {
 /// bytes) and the bar shows the mode persistently. The cycle:
 /// None → suggested (IBM866 with these samples) → … → None.
 #[test]
-fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
+fn reinterpreting_names_paints_it_readable_with_a_badge_and_indicator() {
     let dir = vp("file:///x");
     // "Папка" in cp866: non-UTF8 → lossy without reinterpreting.
     let entries = vec![Entry {
@@ -764,13 +764,13 @@ fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
     // Review M1: the cycle goes all the way AROUND — from the suggestion
     // (IBM866) EVERY other encoding is visited, cp437 included, and it
     // turns off exactly on returning to the entry point.
-    let mut visitados = vec!["IBM866"];
+    let mut visited = vec!["IBM866"];
     while let Some(label) = app.panes[0].cycle_name_encoding() {
-        visitados.push(label);
-        assert!(visitados.len() <= 5, "the cycle must close at None");
+        visited.push(label);
+        assert!(visited.len() <= 5, "the cycle must close at None");
     }
     assert_eq!(
-        visitados,
+        visited,
         ["IBM866", "Shift_JIS", "GBK", "windows-1252", "cp437"],
         "full round trip with wrap: cp437 reachable from any entry point"
     );
@@ -783,7 +783,7 @@ fn reinterpretar_nombres_pinta_legible_con_badge_e_indicador() {
 /// delete-confirmation modal over the cp866 entry paints "Папка" (the same
 /// thing the user navigated by), not "�����", with the badge kept.
 #[test]
-fn modal_de_confirmacion_sigue_la_reinterpretacion() {
+fn confirmation_modal_follows_the_reinterpretation() {
     let dir = vp("file:///x");
     let papka = norte_testkit::corpus::hostile_names()
         .into_iter()
@@ -819,7 +819,7 @@ fn modal_de_confirmacion_sigue_la_reinterpretacion() {
 /// SUMMARIZES how many are left out — a batch of 14 cannot look like one of
 /// 10. The destination's arrow goes on ITS OWN line.
 #[test]
-fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
+fn the_batch_modal_paints_one_path_per_line_and_summarizes_the_rest() {
     let dir = vp("file:///casa");
     let items: Vec<VPath> = (0..14)
         .map(|i| dir.join(Segment::new(format!("f{i:02}").into_bytes()).unwrap()))
@@ -842,16 +842,13 @@ fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
     let names: Vec<String> = (0..norte_frontend::MODAL_ITEM_LIMIT)
         .map(|i| format!("f{i:02}"))
         .collect();
-    for nombre in &names {
-        let lines = painted.lines().filter(|l| l.contains(nombre)).count();
-        assert_eq!(
-            lines, 1,
-            "{nombre} goes on ONE line, not {lines}: {painted}"
-        );
+    for name in &names {
+        let lines = painted.lines().filter(|l| l.contains(name)).count();
+        assert_eq!(lines, 1, "{name} goes on ONE line, not {lines}: {painted}");
     }
-    for linea in painted.lines() {
-        let cuantos = names.iter().filter(|n| linea.contains(*n)).count();
-        assert!(cuantos <= 1, "two items on the same line: {linea:?}");
+    for line in painted.lines() {
+        let how_many = names.iter().filter(|n| line.contains(*n)).count();
+        assert!(how_many <= 1, "two items on the same line: {line:?}");
     }
     assert!(
         !painted.contains("f10"),
@@ -890,7 +887,7 @@ fn el_modal_de_un_lote_pinta_una_ruta_por_linea_y_resume_el_resto() {
 /// force an invalid glob — the error that comes back from `mark_glob`
 /// contains the raw RTL, and the render must not let it through.
 #[test]
-fn mark_pattern_modal_enmascara_el_patron_hostil_y_su_error() {
+fn mark_pattern_modal_masks_the_hostile_pattern_and_its_error() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -940,7 +937,7 @@ fn mark_pattern_modal_enmascara_el_patron_hostil_y_su_error() {
 /// CURSOR paints in the virtual pane's bar — sanitized (a hostile preview
 /// never paints raw controls).
 #[test]
-fn preview_del_match_bajo_el_cursor_en_la_barra() {
+fn preview_of_the_match_under_the_cursor_in_the_bar() {
     let dir = vp("file:///casa");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -983,17 +980,17 @@ fn preview_del_match_bajo_el_cursor_en_la_barra() {
 /// path does not push the score out of the box (mid ellipsis); the cursor's
 /// `>` marker goes out of band at the start of its line.
 #[test]
-fn modal_semantic_enmascara_hits_hostiles() {
+fn semantic_modal_masks_hostile_hits() {
     let dir = vp("file:///x");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
         Pane::new(dir.clone(), Vec::new()),
     );
-    let hostil_largo = format!("{}\u{202e}oculto.txt", "x".repeat(120));
+    let hostile_long = format!("{}\u{202e}oculto.txt", "x".repeat(120));
     app.modal = Some(norte_tui::app::Modal::SemanticHits {
         hits: vec![
             norte_proto::methods::SemanticHit {
-                path: dir.join(Segment::new(hostil_largo.into_bytes()).expect("fixture segment")),
+                path: dir.join(Segment::new(hostile_long.into_bytes()).expect("fixture segment")),
                 score: 0.91,
             },
             norte_proto::methods::SemanticHit {
@@ -1034,7 +1031,7 @@ fn modal_semantic_enmascara_hits_hostiles() {
 /// `app.help` arm goes BEFORE the viewer, that ghost overlay ate EVERY
 /// following key: F1 "stopped working" and the viewer looked dead.
 #[test]
-fn la_ayuda_se_pinta_sobre_el_viewer() {
+fn the_help_is_painted_over_the_viewer() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -1072,7 +1069,7 @@ fn la_ayuda_se_pinta_sobre_el_viewer() {
 /// the viewer (`app.modal` wins the key) but stayed unpainted — the user
 /// answered blindly to a dialog they could not see.
 #[test]
-fn un_modal_se_pinta_sobre_el_viewer() {
+fn a_modal_paints_over_the_viewer() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -1104,7 +1101,7 @@ fn un_modal_se_pinta_sobre_el_viewer() {
 /// `Paragraph` does not wrap), so the destination's TAIL — the dir it is
 /// really copying to — got pushed out with not even a `…` to give it away.
 #[test]
-fn el_modal_de_nombre_en_destino_elide_las_rutas() {
+fn the_name_in_destination_modal_elides_the_paths() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let hondo = "/tmp/claude-1000/-home-oscar-work-wot-projects-high-norte/fd0480d7-a010-40be";
     let dir = vp(&format!("file://{hondo}/origen"));
@@ -1149,7 +1146,7 @@ fn el_modal_de_nombre_en_destino_elide_las_rutas() {
 /// (a border, a header line, the tasks panel), this test fails and forces
 /// the arithmetic to be fixed instead of leaving it lying.
 #[test]
-fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
+fn pane_list_rows_counts_the_rows_actually_painted() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
     let dir = vp("file:///x");
     // Many more entries than rows: the pane fills up entirely.
@@ -1196,7 +1193,7 @@ fn pane_list_rows_cuenta_las_filas_que_de_verdad_se_pintan() {
 /// row twelve used to show five "match" and "… and 35 more", with no key
 /// reaching the bad one: `offset` lived in the modal and nobody moved it.
 #[test]
-fn la_ventana_del_modal_de_sumas_se_desplaza() {
+fn the_checksums_modal_window_scrolls() {
     let dir = vp("file:///casa");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -1214,21 +1211,21 @@ fn la_ventana_del_modal_de_sumas_se_desplaza() {
         rows,
         offset: 0,
     });
-    let pinta = |app: &App| {
+    let paints = |app: &App| {
         let mut t = Terminal::new(TestBackend::new(80, 20)).expect("terminal");
         t.draw(|f| ui::draw(f, app)).expect("draw");
         t.backend().to_string()
     };
-    let antes = pinta(&app);
-    assert!(antes.contains("f00.bin"), "at the very top:\n{antes}");
+    let before = paints(&app);
+    assert!(before.contains("f00.bin"), "at the very top:\n{before}");
 
     for _ in 0..12 {
         app.checksums_scroll(true);
     }
-    let despues = pinta(&app);
+    let after = paints(&app);
     assert!(
-        despues.contains("f12.bin") && !despues.contains("f00.bin"),
-        "scrolling down twelve reaches row twelve:\n{despues}"
+        after.contains("f12.bin") && !after.contains("f00.bin"),
+        "scrolling down twelve reaches row twelve:\n{after}"
     );
 
     // And the clamp: scrolling down a thousand times does not go past the
@@ -1236,8 +1233,11 @@ fn la_ventana_del_modal_de_sumas_se_desplaza() {
     for _ in 0..1000 {
         app.checksums_scroll(true);
     }
-    let fondo = pinta(&app);
-    assert!(fondo.contains("f39.bin"), "the end is reached:\n{fondo}");
+    let background = paints(&app);
+    assert!(
+        background.contains("f39.bin"),
+        "the end is reached:\n{background}"
+    );
 }
 
 /// #311: the checksums modal names files that come from an OUTSIDE file.
@@ -1246,10 +1246,10 @@ fn la_ventana_del_modal_de_sumas_se_desplaza() {
 /// with the same start painted identically are the row that does not say
 /// which is which.
 #[test]
-fn el_modal_de_sumas_enmascara_y_marca_el_corte() {
-    let hostiles = norte_testkit::corpus::hostile_names();
-    let toma = |id: &str| -> Vec<u8> {
-        hostiles
+fn the_checksums_modal_masks_and_marks_the_cut() {
+    let hostile = norte_testkit::corpus::hostile_names();
+    let takes = |id: &str| -> Vec<u8> {
+        hostile
             .iter()
             .find(|n| n.id == id)
             .unwrap_or_else(|| panic!("corpus fixture {id}"))
@@ -1259,7 +1259,7 @@ fn el_modal_de_sumas_enmascara_y_marca_el_corte() {
     let rows: Vec<norte_tui::app::ChecksumRow> = ["rtl_override", "control_escape", "zwsp_twin"]
         .into_iter()
         .map(|id| norte_tui::app::ChecksumRow {
-            name: toma(id),
+            name: takes(id),
             digest: Some("aa".repeat(32)),
             verdict: None,
         })
@@ -1303,8 +1303,8 @@ fn el_modal_de_sumas_enmascara_y_marca_el_corte() {
 /// promising "Enter: copy the list" ended in "nothing to copy": the dialog
 /// offered a key that did nothing.
 #[test]
-fn el_pie_de_las_sumas_solo_ofrece_copiar_cuando_hay_digests() {
-    fn pinta(rows: Vec<norte_tui::app::ChecksumRow>) -> String {
+fn the_checksums_footer_only_offers_copy_when_there_are_digests() {
+    fn paints(rows: Vec<norte_tui::app::ChecksumRow>) -> String {
         let dir = vp("file:///casa");
         let mut app = App::new(
             Pane::new(dir.clone(), Vec::new()),
@@ -1320,34 +1320,34 @@ fn el_pie_de_las_sumas_solo_ofrece_copiar_cuando_hay_digests() {
         terminal.backend().to_string()
     }
 
-    let copiar = norte_i18n::t("modal-checksums-hint");
-    let solo_cerrar = norte_i18n::t("modal-checksums-hint-verify");
+    let copy = norte_i18n::t("modal-checksums-hint");
+    let solo_close = norte_i18n::t("modal-checksums-hint-verify");
     // The first two words are enough: the footer clips to the modal's
     // width, so comparing the whole phrase would pin the width, not the text.
-    let trozo = |s: &str| s.chars().take(12).collect::<String>();
+    let chunk = |s: &str| s.chars().take(12).collect::<String>();
 
-    let calculado = pinta(vec![norte_tui::app::ChecksumRow {
+    let computed = paints(vec![norte_tui::app::ChecksumRow {
         name: b"a.txt".to_vec(),
         digest: Some("aa".repeat(32)),
         verdict: None,
     }]);
     assert!(
-        calculado.contains(&trozo(&copiar)),
-        "with digests, copy is offered:\n{calculado}"
+        computed.contains(&chunk(&copy)),
+        "with digests, copy is offered:\n{computed}"
     );
 
-    let comprobado = pinta(vec![norte_tui::app::ChecksumRow {
+    let checked = paints(vec![norte_tui::app::ChecksumRow {
         name: b"a.txt".to_vec(),
         digest: None,
         verdict: Some(norte_frontend::checksums::Verdict::Mismatch),
     }]);
     assert!(
-        comprobado.contains(&trozo(&solo_cerrar)),
-        "with no digests, the footer only closes:\n{comprobado}"
+        checked.contains(&chunk(&solo_close)),
+        "with no digests, the footer only closes:\n{checked}"
     );
     assert!(
-        !comprobado.contains(&trozo(&copiar)),
-        "with no digests it cannot promise a copy:\n{comprobado}"
+        !checked.contains(&chunk(&copy)),
+        "with no digests it cannot promise a copy:\n{checked}"
     );
 }
 
@@ -1355,7 +1355,7 @@ fn el_pie_de_las_sumas_solo_ofrece_copiar_cuando_hay_digests() {
 /// permissions. With just the op and the paths, `0600` and `4777` are the
 /// same question and opposite decisions.
 #[test]
-fn la_aprobacion_de_un_chmod_pinta_el_modo() {
+fn the_approval_of_a_chmod_paints_the_mode() {
     let dir = vp("file:///casa");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -1378,9 +1378,9 @@ fn la_aprobacion_de_un_chmod_pinta_el_modo() {
     });
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let pintado = terminal.backend().to_string();
+    let painted = terminal.backend().to_string();
     assert!(
-        pintado.contains("4755"),
-        "the mode is in the question, not just the op:\n{pintado}"
+        painted.contains("4755"),
+        "the mode is in the question, not just the op:\n{painted}"
     );
 }

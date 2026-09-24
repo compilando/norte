@@ -10,7 +10,7 @@
 //! the instant Enter is pressed, and the caller knows it; a mapping that
 //! asked the time on its own could not be tested without waiting.
 //!
-//! Nothing is painted here: the labels are Fluent KEYS ([`SearchField::clave`])
+//! Nothing is painted here: the labels are Fluent KEYS ([`SearchField::key`])
 //! and each frontend translates and places them.
 
 use norte_proto::VPath;
@@ -53,7 +53,7 @@ impl SearchField {
 
     /// Its label's Fluent key.
     #[must_use]
-    pub fn clave(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
             Self::Name => "search-name",
             Self::Content => "search-content",
@@ -116,31 +116,31 @@ pub const ID_KINDS: &str = "kinds";
 pub enum SearchKinds {
     /// Anything.
     #[default]
-    Todo,
+    All,
     /// Files only.
-    Ficheros,
+    Files,
     /// Directories only.
-    Carpetas,
+    Folders,
 }
 
 impl SearchKinds {
     /// The next one in the cycle.
     #[must_use]
-    pub fn siguiente(self) -> Self {
+    pub fn next(self) -> Self {
         match self {
-            Self::Todo => Self::Ficheros,
-            Self::Ficheros => Self::Carpetas,
-            Self::Carpetas => Self::Todo,
+            Self::All => Self::Files,
+            Self::Files => Self::Folders,
+            Self::Folders => Self::All,
         }
     }
 
     /// Its label's Fluent key.
     #[must_use]
-    pub fn clave(self) -> &'static str {
+    pub fn key(self) -> &'static str {
         match self {
-            Self::Todo => "search-kinds-any",
-            Self::Ficheros => "search-kinds-files",
-            Self::Carpetas => "search-kinds-dirs",
+            Self::All => "search-kinds-any",
+            Self::Files => "search-kinds-files",
+            Self::Folders => "search-kinds-dirs",
         }
     }
 
@@ -148,9 +148,9 @@ impl SearchKinds {
     #[must_use]
     pub fn wire(self) -> Vec<norte_proto::EntryKind> {
         match self {
-            Self::Todo => Vec::new(),
-            Self::Ficheros => vec![norte_proto::EntryKind::File],
-            Self::Carpetas => vec![norte_proto::EntryKind::Dir],
+            Self::All => Vec::new(),
+            Self::Files => vec![norte_proto::EntryKind::File],
+            Self::Folders => vec![norte_proto::EntryKind::Dir],
         }
     }
 }
@@ -284,7 +284,7 @@ impl Default for SearchForm {
             case: false,
             whole_word: false,
             recursive: true,
-            kinds: SearchKinds::Todo,
+            kinds: SearchKinds::All,
         }
     }
 }
@@ -316,7 +316,7 @@ impl SearchForm {
 
     /// A field's text, to paint it.
     #[must_use]
-    pub fn texto(&self, f: SearchField) -> &str {
+    pub fn text(&self, f: SearchField) -> &str {
         match f {
             SearchField::Name => &self.name,
             SearchField::Content => &self.content,
@@ -334,8 +334,8 @@ impl SearchForm {
     /// itself needs: there the caret's owner is the `<input>`, and what
     /// arrives is the resulting text, not the keystroke. The terminal uses
     /// [`Self::push_char`]/[`Self::backspace`], which is what happens there.
-    pub fn set_texto(&mut self, f: SearchField, texto: String) {
-        *self.field_mut(f) = texto;
+    pub fn set_text(&mut self, f: SearchField, text: String) {
+        *self.field_mut(f) = text;
     }
 
     /// A printable character into the active field.
@@ -379,7 +379,7 @@ impl SearchForm {
 
     /// Cycles which entry kind counts.
     pub fn cycle_kinds(&mut self) {
-        self.kinds = self.kinds.siguiente();
+        self.kinds = self.kinds.next();
     }
 
     /// Is there any criterion? With none, nothing is launched: a search with
@@ -394,7 +394,7 @@ impl SearchForm {
     pub fn has_criteria(&self) -> bool {
         !self.name.is_empty()
             || !self.content.is_empty()
-            || self.kinds != SearchKinds::Todo
+            || self.kinds != SearchKinds::All
             || parse_size(&self.min_size).is_some()
             || parse_size(&self.max_size).is_some()
             || parse_days(&self.days).is_some()
@@ -418,7 +418,7 @@ impl SearchForm {
     /// result, which is exactly what the 0.81.0 version notice exists to
     /// prevent against an old daemon. The same trap at home is no better.
     #[must_use]
-    pub fn campo_ilegible(&self) -> Option<SearchField> {
+    pub fn field_unreadable(&self) -> Option<SearchField> {
         if !self.min_size.trim().is_empty() && parse_size(&self.min_size).is_none() {
             return Some(SearchField::MinSize);
         }
@@ -469,7 +469,7 @@ impl SearchForm {
 /// let mut f = SearchForm::new();
 /// f.name = "*.rs".to_owned();
 /// f.days = "7".to_owned();
-/// let p = params(&f, VPath::parse("mem:///casa").unwrap(), 7 * 86_400_000, 10_000);
+/// let p = params(&f, VPath::parse("mem:///home").unwrap(), 7 * 86_400_000, 10_000);
 /// assert_eq!(p.name_glob.as_deref(), Some("*.rs"));
 /// assert_eq!(p.name_regex, None);
 /// // Seven days counted from the stated instant, not from the clock.
@@ -561,25 +561,25 @@ mod tests {
     fn an_unreadable_field_is_named_and_nothing_launches() {
         let mut d = SearchForm::new();
         d.min_size = "mucho".into();
-        assert_eq!(d.campo_ilegible(), Some(SearchField::MinSize));
+        assert_eq!(d.field_unreadable(), Some(SearchField::MinSize));
         d.min_size = "1M".into();
-        assert_eq!(d.campo_ilegible(), None, "now it is understood");
+        assert_eq!(d.field_unreadable(), None, "now it is understood");
         d.days = "ayer".into();
-        assert_eq!(d.campo_ilegible(), Some(SearchField::Days));
+        assert_eq!(d.field_unreadable(), Some(SearchField::Days));
         // Empty is not unreadable: it is "typed nothing".
         d.days = "   ".into();
-        assert_eq!(d.campo_ilegible(), None);
+        assert_eq!(d.field_unreadable(), None);
         // And the encoding, which needs it most: it is the only one whose
         // error takes down the whole search with an `InvalidPath` that the
         // frontend paints as "invalid path".
         d.encoding = "utf-eight".into();
-        assert_eq!(d.campo_ilegible(), Some(SearchField::Encoding));
+        assert_eq!(d.field_unreadable(), Some(SearchField::Encoding));
         // Including a REPLACEMENT label, which does not fail but finds
         // nothing: it decodes the whole file into a single U+FFFD.
         d.encoding = "utf-7".into();
-        assert_eq!(d.campo_ilegible(), Some(SearchField::Encoding));
+        assert_eq!(d.field_unreadable(), Some(SearchField::Encoding));
         d.encoding = "windows-1252".into();
-        assert_eq!(d.campo_ilegible(), None);
+        assert_eq!(d.field_unreadable(), None);
     }
 
     /// A FILTER alone is already a criterion (0.81.0); excluding directories
@@ -677,9 +677,13 @@ mod tests {
         let mut f = SearchForm::new();
         f.name = "*.rs".into();
         f.exclude = vec!["a"; cap].join(",");
-        assert_eq!(f.campo_ilegible(), None, "right at the cap it is accepted");
+        assert_eq!(
+            f.field_unreadable(),
+            None,
+            "right at the cap it is accepted"
+        );
         f.exclude = vec!["a"; cap + 1].join(",");
-        assert_eq!(f.campo_ilegible(), Some(SearchField::Exclude));
+        assert_eq!(f.field_unreadable(), Some(SearchField::Exclude));
     }
 
     /// A field's id is STABLE and round-trips; one that does not exist is
@@ -723,14 +727,14 @@ mod tests {
     #[test]
     fn a_field_can_be_written_whole_or_key_by_key() {
         let mut f = SearchForm::new();
-        f.set_texto(SearchField::Content, "hola".into());
-        assert_eq!(f.texto(SearchField::Content), "hola");
-        assert_eq!(f.texto(SearchField::Name), "", "and only that field");
+        f.set_text(SearchField::Content, "hola".into());
+        assert_eq!(f.text(SearchField::Content), "hola");
+        assert_eq!(f.text(SearchField::Name), "", "and only that field");
         f.push_char('a');
         f.push_char('b');
         f.backspace();
         assert_eq!(
-            f.texto(SearchField::Name),
+            f.text(SearchField::Name),
             "a",
             "the active one is still the name"
         );

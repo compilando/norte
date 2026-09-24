@@ -150,7 +150,7 @@ pub enum IconSet {
 /// The icon of a built-in panel, or `None` for one that has none (a
 /// plugin's): then its LETTER is painted, which is already known about it.
 ///
-/// The same subjects as the window's icons (`render/iconos.ts`): star,
+/// The same subjects as the window's icons (`render/icons.ts`): star,
 /// branches, eye, pulse, "i", lines, wheel, clock.
 ///
 /// ```
@@ -181,12 +181,12 @@ pub fn icon(kind: &str, set: IconSet) -> Option<&'static str> {
 /// a figure that wraps around would say "nothing" with a full log.
 ///
 /// ```
-/// use norte_frontend::panelbar::cifra;
-/// assert_eq!(cifra(3), 3);
-/// assert_eq!(cifra(usize::MAX), u32::MAX);
+/// use norte_frontend::panelbar::figure;
+/// assert_eq!(figure(3), 3);
+/// assert_eq!(figure(usize::MAX), u32::MAX);
 /// ```
 #[must_use]
-pub fn cifra(n: usize) -> u32 {
+pub fn figure(n: usize) -> u32 {
     u32::try_from(n).unwrap_or(u32::MAX)
 }
 
@@ -251,7 +251,7 @@ fn buttons_with(
     let mut out: Vec<PanelButton> = Vec::new();
     for decl in reg.decls() {
         let id = decl.id.as_str();
-        if !es_boton(decl) {
+        if !es_button(decl) {
             continue;
         }
         let command = TOGGLES
@@ -298,7 +298,7 @@ fn buttons_with(
 /// test red instead of painting a Spanish-speaking reader the id's English
 /// initial.
 #[must_use]
-pub fn es_boton(decl: &crate::layout::KindDecl) -> bool {
+pub fn es_button(decl: &crate::layout::KindDecl) -> bool {
     // A bar panel is one that gets focused: the ones that are only looked
     // at have no business here.
     //
@@ -653,7 +653,7 @@ mod tests {
         let panels: Vec<&str> = reg
             .decls()
             .iter()
-            .filter(|d| es_boton(d))
+            .filter(|d| es_button(d))
             .map(|d| d.id.as_str())
             .collect();
         assert!(panels.len() >= 6, "the registry lost panels: {panels:?}");

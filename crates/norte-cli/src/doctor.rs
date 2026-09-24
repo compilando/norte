@@ -805,7 +805,7 @@ pub fn check_logs(dir: Option<&Path>) -> Vec<Finding> {
 /// single [`Severity::Error`] `connections-parse`. Per connection:
 /// [`ConnectionSpec::endpoint`][ep] parsing is [`Severity::Error`] on
 /// failure (its `Display` never echoes a password — `spec.rs`'s own
-/// `password_inline_en_url_rechazado_sin_eco`/`scheme_invalido_con_password_inline_no_eco`
+/// `inline_password_in_url_rejected_without_echo`/`an_invalid_scheme_with_an_inline_password_is_not_echoed`
 /// tests pin that); `Agent`/`Key` auth need no secret and are
 /// [`Severity::Ok`]; `Password`/`AccessKey` (secret-bearing, decision 2) are
 /// checked for [`norte_connect::env_key`]'s var via `env`, which has FOUR
@@ -1185,7 +1185,7 @@ mod tests {
     /// via `XDG_CONFIG_HOME` once the override is omitted) that ALSO has a
     /// `norte.toml` → a `Warn` split-brain finding.
     #[test]
-    fn split_brain_avisa() {
+    fn split_brain_warns() {
         let legacy_xdg = tempfile::tempdir().unwrap();
         let legacy_norte_dir = legacy_xdg.path().join("norte");
         std::fs::create_dir_all(&legacy_norte_dir).unwrap();
@@ -1459,7 +1459,7 @@ fs-read = "scoped"
         let Some(bytes) = demo_guest_bytes() else {
             return;
         };
-        let viejo: Vec<u8> = {
+        let old: Vec<u8> = {
             let mut out = bytes.clone();
             let (from, to) = (b"@0.10.0", b"@0.70.0");
             let mut i = 0;
@@ -1475,7 +1475,7 @@ fs-read = "scoped"
         };
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "org.norte.demo", DEMO_MANIFEST);
-        std::fs::write(dir.path().join("plugins/org.norte.demo/plugin.wasm"), viejo).unwrap();
+        std::fs::write(dir.path().join("plugins/org.norte.demo/plugin.wasm"), old).unwrap();
 
         let findings = check_plugins(dir.path());
         let f = findings
@@ -1757,7 +1757,7 @@ max = 10
     /// TDD (H3e): a `help.md` past the untrusted cap is served cut short, and
     /// the author only finds out here.
     #[test]
-    fn un_help_md_recortado_sale_como_hallazgo() {
+    fn a_truncated_help_md_comes_out_as_a_finding() {
         let dir = tempfile::tempdir().unwrap();
         write_plugin(dir.path(), "acme.ftp", &manifest_for("acme.ftp"));
         // Over `Limits::untrusted().max_bytes` (64 KiB), and valid UTF-8 so

@@ -16,7 +16,7 @@ use norte_encoding::{is_terminal_hazard, mask_terminal_hazards};
 /// EXCLUDED from `Default_Ignorable_Code_Point`, and `U+2800` is **So**: it
 /// paints blank without being ignorable to anyone.
 #[test]
-fn the_unenumerated_invisibles_are_a_hazard() {
+fn the_unenumerated_invisible_are_a_hazard() {
     const LEAKS: &[(char, &str)] = &[
         ('\u{2061}', "FUNCTION APPLICATION (Cf)"),
         ('\u{2064}', "INVISIBLE PLUS (Cf)"),

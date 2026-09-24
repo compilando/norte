@@ -154,7 +154,7 @@ pub async fn finish(app: &mut App, backend: &norte_core::backend::Backend, outco
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::testutil::app_dos_panes;
+    use crate::app::testutil::app_two_panes;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -164,7 +164,7 @@ mod tests {
     /// `Dismissed`, and Enter on the last step closes with `Done`.
     #[test]
     fn keys_move_the_wizard_and_the_theme_is_seen_live() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.wizard = Some(Wizard::new(
             &["orthodox", "vim"],
             &["default", "nord"],

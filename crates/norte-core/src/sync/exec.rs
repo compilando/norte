@@ -200,7 +200,8 @@ impl SyncTargets {
         let Some(root) = self.dest_confined.as_deref() else {
             return Ok(());
         };
-        crate::ops::dest_sigue_ahi_o_falla(self.dest.as_ref(), root, &self.dest_root, cancel).await
+        crate::ops::dest_still_there_or_fails(self.dest.as_ref(), root, &self.dest_root, cancel)
+            .await
     }
 
     /// A step's destination: the real path, plus the relative one under the
@@ -1459,8 +1460,8 @@ where
         // again. What neither form allows is saying it went well, which is
         // what the final check is for.
         if done_count > 0
-            && (done_count.is_multiple_of(crate::ops::COMPROBAR_RAIZ_CADA)
-                || last_check.elapsed().as_secs() >= crate::ops::COMPROBAR_RAIZ_CADA_SEGUNDOS)
+            && (done_count.is_multiple_of(crate::ops::CHECK_ROOT_EACH)
+                || last_check.elapsed().as_secs() >= crate::ops::CHECK_ROOT_EVERY_SECONDS)
         {
             targets
                 .dest_still_standing(&ctx.cancel)

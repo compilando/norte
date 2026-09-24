@@ -9,7 +9,7 @@
 //!
 //! - **Approve ASKS**, and the question lists the capabilities one per
 //!   line. Revoke and disable do not ask: they go in the safe direction.
-//! - **None of this exists in `SoloLectura`.** The same switch that decides
+//! - **None of this exists in `SoloRead`.** The same switch that decides
 //!   whether the window deletes decides whether it grants permissions.
 //! - **The truth lives in the core.** After a change the catalogue is
 //!   RE-REQUESTED instead of touching the `bool` here: a local optimism the
@@ -42,10 +42,10 @@ use crate::dto::{
 /// A hostile daemon can announce as many plugins as it likes, and each row
 /// costs several masked strings. The cap bounds the work and the message;
 /// what is left out is NOT kept silent, it is stated in the view itself.
-pub(crate) const MAX_EXTENSIONES: usize = 512;
+pub(crate) const MAX_EXTENSIONS: usize = 512;
 
 /// The open manager.
-pub(crate) struct Extensiones {
+pub(crate) struct Extensions {
     /// What is installed, already sanitized. Empty while the catalogue has
     /// not arrived.
     rows: Vec<ExtensionRowView>,
@@ -77,10 +77,10 @@ pub(crate) struct Extensiones {
     requested: Option<String>,
 }
 
-impl Extensiones {
+impl Extensions {
     /// Opens the empty manager: the catalogue is requested and arrives
     /// later.
-    pub(crate) fn abrir() -> Self {
+    pub(crate) fn open() -> Self {
         Self {
             rows: Vec::new(),
             errors: Vec::new(),
@@ -94,44 +94,44 @@ impl Extensiones {
     }
 
     /// Feeds in the catalogue the daemon answered with.
-    pub(crate) fn set_catalogo(&mut self, list: &PluginListResult) {
+    pub(crate) fn set_catalog(&mut self, list: &PluginListResult) {
         self.loading = false;
         // Who was selected, by ID. A state change RE-REQUESTS the whole
         // catalogue, and the core sorts it by category and id: approving
         // an extension can move it elsewhere, and a cursor by position
         // would leave the reader pointing at a different one right after
         // granting permissions to the first.
-        let selected = self.elegida().map(str::to_owned);
+        let selected = self.chosen().map(str::to_owned);
         // And a BROKEN one, by what is painted for it: it stays selected
         // even if the catalogue above changes size. By position, a
         // catalogue with one fewer loaded entry left the cursor on a
         // different row, and the next `e` enabled an extension nobody chose.
-        let broken_selected = self.rota_elegida().map(|r| (r.dir.clone(), r.hostile));
+        let broken_selected = self.broken_chosen().map(|r| (r.dir.clone(), r.hostile));
         self.catalog = list
             .plugins
             .iter()
             .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
-            .take(MAX_EXTENSIONES)
+            .take(MAX_EXTENSIONS)
             .cloned()
             .collect();
         self.commands = list
             .plugins
             .iter()
             .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
-            .take(MAX_EXTENSIONES)
+            .take(MAX_EXTENSIONS)
             .map(|p| (p.id.clone(), commands_of(p)))
             .collect();
         self.rows = list
             .plugins
             .iter()
             .filter(|p| norte_proto::methods::is_valid_plugin_id(&p.id))
-            .take(MAX_EXTENSIONES)
+            .take(MAX_EXTENSIONS)
             .map(row_from)
             .collect();
         self.errors = list
             .errors
             .iter()
-            .take(MAX_EXTENSIONES)
+            .take(MAX_EXTENSIONS)
             .map(|e| {
                 // The BYTES if the peer sends them (#265), and only then can
                 // `display_name` do the conversion and FLAG it. The `dir`
@@ -191,12 +191,12 @@ impl Extensiones {
             // the cursor pointed at another, and the next key press applied
             // to the one pointed at.
             self.cursor = self.cursor.min(self.total().saturating_sub(1));
-            self.cerrar_ficha();
+            self.close_detail();
         }
     }
 
     /// The whole selected row: what is needed to govern it.
-    pub(crate) fn fila_elegida(&self) -> Option<&ExtensionRowView> {
+    pub(crate) fn row_chosen(&self) -> Option<&ExtensionRowView> {
         self.rows.get(self.cursor)
     }
 
@@ -211,7 +211,7 @@ impl Extensiones {
     /// They go behind the loaded ones, in the order they traveled: row
     /// `rows.len() + j` is `errors[j]`. A cursor that only walked the
     /// catalogue left a broken extension with no way to ask for its removal.
-    pub(crate) fn rota_elegida(&self) -> Option<&ExtensionErrorView> {
+    pub(crate) fn broken_chosen(&self) -> Option<&ExtensionErrorView> {
         self.cursor
             .checked_sub(self.rows.len())
             .and_then(|j| self.errors.get(j))
@@ -224,13 +224,13 @@ impl Extensiones {
     }
 
     /// The one that failed to load and is uninstalled with this id, if any.
-    pub(crate) fn rota(&self, id: &str) -> Option<&ExtensionErrorView> {
+    pub(crate) fn broken(&self, id: &str) -> Option<&ExtensionErrorView> {
         self.errors.iter().find(|e| e.id.as_deref() == Some(id))
     }
 
     /// The id of row `row` — loaded or broken — as it traveled. A broken
     /// one with no id names nothing.
-    pub(crate) fn id_de_fila(&self, row: usize) -> Option<&str> {
+    pub(crate) fn row_id(&self, row: usize) -> Option<&str> {
         match row.checked_sub(self.rows.len()) {
             None => self.rows.get(row).map(|f| f.id.as_str()),
             Some(j) => self.errors.get(j).and_then(|e| e.id.as_deref()),
@@ -239,7 +239,7 @@ impl Extensiones {
 
     /// The raw catalogue, to hand to help: its extension pages come from the
     /// same list as these rows.
-    pub(crate) fn catalogo(&self) -> &[PluginInfo] {
+    pub(crate) fn catalog(&self) -> &[PluginInfo] {
         &self.catalog
     }
 
@@ -254,24 +254,24 @@ impl Extensiones {
     pub(crate) fn concesion(&self, id: &str) -> Option<Grant> {
         let p = self.catalog.iter().find(|p| p.id == id)?;
         Some(Grant {
-            nombre: texto_de_tercero(&p.name),
-            capabilities: p.capabilities.iter().map(|c| texto_de_tercero(c)).collect(),
+            name: third_party_text(&p.name),
+            capabilities: p.capabilities.iter().map(|c| third_party_text(c)).collect(),
             digest: p.manifest_digest.clone(),
         })
     }
 
     /// `true` if the open detail card belongs to this extension.
-    pub(crate) fn es_ficha_de(&self, id: &str) -> bool {
+    pub(crate) fn is_tab_of(&self, id: &str) -> bool {
         self.detail.as_ref().is_some_and(|f| f.id == id)
     }
 
     /// An extension's commands, already masked.
-    pub(crate) fn comandos_de_id(&self, id: &str) -> &[ExtensionCommandView] {
+    pub(crate) fn id_commands(&self, id: &str) -> &[ExtensionCommandView] {
         self.commands.get(id).map_or(&[], Vec::as_slice)
     }
 
     /// The selected extension, if there is one.
-    pub(crate) fn elegida(&self) -> Option<&str> {
+    pub(crate) fn chosen(&self) -> Option<&str> {
         self.rows.get(self.cursor).map(|f| f.id.as_str())
     }
 
@@ -288,34 +288,34 @@ impl Extensiones {
         let new_cursor = usize::try_from(target.max(0)).unwrap_or(0).min(total - 1);
         if new_cursor != self.cursor {
             self.cursor = new_cursor;
-            self.cerrar_ficha();
+            self.close_detail();
         }
     }
 
     /// Points the cursor at a specific row (a click). Out of range does
     /// nothing: the painter can be one frame behind.
-    pub(crate) fn senalar(&mut self, row: usize) {
+    pub(crate) fn point_at(&mut self, row: usize) {
         if row < self.total() && row != self.cursor {
             self.cursor = row;
-            self.cerrar_ficha();
+            self.close_detail();
         }
     }
 
     /// Closes the detail card and forgets what was requested.
-    pub(crate) fn cerrar_ficha(&mut self) {
+    pub(crate) fn close_detail(&mut self) {
         self.detail = None;
         self.requested = None;
     }
 
     /// `true` if there is an open detail card to close.
-    pub(crate) fn tiene_ficha(&self) -> bool {
+    pub(crate) fn has_detail(&self) -> bool {
         self.detail.is_some()
     }
 
     /// Claims the detail card of the selected extension, if not already
     /// requested.
-    pub(crate) fn reclamar_ficha(&mut self) -> Option<String> {
-        let id = self.elegida()?.to_owned();
+    pub(crate) fn claim_detail(&mut self) -> Option<String> {
+        let id = self.chosen()?.to_owned();
         if self.requested.as_deref() == Some(id.as_str()) {
             return None;
         }
@@ -327,7 +327,7 @@ impl Extensiones {
     ///
     /// Discarded if the reader has already moved to another row: a slow
     /// response cannot describe an extension other than the one selected.
-    pub(crate) fn set_ficha(&mut self, id: &str, res: &PluginGetConfigResult, lang: Lang) {
+    pub(crate) fn set_detail(&mut self, id: &str, res: &PluginGetConfigResult, lang: Lang) {
         if self.requested.as_deref() != Some(id) {
             return;
         }
@@ -348,7 +348,7 @@ impl Extensiones {
     /// the arrows belong to the catalogue: a detail card with nothing to
     /// walk that kept the keys would leave the reader unable to move
     /// without closing it first.
-    pub(crate) fn mover_en_ficha(&mut self, delta: i64) -> bool {
+    pub(crate) fn move_in_card(&mut self, delta: i64) -> bool {
         let Some(f) = self.detail.as_mut() else {
             return false;
         };
@@ -375,7 +375,7 @@ impl Extensiones {
     /// An unknown `kind` does nothing, which is the shared model's answer:
     /// blindly editing a shape this build does not understand is writing
     /// into a plugin's `config.toml` something nobody can vouch for.
-    pub(crate) fn activar_clave(&mut self) -> Option<(String, PendingConfigWrite)> {
+    pub(crate) fn activate_key(&mut self) -> Option<(String, PendingConfigWrite)> {
         let f = self.detail.as_mut()?;
         let write = f.state.activate()?;
         Some((f.id.clone(), write))
@@ -387,21 +387,21 @@ impl Extensiones {
     }
 
     /// A character into the edit buffer.
-    pub(crate) fn escribir(&mut self, c: char) {
+    pub(crate) fn write(&mut self, c: char) {
         if let Some(f) = self.detail.as_mut() {
             f.state.edit_push_char(c);
         }
     }
 
     /// Deletes the last character of the buffer.
-    pub(crate) fn borrar(&mut self) {
+    pub(crate) fn delete(&mut self) {
         if let Some(f) = self.detail.as_mut() {
             f.state.edit_backspace();
         }
     }
 
     /// Closes the buffer WITHOUT writing.
-    pub(crate) fn cancelar_edicion(&mut self) {
+    pub(crate) fn cancel_edit(&mut self) {
         if let Some(f) = self.detail.as_mut() {
             f.state.edit_cancel();
         }
@@ -412,7 +412,7 @@ impl Extensiones {
     /// # Errors
     /// Whatever the shared model says: it does not parse as an integer, or
     /// it parses and falls outside the schema's bounds.
-    pub(crate) fn confirmar_edicion(
+    pub(crate) fn confirm_edit(
         &mut self,
     ) -> Option<Result<(String, PendingConfigWrite), SettingsEditError>> {
         let f = self.detail.as_mut()?;
@@ -434,17 +434,17 @@ impl Extensiones {
 
 /// A third-party string ready to paint, and whether it differs from what it
 /// says.
-pub(crate) type Texto = (String, bool);
+pub(crate) type Text = (String, bool);
 
 /// What must be SHOWN before granting capabilities.
 pub(crate) struct Grant {
     /// Whose they are.
-    pub(crate) nombre: Texto,
+    pub(crate) name: Text,
     /// What is granted, one per line.
-    pub(crate) capabilities: Vec<Texto>,
+    pub(crate) capabilities: Vec<Text>,
     /// The manifest anchor that was SHOWN (#282), if the peer sends it.
     ///
-    /// The capability comparison `conceder` does covers what is PAINTED;
+    /// The capability comparison `grant` does covers what is PAINTED;
     /// this one covers what is GRANTED, which is more: `category` and
     /// `contributions` — when and how the extension fires — go into the
     /// anchor and not into the list. And the local comparison only sees
@@ -605,7 +605,7 @@ fn row_from(p: &norte_proto::methods::PluginInfo) -> ExtensionRowView {
 /// It is `plugin_label` with its flag — the same function, not a copy —
 /// plus this host's screen clamping. Where the decision IS the string
 /// (approving a capability), the flag is part of the question.
-pub(crate) fn texto_de_tercero(raw: &str) -> (String, bool) {
+pub(crate) fn third_party_text(raw: &str) -> (String, bool) {
     let (paintable, hostile) = plugin_label_flagged(raw);
     (clamp_display(paintable), hostile)
 }

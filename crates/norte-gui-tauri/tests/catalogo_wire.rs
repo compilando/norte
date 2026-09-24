@@ -31,17 +31,17 @@ const FIXTURE: &str = r##"{
 
 /// Round trip: the JSON's names are the contract, not Rust's.
 #[test]
-fn el_catalogo_va_y_vuelve_con_los_mismos_campos() {
-    let leido: HostCatalog = serde_json::from_str(FIXTURE).expect("the fixture deserializes");
-    assert_eq!(leido.instance_id, "host-1");
-    assert_eq!(leido.locale, "es");
-    assert_eq!(leido.strings["hostile-name"], "nombre alterado");
-    assert_eq!(leido.theme["bg"], "#101216");
-    assert!(!leido.measure);
+fn the_catalog_goes_and_returns_with_the_same_fields() {
+    let read: HostCatalog = serde_json::from_str(FIXTURE).expect("the fixture deserializes");
+    assert_eq!(read.instance_id, "host-1");
+    assert_eq!(read.locale, "es");
+    assert_eq!(read.strings["hostile-name"], "nombre alterado");
+    assert_eq!(read.theme["bg"], "#101216");
+    assert!(!read.measure);
     // The wait threshold travels: writing it into the CSS would be a third
     // place where the same number lives, and the first place to forget it.
     assert_eq!(
-        u128::from(leido.busy_threshold_ms),
+        u128::from(read.busy_threshold_ms),
         norte_frontend::busy::THRESHOLD.as_millis(),
         "the catalogue carries the SHARED threshold, not a copy"
     );
@@ -49,18 +49,18 @@ fn el_catalogo_va_y_vuelve_con_los_mismos_campos() {
     // The four `[ui]` keys that were loaded, validated, offered on the
     // settings screen and read by nobody. `reduce_motion` is also an
     // accessibility commitment from spec §17.
-    assert_eq!(leido.appearance.font.as_deref(), Some("Inter"));
-    assert_eq!(leido.appearance.mono_font.as_deref(), Some("Iosevka"));
-    assert_eq!(leido.appearance.font_size, Some(15.0));
-    assert_eq!(leido.appearance.reduce_motion, Some(true));
+    assert_eq!(read.appearance.font.as_deref(), Some("Inter"));
+    assert_eq!(read.appearance.mono_font.as_deref(), Some("Iosevka"));
+    assert_eq!(read.appearance.font_size, Some(15.0));
+    assert_eq!(read.appearance.reduce_motion, Some(true));
     // The window's own title bar (ADR 0136): from startup, and the renderer
     // needs it to turn the menu bar into the title bar.
-    assert!(leido.appearance.custom_titlebar);
+    assert!(read.appearance.custom_titlebar);
 
-    let vuelta: serde_json::Value = serde_json::to_value(&leido).expect("serializes");
+    let return_: serde_json::Value = serde_json::to_value(&read).expect("serializes");
     let esperado: serde_json::Value = serde_json::from_str(FIXTURE).expect("json");
     assert_eq!(
-        vuelta, esperado,
+        return_, esperado,
         "the catalogue has to come back with the SAME fields: a rename \
          here leaves the renderer reading `undefined`"
     );
@@ -73,10 +73,10 @@ fn el_catalogo_va_y_vuelve_con_los_mismos_campos() {
 /// one message a human looks at when diagnosing is worse than not carrying
 /// it at all.
 #[test]
-fn el_catalogo_lleva_la_version_del_host() {
-    let tema = norte_theme::Theme::default();
-    let instancia = norte_ui_host::InstanceId::new("host-1".to_owned());
-    let cat = norte_gui_tauri::catalog::catalogo(&instancia, norte_i18n::Lang::Es, &tema);
+fn the_catalog_carries_the_host_version() {
+    let theme = norte_theme::Theme::default();
+    let instance = norte_ui_host::InstanceId::new("host-1".to_owned());
+    let cat = norte_gui_tauri::catalog::catalog(&instance, norte_i18n::Lang::Es, &theme);
     assert_eq!(cat.bridge_version, norte_ui_host::BRIDGE_VERSION);
 }
 
@@ -84,9 +84,9 @@ fn el_catalogo_lleva_la_version_del_host() {
 /// number the host used to split the listing. With a different one, marks
 /// paint offset and nothing turns red.
 #[test]
-fn la_regla_de_marcas_cuenta_los_mismos_tramos_en_los_dos_lados() {
-    let raiz = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let tipos = std::fs::read_to_string(raiz.join("ui/src/types.ts")).expect("types.ts");
+fn the_marks_rule_counts_the_same_segments_on_both_sides() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let tipos = std::fs::read_to_string(root.join("ui/src/types.ts")).expect("types.ts");
     let esperado = format!(
         "export const MARK_RULER_SPANS = {};",
         norte_ui_host::dto::MARK_RULER_SPANS

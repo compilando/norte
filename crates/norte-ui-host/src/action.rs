@@ -193,7 +193,7 @@ pub enum UiAction {
         /// from it.
         ///
         /// `None` in every other dialog, and in a secret one means an empty
-        /// field: confirming like that is INERT (see `responder_dialogo`).
+        /// field: confirming like that is INERT (see `responder_dialog`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         secret: Option<String>,
     },
@@ -238,7 +238,7 @@ pub enum UiAction {
     ///
     /// The cell travels, not a command: the host has the frame and resolves
     /// what zone it was and what command applies to it, with the same
-    /// filter the terminal applies (`norte_frontend::frame::zona_puede`).
+    /// filter the terminal applies (`norte_frontend::frame::zone_can`).
     /// The renderer reports what happened; what it means is decided by
     /// whoever holds the state.
     PanelClick {

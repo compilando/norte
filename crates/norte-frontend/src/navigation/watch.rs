@@ -61,7 +61,7 @@ const fn max_coalesce(debounce: std::time::Duration) -> std::time::Duration {
 /// Every real write still arrives as `Create`/`Modify`/`Remove`, and an
 /// `Err` counts as a change on purpose: it means "you may have missed
 /// events".
-fn es_cambio(res: &Result<notify::Event, notify::Error>) -> bool {
+fn es_change(res: &Result<notify::Event, notify::Error>) -> bool {
     match res {
         Err(_) => true,
         Ok(ev) => !matches!(ev.kind, notify::EventKind::Access(_)),
@@ -121,12 +121,12 @@ impl DirWatch {
         });
         // Native watcher: a CHANGE event (also Err: "you may have missed
         // events") = raw ping; the debouncer coalesces. Same criterion as
-        // `norte_config::watch`, including its filter — see [`es_cambio`],
+        // `norte_config::watch`, including its filter — see [`es_change`],
         // which is what stops this from feeding back on itself.
         let cb_tx = raw_tx.clone();
         let watcher =
             notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
-                if es_cambio(&res) {
+                if es_change(&res) {
                     let _ = cb_tx.send(());
                 }
             })
@@ -297,21 +297,21 @@ mod tests {
     /// the directory, and inotify emits `Access` on it, so counting it
     /// would make every refresh trigger the next one.
     #[test]
-    fn una_lectura_no_cuenta_como_cambio() {
+    fn a_read_does_not_count_as_a_change() {
         use notify::event::{AccessKind, CreateKind, EventKind, ModifyKind, RemoveKind};
 
         let ev = |kind| Ok(notify::Event::new(kind));
-        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Any))));
-        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Read))));
-        assert!(!es_cambio(&ev(EventKind::Access(AccessKind::Open(
+        assert!(!es_change(&ev(EventKind::Access(AccessKind::Any))));
+        assert!(!es_change(&ev(EventKind::Access(AccessKind::Read))));
+        assert!(!es_change(&ev(EventKind::Access(AccessKind::Open(
             notify::event::AccessMode::Read
         )))));
         // Every real write still counts.
-        assert!(es_cambio(&ev(EventKind::Create(CreateKind::File))));
-        assert!(es_cambio(&ev(EventKind::Modify(ModifyKind::Any))));
-        assert!(es_cambio(&ev(EventKind::Remove(RemoveKind::File))));
+        assert!(es_change(&ev(EventKind::Create(CreateKind::File))));
+        assert!(es_change(&ev(EventKind::Modify(ModifyKind::Any))));
+        assert!(es_change(&ev(EventKind::Remove(RemoveKind::File))));
         // And an error means "you may have missed events": refresh.
-        assert!(es_cambio(&Err(notify::Error::generic("perdidos"))));
+        assert!(es_change(&Err(notify::Error::generic("perdidos"))));
     }
 
     /// The whole loop, with a real watcher: reading the watched directory —
@@ -319,7 +319,7 @@ mod tests {
     /// while creating a file does. Without the filter, this test emits on
     /// the first read and the TUI re-lists forever after the first `cd`.
     #[tokio::test]
-    async fn listar_el_dir_vigilado_no_dispara_refrescos() {
+    async fn listing_the_watched_dir_does_not_trigger_refreshes() {
         let dir = tempfile::tempdir().unwrap();
         // Polling practically off: this test looks ONLY at the watcher.
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, std::time::Duration::from_hours(1));
@@ -348,7 +348,7 @@ mod tests {
     /// without this, a big copy into the watched dir would be a storm of
     /// refreshes.
     #[tokio::test]
-    async fn rafaga_coalesce_a_un_evento() {
+    async fn burst_coalesces_to_one_event() {
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         for _ in 0..5 {
             w.inject();
@@ -365,7 +365,7 @@ mod tests {
     /// on the watched dir and emits; the first sighting is the baseline
     /// (starting up is not a change).
     #[tokio::test]
-    async fn poller_degradado_detecta_mtime() {
+    async fn poller_degradado_detects_mtime() {
         let dir = tempfile::tempdir().unwrap();
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         // No native watcher: only the poller can emit (isolates the test
@@ -388,7 +388,7 @@ mod tests {
     /// task — the debounced channel closes (recv returns None), nothing is
     /// left alive.
     #[tokio::test]
-    async fn drop_cierra_el_pipeline() {
+    async fn drop_closes_the_pipeline() {
         let w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         let mut rx = w.rx;
         drop(w.watcher);
@@ -406,7 +406,7 @@ mod tests {
     /// remote) updates the shared state — the poller stops polling it and
     /// its baseline is pruned.
     #[tokio::test]
-    async fn rewatch_a_menos_dirs_actualiza_el_conjunto() {
+    async fn rewatch_with_fewer_dirs_updates_the_set() {
         let dir = tempfile::tempdir().unwrap();
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         w.rewatch(&[Some(dir.path().to_path_buf()), None]);
@@ -432,7 +432,7 @@ mod tests {
     /// Review MINOR-7: dropping the WHOLE VALUE (the real production path)
     /// also kills the pipeline.
     #[tokio::test]
-    async fn drop_entero_cierra_el_pipeline() {
+    async fn dropping_entirely_closes_the_pipeline() {
         let (probe_tx, mut probe_rx) = tokio::sync::mpsc::unbounded_channel::<()>();
         {
             let w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
@@ -459,7 +459,7 @@ mod tests {
     /// Review MAJOR-3: a sustained STORM of raw events does not emit one
     /// refresh per debounce — the floor between emissions caps the rate.
     #[tokio::test]
-    async fn tormenta_sostenida_respeta_el_suelo() {
+    async fn a_sustained_storm_respects_the_floor() {
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         let raw = w.raw_tx.clone();
         let storm = tokio::spawn(async move {
@@ -507,7 +507,7 @@ mod tests {
     /// constructor is already degraded and the test skips — the poller has
     /// its own test).
     #[tokio::test]
-    async fn watcher_nativo_detecta_escritura() {
+    async fn native_watcher_detects_a_write() {
         let dir = tempfile::tempdir().unwrap();
         let mut w = DirWatch::new_with(FAST_DEBOUNCE, FAST_POLL);
         if w.watcher.is_none() {

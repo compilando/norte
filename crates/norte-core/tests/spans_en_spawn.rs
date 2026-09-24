@@ -31,7 +31,7 @@ fn code(text: &str) -> &str {
 #[test]
 fn nobody_launches_a_task_without_its_span() {
     // Only the two gates. What must not inherit the span goes through
-    // `spawn_raiz`, with its reason written where it is called.
+    // `spawn_root`, with its reason written where it is called.
     const ALLOWED: &[&str] = &["src/blocking.rs"];
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();

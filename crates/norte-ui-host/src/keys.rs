@@ -169,8 +169,8 @@ fn canonical_name(key: &str) -> Option<String> {
 ///
 /// # Errors
 /// [`KeymapError`] if the preset does not exist or does not validate.
-pub fn keymap_de_preset(nombre: &str) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    keymap_de_preset_con(nombre, crate::commands::Efectos::Completo)
+pub fn keymap_de_preset(name: &str) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    keymap_de_preset_con(name, crate::commands::Effects::Full)
 }
 
 /// The listing's keymap for a frontend with the STATED effects.
@@ -183,10 +183,10 @@ pub fn keymap_de_preset(nombre: &str) -> Result<norte_frontend::keymap::Effectiv
 /// # Errors
 /// [`KeymapError`] if the preset does not exist or does not validate.
 pub fn keymap_de_preset_con(
-    nombre: &str,
-    efectos: crate::commands::Efectos,
+    name: &str,
+    effects: crate::commands::Effects,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    keymap_de_preset_con_capas(nombre, &[], efectos)
+    preset_keymap_with_layers(name, &[], effects)
 }
 
 /// The preset's listing keymap PLUS the user's layers.
@@ -199,16 +199,16 @@ pub fn keymap_de_preset_con(
 /// # Errors
 /// [`KeymapError`] if the preset does not exist, or if a layer does not
 /// validate.
-pub fn keymap_de_preset_con_capas(
-    nombre: &str,
-    capas: &[norte_frontend::keymap::KeymapFile],
-    efectos: crate::commands::Efectos,
+pub fn preset_keymap_with_layers(
+    name: &str,
+    layers: &[norte_frontend::keymap::KeymapFile],
+    effects: crate::commands::Effects,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
     effective_with(
-        nombre,
+        name,
         norte_frontend::keymap::Screen::Browse,
-        capas,
-        efectos,
+        layers,
+        effects,
     )
 }
 
@@ -221,9 +221,9 @@ pub fn keymap_de_preset_con_capas(
 /// # Errors
 /// [`KeymapError`] if the preset does not exist or does not validate.
 pub fn keymap_visor_de_preset(
-    nombre: &str,
+    name: &str,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    keymap_visor_de_preset_con_capas(nombre, &[])
+    preset_viewer_keymap_with_layers(name, &[])
 }
 
 /// The VIEWER keymap of the preset plus the user's layers (#253).
@@ -231,15 +231,15 @@ pub fn keymap_visor_de_preset(
 /// # Errors
 /// [`KeymapError`] if the preset does not exist, or if a layer does not
 /// validate.
-pub fn keymap_visor_de_preset_con_capas(
-    nombre: &str,
-    capas: &[norte_frontend::keymap::KeymapFile],
+pub fn preset_viewer_keymap_with_layers(
+    name: &str,
+    layers: &[norte_frontend::keymap::KeymapFile],
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
     effective_with(
-        nombre,
+        name,
         norte_frontend::keymap::Screen::Viewer,
-        capas,
-        crate::commands::Efectos::Completo,
+        layers,
+        crate::commands::Effects::Full,
     )
 }
 
@@ -252,10 +252,8 @@ pub fn keymap_visor_de_preset_con_capas(
 ///
 /// # Errors
 /// [`KeymapError`] if the preset does not exist or does not validate.
-pub fn keymap_dialogo_de_preset(
-    nombre: &str,
-) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    keymap_dialogo_de_preset_con_capas(nombre, &[])
+pub fn preset_dialog_keymap(name: &str) -> Result<norte_frontend::keymap::Effective, KeymapError> {
+    keymap_dialog_preset_with_layers(name, &[])
 }
 
 /// The keymap of a DIALOG for the preset plus the user's layers (#253).
@@ -263,37 +261,37 @@ pub fn keymap_dialogo_de_preset(
 /// # Errors
 /// [`KeymapError`] if the preset does not exist, or if a layer does not
 /// validate.
-pub fn keymap_dialogo_de_preset_con_capas(
-    nombre: &str,
-    capas: &[norte_frontend::keymap::KeymapFile],
+pub fn keymap_dialog_preset_with_layers(
+    name: &str,
+    layers: &[norte_frontend::keymap::KeymapFile],
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    let preset = preset_from(nombre)?;
+    let preset = preset_from(name)?;
     norte_frontend::keymap::Effective::build_for(
         &preset,
-        capas,
-        crate::commands::IMPLEMENTADOS_DIALOGO,
+        layers,
+        crate::commands::IMPLEMENTADOS_DIALOG,
         norte_frontend::keymap::Screen::Dialog,
     )
 }
 
-fn preset_from(nombre: &str) -> Result<norte_frontend::keymap::KeymapFile, KeymapError> {
-    let source = norte_frontend::keymap::presets::source(nombre).ok_or(KeymapError::BadChord {
-        chord: nombre.to_owned(),
+fn preset_from(name: &str) -> Result<norte_frontend::keymap::KeymapFile, KeymapError> {
+    let source = norte_frontend::keymap::presets::source(name).ok_or(KeymapError::BadChord {
+        chord: name.to_owned(),
     })?;
     norte_frontend::keymap::parse_keymap(source)
 }
 
 fn effective_with(
-    nombre: &str,
+    name: &str,
     screen: norte_frontend::keymap::Screen,
-    capas: &[norte_frontend::keymap::KeymapFile],
-    efectos: crate::commands::Efectos,
+    layers: &[norte_frontend::keymap::KeymapFile],
+    effects: crate::commands::Effects,
 ) -> Result<norte_frontend::keymap::Effective, KeymapError> {
-    let preset = preset_from(nombre)?;
+    let preset = preset_from(name)?;
     norte_frontend::keymap::Effective::build_for(
         &preset,
-        capas,
-        &crate::commands::todos_con(efectos),
+        layers,
+        &crate::commands::all_with(effects),
         screen,
     )
 }
@@ -329,10 +327,10 @@ mod tests {
             "the factory preset does not bind `ctrl+alt+j`, or the test proves nothing"
         );
 
-        let with_layer = keymap_de_preset_con_capas(
+        let with_layer = preset_keymap_with_layers(
             "orthodox",
             std::slice::from_ref(&layer),
-            crate::commands::Efectos::Completo,
+            crate::commands::Effects::Full,
         )
         .expect("preset + layer");
         assert!(

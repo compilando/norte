@@ -536,7 +536,7 @@ mod tests {
     /// remembering three different keys.
     #[test]
     fn the_ring_passes_through_the_side_panels() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.toggle_places();
         app.toggle_preview();
         // Opening a panel takes the keyboard; the ring is tested from the
@@ -577,7 +577,7 @@ mod tests {
     #[test]
     fn a_ring_of_one_goes_nowhere() {
         use norte_frontend::layout::{KindId, Node, SlotId};
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         // A single-listing, no-panel layout: it comes from a saved layout,
         // not `layout.close` — which refuses to leave the screen without
         // two listings.
@@ -597,7 +597,7 @@ mod tests {
     #[test]
     fn tab_reaches_the_third_listing() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1), Size::Weight(1)],
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn tab_over_a_single_listing_does_nothing() {
         use norte_frontend::layout::{KindId, Node, SlotId};
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::slot(SlotId(0), KindId::browser()));
         app.switch_focus();
         assert_eq!(app.focus(), 0);
@@ -637,7 +637,7 @@ mod tests {
     /// stopping there would be a spot no key gets you out of.
     #[test]
     fn metadata_is_not_a_stop() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.toggle_metadata();
         app.return_keys_to_panes();
         app.set_focus(0);

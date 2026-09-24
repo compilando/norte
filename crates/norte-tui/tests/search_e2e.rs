@@ -120,26 +120,23 @@ async fn exit_criterion_año() {
     // F5-equivalent: copies the FIRST hit (mem:///f1, UTF-8) to another dir
     // and verifies the destination is byte-exact against the original.
     mem.mkdir(&vp("mem:///otro")).await.expect("mkdir otro");
-    let primero = &hits[0].0;
-    assert_eq!(
-        primero.path.display_lossy(),
-        vp("mem:///f1").display_lossy()
-    );
-    let name = primero.path.file_name().expect("name").clone();
+    let first = &hits[0].0;
+    assert_eq!(first.path.display_lossy(), vp("mem:///f1").display_lossy());
+    let name = first.path.file_name().expect("name").clone();
     let dest = vp("mem:///otro").join(name);
 
     let copy_task = backend
-        .copy(&primero.path, &dest, TransferOptions::default())
+        .copy(&first.path, &dest, TransferOptions::default())
         .await
         .expect("copy");
     assert_eq!(copy_task.join().await, TaskState::Completed);
 
     let original = backend
-        .read(&primero.path, None)
+        .read(&first.path, None)
         .await
         .expect("read original");
-    let copiado = backend.read(&dest, None).await.expect("read copy");
-    assert_eq!(copiado, original, "F5 from a hit is byte-exact");
+    let copied = backend.read(&dest, None).await.expect("read copy");
+    assert_eq!(copied, original, "F5 from a hit is byte-exact");
     assert_eq!(original, "un año".as_bytes());
 }
 

@@ -463,7 +463,7 @@ mod tests {
     /// would leave the dialog with no effect: it would be asked on every
     /// navigation and the answer would never be used.
     #[tokio::test]
-    async fn lo_recordado_en_la_sesion_gana_a_la_env_var() {
+    async fn what_is_remembered_in_the_session_wins_over_the_env_var() {
         let dir = tempfile::tempdir().expect("tmp");
         let r = SecretResolver::new(dir.path());
 
@@ -492,7 +492,7 @@ mod tests {
     /// through would reproduce exactly the ambient-credential leak that #320
     /// closed.
     #[tokio::test]
-    async fn recordar_vacio_es_error_y_no_pasa_como_secreto() {
+    async fn remembering_empty_is_an_error_and_does_not_pass_as_a_secret() {
         let dir = tempfile::tempdir().expect("tmp");
         let r = SecretResolver::new(dir.path());
         r.remember_for_session("vacio-test", Secret::new(String::new()));
@@ -513,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn secret_debug_no_filtra() {
+    fn secret_debug_no_filters() {
         let s = Secret::new("hunter2".into());
         assert_eq!(format!("{s:?}"), "Secret(***)");
         assert!(!format!("{s:?}").contains("hunter2"));
@@ -559,7 +559,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn age_sin_passphrase_es_error_si_existe_el_fichero() {
+    async fn age_without_passphrase_is_an_error_if_the_file_exists() {
         let dir = tempfile::tempdir().unwrap();
         // File present but no passphrase (neither env nor secrets.key).
         std::fs::write(dir.path().join(SECRETS_FILE), b"whatever").unwrap();
@@ -584,7 +584,7 @@ mod tests {
     /// the public path also rejects the empty value: the fixture goes in
     /// underneath, on purpose.
     #[tokio::test]
-    async fn secreto_vacio_es_error_y_no_pasa_como_secreto() {
+    async fn an_empty_secret_is_an_error_and_does_not_pass_as_a_secret() {
         let dir = tempfile::tempdir().unwrap();
         write_key_file(dir.path(), "test-passphrase");
         let r = SecretResolver::new(dir.path());
@@ -608,7 +608,7 @@ mod tests {
     /// hand—, an entry that makes the connection fail forever, and the error
     /// would show up far from where the mistake was made.
     #[tokio::test]
-    async fn store_in_age_rechaza_el_vacio() {
+    async fn store_in_age_rejects_the_empty_one() {
         let dir = tempfile::tempdir().unwrap();
         write_key_file(dir.path(), "test-passphrase");
         let r = SecretResolver::new(dir.path());
@@ -629,7 +629,7 @@ mod tests {
     /// an actionable 403, so treating it as empty would only add a false
     /// positive.
     #[test]
-    fn secreto_vacio_nombra_el_origen_y_los_espacios_pasan() {
+    fn an_empty_secret_names_the_source_and_spaces_pass() {
         for (origin, expected) in [
             (SecretOrigin::Env, "environment variable"),
             (SecretOrigin::Keyring, "keyring"),

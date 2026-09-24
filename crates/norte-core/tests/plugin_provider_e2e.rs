@@ -109,7 +109,7 @@ async fn plugin_provider_satisfies_the_read_contract() {
     assert_eq!(f.size, Some(11));
 
     // ---- list: byte-exact tree + kinds coherent with stat ----
-    // NOTE: `vacio.txt` is fixture data baked into the `provider-mem` guest
+    // NOTE: `empty.txt` is fixture data baked into the `provider-mem` guest
     // (crates/norte-plugin-host/examples-wasm/provider-mem/src/lib.rs, owned
     // by another task) and kept verbatim here — see the T05 report's
     // cross-file literals.

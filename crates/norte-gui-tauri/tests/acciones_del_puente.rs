@@ -17,26 +17,26 @@
 use std::collections::BTreeSet;
 
 const TYPES_TS: &str = include_str!("../ui/src/types.ts");
-const ACCIONES_DEL_HOST: &str = include_str!("../../norte-ui-host/tests/golden/actions.json");
+const HOST_ACTIONS: &str = include_str!("../../norte-ui-host/tests/golden/actions.json");
 
 /// The `action: "…"` literals of the `UiAction` union type in `types.ts`.
-fn acciones_del_renderer() -> BTreeSet<String> {
+fn renderer_actions() -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    let aguja = "action: \"";
-    let mut desde = 0usize;
-    while let Some(i) = TYPES_TS[desde..].find(aguja) {
-        let ini = desde + i + aguja.len();
+    let needle = "action: \"";
+    let mut from = 0usize;
+    while let Some(i) = TYPES_TS[from..].find(needle) {
+        let ini = from + i + needle.len();
         let fin = ini + TYPES_TS[ini..].find('"').expect("closed literal");
         out.insert(TYPES_TS[ini..fin].to_owned());
-        desde = fin;
+        from = fin;
     }
     out
 }
 
 /// The wire names the host pins in its golden: the VALUE of `"action"` in
 /// each fixture, not the fixture's key (which is a test name).
-fn acciones_del_host() -> BTreeSet<String> {
-    let v: serde_json::Value = serde_json::from_str(ACCIONES_DEL_HOST).expect("golden JSON");
+fn host_actions() -> BTreeSet<String> {
+    let v: serde_json::Value = serde_json::from_str(HOST_ACTIONS).expect("golden JSON");
     v.as_object()
         .expect("fixture map")
         .values()
@@ -45,9 +45,9 @@ fn acciones_del_host() -> BTreeSet<String> {
 }
 
 #[test]
-fn toda_accion_que_el_renderer_envia_la_entiende_el_host() {
-    let renderer = acciones_del_renderer();
-    let host = acciones_del_host();
+fn every_action_the_renderer_sends_the_host_understands() {
+    let renderer = renderer_actions();
+    let host = host_actions();
     assert!(
         renderer.len() >= 40,
         "the sweep did not read `types.ts`: {renderer:?}"

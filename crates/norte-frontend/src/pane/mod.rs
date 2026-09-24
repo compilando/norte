@@ -1028,7 +1028,7 @@ impl PaneState {
     /// With a filter it moves the quick's selection, step by step through
     /// what is VISIBLE; without one, the cursor. An `entry` the filter does
     /// not show cannot be pointed at: nothing is touched.
-    pub fn senalar(&mut self, entry: usize) {
+    pub fn point_at(&mut self, entry: usize) {
         let Some(vis) = self.quick_visible() else {
             self.set_cursor(entry);
             return;

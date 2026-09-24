@@ -46,7 +46,7 @@ fn mgr() -> ExtensionManager {
         ],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     }
 }
@@ -91,7 +91,7 @@ fn selected_on_empty_is_none() {
         plugins: Vec::new(),
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     };
     assert!(m.selected().is_none());
@@ -127,7 +127,7 @@ fn render_of_an_empty_overlay_shows_ext_empty() {
         plugins: Vec::new(),
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
     let mut t = Terminal::new(TestBackend::new(60, 12)).expect("term");
@@ -152,7 +152,7 @@ fn render_masks_a_hostile_name() {
         )],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
     let mut t = Terminal::new(TestBackend::new(60, 12)).expect("term");
@@ -188,7 +188,7 @@ fn render_does_not_panic_with_an_unbounded_wire_description() {
         plugins: vec![p],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
     let mut t = Terminal::new(TestBackend::new(60, 12)).expect("term");
@@ -205,7 +205,7 @@ fn render_shows_load_errors() {
             dir_bytes: None,
         }],
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
     let mut t = Terminal::new(TestBackend::new(70, 12)).expect("term");

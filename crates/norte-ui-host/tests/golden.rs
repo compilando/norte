@@ -6,7 +6,7 @@
 //! Rust that leaves the renderer reading `null` with nothing turning red.
 //!
 //! Coverage is 1:1 between this file's fixtures and cases, and ON TOP OF
-//! THAT `tag_de_accion` is an exhaustive `match` with no wildcard: adding a
+//! THAT `action_tag` is an exhaustive `match` with no wildcard: adding a
 //! variant to `UiAction` stops this from compiling. Without that the promise
 //! was false — the JSON was compared against a hand-written list, not
 //! against the enum — and `search_activate_row` had already slipped through,
@@ -46,18 +46,18 @@ fn load(name: &str) -> BTreeMap<String, Value> {
 /// hand-patching the JSON — and by hand is where values matching no case
 /// slip in.
 fn bless<T: Serialize>(file: &str, cases: &[(&str, T)]) {
-    let mut mapa = serde_json::Map::new();
-    for (nombre, valor) in cases {
-        mapa.insert(
-            (*nombre).to_owned(),
+    let mut map = serde_json::Map::new();
+    for (name, valor) in cases {
+        map.insert(
+            (*name).to_owned(),
             serde_json::to_value(valor).expect("serializable"),
         );
     }
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/golden")
         .join(file);
-    let texto = serde_json::to_string_pretty(&Value::Object(mapa)).expect("json");
-    std::fs::write(&path, texto + "\n").expect("write the fixture");
+    let text = serde_json::to_string_pretty(&Value::Object(map)).expect("json");
+    std::fs::write(&path, text + "\n").expect("write the fixture");
 }
 
 fn check_family<T>(file: &str, cases: &[(&str, T)])
@@ -88,10 +88,10 @@ where
     }
 }
 
-fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
+fn row(key: u64, name: &str, hostile: bool) -> RowView {
     RowView {
         key: RowKey(key),
-        display_name: nombre.to_owned(),
+        display_name: name.to_owned(),
         hostile,
         // No task works on this row (bridge 69).
         progress: None,
@@ -120,32 +120,32 @@ fn fila(key: u64, nombre: &str, hostile: bool) -> RowView {
 ///
 /// The badge, its role and the icon cross JSON here and nowhere else: they
 /// are what a THIRD PARTY paints attached to a file name.
-fn fila_adornada(key: u64, nombre: &str) -> RowView {
+fn row_adornada(key: u64, name: &str) -> RowView {
     RowView {
         badge: "M".to_owned(),
         badge_hostile: false,
         badge_role: "warning".to_owned(),
         icon: "🦀".to_owned(),
         icon_hostile: false,
-        ..fila(key, nombre, false)
+        ..row(key, name, false)
     }
 }
 
 #[test]
-fn acciones() {
-    let mut casos = acciones_de_fila();
-    casos.extend(acciones_de_overlay());
-    casos.extend(acciones_de_pantalla());
+fn actions() {
+    let mut cases = row_actions();
+    cases.extend(overlay_actions());
+    cases.extend(screen_actions());
     // Each case is named after its variant: that is what makes the COMPILER,
     // not a list, watch over coverage.
-    for (nombre, accion) in &casos {
+    for (name, action) in &cases {
         assert_eq!(
-            *nombre,
-            tag_de_accion(accion),
-            "case `{nombre}` is not named after its variant"
+            *name,
+            action_tag(action),
+            "case `{name}` is not named after its variant"
         );
     }
-    check_family("actions.json", &casos);
+    check_family("actions.json", &cases);
 }
 
 /// Each action's tag, in an EXHAUSTIVE `match` with no wildcard.
@@ -155,7 +155,7 @@ fn acciones() {
 /// pass with nothing saying anything — and it did: `SearchActivateRow`
 /// crossed the wire with no fixture. With this, adding a variant breaks this
 /// file's compilation, which is where it needs to be noticed.
-fn tag_de_accion(a: &UiAction) -> &'static str {
+fn action_tag(a: &UiAction) -> &'static str {
     match a {
         UiAction::MoveCursor { .. } => "move_cursor",
         UiAction::SelectRow { .. } => "select_row",
@@ -244,10 +244,10 @@ fn tag_de_accion(a: &UiAction) -> &'static str {
 /// The ones that name a row: they carry key AND generation (ADR 0068).
 ///
 /// Grows with every new action, and that is what it should do: like
-/// [`slots_de_referencia`], it is ONE list of literals with no logic inside,
+/// [`reference_slots`], it is ONE list of literals with no logic inside,
 /// and splitting it up would hide exactly what this file shows at a glance.
 #[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
-fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
+fn row_actions() -> Vec<(&'static str, UiAction)> {
     vec![
         (
             "activate",
@@ -260,7 +260,7 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
         ("cancel_task", UiAction::CancelTask { task_id: 42 }),
         // #326: the log panel's five. On a bridge that bumps its number, new
         // wire names are the first thing that needs nailing down — and
-        // `tag_de_accion` is not enough: with the case list and the fixtures
+        // `action_tag` is not enough: with the case list and the fixtures
         // BOTH empty, `check_family` covers them 1:1 and says nothing.
         ("refresh_slot", UiAction::RefreshSlot { slot_id: 1 }),
         (
@@ -357,7 +357,7 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
         ),
         // The desktop picker's return trip (#284). One case per variant,
         // which is the rule above; the `path: null` of a picker closed
-        // without choosing is covered by `un_selector_cancelado_viaja_como_null`.
+        // without choosing is covered by `a_canceled_selector_travels_as_null`.
         (
             "directory_picked",
             UiAction::DirectoryPicked {
@@ -386,8 +386,8 @@ fn acciones_de_fila() -> Vec<(&'static str, UiAction)> {
 /// Kept out of the golden family because there only one case per variant
 /// fits, and the other two are just as easy to get wrong.
 #[test]
-fn los_tres_cambios_de_una_extension_viajan_por_su_nombre() {
-    for (change, nombre) in [
+fn an_extensions_three_changes_travel_by_its_name() {
+    for (change, name) in [
         (ExtensionChange::Approval, "approval"),
         (ExtensionChange::Enabled, "enabled"),
         (ExtensionChange::Uninstall, "uninstall"),
@@ -401,7 +401,7 @@ fn los_tres_cambios_de_una_extension_viajan_por_su_nombre() {
         assert_eq!(
             json,
             serde_json::json!({
-                "action": "extension_govern", "row": 0, "id": "acme.ftp", "change": nombre
+                "action": "extension_govern", "row": 0, "id": "acme.ftp", "change": name
             })
         );
         let back: UiAction = serde_json::from_value(json).expect("deserialize");
@@ -414,15 +414,15 @@ fn los_tres_cambios_de_una_extension_viajan_por_su_nombre() {
 /// per variant fits — but the shape on the wire matters just the same: a
 /// renderer that sent `""` would be naming the root.
 #[test]
-fn un_selector_cancelado_viaja_como_null() {
+fn a_canceled_selector_travels_as_null() {
     let a = UiAction::DirectoryPicked { path: None };
     let json = serde_json::to_value(&a).expect("serialize");
     assert_eq!(
         json,
         serde_json::json!({"action": "directory_picked", "path": null})
     );
-    let vuelta: UiAction = serde_json::from_value(json).expect("deserialize");
-    assert!(matches!(vuelta, UiAction::DirectoryPicked { path: None }));
+    let return_: UiAction = serde_json::from_value(json).expect("deserialize");
+    assert!(matches!(return_, UiAction::DirectoryPicked { path: None }));
 }
 
 /// The ones that name an OVERLAY row by its index.
@@ -430,7 +430,7 @@ fn un_selector_cancelado_viaja_como_null() {
 /// Two carry generation — the sidebar and the picker fill from a background
 /// task, so their list changes without the user touching anything — and the
 /// rest do not, because they cannot change without a gesture from them.
-fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
+fn overlay_actions() -> Vec<(&'static str, UiAction)> {
     vec![
         (
             "extension_select_row",
@@ -509,14 +509,14 @@ fn acciones_de_overlay() -> Vec<(&'static str, UiAction)> {
         ),
     ]
     .into_iter()
-    .chain(acciones_de_ajustes())
-    .chain(acciones_de_cromo())
+    .chain(settings_actions())
+    .chain(chrome_actions())
     .collect()
 }
 
 /// The SETTINGS screen's, kept apart because there are six of them and the
 /// overlay list was going over the lint's line cap.
-fn acciones_de_ajustes() -> Vec<(&'static str, UiAction)> {
+fn settings_actions() -> Vec<(&'static str, UiAction)> {
     vec![
         (
             "settings_select_row",
@@ -552,7 +552,7 @@ fn acciones_de_ajustes() -> Vec<(&'static str, UiAction)> {
 /// Separated from the overlay ones only by size — a hundred-line list is not
 /// readable — and along that seam and no other: these hang off something
 /// that is always in view, not off a screen that opens.
-fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
+fn chrome_actions() -> Vec<(&'static str, UiAction)> {
     vec![
         ("menu_open", UiAction::MenuOpen { menu: 2 }),
         ("menu_point_row", UiAction::MenuPointRow { row: 3 }),
@@ -612,7 +612,7 @@ fn acciones_de_cromo() -> Vec<(&'static str, UiAction)> {
 
 /// The rest: screen, keyboard, dialogs and tasks.
 #[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
-fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
+fn screen_actions() -> Vec<(&'static str, UiAction)> {
     vec![
         ("focus_slot", UiAction::FocusSlot { slot_id: 2 }),
         (
@@ -657,7 +657,7 @@ fn acciones_de_pantalla() -> Vec<(&'static str, UiAction)> {
             },
         ),
         ("set_color_scheme", UiAction::SetColorScheme { dark: true }),
-        // Here and not next to the rest of the menu's: `acciones_de_overlay`
+        // Here and not next to the rest of the menu's: `overlay_actions`
         // is at clippy's line cap, and this list's order does not matter —
         // the corpus is written up by name.
         ("menu_toggle", UiAction::MenuToggle),
@@ -771,7 +771,7 @@ fn acuses() {
 /// The reference snapshot: a screen with a listing (one hostile row), a slot
 /// this host does not project yet, a dialog and a live task.
 /// The dialog the fixtures nail down.
-fn dialogo_de_referencia() -> DialogView {
+fn reference_dialog() -> DialogView {
     DialogView {
         id: ModalId(3),
         title_key: "modal-mkdir-title".to_owned(),
@@ -821,7 +821,7 @@ fn dialogo_de_referencia() -> DialogView {
 }
 
 /// The rename plan the fixtures nail down.
-fn plan_ia_de_referencia() -> norte_ui_host::dto::AiRenameView {
+fn reference_ai_plan() -> norte_ui_host::dto::AiRenameView {
     use norte_ui_host::dto::{AiRenamePairView, AiRenameView, DialogLine};
     AiRenameView {
         dir: DialogLine {
@@ -860,7 +860,7 @@ fn plan_ia_de_referencia() -> norte_ui_host::dto::AiRenameView {
 /// a renderer to collapse them without this noticing. And with an altered
 /// name, because the mark is what separates "what is read" from "what is
 /// there".
-fn arbol_de_organizar_de_referencia() -> norte_ui_host::dto::OrganizeView {
+fn reference_organize_tree() -> norte_ui_host::dto::OrganizeView {
     use norte_ui_host::dto::{DialogLine, OrganizeLineKind, OrganizeLineView, OrganizeView};
     OrganizeView {
         dir: DialogLine {
@@ -903,7 +903,7 @@ fn arbol_de_organizar_de_referencia() -> norte_ui_host::dto::OrganizeView {
 }
 
 /// The task the fixtures nail down.
-fn task_de_referencia() -> TaskView {
+fn reference_task() -> TaskView {
     TaskView {
         task_id: 7,
         kind: "copy".to_owned(),
@@ -920,7 +920,7 @@ fn task_de_referencia() -> TaskView {
 }
 
 /// The layout the fixtures nail down: two slots, roles assigned.
-fn disposicion_de_referencia() -> LayoutView {
+fn reference_layout() -> LayoutView {
     LayoutView {
         cells: (120, 40),
         // The reference carries THREE listings, so the destination mark
@@ -948,19 +948,19 @@ fn disposicion_de_referencia() -> LayoutView {
             active: 0,
             panels: false,
         }],
-        placements: colocaciones_de_referencia(),
+        placements: reference_placements(),
     }
 }
 
 /// Where each of the corpus's slots lands.
 ///
 /// Kept apart from the snapshot because there are thirteen of them, and it
-/// grows with every new slot: like [`slots_de_referencia`] and
-/// [`acciones_de_fila`], it is ONE list of literals with no logic inside,
+/// grows with every new slot: like [`reference_slots`] and
+/// [`row_actions`], it is ONE list of literals with no logic inside,
 /// and splitting it up would hide exactly what this file shows at a glance —
 /// where each slot lands, whole and in one place.
 #[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
-fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
+fn reference_placements() -> Vec<SlotPlacement> {
     vec![
         SlotPlacement {
             slot_id: 1,
@@ -1077,7 +1077,7 @@ fn colocaciones_de_referencia() -> Vec<SlotPlacement> {
 }
 
 /// The viewer the fixtures nail down.
-fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
+fn reference_viewer() -> norte_ui_host::dto::ViewerView {
     norte_ui_host::dto::ViewerView {
         path_display: "⟨file⟩/home/oscar/notas.txt".to_owned(),
         path_hostile: false,
@@ -1145,7 +1145,7 @@ fn visor_de_referencia() -> norte_ui_host::dto::ViewerView {
 /// what this file exists to show at a glance — every variant's wire shape,
 /// whole and in one place.
 #[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
-fn slots_de_referencia() -> Vec<SlotView> {
+fn reference_slots() -> Vec<SlotView> {
     vec![
         SlotView::Browser(Box::new(BrowserSlotView {
             slot_id: 1,
@@ -1158,9 +1158,9 @@ fn slots_de_referencia() -> Vec<SlotView> {
             total_rows: Some(3),
             first_visible: 0,
             rows: vec![
-                fila(1, "notas.txt", false),
-                fila(2, "caf\u{FFFD}.txt", true),
-                fila_adornada(3, "cambiado.rs"),
+                row(1, "notas.txt", false),
+                row(2, "caf\u{FFFD}.txt", true),
+                row_adornada(3, "cambiado.rs"),
             ],
             icon_column: true,
             cursor: Some(RowKey(1)),
@@ -1361,7 +1361,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
         // big one, inside a slot, and its twin with no file and the note.
         SlotView::Preview(Box::new(norte_ui_host::dto::PreviewSlotView {
             slot_id: 11,
-            viewer: Some(visor_de_referencia()),
+            viewer: Some(reference_viewer()),
             note: String::new(),
         })),
         SlotView::Preview(Box::new(norte_ui_host::dto::PreviewSlotView {
@@ -1444,7 +1444,7 @@ fn slots_de_referencia() -> Vec<SlotView> {
 
 /// "Go to" (bridge 77): a header and two rows, one of them marked hostile,
 /// because the renderer paints the three differently.
-fn ir_a_de_referencia() -> norte_ui_host::dto::GotoView {
+fn reference_goto() -> norte_ui_host::dto::GotoView {
     use norte_ui_host::dto::GotoLineView;
     norte_ui_host::dto::GotoView {
         query: "doc".to_owned(),
@@ -1471,7 +1471,7 @@ fn ir_a_de_referencia() -> norte_ui_host::dto::GotoView {
 /// The profile picker: one active and another that fails to load, because
 /// the two rows say different things and the renderer paints them
 /// differently.
-fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
+fn reference_profiles() -> norte_ui_host::dto::ProfilePickerView {
     norte_ui_host::dto::ProfilePickerView {
         rows: vec![
             norte_ui_host::dto::ProfileRowView {
@@ -1500,7 +1500,7 @@ fn perfiles_de_referencia() -> norte_ui_host::dto::ProfilePickerView {
 
 /// The menu bar with one DROPPED DOWN: the fixture has to carry both
 /// halves, because those are the two the renderer paints.
-fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
+fn reference_wizard() -> norte_ui_host::dto::WizardView {
     norte_ui_host::dto::WizardView {
         title: "Bienvenido a norte · 1/3 · teclas".to_owned(),
         question: "¿Qué gestor de ficheros tienes en los dedos?".to_owned(),
@@ -1512,7 +1512,7 @@ fn asistente_de_referencia() -> norte_ui_host::dto::WizardView {
 
 /// One clickable, one not, and the tasks one with its bar (bridge 92): the
 /// shapes the renderer paints.
-fn elementos_de_estado_de_referencia() -> Vec<norte_ui_host::dto::StatusItemView> {
+fn reference_status_items() -> Vec<norte_ui_host::dto::StatusItemView> {
     use norte_ui_host::dto::{StatusItemView, StatusProgressView};
     vec![
         StatusItemView {
@@ -1542,7 +1542,7 @@ fn elementos_de_estado_de_referencia() -> Vec<norte_ui_host::dto::StatusItemView
     ]
 }
 
-fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
+fn reference_pane_bar() -> norte_ui_host::dto::PanelBarView {
     use norte_ui_host::dto::{PanelButtonState, PanelButtonView};
     norte_ui_host::dto::PanelBarView {
         bar: true,
@@ -1574,7 +1574,7 @@ fn barra_de_paneles_de_referencia() -> norte_ui_host::dto::PanelBarView {
     }
 }
 
-fn menu_de_referencia() -> norte_ui_host::dto::MenuView {
+fn reference_menu() -> norte_ui_host::dto::MenuView {
     norte_ui_host::dto::MenuView {
         bar: true,
         titles: vec!["Archivo".to_owned(), "Paneles".to_owned()],
@@ -1606,15 +1606,15 @@ fn menu_de_referencia() -> norte_ui_host::dto::MenuView {
     }
 }
 
-fn snapshot_de_referencia() -> ViewSnapshot {
+fn reference_snapshot() -> ViewSnapshot {
     ViewSnapshot {
         compare: None,
         sync: None,
         // Sin pantalla de arranque puesta (puente 69).
         splash: None,
-        slots: slots_de_referencia(),
+        slots: reference_slots(),
         connection: ConnectionView::Connected,
-        layout: disposicion_de_referencia(),
+        layout: reference_layout(),
         focus: Some(1),
         status: StatusView {
             message: Some("2 entradas".to_owned()),
@@ -1625,11 +1625,11 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 count: Some(12),
             }),
         },
-        dialogs: vec![dialogo_de_referencia()],
-        tasks: vec![task_de_referencia()],
-        menu: menu_de_referencia(),
-        panel_bar: barra_de_paneles_de_referencia(),
-        status_items: elementos_de_estado_de_referencia(),
+        dialogs: vec![reference_dialog()],
+        tasks: vec![reference_task()],
+        menu: reference_menu(),
+        panel_bar: reference_pane_bar(),
+        status_items: reference_status_items(),
         layout_buttons: vec![norte_ui_host::dto::ChromeButtonView {
             id: "split-h".to_owned(),
             label: "Partir lado a lado".to_owned(),
@@ -1639,8 +1639,8 @@ fn snapshot_de_referencia() -> ViewSnapshot {
         // golden pins to `false` does not distinguish "it commands it" from
         // "it does not exist".
         row_stripes: true,
-        profiles: Some(perfiles_de_referencia()),
-        wizard: Some(asistente_de_referencia()),
+        profiles: Some(reference_profiles()),
+        wizard: Some(reference_wizard()),
         palette: Some(norte_ui_host::dto::PaletteView {
             query: "orde".to_owned(),
             rows: vec![norte_ui_host::dto::PaletteRowView {
@@ -1654,7 +1654,7 @@ fn snapshot_de_referencia() -> ViewSnapshot {
             cursor: Some(0),
             total: 42,
         }),
-        goto: Some(ir_a_de_referencia()),
+        goto: Some(reference_goto()),
         whichkey: Some(norte_ui_host::dto::WhichKeyView {
             title: "ctrl+x".to_owned(),
             rows: vec![
@@ -1674,30 +1674,30 @@ fn snapshot_de_referencia() -> ViewSnapshot {
                 },
             ],
         }),
-        help: Some(ayuda_de_referencia()),
-        settings: Some(ajustes_de_referencia()),
-        extensions: Some(extensiones_de_referencia()),
-        agents: Some(agentes_de_referencia()),
-        plugin_output: Some(salida_de_referencia()),
-        program_output: Some(programa_de_referencia()),
-        theme: Some(tema_de_referencia()),
-        search: Some(busqueda_de_referencia()),
-        layouts: Some(disposiciones_de_referencia()),
-        columns: Some(columnas_de_referencia()),
-        picker: Some(selector_de_referencia()),
-        viewer: Some(visor_de_referencia()),
+        help: Some(reference_help()),
+        settings: Some(reference_settings()),
+        extensions: Some(reference_extensions()),
+        agents: Some(reference_agents()),
+        plugin_output: Some(reference_output()),
+        program_output: Some(reference_program()),
+        theme: Some(reference_theme()),
+        search: Some(reference_search()),
+        layouts: Some(reference_layouts()),
+        columns: Some(reference_columns()),
+        picker: Some(reference_selector()),
+        viewer: Some(reference_viewer()),
         // With a plan, like the rest of this snapshot's overlays: if it went
         // to `None`, nobody would pin down the field's place inside the
         // snapshot.
-        ai_rename: Some(plan_ia_de_referencia()),
-        organize: Some(arbol_de_organizar_de_referencia()),
+        ai_rename: Some(reference_ai_plan()),
+        organize: Some(reference_organize_tree()),
         locale: "es".to_owned(),
     }
 }
 
 /// The reference theme: two roles and one effect this renderer does not
 /// paint.
-fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
+fn reference_theme() -> norte_ui_host::dto::ThemeView {
     use norte_ui_host::dto::{ThemeRoleView, ThemeView};
     ThemeView {
         name: "tokyonight".to_owned(),
@@ -1722,7 +1722,7 @@ fn tema_de_referencia() -> norte_ui_host::dto::ThemeView {
 
 /// The reference search: two hits, one with a hostile name, and still
 /// running.
-fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
+fn reference_search() -> norte_ui_host::dto::SearchView {
     use norte_ui_host::dto::{SearchRowView, SearchView};
     SearchView {
         semantic: false,
@@ -1755,7 +1755,7 @@ fn busqueda_de_referencia() -> norte_ui_host::dto::SearchView {
 
 /// The reference plan: a copy and a tree delete, with the mode in view and
 /// a lock.
-fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
+fn reference_sync() -> norte_ui_host::dto::SyncView {
     use norte_ui_host::dto::{SyncStepView, SyncView};
     SyncView {
         source: norte_ui_host::dto::DialogLine {
@@ -1831,9 +1831,9 @@ fn sincronizacion_de_referencia() -> norte_ui_host::dto::SyncView {
 
 /// The reference comparison: one matching row and one orphan on the left
 /// with a hostile name, and one hidden category.
-fn comparacion_de_referencia() -> norte_ui_host::dto::CompareView {
+fn reference_comparison() -> norte_ui_host::dto::CompareView {
     use norte_ui_host::dto::{CompareFaceView, CompareFilterView, CompareRowView, CompareView};
-    let cara = |name: &str, hostile: bool, size: &str| CompareFaceView {
+    let side = |name: &str, hostile: bool, size: &str| CompareFaceView {
         name: name.to_owned(),
         hostile,
         size: size.to_owned(),
@@ -1853,8 +1853,8 @@ fn comparacion_de_referencia() -> norte_ui_host::dto::CompareView {
                 confidence: "cierto".to_owned(),
                 criterion: "size".to_owned(),
                 reason: None,
-                left: Some(cara("notas.txt", false, "1,2 kB")),
-                right: Some(cara("notas.txt", false, "1,2 kB")),
+                left: Some(side("notas.txt", false, "1,2 kB")),
+                right: Some(side("notas.txt", false, "1,2 kB")),
                 paired_under: None,
             },
             CompareRowView {
@@ -1866,7 +1866,7 @@ fn comparacion_de_referencia() -> norte_ui_host::dto::CompareView {
                 reason: None,
                 // No size: an unhydrated orphan does not know it, and that
                 // travels as ABSENCE, not as a manufactured zero.
-                left: Some(cara("caf\u{fffd}.txt", true, "")),
+                left: Some(side("caf\u{fffd}.txt", true, "")),
                 right: None,
                 paired_under: Some("los dos nombres se escriben distinto".to_owned()),
             },
@@ -1887,7 +1887,7 @@ fn comparacion_de_referencia() -> norte_ui_host::dto::CompareView {
 
 /// The reference layout picker: a factory one that shares a name with a
 /// keyboard preset, and a user one that fails to parse.
-fn disposiciones_de_referencia() -> norte_ui_host::dto::LayoutPickerView {
+fn reference_layouts() -> norte_ui_host::dto::LayoutPickerView {
     use norte_ui_host::dto::{LayoutPickerView, LayoutRowView};
     LayoutPickerView {
         title: "Disposiciones".to_owned(),
@@ -1920,7 +1920,7 @@ fn disposiciones_de_referencia() -> norte_ui_host::dto::LayoutPickerView {
 /// — the name —, a builtin with a cyclable format, an `attr:` whose format
 /// is pinned down by the schema, and an id that does NOT parse, which is
 /// preserved because it is the user's configuration intent.
-fn columnas_de_referencia() -> norte_ui_host::dto::ColumnsPickerView {
+fn reference_columns() -> norte_ui_host::dto::ColumnsPickerView {
     use norte_ui_host::dto::{ColumnsPickerRowView, ColumnsPickerView};
     ColumnsPickerView {
         title: "Columnas — sftp".to_owned(),
@@ -1972,7 +1972,7 @@ fn columnas_de_referencia() -> norte_ui_host::dto::ColumnsPickerView {
 }
 
 /// A reference picker: volumes, with one read-only.
-fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
+fn reference_selector() -> norte_ui_host::dto::PickerView {
     use norte_ui_host::dto::{PickerRowView, PickerView};
     PickerView {
         title: "Volúmenes".to_owned(),
@@ -1990,7 +1990,7 @@ fn selector_de_referencia() -> norte_ui_host::dto::PickerView {
 /// The agent sessions panel: one session whose id is painted differently
 /// from what it is — it is an opaque key from the daemon, not a charset
 /// identifier — and another clean one.
-fn agentes_de_referencia() -> norte_ui_host::dto::AgentsView {
+fn reference_agents() -> norte_ui_host::dto::AgentsView {
     norte_ui_host::dto::AgentsView {
         rows: vec![
             norte_ui_host::dto::AgentRowView {
@@ -2027,7 +2027,7 @@ fn agentes_de_referencia() -> norte_ui_host::dto::AgentsView {
 /// A program's output (#312, bridge 52): the comparator, with one masked
 /// line and the output cut off, which are the two fields the renderer
 /// paints differently.
-fn programa_de_referencia() -> norte_ui_host::dto::ProgramOutputView {
+fn reference_program() -> norte_ui_host::dto::ProgramOutputView {
     norte_ui_host::dto::ProgramOutputView {
         title_key: "program-output-compare".to_owned(),
         command: norte_ui_host::dto::MaskedTextView {
@@ -2046,7 +2046,7 @@ fn programa_de_referencia() -> norte_ui_host::dto::ProgramOutputView {
     }
 }
 
-fn salida_de_referencia() -> norte_ui_host::dto::ExtensionOutputView {
+fn reference_output() -> norte_ui_host::dto::ExtensionOutputView {
     norte_ui_host::dto::ExtensionOutputView {
         // The extension's name masked AND marked, with CLEAN text: it is the
         // case a single flag for the three strings could not express — the
@@ -2071,7 +2071,7 @@ fn salida_de_referencia() -> norte_ui_host::dto::ExtensionOutputView {
 
 /// The reference extensions manager: one approved and enabled extension,
 /// another that is not, a directory that failed to load and an open card.
-fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
+fn reference_extensions() -> norte_ui_host::dto::ExtensionsView {
     use norte_ui_host::dto::{
         ExtensionConfigRowView, ExtensionDetailView, ExtensionErrorView, ExtensionRowView,
         ExtensionsView,
@@ -2159,7 +2159,7 @@ fn extensiones_de_referencia() -> norte_ui_host::dto::ExtensionsView {
 /// locations section with one missing.
 /// The reference view's two settings sections, kept apart because the whole
 /// function was going over the lint's line cap.
-fn secciones_de_ajustes_de_referencia() -> Vec<norte_ui_host::dto::SettingsSectionView> {
+fn reference_settings_sections() -> Vec<norte_ui_host::dto::SettingsSectionView> {
     use norte_ui_host::dto::{PathRowView, SettingRowView, SettingsSectionView};
     vec![
         SettingsSectionView::Settings {
@@ -2226,10 +2226,10 @@ fn secciones_de_ajustes_de_referencia() -> Vec<norte_ui_host::dto::SettingsSecti
     ]
 }
 
-fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
+fn reference_settings() -> norte_ui_host::dto::SettingsView {
     use norte_ui_host::dto::{SectionIndexView, SettingsView};
     SettingsView {
-        sections: secciones_de_ajustes_de_referencia(),
+        sections: reference_settings_sections(),
         index: vec![
             SectionIndexView {
                 key: "appearance".to_owned(),
@@ -2260,7 +2260,7 @@ fn ajustes_de_referencia() -> norte_ui_host::dto::SettingsView {
 
 /// The reference help: a page with prose, a live mark already resolved, a
 /// link, the keyboard sheet, and a row this frontend does not execute.
-fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
+fn reference_help() -> norte_ui_host::dto::HelpView {
     use norte_ui_host::dto::{
         HelpActionView, HelpBlockView, HelpFocusView, HelpKeyRowView, HelpSidebarRowView,
         HelpSpanView, HelpView,
@@ -2360,7 +2360,7 @@ fn ayuda_de_referencia() -> norte_ui_host::dto::HelpView {
 
 #[test]
 fn actualizaciones() {
-    let snapshot = snapshot_de_referencia();
+    let snapshot = reference_snapshot();
     check_family(
         "updates.json",
         &[
@@ -2401,7 +2401,7 @@ fn actualizaciones() {
                             slot_id: 1,
                             generation: 5,
                             first_visible: 40,
-                            rows: vec![fila(41, "otro.txt", false)],
+                            rows: vec![row(41, "otro.txt", false)],
                             icon_column: false,
                             total_rows: Some(120),
                         },
@@ -2420,7 +2420,7 @@ fn actualizaciones() {
                 "patch_layout",
                 UiUpdate::Patch(ViewPatch {
                     base_sequence: 13,
-                    changes: vec![ViewChange::Layout(disposicion_de_referencia())],
+                    changes: vec![ViewChange::Layout(reference_layout())],
                 }),
             ),
             ("snapshot", UiUpdate::Snapshot(Box::new(snapshot))),
@@ -2429,7 +2429,7 @@ fn actualizaciones() {
 }
 
 #[test]
-fn el_sobre() {
+fn the_envelope() {
     let e = BridgeEnvelope::new(
         InstanceId::new("host-1"),
         0,
@@ -2440,16 +2440,16 @@ fn el_sobre() {
 
 /// An action with a tag this host does not know is NOT interpreted.
 #[test]
-fn una_accion_desconocida_se_rechaza() {
-    let crudo = r#"{"action":"format_disk","slot_id":1}"#;
-    let out: Result<UiAction, _> = serde_json::from_str(crudo);
+fn an_unknown_action_is_rejected() {
+    let raw = r#"{"action":"format_disk","slot_id":1}"#;
+    let out: Result<UiAction, _> = serde_json::from_str(raw);
     assert!(out.is_err(), "an unknown action is not accepted");
 }
 
 /// An envelope from a future version is detected BEFORE looking at the
 /// payload.
 #[test]
-fn un_sobre_futuro_no_se_interpreta() {
+fn a_future_envelope_is_not_interpreted() {
     let e: BridgeEnvelope<UiUpdate> = serde_json::from_str(
         r#"{"bridge_version":9999,"instance_id":"host-1","sequence":0,
             "payload":{"update":"notice","notice":"shutdown","incomplete":false}}"#,
@@ -2464,7 +2464,7 @@ fn un_sobre_futuro_no_se_interpreta() {
 /// What gets serialized carries no native paths nor debug representations:
 /// the renderer must not receive authority over a path by accident.
 #[test]
-fn nada_serializado_lleva_una_ruta_cruda() {
+fn nothing_serialized_carries_a_raw_path() {
     let json = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/golden/updates.json"),
     )
@@ -2484,14 +2484,14 @@ fn nada_serializado_lleva_una_ruta_cruda() {
 /// how one of them can end up IMPOSSIBLE to serialize with nothing turning
 /// red. Here, 1:1 coverage is against the list of variants.
 #[test]
-fn cada_cambio_cruza_el_bridge() {
-    let mut casos = cambios_del_listado();
-    casos.extend(cambios_de_pantalla());
-    check_family("changes.json", &casos);
+fn every_change_crosses_the_bridge() {
+    let mut cases = listing_changes();
+    cases.extend(screen_changes());
+    check_family("changes.json", &cases);
 }
 
 /// The ones that describe a LISTING.
-fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
+fn listing_changes() -> Vec<(&'static str, ViewChange)> {
     vec![
         (
             "connection",
@@ -2510,7 +2510,7 @@ fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
         (
             "dialogs",
             ViewChange::Dialogs {
-                dialogs: vec![dialogo_de_referencia()],
+                dialogs: vec![reference_dialog()],
             },
         ),
         (
@@ -2531,103 +2531,103 @@ fn cambios_del_listado() -> Vec<(&'static str, ViewChange)> {
 }
 
 /// The changes that describe an OVERLAY: every surface that opens on top.
-fn cambios_de_overlay() -> Vec<(&'static str, ViewChange)> {
+fn overlay_changes() -> Vec<(&'static str, ViewChange)> {
     vec![
         (
             "settings",
             ViewChange::Settings {
-                settings: Some(ajustes_de_referencia()),
+                settings: Some(reference_settings()),
             },
         ),
         (
             "extensions",
             ViewChange::Extensions {
-                extensions: Some(extensiones_de_referencia()),
+                extensions: Some(reference_extensions()),
             },
         ),
         (
             "agents",
             ViewChange::Agents {
-                agents: Some(agentes_de_referencia()),
+                agents: Some(reference_agents()),
             },
         ),
         (
             "plugin_output",
             ViewChange::PluginOutput {
-                output: Some(salida_de_referencia()),
+                output: Some(reference_output()),
             },
         ),
         (
             "program_output",
             ViewChange::ProgramOutput {
-                output: Some(programa_de_referencia()),
+                output: Some(reference_program()),
             },
         ),
         (
             "theme",
             ViewChange::Theme {
-                theme: Some(tema_de_referencia()),
+                theme: Some(reference_theme()),
             },
         ),
         (
             "picker",
             ViewChange::Picker {
-                picker: Some(selector_de_referencia()),
+                picker: Some(reference_selector()),
             },
         ),
         (
             "layouts",
             ViewChange::Layouts {
-                layouts: Some(disposiciones_de_referencia()),
+                layouts: Some(reference_layouts()),
             },
         ),
         (
             "columns_picker",
             ViewChange::ColumnsPicker {
-                columns: Some(columnas_de_referencia()),
+                columns: Some(reference_columns()),
             },
         ),
         (
             "search",
             ViewChange::Search {
-                search: Some(busqueda_de_referencia()),
+                search: Some(reference_search()),
             },
         ),
         (
             "compare",
             ViewChange::Compare {
-                compare: Some(comparacion_de_referencia()),
+                compare: Some(reference_comparison()),
             },
         ),
         (
             "sync",
             ViewChange::Sync {
-                sync: Some(sincronizacion_de_referencia()),
+                sync: Some(reference_sync()),
             },
         ),
         (
             "help",
             ViewChange::Help {
-                help: Some(ayuda_de_referencia()),
+                help: Some(reference_help()),
             },
         ),
     ]
 }
 
 /// The ones that describe the SCREEN: layout, overlays and global state.
-fn cambios_de_pantalla() -> Vec<(&'static str, ViewChange)> {
-    let mut casos = cambios_de_overlay();
-    casos.extend(cambios_de_listado());
-    casos.extend(cambios_del_resto());
-    casos
+fn screen_changes() -> Vec<(&'static str, ViewChange)> {
+    let mut cases = overlay_changes();
+    cases.extend(listing_row_changes());
+    cases.extend(rest_changes());
+    cases
 }
 
 /// The ones that describe a LISTING: its rows and its header.
 ///
-/// Kept apart from the rest because `cambios_de_pantalla` was going over a
+/// Kept apart from the rest because `screen_changes` was going over a
 /// hundred lines once the header was added, and because these two travel
 /// together in the same patch.
-fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
+fn listing_row_changes() -> Vec<(&'static str, ViewChange)> {
     vec![
         (
             "rows",
@@ -2635,7 +2635,7 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
                 slot_id: 1,
                 generation: 5,
                 first_visible: 40,
-                rows: vec![fila(41, "otro.txt", false)],
+                rows: vec![row(41, "otro.txt", false)],
                 // With the icon column OPEN, which is how icons land: a rows
                 // patch is what opens it in the renderer.
                 icon_column: true,
@@ -2674,9 +2674,9 @@ fn cambios_de_listado() -> Vec<(&'static str, ViewChange)> {
 
 /// Everything else about the screen that can change.
 #[expect(clippy::too_many_lines, reason = "list of literals, no logic")]
-fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
+fn rest_changes() -> Vec<(&'static str, ViewChange)> {
     vec![
-        ("layout", ViewChange::Layout(disposicion_de_referencia())),
+        ("layout", ViewChange::Layout(reference_layout())),
         (
             "slot_state",
             ViewChange::SlotState {
@@ -2700,31 +2700,31 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
         (
             "menu",
             ViewChange::Menu {
-                menu: menu_de_referencia(),
+                menu: reference_menu(),
             },
         ),
         (
             "wizard",
             ViewChange::Wizard {
-                wizard: Some(asistente_de_referencia()),
+                wizard: Some(reference_wizard()),
             },
         ),
         (
             "panel_bar",
             ViewChange::PanelBar {
-                panel_bar: barra_de_paneles_de_referencia(),
+                panel_bar: reference_pane_bar(),
             },
         ),
         (
             "status_items",
             ViewChange::StatusItems {
-                status_items: elementos_de_estado_de_referencia(),
+                status_items: reference_status_items(),
             },
         ),
         (
             "profiles",
             ViewChange::Profiles {
-                profiles: Some(perfiles_de_referencia()),
+                profiles: Some(reference_profiles()),
             },
         ),
         (
@@ -2748,7 +2748,7 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
         (
             "goto",
             ViewChange::Goto {
-                goto: Some(ir_a_de_referencia()),
+                goto: Some(reference_goto()),
             },
         ),
         (
@@ -2769,25 +2769,25 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
         (
             "viewer",
             ViewChange::Viewer {
-                viewer: Some(visor_de_referencia()),
+                viewer: Some(reference_viewer()),
             },
         ),
         (
             "ai_rename",
             ViewChange::AiRename {
-                ai_rename: Some(plan_ia_de_referencia()),
+                ai_rename: Some(reference_ai_plan()),
             },
         ),
         (
             "organize",
             ViewChange::Organize {
-                organize: Some(arbol_de_organizar_de_referencia()),
+                organize: Some(reference_organize_tree()),
             },
         ),
         (
             "tasks",
             ViewChange::Tasks {
-                tasks: vec![task_de_referencia()],
+                tasks: vec![reference_task()],
                 // The processes panel's cursor travels WITH the board: a row
                 // expiring shifts the rest, and the corpus has to pin both
                 // down together.
@@ -2819,27 +2819,27 @@ fn cambios_del_resto() -> Vec<(&'static str, ViewChange)> {
 /// day someone puts a hash or a random id into a bridge `u64`, the corpus
 /// turns red before two rows collide in silence.
 #[test]
-fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
+fn no_bridge_number_exceeds_where_f64_is_exact() {
     /// 2^53: the last integer an `f64` represents with no lost neighbors.
-    const TOPE: u64 = 1 << 53;
+    const CAP: u64 = 1 << 53;
 
-    fn recorre(v: &Value, donde: &str, malos: &mut Vec<String>) {
+    fn walks(v: &Value, where_: &str, malos: &mut Vec<String>) {
         match v {
             Value::Number(n) => {
                 if let Some(u) = n.as_u64()
-                    && u > TOPE
+                    && u > CAP
                 {
-                    malos.push(format!("{donde} = {u}"));
+                    malos.push(format!("{where_} = {u}"));
                 }
             }
             Value::Array(xs) => {
                 for (i, x) in xs.iter().enumerate() {
-                    recorre(x, &format!("{donde}[{i}]"), malos);
+                    walks(x, &format!("{where_}[{i}]"), malos);
                 }
             }
             Value::Object(m) => {
                 for (k, x) in m {
-                    recorre(x, &format!("{donde}.{k}"), malos);
+                    walks(x, &format!("{where_}.{k}"), malos);
                 }
             }
             _ => {}
@@ -2847,15 +2847,15 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
     }
 
     let mut malos = Vec::new();
-    for fichero in [
+    for file in [
         "updates.json",
         "changes.json",
         "actions.json",
         "acks.json",
         "envelope.json",
     ] {
-        for (caso, valor) in load(fichero) {
-            recorre(&valor, &format!("{fichero}/{caso}"), &mut malos);
+        for (case, valor) in load(file) {
+            walks(&valor, &format!("{file}/{case}"), &mut malos);
         }
     }
     assert!(
@@ -2884,7 +2884,7 @@ fn ningun_numero_del_puente_pasa_de_donde_f64_es_exacto() {
 /// bumping `BRIDGE_VERSION` (and its mirror in `ui/src/types.ts`), writing
 /// what changed in `bridge.rs`'s version log, and only then updating it.
 #[test]
-fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
+fn the_corpus_shape_does_not_change_without_bumping_the_bridge() {
     /// The blessed summary. Updated BY HAND and in the same commit as the
     /// bump, which is exactly the stop this test exists to force.
     // Bridge 70: the panel that paints a PLUGIN (`SlotView::Panel` with its
@@ -2939,40 +2939,40 @@ fn la_forma_del_corpus_no_cambia_sin_subir_el_puente() {
     // field.
     // 94 (ADR 0148): `BrowserSlotView.progress` and the `slot_progress`
     // change.
-    const FORMA: u64 = 7_145_087_327_109_203_787;
+    const SHAPE: u64 = 7_145_087_327_109_203_787;
 
-    let mut rutas: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    for fichero in ["changes.json", "updates.json", "variants.json", "acks.json"] {
-        for (caso, valor) in load(fichero) {
+    let mut paths: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for file in ["changes.json", "updates.json", "variants.json", "acks.json"] {
+        for (case, valor) in load(file) {
             // The CASE's name does not count: adding one more case of an
             // already-known shape does not change the contract with the
             // renderer.
-            let _ = caso;
-            formas(&valor, fichero, &mut rutas);
+            let _ = case;
+            forms(&valor, file, &mut paths);
         }
     }
-    let calculada = resumen(&rutas);
+    let computed = summary(&paths);
     assert_eq!(
-        calculada, FORMA,
+        computed, SHAPE,
         "the corpus's shape changed. If it is a new bridge field: bump \
          `BRIDGE_VERSION` and its mirror in `ui/src/types.ts`, write why in \
-         `bridge.rs`'s log, and put {calculada} here."
+         `bridge.rs`'s log, and put {computed} here."
     );
 }
 
 /// Every key path of a JSON, with array indices flattened.
-fn formas(v: &Value, prefijo: &str, out: &mut std::collections::BTreeSet<String>) {
+fn forms(v: &Value, prefix: &str, out: &mut std::collections::BTreeSet<String>) {
     match v {
         Value::Object(m) => {
-            for (k, hijo) in m {
-                let ruta = format!("{prefijo}.{k}");
-                out.insert(ruta.clone());
-                formas(hijo, &ruta, out);
+            for (k, child) in m {
+                let path = format!("{prefix}.{k}");
+                out.insert(path.clone());
+                forms(child, &path, out);
             }
         }
         Value::Array(xs) => {
             for x in xs {
-                formas(x, &format!("{prefijo}[]"), out);
+                forms(x, &format!("{prefix}[]"), out);
             }
         }
         // A scalar contributes no shape: its PATH was already noted above.
@@ -2984,9 +2984,9 @@ fn formas(v: &Value, prefijo: &str, out: &mut std::collections::BTreeSet<String>
 /// cryptographic — this catches slip-ups, not attacks — and it does need to
 /// give the same number on any machine and Rust version, which
 /// `DefaultHasher` does not promise.
-fn resumen(rutas: &std::collections::BTreeSet<String>) -> u64 {
+fn summary(paths: &std::collections::BTreeSet<String>) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for r in rutas {
+    for r in paths {
         for b in r.as_bytes() {
             h ^= u64::from(*b);
             h = h.wrapping_mul(0x0000_0100_0000_01b3);
@@ -3000,7 +3000,7 @@ fn resumen(rutas: &std::collections::BTreeSet<String>) -> u64 {
 /// Every VARIANT of the bridge's enums crosses at least once (#257).
 ///
 /// `UiAction`'s coverage is already watched over by the compiler
-/// (`tag_de_accion` is an exhaustive `match` with no wildcard). The enums
+/// (`action_tag` is an exhaustive `match` with no wildcard). The enums
 /// that travel INSIDE a snapshot did not have that: `SlotState::Error` — a
 /// listing's error path — was never serialized, `TaskStateView` only ever
 /// crossed as `running`, and `RowKind` only as `file`, while the renderer
@@ -3008,12 +3008,12 @@ fn resumen(rutas: &std::collections::BTreeSet<String>) -> u64 {
 /// named with an exhaustive `match`, so a new variant does not compile until
 /// someone gives it its fixture.
 mod variantes {
-    use super::{RowKind, SlotState, TaskStateView, check_family, fila};
+    use super::{RowKind, SlotState, TaskStateView, check_family, row};
     use norte_ui_host::dto::{
         CellView, ConnectionView, DialogChoice, DialogView, QuickView, SlotPlacement, SlotRole,
     };
 
-    fn nombre_estado(s: &SlotState) -> &'static str {
+    fn name_state(s: &SlotState) -> &'static str {
         match s {
             SlotState::Ready => "slot_state_ready",
             SlotState::Loading { .. } => "slot_state_loading",
@@ -3021,7 +3021,7 @@ mod variantes {
         }
     }
 
-    fn nombre_conexion(c: &ConnectionView) -> &'static str {
+    fn name_connection(c: &ConnectionView) -> &'static str {
         match c {
             ConnectionView::Connected => "connection_connected",
             ConnectionView::Reconnecting => "connection_reconnecting",
@@ -3029,7 +3029,7 @@ mod variantes {
         }
     }
 
-    fn nombre_task(t: TaskStateView) -> &'static str {
+    fn name_task(t: TaskStateView) -> &'static str {
         match t {
             TaskStateView::Queued => "task_queued",
             TaskStateView::Running => "task_running",
@@ -3040,7 +3040,7 @@ mod variantes {
         }
     }
 
-    fn nombre_clase(k: RowKind) -> &'static str {
+    fn name_class(k: RowKind) -> &'static str {
         match k {
             RowKind::Dir => "row_kind_dir",
             RowKind::File => "row_kind_file",
@@ -3052,7 +3052,7 @@ mod variantes {
     /// The EMPTY SHAPES, which are the ones a renderer misreads with nothing
     /// complaining: a `None` is painted the same as a field that never
     /// arrived.
-    fn formas_vacias() -> Vec<(&'static str, serde_json::Value)> {
+    fn forms_empty() -> Vec<(&'static str, serde_json::Value)> {
         vec![
             // The destination check's three states, and all three in the
             // corpus on purpose: they are the only thing in the dialog where
@@ -3164,7 +3164,7 @@ mod variantes {
             ),
         ]
         .into_iter()
-        .chain(formas_vacias_de_reparto())
+        .chain(empty_layout_shapes())
         .collect()
     }
 
@@ -3173,7 +3173,7 @@ mod variantes {
     ///
     /// Separated from the previous ones only by size: a hundred-line list
     /// is not readable, and the cut falls where the topic changes.
-    fn formas_vacias_de_reparto() -> Vec<(&'static str, serde_json::Value)> {
+    fn empty_layout_shapes() -> Vec<(&'static str, serde_json::Value)> {
         vec![
             (
                 "placement_role_none",
@@ -3240,8 +3240,8 @@ mod variantes {
     }
 
     #[test]
-    fn cada_variante_de_enum_tiene_su_fixture() {
-        let estados = vec![
+    fn every_enum_variant_has_its_fixture() {
+        let states = vec![
             SlotState::Ready,
             // WITH a destination, which is the half that makes it readable
             // that the body keeps showing the previous listing while it
@@ -3256,7 +3256,7 @@ mod variantes {
                 detail: Some("EACCES".to_owned()),
             },
         ];
-        let conexiones = vec![
+        let connections = vec![
             ConnectionView::Connected,
             ConnectionView::Reconnecting,
             ConnectionView::Lost {
@@ -3271,30 +3271,30 @@ mod variantes {
             TaskStateView::Failed,
             TaskStateView::Cancelled,
         ];
-        let clases = vec![
+        let classes = vec![
             RowKind::Dir,
             RowKind::File,
             RowKind::Symlink,
             RowKind::Other,
         ];
 
-        let mut casos: Vec<(&str, serde_json::Value)> = Vec::new();
-        for e in &estados {
-            casos.push((nombre_estado(e), serde_json::to_value(e).expect("json")));
+        let mut cases: Vec<(&str, serde_json::Value)> = Vec::new();
+        for e in &states {
+            cases.push((name_state(e), serde_json::to_value(e).expect("json")));
         }
-        for c in &conexiones {
-            casos.push((nombre_conexion(c), serde_json::to_value(c).expect("json")));
+        for c in &connections {
+            cases.push((name_connection(c), serde_json::to_value(c).expect("json")));
         }
         for t in &tasks {
-            casos.push((nombre_task(*t), serde_json::to_value(t).expect("json")));
+            cases.push((name_task(*t), serde_json::to_value(t).expect("json")));
         }
-        for k in &clases {
-            let mut f = fila(1, "x", false);
+        for k in &classes {
+            let mut f = row(1, "x", false);
             f.kind = *k;
-            casos.push((nombre_clase(*k), serde_json::to_value(&f).expect("json")));
+            cases.push((name_class(*k), serde_json::to_value(&f).expect("json")));
         }
-        casos.extend(formas_vacias());
-        casos.sort_by(|a, b| a.0.cmp(b.0));
-        check_family("variants.json", &casos);
+        cases.extend(forms_empty());
+        cases.sort_by(|a, b| a.0.cmp(b.0));
+        check_family("variants.json", &cases);
     }
 }

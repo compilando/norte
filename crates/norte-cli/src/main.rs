@@ -198,7 +198,7 @@ enum Cmd {
         #[command(subcommand)]
         cmd: PluginCmd,
     },
-    /// Índice de búsqueda: `index build <path>` / `index query <path> <texto>` (M4)
+    /// Índice de búsqueda: `index build <path>` / `index query <path> <text>` (M4)
     Index {
         #[command(subcommand)]
         cmd: IndexCmd,
@@ -722,13 +722,13 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     }
     // Doctor is read-only over config/keymaps (H2): neither engine nor daemon.
     if let Cmd::Doctor { json } = cli.cmd {
-        return cmd::entorno::doctor_cmd(json).await;
+        return cmd::environment::doctor_cmd(json).await;
     }
     // `paths` resolves paths and stats them, nothing more: same place for
     // the same reason. And BEFORE building an engine: the question "where
     // is my config" is asked exactly when something about it is broken.
     if let Cmd::Paths { json } = cli.cmd {
-        return cmd::entorno::paths_cmd(json, cli.socket.clone()).await;
+        return cmd::environment::paths_cmd(json, cli.socket.clone()).await;
     }
     // Help is the EMBEDDED corpus plus the user's keymap (H3g): no
     // engine, no daemon, no network. It goes up here for that reason —
@@ -746,7 +746,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // `shell-init` just prints a constant string picked by name (S3): no
     // engine, no daemon, no config — the same reasoning as `Help` above.
     if let Cmd::ShellInit { ref shell } = cli.cmd {
-        return Ok(cmd::entorno::shell_init_cmd(shell));
+        return Ok(cmd::environment::shell_init_cmd(shell));
     }
     // `theme import` reads a JSON and writes a TOML into the config dir:
     // no engine or daemon, and all synchronous, so `spawn_blocking` (hard
@@ -762,7 +762,7 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     // with `--daemon` the index's owner is the daemon (accessed via RPC),
     // and opening it here would only risk write contention. If it does
     // not open, it continues without it.
-    let mut avisos = Vec::new();
+    let mut notices = Vec::new();
     let engine = if cli.daemon {
         Engine::new()
     } else {
@@ -781,16 +781,16 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         // that is the list this change made unnecessary.
         let dir = norte_core::connect::config_dir();
         let base = norte_core::embedded::engine_in(&dir);
-        norte_core::equipo::con_indice(base, &dir, &mut avisos).await
+        norte_core::team::with_index(base, &dir, &mut notices).await
     };
     if !cli.daemon {
         // Local provider, connector and — only for the two commands that
         // use them — the embeddings: what every engine carries
-        // (`norte_core::equipo`). Loading `[ai]` resolves secrets, and an
+        // (`norte_core::team`). Loading `[ai]` resolves secrets, and an
         // `ls` never pays for that. With `--daemon` the daemon owns all
         // of this.
-        let ia = norte_core::equipo::Ia {
-            renombrado: false,
+        let ia = norte_core::team::Ia {
+            renamed: false,
             embeddings: matches!(
                 cli.cmd,
                 Cmd::Index {
@@ -799,17 +799,17 @@ async fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             ),
         };
         let dir = norte_core::connect::config_dir();
-        avisos.extend(norte_core::equipo::equipar(&engine, &dir, ia).await.avisos);
+        notices.extend(norte_core::team::equipar(&engine, &dir, ia).await.notices);
         // `[archive]` also in embedded mode: without this a `norte ls`
         // inside a zip used the default limits even if `norte.toml` set
         // others. Broken, here it is a warning; in the daemon, a startup
         // error.
-        if let Err(e) = norte_core::archive_config::aplicar(&engine).await {
-            avisos.push(norte_core::equipo::Aviso::ArchivoInvalido(e.to_string()));
+        if let Err(e) = norte_core::archive_config::apply(&engine).await {
+            notices.push(norte_core::team::Notice::ArchiveInvalid(e.to_string()));
         }
     }
-    for aviso in &avisos {
-        eprintln!("{}", cmd::daemon::warning_text(aviso));
+    for notice in &notices {
+        eprintln!("{}", cmd::daemon::warning_text(notice));
     }
 
     // #177: if this session ends up mutating without a journal, it is

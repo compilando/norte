@@ -49,18 +49,18 @@ pub const MOVES_DEFAULT: usize = 5;
 
 /// What can be read from the repository without opening the object database.
 #[derive(Debug, Default, PartialEq, Eq)]
-pub struct Estado {
+pub struct State {
     /// The current branch, or `None` with a detached `HEAD`.
     pub branch: Option<String>,
     /// The commit `HEAD` points to, abbreviated to twelve characters.
     pub commit: Option<String>,
     /// The recent moves, from newest to oldest.
-    pub moves: Vec<Movimiento>,
+    pub moves: Vec<Move>,
 }
 
 /// A reflog move: where it went and why.
 #[derive(Debug, PartialEq, Eq)]
-pub struct Movimiento {
+pub struct Move {
     /// The destination commit, abbreviated.
     pub to: String,
     /// What git wrote as the reason (`checkout: moving from a to b`).
@@ -75,14 +75,14 @@ pub struct Movimiento {
 /// everything after `refs/heads/` preserves the slashes the reader wrote.
 ///
 /// ```
-/// use git_panel::rama_de_head;
+/// use git_panel::head_branch;
 ///
-/// assert_eq!(rama_de_head(b"ref: refs/heads/main\n").as_deref(), Some("main"));
-/// assert_eq!(rama_de_head(b"ref: refs/heads/feat/x\n").as_deref(), Some("feat/x"));
-/// assert!(rama_de_head(b"9f1c2a0e\n").is_none());
+/// assert_eq!(head_branch(b"ref: refs/heads/main\n").as_deref(), Some("main"));
+/// assert_eq!(head_branch(b"ref: refs/heads/feat/x\n").as_deref(), Some("feat/x"));
+/// assert!(head_branch(b"9f1c2a0e\n").is_none());
 /// ```
 #[must_use]
-pub fn rama_de_head(raw: &[u8]) -> Option<String> {
+pub fn head_branch(raw: &[u8]) -> Option<String> {
     let text = core::str::from_utf8(raw).ok()?;
     let line = text.lines().next()?.trim();
     let reference = line.strip_prefix("ref:")?.trim();
@@ -109,7 +109,7 @@ fn abbreviate(sha: &str) -> String {
 /// An empty reflog —a freshly created repository, with no commits— is not
 /// an error: it returns a state with no commit, and the panel says so.
 #[must_use]
-pub fn del_reflog(raw: &[u8], cap: usize) -> (Option<String>, Vec<Movimiento>) {
+pub fn del_reflog(raw: &[u8], cap: usize) -> (Option<String>, Vec<Move>) {
     let Ok(text) = core::str::from_utf8(raw) else {
         return (None, Vec::new());
     };
@@ -129,7 +129,7 @@ pub fn del_reflog(raw: &[u8], cap: usize) -> (Option<String>, Vec<Movimiento>) {
         let (Some(_before), Some(after)) = (fields.next(), fields.next()) else {
             continue;
         };
-        moves.push(Movimiento {
+        moves.push(Move {
             to: abbreviate(after),
             reason: reason.trim().to_string(),
         });
@@ -147,9 +147,9 @@ mod tests {
     /// A detached `HEAD` does not invent a branch.
     #[test]
     fn detached_head_has_no_branch() {
-        assert!(rama_de_head(b"9f1c2a0e9f1c2a0e\n").is_none());
-        assert!(rama_de_head(b"").is_none());
-        assert!(rama_de_head(b"ref: refs/tags/v1\n").is_none());
+        assert!(head_branch(b"9f1c2a0e9f1c2a0e\n").is_none());
+        assert!(head_branch(b"").is_none());
+        assert!(head_branch(b"ref: refs/tags/v1\n").is_none());
     }
 
     /// The commit is the DESTINATION of the last line, not the origin.

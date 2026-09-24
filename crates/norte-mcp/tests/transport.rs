@@ -135,7 +135,7 @@ async fn grant_scope_via_transport(
 /// `approval_id`. Never a fixed sleep: "the copy has already reached the
 /// Ask" is daemon state, and 100 ms over a local UDS was a bet that lost
 /// under load (wave W10).
-async fn esperar_ask(human: &Client) -> u64 {
+async fn wait_ask(human: &Client) -> u64 {
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     loop {
         let res: norte_proto::methods::PolicyPendingResult = human
@@ -162,14 +162,14 @@ fn copy_call(id: u64) -> serde_json::Value {
 /// #67: with a `copy` SUSPENDED in the ask, a concurrent `ping` answers just
 /// the same — the MCP client's keep-alive does not declare the bridge dead.
 #[tokio::test]
-async fn ping_responde_con_un_tool_suspendido_en_vuelo() {
+async fn ping_responds_with_a_tool_suspended_in_flight() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
     let (mut w, mut r) = spawn_transport(&socket).await;
     let human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
 
     // The copy stays suspended in the Ask (nobody decides).
     send_line(&mut w, &copy_call(10)).await;
-    esperar_ask(&human).await;
+    wait_ask(&human).await;
     // The ping MUST answer even while the copy is still in flight.
     send_line(
         &mut w,
@@ -186,13 +186,13 @@ async fn ping_responde_con_un_tool_suspendido_en_vuelo() {
 /// #67: `notifications/cancelled` abandons the in-flight tool WITHOUT a
 /// response (MCP spec); the transport stays alive for what comes next.
 #[tokio::test]
-async fn cancelled_abandona_el_tool_en_vuelo_sin_respuesta() {
+async fn cancelled_abandons_the_in_flight_tool_without_a_response() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
     let (mut w, mut r) = spawn_transport(&socket).await;
     let human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
 
     send_line(&mut w, &copy_call(10)).await;
-    esperar_ask(&human).await;
+    wait_ask(&human).await;
     send_line(
         &mut w,
         &serde_json::json!({"jsonrpc":"2.0","method":"notifications/cancelled",
@@ -218,7 +218,7 @@ async fn cancelled_abandona_el_tool_en_vuelo_sin_respuesta() {
 /// policy.decide does not create the destination. (≠ #67, which only
 /// abandoned the local wait, leaving the Ask zombie until the TTL.)
 #[tokio::test]
-async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
+async fn agent_cancel_withdraws_the_ask_the_human_does_not_execute() {
     let (_dir, socket, mem) = spawn_ask_daemon().await;
     let (mut w, mut r) = spawn_transport(&socket).await;
     let human = grant_scope_via_transport(&mut w, &mut r, &socket).await;
@@ -227,7 +227,7 @@ async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
     // has decided yet).
     send_line(&mut w, &copy_call(10)).await;
 
-    let approval_id = esperar_ask(&human).await;
+    let approval_id = wait_ask(&human).await;
 
     // The agent CANCELS its in-flight tools/call.
     send_line(
@@ -297,7 +297,7 @@ async fn cancel_del_agente_retira_el_ask_el_humano_no_ejecuta() {
 /// cleanly — cancels what is in flight, drains the writer, returns within a
 /// timeout (never hangs on the writer's join).
 #[tokio::test]
-async fn eof_con_tool_en_vuelo_termina_limpio() {
+async fn eof_with_tool_in_flight_ends_cleanly() {
     let (_dir, socket, _mem) = spawn_ask_daemon().await;
     let bridge = Bridge::connect(&socket, "claude").await.expect("bridge");
     let (client_side, server_side) = tokio::io::duplex(64 * 1024);
@@ -311,7 +311,7 @@ async fn eof_con_tool_en_vuelo_termina_limpio() {
     // Grants scope and launches a copy that stays suspended in the Ask.
     let human = grant_scope_via_transport(&mut cli_w, &mut r, &socket).await;
     send_line(&mut cli_w, &copy_call(10)).await;
-    esperar_ask(&human).await;
+    wait_ask(&human).await;
 
     // The peer DIES (drops its end) with the copy in flight.
     drop(cli_w);

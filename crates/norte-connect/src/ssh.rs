@@ -419,7 +419,7 @@ async fn rsa_hash(
 /// and at 4096. A short modulus is a different thing, the ADR does not
 /// mention it, and whoever signed off on the opt-in did not accept it: it
 /// was riding along silently.
-const RSA_MINIMO_BITS: usize = 2048;
+const RSA_MIN_BITS: usize = 2048;
 
 /// The bit length of an RSA key's modulus. `None` if it is not RSA or cannot
 /// be read.
@@ -463,13 +463,13 @@ async fn load_client_key(
         Algorithm::Ed25519 => Ok(key),
         Algorithm::Rsa { .. } if allow_rsa => {
             // The opt-in opens up RSA, not ANY RSA (#370). See
-            // `RSA_MINIMO_BITS`: it is the limit ADR 0150 meant to set and
+            // `RSA_MIN_BITS`: it is the limit ADR 0150 meant to set and
             // forgot to write down.
             match bits_del_modulo(&key) {
-                Some(bits) if bits < RSA_MINIMO_BITS => Err(ConnectError::RsaTooSmall {
+                Some(bits) if bits < RSA_MIN_BITS => Err(ConnectError::RsaTooSmall {
                     path: expanded,
                     bits,
-                    minimo: RSA_MINIMO_BITS,
+                    min: RSA_MIN_BITS,
                 }),
                 // Without being able to read the modulus nothing is
                 // asserted and it is let through: the risk `allow_rsa`
@@ -510,7 +510,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn expand_tilde_solo_prefijo() {
+    fn expand_tilde_solo_prefix() {
         let home = std::env::home_dir().expect("home in the test environment");
         assert_eq!(
             expand_tilde(Path::new("~/.ssh/id_ed25519")),
@@ -525,7 +525,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_user_explicito_gana() {
+    fn resolve_user_explicito_wins() {
         assert_eq!(resolve_user(Some("oscar")).unwrap(), "oscar");
     }
 }

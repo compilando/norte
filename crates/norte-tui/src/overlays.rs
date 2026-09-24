@@ -553,7 +553,7 @@ mod palette_modal_guard_tests {
             errors: Vec::new(),
             cursor: 0,
             config: None,
-            foco: crate::app::ExtFoco::Lista,
+            focus: crate::app::ExtFocus::List,
         });
         a.help = Some(crate::app::HelpView::new(norte_i18n::Lang::En, Vec::new()));
         assert!(

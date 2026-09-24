@@ -149,7 +149,7 @@ async fn list_skipped_reaches_both_modes() {
 #[tokio::test]
 async fn remote_copy_list_read_capabilities_like_the_embedded_one() {
     let d = spawn_daemon().await;
-    write_file(&d.mem, "mem:///src.bin", b"remote-content").await;
+    write_file(&d.mem, "mem:///src.bin", b"file-body-remote").await;
     let backend = Backend::Remote(remote(&d).await);
 
     // list
@@ -178,7 +178,7 @@ async fn remote_copy_list_read_capabilities_like_the_embedded_one() {
         )
         .await
         .expect("read");
-    assert_eq!(bytes, b"ntent-"[..].to_vec().as_slice());
+    assert_eq!(bytes, b"remote");
 
     // capabilities (F8's gating)
     let caps = backend
@@ -189,7 +189,7 @@ async fn remote_copy_list_read_capabilities_like_the_embedded_one() {
 
     // stat (fs.stat, M4 Lua T3)
     let entry = backend.stat(&vp("mem:///dst.bin")).await.expect("stat");
-    assert_eq!(entry.size, Some(14));
+    assert_eq!(entry.size, Some(16));
 }
 
 /// **#295's whole seam, over the socket and without a single frontend line**

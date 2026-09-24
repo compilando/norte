@@ -26,15 +26,15 @@ use crate::bridge::{
     MAX_TASKS_RETAINED, MAX_TRANSFER_BATCH, ModalId, RequestToken, RowKey, StaleAction,
     clamp_display,
 };
-use crate::commands::{Efecto, efecto_de};
+use crate::commands::{Effect, effect_of};
 use crate::dto::{
     BrowserSlotView, ColumnHeader, ConnectionView, DialogChoice, DialogView, LayoutView,
     PendingView, RowKind, RowView, SlotPlacement, SlotRole, SlotState, SlotView, StatusView,
     TaskStateView, TaskView, UiNotice, UiUpdate, ViewChange, ViewPatch, ViewSnapshot,
 };
 
-// The `impl Estado` blocks split by topic (ADR 0086). The actor, the
-// mailbox, `Estado` and action dispatch stay here; every child module sees
+// The `impl State` blocks split by topic (ADR 0086). The actor, the
+// mailbox, `State` and action dispatch stay here; every child module sees
 // this one's private items because it is a descendant, so the move has
 // needed no visibility opened up.
 mod agents;
@@ -96,7 +96,7 @@ const FIRST_PAGE: usize = 100;
 const FILL_BATCH: usize = 500;
 
 /// How long the viewer's read is awaited.
-const PLAZO_VISOR: std::time::Duration = std::time::Duration::from_secs(20);
+const DEADLINE_VISOR: std::time::Duration = std::time::Duration::from_secs(20);
 
 /// The help contexts THIS window can be living in.
 ///
@@ -118,23 +118,23 @@ pub const CONTEXTOS: &[&str] = &[
 
 /// What extensions and their commands are called, already masked:
 /// `id → (name, command → title)`.
-type Rotulos = std::collections::HashMap<
+type Labels = std::collections::HashMap<
     String,
     (
-        crate::extensions::Texto,
-        std::collections::HashMap<String, crate::extensions::Texto>,
+        crate::extensions::Text,
+        std::collections::HashMap<String, crate::extensions::Text>,
     ),
 >;
 
 /// What it takes to paint a command's output: who, what, and what it
 /// answered.
-struct SalidaPedida {
+struct OutputPedida {
     /// The extension's id, reverse-DNS validated.
     id: String,
     /// Its name, already masked, with its flag.
-    plugin: crate::extensions::Texto,
+    plugin: crate::extensions::Text,
     /// The command's title, already masked, with its flag.
-    comando: crate::extensions::Texto,
+    command: crate::extensions::Text,
     /// What it printed, or why not.
     res: Result<String, Error>,
 }
@@ -145,7 +145,7 @@ struct SalidaPedida {
 /// asked of the hosting process, and what that process answered and is
 /// still on screen.
 #[derive(Debug, Default)]
-struct Escritorio {
+struct Desktop {
     /// Where NATIVE effects go out through, when someone is listening.
     ///
     /// `Option` because the state is built before the channel — the first
@@ -159,10 +159,10 @@ struct Escritorio {
     /// the PALETTE, which does not need the manager open — and does not
     /// open it — and an output stored inside a closed screen is seen by
     /// nobody.
-    salida: Option<crate::dto::ExtensionOutputView>,
+    output: Option<crate::dto::ExtensionOutputView>,
     /// The last waited-for PROGRAM's output (#312), if it is still on
     /// screen.
-    programa: Option<crate::dto::ProgramOutputView>,
+    program: Option<crate::dto::ProgramOutputView>,
 }
 
 /// What this window knows about AGENT sessions.
@@ -175,7 +175,7 @@ struct Escritorio {
 struct Agencia {
     /// What has been seen. ALWAYS present: a request arrives when it
     /// arrives, and the panel only decides whether to paint it.
-    sesiones: crate::agents::Agentes,
+    sessions: crate::agents::Agents,
     /// The panel is open.
     panel: bool,
     /// Which session each in-progress undo task undoes, by task id.
@@ -188,21 +188,21 @@ struct Agencia {
 
 /// What is changed about an extension.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Cambio {
+enum Change {
     /// Grant or revoke its capabilities.
-    Aprobacion,
+    Approval,
     /// Turn it on or off.
-    Encendido,
+    On,
     /// Uninstall it (ADR 0104).
     Desinstalacion,
 }
 
-impl From<crate::action::ExtensionChange> for Cambio {
+impl From<crate::action::ExtensionChange> for Change {
     fn from(c: crate::action::ExtensionChange) -> Self {
         use crate::action::ExtensionChange as E;
         match c {
-            E::Approval => Self::Aprobacion,
-            E::Enabled => Self::Encendido,
+            E::Approval => Self::Approval,
+            E::Enabled => Self::On,
             E::Uninstall => Self::Desinstalacion,
         }
     }
@@ -210,20 +210,20 @@ impl From<crate::action::ExtensionChange> for Cambio {
 
 /// The change already resolved to a concrete value.
 ///
-/// Separate from [`Cambio`] on purpose: `a` over a row means different
+/// Separate from [`Change`] on purpose: `a` over a row means different
 /// things depending on its state, and what travels to the daemon is the
 /// resolved one.
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum Gobierno {
+enum Governance {
     /// `plugin.set_approval`, with the anchor that was SHOWN (#282). `None`
     /// when revoking: taking away a permission grants nothing, and refusing
     /// it over a stale digest would keep alive exactly what someone is
     /// trying to remove.
-    Aprobar(bool, Option<String>),
+    Approve(bool, Option<String>),
     /// `plugin.set_enabled`.
-    Encender(bool),
+    TurnOn(bool),
     /// `plugin.uninstall` (ADR 0104). Already confirmed by a human.
-    Desinstalar,
+    Uninstall,
 }
 
 /// Cap on capabilities a grant question can show.
@@ -241,13 +241,13 @@ const MAX_CAPABILIDADES: usize = 32;
 /// BEFORE masking: otherwise, a 100 MB output gets masked whole — and
 /// materializes whole in the writer's task — just so four thousand
 /// characters survive.
-const MAX_SALIDA: usize = 4_000;
+const MAX_OUTPUT: usize = 4_000;
 
 /// Cap on LINES of that output.
 ///
 /// Lines cross loose so that a line break does not mark an honest output as
 /// hostile, and a list also needs its own cap.
-const MAX_SALIDA_LINEAS: usize = 200;
+const MAX_OUTPUT_LINES: usize = 200;
 
 /// Deadline for RUNNING an extension command.
 ///
@@ -256,14 +256,14 @@ const MAX_SALIDA_LINEAS: usize = 200;
 /// the network, and cutting it off at five seconds does not stop it — it
 /// keeps running on the daemon, with its effects — it only leaves this
 /// window not knowing how it ended.
-const PLAZO_COMANDO: std::time::Duration = std::time::Duration::from_mins(1);
+const DEADLINE_COMMAND: std::time::Duration = std::time::Duration::from_mins(1);
 
 /// Deadline for an extensions call (catalog or page).
 ///
 /// Help is painted without waiting for it, so this deadline does not govern
 /// a screen: it governs a task that, if it never came back, would leave an
 /// `id` claimed and a page blank forever.
-const PLAZO_PLUGINS: std::time::Duration = std::time::Duration::from_secs(5);
+const DEADLINE_PLUGINS: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How long an already-FINISHED task stays on the board.
 ///
@@ -283,7 +283,7 @@ const TTL_TASK_TERMINAL: std::time::Duration = std::time::Duration::from_secs(10
 /// after a close that did not make it in time. And a second is cheap:
 /// comparing the body against the last one sent is all a tick with no
 /// changes does.
-const SESION_TIC: std::time::Duration = std::time::Duration::from_secs(1);
+const SESSION_TIC: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// How often what the terminal pane's shell has written is flushed.
 ///
@@ -292,7 +292,7 @@ const SESION_TIC: std::time::Duration = std::time::Duration::from_secs(1);
 /// no bytes produces no patch and wakes no renderer, so an idle shell costs
 /// no more than checking an empty mailbox.
 ///
-/// And the pump only runs while the panel exists: see `Mensaje::TerminalTic`.
+/// And the pump only runs while the panel exists: see `Message::TerminalTic`.
 const TERMINAL_TIC: std::time::Duration = std::time::Duration::from_millis(33);
 
 /// Deadline for a plan request to a model.
@@ -300,13 +300,13 @@ const TERMINAL_TIC: std::time::Duration = std::time::Duration::from_millis(33);
 /// Generous: thinking is what it does. It is the UPPER cap, so a call that
 /// never comes back does not leave the request in flight forever — with
 /// `Escape` as the only exit and nothing on screen saying it is still alive.
-const PLAZO_IA: std::time::Duration = std::time::Duration::from_mins(2);
+const DEADLINE_IA: std::time::Duration = std::time::Duration::from_mins(2);
 
 /// Cap on a typed name, in bytes. Neither `NAME_MAX` (which belongs to the
 /// filesystem and is not known here) nor the screen's: a generous cap that
 /// keeps a renderer from sending a megabyte, and that REJECTS instead of
 /// trimming — trimming a name is inventing another one.
-const MAX_NOMBRE: usize = 4096;
+const MAX_NAME: usize = 4096;
 
 /// What the viewer reads from a file: a 256 KiB header. The rest is NOT
 /// read — the same budget as the TUI, and for the same reason (ADR 0005): a
@@ -323,11 +323,11 @@ const IMAGEN_CAP: u64 = 8 * 1024 * 1024;
 
 /// Simultaneous probes against the daemon. The same number as the TUI, and
 /// for the same reason: a remote session cannot afford N trips in series.
-const SONDEOS_A_LA_VEZ: usize = 8;
+const POLLS_AT_ONCE: usize = 8;
 
 /// How long ONE probe is awaited. A hung provider cannot take the rest of
 /// the batch down with it.
-const PLAZO_SONDEO: std::time::Duration = std::time::Duration::from_secs(5);
+const DEADLINE_PROBE: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// How many entries are probed per batch. It is a SCREEN with slack: more
 /// is not seen, and every probe is a trip to the daemon.
@@ -342,7 +342,7 @@ const UPDATE_BUFFER: usize = 64;
 ///
 /// The renderer owns the body's scroll — a corpus page crosses whole — so
 /// this number only governs the CURSORS, the ones the host carries.
-const PAGINA_DE_AYUDA: usize = 10;
+const HELP_PAGE: usize = 10;
 
 /// How to start the host.
 pub struct UiHostOptions {
@@ -360,11 +360,11 @@ pub struct UiHostOptions {
     /// Only the ACTIVE pane. The other one stays where the session left it:
     /// half a screen of memory nobody asked to be dropped. It is the same
     /// rule as `App::pin_start_dir` in the terminal.
-    pub initial_dir_pedido: bool,
+    pub initial_dir_requested: bool,
     /// This window is the other end of a HANDOFF (`--attach`, phase 9), so
     /// besides the screen it claims the MARKS the other frontend left.
     ///
-    /// The same nature as [`Self::initial_dir_pedido`] — how the process was
+    /// The same nature as [`Self::initial_dir_requested`] — how the process was
     /// launched — and that is why it lives next to it. Without it, a
     /// startup is a startup: marks from a handoff left halfway do not come
     /// back to life the next day.
@@ -401,12 +401,12 @@ pub struct UiHostOptions {
     /// Not an amputation of the host — it knows how to mutate and its tests
     /// prove it — but a decision made by whoever assembles it. The graphical
     /// window started at
-    /// [`crate::commands::Efectos::SoloLectura`] until task 5.4's security
+    /// [`crate::commands::Effects::SoloRead`] until task 5.4's security
     /// review lifted its toggle; today all three setups (window, TUI and
-    /// tests) use [`crate::commands::Efectos::Completo`], and `SoloLectura`
+    /// tests) use [`crate::commands::Effects::Full`], and `SoloRead`
     /// remains the position a setup that wants neither destructive nor
     /// policy authority can choose.
-    pub effects: crate::commands::Efectos,
+    pub effects: crate::commands::Effects,
     /// The ALREADY loaded configuration, for read-only settings.
     ///
     /// Read by whoever starts the host, ONCE, like everything else: a
@@ -501,17 +501,17 @@ pub struct ShutdownReport {
 /// arrive — the process dead, the socket stuck past the deadline — used to
 /// lose everything walked since startup. Changes to the TREE are also
 /// written immediately, without waiting for the tick
-/// (`aplicar_disposicion_con`, `aplicar_arbol`). Dies with the mailbox, like
+/// (`apply_layout_with`, `apply_tree`). Dies with the mailbox, like
 /// the other pumps.
-fn bombear_tic_de_sesion(buzon: mpsc::Sender<Mensaje>) {
+fn pump_session_tick(buzon: mpsc::Sender<Message>) {
     tokio::spawn(async move {
-        let mut tic = tokio::time::interval(SESION_TIC);
+        let mut tic = tokio::time::interval(SESSION_TIC);
         // `interval`'s first tick is immediate, and there is nothing to
         // write an instant after starting.
         tic.tick().await;
         loop {
             tic.tick().await;
-            if buzon.send(Mensaje::SesionTic).await.is_err() {
+            if buzon.send(Message::SessionTic).await.is_err() {
                 return;
             }
         }
@@ -522,13 +522,17 @@ fn bombear_tic_de_sesion(buzon: mpsc::Sender<Mensaje>) {
 /// A function separate from `start` because the pump list was already
 /// filling the line limit, and its shape is the same as the others': a task
 /// that dies with the channel that feeds it.
-fn bombear_avisos_de_plugin(backend: &dyn HostBackend, buzon: mpsc::Sender<Mensaje>) {
-    let Some(mut avisos) = backend.take_plugin_notices() else {
+fn pump_plugin_notices(backend: &dyn HostBackend, buzon: mpsc::Sender<Message>) {
+    let Some(mut notices) = backend.take_plugin_notices() else {
         return;
     };
     tokio::spawn(async move {
-        while let Some(n) = avisos.recv().await {
-            if buzon.send(Mensaje::AvisoPlugin(Box::new(n))).await.is_err() {
+        while let Some(n) = notices.recv().await {
+            if buzon
+                .send(Message::NoticePlugin(Box::new(n)))
+                .await
+                .is_err()
+            {
                 return;
             }
         }
@@ -546,8 +550,8 @@ fn bombear_avisos_de_plugin(backend: &dyn HostBackend, buzon: mpsc::Sender<Mensa
 /// limit.
 fn bombear_canales_del_backend(
     backend: &dyn HostBackend,
-    buzon: &mpsc::Sender<Mensaje>,
-    efectos: crate::commands::Efectos,
+    buzon: &mpsc::Sender<Message>,
+    efectos: crate::commands::Effects,
 ) {
     // The connection's two channels belong to the FIRST owner, so they are
     // taken once, here.
@@ -555,7 +559,7 @@ fn bombear_canales_del_backend(
         let buzon = buzon.clone();
         tokio::spawn(async move {
             while let Some(ev) = eventos.recv().await {
-                if buzon.send(Mensaje::Conexion(ev)).await.is_err() {
+                if buzon.send(Message::Connection(ev)).await.is_err() {
                     return;
                 }
             }
@@ -568,7 +572,7 @@ fn bombear_canales_del_backend(
         let buzon = buzon.clone();
         tokio::spawn(async move {
             while let Some(d) = degradadas.recv().await {
-                if buzon.send(Mensaje::Degradada(Box::new(d))).await.is_err() {
+                if buzon.send(Message::Degraded(Box::new(d))).await.is_err() {
                     return;
                 }
             }
@@ -581,7 +585,7 @@ fn bombear_canales_del_backend(
         let buzon = buzon.clone();
         tokio::spawn(async move {
             while let Some(f) = fallidas.recv().await {
-                if buzon.send(Mensaje::Fallida(Box::new(f))).await.is_err() {
+                if buzon.send(Message::Failed(Box::new(f))).await.is_err() {
                     return;
                 }
             }
@@ -589,23 +593,19 @@ fn bombear_canales_del_backend(
     }
     // Hook notices (ADR 0100) talk about files that have already changed, so
     // they are read whether it can write or not.
-    bombear_avisos_de_plugin(backend, buzon.clone());
+    pump_plugin_notices(backend, buzon.clone());
     // Policy approvals are a MUTATION by delegation: saying yes to an
     // agent's operation. A frontend that cannot write yet cannot authorize
     // another one to write either, so in read-only the channel is not even
     // taken (and the dialog does not exist, which is more honest than one
     // that does not respond).
-    if efectos == crate::commands::Efectos::Completo
-        && let Some(mut aprobaciones) = backend.take_approvals()
+    if efectos == crate::commands::Effects::Full
+        && let Some(mut approvals) = backend.take_approvals()
     {
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            while let Some(req) = aprobaciones.recv().await {
-                if buzon
-                    .send(Mensaje::Aprobacion(Box::new(req)))
-                    .await
-                    .is_err()
-                {
+            while let Some(req) = approvals.recv().await {
+                if buzon.send(Message::Approval(Box::new(req))).await.is_err() {
                     return;
                 }
             }
@@ -616,7 +616,7 @@ fn bombear_canales_del_backend(
         tokio::spawn(async move {
             while let Some(task) = ajenas.recv().await {
                 if buzon
-                    .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
+                    .send(Message::TaskNew(Box::new((task, Vec::new(), None))))
                     .await
                     .is_err()
                 {
@@ -630,7 +630,7 @@ fn bombear_canales_del_backend(
 /// The host: a cheap-to-clone handle over the single writer.
 #[derive(Clone)]
 pub struct UiHost {
-    inbox: mpsc::Sender<Mensaje>,
+    inbox: mpsc::Sender<Message>,
     updates: broadcast::Sender<BridgeEnvelope<UiUpdate>>,
     nativos: broadcast::Sender<crate::dto::NativeEffect>,
     instance: InstanceId,
@@ -640,7 +640,7 @@ pub struct UiHost {
 /// goes to, the directory and the result.
 /// What the viewer requested: token, path, the header read and the plugin
 /// preview if one applied.
-type Contenido = (
+type Content = (
     RequestToken,
     VPath,
     Result<Vec<u8>, Error>,
@@ -650,11 +650,11 @@ type Contenido = (
 /// The same, for the DOCKED viewer (#291): the slot that requested it goes
 /// in front, and it is not resolved on arrival — the slot may have closed,
 /// and then the answer is dropped.
-type PreviewContenido = (u32, Contenido);
+type PreviewContent = (u32, Content);
 
 /// What comes back from a listing: its token, the slot, the directory, and
 /// the first page's entries with HOW MANY the provider skipped.
-type RespuestaListado = (
+type ResponseListing = (
     RequestToken,
     u32,
     VPath,
@@ -672,7 +672,7 @@ type Sondas = (VPath, u32, Vec<(VPath, Entry)>);
 /// with the Task's STATE attached to the report: one from a cancelled Task
 /// is partial, and painting it as complete turns a huge directory into a
 /// small one.
-type MedidaDeMapa = (
+type MapMeasure = (
     u32,
     RequestToken,
     Result<
@@ -684,8 +684,8 @@ type MedidaDeMapa = (
     >,
 );
 
-enum Mensaje {
-    Accion(Box<UiAction>, oneshot::Sender<ActionAck>),
+enum Message {
+    Action(Box<UiAction>, oneshot::Sender<ActionAck>),
     /// The BYTES of the image the viewer has open, if any.
     ///
     /// A query and not an action: it changes nothing and produces no patch.
@@ -700,23 +700,23 @@ enum Mensaje {
     /// Carries the SLOT that requested it and is not resolved on arrival: if
     /// focus moved to the neighboring pane while it was in flight, landing
     /// "on the active one" would put a directory on the wrong screen.
-    Listado(Box<RespuestaListado>),
+    Listing(Box<ResponseListing>),
     /// A scheme's attribute catalog, already resolved.
-    Catalogo(Box<(String, norte_proto::AttrCatalog)>),
+    Catalog(Box<(String, norte_proto::AttrCatalog)>),
     /// An agent op awaits a human decision.
-    Aprobacion(Box<norte_proto::methods::PolicyApprovalRequired>),
+    Approval(Box<norte_proto::methods::PolicyApprovalRequired>),
     /// This approval's TTL ran out: the daemon no longer accepts it.
-    AprobacionCaducada(u64),
+    ApprovalCaducada(u64),
     /// The chosen theme is (or is not) in `norte.toml` now. `Some(key)` is
     /// the reason it could not be saved; `None` means it was saved.
     ///
     /// Only the failure IS SAID. A "saved" for every chosen theme would be a
     /// message per Enter on a screen whose result is already visible: the
     /// colors changed.
-    TemaPersistido(Option<&'static str>),
+    ThemePersistido(Option<&'static str>),
     /// A column's width is (or is not) in `norte.toml` now (bridge 64). Same
     /// treatment as the theme: only the failure is reported.
-    AnchoPersistido(Option<&'static str>),
+    WidthPersistido(Option<&'static str>),
     /// A `[ui] theme` that was a PATH, already read outside the actor.
     ///
     /// Carries the spec so it can be named in the native effect — whoever
@@ -727,10 +727,10 @@ enum Mensaje {
     ///
     /// The error is a KEY, not the error: its own carries the path inside
     /// (#73).
-    TemaResuelto(Box<(String, Result<norte_theme::Theme, &'static str>)>),
+    ThemeResolved(Box<(String, Result<norte_theme::Theme, &'static str>)>),
     /// The session's tick: every second, like the terminal. If the screen
     /// changed since the last write, it is written; if not, nothing.
-    SesionTic,
+    SessionTic,
     /// The TERMINAL panel's tick (#362): flushes what the shell has written
     /// and, if something changed, republishes its slot.
     ///
@@ -746,7 +746,7 @@ enum Mensaje {
     TerminalTic(u64),
     /// A `session.put` answered: what the daemon said and the body that was
     /// sent, to record it as written only if it really went in.
-    SesionPuesta(
+    SessionPlaced(
         Box<(
             Result<u64, Error>,
             std::sync::Arc<norte_frontend::session::SessionBody>,
@@ -754,11 +754,11 @@ enum Mensaje {
     ),
     /// The session re-read after a conflict: another window wrote in
     /// between and the revision being written over is no longer valid.
-    SesionReleida(Result<(norte_proto::methods::Session, bool), Error>),
+    SessionReleida(Result<(norte_proto::methods::Session, bool), Error>),
     /// The HANDOFF to the terminal finished (phase 9): the screen is
     /// written and the session, released — or it could not be, and then
     /// nothing happens and it is reported.
-    Relevado {
+    HandedOff {
         /// This window was the owner and has stopped being one.
         soltada: bool,
     },
@@ -771,14 +771,14 @@ enum Mensaje {
     /// Something requested outside the actor finished and has to be SAID:
     /// the message's key (today, a pause the daemon does not know how to
     /// do).
-    Decir(&'static str),
+    Say(&'static str),
     /// The light progress bar changes with no progress arriving: it passed
     /// its threshold, the panel's, or the "✓"'s time ran out (ADR 0146).
-    Tira,
+    Strip,
     /// The `policy.decide` that WAS APPROVING did not reach the daemon.
     /// A `policy.decide` that did not go well: which approval and under
     /// which key it is counted (#279).
-    AprobacionNoEntregada(u64, &'static str),
+    ApprovalNoEntregada(u64, &'static str),
     /// More entries from the listing draining in the background.
     ///
     /// The `bool` says whether it is the LAST batch. Without it, `drenando`
@@ -786,7 +786,7 @@ enum Mensaje {
     /// not even when the stream ran out within the first page — so the
     /// field did not mean "still arriving" but "this was requested at some
     /// point", and anyone consulting it to decide got it wrong.
-    MasEntradas(Box<(RequestToken, u32, Vec<Entry>, bool)>),
+    MoreEntries(Box<(RequestToken, u32, Vec<Entry>, bool)>),
     /// What a request launched for an OVERLAY answered.
     ///
     /// The five travel together because they are the same story: a surface
@@ -795,7 +795,7 @@ enum Mensaje {
     /// list gaining rows half a second later — and this is the answer
     /// arriving late. Each one checks its surface is still open before
     /// touching anything.
-    Fondo(Box<Fondo>),
+    Background(Box<Background>),
     /// The content the viewer requested.
     /// What the viewer requested: the file's header and, if some
     /// `previewer` plugin applied, its styled preview.
@@ -803,14 +803,14 @@ enum Mensaje {
     /// Both in the SAME message because they are a single answer to a single
     /// key: sending them separately would open the raw viewer and swap it
     /// for the preview an instant later, a flicker nobody asked for.
-    Contenido(Box<Contenido>),
-    /// What a preview slot requested (#291): same as [`Self::Contenido`] but
+    Content(Box<Content>),
+    /// What a preview slot requested (#291): same as [`Self::Content`] but
     /// for the docked viewer, and with the slot in front.
-    PreviewContenido(Box<PreviewContenido>),
+    PreviewContent(Box<PreviewContent>),
     /// The frame a plugin pane painted (phase 3), with the token for the
     /// request that asked for it: one that is not the live one belongs to a
     /// cursor that has already moved.
-    PanelContenido(
+    PanelContent(
         Box<(
             u32,
             RequestToken,
@@ -822,7 +822,7 @@ enum Mensaje {
     /// directory already left behind. The STATE travels with the report
     /// because one from a cancelled Task is partial, and painting it as
     /// complete turns a huge directory into a small one.
-    MapaContenido(Box<MedidaDeMapa>),
+    MapContent(Box<MapMeasure>),
     /// What a probe found out about a few entries (a lazy listing's size and
     /// date).
     ///
@@ -839,56 +839,56 @@ enum Mensaje {
     Hidratado(Box<Sondas>),
     /// A freshly enqueued Task, with its progress, its cancellation and the
     /// directories it will leave out of date.
-    TaskNueva(Box<(crate::backend::HostTask, Vec<VPath>, Option<Reintento>)>),
+    TaskNew(Box<(crate::backend::HostTask, Vec<VPath>, Option<Retry>)>),
     /// What a slot's location accepts: how it folds names (#268) and
     /// whether it refuses writes.
-    Capacidades(u32, VPath, norte_proto::Capabilities),
+    Capabilities(u32, VPath, norte_proto::Capabilities),
     /// Enqueuing it failed. The user has to find out: they requested a
     /// delete.
-    TaskFallida(Box<Error>),
+    TaskFailed(Box<Error>),
     /// A rejection on enqueuing ONE batch entry (#271). Separate from
-    /// [`Self::TaskFallida`] on purpose: that one is sent by anyone enqueuing
+    /// [`Self::TaskFailed`] on purpose: that one is sent by anyone enqueuing
     /// anything — a search, a plan, an undo — and its place is the status
     /// bar; this one is only sent by a batch's loop, and its place is the
     /// batch's COUNT.
-    TaskDeLoteRechazada(Box<Error>),
+    BatchTaskRejected(Box<Error>),
     /// The connection to the daemon changed state.
-    Conexion(norte_client::ConnEvent),
+    Connection(norte_client::ConnEvent),
     /// A provider session travels UNENCRYPTED (#44).
-    Degradada(Box<norte_proto::methods::ConnectionDegraded>),
+    Degraded(Box<norte_proto::methods::ConnectionDegraded>),
     /// A connection could NOT be opened, and why (#322).
-    Fallida(Box<norte_proto::methods::ConnectionFailed>),
+    Failed(Box<norte_proto::methods::ConnectionFailed>),
     /// A `hook` plugin said something about an already-registered mutation,
     /// or the daemon turned off its hooks (0.69.0, ADR 0100).
-    AvisoPlugin(Box<norte_proto::methods::PluginNotice>),
+    NoticePlugin(Box<norte_proto::methods::PluginNotice>),
     /// The secret was delivered (or not), and with it what to do with the
     /// navigation `SecretNeeded` had suspended (#327).
-    SecretoEntregado(Box<(u32, VPath, Result<(), Error>)>),
+    SecretEntregado(Box<(u32, VPath, Result<(), Error>)>),
     /// Time to check whether the log has anything new (#326). Carries the
     /// EPOCH of the opening that scheduled it: one from a previous opening
     /// is left to die instead of rearming forever.
-    RegistroTic(u64),
+    LogTic(u64),
     /// What the daemon answered to `log.tail` (#328), with the EPOCH of the
     /// opening that requested it.
     ///
     /// The epoch is not decoration: a close and an open fit between asking
     /// and answering, and lines from the previous session landing on the
     /// new panel would be history nobody asked for, ahead of the real one.
-    RegistroRemoto(u64, Box<Result<norte_proto::methods::LogTailResult, Error>>),
+    LogRemote(u64, Box<Result<norte_proto::methods::LogTailResult, Error>>),
     /// What the daemon answered to `log.level` (#328): the level really left
     /// set, which may not be the one requested.
-    RegistroNivel(u64, Box<Result<String, Error>>),
+    LogLevel(u64, Box<Result<String, Error>>),
     /// A progress snapshot. Through the SAME queue as everything else,
     /// which is what guarantees a terminal state neither jumps ahead nor
     /// gets lost.
-    Progreso(Box<norte_proto::TaskProgress>),
+    Progress(Box<norte_proto::TaskProgress>),
     /// The report of a Task that has already finished and DOES have a
     /// report.
     ///
     /// Carries the whole `Result` and not an `Option`: "went fine" and "the
     /// daemon does not know how to report" are two different things, and
     /// collapsing them is exactly what these reports exist not to do.
-    Informe(Box<(u64, u64, tasks::Informe)>),
+    Report(Box<(u64, u64, tasks::Report)>),
     /// The `fs.stat` done between creating a file and opening it (#303): the
     /// path that was created, and whether what is there is still a regular
     /// file.
@@ -897,7 +897,7 @@ enum Mensaje {
     /// on this machine's desktop, which does not mean something different
     /// depending on which daemon answers — unlike reports, whose task ids
     /// start over at 1 after a handoff.
-    CreadoComprobado(Box<(norte_proto::VPath, Veredicto)>),
+    CreadoChecked(Box<(norte_proto::VPath, Verdict)>),
     /// A favorite was saved (#309): its name, where it points to and, if it
     /// failed, the reason's key. The in-memory copy is not touched until the
     /// disk answers.
@@ -906,12 +906,12 @@ enum Mensaje {
     /// arrival: between requesting the name and saving, the pane may have
     /// navigated, and reflecting "where I am now" would put a different
     /// favorite in the list than the one just written to the file.
-    FavoritoPersistido(Box<(String, norte_proto::VPath, Option<&'static str>)>),
+    FavoritePersistido(Box<(String, norte_proto::VPath, Option<&'static str>)>),
     /// The profile was written (or not): name and the failure's key (#318).
-    PerfilGuardado(Box<(String, Option<&'static str>)>),
+    ProfileSaved(Box<(String, Option<&'static str>)>),
     /// A favorite was removed, in the same shape.
-    FavoritoQuitado(Box<(String, Option<&'static str>)>),
-    Apagar(oneshot::Sender<ShutdownReport>),
+    FavoriteRemoved(Box<(String, Option<&'static str>)>),
+    TurnOff(oneshot::Sender<ShutdownReport>),
 }
 
 /// What the `fs.stat` done between creating a file and opening it answered
@@ -923,30 +923,30 @@ enum Mensaje {
 /// reader to ignore that message is what makes it useless the day it is
 /// true.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Veredicto {
+enum Verdict {
     /// Still a regular file: go ahead.
-    EsElFichero,
+    IsTheFile,
     /// A link, a folder or nothing. All three are said the same way: naming
     /// which one would confirm the link to whoever planted it.
-    YaNoEsElFichero,
+    NoLongerTheFile,
     /// The `stat` failed. Nothing opens, and it is reported that the check
     /// could not be made.
-    NoSeSabe,
+    Unknown,
 }
 
-impl From<bool> for Veredicto {
+impl From<bool> for Verdict {
     fn from(regular: bool) -> Self {
         if regular {
-            Self::EsElFichero
+            Self::IsTheFile
         } else {
-            Self::YaNoEsElFichero
+            Self::NoLongerTheFile
         }
     }
 }
 
 /// A background request's answer, by surface.
 ///
-/// A separate enum and not five [`Mensaje`] variants: the actor is a
+/// A separate enum and not five [`Message`] variants: the actor is a
 /// dispatcher, and five arms that do the same thing — checking their
 /// surface is still open and returning patches — are one arm with five
 /// cases.
@@ -965,9 +965,9 @@ type Adornos = (
     std::collections::BTreeMap<String, String>,
 );
 
-enum Fondo {
+enum Background {
     /// The plugin catalog HELP requested, for its side panel.
-    PluginsDeAyuda(Result<norte_proto::methods::PluginListResult, Error>),
+    HelpPlugins(Result<norte_proto::methods::PluginListResult, Error>),
     /// The catalog requested on STARTUP, to declare which PANES the plugins
     /// contribute (phase 3).
     ///
@@ -976,9 +976,9 @@ enum Fondo {
     /// able to paint without anyone having opened help or the manager. What
     /// it brings is the DECLARATION of which slots exist, not any of their
     /// content.
-    PanelesDePlugin(Result<norte_proto::methods::PluginListResult, Error>),
+    PluginPanes(Result<norte_proto::methods::PluginListResult, Error>),
     /// A plugin's page, requested on opening it in help.
-    PaginaDePlugin(
+    PluginPage(
         String,
         Result<norte_proto::methods::PluginHelpResult, Error>,
     ),
@@ -993,7 +993,7 @@ enum Fondo {
     /// Open (request A, slow), `esc`, reopen: A used to time out and its
     /// `unwrap_or(empty)` turned off B's "loading" and said "none
     /// installed" until B arrived.
-    Catalogo(
+    Catalog(
         u64,
         u64,
         Result<norte_proto::methods::PluginListResult, Error>,
@@ -1007,10 +1007,10 @@ enum Fondo {
     /// same place at the same moment, and splitting them would cost two I/O
     /// round trips per dialog to paint two adjoining lines — the same split
     /// the terminal makes in `DestCheck`.
-    AvisosDeDestino(ModalId, Vec<String>),
+    DestinationNotices(ModalId, Vec<String>),
     /// A `policy.undo_session`'s task already has an id: it is tied to its
     /// session.
-    UndoDeSesion(u64, String),
+    SessionUndo(u64, String),
     /// The profiles in `profiles/`, already read, and what to do with them:
     /// `None` = open the selector, `Some(forward)` = jump to the neighbor
     /// without opening anything.
@@ -1018,7 +1018,7 @@ enum Fondo {
     /// Reading them is disk I/O — a directory and a `norte.toml` per
     /// profile — so it comes through here like everything that cannot run
     /// in the actor.
-    Perfiles(
+    Profiles(
         Vec<norte_frontend::profile_picker::UserProfile>,
         Option<bool>,
     ),
@@ -1027,18 +1027,18 @@ enum Fondo {
     /// `Err` is the reason's key: a profile that fails to load changes
     /// NOTHING — it stays on the one you were on, which is what ADR 0079 D7
     /// asks for a switch.
-    PerfilCargado(
+    ProfileLoaded(
         std::ffi::OsString,
         Box<Result<norte_frontend::config::FrontendConfig, &'static str>>,
     ),
     /// An F11 setting is (or is not) in `norte.toml` now, and the
     /// configuration re-read with it. Boxed because a `FrontendConfig` is
     /// large next to the rest of the enum.
-    AjusteEscrito(Box<settings::AjusteEscrito>),
+    SettingWritten(Box<settings::SettingWritten>),
     /// An F11 key is no longer in `norte.toml` — reset.
-    AjusteRestablecido(Box<settings::AjusteRestablecido>),
+    SettingRestablecido(Box<settings::SettingRestablecido>),
     /// The catalog the PALETTE requested, for its plugin rows.
-    PluginsDePaleta(u64, Result<norte_proto::methods::PluginListResult, Error>),
+    PalettePlugins(u64, Result<norte_proto::methods::PluginListResult, Error>),
     /// A governance change (approve/revoke, turn on/off) answered.
     ///
     /// Carries the OPENING for the same reason as the catalog: the answer
@@ -1050,7 +1050,7 @@ enum Fondo {
     /// The opening is needed for the same reason as in the catalog: closing
     /// the manager and reopening it while a write is in flight let the
     /// first one's failure close the second one's card.
-    ConfigEscrita(u64, String, Result<(), Error>),
+    ConfigWritten(u64, String, Result<(), Error>),
     /// An extension command's output: the opening that requested it, the
     /// extension's id, its two labels WITH their flag, and what it
     /// answered.
@@ -1059,18 +1059,18 @@ enum Fondo {
     /// is no coming back from a mask: a flag computed afterward, over
     /// already-masked text, always comes out `false` and the panel claims
     /// to be faithful.
-    SalidaDeComando(u64, Box<SalidaPedida>),
+    CommandOutput(u64, Box<OutputPedida>),
     /// An extension's `[config]` schema, requested on opening its card.
-    FichaDePlugin(
+    PluginTab(
         String,
         Result<norte_proto::methods::PluginGetConfigResult, Error>,
     ),
     /// The host's volumes, with the OPENING of the selector that requested
-    /// them. See [`Fondo::Catalogo`].
-    Volumenes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
+    /// them. See [`Background::Catalog`].
+    Volumes(u64, Result<Vec<norte_proto::methods::Volume>, Error>),
     /// A timeline page (#359): the slot, the request's token and where it
     /// was requested from (`None` = the first one).
-    PaginaDeLinea(
+    TimelinePage(
         u32,
         RequestToken,
         Option<i64>,
@@ -1079,14 +1079,14 @@ enum Fondo {
     /// The connections for "go to" (#357), with the OPENING that requested
     /// them: an answer from a previous opening does not fill in the current
     /// one.
-    ConexionesDeIrA(
+    GoToConnections(
         u64,
         Result<Vec<norte_proto::methods::ConnectionEntry>, Error>,
     ),
     /// What the index answered to a "go to" query (#357): the opening and
     /// the query that were asked about, to drop the answer if it is no
     /// longer what is written.
-    IndiceDeIrA(
+    GoToIndex(
         u64,
         String,
         Result<Vec<norte_proto::methods::SemanticHit>, Error>,
@@ -1096,29 +1096,29 @@ enum Fondo {
     ///
     /// The whole result: since #365 it also brings the ones the daemon
     /// could not read, and the selector shows them with no destination.
-    Conexiones(
+    Connections(
         u64,
         Result<norte_proto::methods::ConnectionListResult, Error>,
     ),
     /// A batch of results, with the search epoch that requested it.
-    Resultados(u64, Box<norte_proto::methods::SearchHits>),
+    Results(u64, Box<norte_proto::methods::SearchHits>),
     /// A SEMANTIC query's answer: whole, all at once.
-    Semanticos(u64, Result<Vec<norte_proto::methods::SemanticHit>, Error>),
+    Semantic(u64, Result<Vec<norte_proto::methods::SemanticHit>, Error>),
     /// The comparison has a Task: it is christened so it can be cancelled.
-    ComparacionViva(u64, norte_proto::TaskId),
+    ComparisonViva(u64, norte_proto::TaskId),
     /// The synchronization plan has a Task.
     PlanDeSyncVivo(u64, norte_proto::TaskId),
     /// The `sync.apply` was accepted and this is its Task.
-    SyncAplicando(u64, norte_proto::TaskId),
+    SyncApplying(u64, norte_proto::TaskId),
     /// The `sync.apply` failed. The `bool` says whether it is KNOWN that it
     /// wrote nothing: a rejection (policy, conflict, invalid path) knows,
     /// because the daemon answered; a dropped transport does NOT, because
     /// the request may have arrived and be running right now. Releasing the
     /// latch in the second case invites applying the same plan twice over
     /// the same destination.
-    SyncNoAplicado(u64, bool),
+    SyncNoApplied(u64, bool),
     /// A finished synchronization's report.
-    InformeDeSync(
+    SyncReport(
         u64,
         norte_proto::TaskState,
         Box<Result<norte_proto::methods::SyncReportResult, Error>>,
@@ -1126,19 +1126,19 @@ enum Fondo {
     /// The daemon rejected the plan: there will be no Task and no panel.
     PlanDeSyncFallido(u64),
     /// The bytes of the checksums file about to be checked (#311).
-    FicheroDeSumas(Box<VPath>, Box<Result<Vec<u8>, Error>>),
+    ChecksumsFile(Box<VPath>, Box<Result<Vec<u8>, Error>>),
     /// The digests that Task computed, with the STATE it finished with
     /// (#311): a cancelled Task's report is partial, and comparing it would
     /// accuse files nobody got around to reading.
-    InformeDeSumas(
+    ChecksumsReport(
         norte_proto::TaskId,
         norte_proto::TaskState,
         Box<Result<norte_proto::methods::FsChecksumReportResult, Error>>,
     ),
     /// A plan event: a batch of steps, or its closing.
-    EventoDeSync(u64, Box<norte_client::SyncPlanEvent>),
+    SyncEvent(u64, Box<norte_client::SyncPlanEvent>),
     /// A batch of compared rows.
-    FilasComparadas(u64, Box<norte_proto::methods::CompareRowsBatch>),
+    RowsComparadas(u64, Box<norte_proto::methods::CompareRowsBatch>),
     /// What the model proposed, with the epoch of the request that asked
     /// for it.
     PlanIa(
@@ -1148,14 +1148,14 @@ enum Fondo {
     /// The ORGANIZE plan a producer proposed (phase 8), with the epoch of
     /// the request that asked for it. One single one for the model and for
     /// a plugin: both produce the same plan and the same review.
-    PlanOrganizar(
+    PlanOrganize(
         u64,
         Box<Result<norte_proto::methods::AiOrganizePlanResult, Error>>,
     ),
     /// The core's verdict on that plan, with the SAME epoch: between
     /// requesting one and the other the reader may have discarded the
     /// review, and a verdict on a plan no longer on screen does not apply.
-    PlanDeLote(
+    BatchPlan(
         u64,
         Box<Result<norte_proto::methods::FsRenameBatchPlanResult, Error>>,
     ),
@@ -1169,18 +1169,18 @@ enum Fondo {
     /// The STYLED view a previewer gave of the viewer's file (ADR 0141), or
     /// `None` if none matched. Arrives AFTER opening: the viewer opens with
     /// the raw view as soon as it is read and this replaces it.
-    Estilo(
+    Style(
         RequestToken,
         Option<norte_proto::methods::PluginPreviewStyled>,
     ),
     /// The THUMBNAIL a plugin gave of the viewer's file (ADR 0107), or
     /// `None` if none matched or the one that matched did not know how.
-    Miniatura(RequestToken, Option<norte_proto::methods::PluginThumbnail>),
+    Thumbnail(RequestToken, Option<norte_proto::methods::PluginThumbnail>),
     /// This epoch's search already has a Task: this is its id.
     ///
     /// Arrives on its own and not inside the first batch because there may
     /// be no first batch: the core sends no empty batches.
-    BusquedaViva(u64, norte_proto::TaskId),
+    SearchViva(u64, norte_proto::TaskId),
     /// This epoch's search never made it to being enqueued, and with which
     /// error.
     ///
@@ -1188,21 +1188,21 @@ enum Fondo {
     /// progress: without this the view kept saying "searching…" forever
     /// about a search that does not exist, while the error passed through
     /// the status bar and the next key swept it away.
-    BusquedaRota(u64, Box<Error>),
+    SearchBroken(u64, Box<Error>),
     /// The volumes, requested by the SIDE PANEL.
     ///
     /// Separate from the selector's for the same reason as the two plugin
     /// catalogs: they are two surfaces with two lifetimes.
-    SitiosVolumenes(Result<Vec<norte_proto::methods::Volume>, Error>),
+    PlacesVolumes(Result<Vec<norte_proto::methods::Volume>, Error>),
     /// The volumes for the listings' FOOTER (spec 2026-09-10). Separate
     /// from places' and the selector's for the same reason: a different
     /// lifetime, and it arrives with nobody having opened anything.
-    VolumenesDePie(Result<Vec<norte_proto::methods::Volume>, Error>),
+    FooterVolumes(Result<Vec<norte_proto::methods::Volume>, Error>),
     /// A TREE branch's subdirectories, already filtered and sorted.
     ///
     /// `None` = the branch would not let itself be read; decided by
     /// `Tree::branch_unreadable` (empty, or re-anchor if it was the root).
-    RamasDeArbol(VPath, Option<Vec<VPath>>),
+    TreeBranches(VPath, Option<Vec<VPath>>),
     /// A pane's session closed (#140): the slot, how it went, and where
     /// that pane goes now.
     ///
@@ -1223,7 +1223,7 @@ impl UiHost {
     /// [`UiError::NoBrowserSlot`] if the layout declares no `browser`: with
     /// no listing there is no screen to paint.
     pub async fn start(options: UiHostOptions) -> Result<(Self, ViewSnapshot), UiError> {
-        let instance = InstanceId::new(nueva_instancia());
+        let instance = InstanceId::new(new_instance());
         let (updates, _) = broadcast::channel(UPDATE_BUFFER);
         // NATIVE effects go through their own channel: they carry paths and
         // go to the hosting process, not to the webview. A small buffer
@@ -1236,18 +1236,18 @@ impl UiHost {
         // where slow answers come back through.
         let tx2 = tx.clone();
 
-        let (mut estado, backend) = Estado::nuevo(instance.clone(), options);
-        if estado.huecos.is_empty() {
+        let (mut state, backend) = State::new(instance.clone(), options);
+        if state.slots.is_empty() {
             return Err(UiError::NoBrowserSlot);
         }
         // The session first: it says WHERE each slot was, and listing
         // before that would be bringing in a directory only to drop it.
-        estado.leer_sesion(backend.as_ref()).await;
+        state.leer_session(backend.as_ref()).await;
         // What the session said about this window — owner or loose — goes
         // to the status bar from the first frame: the change is discarded
         // because the startup snapshot carries the whole status bar.
-        let _ = estado.cambio_de_banners();
-        // And afterward `[profile.start]`, OUTSIDE `leer_sesion` on purpose:
+        let _ = state.banner_change();
+        // And afterward `[profile.start]`, OUTSIDE `leer_session` on purpose:
         // that one returns early through four paths — no session, from a
         // future version, revision 0, unreadable body — and three of those
         // are exactly the case the key exists for: a fresh install, or a
@@ -1257,53 +1257,53 @@ impl UiHost {
         // The order IS the precedence: the session, then what the profile
         // says about slots it does not know, and on top of that the
         // directory a human just typed.
-        for (id, destino) in estado.siembra_de_perfil() {
-            if let Some(hueco) = estado.huecos.get_mut(&id) {
-                hueco.pane.begin_loading(destino);
+        for (id, dest) in state.profile_seed() {
+            if let Some(hueco) = state.slots.get_mut(&id) {
+                hueco.pane.begin_loading(dest);
             }
         }
-        estado.fijar_dir_pedido();
+        state.pin_dir_requested();
         // The first listing is requested BEFORE publishing anything:
         // snapshot 0 describes a screen that already exists, not a promise.
-        estado.listar_inicial(&backend, &tx2).await;
+        state.list_inicial(&backend, &tx2).await;
         // The side panel, if the layout places one: favorites come from the
         // already-loaded configuration, and volumes are REQUESTED and
         // arrive later — asking about them mounts and queries space on every
         // filesystem, and the window does not wait for that to paint.
-        if estado.hueco_de_sitios().is_some() {
-            estado.sembrar_sitios();
-            estado.pedir_sitios(&backend, &tx2);
+        if state.places_slot().is_some() {
+            state.seed_places();
+            state.request_places(&backend, &tx2);
         }
         // And which PANES the plugins contribute (phase 3). Without asking
         // whether there is a slot for one: the saved layout can bring one
         // and that slot does not get placed until its kind is declared. The
-        // only gate is the effects one, put there by `pedir_paneles`.
+        // only gate is the effects one, put there by `request_panels`.
         //
         // Arrives after the first snapshot, like the volumes: declaring a
         // kind repaints, and waiting for an RPC to show the screen would be
         // paying for something that is almost never there.
-        Estado::pedir_paneles(&backend, &tx2);
+        State::request_panels(&backend, &tx2);
         // And what is already visible is probed: the local listing carries
         // no size or date (#52), so without this the first screen is born
         // with two blank columns that do not fill in until something moves
         // it.
-        let visibles: Vec<u32> = estado.huecos.keys().copied().collect();
-        for slot in visibles {
-            estado.sondear(slot, &backend, &tx2);
+        let visible: Vec<u32> = state.slots.keys().copied().collect();
+        for slot in visible {
+            state.sondear(slot, &backend, &tx2);
         }
-        let primero = estado.snapshot();
+        let primero = state.snapshot();
 
-        bombear_tic_de_sesion(tx.clone());
+        pump_session_tick(tx.clone());
 
-        bombear_canales_del_backend(backend.as_ref(), &tx, estado.efectos);
+        bombear_canales_del_backend(backend.as_ref(), &tx, state.effects);
         let host = Self {
             inbox: tx,
             updates: updates.clone(),
             nativos: nativos.clone(),
             instance,
         };
-        estado.escritorio.nativos = Some(nativos);
-        tokio::spawn(actor(rx, estado, backend, updates, tx2));
+        state.desktop.nativos = Some(nativos);
+        tokio::spawn(actor(rx, state, backend, updates, tx2));
         Ok((host, primero))
     }
 
@@ -1321,7 +1321,7 @@ impl UiHost {
     pub async fn dispatch(&self, action: UiAction) -> Result<ActionAck, UiError> {
         let (tx, rx) = oneshot::channel();
         self.inbox
-            .send(Mensaje::Accion(Box::new(action), tx))
+            .send(Message::Action(Box::new(action), tx))
             .await
             .map_err(|_| UiError::Down)?;
         rx.await.map_err(|_| UiError::Down)
@@ -1344,7 +1344,7 @@ impl UiHost {
     pub async fn image_bytes(&self) -> Result<Option<std::sync::Arc<Vec<u8>>>, UiError> {
         let (tx, rx) = oneshot::channel();
         self.inbox
-            .send(Mensaje::BytesDeImagen(tx))
+            .send(Message::BytesDeImagen(tx))
             .await
             .map_err(|_| UiError::Down)?;
         rx.await.map_err(|_| UiError::Down)
@@ -1379,7 +1379,7 @@ impl UiHost {
     pub async fn shutdown(&self) -> Result<ShutdownReport, UiError> {
         let (tx, rx) = oneshot::channel();
         self.inbox
-            .send(Mensaje::Apagar(tx))
+            .send(Message::TurnOff(tx))
             .await
             .map_err(|_| UiError::Down)?;
         rx.await.map_err(|_| UiError::Down)
@@ -1412,273 +1412,273 @@ pub enum UiError {
     reason = "actor message dispatch: long by variant count, not by logic"
 )]
 async fn actor(
-    mut rx: mpsc::Receiver<Mensaje>,
-    mut estado: Estado,
+    mut rx: mpsc::Receiver<Message>,
+    mut state: State,
     backend: Arc<dyn HostBackend>,
     updates: broadcast::Sender<BridgeEnvelope<UiUpdate>>,
-    buzon: mpsc::Sender<Mensaje>,
+    buzon: mpsc::Sender<Message>,
 ) {
     while let Some(msg) = rx.recv().await {
         match msg {
-            Mensaje::Accion(accion, responde) => {
-                let (ack, salidas) = estado.aplicar(&accion, &backend, &buzon);
-                for u in salidas {
+            Message::Action(action, answers) => {
+                let (ack, outputs) = state.apply(&action, &backend, &buzon);
+                for u in outputs {
                     // With no subscribers it is not an error: the host is
                     // still alive even if the renderer has gone off to do
                     // something else.
                     let _ = updates.send(u);
                 }
-                let _ = responde.send(ack);
+                let _ = answers.send(ack);
             }
-            Mensaje::BytesDeImagen(responde) => {
-                let _ = responde.send(estado.imagen.clone());
+            Message::BytesDeImagen(answers) => {
+                let _ = answers.send(state.imagen.clone());
             }
-            Mensaje::Catalogo(datos) => {
-                let (scheme, catalogo) = *datos;
-                let _ = updates.send(estado.aplicar_catalogo(scheme, catalogo));
+            Message::Catalog(data) => {
+                let (scheme, catalog) = *data;
+                let _ = updates.send(state.apply_catalog(scheme, catalog));
             }
-            Mensaje::Aprobacion(req) => {
+            Message::Approval(req) => {
                 // And through the DESKTOP if the window is not up front
                 // (#285). It is the notice that justifies the mechanism: an
                 // approval expires on its own if nobody answers, so not
                 // finding out changes the outcome — unlike a copy, which
                 // stays finished when you come back.
-                estado.avisar_de_aprobacion(&req);
-                for u in estado.abrir_aprobacion(&req, &buzon) {
+                state.notify_of_approval(&req);
+                for u in state.open_approval(&req, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::AprobacionCaducada(approval_id) => {
-                for u in estado.caduca_aprobacion(approval_id) {
+            Message::ApprovalCaducada(approval_id) => {
+                for u in state.expires_approval(approval_id) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::AprobacionNoEntregada(approval_id, clave) => {
+            Message::ApprovalNoEntregada(approval_id, clave) => {
                 // NAMES the approval (#279): with two stacked, "the approval
                 // did not arrive" does not say which of the two, and they
                 // are security decisions over different operands.
-                for u in estado.decir_con(clave, &[("id", &approval_id.to_string())]) {
+                for u in state.say_with(clave, &[("id", &approval_id.to_string())]) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Listado(datos) => {
-                for u in estado.aterrizar_listado(*datos, &backend, &buzon) {
+            Message::Listing(data) => {
+                for u in state.land_listing(*data, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::RegistroTic(epoca) => {
-                for u in estado.tic_de_registro(epoca, &backend, &buzon) {
+            Message::LogTic(epoch) => {
+                for u in state.log_tick(epoch, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::RegistroRemoto(epoca, res) => {
-                for u in estado.aterrizar_registro_remoto(epoca, *res) {
+            Message::LogRemote(epoch, res) => {
+                for u in state.land_log_remote(epoch, *res) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::RegistroNivel(epoca, res) => {
-                for u in estado.aterrizar_nivel_remoto(epoca, *res) {
+            Message::LogLevel(epoch, res) => {
+                for u in state.land_level_remote(epoch, *res) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::SecretoEntregado(datos) => {
-                let (slot, dir, res) = *datos;
-                for u in estado.secreto_entregado(slot, &dir, res, &backend, &buzon) {
+            Message::SecretEntregado(data) => {
+                let (slot, dir, res) = *data;
+                for u in state.secret_entregado(slot, &dir, res, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Contenido(datos) => {
-                let (token, path, leido, preview) = *datos;
-                if let Some(u) = estado.abrir_visor(token, path, leido, preview, &backend, &buzon) {
+            Message::Content(data) => {
+                let (token, path, leido, preview) = *data;
+                if let Some(u) = state.open_visor(token, path, leido, preview, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::PreviewContenido(datos) => {
-                let (slot, (token, path, leido, preview)) = *datos;
-                if let Some(u) = estado.aterrizar_preview(slot, token, path, leido, preview) {
+            Message::PreviewContent(data) => {
+                let (slot, (token, path, leido, preview)) = *data;
+                if let Some(u) = state.land_preview(slot, token, path, leido, preview) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::PanelContenido(datos) => {
-                let (slot, token, res) = *datos;
-                if let Some(u) = estado.aterrizar_panel(slot, token, res) {
+            Message::PanelContent(data) => {
+                let (slot, token, res) = *data;
+                if let Some(u) = state.land_panel(slot, token, res) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::MapaContenido(datos) => {
-                let (slot, token, res) = *datos;
-                if let Some(u) = estado.aterrizar_mapa(slot, token, res) {
+            Message::MapContent(data) => {
+                let (slot, token, res) = *data;
+                if let Some(u) = state.land_map(slot, token, res) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Fondo(f) => {
-                for u in estado.aplicar_de_fondo(*f, &backend, &buzon) {
+            Message::Background(f) => {
+                for u in state.apply_in_background(*f, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Hidratado(datos) => {
-                if let Some(u) = estado.aterrizar_sondas(*datos, &backend, &buzon) {
+            Message::Hidratado(data) => {
+                if let Some(u) = state.land_sondas(*data, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::MasEntradas(datos) => {
-                for u in estado.aterrizar_lote(*datos, &backend, &buzon) {
+            Message::MoreEntries(data) => {
+                for u in state.land_batch(*data, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Conexion(ev) => {
-                for u in estado.cambio_de_conexion(ev, &backend, &buzon) {
+            Message::Connection(ev) => {
+                for u in state.connection_change(ev, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Degradada(d) => {
-                let _ = updates.send(estado.sesion_degradada(*d));
+            Message::Degraded(d) => {
+                let _ = updates.send(state.session_degraded(*d));
             }
-            Mensaje::Fallida(f) => {
-                for u in estado.conexion_fallida(&f) {
+            Message::Failed(f) => {
+                for u in state.connection_failed(&f) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::AvisoPlugin(n) => {
-                for u in estado.aviso_de_plugin(&n) {
+            Message::NoticePlugin(n) => {
+                for u in state.plugin_notice(&n) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::TaskNueva(task) => {
-                let (task, afectados, reintento) = *task;
-                for u in estado.registrar_task(task, afectados, reintento, &backend, &buzon) {
+            Message::TaskNew(task) => {
+                let (task, afectados, retry) = *task;
+                for u in state.registrar_task(task, afectados, retry, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Capacidades(slot, dir, caps) => {
-                if let Some(u) = estado.aplicar_capacidades(slot, &dir, caps) {
+            Message::Capabilities(slot, dir, caps) => {
+                if let Some(u) = state.apply_capabilities(slot, &dir, caps) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::TaskFallida(e) => {
-                for u in estado.task_fallida(&e) {
+            Message::TaskFailed(e) => {
+                for u in state.task_failed(&e) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::TaskDeLoteRechazada(e) => {
-                for u in estado.rechazo_de_lote(&e) {
+            Message::BatchTaskRejected(e) => {
+                for u in state.batch_rejection(&e) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Progreso(p) => {
-                for u in estado.progreso(&p, &backend, &buzon) {
+            Message::Progress(p) => {
+                for u in state.progress(&p, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::TaskCaducada(id, epoca) => {
-                for u in estado.caducar_task(id, epoca, &backend, &buzon) {
+            Message::TaskCaducada(id, epoch) => {
+                for u in state.caducar_task(id, epoch, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Decir(clave) => {
-                for u in estado.decir(clave) {
+            Message::Say(clave) => {
+                for u in state.say(clave) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Tira => {
-                for u in estado.despertar_tira(&backend, &buzon) {
+            Message::Strip => {
+                for u in state.despertar_strip(&backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::TemaPersistido(fallo) | Mensaje::AnchoPersistido(fallo) => {
-                if let Some(clave) = fallo {
-                    for u in estado.decir(clave) {
+            Message::ThemePersistido(failure) | Message::WidthPersistido(failure) => {
+                if let Some(clave) = failure {
+                    for u in state.say(clave) {
                         let _ = updates.send(u);
                     }
                 }
             }
-            Mensaje::TerminalTic(epoca) => {
-                for u in estado.terminal_tic(epoca, &buzon) {
+            Message::TerminalTic(epoch) => {
+                for u in state.terminal_tic(epoch, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::SesionTic => {
-                estado.empujar_sesion(&backend, &buzon);
+            Message::SessionTic => {
+                state.empujar_session(&backend, &buzon);
                 // And one more second for the status bar's notice (spec
                 // 2026-09-10).
-                if let Some(u) = estado.caducar_aviso() {
+                if let Some(u) = state.caducar_notice() {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::SesionPuesta(datos) => {
-                let (res, cuerpo) = *datos;
-                for u in estado.sesion_puesta(res, cuerpo, &backend, &buzon) {
+            Message::SessionPlaced(data) => {
+                let (res, body) = *data;
+                for u in state.session_placed(res, body, &backend, &buzon) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Relevado { soltada } => {
-                for u in estado.relevo_terminado(soltada) {
+            Message::HandedOff { soltada } => {
+                for u in state.handoff_finished(soltada) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::SesionReleida(res) => {
-                for u in estado.sesion_releida(res) {
+            Message::SessionReleida(res) => {
+                for u in state.session_releida(res) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::TemaResuelto(datos) => {
-                let (spec, resultado) = *datos;
-                match resultado {
+            Message::ThemeResolved(data) => {
+                let (spec, result) = *data;
+                match result {
                     Ok(tema) => {
-                        estado.tema_puesto(&spec, &tema);
+                        state.theme_placed(&spec, &tema);
                         // Snapshot and not a patch: changing theme moves the
                         // colors of the WHOLE screen, and the renderer plugs
                         // them back in from the catalog, not from a view
                         // field.
-                        let snap = estado.snapshot();
-                        let _ = updates.send(estado.sobre(UiUpdate::Snapshot(Box::new(snap))));
+                        let snap = state.snapshot();
+                        let _ = updates.send(state.over(UiUpdate::Snapshot(Box::new(snap))));
                     }
                     // A theme that cannot be read does NOT leave the window
                     // with no colors: it stays on the one there was and
                     // reports why.
                     Err(clave) => {
-                        for u in estado.decir(clave) {
+                        for u in state.say(clave) {
                             let _ = updates.send(u);
                         }
                     }
                 }
             }
-            Mensaje::Informe(informe) => {
-                let (epoca, task_id, cual) = *informe;
-                for u in estado.informe(epoca, task_id, &cual) {
+            Message::Report(report) => {
+                let (epoch, task_id, which) = *report;
+                for u in state.report(epoch, task_id, &which) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::CreadoComprobado(comprobado) => {
-                let (path, veredicto) = *comprobado;
-                for u in estado.abrir_lo_comprobado(path, veredicto) {
+            Message::CreadoChecked(checked) => {
+                let (path, verdict) = *checked;
+                for u in state.open_the_checked(path, verdict) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::FavoritoPersistido(hecho) => {
-                let (nombre, destino, fallo) = *hecho;
-                for u in estado.favorito_persistido(&nombre, Some(destino), fallo) {
+            Message::FavoritePersistido(done) => {
+                let (name, dest, failure) = *done;
+                for u in state.favorite_persistido(&name, Some(dest), failure) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::FavoritoQuitado(hecho) => {
-                let (nombre, fallo) = *hecho;
-                for u in estado.favorito_persistido(&nombre, None, fallo) {
+            Message::FavoriteRemoved(done) => {
+                let (name, failure) = *done;
+                for u in state.favorite_persistido(&name, None, failure) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::PerfilGuardado(hecho) => {
-                let (nombre, fallo) = *hecho;
-                for u in estado.perfil_guardado(&nombre, fallo) {
+            Message::ProfileSaved(done) => {
+                let (name, failure) = *done;
+                for u in state.profile_saved(&name, failure) {
                     let _ = updates.send(u);
                 }
             }
-            Mensaje::Apagar(responde) => {
-                let informe = estado.apagar(backend.as_ref()).await;
-                let _ = updates.send(estado.sobre(UiUpdate::Notice(UiNotice::Shutdown {
-                    incomplete: informe.incomplete,
+            Message::TurnOff(answers) => {
+                let report = state.turn_off(backend.as_ref()).await;
+                let _ = updates.send(state.over(UiUpdate::Notice(UiNotice::Shutdown {
+                    incomplete: report.incomplete,
                 })));
-                let _ = responde.send(informe);
+                let _ = answers.send(report);
                 return;
             }
         }
@@ -1687,13 +1687,13 @@ async fn actor(
         // It is asked AFTER each one, the way the TUI asks it every frame:
         // what each placed preview slot should be showing, and if it is not
         // what it shows, it is requested.
-        for u in estado.sondear_previews(&backend, &buzon) {
+        for u in state.sondear_previews(&backend, &buzon) {
             let _ = updates.send(u);
         }
         // And a plugin's pane (phase 3), for the same reason and in the same
         // place: its guest receives the directory and the row under the
         // cursor, so any message can change what it should be showing.
-        for u in estado.sondear_paneles(&backend, &buzon) {
+        for u in state.sondear_panels(&backend, &buzon) {
             let _ = updates.send(u);
         }
         // And the disk map (phase 4), in the same place and for the same
@@ -1702,17 +1702,17 @@ async fn actor(
         // showing. It does not follow the cursor: moving a row does not
         // change what the directory is made of, and probing per cursor
         // would mean measuring a `$HOME` on every arrow.
-        for u in estado.sondear_mapas(&backend, &buzon) {
+        for u in state.sondear_maps(&backend, &buzon) {
             let _ = updates.send(u);
         }
         // And the timeline (#359): the first page when its slot appears,
         // and the next one when the cursor reaches the bottom.
-        estado.sondear_lineas(&backend, &buzon);
+        state.sondear_lines(&backend, &buzon);
         // And the attribute sheet, for the SAME reason and in the same
         // place: it also follows the cursor and also has no other path to
         // the renderer. It goes after the viewer so that, when both change
         // at once, the snapshot sent already carries both up to date.
-        for u in estado.sondear_hojas() {
+        for u in state.sondear_hojas() {
             let _ = updates.send(u);
         }
     }
@@ -1743,7 +1743,7 @@ async fn actor(
 /// matches nothing is a visible failure; one that matches the wrong one is
 /// not. What gets PAINTED is `label`, which is masked, and the renderer only
 /// uses the id in a `data-` and to send it back.
-fn identidad_de_columna(id: &norte_frontend::columns::ColumnId) -> String {
+fn column_identity(id: &norte_frontend::columns::ColumnId) -> String {
     let s = id.to_string();
     if s.len() > crate::bridge::MAX_STRING_BYTES {
         return String::new();
@@ -1761,22 +1761,22 @@ fn rect((width, height): (u16, u16)) -> Rect {
 }
 
 /// Is this tree slot a listing?
-fn es_listado(arbol: &Node, slot: SlotId, kinds: &KindRegistry) -> bool {
-    kind_de(arbol, slot).is_some_and(|k| k.as_str() == "browser" && kinds.get(&k).is_some())
+fn es_listing(tree: &Node, slot: SlotId, kinds: &KindRegistry) -> bool {
+    kind_de(tree, slot).is_some_and(|k| k.as_str() == "browser" && kinds.get(&k).is_some())
 }
 
 /// A tree slot's declared kind.
-fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId> {
-    fn buscar(n: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId> {
+fn kind_de(tree: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId> {
+    fn search(n: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId> {
         match n {
             Node::Slot { id, kind, .. } if *id == slot => Some(kind.clone()),
             Node::Slot { .. } => None,
             Node::Split { children, .. } | Node::Tabs { children, .. } => {
-                children.iter().find_map(|c| buscar(c, slot))
+                children.iter().find_map(|c| search(c, slot))
             }
         }
     }
-    buscar(arbol, slot)
+    search(tree, slot)
 }
 
 /// Now, in milliseconds. Injected by the projector so a relative date's
@@ -1790,7 +1790,7 @@ fn kind_de(arbol: &Node, slot: SlotId) -> Option<norte_frontend::layout::KindId>
 /// The ids are the shared `dialog.*` catalog's, the same ones the TUI binds:
 /// two vocabularies for the same question would be two places where a key
 /// ends up doing something else.
-fn politica_de_colision(choice: &str) -> Option<norte_proto::CollisionPolicy> {
+fn collision_policy(choice: &str) -> Option<norte_proto::CollisionPolicy> {
     use norte_proto::CollisionPolicy as P;
     match choice {
         "overwrite" => Some(P::Overwrite),
@@ -1807,19 +1807,19 @@ fn politica_de_colision(choice: &str) -> Option<norte_proto::CollisionPolicy> {
 /// Separate because the outcome has three different ways to go wrong and
 /// none of them is the business of the function that decides what to do
 /// with a dialog (#279).
-fn lanzar_aprobacion(
+fn launch_approval(
     approval_id: u64,
     backend: &Arc<dyn HostBackend>,
-    buzon: &mpsc::Sender<Mensaje>,
+    buzon: &mpsc::Sender<Message>,
 ) {
     let backend = Arc::clone(backend);
     let buzon = buzon.clone();
     tokio::spawn(async move {
         if let Err(e) = backend.policy_decide(approval_id, true).await {
             let _ = buzon
-                .send(Mensaje::AprobacionNoEntregada(
+                .send(Message::ApprovalNoEntregada(
                     approval_id,
-                    clave_de_aprobacion_perdida(&e),
+                    lost_approval_key(&e),
                 ))
                 .await;
         }
@@ -1837,7 +1837,7 @@ fn lanzar_aprobacion(
 /// A `reason` this binary does not know falls into "unknown" and never into
 /// one of the others: the wire's vocabulary can grow, and guessing on a
 /// security surface is worse than saying it is not known.
-fn clave_de_aprobacion_perdida(e: &norte_proto::Error) -> &'static str {
+fn lost_approval_key(e: &norte_proto::Error) -> &'static str {
     match e {
         norte_proto::Error::ApprovalGone { reason } => match reason.as_str() {
             "expired" => "msg-approval-expired",
@@ -1862,7 +1862,7 @@ fn clave_de_aprobacion_perdida(e: &norte_proto::Error) -> &'static str {
 /// does NOT stop compiling when a variant appears: what happens is it falls
 /// into `unknown`, a key that DOES EXIST in the catalog. A task from a newer
 /// daemon reads "task" instead of reading `gui-task-kind-frobnicate`.
-fn clase_de_task(kind: norte_proto::TaskKind) -> &'static str {
+fn task_class(kind: norte_proto::TaskKind) -> &'static str {
     use norte_proto::TaskKind as K;
     match kind {
         K::Copy => "copy",
@@ -1905,7 +1905,7 @@ fn clase_de_task(kind: norte_proto::TaskKind) -> &'static str {
 /// the listing into an error. And `superado` cuts off between RPCs, because
 /// a batch the listing has already superseded has no reason to spend the
 /// ones it has left.
-async fn celdas_de_plugin(
+async fn plugin_cells(
     backend: &Arc<dyn HostBackend>,
     pedidas: &[(String, String)],
     paths: &[VPath],
@@ -1915,51 +1915,51 @@ async fn celdas_de_plugin(
     std::collections::BTreeMap<String, String>,
 ) {
     let mut out = std::collections::HashMap::new();
-    let mut rotulos = std::collections::BTreeMap::new();
+    let mut labels = std::collections::BTreeMap::new();
     if pedidas.is_empty() {
-        return (out, rotulos);
+        return (out, labels);
     }
-    let Ok(lista) = backend.plugin_list().await else {
-        return (out, rotulos);
+    let Ok(list) = backend.plugin_list().await else {
+        return (out, labels);
     };
-    for (plugin, columna) in
-        norte_frontend::columns::validated_plugin_requests(pedidas, &lista.plugins)
+    for (plugin, column) in
+        norte_frontend::columns::validated_plugin_requests(pedidas, &list.plugins)
     {
         // The LABEL the manifest gave it, so the header does not say the id
         // (`acme.git/status`). A plugin's text: it is masked and clamped
         // like any header. A manifest leaving it empty stays with no label
         // and the header falls back to the id, as before.
-        if let Some(h) = lista
+        if let Some(h) = list
             .plugins
             .iter()
             .find(|p| p.id == plugin)
-            .and_then(|p| p.columns.iter().find(|c| c.id == columna))
+            .and_then(|p| p.columns.iter().find(|c| c.id == column))
         {
             let sano: String = norte_frontend::columns::sanitize_header(&h.header)
                 .chars()
                 .take(norte_frontend::columns::HEADER_MAX_CHARS)
                 .collect();
             if !sano.is_empty() {
-                rotulos.insert(
-                    norte_frontend::columns::plugin_display_id(&plugin, &columna),
+                labels.insert(
+                    norte_frontend::columns::plugin_display_id(&plugin, &column),
                     sano,
                 );
             }
         }
         if superado() {
-            return (out, rotulos);
+            return (out, labels);
         }
-        let crudos = backend
-            .plugin_column_values(plugin.clone(), columna.clone(), paths.to_vec())
+        let raw = backend
+            .plugin_column_values(plugin.clone(), column.clone(), paths.to_vec())
             .await
             .unwrap_or_default();
-        let sanos = norte_frontend::columns::sanitize_column_values(paths, &crudos);
+        let sanos = norte_frontend::columns::sanitize_column_values(paths, &raw);
         out.insert(
-            norte_frontend::columns::plugin_display_id(&plugin, &columna),
+            norte_frontend::columns::plugin_display_id(&plugin, &column),
             sanos,
         );
     }
-    (out, rotulos)
+    (out, labels)
 }
 
 /// What a column is called in the selector, and whether that differs from
@@ -1970,9 +1970,9 @@ async fn celdas_de_plugin(
 /// An id that does not parse is shown as is — it is the user's configuration
 /// intent and the selector never cleans it up — and that is why it is masked
 /// too.
-fn etiqueta_de_columna(
+fn column_label(
     r: &norte_frontend::columns_picker::PickerRow,
-    esquema: &str,
+    scheme: &str,
     columnas: &norte_frontend::columns::ColumnsSettings,
     lang: norte_i18n::Lang,
 ) -> (String, bool) {
@@ -1982,22 +1982,22 @@ fn etiqueta_de_columna(
         // text from a configuration file.
         return norte_frontend::display_name(r.id.as_bytes());
     };
-    let estilo = columnas.style_for_id(esquema, &cid, None);
-    norte_frontend::display_name(header_label_in(&cid, &estilo, None, lang).as_bytes())
+    let style = columnas.style_for_id(scheme, &cid, None);
+    norte_frontend::display_name(header_label_in(&cid, &style, None, lang).as_bytes())
 }
 
 /// A text IDENTITY that crosses the bridge: whole, or empty.
 ///
-/// Same rule as [`identidad_de_columna`] and for the same reason (ADR 0061):
+/// Same rule as [`column_identity`] and for the same reason (ADR 0061):
 /// trimming is not injective, and a trimmed key matches the wrong one.
-fn identidad_de_texto(id: &str) -> String {
+fn text_identity(id: &str) -> String {
     if id.len() > crate::bridge::MAX_STRING_BYTES {
         return String::new();
     }
     id.to_owned()
 }
 
-fn ahora_ms() -> i64 {
+fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
@@ -2006,11 +2006,11 @@ fn ahora_ms() -> i64 {
 /// An instance's unique identity: pid plus the startup instant. It does not
 /// need to be unpredictable — it authorizes nothing — only different from
 /// the process's previous life.
-fn nueva_instancia() -> String {
-    let ahora = std::time::SystemTime::now()
+fn new_instance() -> String {
+    let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_nanos());
-    format!("host-{}-{ahora}", std::process::id())
+    format!("host-{}-{now}", std::process::id())
 }
 
 /// A listing open in a slot.
@@ -2020,7 +2020,7 @@ fn nueva_instancia() -> String {
 /// marks, hidden ones, per-directory cursor memory and the listing's EPOCH
 /// come from there, so the two surfaces cannot diverge on what "move the
 /// cursor down" means (ADR 0066, D14).
-struct Hueco {
+struct Slot {
     pane: PaneState,
     /// How the directory this slot is in FOLDS names (#268).
     ///
@@ -2061,15 +2061,15 @@ struct Hueco {
     /// `cd`, which is what the TUI does: here the session RESTORES the
     /// order, and reapplying it on the first landing would erase it before
     /// it is seen.
-    esquema_del_orden: String,
+    order_scheme: String,
     /// Where I come from and where I go back to. Also shared.
-    historial: History,
-    primera_visible: u64,
-    visibles: u32,
+    history: History,
+    first_visible: u64,
+    visible: u32,
     /// The listing request IN FLIGHT, if any. An answer with a different
     /// token arrived late: it is discarded here, in Rust, not hidden in the
     /// renderer.
-    en_vuelo: Option<RequestToken>,
+    in_flight: Option<RequestToken>,
     /// WHERE the in-flight request is going, if any.
     ///
     /// Not the same as `pane.dir()`, and confusing them was a bug: `dir()`
@@ -2080,13 +2080,13 @@ struct Hueco {
     /// mutation just changed would not be recognized as affected, and would
     /// land on a listing from before the mutation with nothing to correct
     /// it.
-    dir_pedido: Option<VPath>,
+    dir_requested: Option<VPath>,
     /// The marks that need to be set again when a REFRESH lands.
     ///
     /// Empty whenever what is in flight is a navigation: there the rows
     /// belong to another directory and a mark means nothing. Consumed on
     /// landing.
-    marcas_a_restaurar: Vec<VPath>,
+    marks_to_restore: Vec<VPath>,
     /// The row the SESSION left under the cursor, until its listing arrives.
     ///
     /// Waits for the same reason as the marks: over an empty pane, putting
@@ -2094,7 +2094,7 @@ struct Hueco {
     /// landing — good or bad — so it never falls on a later listing from
     /// somewhere else. It is an INDEX, the same one the terminal saves and
     /// restores: a handoff has to land on the same row in both directions.
-    cursor_a_restaurar: Option<usize>,
+    cursor_to_restore: Option<usize>,
     /// There are merged rows not yet published.
     ///
     /// Filling stays quiet when the merging batch does not change the
@@ -2102,21 +2102,21 @@ struct Hueco {
     /// the renderer names rows by epoch: if ALL patches stay quiet, it is
     /// left on a stale epoch and its clicks are rejected as outdated. This
     /// flag is the debt, and the last batch settles it.
-    filas_por_publicar: bool,
+    rows_to_publish: bool,
     /// The drain still bringing batches in from behind, if any.
     ///
-    /// SEPARATE from `en_vuelo` because they are two different lifetimes:
-    /// the first page lands and clears `en_vuelo`, but the rest of the
-    /// stream keeps arriving. Sharing a token made `aplicar_lote` reject ALL
+    /// SEPARATE from `in_flight` because they are two different lifetimes:
+    /// the first page lands and clears `in_flight`, but the rest of the
+    /// stream keeps arriving. Sharing a token made `apply_batch` reject ALL
     /// of a navigation's batches — a five-thousand-entry directory got
     /// stuck at a hundred — and startup had to restore it by hand to work.
     drenando: Option<RequestToken>,
-    estado: SlotState,
+    state: SlotState,
     /// There is a probe batch in flight for this slot.
     sondeando: bool,
     /// Raised when the listing changes: whatever comes back from the batch
     /// in flight no longer describes this screen.
-    cancelar_sondeo: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    cancel_probe: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// The paths already probed (whether they answered or not). Without
     /// this memory, a failing `stat` gets requested again on every repaint
     /// and probing turns into a loop against the daemon.
@@ -2128,14 +2128,14 @@ struct Hueco {
     /// by the time they land.
     adornos: std::collections::HashMap<VPath, norte_frontend::Decoration>,
     /// The values of each `plugin:` column, by column id and path.
-    celdas_plugin: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
+    cells_plugin: std::collections::HashMap<String, std::collections::HashMap<VPath, String>>,
     /// There is a decoration batch in flight for this slot.
     adornando: bool,
     /// The directory a navigation that COUNTS as a step is going to, until
     /// its listing arrives (spec 2026-09-15 D6): it is then added to the
     /// popular ones, and forgotten if it fails. The slot's next navigation
     /// and the landing itself replace it.
-    visita_pendiente: Option<VPath>,
+    visita_pending: Option<VPath>,
     /// The paths already requested for decoration (whether they answered or
     /// not). Same memory as `sondeados` and for the same reason: without it,
     /// a plugin that decorates nothing gets asked again on every repaint.
@@ -2148,11 +2148,11 @@ struct Hueco {
 }
 
 /// An open dialog and what it will do if confirmed.
-struct Dialogo {
+struct Dialog {
     id: ModalId,
     vista: DialogView,
     /// What the confirmation runs. `None` = it only informs.
-    al_confirmar: Option<Pendiente>,
+    on_confirm: Option<Pending>,
     /// What the user typed, AS IS.
     ///
     /// Separate from `vista.input`, which is its projection for painting —
@@ -2166,7 +2166,7 @@ struct Dialogo {
     /// `Debug`, to the heap unredacted, and — worst of all — to the paint
     /// projection through the same path as a file name. With two variants,
     /// whoever writes to it has to say which one it is.
-    tecleado: Tecleado,
+    typed: Typed,
     /// This dialog OPENED BY ITSELF, and has not been acknowledged yet.
     ///
     /// An approval and a batch's report appear without anyone finishing a
@@ -2175,7 +2175,7 @@ struct Dialogo {
     /// RESPONSE only says "I see it" — the same rule as a plan review, and
     /// for the same reason.
     ///
-    /// A response, not a key: the check lives in `responder_dialogo`, which
+    /// A response, not a key: the check lives in `responder_dialog`, which
     /// is where both inputs pass through. When it only covered the keyboard,
     /// a click already in flight on a confirmation's "Confirm" landed on the
     /// "Approve" of an agent approval that had just painted itself in the
@@ -2187,7 +2187,7 @@ struct Dialogo {
     /// `true` on a dialog that a gesture opened: there, the next response IS
     /// a response, because the question was asked by whoever is in front of
     /// it.
-    reconocido: bool,
+    recognized: bool,
 }
 /// What was typed into a dialog's field, according to what it is.
 ///
@@ -2198,9 +2198,9 @@ struct Dialogo {
 /// a password leaking through the same `display_name` as a name, or inside a
 /// `Debug` of the whole state.
 #[derive(Debug)]
-enum Tecleado {
+enum Typed {
     /// A name, an instruction, a template: text that is shown.
-    Texto(String),
+    Text(String),
     /// A password, and the host does NOT have it while it is being typed.
     ///
     /// No data inside, and that is the decision: the field is masked by the
@@ -2210,10 +2210,10 @@ enum Tecleado {
     /// it over. What the host does not have cannot leak through a `Debug`, a
     /// screenshot, or a log.
     ///
-    /// The variant exists anyway because it is the TYPE barrier: `texto()`
+    /// The variant exists anyway because it is the TYPE barrier: `text()`
     /// returns nothing about it, so a text pending action that landed on this
     /// dialog by mistake cannot read a secret — there is none to read.
-    Secreto,
+    Secret,
     /// A FORM: several fields at once (bridge 91).
     ///
     /// The model is the SHARED one (`norte_frontend::search::SearchForm`),
@@ -2222,63 +2222,63 @@ enum Tecleado {
     /// search's outcome (ADR 0077).
     ///
     /// `Box` because it is twice as big as the other two variants combined
-    /// and there is one `Tecleado` per open dialog.
-    Formulario(Box<norte_frontend::search::SearchForm>),
+    /// and there is one `Typed` per open dialog.
+    Form(Box<norte_frontend::search::SearchForm>),
 }
 
 /// The cap on a password, from the SHARED crate: what gets rejected here is
 /// exactly what that one can store without reallocating.
 use norte_frontend::secret::SECRET_MAX_CHARS;
 
-impl Tecleado {
+impl Typed {
     /// The text, for the pending actions that work with text.
     ///
     /// Empty for a secret, on purpose: if a text pending action ever landed
     /// on a password dialog, what it receives is nothing. A `panic!` would be
     /// worse — bringing the window down over a wiring bug — and there is
     /// nothing more to return here.
-    fn texto(&self) -> &str {
+    fn text(&self) -> &str {
         match self {
-            Self::Texto(s) => s,
+            Self::Text(s) => s,
             // A form does not have "the" text: it has seven fields, and a
             // text pending action that landed here by mistake cannot walk
             // off with just any one of them by passing it off as the one it
             // asked for.
-            Self::Secreto | Self::Formulario(_) => "",
+            Self::Secret | Self::Form(_) => "",
         }
     }
 }
 
 /// What a dialog has pending to do.
-enum Pendiente {
+enum Pending {
     /// Delete these entries, to the trash or permanently.
-    Borrar {
+    Delete {
         /// What gets deleted, in listing order.
         paths: Vec<VPath>,
         /// Permanent (no trash): the dialog WARNS about it.
-        permanente: bool,
+        permanent: bool,
     },
     /// Copy to the pane what was DROPPED from the desktop (#283).
     ///
-    /// Separate from [`Pendiente::Transferir`] for two reasons, and neither
+    /// Separate from [`Pending::Transferir`] for two reasons, and neither
     /// is cosmetic: here the sources do not come out of any pane — so there
     /// are no marks to consume, and consuming them would erase a selection
     /// the reader made for something else —, and the verb is always COPY:
     /// moving what another application dragged would mean deleting it from
     /// wherever that process keeps it, and this window has not asked about
     /// that.
-    Soltar {
+    Release {
         /// What arrived, already converted and filtered.
         paths: Vec<VPath>,
         /// Where it falls, which is the active pane's directory when it was
         /// dropped.
-        destino: VPath,
+        dest: VPath,
     },
     /// Ask the index by MEANING. What is typed is the query, and it carries
     /// no other operands: the scope is the whole index.
-    ConsultaSemantica,
+    QuerySemantic,
     /// CLOSE the window, already confirmed (`[ui] confirm_quit`).
-    Salir,
+    Exit,
     /// Hand over a connection's secret and RETRY the navigation that
     /// `Error::SecretNeeded` interrupted (#325/#327).
     ///
@@ -2288,7 +2288,7 @@ enum Pendiente {
     /// the slot was left showing the directory it was leaving. Without the
     /// destination here, handing over the secret would leave the reader with
     /// the password given and the pane where it was.
-    EntregarSecreto {
+    DeliverSecret {
         /// Name of the `connections.toml` entry asking for it — the SAME
         /// string that goes in `connection.provide_secret`. It comes from
         /// the core's error, not from the remote server.
@@ -2301,7 +2301,7 @@ enum Pendiente {
     /// Mark — or unmark — by pattern. What is typed is the glob.
     Patron {
         /// `true` adds marks, `false` removes them.
-        marcar: bool,
+        mark: bool,
     },
     /// Retry a transfer that COLLIDED, with another policy (#274).
     ///
@@ -2309,13 +2309,13 @@ enum Pendiente {
     /// outcomes, so the policy comes from the `choice` the reader pressed and
     /// not from here. Cancel means choosing none, and then the failed task
     /// stays as it was — which is what always happened before this.
-    Reintentar {
+    Retry {
         /// What to relaunch with.
-        con: Reintento,
+        con: Retry,
     },
     /// Split the file under the cursor into chunks of the size that is typed
     /// (#132).
-    Partir {
+    Split {
         /// What gets split.
         path: VPath,
         /// Where the chunks fall. The DESTINATION pane, as with a copy:
@@ -2328,7 +2328,7 @@ enum Pendiente {
     /// Carries the directory and not the name: the name is what the reader
     /// types, and the format comes from it. It is resolved on confirm, not on
     /// open, because until then there is nothing to resolve.
-    Empaquetar {
+    Pack {
         /// Where the container falls and, also, the BASE of the names stored
         /// inside: whoever unpacks it expects to see what it saw on screen,
         /// not absolute paths.
@@ -2341,7 +2341,7 @@ enum Pendiente {
     /// The BYTES already assembled — with coreutils escaping — and not the
     /// rows: what is painted is sanitized, and copying that would give a
     /// `SHA256SUMS` that does not check the files it names.
-    CopiarSumas {
+    CopyChecksums {
         /// What goes to the clipboard, as is.
         bytes: Vec<u8>,
     },
@@ -2351,18 +2351,18 @@ enum Pendiente {
     /// The paths freeze on OPENING the dialog, like the rest of the ones that
     /// carry operands: between the question and the yes the listing can
     /// refresh, and then "what is marked" would be something else.
-    Permisos {
+    Permissions {
         /// On what, in listing order.
         targets: Vec<VPath>,
     },
     /// Undo EVERYTHING an agent session did (#276).
-    DeshacerSesion {
+    UndoSession {
         /// The OPAQUE key the core resolves it with, raw.
-        sesion: String,
+        session: String,
     },
     /// Undo the human's actions AFTER a point in the timeline (#359,
     /// `journal.undo_after`). The marked row stays.
-    DeshacerHasta {
+    UndoUntil {
         /// The cut: the marked row's newest `seq`.
         seq: i64,
         /// The ceiling: the newest thing the count reported (`upto_seq`). It
@@ -2376,7 +2376,7 @@ enum Pendiente {
     /// gesture. The question lists the capabilities one per line — outside
     /// the sentence, like any operand in this host — because "approve
     /// org.ejemplo.foo" without saying what it grants is not a decision.
-    AprobarExtension {
+    ApproveExtension {
         /// Who they are granted to.
         id: String,
         /// WHAT was shown when asking, in the order it was shown.
@@ -2403,13 +2403,13 @@ enum Pendiente {
     /// consent. It asks because it has no way back — there is no
     /// `plugin.install` over the wire — and because a plugin installed later
     /// under the same id is born without the approval this one had.
-    DesinstalarExtension {
+    UninstallExtension {
         /// Which one.
         id: String,
     },
     /// Decide on an agent op. The daemon holds the actual op tied to the id:
     /// only the yes or no travels here.
-    Decidir {
+    Decide {
         /// The id the daemon expects back.
         approval_id: u64,
         /// The agent session that asked for it, RAW, if the request carried
@@ -2421,12 +2421,12 @@ enum Pendiente {
         session: Option<String>,
     },
     /// Search the subtree of this directory. What is typed is the pattern.
-    Buscar {
+    Search {
         /// Where the walk starts.
         root: VPath,
     },
     /// Create an EMPTY file and open it with the desktop (#290).
-    CrearFichero {
+    CreateFile {
         /// Where it is created. The name is what is typed.
         dir: VPath,
     },
@@ -2437,9 +2437,9 @@ enum Pendiente {
     /// opening the dialog and accepting, the pane may have navigated, and
     /// saving "where I am now" would make a bookmark that points somewhere
     /// other than what was being looked at when it was requested.
-    GuardarFavorito {
+    SaveFavorite {
         /// Where the bookmark points to.
-        destino: VPath,
+        dest: VPath,
     },
     /// Save the workspace as a profile (#318, ADR 0079).
     ///
@@ -2448,7 +2448,7 @@ enum Pendiente {
     /// there the destination is an answer to "what were you looking at?", and
     /// here the question is "how is the screen set up?", which only makes
     /// sense NOW.
-    GuardarPerfil,
+    SaveProfile,
     /// The value of a TEXT entry in the settings (F11). What is typed is the
     /// value; `id` is which entry was asked about.
     ///
@@ -2456,33 +2456,33 @@ enum Pendiente {
     /// the search behind it can change which rows there are — a position
     /// stops naming the same entry, and confirming would write the value into
     /// another one.
-    EditarAjuste {
+    EditSetting {
         /// The catalogue id that was asked about.
         id: &'static str,
     },
     /// Create a directory inside this other one. The user types the name and
     /// it is validated on confirm, not on typing: correcting a name halfway
     /// is worse than seeing it rejected at the end.
-    CrearDirectorio {
+    CreateDirectory {
         /// Where it is created.
         dir: VPath,
     },
     /// Ask a model for a renaming plan for this directory. What is typed is
     /// the INSTRUCTION, not a name: nothing mutates yet.
-    InstruccionIa {
+    InstructionIa {
         /// The directory to plan over.
         dir: VPath,
     },
     /// The batch rename's TEMPLATE (#310). What is typed is a template, not a
     /// name: the plan is generated here and reviewed before anything, like
     /// the AI one.
-    PlantillaLote {
+    TemplateBatch {
         /// The directory to plan over.
         dir: VPath,
         /// The names the batch acts on: what is marked, or the cursor's.
         /// Fixed on opening the prompt, like the operand of any other
         /// operation.
-        nombres: Vec<String>,
+        names: Vec<String>,
     },
     /// Rename ONE entry inside its own directory.
     ///
@@ -2492,7 +2492,7 @@ enum Pendiente {
     /// bytes. Comparing against the seed instead of carrying a "touched"
     /// `bool` is what survives the renderer returning the whole text on every
     /// event instead of a delta.
-    Renombrar {
+    Rename {
         /// The entry being renamed.
         from: VPath,
         /// What was put in the field, AS IS (the name's paintable projection,
@@ -2509,13 +2509,13 @@ enum Pendiente {
     Transferir {
         /// The slot the marks came from.
         ///
-        /// Travels for the same reason as `destino`, and its absence was a
+        /// Travels for the same reason as `dest`, and its absence was a
         /// bug: `UiAction::FocusSlot` is NOT blocked while a dialog is open —
         /// only the keys are —, so a click on the other pane between the
         /// question and the response made the marks consumed be another
         /// slot's. The real one stayed marked, and the reader pressed F5
         /// again on the same thing.
-        origen: u32,
+        source: u32,
         /// The DIRECTORY they came from, exactly as the slot writes it.
         ///
         /// Not derived from each entry's parent: the parent is written by the
@@ -2524,12 +2524,12 @@ enum Pendiente {
         /// case distinction they are two different strings for the same
         /// place — and a byte-by-byte comparison refresh would not find the
         /// source pane (ADR 0061).
-        origen_dir: VPath,
+        source_dir: VPath,
         /// What is transferred, in listing order.
         paths: Vec<VPath>,
         /// The DIRECTORY they go to. The final name is composed here, never
         /// in the renderer.
-        destino: VPath,
+        dest: VPath,
         /// `true` = move.
         mover: bool,
     },
@@ -2550,7 +2550,7 @@ const SUMS_MAX_BYTES: u64 = 1024 * 1024;
 /// says which file is currently going through, not what the source or
 /// destination were.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Reintento {
+pub struct Retry {
     /// The source, exactly as requested.
     from: VPath,
     /// The EXACT destination, with its name already composed.
@@ -2576,7 +2576,7 @@ pub struct Reintento {
 /// (`norte_i18n::t_in`), not the process's. And never the system's `Display`,
 /// which the OS translates on a whim — "Permission denied (os error 13)" is
 /// not a norte message (#73).
-fn clave_de_io(e: &std::io::Error) -> &'static str {
+fn io_key(e: &std::io::Error) -> &'static str {
     match e.kind() {
         std::io::ErrorKind::NotFound => "err-not-found",
         std::io::ErrorKind::PermissionDenied => "err-permission-denied",
@@ -2595,7 +2595,7 @@ fn clave_de_io(e: &std::io::Error) -> &'static str {
     clippy::struct_excessive_bools,
     reason = "controller state: flags for different things, not a single machine"
 )]
-struct Estado {
+struct State {
     instance: InstanceId,
     sequence: u64,
     /// Request counter. Every listing carries its own, and a response with an
@@ -2607,12 +2607,12 @@ struct Estado {
     resolver: Resolver,
     /// The VIEWER's effective keymap, so the palette can say a command's
     /// shortcut for that screen.
-    efectivo_visor: Effective,
+    effective_visor: Effective,
     /// The command palette, if it is open.
     ///
     /// It is one more input context, like the incremental search and the
     /// viewer: while it is open, text keys belong to it.
-    paleta: Option<norte_frontend::palette_state::Palette>,
+    palette: Option<norte_frontend::palette_state::Palette>,
     /// "Go to anywhere", if it is open (#357). Another free-text input
     /// context, like the palette.
     ir_a: Option<norte_frontend::goto::Goto>,
@@ -2622,57 +2622,57 @@ struct Estado {
     /// The question to the index in flight, if any. Every key ABORTS it and
     /// launches another: typing fast does not leave three questions alive
     /// against a provider that costs time and can cost money.
-    ir_a_indice: Option<tokio::task::JoinHandle<()>>,
+    go_to_index: Option<tokio::task::JoinHandle<()>>,
     /// The first-run wizard (spec 2026-09-10), while it is open. One more
     /// overlay: it keeps the keys.
-    asistente: Option<norte_frontend::wizard::Wizard>,
+    wizard: Option<norte_frontend::wizard::Wizard>,
     /// The splash screen (spec 2026-09-15, ADR 0115), while it is up. A LAYER
     /// and not an overlay with its own keys: any key or click removes it, and
     /// the wizard beats it.
     splash: Option<norte_frontend::splash::SplashView>,
     /// When it stops covering the `brief`, in epoch milliseconds. `None` = it
     /// does not expire on its own (`home`), or there is no screen up.
-    splash_hasta_ms: Option<i64>,
+    splash_until_ms: Option<i64>,
     /// The splash screen has already been shown in THIS host session.
     ///
     /// The host survives the webview — a reload, a renderer that restarts —,
     /// and the renderer sends `splash_open` every time it starts up. Without
     /// this flag, reloading mid-session covered what you were looking at with
     /// a welcome screen that in `home` mode stays until you touch it.
-    splash_visto: bool,
+    splash_seen: bool,
     /// The processes panel was opened by the AUTOMATIC trigger
     /// (`[ui] processes_panel`), so the automatic trigger can close it. One
     /// the reader opened stays.
-    procesos_auto: bool,
+    processes_auto: bool,
     /// The lightweight progress bar of the `tasks` item (ADR 0146).
-    tira: norte_frontend::task_strip::TaskStrip,
+    strip: norte_frontend::task_strip::TaskStrip,
     /// Transfers that get launched go to the QUEUE (ADR 0149). From the
     /// session, not from the config: it is turned on for a while of moving
     /// things and turned off afterward.
-    encolar: bool,
-    /// The clock source for [`Self::tira`]: tokio's, which tests can pause
+    enqueue: bool,
+    /// The clock source for [`Self::strip`]: tokio's, which tests can pause
     /// and advance.
-    tira_base: tokio::time::Instant,
+    strip_base: tokio::time::Instant,
     /// For when a wake-up is already scheduled, so as not to stack one per
     /// progress update.
-    tira_despertar: Option<i64>,
+    strip_despertar: Option<i64>,
     /// The latest keys launched from the palette, most recent first (spec
     /// 2026-09-10). They live in the UI session, like in the terminal.
-    paleta_recientes: Vec<String>,
+    palette_recent: Vec<String>,
     /// The session's popular directories (spec 2026-09-15 D6). They live in
     /// the UI session, like in the terminal.
     popular: norte_frontend::history::Popular,
     /// The host's volumes, cached for each listing's footer (spec
     /// 2026-09-10). Requested when a listing lands, never on a screenshot:
     /// `host.volumes` mounts and queries space on every filesystem.
-    volumenes_pie: Vec<norte_proto::methods::Volume>,
-    /// There is a [`Self::volumenes_pie`] request in flight: no second one is
+    volumes_pie: Vec<norte_proto::methods::Volume>,
+    /// There is a [`Self::volumes_pie`] request in flight: no second one is
     /// stacked.
-    pie_en_vuelo: bool,
+    footer_in_flight: bool,
     /// Which menu was last opened. It reopens from there: always starting
     /// from the first one forces walking the whole bar on every gesture, and
     /// whoever uses two entries of the same menu pays for it every time.
-    menu_ultimo: usize,
+    menu_last: usize,
     /// The OPEN menu, if there is one.
     ///
     /// The bar is always painted (or never, per `[ui] menu_bar`); this is
@@ -2685,9 +2685,9 @@ struct Estado {
     /// Where each thing lives.
     paths: crate::settings::HostPaths,
     /// The settings, if they are open.
-    ajustes: Option<crate::settings::Ajustes>,
+    settings: Option<crate::settings::Settings>,
     /// The extensions manager, if it is open.
-    extensiones: Option<crate::extensions::Extensiones>,
+    extensions: Option<crate::extensions::Extensions>,
     /// Everything about AGENT sessions: what has been seen, whether the panel
     /// is open, and which undo runs on whose behalf.
     agencia: Agencia,
@@ -2699,10 +2699,10 @@ struct Estado {
     /// a command is launched from the palette with the manager closed, and
     /// then there is nowhere to pull a label from. A panel that says who
     /// printed what without being able to name either one says nothing.
-    rotulos_plugin: Rotulos,
+    labels_plugin: Labels,
     /// What this window has from the DESKTOP: where the native effects and
     /// the last extension command's output go out through.
-    escritorio: Escritorio,
+    desktop: Desktop,
     /// The window has the desktop's focus (#285).
     ///
     /// Starts at `true` and not `false`: a renderer that does not send
@@ -2715,10 +2715,10 @@ struct Estado {
     /// Only the verb: the operands are recomputed when the response comes
     /// back. Freezing them here would promise an operation on a listing the
     /// reader could have changed while the picker was up.
-    destino_pendiente: Option<bool>,
+    dest_pending: Option<bool>,
 
     /// The theme, as startup resolved it.
-    tema: crate::pickers::HostTheme,
+    theme: crate::pickers::HostTheme,
     /// The desktop asks for a DARK scheme (`prefers-color-scheme`).
     ///
     /// The renderer says it with [`UiAction::SetColorScheme`], on startup and
@@ -2729,26 +2729,26 @@ struct Estado {
     /// Starts at `false` and not "whatever the system says" because the host
     /// has a desktop to ask: the renderer's first message corrects it, and it
     /// arrives before anything is painted.
-    esquema_oscuro: bool,
+    scheme_dark: bool,
     /// The theme is being looked at from the inside.
     /// The theme picker, if it is open.
-    tema_elegido: Option<profiles::SeleccionDeTema>,
+    theme_chosen: Option<profiles::ThemeSelection>,
     /// The active PROFILE (ADR 0079), or none.
     ///
     /// `OsString` because it is a directory name: passing it through text
     /// changes which one opens (#245).
-    perfil_activo: Option<std::ffi::OsString>,
+    profile_active: Option<std::ffi::OsString>,
     /// The profile picker, if it is open.
-    selector_perfil: Option<norte_frontend::profile_picker::ProfilePicker>,
+    selector_profile: Option<norte_frontend::profile_picker::ProfilePicker>,
     /// The profile list's generation: bumps every time it is re-read.
-    gen_perfiles: u64,
+    gen_profiles: u64,
     /// Bumps every time the sidebar's set of rows changes.
-    gen_sitios: u64,
+    gen_places: u64,
     /// Bumps every time the picker's set of rows changes. Also serves as the
     /// OPENING id: the picker opens empty.
     gen_selector: u64,
     /// How many times the extensions manager has been opened.
-    gen_extensiones: u64,
+    gen_extensions: u64,
     /// How many catalogues have been REQUESTED, and which was the last one
     /// APPLIED.
     ///
@@ -2756,13 +2756,13 @@ struct Estado {
     /// catalogues with the same opening, and they can answer in any order.
     /// Without this, the old one overwrote the new one and the "approved"
     /// column was left stale with nothing left to move it again.
-    gen_catalogo: u64,
+    gen_catalog: u64,
     /// The last catalogue applied, to discard the ones that arrive late.
-    catalogo_aplicado: u64,
+    catalog_applied: u64,
     /// How many times the palette has been opened.
-    gen_paleta: u64,
+    gen_palette: u64,
     /// How many extension commands have been launched.
-    gen_salida: u64,
+    gen_output: u64,
     /// The bytes of the image the viewer shows, if they have already arrived.
     ///
     /// They do NOT travel in the screenshot: an eight-megabyte image in the
@@ -2773,26 +2773,26 @@ struct Estado {
     /// The thumbnail a plugin gave for the viewer's file (ADR 0107): what the
     /// projection announces as the image and whose it is, while the bytes go
     /// in `imagen`. `None` = the viewer paints its own.
-    miniatura: Option<(crate::dto::ImageView, String)>,
+    thumbnail: Option<(crate::dto::ImageView, String)>,
     /// The open search, if there is one.
-    busqueda: Option<search::Busqueda>,
+    search: Option<search::Search>,
     /// How many searches this window has launched. It is the search's
     /// identity while the daemon has not said its own yet.
-    epoca_busqueda: u64,
+    epoch_search: u64,
     /// The user's layouts, already read by whoever started the host.
-    disposiciones: Vec<norte_frontend::layout_picker::UserLayout>,
+    layouts: Vec<norte_frontend::layout_picker::UserLayout>,
     /// The layout picker, if it is open.
-    selector_disposicion: Option<norte_frontend::layout_picker::LayoutPicker>,
+    selector_layout: Option<norte_frontend::layout_picker::LayoutPicker>,
     /// The COLUMNS picker, if it is open.
-    selector_columnas: Option<norte_frontend::columns_picker::ColumnsPicker>,
+    selector_columns: Option<norte_frontend::columns_picker::ColumnsPicker>,
     /// The places sidebar, if the layout places one. There is AT MOST ONE: two
     /// identical lists of disks are not a layout, they are a bug (the shared
     /// registry says so, `multi: false`).
-    sitios: Option<norte_frontend::places::PlacesState>,
+    places: Option<norte_frontend::places::PlacesState>,
     /// What each preview slot shows (#291), by slot: which path, the viewer
     /// with what was read or the note replacing it, and what is in flight. By
     /// slot and not a single one: the registry allows several.
-    previews: std::collections::BTreeMap<u32, preview::EstadoPreview>,
+    previews: std::collections::BTreeMap<u32, preview::StatePreview>,
     /// What each PLUGIN panel has alive (phase 3), by slot: its last frame,
     /// its guest's opaque state, and what is in flight.
     ///
@@ -2800,16 +2800,16 @@ struct Estado {
     /// permission to read it is minted per call —, so it is pruned along with
     /// the tree: a `SlotId` gets reused, and without pruning another plugin's
     /// panel would inherit what the first one stored.
-    paneles: std::collections::BTreeMap<u32, panelplugin::EstadoPanel>,
+    panels: std::collections::BTreeMap<u32, panelplugin::StatePanel>,
     /// The disk map of each slot showing one (phase 4).
     ///
     /// The state is the SHARED one (`norte_frontend::diskmap`), the same one
     /// the terminal uses: which directory it describes, what has been
     /// measured, and which child is chosen. A decision written twice diverges
     /// silently (ADR 0077).
-    mapas: std::collections::BTreeMap<u32, diskmap::EstadoMapa>,
+    maps: std::collections::BTreeMap<u32, diskmap::StateMap>,
     /// The timeline of each slot that has one (#359).
-    lineas: std::collections::BTreeMap<u32, timeline::EstadoLinea>,
+    lines: std::collections::BTreeMap<u32, timeline::StateLine>,
     /// The LAST thing sent for each attributes sheet, by slot.
     ///
     /// The sheet requests nothing and is computed whole from the listing, so
@@ -2822,15 +2822,15 @@ struct Estado {
     hojas: std::collections::BTreeMap<u32, crate::dto::MetadataSlotView>,
     /// The directory tree, if the layout places one. There is AT MOST ONE,
     /// for the same reason as the places sidebar.
-    ramas: Option<norte_frontend::tree::Tree>,
+    branches: Option<norte_frontend::tree::Tree>,
     /// Bumps every time the set of visible branches changes.
-    gen_ramas: u64,
+    gen_branches: u64,
     /// The file to open as soon as it exists (#290), with the task creating
     /// it.
     ///
     /// At most one: the gesture asks for a name, and until that dialog is
     /// answered there is no other.
-    abrir_al_crear: Option<fileops::Creacion>,
+    open_on_create: Option<fileops::Creation>,
     /// The processes panel's cursor.
     ///
     /// The SAME type the TUI uses, with its rule inside: it is clamped on
@@ -2839,7 +2839,7 @@ struct Estado {
     /// cursor can always have ended up out of bounds. Here it was written by
     /// hand in five places, which is the same duplicated decision ADR 0077
     /// exists to avoid.
-    cursor_procesos: norte_frontend::processes::Processes,
+    cursor_processes: norte_frontend::processes::Processes,
     /// The log panel's state: level, filter and follow (#326).
     ///
     /// The SAME type the TUI uses, with its rule about the two levels inside
@@ -2857,37 +2857,37 @@ struct Estado {
     /// guessing it here is what in the TUI made every page skip two lines and
     /// the first one skip four, and what neither window showed could not be
     /// read at all.
-    log_filas: usize,
+    log_rows: usize,
     /// Bumps on every OPENING of the panel. Distinguishes this opening's
     /// timer from the previous one's: opening, closing and reopening would
     /// leave two alive on the same panel, and the old one would keep
     /// rearming itself forever.
-    log_epoca: u64,
+    log_epoch: u64,
     /// The ring's entry counter the last time it was painted, so as not to
     /// send a screenshot on a poll when nothing has happened.
-    log_visto: u64,
+    log_seen: u64,
     /// The REMOTE half of the log panel: what the daemon has delivered from
     /// its ring and what is known about it (#328).
     ///
     /// Grouped and not six loose fields: they are a single matter — a source
     /// of lines with its cursor, its state and its request in flight — and
-    /// loose they would turn `Estado` into the kind of struct that is
+    /// loose they would turn `State` into the kind of struct that is
     /// described with a list of flags.
-    log_remoto: logpanel::RegistroRemoto,
+    log_remote: logpanel::LogRemote,
     /// The open picker, if there is one.
     selector: Option<crate::pickers::Selector>,
     /// Help, if it is open. It covers the screen and keeps the keys, like the
     /// viewer: its keys are FIXED (there is no `dialog.*` vocabulary for
     /// "filter this list" or "follow this link"), which is the same thing the
     /// TUI and the palette do.
-    ayuda: Option<crate::help::Ayuda>,
+    help: Option<crate::help::Help>,
     /// A COPY of the listing's effective keymap.
     ///
     /// The resolver keeps its own, and building the continuations panel needs
     /// the whole effective one (what follows a prefix, and what availability
     /// each continuation has). `Effective` is `Clone` and the TUI does
     /// exactly this for the same reason.
-    efectivo: Effective,
+    effective: Effective,
     /// The negotiated language, for the continuations' labels.
     lang: norte_i18n::Lang,
     /// The continuations of the half-typed prefix, if there is one.
@@ -2901,28 +2901,28 @@ struct Estado {
     /// through HERE.
     resolver_visor: Resolver,
     /// The DIALOG screen's resolver.
-    resolver_dialogo: Resolver,
+    resolver_dialog: Resolver,
     /// Whether this frontend can write.
-    efectos: crate::commands::Efectos,
+    effects: crate::commands::Effects,
     /// How many lines fit in the viewer, according to the renderer.
     ///
     /// `None` while it has not said so: it falls back to the size in cells
     /// minus the chrome, which is an estimate and behaves like one.
-    visor_filas: Option<usize>,
+    visor_rows: Option<usize>,
     /// Width in cells of the viewer's BODY, measured by the renderer the last
     /// time it painted it. `None` until then: the first opening uses the
     /// viewport, which goes through the chrome.
-    visor_columnas: Option<u32>,
+    visor_columns: Option<u32>,
     /// The token of the viewer's read in flight, if there is one.
     ///
     /// Without it, a slow read opened the viewer AFTER the user closed it or
     /// moved elsewhere — and since keys are routed by "there is a viewer",
     /// the next key was interpreted by another map without anyone having
     /// asked for anything.
-    visor_en_vuelo: Option<RequestToken>,
+    viewer_in_flight: Option<RequestToken>,
     /// The token of the OPEN viewer, not of the one being requested.
     ///
-    /// Separate from `visor_en_vuelo`, which is cleared on opening: the
+    /// Separate from `viewer_in_flight`, which is cleared on opening: the
     /// image's bytes arrive AFTERWARD, and without this there would be
     /// nothing to check that they belong to this viewer and not the previous
     /// one.
@@ -2935,30 +2935,30 @@ struct Estado {
     /// resizing — a saved layout is its intent, and rewriting it because the
     /// window shrank would mean opening the host for a minute eats the TUI's
     /// layout (ADR 0058 D5).
-    arbol: Node,
+    tree: Node,
     /// The kinds this host knows how to declare (minimums, focus, roles).
     kinds: KindRegistry,
     /// The last panel bar that crossed the bridge. `parche` compares it
     /// against the current one and sends the new one if it differs: that is
     /// what makes the bar update through any path without each path having to
     /// know it.
-    ultima_barra: Option<crate::dto::PanelBarView>,
+    ultima_bar: Option<crate::dto::PanelBarView>,
     /// The last status bar items that crossed (ADR 0132), for the same reason
     /// as the panel bar.
-    ultimos_elementos: Option<Vec<crate::dto::StatusItemView>>,
+    last_items: Option<Vec<crate::dto::StatusItemView>>,
     /// The last thin line that crossed per slot (ADR 0148), to send only what
     /// changes.
-    ultima_linea: std::collections::HashMap<u32, Option<u8>>,
+    ultima_line: std::collections::HashMap<u32, Option<u8>>,
     /// The last column fit that crossed, per slot
     /// (`norte_frontend::columns::fitted_columns`). It depends on the slot's
     /// width and its listing's names, and both change through paths that do
     /// not send a header; `parche` compares it and, if it differs, sends the
     /// header AND the rows together — a row with a cell whose header no
     /// longer has it would be painted without a width.
-    ultimo_ajuste: std::collections::HashMap<u32, Vec<norte_frontend::columns::Fitted>>,
+    last_setting: std::collections::HashMap<u32, Vec<norte_frontend::columns::Fitted>>,
     /// How many one-second ticks `status.message` has been on the bar (spec
     /// 2026-09-10): in TICKS so a test can advance it without sleeping.
-    mensaje_ticks: u32,
+    message_ticks: u32,
     /// The terminal panel's shell (#362), if one is alive.
     ///
     /// Here and not in the slot because the kind is `multi: false`: there is
@@ -2967,14 +2967,14 @@ struct Estado {
     terminal: Option<norte_term::pty::Shell>,
     /// The terminal panel's epoch: bumps on closing it, and the timer in
     /// flight is left to die without rearming.
-    terminal_epoca: u64,
+    terminal_epoch: u64,
     /// The text that was being counted: if it changes, the count goes back to
     /// zero.
-    mensaje_contado: Option<String>,
+    message_contado: Option<String>,
     /// The LAST known size's layout: who gets painted, who does not, and in
     /// what order they are tabbed through. Lives and dies with the size, not
     /// with the tree.
-    reparto: Resolved,
+    split: Resolved,
     /// The last size distributed, in cells. It travels to the renderer with
     /// the layout: without it, it cannot know against which grid the
     /// rectangles it receives are measured.
@@ -2982,32 +2982,32 @@ struct Estado {
     /// Who has the focus and who is the destination.
     roles: Roles,
     /// The column configuration, per scheme.
-    columnas: norte_frontend::columns::ColumnsSettings,
+    columns: norte_frontend::columns::ColumnsSettings,
     /// Each slot's location's attribute catalogue, cached by SCHEME: it is
     /// what says whether an `attr:` is a size, a date or a mode, and without
     /// it the raw number is painted.
     catalogos: std::collections::HashMap<String, norte_proto::AttrCatalog>,
     /// The slots with state, by id.
-    huecos: std::collections::BTreeMap<u32, Hueco>,
+    slots: std::collections::BTreeMap<u32, Slot>,
     /// The open dialogs, in opening order. Each with its id: a second
     /// `Confirm` with the same id does not launch anything again, and one
     /// with an old id does not close the current one.
-    dialogos: Vec<Dialogo>,
+    dialogs: Vec<Dialog>,
     /// The next dialog id. Monotonic: an id is never reused, which is what
     /// makes "old" distinguishable from "current".
-    siguiente_modal: u64,
+    next_modal: u64,
     /// The renaming plan under review, if there is one.
     revision_ia: Option<ai::RevisionIa>,
     /// The review's epoch: bumps on every REQUEST and on abandoning one in
     /// flight. A response with a different epoch arrived late and is
     /// discarded on Rust.
-    epoca_ia: u64,
+    epoch_ia: u64,
     /// SYNCHRONIZED navigation (`pane.sync-nav`): while it is on, every
     /// navigation of the active slot is repeated by the destination slot.
     ///
     /// Execution state and not config nor session: it is a mode turned on to
     /// do one thing and turned off afterward, like in Krusader.
-    espejo_permanente: bool,
+    mirror_permanent: bool,
     /// The plan request IN FLIGHT: its epoch and the DIRECTORY it was
     /// requested for.
     ///
@@ -3016,12 +3016,12 @@ struct Estado {
     /// have navigated: a plan for `series/` opened while showing
     /// `downloads/` would be promising to rename what is shown, and would
     /// rename something else.
-    ia_en_vuelo: Option<(u64, VPath, Vec<Vec<u8>>)>,
+    ai_in_flight: Option<(u64, VPath, Vec<Vec<u8>>)>,
     /// The ORGANIZE plan under review (phase 8), if there is one.
-    revision_organizar: Option<organize::RevisionOrganizar>,
+    revision_organize: Option<organize::RevisionOrganize>,
     /// Its epoch: bumps on every request, and a response with a different one
     /// arrived late.
-    epoca_organizar: u64,
+    epoch_organize: u64,
     /// The organize plan request IN FLIGHT: epoch, directory, and the names
     /// that were in it when requested.
     ///
@@ -3030,23 +3030,23 @@ struct Estado {
     /// and asking the slot then would paint the tree against a directory that
     /// is not its own — calling "new" a folder that did exist, or the other
     /// way around.
-    organizar_en_vuelo: Option<(u64, VPath, Vec<String>)>,
+    organize_in_flight: Option<(u64, VPath, Vec<String>)>,
     /// The board: what is running, by task id.
     tasks: std::collections::BTreeMap<u64, tasks::TaskViva>,
     /// The transfer batch in progress, if there is one (#271).
-    lote: Option<tasks::Lote>,
+    batch: Option<tasks::Batch>,
     /// The UI session: which revision was read, whether this window owns it,
     /// and whether the saved schema is from a version this host does not
     /// understand (ADR 0059).
-    sesion: Sesion,
+    session: Session,
     /// The directory a human TYPED in on startup, if they typed one.
     ///
     /// Saved because the session is read after mounting the slots and
     /// overwrites everyone's location: without this, `norte-gui /usr/bin`
     /// ended up wherever you were yesterday. Consumed by
-    /// [`Self::leer_sesion`] and never needed again — a startup intent is
+    /// [`Self::leer_session`] and never needed again — a startup intent is
     /// worth once.
-    dir_pedido: Option<VPath>,
+    dir_requested: Option<VPath>,
     /// Comes from a HANDOFF (`--attach`, phase 9): the session's marks are
     /// claimed. Without it they are ignored — a startup is not a handoff.
     attach: bool,
@@ -3054,31 +3054,31 @@ struct Estado {
     /// the terminal opened (phase 9). It is the only thing that authorizes a
     /// `HandoffFailed`: anyone can send the action, and without a handoff in
     /// progress there is nothing to recover nor to say.
-    relevo_en_curso: bool,
+    handoff_in_progress: bool,
     /// The last LISTING that had the focus. When the focus is on a pane that
     /// is not a listing — the tree, the places —, commands act on it and the
-    /// tree navigates it ([`Self::activo`]). Without this, `activo` fell back
+    /// tree navigates it ([`Self::active`]). Without this, `active` fell back
     /// to the listing with the lowest id, which can be the one on the RIGHT:
     /// choosing a branch moved the pane that did not have the focus.
-    ultimo_listado: Option<u32>,
+    last_listing: Option<u32>,
     status: StatusView,
-    conexion: ConnectionView,
+    connection: ConnectionView,
     /// The provider sessions traveling unencrypted (#44), tracked by the
     /// shared module.
     degradadas: norte_frontend::banners::DegradedSet,
     /// What the daemon said about itself before leaving: handoff or stop.
     /// `None` = it has said nothing, or it already came back.
-    aviso_de_daemon: Option<&'static str>,
+    daemon_notice: Option<&'static str>,
     /// The open comparison, if there is one.
-    comparacion: Option<sync::Comparacion>,
+    comparison: Option<sync::Comparison>,
     /// The open sync plan, if there is one.
-    sincronizacion: Option<sync::Sincronizacion>,
+    sync: Option<sync::Sync>,
     /// The checksum batch in flight, if there is one (#311). AT MOST ONE: the
     /// results dialog is a single one, and launching another supersedes the
     /// previous one.
-    sumas: Option<tasks::SumasEnVuelo>,
+    checksums: Option<tasks::ChecksumsInFlight>,
     /// The QUEUED checksum batch that still has no id (#311). `None` = none.
-    sumas_pendientes: Option<sums::SumasEncoladas>,
+    checksums_pendientes: Option<sums::ChecksumsEncoladas>,
     /// A REQUESTED plan whose Task has not answered yet.
     sync_pedida: Option<sync::SyncPedida>,
     /// The semantic query in flight, so it can be ABORTED.
@@ -3087,7 +3087,7 @@ struct Estado {
     /// when the call is dropped, and on the other end there is an embed and
     /// an index sweep that cost something. Relaunching or closing the view
     /// stops them.
-    semantica_en_vuelo: Option<tokio::task::JoinHandle<()>>,
+    semantics_in_flight: Option<tokio::task::JoinHandle<()>>,
     /// How many times the connection to the daemon has been (re)established.
     ///
     /// Task ids are handed out by a process's SCHEDULER and start at 1 on
@@ -3098,7 +3098,7 @@ struct Estado {
     /// never requested), its affected directories, and even its detail.
     /// Approvals do not have this problem because the daemon seeds THEIR ids
     /// with the clock on purpose.
-    epoca_conexion: u64,
+    epoch_connection: u64,
     /// The engine REFUSED a mutation because it could not open its journal.
     ///
     /// Persistent and not a message: hard rule 4 says nothing mutates without
@@ -3122,7 +3122,7 @@ struct Estado {
 
 /// What the host knows about the saved session.
 #[derive(Debug)]
-struct Sesion {
+struct Session {
     /// The revision being written to. Writing to a different one means
     /// overwriting whoever wrote in between, and the core rejects it.
     revision: u64,
@@ -3144,10 +3144,10 @@ struct Sesion {
     /// layouts — instead of preserving it. Wave #229–#234 put in "preserve
     /// what belongs to others on a handoff" for exactly this, and this window
     /// was not doing it.
-    leida: norte_frontend::session::SessionBody,
+    read: norte_frontend::session::SessionBody,
     /// Which slots the data read from disk KNEW ABOUT.
     ///
-    /// The `[profile.start]` veto (ADR 0098). Separate from [`Self::leida`]
+    /// The `[profile.start]` veto (ADR 0098). Separate from [`Self::read`]
     /// and not derived from it on the fly because they are two different
     /// questions: that one is what has to be written back, and this is what
     /// the session already knew — and it cannot move once the process starts
@@ -3165,11 +3165,11 @@ struct Sesion {
     /// does not send another on top of it — two crossed writes with the same
     /// revision are a guaranteed conflict — and shutdown knows what was being
     /// written to say whether its own made it or not.
-    en_vuelo: Option<std::sync::Arc<norte_frontend::session::SessionBody>>,
+    in_flight: Option<std::sync::Arc<norte_frontend::session::SessionBody>>,
     /// The daemon refused the body for size (#316): from then on it is sent
     /// without history, which is what gets degraded. What had to be saved is
     /// where the reader is, and that fits.
-    sin_historial: bool,
+    no_history: bool,
     /// The slots this process has already seeded from `[profile.start]`.
     ///
     /// Seeding happens the FIRST time. Without this count, a reader with no
@@ -3178,7 +3178,7 @@ struct Sesion {
     sembrados: std::collections::BTreeSet<u32>,
 }
 
-impl Hueco {
+impl Slot {
     /// A newborn slot: no listing, no history, and LOADING.
     ///
     /// Just one, because the three places that built it — startup, opening a
@@ -3186,49 +3186,44 @@ impl Hueco {
     /// field, and a new field forgotten in one of them is a slot that behaves
     /// differently depending on where it was born.
     ///
-    /// `ocultos` is the INITIAL state of `[ui] show_hidden` (#107). Given by
+    /// `hidden` is the INITIAL state of `[ui] show_hidden` (#107). Given by
     /// the caller because it is configuration, and the pane is born showing
     /// everything: without this, a window with `show_hidden = false` in its
     /// config started up showing the dotfiles anyway, and `pane.toggle-hidden`
     /// hid them "for the first time" on every startup.
-    fn vacio(
-        dir: VPath,
-        ocultos: bool,
-        orden: norte_frontend::SortSpec,
-        fila_de_subir: bool,
-    ) -> Self {
-        let esquema = dir.scheme().to_owned();
+    fn empty(dir: VPath, hidden: bool, orden: norte_frontend::SortSpec, upload_row: bool) -> Self {
+        let scheme = dir.scheme().to_owned();
         let mut pane = PaneState::new(dir, Vec::new());
-        pane.set_show_hidden(ocultos);
+        pane.set_show_hidden(hidden);
         pane.set_sort(orden);
         // `[ui] parent_entry`: the `..` row is born with the slot and is not
         // added to it afterward — a slot that opens without it and gains it
         // on the next listing would show two different screens for the same
         // config.
-        pane.set_parent_row(fila_de_subir);
+        pane.set_parent_row(upload_row);
         Self {
             pane,
             caps: None,
-            esquema_del_orden: esquema,
-            historial: History::default(),
-            primera_visible: 0,
-            visibles: 64,
-            en_vuelo: None,
-            dir_pedido: None,
-            marcas_a_restaurar: Vec::new(),
-            cursor_a_restaurar: None,
-            filas_por_publicar: false,
+            order_scheme: scheme,
+            history: History::default(),
+            first_visible: 0,
+            visible: 64,
+            in_flight: None,
+            dir_requested: None,
+            marks_to_restore: Vec::new(),
+            cursor_to_restore: None,
+            rows_to_publish: false,
             drenando: None,
             sondeando: false,
-            cancelar_sondeo: std::sync::Arc::default(),
+            cancel_probe: std::sync::Arc::default(),
             // No destination: a newborn slot is not going anywhere, it is
             // already where it is going to be.
-            estado: Estado::cargando_hacia(None, None),
+            state: State::loading_toward(None, None),
             sondeados: std::collections::HashSet::new(),
             adornos: std::collections::HashMap::new(),
-            celdas_plugin: std::collections::HashMap::new(),
+            cells_plugin: std::collections::HashMap::new(),
             adornando: false,
-            visita_pendiente: None,
+            visita_pending: None,
             adornadas: std::collections::HashSet::new(),
             gen_adornos: 0,
         }
@@ -3242,13 +3237,13 @@ impl Hueco {
     /// undecorated forever.
     fn olvidar_adornos(&mut self) {
         self.adornos.clear();
-        self.celdas_plugin.clear();
+        self.cells_plugin.clear();
         self.adornadas.clear();
         self.gen_adornos += 1;
     }
 }
 
-impl Estado {
+impl State {
     /// Builds the state from the startup options.
     ///
     /// Takes the WHOLE options struct and not eight loose parameters: they
@@ -3261,23 +3256,23 @@ impl Estado {
     ///
     /// `[ui] show_hidden` (#107) seeds each one's initial state, same as in
     /// the TUI: absent = show everything.
-    fn huecos_iniciales(
-        arbol: &Node,
+    fn slots_initial(
+        tree: &Node,
         kinds: &KindRegistry,
         dir: &VPath,
         settings: &norte_frontend::config::FrontendConfig,
         columnas: &norte_frontend::columns::ColumnsSettings,
-    ) -> std::collections::BTreeMap<u32, Hueco> {
-        let ocultos = settings.common.ui_show_hidden.unwrap_or(true);
-        let subir = settings.common.ui_parent_entry.unwrap_or(true);
+    ) -> std::collections::BTreeMap<u32, Slot> {
+        let hidden = settings.common.ui_show_hidden.unwrap_or(true);
+        let up = settings.common.ui_parent_entry.unwrap_or(true);
         let orden = columnas.sort_for(dir.scheme());
-        let mut huecos = std::collections::BTreeMap::new();
-        for SlotId(id) in arbol.slot_ids() {
-            if es_listado(arbol, SlotId(id), kinds) {
-                huecos.insert(id, Hueco::vacio(dir.clone(), ocultos, orden.clone(), subir));
+        let mut slots = std::collections::BTreeMap::new();
+        for SlotId(id) in tree.slot_ids() {
+            if es_listing(tree, SlotId(id), kinds) {
+                slots.insert(id, Slot::empty(dir.clone(), hidden, orden.clone(), up));
             }
         }
-        huecos
+        slots
     }
 
     /// The negotiated language, for the continuations' labels.
@@ -3296,14 +3291,14 @@ impl Estado {
     /// candidates appearing: with three listings, the first one kept the role
     /// forever and copying sent things there without anyone having said so
     /// (ADR 0058 D7).
-    fn roles_iniciales(
-        arbol: &Node,
-        reparto: &norte_frontend::layout::Resolved,
+    fn roles_initial(
+        tree: &Node,
+        split: &norte_frontend::layout::Resolved,
         kinds: &KindRegistry,
-        activo: u32,
+        active: u32,
     ) -> Roles {
-        let mut roles = Roles::con_active(SlotId(activo));
-        roles.reconcile(arbol, reparto, kinds, SlotId(activo));
+        let mut roles = Roles::con_active(SlotId(active));
+        roles.reconcile(tree, split, kinds, SlotId(active));
         roles
     }
 
@@ -3315,17 +3310,17 @@ impl Estado {
         clippy::too_many_lines,
         reason = "constructor: one field per line with its why, nothing to extract"
     )]
-    fn nuevo(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
+    fn new(instance: InstanceId, options: UiHostOptions) -> (Self, Arc<dyn HostBackend>) {
         let UiHostOptions {
             backend,
             initial_dir,
-            initial_dir_pedido,
+            initial_dir_requested,
             attach,
             locale,
             keymap,
             keymap_viewer: keymap_visor,
             keymap_dialog,
-            layout: arbol,
+            layout: tree,
             viewport,
             columns: columnas,
             effects: efectos,
@@ -3333,136 +3328,136 @@ impl Estado {
             paths,
             theme,
             user_layouts,
-            profile: perfil_de_arranque,
+            profile: startup_profile,
             log_ring,
         } = options;
         let dir = &initial_dir;
         let lang = Self::lang_de(&locale);
         let kinds = KindRegistry::builtin();
-        let reparto = resolve(rect(viewport), &arbol, &kinds);
-        let huecos = Self::huecos_iniciales(&arbol, &kinds, dir, &settings, &columnas);
-        let activo = huecos.keys().copied().next().unwrap_or(1);
-        let roles = Self::roles_iniciales(&arbol, &reparto, &kinds, activo);
-        let estado = Self {
-            rotulos_plugin: Rotulos::new(),
+        let split = resolve(rect(viewport), &tree, &kinds);
+        let slots = Self::slots_initial(&tree, &kinds, dir, &settings, &columnas);
+        let active = slots.keys().copied().next().unwrap_or(1);
+        let roles = Self::roles_initial(&tree, &split, &kinds, active);
+        let state = Self {
+            labels_plugin: Labels::new(),
             instance,
             sequence: 0,
             token: 0,
             locale,
-            paleta: None,
+            palette: None,
             ir_a: None,
             gen_ir_a: 0,
-            ir_a_indice: None,
-            asistente: None,
+            go_to_index: None,
+            wizard: None,
             splash: None,
-            splash_hasta_ms: None,
-            splash_visto: false,
-            procesos_auto: false,
-            tira: norte_frontend::task_strip::TaskStrip::default(),
-            encolar: false,
-            tira_base: tokio::time::Instant::now(),
-            tira_despertar: None,
-            paleta_recientes: Vec::new(),
+            splash_until_ms: None,
+            splash_seen: false,
+            processes_auto: false,
+            strip: norte_frontend::task_strip::TaskStrip::default(),
+            enqueue: false,
+            strip_base: tokio::time::Instant::now(),
+            strip_despertar: None,
+            palette_recent: Vec::new(),
             popular: norte_frontend::history::Popular::default(),
-            volumenes_pie: Vec::new(),
-            pie_en_vuelo: false,
+            volumes_pie: Vec::new(),
+            footer_in_flight: false,
             menu: None,
-            ayuda: None,
-            ajustes: None,
-            extensiones: None,
+            help: None,
+            settings: None,
+            extensions: None,
             agencia: Agencia::default(),
-            escritorio: Escritorio::default(),
+            desktop: Desktop::default(),
             enfocada: true,
-            destino_pendiente: None,
-            tema: theme,
-            esquema_oscuro: false,
-            tema_elegido: None,
-            menu_ultimo: 0,
+            dest_pending: None,
+            theme,
+            scheme_dark: false,
+            theme_chosen: None,
+            menu_last: 0,
             // What `--profile` named is already APPLIED in `settings`; what
             // is missing is for the host to know it (#307).
-            perfil_activo: perfil_de_arranque,
-            selector_perfil: None,
-            gen_perfiles: 0,
-            cursor_procesos: norte_frontend::processes::Processes::default(),
+            profile_active: startup_profile,
+            selector_profile: None,
+            gen_profiles: 0,
+            cursor_processes: norte_frontend::processes::Processes::default(),
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_ring,
             // One until the first frame tells the truth: never zero, so a
             // page keypress before painting moves something instead of
             // nothing.
-            log_filas: 1,
-            log_epoca: 0,
-            log_visto: 0,
-            log_remoto: logpanel::RegistroRemoto::default(),
-            sitios: None,
+            log_rows: 1,
+            log_epoch: 0,
+            log_seen: 0,
+            log_remote: logpanel::LogRemote::default(),
+            places: None,
             previews: std::collections::BTreeMap::new(),
-            paneles: std::collections::BTreeMap::new(),
-            mapas: std::collections::BTreeMap::new(),
-            lineas: std::collections::BTreeMap::new(),
+            panels: std::collections::BTreeMap::new(),
+            maps: std::collections::BTreeMap::new(),
+            lines: std::collections::BTreeMap::new(),
             hojas: std::collections::BTreeMap::new(),
-            gen_sitios: 0,
-            ramas: None,
-            gen_ramas: 0,
-            abrir_al_crear: None,
+            gen_places: 0,
+            branches: None,
+            gen_branches: 0,
+            open_on_create: None,
             gen_selector: 0,
-            gen_extensiones: 0,
-            gen_catalogo: 0,
-            catalogo_aplicado: 0,
-            gen_paleta: 0,
-            gen_salida: 0,
+            gen_extensions: 0,
+            gen_catalog: 0,
+            catalog_applied: 0,
+            gen_palette: 0,
+            gen_output: 0,
             imagen: None,
-            miniatura: None,
-            busqueda: None,
-            epoca_busqueda: 0,
-            disposiciones: user_layouts,
-            selector_disposicion: None,
-            selector_columnas: None,
+            thumbnail: None,
+            search: None,
+            epoch_search: 0,
+            layouts: user_layouts,
+            selector_layout: None,
+            selector_columns: None,
             selector: None,
             config: settings,
             paths,
-            efectivo_visor: keymap_visor.clone(),
-            efectivo: keymap.clone(),
+            effective_visor: keymap_visor.clone(),
+            effective: keymap.clone(),
             lang,
             whichkey: None,
             resolver: Resolver::new(keymap),
             resolver_visor: Resolver::new(keymap_visor),
-            resolver_dialogo: Resolver::new(keymap_dialog),
-            efectos,
-            visor_filas: None,
-            visor_columnas: None,
-            visor_en_vuelo: None,
+            resolver_dialog: Resolver::new(keymap_dialog),
+            effects: efectos,
+            visor_rows: None,
+            visor_columns: None,
+            viewer_in_flight: None,
             visor_token: None,
             visor: None,
-            arbol,
+            tree,
             kinds,
-            ultima_barra: None,
-            ultimos_elementos: None,
-            ultima_linea: std::collections::HashMap::new(),
-            ultimo_ajuste: std::collections::HashMap::new(),
-            mensaje_ticks: 0,
+            ultima_bar: None,
+            last_items: None,
+            ultima_line: std::collections::HashMap::new(),
+            last_setting: std::collections::HashMap::new(),
+            message_ticks: 0,
             // Lazy, like in the terminal: a per-session shell nobody is going
             // to use is a process, a pty and someone's `.bashrc` running just
             // in case.
             terminal: None,
-            terminal_epoca: 0,
-            mensaje_contado: None,
-            reparto,
+            terminal_epoch: 0,
+            message_contado: None,
+            split,
             viewport,
             roles,
-            columnas,
+            columns: columnas,
             catalogos: std::collections::HashMap::new(),
-            huecos,
-            dialogos: Vec::new(),
-            siguiente_modal: 1,
+            slots,
+            dialogs: Vec::new(),
+            next_modal: 1,
             revision_ia: None,
-            epoca_ia: 0,
-            espejo_permanente: false,
-            ia_en_vuelo: None,
-            revision_organizar: None,
-            epoca_organizar: 0,
-            organizar_en_vuelo: None,
+            epoch_ia: 0,
+            mirror_permanent: false,
+            ai_in_flight: None,
+            revision_organize: None,
+            epoch_organize: 0,
+            organize_in_flight: None,
             tasks: std::collections::BTreeMap::new(),
-            lote: None,
-            sesion: Sesion {
+            batch: None,
+            session: Session {
                 revision: 0,
                 owner: false,
                 futuro: false,
@@ -3470,84 +3465,81 @@ impl Estado {
                 // ticks: the owner can close at any moment and then someone
                 // has to pick it up.
                 policy: norte_frontend::session::PushPolicy::new(30),
-                leida: norte_frontend::session::SessionBody::default(),
+                read: norte_frontend::session::SessionBody::default(),
                 conocidos: std::collections::BTreeSet::new(),
                 touched: std::collections::BTreeMap::new(),
-                en_vuelo: None,
-                sin_historial: false,
+                in_flight: None,
+                no_history: false,
                 sembrados: std::collections::BTreeSet::new(),
             },
-            dir_pedido: initial_dir_pedido.then(|| initial_dir.clone()),
+            dir_requested: initial_dir_requested.then(|| initial_dir.clone()),
             attach,
-            relevo_en_curso: false,
-            ultimo_listado: None,
+            handoff_in_progress: false,
+            last_listing: None,
             status: StatusView::default(),
-            conexion: ConnectionView::Connected,
+            connection: ConnectionView::Connected,
             degradadas: norte_frontend::banners::DegradedSet::default(),
-            epoca_conexion: 0,
-            semantica_en_vuelo: None,
-            comparacion: None,
-            sincronizacion: None,
-            sumas: None,
-            sumas_pendientes: None,
+            epoch_connection: 0,
+            semantics_in_flight: None,
+            comparison: None,
+            sync: None,
+            checksums: None,
+            checksums_pendientes: None,
             sync_pedida: None,
-            aviso_de_daemon: None,
+            daemon_notice: None,
             journal_rehusado: false,
         };
-        (estado, backend)
+        (state, backend)
     }
 
     /// The slot with the focus. There is always one: if the role points to a
     /// slot that no longer exists, it falls back to the first one there is.
-    fn activo(&self) -> u32 {
+    fn active(&self) -> u32 {
         let preferido = self.roles.get(RoleId::Active).map(|SlotId(id)| id);
         preferido
-            .filter(|id| self.huecos.contains_key(id))
-            .or_else(|| {
-                self.ultimo_listado
-                    .filter(|id| self.huecos.contains_key(id))
-            })
-            .or_else(|| self.huecos.keys().copied().next())
+            .filter(|id| self.slots.contains_key(id))
+            .or_else(|| self.last_listing.filter(|id| self.slots.contains_key(id)))
+            .or_else(|| self.slots.keys().copied().next())
             .unwrap_or(1)
     }
 
     /// The slot with the FOCUS, whatever type it is.
     ///
-    /// Not the same as [`Self::activo`], and confusing them was a bug: that
+    /// Not the same as [`Self::active`], and confusing them was a bug: that
     /// one answers "the LISTING commands act on" and skips whatever is not a
     /// listing, which is exactly what is needed for `F5` to copy something
     /// while the sidebar has the focus. This one answers where the keyboard
     /// is, which is what decides who receives a key and which slot is
     /// painted focused.
-    fn enfocado(&self) -> u32 {
+    fn focused(&self) -> u32 {
         self.roles
             .get(RoleId::Active)
-            .map_or_else(|| self.activo(), |SlotId(id)| id)
+            .map_or_else(|| self.active(), |SlotId(id)| id)
     }
 
     /// The ACTIVE slot, which always exists.
     ///
-    /// The invariant (rule 6): `huecos` is seeded from `arbol.slot_ids()` —
-    /// in `Estado::nuevo` and in `aplicar_disposicion`, the only two places
+    /// The invariant (rule 6): `slots` is seeded from `tree.slot_ids()` —
+    /// in `State::new` and in `apply_layout`, the only two places
     /// that touch it — and `validate` rejects a tree with no `browser`, so
-    /// there is at least one. `activo()` comes from `Roles`, and
+    /// there is at least one. `active()` comes from `Roles`, and
     /// `reconcilia_roles` runs after every layout change leaving them pointing
     /// at slots that exist.
     ///
     /// The invariant was FALSE until this wave: it was seeded from
-    /// `reparto.placements`, which does not include hidden slots, so choosing
+    /// `split.placements`, which does not include hidden slots, so choosing
     /// a layout that places no listing emptied the map and the next key
     /// panicked inside the actor's task. It is pinned down in
     /// `una_disposicion_que_esconde_el_listado_deja_el_hueco_vivo`.
-    fn hueco(&self) -> &Hueco {
-        let id = self.activo();
-        self.huecos.get(&id).expect("the active slot exists")
+    fn slot(&self) -> &Slot {
+        let id = self.active();
+        self.slots.get(&id).expect("the active slot exists")
     }
 
-    /// The active slot, mutable. Same invariant as [`Self::hueco`].
-    fn hueco_mut(&mut self) -> &mut Hueco {
-        let id = self.activo();
-        self.huecos.get_mut(&id).expect("the active slot exists")
+    /// The active slot, mutable. Same invariant as [`Self::slot`].
+    fn slot_mut(&mut self) -> &mut Slot {
+        let id = self.active();
+        self.slots.get_mut(&id).expect("the active slot exists")
     }
 
     /// Leaves the roles pointing at slots that EXIST and are VISIBLE.
@@ -3571,26 +3563,26 @@ impl Estado {
         // is what it used to do — turned Tab into a switch between two
         // panes: it fell onto the sidebar or the processes panel and bounced
         // back on its own before anyone saw it.
-        let foco = self.roles.get(RoleId::Active).map(|SlotId(id)| id);
-        let sirve = foco.is_some_and(|id| {
+        let focus = self.roles.get(RoleId::Active).map(|SlotId(id)| id);
+        let serves = focus.is_some_and(|id| {
             !self.oculto(id)
-                && self.reparto.placements.iter().any(|(s, _)| s.0 == id)
-                && kind_de(&self.arbol, SlotId(id))
+                && self.split.placements.iter().any(|(s, _)| s.0 == id)
+                && kind_de(&self.tree, SlotId(id))
                     .and_then(|k| self.kinds.get(&k).map(|d| d.focusable))
                     .unwrap_or(false)
         });
-        if !sirve {
-            self.roles.set(RoleId::Active, SlotId(self.activo()));
+        if !serves {
+            self.roles.set(RoleId::Active, SlotId(self.active()));
         }
-        let foco = SlotId(self.enfocado());
+        let focus = SlotId(self.focused());
         self.roles
-            .reconcile(&self.arbol, &self.reparto, &self.kinds, foco);
+            .reconcile(&self.tree, &self.split, &self.kinds, focus);
         // Focus on a LISTING is remembered: it is where commands and the tree
         // return to while the focus is on another pane.
         if let Some(SlotId(id)) = self.roles.get(RoleId::Active)
-            && self.huecos.contains_key(&id)
+            && self.slots.contains_key(&id)
         {
-            self.ultimo_listado = Some(id);
+            self.last_listing = Some(id);
         }
     }
 
@@ -3600,7 +3592,7 @@ impl Estado {
     /// not request listings nor project rows: what is not seen is not
     /// fetched.
     fn oculto(&self, id: u32) -> bool {
-        self.reparto.hidden.contains(&SlotId(id))
+        self.split.hidden.contains(&SlotId(id))
     }
 
     /// Requests the listing of the slots that are VISIBLE and have not
@@ -3610,37 +3602,33 @@ impl Estado {
     /// when the layout brings it into view it has to be requested THEN.
     /// Nobody was doing it: a `browser` hidden on startup that appeared when
     /// the window was enlarged stayed in `Loading` forever, with zero rows,
-    /// and after a layout change its `Hueco` did not even exist, so
+    /// and after a layout change its `Slot` did not even exist, so
     /// `snapshot()` fell through to the default arm and painted it as
     /// `Unsupported { kind_name: "browser" }`.
     ///
     /// Idempotent by design: it only wakes up what is in `Loading` WITHOUT a
     /// request in flight, so calling it on every layout change duplicates
     /// nothing.
-    fn despertar_visibles(
-        &mut self,
-        backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
-    ) {
+    fn despertar_visible(&mut self, backend: &Arc<dyn HostBackend>, buzon: &mpsc::Sender<Message>) {
         let dormidos: Vec<u32> = self
-            .huecos
+            .slots
             .iter()
             .filter(|(id, h)| {
                 !self.oculto(**id)
-                    && h.en_vuelo.is_none()
-                    && matches!(h.estado, SlotState::Loading { .. })
+                    && h.in_flight.is_none()
+                    && matches!(h.state, SlotState::Loading { .. })
             })
             .map(|(id, _)| *id)
             .collect();
         for id in dormidos {
-            let dir = self.huecos[&id].pane.dir().clone();
+            let dir = self.slots[&id].pane.dir().clone();
             self.token += 1;
             let token = RequestToken(self.token);
-            if let Some(h) = self.huecos.get_mut(&id) {
-                h.en_vuelo = Some(token);
+            if let Some(h) = self.slots.get_mut(&id) {
+                h.in_flight = Some(token);
                 h.drenando = Some(token);
             }
-            self.pedir_listado(id, &dir, token, backend, buzon);
+            self.request_listing(id, &dir, token, backend, buzon);
         }
     }
 
@@ -3650,14 +3638,14 @@ impl Estado {
     /// The rest arrives through the SAME mailbox as everything else, with its
     /// request's token: a batch from an abandoned navigation is discarded
     /// just like its first page was.
-    async fn primera_pagina(
-        listado: Result<(norte_client::EntryStream, Option<u64>), Error>,
+    async fn first_page(
+        listing: Result<(norte_client::EntryStream, Option<u64>), Error>,
         slot: u32,
         token: RequestToken,
-        buzon: mpsc::Sender<Mensaje>,
+        buzon: mpsc::Sender<Message>,
     ) -> Result<(Vec<Entry>, Option<u64>), Error> {
         use futures::StreamExt as _;
-        let (mut stream, omitidas) = listado?;
+        let (mut stream, skipped) = listing?;
         let mut primera = Vec::with_capacity(FIRST_PAGE);
         let mut agotado = false;
         while primera.len() < FIRST_PAGE {
@@ -3682,18 +3670,18 @@ impl Estado {
         tokio::spawn(async move {
             let mut lote = Vec::with_capacity(FILL_BATCH);
             if !agotado {
-                while let Some(entrada) = stream.next().await {
-                    let Ok(entrada) = entrada else {
+                while let Some(entry) = stream.next().await {
+                    let Ok(entry) = entry else {
                         // The rest was cut off. What has already been painted
                         // is still valid; staying quiet about it is better
                         // than throwing away the whole listing.
                         break;
                     };
-                    lote.push(entrada);
+                    lote.push(entry);
                     if lote.len() >= FILL_BATCH {
                         let batch = std::mem::take(&mut lote);
                         if buzon
-                            .send(Mensaje::MasEntradas(Box::new((token, slot, batch, false))))
+                            .send(Message::MoreEntries(Box::new((token, slot, batch, false))))
                             .await
                             .is_err()
                         {
@@ -3704,10 +3692,10 @@ impl Estado {
                 }
             }
             let _ = buzon
-                .send(Mensaje::MasEntradas(Box::new((token, slot, lote, true))))
+                .send(Message::MoreEntries(Box::new((token, slot, lote, true))))
                 .await;
         });
-        Ok((primera, omitidas))
+        Ok((primera, skipped))
     }
 
     /// The initial listing of each VISIBLE slot, the only one that is awaited
@@ -3716,65 +3704,65 @@ impl Estado {
     ///
     /// A hidden slot is not listed: what is not seen is not fetched, and as
     /// soon as the layout brings it into view it will be requested then.
-    async fn listar_inicial(
+    async fn list_inicial(
         &mut self,
         backend_arc: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
         let backend = backend_arc.as_ref();
-        let visibles: Vec<u32> = self
-            .huecos
+        let visible: Vec<u32> = self
+            .slots
             .keys()
             .copied()
             .filter(|id| !self.oculto(*id))
             .collect();
-        for id in visibles {
-            let dir = self.huecos[&id].pane.dir().clone();
+        for id in visible {
+            let dir = self.slots[&id].pane.dir().clone();
             self.token += 1;
             let token = RequestToken(self.token);
-            if let Some(h) = self.huecos.get_mut(&id) {
-                h.en_vuelo = Some(token);
+            if let Some(h) = self.slots.get_mut(&id) {
+                h.in_flight = Some(token);
                 h.drenando = Some(token);
             }
-            self.pedir_catalogo(&dir, backend_arc, buzon);
+            self.request_catalog(&dir, backend_arc, buzon);
             let stream = backend.list(dir.clone(), self.attrs_de(&dir)).await;
-            let res = Self::primera_pagina(stream, id, token, buzon.clone()).await;
-            self.aterriza_en(id, dir, res);
+            let res = Self::first_page(stream, id, token, buzon.clone()).await;
+            self.lands_on(id, dir, res);
             // The footer's free space (spec 2026-09-10): also on startup,
-            // which does not go through `aterrizar_listado`. Without this the
+            // which does not go through `land_listing`. Without this the
             // window opened with no "free" figure until the first navigation.
-            self.pedir_volumenes_de_pie(backend_arc, buzon);
+            self.request_footer_volumes(backend_arc, buzon);
             // The same thing a navigation's landing does, and that this path
             // was not doing: a slot's FIRST directory was left without
             // capabilities until the reader navigated somewhere else. Meaning
             // the window that had just opened inside a container offered
             // writes that container does not accept — and the destination's
             // folding was not recorded either (#268) while nobody moved.
-            self.pedir_capacidades(id, backend_arc, buzon);
+            self.request_capabilities(id, backend_arc, buzon);
         }
     }
 
     /// Applies a listing's result onto ITS slot. The order and the cursor are
     /// decided by `PaneState`, which is the one that knows what to do with
     /// the cursor's memory and with a pending focus.
-    fn aterriza_en(&mut self, id: u32, dir: VPath, res: Result<(Vec<Entry>, Option<u64>), Error>) {
+    fn lands_on(&mut self, id: u32, dir: VPath, res: Result<(Vec<Entry>, Option<u64>), Error>) {
         // #108: `[ui.columns]`'s order is PER SCHEME, so it is reapplied when
         // the slot changes scheme — not on every `cd`, which is what the TUI
         // does. Here the SESSION restores the order, and reapplying it on the
         // first landing would erase it before it was ever seen.
-        let cambia_esquema = self
-            .huecos
+        let changes_scheme = self
+            .slots
             .get(&id)
-            .is_some_and(|h| h.esquema_del_orden != dir.scheme());
-        let orden = cambia_esquema.then(|| self.columnas.sort_for(dir.scheme()));
-        let Some(hueco) = self.huecos.get_mut(&id) else {
+            .is_some_and(|h| h.order_scheme != dir.scheme());
+        let orden = changes_scheme.then(|| self.columns.sort_for(dir.scheme()));
+        let Some(hueco) = self.slots.get_mut(&id) else {
             return;
         };
-        if cambia_esquema {
-            dir.scheme().clone_into(&mut hueco.esquema_del_orden);
+        if changes_scheme {
+            dir.scheme().clone_into(&mut hueco.order_scheme);
         }
-        hueco.en_vuelo = None;
-        hueco.dir_pedido = None;
+        hueco.in_flight = None;
+        hueco.dir_requested = None;
         // The listing is a DIFFERENT one: what was probed before says nothing
         // about these entries, which are born lazy all over again. Without
         // this clearing, returning to an already-visited directory left the
@@ -3785,9 +3773,9 @@ impl Estado {
         // And whatever is in flight is no longer valid: it is marked so its
         // response gets discarded instead of sticking to another directory.
         hueco
-            .cancelar_sondeo
+            .cancel_probe
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        hueco.cancelar_sondeo = std::sync::Arc::default();
+        hueco.cancel_probe = std::sync::Arc::default();
         hueco.sondeando = false;
         // And the same with what the plugins said: another directory's path
         // would not match, but the memory of "already requested" would, and
@@ -3795,42 +3783,42 @@ impl Estado {
         hueco.olvidar_adornos();
         hueco.adornando = false;
         match res {
-            Ok((entradas, omitidas)) => {
+            Ok((entries, skipped)) => {
                 if let Some(spec) = orden {
                     hueco.pane.set_sort(spec);
                 }
-                hueco.pane.set_listing(dir, entradas);
+                hueco.pane.set_listing(dir, entries);
                 // A refresh keeps the selection; a `cd` has none to keep and
                 // arrives with an empty list. What the operation took away is
                 // not marked again.
-                let marcas = std::mem::take(&mut hueco.marcas_a_restaurar);
-                hueco.pane.restore_marks(&marcas);
+                let marks = std::mem::take(&mut hueco.marks_to_restore);
+                hueco.pane.restore_marks(&marks);
                 // And the cursor the session left, also AFTER `set_listing`:
                 // before that there are no rows and row 12 would be row 0.
                 // `set_cursor` clamps it if the directory has fewer entries
                 // today than it did then.
-                if let Some(fila) = hueco.cursor_a_restaurar.take() {
-                    hueco.pane.set_cursor(fila);
+                if let Some(row) = hueco.cursor_to_restore.take() {
+                    hueco.pane.set_cursor(row);
                 }
                 // AFTER `set_listing`, which clears it: it is data for THIS
                 // listing, and carrying over the previous one's would mean
                 // saying entries are missing from a directory where they were
                 // missing from a different one.
-                hueco.pane.set_skipped(omitidas);
-                hueco.primera_visible = 0;
-                hueco.estado = SlotState::Ready;
+                hueco.pane.set_skipped(skipped);
+                hueco.first_visible = 0;
+                hueco.state = SlotState::Ready;
             }
             Err(e) => {
                 // With no stream there is no drain that will answer, so
                 // whoever raised the flag lowers it.
                 hueco.drenando = None;
                 hueco.pane.set_listing(dir, Vec::new());
-                hueco.marcas_a_restaurar.clear();
+                hueco.marks_to_restore.clear();
                 // A failed listing CONSUMES the saved cursor: if it stayed
                 // pending, it would land on the next listing that arrives,
                 // which may be from somewhere else.
-                hueco.cursor_a_restaurar = None;
-                hueco.estado = SlotState::Error {
+                hueco.cursor_to_restore = None;
+                hueco.state = SlotState::Error {
                     reason_key: norte_frontend::error::error_key(&e).to_owned(),
                     // WHICH one is asking for the password. Without this, a
                     // startup with two remote panes said "a secret is
@@ -3854,7 +3842,7 @@ impl Estado {
     ///
     /// What TAKES TIME is not done here. A navigation leaves the request in
     /// flight and returns; its response comes back to the actor as one more
-    /// message and is applied in [`Estado::aterriza`]. That is why the cursor
+    /// message and is applied in [`State::aterriza`]. That is why the cursor
     /// keeps responding while a dead NFS is thinking: the only writer is not
     /// waiting on anyone.
     #[expect(
@@ -3863,24 +3851,24 @@ impl Estado {
                   like `ejecutar_pendiente`. Splitting it in half would only move \
                   the boundary to an arbitrary place"
     )]
-    fn aplicar(
+    fn apply(
         &mut self,
-        accion: &UiAction,
+        action: &UiAction,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        match accion {
+        match action {
             UiAction::MoveCursor { slot_id, delta } => self.mover_cursor(*slot_id, *delta),
             UiAction::SelectRow {
                 slot_id,
                 key,
                 generation,
-            } => self.poner_cursor(*slot_id, *key, *generation),
+            } => self.set_cursor(*slot_id, *key, *generation),
             UiAction::ToggleMark {
                 slot_id,
                 key,
                 generation,
-            } => self.marcar(*slot_id, *key, *generation),
+            } => self.mark(*slot_id, *key, *generation),
             UiAction::SetVisibleRange {
                 slot_id,
                 first,
@@ -3891,27 +3879,27 @@ impl Estado {
                 // rows are visible is not acting on the listing, it is saying
                 // where the user is looking. The wheel over the pane next to
                 // it moves THAT pane and steals nobody's focus.
-                if !self.huecos.contains_key(&slot_id) || self.oculto(slot_id) {
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                if !self.slots.contains_key(&slot_id) || self.oculto(slot_id) {
+                    return (Self::stale(StaleAction::Generation), Vec::new());
                 }
-                let tope = count.min(u32::try_from(MAX_ROWS_PER_BATCH).unwrap_or(u32::MAX));
-                if let Some(h) = self.huecos.get_mut(&slot_id) {
-                    h.primera_visible = first;
-                    h.visibles = tope;
+                let cap = count.min(u32::try_from(MAX_ROWS_PER_BATCH).unwrap_or(u32::MAX));
+                if let Some(h) = self.slots.get_mut(&slot_id) {
+                    h.first_visible = first;
+                    h.visible = cap;
                 }
                 // Scroll = new rows coming into view, and possibly without a
                 // size yet: probing goes with the window, not with the
                 // cursor.
                 self.sondear(slot_id, backend, buzon);
                 self.adornar(slot_id, backend, buzon);
-                (self.aplicada(), vec![self.parche_filas_de(slot_id)])
+                (self.applied(), vec![self.patch_rows_of(slot_id)])
             }
-            UiAction::SortBy { slot_id, column } => self.ordenar_por(*slot_id, column),
+            UiAction::SortBy { slot_id, column } => self.sort_by(*slot_id, column),
             UiAction::ResizeColumn {
                 slot_id,
                 column,
                 cells,
-            } => self.redimensionar_columna(*slot_id, column, *cells, buzon),
+            } => self.resize_column(*slot_id, column, *cells, buzon),
             UiAction::FocusSlot { slot_id } => {
                 let slot_id = *slot_id;
                 // Focusing something not visible, or that does not accept
@@ -3922,8 +3910,8 @@ impl Estado {
                 // on the processes panel or on the places sidebar did not
                 // focus them — only Tab could —, and the renderer sends
                 // exactly this action on a press.
-                if !self.reparto.focus_order.contains(&SlotId(slot_id)) || self.oculto(slot_id) {
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                if !self.split.focus_order.contains(&SlotId(slot_id)) || self.oculto(slot_id) {
+                    return (Self::stale(StaleAction::Generation), Vec::new());
                 }
                 self.roles.set(RoleId::Active, SlotId(slot_id));
                 self.reconcilia_roles();
@@ -3932,8 +3920,8 @@ impl Estado {
                 // screenshot cost every row of every listing on every Tab —
                 // the same waste the bridge caps for the cursor (decision
                 // D7).
-                let cambio = ViewChange::Layout(self.disposicion());
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                let change = ViewChange::Layout(self.layout());
+                (self.applied(), vec![self.parche(vec![change])])
             }
             UiAction::MarkRange {
                 slot_id,
@@ -3949,165 +3937,155 @@ impl Estado {
                 // listing, including rows the renderer never received. What
                 // gets marked is a delete's input.
                 let (Some(a), Some(b)) = (
-                    self.fila_de(slot_id, from, generation),
-                    self.fila_de(slot_id, to, generation),
+                    self.row_of(slot_id, from, generation),
+                    self.row_of(slot_id, to, generation),
                 ) else {
-                    return (Self::obsoleta(StaleAction::Generation), Vec::new());
+                    return (Self::stale(StaleAction::Generation), Vec::new());
                 };
-                self.hueco_mut().pane.mark_range(a, b);
-                (self.aplicada(), vec![self.parche_filas()])
+                self.slot_mut().pane.mark_range(a, b);
+                (self.applied(), vec![self.parche_rows()])
             }
             UiAction::Activate { .. }
             | UiAction::Parent { .. }
             | UiAction::BreadcrumbActivate { .. }
-            | UiAction::History { .. } => self.navegacion(accion, backend, buzon),
+            | UiAction::History { .. } => self.navigation(action, backend, buzon),
             UiAction::SetViewport { width, height } => {
                 self.viewport = (*width, *height);
-                self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
+                self.split = resolve(rect(self.viewport), &self.tree, &self.kinds);
                 // The target cannot point at something not visible: a copy
                 // that lands on a hidden pane is a copy the user will not see
                 // arrive.
                 self.reconcilia_roles();
                 // Enlarging the window brings slots out of `hidden`, and a
                 // slot that appears with no listing stays loading forever.
-                self.despertar_visibles(backend, buzon);
-                self.responde_con_foto()
+                self.despertar_visible(backend, buzon);
+                self.responds_with_snapshot()
             }
             UiAction::SetColorScheme { dark } => {
                 // Same thing, it is nothing: the renderer sends it on startup
                 // and on every change, and repainting every row for a message
                 // that changes nothing is work for nothing.
-                if self.esquema_oscuro == *dark {
-                    return (self.aplicada(), Vec::new());
+                if self.scheme_dark == *dark {
+                    return (self.applied(), Vec::new());
                 }
-                self.esquema_oscuro = *dark;
+                self.scheme_dark = *dark;
                 // Only the ROWS: the variant's CSS variables are plugged in
                 // by the renderer on its own, synchronously, to avoid a
                 // flicker. What the host has to redo is what is baked into
                 // the row (bridge 66).
-                (self.aplicada(), self.parches_de_filas_de_todos())
+                (self.applied(), self.patches_of_rows_from_all())
             }
-            UiAction::Key(k) => self.tecla(k, backend, buzon),
-            UiAction::SetViewerRows { rows } => self.fijar_filas_del_visor(*rows),
+            UiAction::Key(k) => self.key(k, backend, buzon),
+            UiAction::SetViewerRows { rows } => self.pin_viewer_rows(*rows),
             UiAction::SetViewerCols { cols } => {
-                self.visor_columnas = Some((*cols).clamp(1, u32::from(u16::MAX)));
-                (self.aplicada(), Vec::new())
+                self.visor_columns = Some((*cols).clamp(1, u32::from(u16::MAX)));
+                (self.applied(), Vec::new())
             }
             UiAction::AiRenameDecide { approve } => {
-                self.decidir_revision_ia(*approve, backend, buzon)
+                self.decide_revision_ia(*approve, backend, buzon)
             }
             UiAction::OrganizeDecide { approve } => {
-                self.decidir_revision_organizar(*approve, backend, buzon)
+                self.decide_revision_organize(*approve, backend, buzon)
             }
-            UiAction::OrganizeScroll { down } => self.recorrer_organizar(*down),
-            UiAction::HandoffFailed { no_terminal } => self.relevo_fallido(*no_terminal),
-            UiAction::Resync => self.responde_con_foto(),
-            UiAction::RequestQuit => self.pedir_salir(),
-            UiAction::MenuOpen { menu } => self.desplegar_menu(*menu),
+            UiAction::OrganizeScroll { down } => self.walk_organize(*down),
+            UiAction::HandoffFailed { no_terminal } => self.handoff_fallido(*no_terminal),
+            UiAction::Resync => self.responds_with_snapshot(),
+            UiAction::RequestQuit => self.request_exit(),
+            UiAction::MenuOpen { menu } => self.expand_menu(*menu),
             UiAction::MenuPointRow { row } => self.apuntar_en_menu(*row),
-            UiAction::MenuActivateRow { row } => self.activar_del_menu(*row, backend, buzon),
-            UiAction::MenuClose => self.cerrar_menu(),
-            UiAction::MenuToggle => self.alternar_menu(),
-            UiAction::WizardOpen => self.abrir_asistente(),
-            UiAction::SplashOpen => self.abrir_splash(),
-            UiAction::SplashClose => (self.aplicada(), self.cerrar_splash()),
+            UiAction::MenuActivateRow { row } => self.activate_from_menu(*row, backend, buzon),
+            UiAction::MenuClose => self.close_menu(),
+            UiAction::MenuToggle => self.toggle_menu(),
+            UiAction::WizardOpen => self.open_wizard(),
+            UiAction::SplashOpen => self.open_splash(),
+            UiAction::SplashClose => (self.applied(), self.close_splash()),
             UiAction::SplashActivateRow { number } => {
-                self.activar_fila_de_splash(*number, backend, buzon)
+                self.activate_splash_row(*number, backend, buzon)
             }
-            UiAction::WizardActivateRow { row } => {
-                self.activar_fila_de_asistente(*row, backend, buzon)
-            }
-            UiAction::PanelBarActivate { button } => {
-                self.pulsar_barra_de_paneles(*button, backend, buzon)
-            }
-            UiAction::StatusItemActivate { id } => {
-                self.pulsar_elemento_de_estado(id, backend, buzon)
-            }
-            UiAction::LayoutButtonActivate { id } => {
-                self.pulsar_boton_de_disposicion(id, backend, buzon)
-            }
+            UiAction::WizardActivateRow { row } => self.activate_wizard_row(*row, backend, buzon),
+            UiAction::PanelBarActivate { button } => self.click_pane_bar(*button, backend, buzon),
+            UiAction::StatusItemActivate { id } => self.click_status_item(id, backend, buzon),
+            UiAction::LayoutButtonActivate { id } => self.click_layout_button(id, backend, buzon),
             UiAction::TabAction { slot_id, verb } => {
-                self.boton_de_pestana(*slot_id, *verb, backend, buzon)
+                self.tab_button(*slot_id, *verb, backend, buzon)
             }
             UiAction::MoveSlot {
                 slot_id,
                 target,
                 zone,
-            } => self.mover_hueco(*slot_id, *target, *zone, backend, buzon),
+            } => self.mover_slot(*slot_id, *target, *zone, backend, buzon),
             UiAction::ResizeSlot { slot_id, cells } => {
-                self.arrastrar_borde(*slot_id, *cells, backend, buzon)
+                self.drag_edge(*slot_id, *cells, backend, buzon)
             }
             UiAction::ProfileActivateRow { row, generation } => {
-                self.activar_perfil_de_fila(*row, *generation, backend, buzon)
+                self.activate_profile_from_row(*row, *generation, backend, buzon)
             }
             UiAction::Dialog { id, choice, secret } => {
-                self.responder_dialogo(*id, choice, secret.as_deref(), backend, buzon)
+                self.responder_dialog(*id, choice, secret.as_deref(), backend, buzon)
             }
             UiAction::RefreshSlot { slot_id } => {
-                let cambios = self.refrescar(*slot_id, backend, buzon);
-                if cambios.is_empty() {
+                let changes = self.refresh(*slot_id, backend, buzon);
+                if changes.is_empty() {
                     // It already had something in flight: what is about to
                     // land is newer than this click.
-                    (self.aplicada(), Vec::new())
+                    (self.applied(), Vec::new())
                 } else {
-                    (self.aplicada(), vec![self.parche(cambios)])
+                    (self.applied(), vec![self.parche(changes)])
                 }
             }
-            UiAction::LogSetLevel { level } => self.nivel_de_registro(level, backend, buzon),
-            UiAction::LogSetFilter { filter } => self.filtro_de_registro(filter),
-            UiAction::LogScroll { delta } => self.desplazar_registro(*delta),
+            UiAction::LogSetLevel { level } => self.log_level(level, backend, buzon),
+            UiAction::LogSetFilter { filter } => self.log_filter(filter),
+            UiAction::LogScroll { delta } => self.scroll_log(*delta),
             UiAction::PanelClick { slot_id, row, col } => {
                 // The SAME action for both, and it branches on the slot's
                 // kind: the renderer sends a cell and does not know — nor
                 // does it need to — whether there is a guest or a treemap
                 // behind it. What changes is who resolves it and against
                 // which frame.
-                if kind_de(&self.arbol, SlotId(*slot_id))
+                if kind_de(&self.tree, SlotId(*slot_id))
                     .is_some_and(|k| k.as_str() == diskmap::KIND)
                 {
-                    self.clic_en_mapa(*slot_id, *row, *col, backend, buzon)
+                    self.click_on_map(*slot_id, *row, *col, backend, buzon)
                 } else {
-                    self.clic_en_panel(*slot_id, *row, *col, backend, buzon)
+                    self.click_on_pane(*slot_id, *row, *col, backend, buzon)
                 }
             }
-            UiAction::PreviewScroll { slot_id, delta } => self.desplazar_preview(*slot_id, *delta),
-            UiAction::ViewerScroll { lines, cols } => self.desplazar_visor(*lines, *cols),
-            UiAction::LogFollow => self.seguir_registro(),
-            UiAction::LogCycleSource => self.fuente_de_registro(),
-            UiAction::LogSetVisibleRange { rows } => self.filas_de_registro(*rows),
-            UiAction::CancelTask { task_id } => self.cancelar(*task_id),
+            UiAction::PreviewScroll { slot_id, delta } => self.scroll_preview(*slot_id, *delta),
+            UiAction::ViewerScroll { lines, cols } => self.scroll_visor(*lines, *cols),
+            UiAction::LogFollow => self.follow_log(),
+            UiAction::LogCycleSource => self.log_source(),
+            UiAction::LogSetVisibleRange { rows } => self.log_rows(*rows),
+            UiAction::CancelTask { task_id } => self.cancel(*task_id),
             UiAction::CompareSelectRow { .. }
             | UiAction::CompareActivateRow { .. }
             | UiAction::CompareToggleFilter { .. }
             | UiAction::CompareSetVisibleRange { .. } => {
-                self.accion_de_comparacion(accion, backend, buzon)
+                self.comparison_action(action, backend, buzon)
             }
             // A dialog with a text field arrives with the task that brought
             // it (create directory, rename). Saying so is more honest than
             // accepting text nobody is going to read.
-            UiAction::DialogInput { id, text } => self.escribir_en_dialogo(*id, text),
+            UiAction::DialogInput { id, text } => self.write_in_dialog(*id, text),
             // And a FORM dialog (bridge 91): it says WHICH of its fields was
             // touched, which is what the single-field one does not need to
             // say.
             UiAction::DialogField { id, field, value } => {
-                self.tocar_campo_de_dialogo(*id, field, value)
+                self.touch_dialog_field(*id, field, value)
             }
-            UiAction::DirectoryPicked { path } => {
-                self.destino_elegido(path.clone(), backend, buzon)
-            }
+            UiAction::DirectoryPicked { path } => self.dest_chosen(path.clone(), backend, buzon),
             UiAction::ProgramFinished {
                 title_key,
                 command,
                 output,
                 truncated,
                 failed,
-            } => self.programa_terminado(title_key, command, output, *truncated, *failed),
+            } => self.program_finished(title_key, command, output, *truncated, *failed),
             UiAction::FilesDropped { paths } => self.soltados(paths, backend, buzon),
             UiAction::WindowFocus { focused } => {
                 self.enfocada = *focused;
-                (self.aplicada(), Vec::new())
+                (self.applied(), Vec::new())
             }
-            otra => self.fila_por_indice(otra, backend, buzon),
+            other => self.row_by_index(other, backend, buzon),
         }
     }
 
@@ -4120,48 +4098,46 @@ impl Estado {
     /// carry a generation; the rest cannot change without a user gesture, and
     /// what all of them do is REJECT an index out of range instead of
     /// clamping it.
-    fn fila_por_indice(
+    fn row_by_index(
         &mut self,
-        accion: &UiAction,
+        action: &UiAction,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        match accion {
-            UiAction::HelpSelectTopic { row } => self.elegir_pagina(*row, backend, buzon),
-            UiAction::SettingsSelectRow { row } => self.elegir_ajuste(*row),
-            UiAction::SettingsActivate { row } => self.activar_ajuste_por_raton(*row, buzon),
-            UiAction::SettingsQuery { text } => self.buscar_ajuste(text),
-            UiAction::SettingsJumpSection { section } => self.saltar_a_seccion(section),
-            UiAction::SettingsReset { row } => self.restablecer_ajuste(*row, buzon),
-            UiAction::SettingsSet { id, value } => self.poner_ajuste(id, value, buzon),
-            UiAction::ExtensionSelectRow { row } => self.elegir_extension(*row, backend, buzon),
+        match action {
+            UiAction::HelpSelectTopic { row } => self.choose_page(*row, backend, buzon),
+            UiAction::SettingsSelectRow { row } => self.choose_setting(*row),
+            UiAction::SettingsActivate { row } => self.activate_setting_by_mouse(*row, buzon),
+            UiAction::SettingsQuery { text } => self.search_setting(text),
+            UiAction::SettingsJumpSection { section } => self.jump_to_section(section),
+            UiAction::SettingsReset { row } => self.reset_setting(*row, buzon),
+            UiAction::SettingsSet { id, value } => self.set_setting(id, value, buzon),
+            UiAction::ExtensionSelectRow { row } => self.choose_extension(*row, backend, buzon),
             UiAction::ExtensionGovern { row, id, change } => {
-                self.gobernar_por_raton(*row, id, (*change).into(), backend, buzon)
+                self.govern_by_mouse(*row, id, (*change).into(), backend, buzon)
             }
-            UiAction::ExtensionHelp { row, id } => {
-                self.ayuda_de_extension(*row, id, backend, buzon)
-            }
-            UiAction::SelectTab { slot_id } => self.elegir_pestana(*slot_id, backend, buzon),
-            UiAction::AgentSelectRow { row, generation } => self.elegir_agente(*row, *generation),
+            UiAction::ExtensionHelp { row, id } => self.extension_help(*row, id, backend, buzon),
+            UiAction::SelectTab { slot_id } => self.choose_tab(*slot_id, backend, buzon),
+            UiAction::AgentSelectRow { row, generation } => self.choose_agent(*row, *generation),
             UiAction::PickerSelectRow { row, generation } => {
-                self.elegir_fila_del_selector(*row, *generation)
+                self.choose_row_from_selector(*row, *generation)
             }
             UiAction::PlaceActivateRow { row, generation } => {
-                self.activar_sitio(*row, *generation, backend, buzon)
+                self.activate_place(*row, *generation, backend, buzon)
             }
             UiAction::TreeActivateRow { row, generation } => {
-                self.tocar_rama(*row, *generation, true, backend, buzon)
+                self.touch_branch(*row, *generation, true, backend, buzon)
             }
             UiAction::TreeToggleRow { row, generation } => {
-                self.tocar_rama(*row, *generation, false, backend, buzon)
+                self.touch_branch(*row, *generation, false, backend, buzon)
             }
-            UiAction::LayoutActivateRow { row } => self.elegir_disposicion(*row, backend, buzon),
-            UiAction::SearchActivateRow { row } => self.ir_al_resultado(*row, backend, buzon),
-            UiAction::HelpActivate { index } => self.activar_en_ayuda(*index, backend, buzon),
-            // The rest was handled by `aplicar`; getting here would be an arm
+            UiAction::LayoutActivateRow { row } => self.choose_layout(*row, backend, buzon),
+            UiAction::SearchActivateRow { row } => self.go_to_result(*row, backend, buzon),
+            UiAction::HelpActivate { index } => self.activate_in_help(*index, backend, buzon),
+            // The rest was handled by `apply`; getting here would be an arm
             // it forgot, and answering `Applied` to something that was not
             // done is worse than saying it could not be done.
-            _ => (Self::obsoleta(StaleAction::Modal), Vec::new()),
+            _ => (Self::stale(StaleAction::Modal), Vec::new()),
         }
     }
 }

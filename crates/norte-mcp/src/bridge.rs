@@ -1735,7 +1735,7 @@ mod tests {
     /// anything— and in `sync_plan`, with the `on_unknown: copy` that is its
     /// default, an `Overwrite` per file.
     #[test]
-    fn criteria_vacia_es_error_y_no_el_default_del_wire() {
+    fn empty_criteria_is_error_not_wire_default() {
         let err = compare_criteria_arg(&json!({"criteria": []})).expect_err("empty list");
         assert!(err.contains("criteria"), "{err}");
         // Absent IS the wire default (size + date, no hash).
@@ -1754,7 +1754,7 @@ mod tests {
 
     /// The two schemas also say so in the contract the model reads.
     #[test]
-    fn los_esquemas_prohiben_la_lista_vacia_de_criteria() {
+    fn schemas_forbid_an_empty_criteria_list() {
         for def in [compare_tool_def(), sync_plan_tool_def()] {
             assert_eq!(
                 def["inputSchema"]["properties"]["criteria"]["minItems"],
@@ -1769,7 +1769,7 @@ mod tests {
     /// dropped batch leaves the Task `Completed` and the channel cleanly
     /// closed.
     #[test]
-    fn completo_exige_que_las_filas_cuadren_con_las_emitidas() {
+    fn complete_requires_rows_to_match_the_emitted_ones() {
         let completed = norte_proto::TaskState::Completed;
         assert!(stream_is_complete(false, Some(&completed), 7, 7));
         assert!(
@@ -1801,7 +1801,7 @@ mod tests {
     /// A plan's step total is the sum of the CLASSES; `irreversible` is
     /// orthogonal and `unmeasured_steps` a subset, so neither is summed.
     #[test]
-    fn el_total_de_pasos_suma_las_clases_y_solo_las_clases() {
+    fn the_total_steps_add_up_the_classes_and_only_the_classes() {
         let counts = methods::SyncCounts {
             create_dir: 1,
             copy: 2,
@@ -1821,7 +1821,7 @@ mod tests {
     /// payload: `None` is "was still alive when we stopped watching", not
     /// "ended".
     #[test]
-    fn el_estado_viaja_con_nombre_y_el_fallo_con_su_causa() {
+    fn the_status_travels_with_a_name_and_the_failure_with_its_cause() {
         assert_eq!(state_label(None), "running");
         assert_eq!(
             state_label(Some(&norte_proto::TaskState::Completed)),
@@ -1843,7 +1843,7 @@ mod tests {
     /// would come out `truncated: true` with an empty list, indistinguishable
     /// from a genuinely truncated tree.
     #[test]
-    fn el_limit_cero_es_error_y_el_ausente_es_el_default() {
+    fn zero_limit_is_error_and_absent_is_default() {
         assert!(stream_limit_arg(&json!({"limit": 0}), 500, 5000).is_err());
         assert_eq!(
             stream_limit_arg(&json!({}), 500, 5000).expect("absent"),
@@ -1858,7 +1858,7 @@ mod tests {
 
     /// The default tolerance is READ from the wire, not copied.
     #[test]
-    fn la_tolerancia_por_defecto_es_la_del_wire() {
+    fn the_default_tolerance_is_the_wires() {
         assert_eq!(
             default_mtime_tolerance_ms(),
             methods::SyncCompareOptions::default().mtime_tolerance_ms
@@ -1868,7 +1868,7 @@ mod tests {
     /// The guard cancels on drop, and does NOT cancel if it was disarmed
     /// (the normal path: the terminal was seen).
     #[test]
-    fn el_guard_cancela_al_abandonar_y_calla_si_se_desarma() {
+    fn the_guard_cancels_on_drop_and_stays_quiet_if_disarmed() {
         let token = CancellationToken::new();
         drop(CancelOnAbandon::new(
             norte_core::backend::TaskCanceller::Embedded(token.clone()),
@@ -1888,7 +1888,7 @@ mod tests {
     /// which is exactly the string that makes it retry, and retrying is what
     /// fills this cap.
     #[test]
-    fn el_error_de_plan_nombra_el_tope_en_vez_de_decir_internal() {
+    fn the_plan_error_names_the_cap_instead_of_saying_internal() {
         let text = map_plan_err(norte_proto::Error::LimitExceeded {
             limit: norte_proto::Error::LIMIT_RETAINED_SYNC_PLANS.to_owned(),
         });
@@ -1916,7 +1916,7 @@ mod tests {
 
     /// The ten tools, each with its own function, and none named `sync_apply`.
     #[test]
-    fn el_catalogo_de_tools_no_tiene_dos_convenciones() {
+    fn the_tools_catalog_does_not_have_two_conventions() {
         let Value::Array(defs) = tool_defs() else {
             panic!("tool_defs returns an array")
         };
@@ -1952,7 +1952,7 @@ mod tests {
 
     /// `compare` asks with the same names it answers with.
     #[test]
-    fn compare_pregunta_en_left_y_right_como_contesta() {
+    fn compare_asks_with_the_same_names_it_answers_with() {
         let def = compare_tool_def();
         assert_eq!(def["inputSchema"]["required"], json!(["left", "right"]));
     }

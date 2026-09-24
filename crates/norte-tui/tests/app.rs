@@ -27,7 +27,7 @@ fn pane_with(names: &[(&[u8], EntryKind)]) -> Pane {
 }
 
 #[test]
-fn sort_pone_dirs_primero_y_por_bytes() {
+fn sort_puts_dirs_first_and_by_bytes() {
     let dir = vp("file:///base");
     let mut entries = vec![
         entry(&dir, b"zeta.txt", EntryKind::File),
@@ -55,7 +55,7 @@ fn sort_pone_dirs_primero_y_por_bytes() {
 }
 
 #[test]
-fn cursor_navega_con_topes() {
+fn cursor_navigates_with_caps() {
     let mut p = pane_with(&[
         (b"a", EntryKind::File),
         (b"b", EntryKind::File),
@@ -75,7 +75,7 @@ fn cursor_navega_con_topes() {
 }
 
 #[test]
-fn cursor_en_pane_vacio_no_revienta() {
+fn cursor_in_empty_pane_does_not_crash() {
     let mut p = pane_with(&[]);
     p.move_down(1);
     p.move_up(1);
@@ -85,7 +85,7 @@ fn cursor_en_pane_vacio_no_revienta() {
 }
 
 #[test]
-fn selected_devuelve_la_entrada_bajo_el_cursor() {
+fn selected_returns_the_entry_under_the_cursor() {
     let mut p = pane_with(&[(b"a", EntryKind::File), (b"dir", EntryKind::Dir)]);
     // After sort: [dir, a].
     assert_eq!(
@@ -100,7 +100,7 @@ fn selected_devuelve_la_entrada_bajo_el_cursor() {
 }
 
 #[test]
-fn display_marca_toda_perdida_y_neutraliza_controles() {
+fn display_marks_everything_lost_and_neutralizes_controls() {
     // Clean UTF-8 name: identical and with no badge.
     let (text, hostile) = display_name(b"normal.txt");
     assert_eq!(text, "normal.txt");
@@ -111,9 +111,9 @@ fn display_marca_toda_perdida_y_neutraliza_controles() {
     for n in norte_testkit::corpus::hostile_names() {
         let (text, hostile) = display_name(&n.bytes);
         assert!(!text.is_empty(), "{}: display never empty", n.id);
-        let identico = text.as_bytes() == n.bytes.as_slice();
+        let identical = text.as_bytes() == n.bytes.as_slice();
         assert_eq!(
-            hostile, !identico,
+            hostile, !identical,
             "{}: badge exactly when the display differs from the real name",
             n.id
         );
@@ -126,7 +126,7 @@ fn display_marca_toda_perdida_y_neutraliza_controles() {
             "{}: no Cc or Cf-bidi in the display",
             n.id
         );
-        if !identico {
+        if !identical {
             assert!(
                 text.contains('\u{FFFD}'),
                 "{}: the loss is visible (spec §6: lossy marked)",
@@ -143,7 +143,7 @@ fn display_marca_toda_perdida_y_neutraliza_controles() {
 }
 
 #[test]
-fn sort_junta_las_variantes_de_normalizacion() {
+fn sort_groups_normalization_variants_together() {
     // spec §6.1: unicode_compare = nfc by default FOR SORTING (the bytes
     // are never mutated). NFC and NFD of the same name end up adjacent.
     let dir = vp("file:///base");
@@ -168,7 +168,7 @@ fn sort_junta_las_variantes_de_normalizacion() {
 }
 
 #[test]
-fn path_display_marca_paths_con_segmentos_hostiles() {
+fn path_display_flags_paths_with_hostile_segments() {
     use norte_tui::app::path_display;
     let clean = vp("file:///casa/docs");
     let (text, hostile) = path_display(&clean);
@@ -181,7 +181,7 @@ fn path_display_marca_paths_con_segmentos_hostiles() {
 }
 
 #[test]
-fn tab_alterna_el_foco_entre_los_dos_panes() {
+fn tab_toggles_focus_between_the_two_panes() {
     use norte_tui::app::App;
     let mut app = App::new(pane_with(&[]), pane_with(&[]));
     assert_eq!(app.focus(), 0);
@@ -197,7 +197,7 @@ fn tab_alterna_el_foco_entre_los_dos_panes() {
 /// not drag previews from the earlier one — a name-only hit from query B
 /// would paint query A's :line.
 #[test]
-fn begin_search_limpia_los_previews_anteriores() {
+fn begin_search_clears_previous_previews() {
     let mut p = pane_with(&[(b"a.rs", EntryKind::File)]);
     let root = vp("file:///casa");
     p.begin_search(root.clone());

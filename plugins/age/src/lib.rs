@@ -225,11 +225,11 @@ mod tests {
             ..Params::default()
         };
         assert_eq!(cell(3 * DAY, &solo), "◐");
-        let texto = Params {
+        let text = Params {
             format: Format::Text,
             ..Params::default()
         };
-        assert_eq!(cell(3 * DAY, &texto), "3d");
+        assert_eq!(cell(3 * DAY, &text), "3d");
     }
 
     #[test]

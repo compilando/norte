@@ -207,7 +207,7 @@ fn main() -> ExitCode {
     let state = match boot_result {
         Ok(boot) => {
             let mut cat =
-                norte_gui_tauri::catalog::catalogo(boot.host.instance(), boot.lang, &boot.theme);
+                norte_gui_tauri::catalog::catalog(boot.host.instance(), boot.lang, &boot.theme);
             cat.appearance = boot.appearance;
             cat.first_run = boot.first_run;
             cat.no_splash = boot.no_splash;
@@ -232,7 +232,7 @@ fn main() -> ExitCode {
     let result = tauri::Builder::default()
         .manage(state)
         .invoke_handler(handler())
-        .plugin(guardia_de_navegacion())
+        .plugin(navigation_guard())
         .setup(|app| {
             // Which binary this is, in the title: version and tree revision.
             // The webview does not need to know it and the title does not go
@@ -272,7 +272,7 @@ fn main() -> ExitCode {
                 let handle = app.handle().clone();
                 let apply_theme = move |name: &str| {
                     let state: tauri::State<'_, AppState> = handle.state();
-                    if state.bridge().is_ok_and(|b| b.cambiar_tema(name)) {
+                    if state.bridge().is_ok_and(|b| b.change_theme(name)) {
                         let _ = handle.emit(EVENT_CATALOG, ());
                     }
                 };
@@ -293,7 +293,7 @@ fn main() -> ExitCode {
                 };
                 tauri::async_runtime::spawn(norte_gui_tauri::nativo::bombear(
                     native_effects,
-                    bridge.host_compartido(),
+                    bridge.host_shared(),
                     apply_theme,
                     close,
                 ));
@@ -316,7 +316,7 @@ fn main() -> ExitCode {
 ///
 /// `tauri:` is the packaged bundle; `ipc:` is how the webview talks to this
 /// process. Nothing else.
-const ESQUEMAS_DE_PAGINA: &[&str] = &["tauri", "ipc"];
+const PAGE_SCHEMAS: &[&str] = &["tauri", "ipc"];
 
 /// The webview does NOT navigate outside its assets.
 ///
@@ -326,10 +326,10 @@ const ESQUEMAS_DE_PAGINA: &[&str] = &["tauri", "ipc"];
 /// INSIDE the application's frame: the window the user believes they are
 /// looking at is norte's. Tauri still rejects commands from a remote origin,
 /// so what this closes is IMPERSONATION, not IPC (ADR 0066, decision D11).
-fn guardia_de_navegacion<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
+fn navigation_guard<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
     tauri::plugin::Builder::new("norte-navegacion")
         .on_navigation(|_webview, url| {
-            let allowed = ESQUEMAS_DE_PAGINA.contains(&url.scheme());
+            let allowed = PAGE_SCHEMAS.contains(&url.scheme());
             if !allowed {
                 tracing::warn!(scheme = url.scheme(), "navigation rejected");
             }
@@ -339,7 +339,7 @@ fn guardia_de_navegacion<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
 }
 
 /// What to wait for on shutdown before closing the window anyway.
-const PLAZO_APAGADO: std::time::Duration = std::time::Duration::from_secs(2);
+const DEADLINE_OFF: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// The close is already confirmed: the next `CloseRequested` does not ask.
 ///
@@ -360,7 +360,7 @@ fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if let tauri::WindowEvent::Focused(focused) = event {
         let state: tauri::State<'_, AppState> = window.state();
         if let Ok(bridge) = state.bridge() {
-            let host = bridge.host_compartido();
+            let host = bridge.host_shared();
             let focused = *focused;
             tauri::async_runtime::spawn(async move {
                 let _ = host
@@ -378,7 +378,7 @@ fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
     if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
         let state: tauri::State<'_, AppState> = window.state();
         if let Ok(bridge) = state.bridge() {
-            let host = bridge.host_compartido();
+            let host = bridge.host_shared();
             // As text as-is, without `to_string_lossy`: a name that is not
             // UTF-8 is not converted with replacements, because that would
             // name ANOTHER file. It is dropped here and the host never gets
@@ -409,10 +409,10 @@ fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
         if !CONFIRMED.swap(false, std::sync::atomic::Ordering::SeqCst)
             && let Ok(bridge) = state.bridge()
         {
-            let host = bridge.host_compartido();
+            let host = bridge.host_shared();
             let ack = tauri::async_runtime::block_on(async {
                 tokio::time::timeout(
-                    PLAZO_APAGADO,
+                    DEADLINE_OFF,
                     host.dispatch(norte_ui_host::UiAction::RequestQuit),
                 )
                 .await
@@ -438,7 +438,7 @@ fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             // — and killing the process is exactly the path that guarantees
             // losing the session.
             let report = tauri::async_runtime::block_on(async {
-                tokio::time::timeout(PLAZO_APAGADO, bridge.host().shutdown()).await
+                tokio::time::timeout(DEADLINE_OFF, bridge.host().shutdown()).await
             });
             match report {
                 Ok(Ok(r)) if r.incomplete => {
@@ -447,7 +447,7 @@ fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => tracing::warn!(error = %e, "shutdown failed"),
                 Err(_) => tracing::warn!(
-                    "shutdown did not answer within {PLAZO_APAGADO:?}: the session may \
+                    "shutdown did not answer within {DEADLINE_OFF:?}: the session may \
                          have been left unwritten"
                 ),
             }

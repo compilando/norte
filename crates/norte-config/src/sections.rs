@@ -6,7 +6,7 @@
 //! `merge_*_layer`, the literal that builds the config, and the list of keys
 //! that warns when a profile requests it. That list had already forgotten
 //! one: `[log] format` in a profile was dropped with no warning. Here there
-//! are four, and the two that are easy to forget — `merge` and `declara`
+//! are four, and the two that are easy to forget — `merge` and `declares`
 //! (TODO(translation): review — the doc kept the Spanish name because it is
 //! the method's real identifier, a pub item this task must not rename) —
 //! destructure the schema section WITHOUT `..`: a new key that neither one
@@ -38,7 +38,7 @@ impl LogSettings {
     /// Does this layer declare any `[log]` key? This is what decides whether
     /// a layer that may not set it has to WARN that it is being ignored.
     #[must_use]
-    pub fn declara(layer: &LogSection) -> bool {
+    pub fn declares(layer: &LogSection) -> bool {
         let LogSection {
             dir,
             retain,
@@ -90,9 +90,9 @@ pub struct DaemonSettings {
 
 impl DaemonSettings {
     /// Does this layer declare any `[daemon]` key? See
-    /// [`LogSettings::declara`].
+    /// [`LogSettings::declares`].
     #[must_use]
-    pub fn declara(layer: &DaemonSection) -> bool {
+    pub fn declares(layer: &DaemonSection) -> bool {
         let DaemonSection { mode, socket } = layer;
         mode.is_some() || socket.is_some()
     }
@@ -137,9 +137,9 @@ pub struct ArchiveSettings {
 
 impl ArchiveSettings {
     /// Does this layer declare any `[archive]` key? See
-    /// [`LogSettings::declara`].
+    /// [`LogSettings::declares`].
     #[must_use]
-    pub fn declara(layer: &ArchiveSection) -> bool {
+    pub fn declares(layer: &ArchiveSection) -> bool {
         let ArchiveSection {
             max_entries,
             max_decompressed_bytes,

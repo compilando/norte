@@ -20,7 +20,7 @@ use crate::jobs::{DiskMapRun, InFlight};
 /// before is forgotten before asking for anything — the previous
 /// directory's map under the new title is the wrong answer for exactly as
 /// long as the measurement lasts.
-pub async fn lanzar(app: &mut App, backend: &Backend, work: &mut InFlight) {
+pub async fn launch(app: &mut App, backend: &Backend, work: &mut InFlight) {
     let Some(slot) = app.disk_map_slot() else {
         return; // the panel isn't open: nothing to measure
     };
@@ -45,7 +45,7 @@ pub async fn lanzar(app: &mut App, backend: &Backend, work: &mut InFlight) {
             let observer = task.observer();
             let mut progress = task.progress();
             if let Some(m) = app.panes.disk_map_mut(slot) {
-                m.midiendo(id);
+                m.measuring(id);
             }
             let b = backend.clone();
             let handle = tokio::spawn(async move {
@@ -121,7 +121,7 @@ pub fn harvest(
         Ok(r) => r,
         Err(e) => {
             if let Some(m) = app.panes.disk_map_mut(run.slot) {
-                m.fallo(crate::app::error_message(&e));
+                m.failure(crate::app::error_message(&e));
             }
             app.message = Some(crate::app::error_message(&e));
             return;
@@ -136,10 +136,10 @@ pub fn harvest(
         return;
     }
     let complete = state == norte_proto::TaskState::Completed;
-    map.aterrizar(report, complete);
+    map.land(report, complete);
     if !complete {
         // What's there is a fragment correct to look at NOW, with its
-        // notice up front. It isn't saved to the cache: `DiskMap::aterrizar`
+        // notice up front. It isn't saved to the cache: `DiskMap::land`
         // only declares the measurement done when complete, and the cache
         // only accepts what's finished.
         app.message = Some(t("msg-disk-map-partial"));

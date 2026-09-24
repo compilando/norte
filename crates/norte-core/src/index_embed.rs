@@ -116,7 +116,7 @@ pub(crate) struct Puntuado {
 
 impl Puntuado {
     /// The RESULT order: best first.
-    fn mejor_primero(&self, other: &Self) -> std::cmp::Ordering {
+    fn mejor_first(&self, other: &Self) -> std::cmp::Ordering {
         other
             .score
             .total_cmp(&self.score)
@@ -126,7 +126,7 @@ impl Puntuado {
 
 impl PartialEq for Puntuado {
     fn eq(&self, other: &Self) -> bool {
-        self.mejor_primero(other) == std::cmp::Ordering::Equal
+        self.mejor_first(other) == std::cmp::Ordering::Equal
     }
 }
 
@@ -135,7 +135,7 @@ impl Eq for Puntuado {}
 impl Ord for Puntuado {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Not inverted: see the type's note.
-        self.mejor_primero(other)
+        self.mejor_first(other)
     }
 }
 
@@ -160,7 +160,7 @@ pub(crate) fn mejores_k(
         if heap.len() < k {
             heap.push(c);
         } else if let Some(worst) = heap.peek()
-            && c.mejor_primero(worst) == std::cmp::Ordering::Less
+            && c.mejor_first(worst) == std::cmp::Ordering::Less
         {
             // `Less` in result order = BETTER than the worst one stored.
             heap.pop();
@@ -168,7 +168,7 @@ pub(crate) fn mejores_k(
         }
     }
     let mut out = heap.into_vec();
-    out.sort_unstable_by(Puntuado::mejor_primero);
+    out.sort_unstable_by(Puntuado::mejor_first);
     out.into_iter().map(|p| (p.path, p.score)).collect()
 }
 

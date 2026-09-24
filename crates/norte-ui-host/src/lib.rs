@@ -63,7 +63,7 @@ pub use keys::KeyInput;
 /// # Panics
 /// Never: loading ZERO layers cannot fail (there is no file to mis-parse).
 #[must_use]
-pub fn ajustes_por_defecto() -> norte_frontend::config::FrontendConfig {
+pub fn default_settings() -> norte_frontend::config::FrontendConfig {
     norte_frontend::config::load(&norte_config::Layers { dirs: Vec::new() })
         .expect("loading zero layers cannot fail")
 }
@@ -75,6 +75,6 @@ pub fn ajustes_por_defecto() -> norte_frontend::config::FrontendConfig {
 /// a real host resolves it from the user's configuration with
 /// `ColumnsSettings::resolve` and passes it in [`UiHostOptions`].
 #[must_use]
-pub fn columnas_por_defecto() -> norte_frontend::columns::ColumnsSettings {
+pub fn default_columns() -> norte_frontend::columns::ColumnsSettings {
     norte_frontend::columns::ColumnsSettings::default()
 }

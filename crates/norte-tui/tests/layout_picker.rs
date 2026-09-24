@@ -17,7 +17,7 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
 }
 
-fn app_de_prueba() -> App {
+fn test_app() -> App {
     App::new(
         Pane::new(vp("file:///izq"), Vec::new()),
         Pane::new(vp("file:///der"), Vec::new()),
@@ -26,7 +26,7 @@ fn app_de_prueba() -> App {
 
 /// A user layout: two listings and nothing else, to tell it apart from any
 /// preset by its number of slots.
-fn arbol_mio() -> Node {
+fn tree_mio() -> Node {
     Node::split(
         Dir::Vertical,
         vec![
@@ -39,8 +39,8 @@ fn arbol_mio() -> Node {
 /// Load and apply, which is what the binary does in two steps: the file is
 /// read OUTSIDE the event loop (rule 2, #244 M2) and `App` only decides
 /// what to do with what was read.
-fn aplicar(app: &mut App, nombre: &str, dir: &std::path::Path) -> bool {
-    let n = OsStr::new(nombre);
+fn apply(app: &mut App, name: &str, dir: &std::path::Path) -> bool {
+    let n = OsStr::new(name);
     app.apply_loaded_layout(n, norte_frontend::layout::config::load(dir, n))
 }
 
@@ -56,21 +56,21 @@ fn user(dir: &std::path::Path) -> Vec<UserLayout> {
         .collect()
 }
 
-fn escribir(dir: &std::path::Path, nombre: &str, tree: &Node) {
+fn write(dir: &std::path::Path, name: &str, tree: &Node) {
     let layouts = dir.join("layouts");
     std::fs::create_dir_all(&layouts).expect("mkdir");
     std::fs::write(
-        layouts.join(format!("{nombre}.toml")),
+        layouts.join(format!("{name}.toml")),
         to_toml(tree).expect("toml"),
     )
     .expect("write");
 }
 
 #[test]
-fn un_preset_de_fabrica_se_aplica_sin_fichero_ninguno() {
+fn a_factory_preset_applies_with_no_file_at_all() {
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
-    assert!(aplicar(&mut app, "simple", dir.path()));
+    let mut app = test_app();
+    assert!(apply(&mut app, "simple", dir.path()));
     assert_eq!(
         app.layout,
         norte_frontend::layout::presets::tree("simple").expect("factory")
@@ -86,10 +86,10 @@ fn un_preset_de_fabrica_se_aplica_sin_fichero_ninguno() {
 /// forever: the toggle that would have created it is not going to be
 /// pressed, because it is already there.
 #[test]
-fn un_preset_completo_siembra_el_estado_de_cada_hueco() {
+fn a_complete_preset_seeds_every_slots_state() {
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
-    assert!(aplicar(&mut app, "full", dir.path()));
+    let mut app = test_app();
+    assert!(apply(&mut app, "full", dir.path()));
     for id in app.layout.slot_ids() {
         let kind = app
             .layout
@@ -111,26 +111,26 @@ fn un_preset_completo_siembra_el_estado_de_cada_hueco() {
 
 /// The user's file wins, even under the same name as a factory one.
 #[test]
-fn un_fichero_del_usuario_gana_al_preset_del_mismo_nombre() {
+fn a_user_file_wins_over_the_preset_of_the_same_name() {
     let dir = tempfile::tempdir().expect("tmp");
-    escribir(dir.path(), "simple", &arbol_mio());
-    let mut app = app_de_prueba();
-    assert!(aplicar(&mut app, "simple", dir.path()));
-    assert_eq!(app.layout, arbol_mio(), "the user's was loaded");
+    write(dir.path(), "simple", &tree_mio());
+    let mut app = test_app();
+    assert!(apply(&mut app, "simple", dir.path()));
+    assert_eq!(app.layout, tree_mio(), "the user's was loaded");
     assert!(app.message.is_none());
 }
 
 /// A broken file WARNS and falls back to the preset: a layout that does not
 /// parse cannot leave norte with no screen.
 #[test]
-fn un_fichero_roto_avisa_y_cae_al_preset() {
+fn a_broken_file_warns_and_falls_back_to_the_preset() {
     let dir = tempfile::tempdir().expect("tmp");
     let layouts = dir.path().join("layouts");
     std::fs::create_dir_all(&layouts).expect("mkdir");
     std::fs::write(layouts.join("simple.toml"), "esto no es un layout").expect("write");
 
-    let mut app = app_de_prueba();
-    assert!(aplicar(&mut app, "simple", dir.path()));
+    let mut app = test_app();
+    assert!(apply(&mut app, "simple", dir.path()));
     assert_eq!(
         app.layout,
         norte_frontend::layout::presets::tree("simple").expect("factory"),
@@ -143,11 +143,11 @@ fn un_fichero_roto_avisa_y_cae_al_preset() {
 /// A name that belongs to nobody does not leave the screen half-done: it is
 /// said and the earlier tree stays standing.
 #[test]
-fn un_nombre_desconocido_no_cambia_el_arbol() {
+fn an_unknown_name_does_not_change_the_tree() {
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     let before = app.layout.clone();
-    assert!(!aplicar(&mut app, "no-existe", dir.path()));
+    assert!(!apply(&mut app, "no-existe", dir.path()));
     assert_eq!(app.layout, before);
     assert!(app.message.is_some(), "it says so");
 }
@@ -155,20 +155,20 @@ fn un_nombre_desconocido_no_cambia_el_arbol() {
 /// Switching layouts does not erase navigation: the listing that was
 /// already in a slot stays where it was.
 #[test]
-fn cambiar_de_layout_conserva_los_listados_que_ya_habia() {
+fn changing_layout_keeps_the_listings_that_were_already_there() {
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     let left = app.panes[0].dir().clone();
-    assert!(aplicar(&mut app, "full", dir.path()));
+    assert!(apply(&mut app, "full", dir.path()));
     assert_eq!(app.panes[0].dir(), &left, "the listing was not reset");
 }
 
 /// The picker: five factory ones plus the directory's, and the warning that
 /// the name matches a keymap preset.
 #[test]
-fn el_selector_lista_las_de_fabrica_y_las_del_usuario() {
+fn the_selector_lists_the_factory_ones_and_the_users() {
     let dir = tempfile::tempdir().expect("tmp");
-    escribir(dir.path(), "mio", &arbol_mio());
+    write(dir.path(), "mio", &tree_mio());
     let mine = user(dir.path());
     assert_eq!(
         mine.iter().map(|u| u.name.clone()).collect::<Vec<_>>(),
@@ -192,7 +192,7 @@ fn el_selector_lista_las_de_fabrica_y_las_del_usuario() {
         "the dialog warns that the name is also a keymap's"
     );
     assert!(
-        p.rows().last().expect("mio").tree.as_ref() == Some(&arbol_mio()),
+        p.rows().last().expect("mio").tree.as_ref() == Some(&tree_mio()),
         "the user's row carries ITS OWN tree for the preview (#244 M3)"
     );
     assert!(
@@ -203,10 +203,10 @@ fn el_selector_lista_las_de_fabrica_y_las_del_usuario() {
 
 /// Choosing from the picker applies the choice, and cancelling touches nothing.
 #[test]
-fn confirmar_aplica_y_cancelar_no_toca_nada() {
+fn confirm_applies_and_cancel_touches_nothing() {
     use norte_tui::app::PickerAction;
     let dir = tempfile::tempdir().expect("tmp");
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     let before = app.layout.clone();
 
     app.open_layout_picker(user(dir.path()));

@@ -58,7 +58,7 @@ pub fn source(name: &str) -> Option<&'static str> {
 /// let tree = presets::tree("simple").expect("factory one");
 /// // A listing, the tasks strip and the status bar.
 /// assert_eq!(tree.slot_ids().len(), 3);
-/// assert!(presets::tree("no-existe").is_err());
+/// assert!(presets::tree("no-exists").is_err());
 /// ```
 pub fn tree(name: &str) -> Result<Node, LayoutError> {
     let text = source(name).ok_or_else(|| LayoutError::NotFound(name.to_owned()))?;
@@ -103,7 +103,7 @@ mod tests {
 
     /// The body with what is below and the status bar. All five end the
     /// same way: weighted body, strip or panel, and a status row.
-    fn con_cromo(body: Node, below: Node, below_height: Size) -> Node {
+    fn with_chrome(body: Node, below: Node, below_height: Size) -> Node {
         Node::Split {
             dir: Dir::Vertical,
             children: vec![body, below, Node::slot(STATUS, KindId::new("status"))],
@@ -121,16 +121,16 @@ mod tests {
 
     fn esperado(name: &str) -> Node {
         match name {
-            "orthodox" => con_cromo(
+            "orthodox" => with_chrome(
                 Node::split(Dir::Horizontal, vec![browser(LEFT), browser(RIGHT)]),
                 tasks(),
                 Size::Auto,
             ),
-            "simple" => con_cromo(browser(LEFT), tasks(), Size::Auto),
+            "simple" => with_chrome(browser(LEFT), tasks(), Size::Auto),
             // The sidebar goes next to the LISTINGS, not next to the
             // chrome: that is exactly what `dock` produces, and the last
             // test pins it.
-            "krusader" => con_cromo(
+            "krusader" => with_chrome(
                 Node::Split {
                     dir: Dir::Horizontal,
                     children: vec![
@@ -143,7 +143,7 @@ mod tests {
                 tasks(),
                 Size::Auto,
             ),
-            "explorer" => con_cromo(
+            "explorer" => with_chrome(
                 Node::Split {
                     dir: Dir::Horizontal,
                     children: vec![
@@ -156,7 +156,7 @@ mod tests {
                 processes(),
                 Size::Fixed(8),
             ),
-            "full" => con_cromo(
+            "full" => with_chrome(
                 Node::Split {
                     dir: Dir::Horizontal,
                     children: vec![
@@ -185,7 +185,7 @@ mod tests {
         }
     }
 
-    fn ruta(name: &str) -> std::path::PathBuf {
+    fn path(name: &str) -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("presets/layout")
             .join(format!("{name}.toml"))
@@ -194,13 +194,13 @@ mod tests {
     /// The shipped file IS the tree above. With `NORTE_UPDATE_GOLDEN` it is
     /// rewritten; without it, it is compared.
     #[test]
-    fn los_cinco_ficheros_son_los_cinco_arboles() {
+    fn the_five_files_are_the_five_trees() {
         for name in NAMES {
             let want = to_toml(&esperado(name)).expect("serializes");
             if std::env::var_os("NORTE_UPDATE_GOLDEN").is_some() {
-                std::fs::write(ruta(name), &want).expect("writes");
+                std::fs::write(path(name), &want).expect("writes");
             }
-            let have = std::fs::read_to_string(ruta(name))
+            let have = std::fs::read_to_string(path(name))
                 .expect("the preset — regenerate it with NORTE_UPDATE_GOLDEN=1");
             assert_eq!(
                 have, want,
@@ -211,7 +211,7 @@ mod tests {
 
     /// What really matters: what `tree` returns is what was expected.
     #[test]
-    fn los_cinco_parsean_a_lo_que_dicen_ser() {
+    fn all_five_parse_into_what_they_claim_to_be() {
         for name in NAMES {
             assert_eq!(tree(name).expect(name), esperado(name), "{name}");
         }
@@ -220,7 +220,7 @@ mod tests {
     /// A kind this binary does not declare is painted as a box with its
     /// name. In a FACTORY preset that would be a broken built-in preset.
     #[test]
-    fn ningun_preset_nombra_un_kind_que_no_existe() {
+    fn no_preset_names_a_kind_that_does_not_exist() {
         let reg = KindRegistry::builtin();
         for name in NAMES {
             let tree = tree(name).expect(name);
@@ -238,7 +238,7 @@ mod tests {
     /// Repeated ids: `validate` already rejects them, so this checks that
     /// none of the five ever produces the error.
     #[test]
-    fn ningun_preset_repite_un_hueco() {
+    fn no_preset_repeats_a_slot() {
         for name in NAMES {
             assert!(
                 tree(name).expect(name).duplicate_slot_ids().is_empty(),
@@ -258,10 +258,10 @@ mod tests {
     /// chrome aside) lives in `resolve`; this test is what says whether it
     /// is still doing its job.
     #[test]
-    fn ningun_preset_deja_una_pantalla_sin_listado_usable() {
+    fn no_preset_leaves_a_screen_without_a_usable_listing() {
         use crate::layout::{Rect, resolve};
 
-        // The floor #229's rescue promises: `resolve::CONTENIDO`, the
+        // The floor #229's rescue promises: `resolve::CONTENT`, the
         // ceiling each kind's minimum is clamped to. On roomy screens the
         // listing's OWN minimum is also required, which is what is seen
         // when nothing has to be squeezed.
@@ -303,7 +303,7 @@ mod tests {
     /// `NAMES` and `source` are two items and can fall out of sync. Not
     /// here.
     #[test]
-    fn el_catalogo_y_la_busqueda_dicen_lo_mismo() {
+    fn the_catalog_and_the_search_say_the_same_thing() {
         for name in NAMES {
             assert!(source(name).is_some(), "{name} in NAMES and not in source");
         }
@@ -316,7 +316,7 @@ mod tests {
     /// `dock` changed its mind about where a sidebar goes; both need
     /// looking at.
     #[test]
-    fn krusader_es_orthodox_con_el_sidebar_puesto() {
+    fn krusader_is_orthodox_with_sidebar_on() {
         let docked = tree("orthodox").expect("orthodox").dock(
             LEFT,
             Edge::Left,

@@ -26,7 +26,7 @@ use crate::dto::{AgentRowView, AgentsView};
 /// A daemon that keeps announcing requests cannot be allowed to grow this
 /// without bound. The OLDEST by last-seen is forgotten first, since it is the
 /// one least likely to still be doing anything.
-const MAX_SESIONES: usize = 128;
+const MAX_SESSIONS: usize = 128;
 
 /// What is known about an agent session.
 #[derive(Debug, Clone)]
@@ -45,7 +45,7 @@ struct Session {
 
 /// The sessions seen, and the panel open over them.
 #[derive(Debug, Default)]
-pub(crate) struct Agentes {
+pub(crate) struct Agents {
     /// What was seen, by id.
     sessions: std::collections::HashMap<String, Session>,
     /// The logical "last seen" clock.
@@ -71,7 +71,7 @@ pub(crate) struct Agentes {
     undoing: std::collections::HashSet<String>,
 }
 
-impl Agentes {
+impl Agents {
     /// Notes that this session asked for permission for `op`.
     pub(crate) fn vista(&mut self, id: &str, op: &str) {
         self.clock += 1;
@@ -95,7 +95,7 @@ impl Agentes {
     }
 
     /// Notes that this session had an op approved from here.
-    pub(crate) fn aprobada(&mut self, id: &str) {
+    pub(crate) fn approved(&mut self, id: &str) {
         if let Some(s) = self.sessions.get_mut(id) {
             s.approved = s.approved.saturating_add(1);
             self.generation += 1;
@@ -103,20 +103,20 @@ impl Agentes {
     }
 
     /// Notes that an undo was launched for this session.
-    pub(crate) fn deshaciendo(&mut self, id: &str) {
+    pub(crate) fn undoing(&mut self, id: &str) {
         self.undoing.insert(id.to_owned());
         self.generation += 1;
     }
 
     /// This session's undo finished, one way or another.
-    pub(crate) fn deshecha(&mut self, id: &str) {
+    pub(crate) fn undone(&mut self, id: &str) {
         if self.undoing.remove(id) {
             self.generation += 1;
         }
     }
 
     /// `true` if this session already has a live undo in progress.
-    pub(crate) fn tiene_undo_vivo(&self, id: &str) -> bool {
+    pub(crate) fn has_undo_vivo(&self, id: &str) -> bool {
         self.undoing.contains(id)
     }
 
@@ -131,7 +131,7 @@ impl Agentes {
     /// forgotten count TRAVELS: a trimmed list that presents itself as
     /// complete is what turns the attack into "that session doesn't exist".
     fn prune(&mut self) {
-        while self.sessions.len() > MAX_SESIONES {
+        while self.sessions.len() > MAX_SESSIONS {
             let Some(old) = self
                 .sessions
                 .values()
@@ -161,7 +161,7 @@ impl Agentes {
     }
 
     /// The RAW id of the chosen session.
-    pub(crate) fn elegida(&self) -> Option<String> {
+    pub(crate) fn chosen(&self) -> Option<String> {
         match &self.selected {
             // By ID: if the row moved —or disappeared—, the selection
             // follows it, and it does not keep pointing at whoever took its
@@ -201,7 +201,7 @@ impl Agentes {
     /// Out of generation it is NOT clamped nor ignored: it is refused.
     /// Clamping against a list that moved is choosing for the reader, and
     /// here what is being chosen is whose work gets undone.
-    pub(crate) fn senalar(&mut self, row: usize, generation: u64) -> bool {
+    pub(crate) fn point_at(&mut self, row: usize, generation: u64) -> bool {
         if generation != self.generation {
             return false;
         }
@@ -215,7 +215,7 @@ impl Agentes {
 
     /// Starts with no selection: the panel opens and closes, and the
     /// previous one described a list that may have changed entirely.
-    pub(crate) fn al_abrir(&mut self) {
+    pub(crate) fn on_open(&mut self) {
         self.selected = None;
     }
 

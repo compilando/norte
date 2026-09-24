@@ -1,17 +1,17 @@
 //! Copy, move and rename.
 //!
-//! Part of `controller`: these are `Estado` methods, moved here without
+//! Part of `controller`: these are `State` methods, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Enumerating them here would be a
 // forty-line list per file, in 32 files, that goes stale the moment the
 // parent imports something — `super::*` tracks it on its own.
-use super::tasks::Lote;
+use super::tasks::Batch;
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// The DIRECTORY a transfer goes to, or why there is none.
     ///
     /// The declared destination has to still be serviceable: exist, be
@@ -22,33 +22,33 @@ impl Estado {
     /// for another one. The shared layer leaves the role UNSET when there
     /// are several candidates and none chosen (ADR 0058 D7): that is not
     /// "there is no other one", it is "pick which one".
-    pub(super) fn directorio_destino(&self) -> Result<VPath, &'static str> {
-        self.hueco_destino()
-            .map(|id| self.huecos[&id].pane.dir().clone())
+    pub(super) fn directory_dest(&self) -> Result<VPath, &'static str> {
+        self.slot_dest()
+            .map(|id| self.slots[&id].pane.dir().clone())
     }
 
     /// The destination SLOT, with the same rule as
-    /// [`Self::directorio_destino`].
+    /// [`Self::directory_dest`].
     ///
     /// Both through the same path: a comparison needs the slot (to navigate
     /// the right side) and a transfer needs its directory, and two ways of
     /// deciding "the other pane" are two places to drift apart.
-    pub(super) fn hueco_destino(&self) -> Result<u32, &'static str> {
-        let activo = self.activo();
-        let destino_id = self
+    pub(super) fn slot_dest(&self) -> Result<u32, &'static str> {
+        let active = self.active();
+        let dest_id = self
             .roles
             .get(RoleId::Target)
             .map(|SlotId(id)| id)
-            .filter(|id| *id != activo && self.huecos.contains_key(id) && !self.oculto(*id));
-        if let Some(id) = destino_id {
+            .filter(|id| *id != active && self.slots.contains_key(id) && !self.oculto(*id));
+        if let Some(id) = dest_id {
             return Ok(id);
         }
-        let candidatos = self
-            .huecos
+        let candidates = self
+            .slots
             .keys()
-            .filter(|id| **id != activo && !self.oculto(**id))
+            .filter(|id| **id != active && !self.oculto(**id))
             .count();
-        Err(if candidatos > 1 {
+        Err(if candidates > 1 {
             "host-no-target-designated"
         } else {
             "host-no-other-slot"
@@ -71,8 +71,8 @@ impl Estado {
     /// going, not by where they come from. With no mode yet (the slot has
     /// just landed, or the daemon has not answered) it does not fold: this
     /// is a client courtesy and the authority is the core.
-    pub(super) fn dos_marcas_pliegan_igual(&self, paths: &[VPath]) -> bool {
-        let Some(modo) = self.hueco_destino().ok().and_then(|id| self.pliegue_de(id)) else {
+    pub(super) fn two_marks_fold_the_same(&self, paths: &[VPath]) -> bool {
+        let Some(modo) = self.slot_dest().ok().and_then(|id| self.pliegue_de(id)) else {
             return false;
         };
         if modo == norte_encoding::FoldMode::None {
@@ -89,33 +89,33 @@ impl Estado {
     ///
     /// Asked before opening any dialog: asking about something that will not
     /// be possible is worse than saying so up front.
-    pub(super) fn lote_no_cabe(&self, cuantas: usize) -> Option<&'static str> {
-        if cuantas > MAX_TRANSFER_BATCH {
+    pub(super) fn batch_no_fits(&self, how_many: usize) -> Option<&'static str> {
+        if how_many > MAX_TRANSFER_BATCH {
             return Some("host-batch-too-large");
         }
         // And that it fits in what the host RETAINS: eviction can only drop
         // terminal tasks, so a batch over a board already full of live ones
         // would have nowhere to land.
-        if self.tasks.len().saturating_add(cuantas) > MAX_TASKS_RETAINED {
+        if self.tasks.len().saturating_add(how_many) > MAX_TASKS_RETAINED {
             return Some("host-task-board-full");
         }
         None
     }
 
-    /// WHAT a transfer to `destino` operates on, or the reason it cannot even
-    /// be asked about. Returns `(origen_dir, paths)`.
+    /// WHAT a transfer to `dest` operates on, or the reason it cannot even
+    /// be asked about. Returns `(source_dir, paths)`.
     ///
     /// The destination arrives as a PARAMETER since #284: it almost always
     /// comes from the shared role, but with only one listing on screen the
     /// reader picks it in the desktop's selector, and both ways have to go
     /// through the same checks.
-    pub(super) fn operandos_de_transferencia(
+    pub(super) fn transfer_operands(
         &self,
-        destino: &VPath,
+        dest: &VPath,
     ) -> Result<(VPath, Vec<VPath>), &'static str> {
-        let destino = destino.clone();
-        let origen_dir = self.hueco().pane.dir().clone();
-        if origen_dir == destino {
+        let dest = dest.clone();
+        let source_dir = self.slot().pane.dir().clone();
+        if source_dir == dest {
             // Both listings in the same place. The daemon would reject it
             // just the same, but opening a dialog that promises something
             // impossible is worse than saying so beforehand.
@@ -136,11 +136,11 @@ impl Estado {
         // marks: it is the single source of "what this operates on", and
         // duplicating that fallback here would be a second place for them to
         // drift apart.
-        let paths: Vec<VPath> = self.hueco().pane.marked_paths();
+        let paths: Vec<VPath> = self.slot().pane.marked_paths();
         if paths.is_empty() {
             return Err("msg-nothing-selected");
         }
-        if let Some(motivo) = self.lote_no_cabe(paths.len()) {
+        if let Some(motivo) = self.batch_no_fits(paths.len()) {
             return Err(motivo);
         }
         // Two marks that FOLD to the same name in the destination (#268): on
@@ -150,7 +150,7 @@ impl Estado {
         // arbitrary member of the pair. With `CollisionPolicy::Fail` the
         // result is at least a visible error; the day the window offers a
         // choice to overwrite, the same batch silently loses a file.
-        if self.dos_marcas_pliegan_igual(&paths) {
+        if self.two_marks_fold_the_same(&paths) {
             return Err("host-batch-folds-to-one");
         }
         // An entry with no last segment is a ROOT, and a root has no name to
@@ -160,8 +160,8 @@ impl Estado {
         if paths.iter().any(|p| p.file_name().is_none()) {
             return Err("host-cannot-transfer-root");
         }
-        let _ = destino;
-        Ok((origen_dir, paths))
+        let _ = dest;
+        Ok((source_dir, paths))
     }
 
     /// Opens the copy or move confirmation, resolving the destination.
@@ -170,16 +170,16 @@ impl Estado {
     /// until #284 that was the end of the road: the operation was refused
     /// and whoever had not split the window could not copy. Now the desktop
     /// is asked.
-    pub(super) fn pedir_transferencia(
+    pub(super) fn request_transfer(
         &mut self,
         mover: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        match self.directorio_destino() {
-            Ok(destino) => self.confirmar_transferencia(&destino, mover, backend, buzon),
+        match self.directory_dest() {
+            Ok(dest) => self.confirm_transfer(&dest, mover, backend, buzon),
             // With no OTHER slot to point at: the reader picks it outside.
-            Err("host-no-other-slot") => self.pedir_destino_al_escritorio(mover),
+            Err("host-no-other-slot") => self.request_destination_from_the_desktop(mover),
             Err(reason_key) => (
                 ActionAck::Unavailable {
                     reason_key: reason_key.to_owned(),
@@ -193,15 +193,15 @@ impl Estado {
     ///
     /// At least one: a viewer with zero rows paints nothing and its
     /// pagination would divide by zero.
-    pub(super) fn fijar_filas_del_visor(
+    pub(super) fn pin_viewer_rows(
         &mut self,
         rows: u32,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.visor_filas = Some(usize::try_from(rows).unwrap_or(1).max(1));
-        let cambio = ViewChange::Viewer {
+        self.visor_rows = Some(usize::try_from(rows).unwrap_or(1).max(1));
+        let change = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Asks the DESKTOP for the reader to choose the destination (#284).
@@ -210,7 +210,7 @@ impl Estado {
     /// the answer comes back, they are recomputed from the state at that
     /// point. Freezing the marks here would promise an operation over a
     /// listing the reader could have changed while the selector was open.
-    pub(super) fn pedir_destino_al_escritorio(
+    pub(super) fn request_destination_from_the_desktop(
         &mut self,
         mover: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
@@ -220,12 +220,12 @@ impl Estado {
         // from an `sftp://` to a local folder is a legitimate operation the
         // core has always done. With a remote pane, whoever runs it opens
         // wherever it can — the suggestion is lost, the operation is not.
-        let desde = self.hueco().pane.dir().clone();
-        if !self.nativo(crate::dto::NativeEffect::PickDirectory { desde }) {
-            return Self::sin_escritorio();
+        let from = self.slot().pane.dir().clone();
+        if !self.nativo(crate::dto::NativeEffect::PickDirectory { from }) {
+            return Self::without_desktop();
         }
-        self.destino_pendiente = Some(mover);
-        (self.aplicada(), self.decir("host-pick-destination"))
+        self.dest_pending = Some(mover);
+        (self.applied(), self.say("host-pick-destination"))
     }
 
     /// The desktop's selector came back (#284).
@@ -235,30 +235,30 @@ impl Estado {
     /// transfer — which means the destination gets SHOWN before a single
     /// byte moves, which is what bounds the risk of the path having gone
     /// through the renderer.
-    pub(super) fn destino_elegido(
+    pub(super) fn dest_chosen(
         &mut self,
         path: Option<String>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(mover) = self.destino_pendiente.take() else {
+        let Some(mover) = self.dest_pending.take() else {
             // Nobody asked for a destination: an answer that answers no
             // question is not interpreted.
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(nativa) = path else {
-            return (self.aplicada(), Vec::new());
+        let Some(native) = path else {
+            return (self.applied(), Vec::new());
         };
-        let Some(destino) = norte_frontend::shell::vpath_de_ruta_nativa(&nativa) else {
-            let fuera = self.decir("host-bad-destination");
+        let Some(dest) = norte_frontend::shell::vpath_from_native_path(&native) else {
+            let outside = self.say("host-bad-destination");
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-bad-destination".to_owned(),
                 },
-                fuera,
+                outside,
             );
         };
-        self.confirmar_transferencia(&destino, mover, backend, buzon)
+        self.confirm_transfer(&dest, mover, backend, buzon)
     }
 
     /// Files dropped from the desktop arrived (#283).
@@ -276,81 +276,81 @@ impl Estado {
         &mut self,
         paths: &[String],
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let llegaron = paths.len();
+        let arrived = paths.len();
         let usables: Vec<VPath> = paths
             .iter()
-            .filter_map(|p| norte_frontend::shell::vpath_de_ruta_nativa(p))
+            .filter_map(|p| norte_frontend::shell::vpath_from_native_path(p))
             // A root has no name to give it in the destination, and the send
             // would silently skip it: it is dropped here, where it can still
             // be counted.
             .filter(|v| v.file_name().is_some())
             .collect();
         if usables.is_empty() {
-            let clave = if llegaron == 0 {
+            let key = if arrived == 0 {
                 "host-drop-empty"
             } else {
                 "host-drop-unusable"
             };
-            let fuera = self.decir(clave);
+            let outside = self.say(key);
             return (
                 ActionAck::Unavailable {
-                    reason_key: clave.to_owned(),
+                    reason_key: key.to_owned(),
                 },
-                fuera,
+                outside,
             );
         }
-        if let Some(motivo) = self.lote_no_cabe(usables.len()) {
-            let fuera = self.decir(motivo);
+        if let Some(motivo) = self.batch_no_fits(usables.len()) {
+            let outside = self.say(motivo);
             return (
                 ActionAck::Unavailable {
                     reason_key: motivo.to_owned(),
                 },
-                fuera,
+                outside,
             );
         }
         // Same reason as in a normal copy (#268): two that fold to the same
         // name let one win without saying which. And here the reader did
         // not choose the batch by marking, so finding it out afterward would
         // be even less explicable.
-        if self.dos_marcas_pliegan_igual(&usables) {
-            let fuera = self.decir("host-batch-folds-to-one");
+        if self.two_marks_fold_the_same(&usables) {
+            let outside = self.say("host-batch-folds-to-one");
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-batch-folds-to-one".to_owned(),
                 },
-                fuera,
+                outside,
             );
         }
         // The ACTIVE pane, and without requiring it to be local: uploading
         // what is dragged from the desktop is the convenient case, and the
         // core has always copied between providers.
-        let destino = self.hueco().pane.dir().clone();
-        let destino_linea = Self::linea_de_ruta(&destino);
+        let dest = self.slot().pane.dir().clone();
+        let dest_line = Self::path_line(&dest);
         let cuerpo: Vec<crate::dto::DialogLine> = usables
             .iter()
-            .take(Self::MAX_LINEAS_DIALOGO)
-            .map(Self::linea_de_ruta)
+            .take(Self::MAX_LINES_DIALOG)
+            .map(Self::path_line)
             .collect();
         // The trim counts against what ARRIVED, not against what could be
         // converted: "16 of 40 shown" has to stay true when four of those
         // 40 fell out along the way.
-        let nota = self.nota_de_recorte(cuerpo.len(), llegaron.max(usables.len()));
-        let hostil_fuera = norte_frontend::overflow_hostile(&usables, cuerpo.len());
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let note = self.truncation_note(cuerpo.len(), arrived.max(usables.len()));
+        let hostile_outside = norte_frontend::overflow_hostile(&usables, cuerpo.len());
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-drop-title".to_owned(),
-            destination: Some(destino_linea),
+            destination: Some(dest_line),
             subject: None,
             asker: None,
             deadline: None,
             deadline_at_ms: None,
             body: cuerpo,
-            overflow_note: nota,
-            overflow_hostile: hostil_fuera,
+            overflow_note: note,
+            overflow_hostile: hostile_outside,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -369,14 +369,14 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::Checking,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista,
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::Soltar {
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::Release {
                 paths: usables,
-                destino: destino.clone(),
+                dest: dest.clone(),
             }),
         });
         // Here too, and it is the path that can LEAST afford to skip it: the
@@ -385,11 +385,11 @@ impl Estado {
         // same way. With no total: dropped files are in no listing, so only
         // the confinement one can come out, which is the one that matters
         // here.
-        self.sondear_destino(id, destino, None, backend, buzon);
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        self.sondear_dest(id, dest, None, backend, buzon);
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Asks the DESTINATION what needs to be known before saying yes:
@@ -419,25 +419,25 @@ impl Estado {
     /// slot: with a single listing the reader picks it on the desktop
     /// (#284).
     ///
-    /// And it sends the `Fondo` ALWAYS, even with an empty list. Staying
+    /// And it sends the `Background` ALWAYS, even with an empty list. Staying
     /// quiet when there is nothing to say would leave the dialog saying
     /// "checking" forever, and then "I asked and it's clean" would become
     /// indistinguishable from "I haven't asked yet" again — exactly what
     /// [`crate::dto::DestCheckView`] exists to keep apart.
-    fn sondear_destino(
+    fn sondear_dest(
         &self,
         id: ModalId,
-        destino: VPath,
+        dest: VPath,
         total: Option<u64>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         let lang = self.lang;
-        let sabidas = self.caps_de_ruta(&destino);
+        let sabidas = self.path_caps(&dest);
         tokio::spawn(async move {
-            let libre = match total {
+            let free = match total {
                 // With no total there is no space question to ask, and
                 // enumerating volumes only to throw away the answer is I/O
                 // for nothing.
@@ -446,23 +446,26 @@ impl Estado {
                     .volumes()
                     .await
                     .ok()
-                    .and_then(|vols| norte_frontend::space::free_for(&destino, &vols)),
+                    .and_then(|vols| norte_frontend::space::free_for(&dest, &vols)),
             };
-            let caps = match sabidas {
-                Some(c) => c,
-                None => backend.capabilities(destino.clone()).await.unwrap_or(
-                    norte_proto::Capabilities {
-                        flags: norte_proto::CapabilityFlags::empty(),
-                        max_path: None,
-                    },
-                ),
-            };
-            let avisos: Vec<String> = norte_frontend::space::warning(total, libre, lang)
+            let caps =
+                match sabidas {
+                    Some(c) => c,
+                    None => backend.capabilities(dest.clone()).await.unwrap_or(
+                        norte_proto::Capabilities {
+                            flags: norte_proto::CapabilityFlags::empty(),
+                            max_path: None,
+                        },
+                    ),
+                };
+            let notices: Vec<String> = norte_frontend::space::warning(total, free, lang)
                 .into_iter()
                 .chain(norte_frontend::confine::warning(caps, lang))
                 .collect();
             let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::AvisosDeDestino(id, avisos))))
+                .send(Message::Background(Box::new(
+                    Background::DestinationNotices(id, notices),
+                )))
                 .await;
         });
     }
@@ -474,32 +477,32 @@ impl Estado {
     /// between asking and answering, and attaching one destination's warning
     /// to the question about something else is worse than not warning at
     /// all.
-    pub(super) fn avisos_de_destino(
+    pub(super) fn destination_notices(
         &mut self,
         id: ModalId,
-        avisos: Vec<String>,
+        notices: Vec<String>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(d) = self.dialogos.iter_mut().find(|d| d.id == id) else {
+        let Some(d) = self.dialogs.iter_mut().find(|d| d.id == id) else {
             return Vec::new();
         };
-        d.vista.dest_check = crate::dto::DestCheckView::Done { warnings: avisos };
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        d.vista.dest_check = crate::dto::DestCheckView::Done { warnings: notices };
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
     /// The confirmation itself, with the destination already resolved.
-    pub(super) fn confirmar_transferencia(
+    pub(super) fn confirm_transfer(
         &mut self,
-        destino: &VPath,
+        dest: &VPath,
         mover: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let activo = self.activo();
-        let destino = destino.clone();
-        let (origen_dir, paths) = match self.operandos_de_transferencia(&destino) {
+        let active = self.active();
+        let dest = dest.clone();
+        let (source_dir, paths) = match self.transfer_operands(&dest) {
             Ok(t) => t,
             Err(reason_key) => {
                 return (
@@ -516,18 +519,18 @@ impl Estado {
         // would read as two paths and whoever confirms would believe they
         // are sending their files to the second one (`arrow_join_spoof`
         // fixture in the canonical corpus).
-        let destino_linea = Self::linea_de_ruta(&destino);
+        let dest_line = Self::path_line(&dest);
         // And the sources, masked and clamped the same as the listing: these
         // names are controlled by whoever has written to the directory.
         let cuerpo: Vec<crate::dto::DialogLine> = paths
             .iter()
-            .take(Self::MAX_LINEAS_DIALOGO)
-            .map(Self::linea_de_ruta)
+            .take(Self::MAX_LINES_DIALOG)
+            .map(Self::path_line)
             .collect();
-        let nota = self.nota_de_recorte(cuerpo.len(), paths.len());
-        let hostil_fuera = norte_frontend::overflow_hostile(&paths, cuerpo.len());
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let note = self.truncation_note(cuerpo.len(), paths.len());
+        let hostile_outside = norte_frontend::overflow_hostile(&paths, cuerpo.len());
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
             title_key: if mover {
@@ -536,14 +539,14 @@ impl Estado {
                 "modal-copy-title"
             }
             .to_owned(),
-            destination: Some(destino_linea),
+            destination: Some(dest_line),
             subject: None,
             asker: None,
             deadline: None,
             deadline_at_ms: None,
             body: cuerpo,
-            overflow_note: nota,
-            overflow_hostile: hostil_fuera,
+            overflow_note: note,
+            overflow_hostile: hostile_outside,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -571,49 +574,49 @@ impl Estado {
         // nothing, because a directory carries no size in the listing and
         // adding up only what does would warn with a number smaller than
         // the real one.
-        let total = norte_frontend::space::total_to_write(self.hueco().pane.entries(), &paths);
-        self.dialogos.push(Dialogo {
+        let total = norte_frontend::space::total_to_write(self.slot().pane.entries(), &paths);
+        self.dialogs.push(Dialog {
             id,
             vista: vista.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::Transferir {
-                origen: activo,
-                origen_dir,
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::Transferir {
+                source: active,
+                source_dir,
                 paths,
-                destino: destino.clone(),
+                dest: dest.clone(),
                 mover,
             }),
         });
-        self.sondear_destino(id, destino, total, backend, buzon);
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        self.sondear_dest(id, dest, total, backend, buzon);
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Resolves the confirmed name and enqueues the rename, or says why not.
-    pub(super) fn confirmar_rename(
+    pub(super) fn confirm_rename(
         &mut self,
         from: &VPath,
         siembra: &str,
-        escrito: &str,
+        written: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        match Self::bytes_del_rename(from, siembra, escrito) {
-            Ok(destino) => {
-                Self::lanzar_rename(from.clone(), destino, backend, buzon);
+        match Self::bytes_del_rename(from, siembra, written) {
+            Ok(dest) => {
+                Self::launch_rename(from.clone(), dest, backend, buzon);
                 (None, Vec::new())
             }
-            Err(clave) => {
+            Err(key) => {
                 // The reason comes back so the ACK can say it, not just the
                 // status bar: a renderer receiving `Applied` believes the
                 // operation succeeded, and the same surface answered
                 // `Unavailable` when the rejection was for the marks.
-                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
-                let cambio = ViewChange::Status(self.status.clone());
-                (Some(clave), vec![self.parche(vec![cambio])])
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
+                let change = ViewChange::Status(self.status.clone());
+                (Some(key), vec![self.parche(vec![change])])
             }
         }
     }
@@ -621,7 +624,7 @@ impl Estado {
     /// Enqueues ONE rename's `fs.move`, with the destination already
     /// composed.
     ///
-    /// Separate from [`Self::lanzar_transferencia`] because a rename's
+    /// Separate from [`Self::launch_transfer`] because a rename's
     /// destination is a FULL PATH and a transfer's is a DIRECTORY the
     /// source's name is composed onto. Passing one for the other would
     /// rename to `new/old-name`, exactly the kind of bug a parameter with
@@ -629,11 +632,11 @@ impl Estado {
     ///
     /// Same wire verb, same journal entry and same undo path as move: what
     /// changes is the question, not the effect.
-    pub(super) fn lanzar_rename(
+    pub(super) fn launch_rename(
         from: VPath,
         to: VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
         // The directory it leaves and the one it arrives at are the SAME, so
         // one single entry: re-listing it twice would be asking for the same
@@ -642,16 +645,16 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let mensaje = match backend
+            let message = match backend
                 // A rename is not enqueued: it is a single step and moves no
                 // bytes from one place to another.
                 .move_(from, to, norte_proto::CollisionPolicy::Fail, false)
                 .await
             {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
-                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(mensaje).await;
+            let _ = buzon.send(message).await;
         });
     }
 
@@ -678,45 +681,45 @@ impl Estado {
     /// for the second one. A single one is not a batch: its outcome is
     /// already stated in its row and its rejection in the status bar, with
     /// the error's typed phrase.
-    pub(super) fn enviar_lote(
+    pub(super) fn send_batch(
         &mut self,
         paths: &[VPath],
-        origen_dir: &VPath,
-        destino: &VPath,
+        source_dir: &VPath,
+        dest: &VPath,
         mover: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
-        self.lote = (paths.len() > 1).then(|| Lote {
+        self.batch = (paths.len() > 1).then(|| Batch {
             total: paths.len(),
-            ..Lote::default()
+            ..Batch::default()
         });
         // The reinterpretation is captured HERE, with the slot still in
         // front: a collision arrives asynchronously and on top of whatever
         // the reader is doing, so reading it on arrival can give the wrong
         // one's.
-        let enc = self.hueco().pane.name_encoding();
-        Self::lanzar_transferencia(
+        let enc = self.slot().pane.name_encoding();
+        Self::launch_transfer(
             paths,
-            (origen_dir, destino),
+            (source_dir, dest),
             mover,
             enc,
-            self.encolar,
+            self.enqueue,
             backend,
             buzon,
         );
     }
 
-    pub(super) fn lanzar_transferencia(
+    pub(super) fn launch_transfer(
         paths: &[VPath],
         rutas: (&VPath, &VPath),
         mover: bool,
         enc: Option<norte_encoding::NameEncoding>,
         a_la_cola: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
-        let (origen_dir, destino) = rutas;
+        let (source_dir, dest) = rutas;
         // The directories the outcome leaves out of date. In a copy, only
         // the destination; in a move, also where it came from — and the
         // source one is taken from the SLOT, not from each entry's parent:
@@ -725,14 +728,14 @@ impl Estado {
         // server with no case distinction, they are two strings for the
         // same place and the refresh's byte-for-byte comparison would not
         // find the pane (ADR 0061). Both get noted: one of them matches.
-        let mut afectados = vec![destino.clone()];
+        let mut afectados = vec![dest.clone()];
         if mover {
-            afectados.push(origen_dir.clone());
+            afectados.push(source_dir.clone());
         }
-        let mut trabajos: Vec<(VPath, VPath)> = Vec::with_capacity(paths.len());
+        let mut jobs: Vec<(VPath, VPath)> = Vec::with_capacity(paths.len());
         for path in paths {
-            let Some(nombre) = path.file_name() else {
-                // Impossible here: `pedir_transferencia` rejects the whole
+            let Some(name) = path.file_name() else {
+                // Impossible here: `request_transfer` rejects the whole
                 // batch if any entry is a root. It is checked anyway because
                 // the alternative is an `unwrap` on a mutation's path.
                 continue;
@@ -743,7 +746,7 @@ impl Estado {
             {
                 afectados.push(padre);
             }
-            trabajos.push((path.clone(), destino.join(nombre.clone())));
+            jobs.push((path.clone(), dest.join(name.clone())));
         }
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
@@ -755,13 +758,13 @@ impl Estado {
         // series the daemon can still do the work in parallel if it wants
         // to; what is capped is how many requests are in flight at once.
         tokio::spawn(async move {
-            for (from, to) in trabajos {
+            for (from, to) in jobs {
                 // The ORIGINAL pair travels with the task (#274): if this
                 // collides, it is the only thing that can be retried with a
                 // different policy. Rebuilding it from progress does not
                 // work — that says which file is currently in flight, not
                 // what was requested.
-                let reintento = Reintento {
+                let retry = Retry {
                     from: from.clone(),
                     to: to.clone(),
                     mover,
@@ -776,16 +779,14 @@ impl Estado {
                         .copy(from, to, norte_proto::CollisionPolicy::Fail, a_la_cola)
                         .await
                 };
-                let mensaje = match encolada {
-                    Ok(task) => {
-                        Mensaje::TaskNueva(Box::new((task, afectados.clone(), Some(reintento))))
-                    }
+                let message = match encolada {
+                    Ok(task) => Message::TaskNew(Box::new((task, afectados.clone(), Some(retry)))),
                     // To the batch's COUNT, not to the status bar: N
                     // rejections used to be N messages of which only the
                     // last one survived (#271).
-                    Err(e) => Mensaje::TaskDeLoteRechazada(Box::new(e)),
+                    Err(e) => Message::BatchTaskRejected(Box::new(e)),
                 };
-                if buzon.send(mensaje).await.is_err() {
+                if buzon.send(message).await.is_err() {
                     // The actor is no longer there: whatever remains of the
                     // batch matters to nobody, and continuing to request it
                     // would matter.

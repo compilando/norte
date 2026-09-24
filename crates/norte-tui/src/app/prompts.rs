@@ -1197,7 +1197,7 @@ mod tests {
     /// same rejection, and the same key, as the rename prompt.
     #[test]
     fn pack_refuses_a_name_with_the_replacement_character() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.modal = Some(Modal::Pack {
             name: "caf\u{FFFD}.zip".to_owned(),
             error: None,
@@ -1213,7 +1213,7 @@ mod tests {
     /// dialog, instead of packing a zip named like a rar.
     #[test]
     fn pack_refuses_an_extension_it_cant_write() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.modal = Some(Modal::Pack {
             name: "stuff.rar".to_owned(),
             error: None,

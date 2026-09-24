@@ -62,8 +62,8 @@ pub(crate) use chrome::{TARGET_BADGE, TabStrip, draw_tab_strip};
 pub(crate) use chrome::panel_buttons;
 use chrome::{draw_key_bar, draw_menu, draw_panel_bar};
 pub(crate) use geometry::{
-    body_rect, centered, chrome_body, contenido_de_hueco, pane_cols, placed_of_kind,
-    resolved_frame, slot_rect, visor_split,
+    body_rect, centered, chrome_body, pane_cols, placed_of_kind, resolved_frame, slot_content,
+    slot_rect, visor_split,
 };
 use modals::draw_modal;
 #[cfg(test)]
@@ -243,7 +243,7 @@ fn draw_body(frame: &mut Frame<'_>, app: &App) {
     draw_side_panels(frame, &res, app, tasks_area, status_area);
     // The panel-group strips (ADR 0134), over the row `placed_of_kind`
     // reserved for them.
-    chrome::draw_tiras_de_paneles(frame, app);
+    chrome::draw_pane_strips(frame, app);
     // Moving a panel (ADR 0138): the spot it would land on, marked with the
     // focus border, like the window's veil.
     if let Some(r) = app.mouse.move_target() {
@@ -377,7 +377,7 @@ fn draw_side_panels(
     if let Some(id) = app.panel_slot()
         && let Some(rect) = geometry::slot_rect(res, id)
     {
-        let rect = geometry::contenido_de_hueco(&app.layout, id, rect);
+        let rect = geometry::slot_content(&app.layout, id, rect);
         let has_keyboard = app.key_owner() == crate::app::KeyOwner::Panel;
         draw_plugin_panel(frame, rect, app, id, has_keyboard);
     }
@@ -620,7 +620,7 @@ pub fn draw(frame: &mut Frame<'_>, app: &App) {
 /// reachable. `app.menu_bar` (the PINNED bar) is not needed: it lives
 /// outside `body_area`, never competing for the viewer's spot.
 #[must_use]
-pub fn algo_encima_del_visor(app: &App) -> bool {
+pub fn something_above_the_viewer(app: &App) -> bool {
     app.menu.is_some()
         || app.help.is_some()
         || app.theme_picker.is_some()
@@ -648,7 +648,7 @@ pub fn algo_encima_del_visor(app: &App) -> bool {
 /// Branch review, finding 2: `panels::draw_viewer` (the painter, which
 /// blanks the slot) and the run loop (T4, which places the real pixels,
 /// `event_loop.rs`) each did this count on their own side — the painter
-/// only looked at `path`, the run loop added [`algo_encima_del_visor`] and
+/// only looked at `path`, the run loop added [`something_above_the_viewer`] and
 /// that the rect was not empty. With an overlay that does NOT cover the
 /// whole screen (the menu, which-key, a small modal, the nav popup) the
 /// painter blanked the slot JUST AS ALWAYS while the run loop refused to
@@ -656,10 +656,10 @@ pub fn algo_encima_del_visor(app: &App) -> bool {
 /// questions resolved by the SAME function, diverging like that stops being
 /// possible (memory `funcion-compartida-no-basta`).
 #[must_use]
-pub fn imagen_a_colocar(app: &App, area: Rect) -> Option<crate::viewer_open::Colocacion> {
+pub fn imagen_a_colocar(app: &App, area: Rect) -> Option<crate::viewer_open::Placement> {
     let viewer = app.viewer.as_ref()?;
     let image = app.viewer_imagen.as_ref()?;
-    if image.path != viewer.path || algo_encima_del_visor(app) {
+    if image.path != viewer.path || something_above_the_viewer(app) {
         return None;
     }
     let rect = rect_del_visor(app, area);
@@ -669,7 +669,7 @@ pub fn imagen_a_colocar(app: &App, area: Rect) -> Option<crate::viewer_open::Col
     // Zoom (spec 2026-09-20). The pan is the keys that move the viewer,
     // which with an image have nothing else to move: `scroll` goes down it
     // and `hscroll` travels across it.
-    Some(crate::viewer_open::colocacion(
+    Some(crate::viewer_open::placement(
         viewer.zoom_pct(),
         rect,
         image.width,
@@ -713,7 +713,7 @@ fn draw_search_dialog(
     // jumps to a line that is not painted.
     let mut lines: Vec<String> = SearchField::ORDEN
         .iter()
-        .map(|f| field(&t(f.clave()), dialog.texto(*f), dialog.field == *f))
+        .map(|f| field(&t(f.key()), dialog.text(*f), dialog.field == *f))
         .collect();
     lines.push(ta("search-regex", &[("on", &on_txt(dialog.regex))]));
     lines.push(ta("search-case", &[("on", &on_txt(dialog.case))]));
@@ -722,7 +722,7 @@ fn draw_search_dialog(
         &[("on", &on_txt(dialog.whole_word))],
     ));
     lines.push(ta("search-recursive", &[("on", &on_txt(dialog.recursive))]));
-    lines.push(ta("search-kinds", &[("what", &t(dialog.kinds.clave()))]));
+    lines.push(ta("search-kinds", &[("what", &t(dialog.kinds.key()))]));
     lines.push(middle_ellipsis(&root_line, 56));
     lines.push(t("search-hint"));
     let body = lines.join("\n");

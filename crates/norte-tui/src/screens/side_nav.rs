@@ -226,7 +226,7 @@ pub async fn on_timeline_key(
             // moment more is asked for: a list loaded whole on open would
             // pull in months of journal to show twelve rows.
             if at_bottom && let Some(from) = cursor {
-                crate::dispatch::cargar_timeline(app, backend, Some(from)).await;
+                crate::dispatch::load_timeline(app, backend, Some(from)).await;
             }
         }
         "dialog.cancel" | "dialog.pane" | "pane.switch" => app.return_keys_to_panes(),
@@ -234,21 +234,21 @@ pub async fn on_timeline_key(
             let Some(tl) = app.panes.timeline(slot) else {
                 return;
             };
-            let (Some(seq), summary) = (tl.corte(), tl.resumen()) else {
+            let (Some(seq), summary) = (tl.cutoff(), tl.summary()) else {
                 return;
             };
             // A cut that carries nothing away does NOT open a dialog: asking
             // "are you sure?" about something that will not happen teaches
             // people to say yes without reading, which is how the next
             // question — one that DOES matter — also goes unread.
-            if summary.no_hace_nada() {
+            if summary.no_does_nothing() {
                 app.message = Some(t("timeline-undo-nothing"));
                 return;
             }
             app.modal = Some(crate::app::Modal::ConfirmUndoAfter {
                 seq,
-                a_deshacer: summary.a_deshacer,
-                irreversibles: summary.irreversibles,
+                to_undo: summary.to_undo,
+                irreversible: summary.irreversible,
                 ajenas: summary.ajenas,
                 // Frozen NOW, with the count that is about to be shown.
                 techo: tl.techo(),
@@ -290,17 +290,17 @@ pub fn on_disk_map_key(app: &mut App, resolver: &mut Resolver, mods: KeyModifier
                     m.mover(n);
                 }
             }
-            MapAction::Entrar => {
+            MapAction::Enter => {
                 let chosen = app
                     .panes
                     .disk_map(slot)
-                    .and_then(|m| m.elegido().map(|c| c.name.clone()));
+                    .and_then(|m| m.chosen().map(|c| c.name.clone()));
                 // Only a DIRECTORY opens: entering a file is not navigating,
                 // and the map shows both.
                 let is_dir = app
                     .panes
                     .disk_map(slot)
-                    .and_then(|m| m.elegido().map(|c| c.kind == norte_proto::EntryKind::Dir));
+                    .and_then(|m| m.chosen().map(|c| c.kind == norte_proto::EntryKind::Dir));
                 if let (Some(name), Some(true)) = (chosen, is_dir) {
                     app.pending_disk_map_enter = Some(name);
                 }

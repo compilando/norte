@@ -163,11 +163,11 @@ pub async fn confirm_modal(
         // and relists, instead of trusting a local `bool` the daemon never
         // confirmed.
         Modal::ConfirmPluginApproval { id, digest, .. } => {
-            crate::screens::extensions::conceder_aprobacion(app, backend, &id, digest.as_deref())
+            crate::screens::extensions::grant_approval(app, backend, &id, digest.as_deref())
                 .await;
         }
         Modal::ConfirmPluginUninstall { id, .. } => {
-            crate::screens::extensions::desinstalar_confirmada(app, backend, &id).await;
+            crate::screens::extensions::uninstall_confirmada(app, backend, &id).await;
         }
         // A human read the count and said yes (phase 7). Runs as an undo
         // Task, with the usual progress and cancellation: what is said here
@@ -521,7 +521,7 @@ pub async fn checksum_start(
 ) {
     match req {
         crate::app::ChecksumRequest::Compute { paths } => {
-            lanzar_sumas(app, backend, work, paths, None).await;
+            launch_checksums(app, backend, work, paths, None).await;
         }
         crate::app::ChecksumRequest::Verify { sums } => {
             checksum_verify(app, backend, work, &sums).await;
@@ -586,7 +586,7 @@ async fn checksum_verify(
         return;
     };
     // The resolution lives in the SHARED crate: the window checks the same
-    // sums files, and two reads of `sub/dentro.txt` in two frontends would
+    // sums files, and two reads of `sub/inside.txt` in two frontends would
     // be two different checks (ADR 0077).
     let (paths, asked) = norte_frontend::checksums::resolve_targets(&base, &published.lines);
     if paths.is_empty() {
@@ -598,7 +598,7 @@ async fn checksum_verify(
         asked,
         refused: published.refused,
     };
-    lanzar_sumas(app, backend, work, paths, Some(published)).await;
+    launch_checksums(app, backend, work, paths, Some(published)).await;
 }
 
 /// Launches the checksums Task and leaves it waiting for its report.
@@ -607,7 +607,7 @@ async fn checksum_verify(
 /// hundred large files takes a while, and awaiting it here would leave the
 /// TUI not drawing, not taking keys and unable to cancel — which is exactly
 /// when someone cancels.
-async fn lanzar_sumas(
+async fn launch_checksums(
     app: &mut App,
     backend: &Backend,
     work: &mut crate::jobs::InFlight,
@@ -679,7 +679,7 @@ pub async fn combine_pieces(app: &mut App, backend: &Backend) {
     // Only from the FIRST piece: starting from `.007` would join half a
     // thing, and the core only knows how to search forward anyway. The rule
     // lives in the shared crate — the window asks the same (D14).
-    let Some(seg) = norte_frontend::nav::base_de_trozos(&name) else {
+    let Some(seg) = norte_frontend::nav::chunk_base(&name) else {
         app.message = Some(t("msg-combine-needs-first"));
         return;
     };
@@ -715,7 +715,7 @@ pub async fn submit_transfer(
     // a collision's retry inherits what was requested the first time, so
     // whatever the options already carried is respected.
     let opts = TransferOptions {
-        queued: opts.queued || app.encolar,
+        queued: opts.queued || app.enqueue,
         ..opts
     };
     let res = match kind {

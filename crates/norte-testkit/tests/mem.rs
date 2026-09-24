@@ -470,7 +470,7 @@ async fn unavailable_for_next_recovers() {
 /// `without_node_ids()` simulates a backend WITHOUT stable identity (object
 /// storage, ftp): `node_id` = `Ok(None)` always, even if the node exists.
 #[tokio::test]
-async fn without_node_ids_devuelve_none() {
+async fn without_node_ids_returns_none() {
     use norte_vfs::FollowLinks;
     let mem = MemProvider::new().without_node_ids();
     write_file(&mem, "mem:///f", b"x").await;
@@ -484,7 +484,7 @@ async fn without_node_ids_devuelve_none() {
 /// Mem, `a` and `A` resolve to the SAME node → same id. It is what the
 /// engine's guard could not know via heuristics (issue #16).
 #[tokio::test]
-async fn node_id_es_el_mismo_para_variantes_de_caja_plegadas() {
+async fn node_id_is_the_same_for_folded_case_variants() {
     use norte_vfs::FollowLinks;
     let mem =
         MemProvider::with_flags(CapabilityFlags::RENAME_ATOMIC | CapabilityFlags::CASE_PRESERVING);
@@ -507,7 +507,7 @@ async fn node_id_es_el_mismo_para_variantes_de_caja_plegadas() {
 /// `SymlinkKind::Unknown`: the provider resolves the target in ITS tree.
 /// Dir target → Dir; file target → File; broken → File (documented).
 #[tokio::test]
-async fn symlink_unknown_resuelve_el_kind_del_target() {
+async fn symlink_unknown_resolves_the_target_kind() {
     use norte_vfs::SymlinkKind;
     let mem = MemProvider::new();
     mem.mkdir(&vp("mem:///d")).await.unwrap();
@@ -552,7 +552,7 @@ async fn symlink_unknown_resuelve_el_kind_del_target() {
 /// `ProviderUnavailable` retryable — a remote's "timeout after commit". It
 /// is the fixture for the engine's disambiguating retry.
 #[tokio::test]
-async fn ambiguous_mutation_aplica_el_efecto_y_falla_transitorio() {
+async fn ambiguous_mutation_applies_the_effect_and_fails_transiently() {
     let mem = MemProvider::new();
     mem.faults().ambiguous_mutations(1);
     match mem.mkdir(&vp("mem:///d")).await {
@@ -569,7 +569,7 @@ async fn ambiguous_mutation_aplica_el_efecto_y_falla_transitorio() {
 /// The ambiguous failure covers the trait's 4 point mutations
 /// (mkdir/remove/rename/symlink); reads do NOT consume it.
 #[tokio::test]
-async fn ambiguous_mutation_cubre_las_cuatro_mutaciones() {
+async fn ambiguous_mutation_covers_the_four_mutations() {
     use norte_vfs::SymlinkKind;
     let mem = MemProvider::new();
     write_file(&mem, "mem:///a", b"x").await;
@@ -600,7 +600,7 @@ async fn ambiguous_mutation_cubre_las_cuatro_mutaciones() {
 /// A link→link chain with follow: `NotFound`, consistent with `read()`
 /// (Mem's minimal resolution does not follow chains — documented limit).
 #[tokio::test]
-async fn node_id_follow_sobre_cadena_es_notfound() {
+async fn node_id_follow_on_a_string_is_notfound() {
     use norte_vfs::{FollowLinks, SymlinkKind};
     let mem = MemProvider::new();
     write_file(&mem, "mem:///f", b"x").await;
@@ -628,7 +628,7 @@ async fn node_id_follow_sobre_cadena_es_notfound() {
 /// Symlink traversal composes with the normalization axis: a dir stored in
 /// NFD, looked up in NFC through an intermediate link.
 #[tokio::test]
-async fn travesia_compone_con_normalizacion_insensible() {
+async fn traversal_composes_with_insensitive_normalization() {
     use norte_testkit::Normalization;
     let mem = MemProvider::new().with_normalization(Normalization::Insensitive);
     // Dir with an NFD name (e + combining mark).
@@ -648,7 +648,7 @@ async fn travesia_compone_con_normalizacion_insensible() {
 /// to File (minimal resolution → Unsupported); a non-UTF8 target pointing
 /// at a dir with a non-UTF8 name resolves Dir.
 #[tokio::test]
-async fn symlink_unknown_con_targets_hostiles() {
+async fn symlink_unknown_with_hostile_targets() {
     use norte_vfs::SymlinkKind;
     let mem = MemProvider::new();
     mem.symlink(&vp("mem:///labs"), b"/etc", SymlinkKind::Unknown)
@@ -677,7 +677,7 @@ async fn symlink_unknown_con_targets_hostiles() {
 }
 
 #[tokio::test]
-async fn faults_cuenta_las_llamadas_a_read() {
+async fn faults_counts_the_calls_to_read() {
     // Observability #61: the read counter lets cache tests assert "N
     // concurrent ops = a SINGLE build's reads".
     let mem = MemProvider::new();
@@ -692,7 +692,7 @@ async fn faults_cuenta_las_llamadas_a_read() {
 // ---------- synthetic attrs (#108 block 2) ----------
 
 #[tokio::test]
-async fn synthetic_attrs_hostiles_y_deterministas() {
+async fn synthetic_attrs_hostile_and_deterministic() {
     use norte_vfs::{AttrRequest, ListOptions};
     let mem = MemProvider::new().with_synthetic_attrs();
     write_file(&mem, "mem:///f.txt", b"x").await;

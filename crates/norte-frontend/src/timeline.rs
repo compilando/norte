@@ -31,7 +31,7 @@ use norte_proto::methods::JournalRow;
 ///
 /// ```
 /// use norte_frontend::timeline::path_label;
-/// assert_eq!(path_label("file:///home/ana/fotos"), "/home/ana/fotos");
+/// assert_eq!(path_label("file:///home/ana/snapshots"), "/home/ana/snapshots");
 /// assert_eq!(path_label("not a path"), "not a path");
 /// ```
 #[must_use]
@@ -45,13 +45,13 @@ pub fn path_label(path: &str) -> String {
 /// to know which rows it can undo, and it lives here — and not as a loose
 /// literal in every call site — because writing it wrong does not break
 /// anything visibly: it just makes the count read zero forever.
-pub const ACTOR_HUMANO: &str = "user";
+pub const ACTOR_HUMAN: &str = "user";
 
 /// One row of the timeline: a mutation, or a whole BATCH.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TimelineRow {
     /// The NEWEST `seq` in the group. It is the cutoff that has to be sent to
-    /// keep this row whole ([`Timeline::corte`]).
+    /// keep this row whole ([`Timeline::cutoff`]).
     pub seq: i64,
     /// When the newest thing in the group happened.
     pub ts_ms: i64,
@@ -95,8 +95,8 @@ impl TimelineRow {
     /// Whether the human did this row, i.e. whether `journal.undo_after` is
     /// even going to look at it.
     #[must_use]
-    pub fn es_del_humano(&self) -> bool {
-        self.actor_kind == ACTOR_HUMANO
+    pub fn is_from_human(&self) -> bool {
+        self.actor_kind == ACTOR_HUMAN
     }
 
     /// Whether undo is actually going to try to bring this row back.
@@ -106,26 +106,26 @@ impl TimelineRow {
     /// itself a compensation. Counting only the first two is what made the
     /// confirmation promise twice what was actually going to happen.
     #[must_use]
-    pub fn se_va_a_deshacer(&self) -> bool {
-        self.es_del_humano() && self.reversible && !self.ya_desecho
+    pub fn will_undo(&self) -> bool {
+        self.is_from_human() && self.reversible && !self.ya_desecho
     }
 }
 
 /// What a cutoff is going to take with it, counted BEFORE asking.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Corte {
+pub struct Cutoff {
     /// The HUMAN's entries, reversible, after the cutoff: the ones undo is
     /// going to try to bring back.
-    pub a_deshacer: usize,
+    pub to_undo: usize,
     /// The human's entries after the cutoff that undo will NOT touch because
     /// they have no way back, because they are already undone, or because
     /// they are themselves another one's compensation.
     ///
-    /// These are counted separately and not added to [`Self::a_deshacer`] for
+    /// These are counted separately and not added to [`Self::to_undo`] for
     /// the usual reason: a number that mixed them would promise something
     /// that is not going to happen, and this figure is the one shown right
     /// before asking.
-    pub irreversibles: usize,
+    pub irreversible: usize,
     /// Entries after the cutoff that are NOT the human's. Undo does not touch
     /// them — they belong to an agent or a plugin, and get undone through
     /// their own path — and that is why they are counted apart instead of
@@ -134,11 +134,11 @@ pub struct Corte {
     pub ajenas: usize,
 }
 
-impl Corte {
+impl Cutoff {
     /// Whether a cutoff here is not going to do anything.
     #[must_use]
-    pub fn no_hace_nada(&self) -> bool {
-        self.a_deshacer == 0
+    pub fn no_does_nothing(&self) -> bool {
+        self.to_undo == 0
     }
 }
 
@@ -171,7 +171,7 @@ impl Timeline {
     /// has happened yet" about a journal that has not been looked at. On a
     /// history screen, that sentence is the worst possible mistake.
     #[must_use]
-    pub fn cargada(&self) -> bool {
+    pub fn loaded(&self) -> bool {
         self.loaded
     }
 
@@ -237,7 +237,7 @@ impl Timeline {
     /// What `seq` has to be sent to `journal.undo_after` to go back to the
     /// state at the row under the cursor, keeping it.
     #[must_use]
-    pub fn corte(&self) -> Option<i64> {
+    pub fn cutoff(&self) -> Option<i64> {
         self.selected().map(|r| r.seq)
     }
 
@@ -251,22 +251,22 @@ impl Timeline {
     /// anything newer than that. Whatever is below the cursor, which may not
     /// be loaded, a cutoff here does not touch.
     #[must_use]
-    pub fn resumen(&self) -> Corte {
-        let mut summary = Corte::default();
+    pub fn summary(&self) -> Cutoff {
+        let mut summary = Cutoff::default();
         for row in self.rows.iter().take(self.cursor) {
-            if !row.es_del_humano() {
+            if !row.is_from_human() {
                 summary.ajenas += row.members;
-            } else if row.se_va_a_deshacer() {
-                summary.a_deshacer += row.members;
+            } else if row.will_undo() {
+                summary.to_undo += row.members;
             } else {
-                summary.irreversibles += row.members;
+                summary.irreversible += row.members;
             }
         }
         summary
     }
 
     /// The CEILING of an undo from this list: the newest `seq` that has been
-    /// loaded, and therefore the newest thing [`Self::resumen`] could have
+    /// loaded, and therefore the newest thing [`Self::summary`] could have
     /// counted. It goes as `upto_seq` in `journal.undo_after`: without it,
     /// whatever happened after the list was painted would enter the undo
     /// without having been counted.
@@ -420,7 +420,7 @@ mod tests {
         ];
         let mut t = Timeline::new(&rows, None);
         t.down();
-        assert_eq!(t.corte(), Some(8), "the newest in the marked batch");
+        assert_eq!(t.cutoff(), Some(8), "the newest in the marked batch");
     }
 
     /// The count up front separates what is actually going to be undone from
@@ -439,12 +439,9 @@ mod tests {
         let mut t = Timeline::new(&rows, None);
         // Cursor on the last one (the oldest): everything above enters.
         t.set_cursor(99);
-        let c = t.resumen();
-        assert_eq!(
-            c.a_deshacer, 3,
-            "the lone one above and the two in the batch"
-        );
-        assert_eq!(c.irreversibles, 1);
+        let c = t.summary();
+        assert_eq!(c.to_undo, 3, "the lone one above and the two in the batch");
+        assert_eq!(c.irreversible, 1);
         assert_eq!(c.ajenas, 1, "the agent's is not touched by this undo");
     }
 
@@ -466,14 +463,14 @@ mod tests {
         let rows = [compensation, undone, row(3, "user", true, None)];
         let mut t = Timeline::new(&rows, None);
         t.set_cursor(99);
-        let c = t.resumen();
+        let c = t.summary();
 
-        assert_eq!(c.a_deshacer, 0, "the two above are already settled");
+        assert_eq!(c.to_undo, 0, "the two above are already settled");
         assert_eq!(
-            c.irreversibles, 2,
+            c.irreversible, 2,
             "and count as \"not going to be touched\""
         );
-        assert!(c.no_hace_nada());
+        assert!(c.no_does_nothing());
     }
 
     /// A batch groups together even when its entries are NOT contiguous: two
@@ -497,7 +494,7 @@ mod tests {
     fn a_cutoff_at_the_newest_entry_does_nothing() {
         let rows = [row(2, "user", true, None), row(1, "user", true, None)];
         let t = Timeline::new(&rows, None);
-        assert!(t.resumen().no_hace_nada());
+        assert!(t.summary().no_does_nothing());
     }
 
     /// A batch split across two pages gets rejoined: the journal paginates by

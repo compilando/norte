@@ -34,10 +34,10 @@ pub struct HostTask {
     /// Pauses (`true`) or resumes (`false`) the task (ADR 0147), or `None` if
     /// this task cannot be paused from here. Returns `Unsupported` against a
     /// daemon that does not know how to pause, so the window can say so.
-    pub pause: Option<Pausa>,
+    pub pause: Option<Pause>,
     /// Raises (`true`) or lowers the task in the serial queue (ADR 0149), or
     /// `None` if it cannot be done from here.
-    pub cola: Option<Pausa>,
+    pub cola: Option<Pause>,
     /// It was launched by ANOTHER client of the same session. It is painted
     /// the same and can be cancelled the same — it is the same session — but
     /// the board says so: an operation nobody here asked for, and
@@ -46,17 +46,17 @@ pub struct HostTask {
 }
 
 /// How to pause or resume a [`HostTask`] (ADR 0147).
-pub type Pausa = Arc<dyn Fn(bool) -> BoxFuture<'static, Result<(), Error>> + Send + Sync>;
+pub type Pause = Arc<dyn Fn(bool) -> BoxFuture<'static, Result<(), Error>> + Send + Sync>;
 
 /// The pause handle of a daemon task, over the SDK's handle.
-fn remote_queue_move(c: norte_client::RemoteTaskCanceller) -> Pausa {
+fn remote_queue_move(c: norte_client::RemoteTaskCanceller) -> Pause {
     Arc::new(move |up| {
         let c = c.clone();
         Box::pin(async move { c.mover_en_cola(up).await })
     })
 }
 
-fn remote_pause(c: norte_client::RemoteTaskCanceller) -> Pausa {
+fn remote_pause(c: norte_client::RemoteTaskCanceller) -> Pause {
     Arc::new(move |pause| {
         let c = c.clone();
         Box::pin(async move { c.set_paused(pause).await })

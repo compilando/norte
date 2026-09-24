@@ -8,9 +8,9 @@
 //!   copying a small file finishes sooner, and painting a bar for 50 ms is a
 //!   flicker, not information;
 //! - with several tasks there is ONE bar, the total's;
-//! - on finishing it leaves a "✓" for [`HECHO_MS`] — also if the burst was
+//! - on finishing it leaves a "✓" for [`DONE_MS`] — also if the burst was
 //!   too short to show the bar: otherwise, a fast copy would give no sign of
-//!   having happened — or a "✗" for [`FALLO_MS`] if something failed;
+//!   having happened — or a "✗" for [`FAILURE_MS`] if something failed;
 //! - the processes panel that opens on its own only waits [`PANEL_MS`]:
 //!   whatever finishes before that is counted by this bar, without taking a
 //!   third of the screen from the listing away from it.
@@ -26,10 +26,10 @@ use norte_proto::{TaskKind, TaskProgress, TaskState, VPath};
 /// How long the bar takes to appear since a burst starts.
 pub const UMBRAL_MS: i64 = 400;
 /// How long the "✓" stays once it finishes well.
-pub const HECHO_MS: i64 = 1_500;
+pub const DONE_MS: i64 = 1_500;
 /// How long the "✗" stays once it finishes with some failure: the same as a
 /// row finished in the board, which is where you see which one and why.
-pub const FALLO_MS: i64 = 10_000;
+pub const FAILURE_MS: i64 = 10_000;
 /// How long the automatic processes panel waits before opening.
 pub const PANEL_MS: i64 = 2_000;
 /// The bar's cells in the terminal (the window draws it its own way, with
@@ -202,9 +202,9 @@ impl TaskStrip {
             return;
         }
         let (phase, count, duration) = if r.failed > 0 {
-            (StripPhase::Failed, r.failed, FALLO_MS)
+            (StripPhase::Failed, r.failed, FAILURE_MS)
         } else {
-            (StripPhase::Done, r.done, HECHO_MS)
+            (StripPhase::Done, r.done, DONE_MS)
         };
         let view = StripView {
             phase,
@@ -524,9 +524,9 @@ mod tests {
         s.update(100, [t(&a)]);
         let v = s.view(100).expect("the ✓");
         assert_eq!((v.phase, v.count), (StripPhase::Done, 1));
-        assert!(s.view(100 + HECHO_MS - 1).is_some(), "it stays");
-        assert_eq!(s.view(100 + HECHO_MS), None, "and it goes");
-        assert_eq!(s.next_change_ms(100), Some(100 + HECHO_MS));
+        assert!(s.view(100 + DONE_MS - 1).is_some(), "it stays");
+        assert_eq!(s.view(100 + DONE_MS), None, "and it goes");
+        assert_eq!(s.next_change_ms(100), Some(100 + DONE_MS));
     }
 
     /// A failure stays longer than a success.
@@ -541,8 +541,8 @@ mod tests {
         s.update(50, [t(&a), t(&b)]);
         let v = s.view(50).expect("the ✗");
         assert_eq!((v.phase, v.count), (StripPhase::Failed, 1));
-        assert!(s.view(50 + HECHO_MS).is_some(), "longer than a ✓");
-        assert_eq!(s.view(50 + FALLO_MS), None);
+        assert!(s.view(50 + DONE_MS).is_some(), "longer than a ✓");
+        assert_eq!(s.view(50 + FAILURE_MS), None);
     }
 
     /// With several tasks, ONE bar: the byte total's, which does not go
@@ -609,8 +609,8 @@ mod tests {
         s.update(0, [t(&a)]);
         assert_eq!(s.view(0).map(|v| v.phase), Some(StripPhase::Done));
         // And it is not counted again on the next tick.
-        s.update(HECHO_MS, [t(&a)]);
-        assert_eq!(s.view(HECHO_MS), None);
+        s.update(DONE_MS, [t(&a)]);
+        assert_eq!(s.view(DONE_MS), None);
     }
 
     /// A burst whose tasks disappear without finishing (a daemon handover)

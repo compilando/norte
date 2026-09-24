@@ -339,16 +339,16 @@ pub fn profile_start_seeds(
 /// ```
 /// use std::collections::{BTreeMap, BTreeSet};
 /// use norte_proto::VPath;
-/// use norte_frontend::config::profile_start_huerfanos;
+/// use norte_frontend::config::profile_start_orphans;
 ///
 /// let mut start = BTreeMap::new();
 /// start.insert(1, VPath::parse("file:///src").unwrap());
 /// start.insert(9, VPath::parse("file:///tmp").unwrap());
 /// let placed = BTreeSet::from([1, 2]);
-/// assert_eq!(profile_start_huerfanos(&start, &placed), vec![9]);
+/// assert_eq!(profile_start_orphans(&start, &placed), vec![9]);
 /// ```
 #[must_use]
-pub fn profile_start_huerfanos(
+pub fn profile_start_orphans(
     start: &std::collections::BTreeMap<u32, norte_proto::VPath>,
     placed: &std::collections::BTreeSet<u32>,
 ) -> Vec<u32> {

@@ -13,7 +13,7 @@ fn dir_with(files: &[(&str, &str)]) -> tempfile::TempDir {
 }
 
 #[test]
-fn defaults_sin_ninguna_capa() {
+fn defaults_without_any_layer() {
     let cfg = load(&Layers { dirs: vec![] }).expect("defaults");
     assert_eq!(
         cfg.common.preset, "orthodox",
@@ -23,24 +23,24 @@ fn defaults_sin_ninguna_capa() {
 }
 
 #[test]
-fn el_ultimo_gana_por_campo_y_las_capas_de_keymap_se_acumulan() {
-    let sistema = dir_with(&[
+fn last_one_wins_per_field_and_keymap_layers_accumulate() {
+    let system = dir_with(&[
         ("norte.toml", "[keymap]\npreset = \"cua\"\n"),
         (
             "keymap.toml",
             "[pane]\nappend_keymap = [{ on = [\"x\"], run = \"app.quit\" }]\n",
         ),
     ]);
-    let usuario = dir_with(&[("norte.toml", "[keymap]\npreset = \"vim\"\n")]);
-    let proyecto = dir_with(&[(
+    let user = dir_with(&[("norte.toml", "[keymap]\npreset = \"vim\"\n")]);
+    let project = dir_with(&[(
         "keymap.toml",
         "[pane]\nprepend_keymap = [{ on = [\"z\"], run = \"cursor.top\" }]\n",
     )]);
     let layers = Layers {
         dirs: vec![
-            (sistema.path().to_path_buf(), Layer::System),
-            (usuario.path().to_path_buf(), Layer::User),
-            (proyecto.path().to_path_buf(), Layer::Project),
+            (system.path().to_path_buf(), Layer::System),
+            (user.path().to_path_buf(), Layer::User),
+            (project.path().to_path_buf(), Layer::Project),
         ],
     };
     let cfg = load(&layers).expect("load");
@@ -56,7 +56,7 @@ fn el_ultimo_gana_por_campo_y_las_capas_de_keymap_se_acumulan() {
 }
 
 #[test]
-fn toml_roto_nombra_el_archivo() {
+fn a_broken_toml_names_the_file() {
     let mala = dir_with(&[("norte.toml", "esto no es toml ===")]);
     match load(&Layers {
         dirs: vec![(mala.path().to_path_buf(), Layer::User)],
@@ -72,7 +72,7 @@ fn toml_roto_nombra_el_archivo() {
 }
 
 #[test]
-fn clave_desconocida_es_error_claro() {
+fn unknown_key_is_a_clear_error() {
     let mala = dir_with(&[("norte.toml", "[keymap]\npresett = \"vim\"\n")]);
     match load(&Layers {
         dirs: vec![(mala.path().to_path_buf(), Layer::User)],
@@ -85,11 +85,11 @@ fn clave_desconocida_es_error_claro() {
 }
 
 #[test]
-fn dir_sin_archivos_no_molesta() {
-    let vacia = dir_with(&[]);
+fn dir_without_files_does_not_bother() {
+    let empty = dir_with(&[]);
     let cfg = load(&Layers {
         dirs: vec![
-            (vacia.path().to_path_buf(), Layer::User),
+            (empty.path().to_path_buf(), Layer::User),
             ("/no/existe/en/absoluto".into(), Layer::Project),
         ],
     })
@@ -101,7 +101,7 @@ fn dir_sin_archivos_no_molesta() {
 /// `Watch` CANCELS it cleanly (the task drops its sender → the channel
 /// closes).
 #[tokio::test]
-async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
+async fn polling_detects_changes_and_cancels_cleanly() {
     let d = dir_with(&[("norte.toml", "[keymap]\npreset = \"vim\"\n")]);
     let layers = Layers {
         dirs: vec![(d.path().to_path_buf(), Layer::User)],
@@ -115,21 +115,21 @@ async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
     // load it lost (wave W9, task 2.2). Instead a different change (mtime
     // AND size) is written every round until a tick sees it: if the base
     // arrived after the first write, the second one gives it away.
-    let mut visto = None;
+    let mut seen = None;
     for i in 0..15u32 {
-        let mut contenido = String::from("[keymap]\npreset = \"orthodox\"\n");
+        let mut content = String::from("[keymap]\npreset = \"orthodox\"\n");
         for _ in 0..i {
-            contenido.push_str("# round\n");
+            content.push_str("# round\n");
         }
-        std::fs::write(d.path().join("norte.toml"), contenido).unwrap();
+        std::fs::write(d.path().join("norte.toml"), content).unwrap();
         if let Ok(Some(())) =
             tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
         {
-            visto = Some(());
+            seen = Some(());
             break;
         }
     }
-    assert!(visto.is_some(), "the poll sees the change");
+    assert!(seen.is_some(), "the poll sees the change");
 
     drop(watch);
     // After cancelling, the task ends and drops the sender: recv → None
@@ -151,14 +151,14 @@ async fn el_polling_detecta_cambios_y_se_cancela_limpio() {
 /// discards its `lua:` bindings (a hostile repo does not rebind keys to the
 /// user's Lua commands). The user layer is NOT marked.
 #[test]
-fn el_keymap_de_la_ultima_capa_se_marca_como_proyecto() {
+fn the_last_layer_keymap_is_marked_as_project() {
     let binding = "[pane]\nprepend_keymap = [{ on = [\"j\"], run = \"lua:pwn\" }]\n";
-    let usuario = dir_with(&[("keymap.toml", binding)]);
-    let proyecto = dir_with(&[("keymap.toml", binding)]);
+    let user = dir_with(&[("keymap.toml", binding)]);
+    let project = dir_with(&[("keymap.toml", binding)]);
     let layers = Layers {
         dirs: vec![
-            (usuario.path().to_path_buf(), Layer::User),
-            (proyecto.path().to_path_buf(), Layer::Project),
+            (user.path().to_path_buf(), Layer::User),
+            (project.path().to_path_buf(), Layer::Project),
         ],
     };
     let cfg = load(&layers).expect("load");
@@ -186,21 +186,21 @@ fn el_keymap_de_la_ultima_capa_se_marca_como_proyecto() {
 /// cannot raise the anti-bomb limits exactly where hostile archives live
 /// (same fail-closed criterion as the hotlist).
 #[test]
-fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
-    let sistema = dir_with(&[(
+fn archive_limits_last_one_wins_and_project_does_not_touch_them() {
+    let system = dir_with(&[(
         "norte.toml",
         "[archive]\nmax_entries = 1000\nmax_decompressed_bytes = 4096\n",
     )]);
-    let usuario = dir_with(&[("norte.toml", "[archive]\nmax_entries = 50\n")]);
-    let proyecto = dir_with(&[(
+    let user = dir_with(&[("norte.toml", "[archive]\nmax_entries = 50\n")]);
+    let project = dir_with(&[(
         "norte.toml",
         "[archive]\nmax_entries = 999999999\nmax_decompressed_bytes = 999999999\n",
     )]);
     let layers = Layers {
         dirs: vec![
-            (sistema.path().to_path_buf(), Layer::System),
-            (usuario.path().to_path_buf(), Layer::User),
-            (proyecto.path().to_path_buf(), Layer::Project),
+            (system.path().to_path_buf(), Layer::System),
+            (user.path().to_path_buf(), Layer::User),
+            (project.path().to_path_buf(), Layer::Project),
         ],
     };
     let cfg = load(&layers).expect("load");
@@ -227,7 +227,7 @@ fn archive_limits_ultimo_gana_y_proyecto_no_los_toca() {
 /// through a path that does load config, install the subscriber, and exit
 /// without opening the TTY.
 #[test]
-fn el_frontend_de_terminal_loguea_al_fichero_y_no_a_la_pantalla() {
+fn the_terminal_frontend_logs_to_the_file_and_not_to_the_screen() {
     let state = tempfile::tempdir().expect("tmp");
     let config = tempfile::tempdir().expect("tmp");
     // VALID config with an AI provider that does not resolve: it parses

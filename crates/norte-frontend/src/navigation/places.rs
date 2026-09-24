@@ -128,7 +128,7 @@ pub enum PlaceRow {
 ///
 /// let mut s = PlacesState::new();
 /// s.set_favorites(&[(
-///     "casa".to_owned(),
+///     "home".to_owned(),
 ///     Ok(VPath::parse("file:///home").expect("wire")),
 /// )]);
 /// // BOTH headers are always there, even if a section is empty: with no
@@ -191,7 +191,7 @@ impl PlacesState {
     /// zero: a zero reads as "full", which is the opposite of "I don't
     /// know".
     ///
-    /// `corto` picks the numbers' scale, and that difference is real: the
+    /// `short` picks the numbers' scale, and that difference is real: the
     /// side bar is half the width of a full-screen picker.
     ///
     /// ```
@@ -202,8 +202,8 @@ impl PlacesState {
     /// let d = PlacesState::volume_detail(Some(1_000), Some(4_000), false, false, Lang::En);
     /// assert!(d.contains("free of"));
     /// // Only what is left: what is known is said, instead of "unknown".
-    /// let medio = PlacesState::volume_detail(Some(1_000), None, false, false, Lang::En);
-    /// assert!(medio.contains("free") && !medio.contains("unknown"));
+    /// let middle = PlacesState::volume_detail(Some(1_000), None, false, false, Lang::En);
+    /// assert!(middle.contains("free") && !middle.contains("unknown"));
     /// // Nothing: then yes.
     /// assert!(PlacesState::volume_detail(None, None, false, false, Lang::En).contains("unknown"));
     /// // And read-only is added, not substituted.
@@ -215,11 +215,11 @@ impl PlacesState {
         free: Option<u64>,
         total: Option<u64>,
         read_only: bool,
-        corto: bool,
+        short: bool,
         lang: norte_i18n::Lang,
     ) -> String {
         let bytes = |n: u64| {
-            if corto {
+            if short {
                 crate::human_bytes_short(n)
             } else {
                 crate::human_bytes(n)
@@ -468,7 +468,7 @@ mod tests {
         VPath::parse(wire).expect("valid wire")
     }
 
-    fn volumen(mount: &str, free: Option<u64>, total: Option<u64>) -> Volume {
+    fn volume(mount: &str, free: Option<u64>, total: Option<u64>) -> Volume {
         Volume {
             mount: vp(mount),
             label: None,
@@ -483,14 +483,14 @@ mod tests {
     fn con_label(label: Vec<u8>) -> Volume {
         Volume {
             label: Some(label),
-            ..volumen("file:///", Some(1), Some(2))
+            ..volume("file:///", Some(1), Some(2))
         }
     }
 
     /// A broken favorite IS PAINTED, with its reason. One that disappears
     /// silently is a config failure you cannot see.
     #[test]
-    fn un_favorito_roto_sale_en_la_lista_y_no_navega() {
+    fn a_broken_favorite_shows_in_the_list_and_does_not_navigate() {
         let mut s = PlacesState::new();
         s.set_favorites(&[
             ("bueno".to_owned(), Ok(vp("file:///casa"))),
@@ -516,9 +516,9 @@ mod tests {
     /// lives in `space.rs` and here the `Option` is kept as is, without
     /// substituting it with a number that would read as "full".
     #[test]
-    fn un_volumen_sin_espacio_conserva_el_none() {
+    fn a_volume_without_space_preserves_the_none() {
         let mut s = PlacesState::new();
-        s.set_drives(&[volumen("file:///mnt", None, None)]);
+        s.set_drives(&[volume("file:///mnt", None, None)]);
         let PlaceRow::Drive { free, total, .. } = &s.rows()[1] else {
             panic!("row 1 is the volume");
         };
@@ -528,9 +528,9 @@ mod tests {
     /// Folding hides the section's rows and leaves the cursor within what
     /// remains.
     #[test]
-    fn plegar_una_seccion_esconde_sus_filas_y_recoloca_el_cursor() {
+    fn folding_a_section_hides_its_rows_and_relocates_the_cursor() {
         let mut s = PlacesState::new();
-        s.set_drives(&[volumen("file:///", Some(1000), Some(4000))]);
+        s.set_drives(&[volume("file:///", Some(1000), Some(4000))]);
         s.set_favorites(&[("casa".to_owned(), Ok(vp("file:///casa")))]);
         assert_eq!(s.rows().len(), 4);
         // Cursor all the way at the end, which is where folding hurts.
@@ -546,7 +546,7 @@ mod tests {
     /// `is_folded` says the same thing the header paints: it is what
     /// whoever decides whether to request the volumes again looks at.
     #[test]
-    fn is_folded_sigue_al_toggle() {
+    fn is_folded_follows_the_toggle() {
         let mut s = PlacesState::new();
         assert!(!s.is_folded(Section::Drives));
         s.toggle_fold();
@@ -556,9 +556,9 @@ mod tests {
 
     /// Folding from any row folds ITS section, not the first one.
     #[test]
-    fn plegar_desde_una_fila_pliega_su_propia_seccion() {
+    fn folding_from_a_row_folds_its_own_section() {
         let mut s = PlacesState::new();
-        s.set_drives(&[volumen("file:///", Some(1), Some(2))]);
+        s.set_drives(&[volume("file:///", Some(1), Some(2))]);
         s.set_favorites(&[("casa".to_owned(), Ok(vp("file:///casa")))]);
         s.down(); // on the volume
         s.toggle_fold();
@@ -581,7 +581,7 @@ mod tests {
     /// A volume's label is BYTES (rule 1): a name that is not UTF-8 does
     /// not blow up or get lost along the way.
     #[test]
-    fn una_etiqueta_no_utf8_sobrevive_como_bytes() {
+    fn a_non_utf8_label_survives_as_bytes() {
         let mut s = PlacesState::new();
         s.set_drives(&[con_label(b"\xffdisco".to_vec())]);
         let PlaceRow::Drive { label, .. } = &s.rows()[1] else {
@@ -594,10 +594,10 @@ mod tests {
     /// offering a mount that is no longer there is offering a place you
     /// cannot go to.
     #[test]
-    fn set_drives_sustituye_no_fusiona() {
+    fn set_drives_replaces_it_does_not_merge() {
         let mut s = PlacesState::new();
-        s.set_drives(&[volumen("file:///", Some(1), Some(2))]);
-        s.set_drives(&[volumen("file:///mnt", Some(1), Some(2))]);
+        s.set_drives(&[volume("file:///", Some(1), Some(2))]);
+        s.set_drives(&[volume("file:///mnt", Some(1), Some(2))]);
         assert_eq!(s.rows().len(), 3);
         let PlaceRow::Drive { mount, .. } = &s.rows()[1] else {
             panic!("volume")
@@ -606,7 +606,7 @@ mod tests {
     }
 
     #[test]
-    fn la_sugerencia_es_el_ultimo_segmento() {
+    fn the_suggestion_is_the_last_segment() {
         assert_eq!(
             suggested_hotlist_name(&vp("file:///home/o/work"), &[]),
             "work"
@@ -616,13 +616,13 @@ mod tests {
     /// The local root has no last segment, and `file` names no place: the
     /// name a human recognizes there is the slash.
     #[test]
-    fn la_raiz_local_se_sugiere_como_barra() {
+    fn the_local_root_is_suggested_as_the_slash() {
         assert_eq!(suggested_hotlist_name(&vp("file:///"), &[]), "/");
     }
 
     /// At a remote's root there IS something naming the place: the host.
     #[test]
-    fn la_raiz_remota_se_sugiere_con_su_authority() {
+    fn the_remote_root_is_suggested_with_its_authority() {
         assert_eq!(suggested_hotlist_name(&vp("sftp://host/"), &[]), "host");
     }
 
@@ -630,7 +630,7 @@ mod tests {
     /// it is suggested SANITIZED: non-UTF-8 bytes come out lossy and
     /// terminal hazards masked, and none go raw into `norte.toml`.
     #[test]
-    fn la_sugerencia_va_saneada_como_cualquier_nombre_pintado() {
+    fn the_suggestion_is_sanitized_like_any_painted_name() {
         assert_eq!(
             suggested_hotlist_name(&vp("file:///home/%FFdir"), &[]),
             "\u{FFFD}dir"
@@ -646,7 +646,7 @@ mod tests {
     /// favorite that pointed somewhere else. The suggestion is qualified
     /// with the parent, which also says more than a number.
     #[test]
-    fn una_sugerencia_ocupada_se_cualifica_con_el_padre() {
+    fn a_taken_suggestion_is_qualified_with_the_parent() {
         assert_eq!(
             suggested_hotlist_name(&vp("file:///home/o/norte/src"), &["src"]),
             "norte/src"
@@ -657,7 +657,7 @@ mod tests {
     /// up until it finds room: stopping at the first taken one would
     /// collide again.
     #[test]
-    fn si_el_padre_tampoco_basta_se_numera_hasta_encontrar_hueco() {
+    fn if_the_parent_is_not_enough_either_it_numbers_until_it_finds_room() {
         assert_eq!(
             suggested_hotlist_name(&vp("file:///home/o/norte/src"), &["src", "norte/src"]),
             "src (2)"
@@ -673,7 +673,7 @@ mod tests {
 
     /// With no parent to qualify with (the root), it numbers directly.
     #[test]
-    fn la_raiz_ocupada_se_numera_sin_padre() {
+    fn the_taken_root_is_numbered_without_parent() {
         assert_eq!(suggested_hotlist_name(&vp("file:///"), &["/"]), "/ (2)");
     }
 }

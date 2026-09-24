@@ -437,7 +437,7 @@ mod sync_step_item_tests {
 
     /// Branch review encoding audit, MAJOR-4. The badge and the `→` were
     /// INSIDE the string that gets truncated, and `middle_ellipsis` drops
-    /// the middle: on a narrow pane the row came out `⚠ caf…largo.txt`, that
+    /// the middle: on a narrow pane the row came out `⚠ caf…long.txt`, that
     /// is, a single truncated name. Both the pair's separator and the
     /// DESTINATION spelling's mark — the one that says which file the write
     /// lands on — vanished with nothing saying the pair had collapsed.

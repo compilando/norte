@@ -916,7 +916,7 @@ impl RemoteConnector for CauseConnector {
     async fn connect(&self, _s: &str, _a: &str) -> Result<Connected, DialError> {
         Err(DialError {
             error: Error::PermissionDenied,
-            causa: Some(Box::new(norte_core::connect::Causa {
+            cause: Some(Box::new(norte_core::connect::Cause {
                 conn: Some("rosetta".into()),
                 reason: norte_core::connect::ConnectionFailureReason::SecretEmpty,
                 detail: Some("the secret for \"rosetta\" is set but EMPTY".into()),
@@ -990,7 +990,7 @@ impl RemoteConnector for FallenAgentConnector {
         self.attempts.fetch_add(1, Ordering::SeqCst);
         Err(DialError {
             error: Error::ProviderUnavailable { retryable: false },
-            causa: Some(Box::new(norte_core::connect::Causa {
+            cause: Some(Box::new(norte_core::connect::Cause {
                 conn: None,
                 reason: norte_core::connect::ConnectionFailureReason::Agent,
                 detail: Some("the SSH agent is not responding".into()),
@@ -1057,7 +1057,7 @@ async fn the_reason_repeats_on_retry_within_the_backoff() {
 #[test]
 fn the_failure_vocabulary_is_the_protos() {
     use norte_core::connect::ConnectionFailureReason as R;
-    let from_core: Vec<&str> = R::TODAS.iter().map(|r| r.wire()).collect();
+    let from_core: Vec<&str> = R::ALL.iter().map(|r| r.wire()).collect();
     let from_proto = norte_proto::methods::CONNECTION_FAILURE_REASONS;
     for w in &from_core {
         assert!(

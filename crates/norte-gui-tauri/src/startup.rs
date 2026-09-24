@@ -26,7 +26,7 @@ use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 ///
 /// **Full since task 5.4** (2026-08-22), which is the mutation security
 /// review that phase 5's exit gate requires before a release build writes
-/// anything. Until then it was `SoloLectura` (read-only), and not for lack of
+/// anything. Until then it was `SoloRead` (read-only), and not for lack of
 /// code: task 3.3's review had found that the preset already bound F7/F8 to
 /// create and delete, and that `Dialog{choice:"approve"}` approved an agent's
 /// operation — so the "read-only" slice already had destructive and policy
@@ -42,8 +42,8 @@ use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 /// - **Every mutation goes through a confirmation** and from there to a
 ///   daemon Task: journal, dashboard, cancellation and relisting. The paths
 ///   to `backend.delete/copy/move_/mkdir/rename_batch` are TWO and both
-///   require an answered screen: `ejecutar_pendiente` (the dialogs) and
-///   `aprobar_revision_ia` (an AI plan's review, which also requires the
+///   require an answered screen: `run_pending` (the dialogs) and
+///   `approve_revision_ia` (an AI plan's review, which also requires the
 ///   `plan_hash` the core returned and having read the whole plan).
 /// - **Turning this on also enables `pane.ai-rename`**, which sends the
 ///   directory's contents to an external model. It does not write, but it
@@ -56,7 +56,7 @@ use norte_ui_host::{UiHost, UiHostOptions, ViewSnapshot};
 /// - **The webview's surface stays the same as ever**: four commands, a CSP
 ///   with no `eval` and no remote origins, minimal capabilities, no
 ///   filesystem and no shell, and `tests/webview_boundary.rs` pins it.
-pub const EFECTOS: norte_ui_host::commands::Efectos = norte_ui_host::commands::Efectos::Completo;
+pub const EFFECTS: norte_ui_host::commands::Effects = norte_ui_host::commands::Effects::Full;
 
 /// The command-line help. Short on purpose: what this window knows how to do
 /// is documented INSIDE (F1), not in a `--help`.
@@ -104,7 +104,7 @@ OPCIONES:
 ///
 /// `None` leaves startup as it was: it tries to connect and, if nobody
 /// answers, it says so.
-async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsString>> {
+async fn daemon_command(socket: &std::path::Path) -> Option<Vec<std::ffi::OsString>> {
     let socket = socket.to_path_buf();
     // FS probes outside the runtime (rule 2).
     tokio::task::spawn_blocking(move || {
@@ -114,7 +114,7 @@ async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsS
         // The argv is the shared one: what starts this window shuts down
         // only once its last client leaves.
         Some(norte_client::daemon_run_argv(
-            programa_del_daemon(next_to.as_deref()),
+            daemon_program(next_to.as_deref()),
             &socket,
         ))
     })
@@ -126,13 +126,13 @@ async fn comando_de_daemon(socket: &std::path::Path) -> Option<Vec<std::ffi::OsS
 /// Which `norte` is going to be launched: the executable's SIBLING if there
 /// is one, and if not, the `PATH`'s.
 ///
-/// Separate from [`comando_de_daemon`] so it can be tested. It is the promise
+/// Separate from [`daemon_command`] so it can be tested. It is the promise
 /// that backs the package — `norte-gui`, `norte` and `ntc` travel together and
 /// the window finds its own (#256) — and until now it could only be checked
 /// by installing, which is when it is already too late. What cannot be tested
 /// here is `current_exe`, and that is why the directory comes in as an
 /// argument.
-fn programa_del_daemon(next_to: Option<&std::path::Path>) -> std::ffi::OsString {
+fn daemon_program(next_to: Option<&std::path::Path>) -> std::ffi::OsString {
     next_to
         .map(|d| d.join("norte"))
         .filter(|p| p.is_file())
@@ -140,8 +140,8 @@ fn programa_del_daemon(next_to: Option<&std::path::Path>) -> std::ffi::OsString 
 }
 
 #[cfg(test)]
-mod prueba_del_daemon {
-    use super::programa_del_daemon;
+mod daemon_test {
+    use super::daemon_program;
 
     /// With a `norte` next to it, THAT one is launched, and with its full
     /// path.
@@ -149,20 +149,20 @@ mod prueba_del_daemon {
     /// It is what makes the package work: on a clean install the `PATH` may
     /// have nothing, and the sibling is there.
     #[test]
-    fn el_hermano_gana() {
+    fn the_sibling_wins() {
         let dir = tempfile::tempdir().expect("temp");
         let sibling = dir.path().join("norte");
         std::fs::write(&sibling, b"#!/bin/sh\n").expect("is written");
-        assert_eq!(programa_del_daemon(Some(dir.path())), sibling.as_os_str());
+        assert_eq!(daemon_program(Some(dir.path())), sibling.as_os_str());
     }
 
     /// Without a sibling it falls back to the `PATH`, which is the
     /// development tree's case.
     #[test]
-    fn sin_hermano_se_cae_al_path() {
+    fn without_sibling_it_falls_back_to_path() {
         let dir = tempfile::tempdir().expect("temp");
-        assert_eq!(programa_del_daemon(Some(dir.path())), "norte");
-        assert_eq!(programa_del_daemon(None), "norte");
+        assert_eq!(daemon_program(Some(dir.path())), "norte");
+        assert_eq!(daemon_program(None), "norte");
     }
 
     /// A DIRECTORY named `norte` is not a daemon: it is ignored.
@@ -171,10 +171,10 @@ mod prueba_del_daemon {
     /// were a program, and the failure would come out as "could not
     /// connect", which says nothing.
     #[test]
-    fn un_directorio_no_es_un_daemon() {
+    fn a_directory_is_not_a_daemon() {
         let dir = tempfile::tempdir().expect("temp");
         std::fs::create_dir(dir.path().join("norte")).expect("is created");
-        assert_eq!(programa_del_daemon(Some(dir.path())), "norte");
+        assert_eq!(daemon_program(Some(dir.path())), "norte");
     }
 }
 
@@ -208,17 +208,17 @@ pub enum StartupError {
     #[error("the daemon could not start{}:\n{}",
         match .status { Some(c) => format!(" (exited with {c})"), None => String::new() },
         if .stderr.is_empty() { "and did not say why" } else { .stderr })]
-    DaemonMuerto {
+    DaemonDead {
         /// Exit code, if there was one (`None` = a signal killed it).
         status: Option<i32>,
         /// What it wrote to `stderr`. May come empty.
         stderr: String,
     },
     /// A command-line value that does not exist.
-    #[error("{que}: \"{valor}\" does not exist")]
-    Desconocido {
+    #[error("{that}: \"{valor}\" does not exist")]
+    Unknown {
         /// Which option.
-        que: &'static str,
+        that: &'static str,
         /// What was asked for.
         valor: String,
     },
@@ -280,24 +280,24 @@ where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString>,
 {
-    let crudo = norte_frontend::cli::parse(
+    let raw = norte_frontend::cli::parse(
         args,
         &["--no-splash", norte_frontend::handoff::ATTACH],
         &["--socket", "--layout", "--preset", "--profile"],
     );
-    if let Some(flag) = crudo.unknown {
+    if let Some(flag) = raw.unknown {
         return Err(StartupError::UnknownFlag(flag));
     }
     Ok(Cli {
-        dir: crudo.dir.clone(),
-        socket: crudo.path("--socket"),
-        layout: crudo.os_text("--layout").map(std::ffi::OsString::from),
-        preset: crudo.os_text("--preset").map(std::ffi::OsString::from),
-        profile: crudo.os_text("--profile").map(std::ffi::OsString::from),
-        no_splash: crudo.has("--no-splash"),
-        attach: crudo.has(norte_frontend::handoff::ATTACH),
-        help: crudo.help,
-        version: crudo.version,
+        dir: raw.dir.clone(),
+        socket: raw.path("--socket"),
+        layout: raw.os_text("--layout").map(std::ffi::OsString::from),
+        preset: raw.os_text("--preset").map(std::ffi::OsString::from),
+        profile: raw.os_text("--profile").map(std::ffi::OsString::from),
+        no_splash: raw.has("--no-splash"),
+        attach: raw.has(norte_frontend::handoff::ATTACH),
+        help: raw.help,
+        version: raw.version,
     })
 }
 
@@ -347,8 +347,8 @@ pub struct Boot {
 /// it is a small directory" is not the criterion: a `read_dir` over a
 /// configuration layer on a downed mount blocks the runtime's worker thread
 /// just as well, and here there is not even a window to say so in (rule 2).
-fn disposiciones_del_usuario(capas: &norte_config::Layers) -> Vec<UserLayout> {
-    let Some((dir, _)) = capas
+fn user_layouts(layers: &norte_config::Layers) -> Vec<UserLayout> {
+    let Some((dir, _)) = layers
         .dirs
         .iter()
         .rev()
@@ -372,26 +372,26 @@ fn disposiciones_del_usuario(capas: &norte_config::Layers) -> Vec<UserLayout> {
 /// shows is literally what gets painted. The effects are named one by one as
 /// NOT supported, because this renderer is a webview and interprets none of
 /// them — and a retro theme that looks identical reads as broken.
-fn tema_visto(
+fn theme_seen(
     spec: Option<&str>,
     theme: &Theme,
-    variante_clara: Option<Theme>,
-    variante_oscura: Option<Theme>,
+    variant_clara: Option<Theme>,
+    variant_oscura: Option<Theme>,
 ) -> HostTheme {
     HostTheme {
         // In a `Box`: `HostTheme` travels inside the startup future, and two
         // inline `Theme`s crossed `large_futures`'s threshold.
-        variante_clara: variante_clara.map(Box::new),
-        variante_oscura: variante_oscura.map(Box::new),
+        variant_clara: variant_clara.map(Box::new),
+        variant_oscura: variant_oscura.map(Box::new),
         // The RESOLVED one, which is `theme`'s. `spec` is what was
         // requested, and with a broken file the two do not match.
         name: spec.unwrap_or("default").to_owned(),
         roles: crate::catalog::variables(theme).into_iter().collect(),
-        effects: efectos_declarados(theme),
+        effects: effects_declarados(theme),
         // The WHOLE theme, which is what is needed to color an entry by its
         // extension (bridge 66): that cannot be projected as CSS variables
         // because extensions are an open set.
-        resuelto: theme.clone(),
+        resolved: theme.clone(),
     }
 }
 
@@ -400,7 +400,7 @@ fn tema_visto(
 /// The `[effects]` block is free-form on purpose (ADR 0036): each renderer
 /// interprets it. Here only its top-level keys are enumerated, which is what
 /// is needed to say which ones are not painted.
-fn efectos_declarados(theme: &Theme) -> Vec<String> {
+fn effects_declarados(theme: &Theme) -> Vec<String> {
     // `Theme::effects` is a `toml::Value` and this crate does not depend on
     // `toml` (nor does it need to: it does not parse configuration). It asks
     // for the shape through the type it already has in hand.
@@ -420,9 +420,9 @@ fn efectos_declarados(theme: &Theme) -> Vec<String> {
 /// of thing as `--layout`, which beats `[ui] layout`. `LANG` does not: that
 /// is the system's language, and a decision written in the configuration is
 /// more specific than it.
-fn idioma(pedido: Option<&str>) -> Lang {
+fn language(requested: Option<&str>) -> Lang {
     let explicito = std::env::var("NORTE_LANG").ok().filter(|v| !v.is_empty());
-    let lang = elegir_idioma(explicito.as_deref(), pedido, Lang::from_env());
+    let lang = choose_language(explicito.as_deref(), requested, Lang::from_env());
     let _ = norte_i18n::force(lang);
     // Keys are named in the window's language (see the TUI).
     let _ = norte_frontend::keymap::set_chord_lang(lang);
@@ -433,32 +433,30 @@ fn idioma(pedido: Option<&str>) -> Lang {
 ///
 /// Separate so it can be tested: `std::env::set_var` is `unsafe` since the
 /// 2024 edition and rule 5 forbids it, so what is read from the environment
-/// comes in as an argument. Same fix as [`programa_del_daemon`].
-fn elegir_idioma(explicito: Option<&str>, config: Option<&str>, del_entorno: Lang) -> Lang {
+/// comes in as an argument. Same fix as [`daemon_program`].
+fn choose_language(explicito: Option<&str>, config: Option<&str>, from_env: Lang) -> Lang {
     match (explicito, config) {
         (Some(e), _) => Lang::negotiate(Some(e)),
         (None, Some(c)) => Lang::negotiate(Some(c)),
-        (None, None) => del_entorno,
+        (None, None) => from_env,
     }
 }
 
 /// The two startup disk reads that are not the configuration.
 ///
-/// Together and outside the runtime (rule 2): `rutas` does one `metadata`
-/// per location and `disposiciones_del_usuario` a `read_dir` plus a
+/// Together and outside the runtime (rule 2): `paths` does one `metadata`
+/// per location and `user_layouts` a `read_dir` plus a
 /// `read_to_string` per layout. Both over the SAME layers as `config::load`,
 /// which already went through `spawn_blocking` for this same reason, and
 /// both can touch a downed mount.
-async fn diagnostico(
-    capas: &norte_config::Layers,
+async fn diagnostic(
+    layers: &norte_config::Layers,
     socket: &std::path::Path,
 ) -> (HostPaths, Vec<UserLayout>) {
-    let capas = capas.clone();
+    let layers = layers.clone();
     let socket = socket.to_path_buf();
-    match tokio::task::spawn_blocking(move || {
-        (rutas(&capas, &socket), disposiciones_del_usuario(&capas))
-    })
-    .await
+    match tokio::task::spawn_blocking(move || (paths(&layers, &socket), user_layouts(&layers)))
+        .await
     {
         Ok(par) => par,
         // A panic here is a bug of OURS, not a missing directory.
@@ -472,37 +470,37 @@ async fn diagnostico(
 /// to: asking again could answer something else (a `NORTE_CONFIG_DIR` that
 /// changes, a `--socket` that gets ignored) and the window would say its
 /// configuration comes from a place other than where it really came from.
-fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
+fn paths(layers: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
     // With its `missing` ALREADY resolved: the host projects this list
     // inside the single writer's loop, and an `exists()` there is
     // `std::fs::metadata` over — among others — a configuration layer that
     // may be on a downed mount. This function runs in `spawn_blocking`
     // (rule 2).
-    let sitio = |p: PathBuf| HostPath {
+    let place = |p: PathBuf| HostPath {
         missing: !p.exists(),
         path: p,
     };
     HostPaths {
-        config_layers: capas
+        config_layers: layers
             .dirs
             .iter()
             .map(|(dir, kind)| {
-                let capa = match kind {
+                let layer = match kind {
                     norte_config::Layer::System => ConfigLayer::System,
                     norte_config::Layer::User => ConfigLayer::User,
                     norte_config::Layer::Profile => ConfigLayer::Profile,
                     norte_config::Layer::Project => ConfigLayer::Project,
                 };
-                (capa, sitio(dir.clone()))
+                (layer, place(dir.clone()))
             })
             .collect(),
-        state_dir: norte_config::dirs::state_dir().map(sitio),
+        state_dir: norte_config::dirs::state_dir().map(place),
         // The SAME place `logging()` writes to, which is the only thing that
         // makes showing it useful.
         logs_dir: norte_config::dirs::state_dir()
             .map(|d| d.join("logs"))
-            .map(sitio),
-        socket: Some(sitio(socket.to_path_buf())),
+            .map(place),
+        socket: Some(place(socket.to_path_buf())),
     }
 }
 
@@ -517,11 +515,11 @@ fn rutas(capas: &norte_config::Layers, socket: &std::path::Path) -> HostPaths {
 /// runs — and that is the warning that cannot be left overwritten. The
 /// ignored project layer's (#260) is the other one: skipping it silently
 /// leaves the reader with a configuration they believe is active and is not.
-fn aviso_de_arranque(
+fn startup_notice(
     cfg: &norte_frontend::config::FrontendConfig,
     lang: Lang,
-    lua_descartadas: usize,
-    perfil: Option<&std::ffi::OsStr>,
+    lua_discarded: usize,
+    profile: Option<&std::ffi::OsStr>,
 ) -> Option<String> {
     let mut msg = None;
     if !cfg.common.project_warnings.is_empty() {
@@ -549,7 +547,7 @@ fn aviso_de_arranque(
             &[
                 (
                     "profile",
-                    &perfil
+                    &profile
                         .map(|p| p.to_string_lossy().into_owned())
                         .unwrap_or_default(),
                 ),
@@ -557,11 +555,11 @@ fn aviso_de_arranque(
             ],
         ));
     }
-    if lua_descartadas > 0 {
+    if lua_discarded > 0 {
         msg = Some(norte_i18n::ta_in(
             lang,
             "msg-lua-keymap-project",
-            &[("n", &lua_descartadas.to_string())],
+            &[("n", &lua_discarded.to_string())],
         ));
     }
     msg
@@ -599,20 +597,20 @@ fn keymaps(
     StartupError,
 > {
     let keymap =
-        norte_ui_host::keys::keymap_de_preset_con_capas(preset, &cfg.keymap_layers, EFECTOS)
-            .map_err(|_| StartupError::Desconocido {
-                que: "preset",
+        norte_ui_host::keys::preset_keymap_with_layers(preset, &cfg.keymap_layers, EFFECTS)
+            .map_err(|_| StartupError::Unknown {
+                that: "preset",
                 valor: preset.to_owned(),
             })?;
-    let (visor, dialogo) = otras_pantallas(preset, &cfg.keymap_layers)?;
-    Ok((keymap, visor, dialogo))
+    let (visor, dialog) = others_screens(preset, &cfg.keymap_layers)?;
+    Ok((keymap, visor, dialog))
 }
 
 /// Change this window the same as the TUI (#287).
 // TODO(translation): review — fragment, looks like it is missing its subject.
-fn otras_pantallas(
+fn others_screens(
     preset: &str,
-    capas: &[norte_frontend::keymap::KeymapFile],
+    layers: &[norte_frontend::keymap::KeymapFile],
 ) -> Result<
     (
         norte_frontend::keymap::Effective,
@@ -620,15 +618,15 @@ fn otras_pantallas(
     ),
     StartupError,
 > {
-    let desconocido = || StartupError::Desconocido {
-        que: "preset",
+    let unknown = || StartupError::Unknown {
+        that: "preset",
         valor: preset.to_owned(),
     };
-    let visor = norte_ui_host::keys::keymap_visor_de_preset_con_capas(preset, capas)
-        .map_err(|_| desconocido())?;
-    let dialogo = norte_ui_host::keys::keymap_dialogo_de_preset_con_capas(preset, capas)
-        .map_err(|_| desconocido())?;
-    Ok((visor, dialogo))
+    let visor = norte_ui_host::keys::preset_viewer_keymap_with_layers(preset, layers)
+        .map_err(|_| unknown())?;
+    let dialog = norte_ui_host::keys::keymap_dialog_preset_with_layers(preset, layers)
+        .map_err(|_| unknown())?;
+    Ok((visor, dialog))
 }
 
 /// The configuration layers with the profile the reader NAMED already tucked
@@ -642,17 +640,17 @@ fn otras_pantallas(
 /// exists or not; the load then treats it as an absent layer, which is not an
 /// error, and `--profile ghost` used to start as if nothing happened. It is
 /// the same check, word for word, that the terminal makes.
-fn capas_con_perfil(nombre: &std::ffi::OsStr) -> Result<norte_config::Layers, StartupError> {
+fn layers_with_profile(nombre: &std::ffi::OsStr) -> Result<norte_config::Layers, StartupError> {
     let dir = norte_config::profiles_dir_from(&|k| std::env::var_os(k)).ok_or_else(|| {
         StartupError::Config("no configuration directory to hang a profile off of".to_owned())
     })?;
-    capas_con_perfil_en(&dir, nombre)
+    layers_with_profile_in(&dir, nombre)
 }
 
-/// The probable core of [`capas_con_perfil`]: the profiles directory comes in
+/// The probable core of [`layers_with_profile`]: the profiles directory comes in
 /// as an ARGUMENT, so its test does not depend on the `HOME` of whoever runs
 /// it.
-fn capas_con_perfil_en(
+fn layers_with_profile_in(
     dir: &std::path::Path,
     nombre: &std::ffi::OsStr,
 ) -> Result<norte_config::Layers, StartupError> {
@@ -661,8 +659,8 @@ fn capas_con_perfil_en(
         .iter()
         .any(|n| n == nombre);
     if !hay {
-        return Err(StartupError::Desconocido {
-            que: "--profile",
+        return Err(StartupError::Unknown {
+            that: "--profile",
             valor: nombre.to_string_lossy().into_owned(),
         });
     }
@@ -677,7 +675,7 @@ fn capas_con_perfil_en(
 /// preset, the host needs all of them. Splitting it to get under the lint's
 /// threshold puts the order in two places and leaves the reader
 /// reconstructing it — and the order is the only delicate thing here. Same
-/// treatment as `aplicar_efecto` in the host.
+/// treatment as `apply_effect` in the host.
 ///
 /// # Errors
 /// [`StartupError`] if the configuration does not load, the directory is not
@@ -697,15 +695,15 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // profile cannot do this — it lives in the session, and the session
     // belongs to the daemon, which is reached with the configuration we are
     // loading right now — and that is why it arrives by the other path.
-    let capas = match &cli.profile {
-        Some(nombre) => capas_con_perfil(nombre)?,
+    let layers = match &cli.profile {
+        Some(nombre) => layers_with_profile(nombre)?,
         None => norte_config::standard_layers(),
     };
     // Saved for the "where each thing lives" view: the host does not
     // discover files, so the layer list is handed to it already resolved and
     // is exactly the one that was just READ, not one recomputed later.
-    let capas_vistas = capas.clone();
-    let cfg = match tokio::task::spawn_blocking(move || norte_frontend::config::load(&capas)).await
+    let layers_vistas = layers.clone();
+    let cfg = match tokio::task::spawn_blocking(move || norte_frontend::config::load(&layers)).await
     {
         Ok(res) => res.map_err(|e| StartupError::Config(e.to_string()))?,
         // A panic inside `load` is a bug of OURS: it is not buried as a
@@ -713,9 +711,9 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         Err(e) => std::panic::resume_unwind(e.into_panic()),
     };
 
-    let lang = idioma(cfg.common.ui_lang.as_deref());
+    let lang = language(cfg.common.ui_lang.as_deref());
 
-    let (theme, tema_resuelto) = tema(cfg.common.ui_theme.as_deref());
+    let (theme, theme_resolved) = theme(cfg.common.ui_theme.as_deref());
     // The desktop-scheme variants (V6): each one resolves like `theme` and
     // already travels as variables. A key that is set whose theme does not
     // load ends up WITHOUT a variant — not with the factory one — so the
@@ -728,7 +726,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // extensions are an open set. Always resolving against `[ui] theme`, a
     // desktop in light mode painted the chrome with the light variant and
     // the NAMES with the dark one's colors.
-    let variante = |nombre: Option<&str>| -> Option<Theme> {
+    let variant = |nombre: Option<&str>| -> Option<Theme> {
         let n = nombre?;
         match norte_frontend::theme::resolve_theme(Some(n)) {
             Ok(t) => Some(t),
@@ -738,8 +736,8 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
             }
         }
     };
-    let tema_claro = variante(cfg.common.ui_theme_light.as_deref());
-    let tema_oscuro = variante(cfg.common.ui_theme_dark.as_deref());
+    let tema_claro = variant(cfg.common.ui_theme_light.as_deref());
+    let tema_oscuro = variant(cfg.common.ui_theme_dark.as_deref());
     let theme_light: Option<BTreeMap<String, String>> =
         tema_claro.as_ref().map(crate::catalog::variables);
     let theme_dark: Option<BTreeMap<String, String>> =
@@ -748,8 +746,8 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // the worker thread until the mount times out, and before there is even
     // a window to say so in. The configuration read above already went
     // through `spawn_blocking`; this one was left at eight lines.
-    let dir_pedido = cli.dir.clone();
-    let inicio = match tokio::task::spawn_blocking(move || start_dir(dir_pedido)).await {
+    let dir_requested = cli.dir.clone();
+    let start = match tokio::task::spawn_blocking(move || start_dir(dir_requested)).await {
         Ok(res) => res?,
         Err(e) => std::panic::resume_unwind(e.into_panic()),
     };
@@ -772,10 +770,10 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // and the wire's taxonomy has nowhere to put it. Without this, the
     // window said "could not connect (retryable: true)", i.e. "wait", about
     // something that was never going to arrive.
-    let arranque = comando_de_daemon(&socket).await;
+    let startup = daemon_command(&socket).await;
     let backend = RemoteBackend::connect_detallado(
         socket.clone(),
-        arranque,
+        startup,
         ClientInfo {
             name: "norte-gui".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
@@ -784,11 +782,11 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     .await
     .map_err(|e| match e {
         norte_client::ClientError::SpawnFailed { status, stderr } => {
-            StartupError::DaemonMuerto { status, stderr }
+            StartupError::DaemonDead { status, stderr }
         }
-        otro => StartupError::Connect {
+        other => StartupError::Connect {
             socket: socket.display().to_string(),
-            source: norte_client::to_taxonomy(otro),
+            source: norte_client::to_taxonomy(other),
         },
     })?;
 
@@ -808,7 +806,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     let log_ring = logging(&cfg);
 
     let preset = if let Some(p) = &cli.preset {
-        nombre_de(p, "--preset")?
+        name_of(p, "--preset")?
     } else {
         cfg.common.preset.clone()
     };
@@ -816,7 +814,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // A `lua:` from the PROJECT layer is discarded — a repository does not
     // choose what code a key runs — and it is SAID, like in the terminal: a
     // silent discard is a key that does not do what its file says.
-    let capas_lua_descartadas = keymap
+    let layers_lua_discarded = keymap
         .discarded_lua_bindings()
         .max(keymap_viewer.discarded_lua_bindings())
         .max(keymap_dialog.discarded_lua_bindings());
@@ -829,12 +827,12 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // The file is read OUTSIDE the runtime (rule 2), as in the TUI: it is a
     // small TOML, but reading it with `std::fs` inside an `async fn` is
     // blocking I/O all the same.
-    let (layout, layout_roto) = {
+    let (layout, layout_broken) = {
         let cli_layout = cli.layout.clone();
         let cfg_layout = cfg.common.ui_layout.clone();
         let dir = norte_config::user_config_dir();
         tokio::task::spawn_blocking(move || {
-            arbol_de_arranque(cli_layout.as_deref(), cfg_layout.as_deref(), dir.as_deref())
+            startup_tree(cli_layout.as_deref(), cfg_layout.as_deref(), dir.as_deref())
         })
         .await
         .map_err(|e| StartupError::Config(e.to_string()))??
@@ -844,7 +842,7 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // disappears silently is a configuration the reader believes is set. It
     // goes to the LOG and the status bar, as in the TUI: the log alone is
     // read by nobody who is looking at a layout they did not ask for.
-    let aviso_layout = layout_roto.map(|e| {
+    let notice_layout = layout_broken.map(|e| {
         tracing::warn!(error = %e, "user layout did not load: the factory one stays");
         let nombre = cli.layout.clone().unwrap_or_else(|| {
             std::ffi::OsString::from(cfg.common.ui_layout.as_deref().unwrap_or("orthodox"))
@@ -863,13 +861,13 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     for malo in &columnas.invalid {
         tracing::warn!(column = %malo, "invalid column id: ignored");
     }
-    let (paths, user_layouts) = diagnostico(&capas_vistas, &socket).await;
+    let (paths, user_layouts) = diagnostic(&layers_vistas, &socket).await;
     let (host, snapshot) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
-        initial_dir: inicio,
+        initial_dir: start,
         // A human typed it, so it beats the session in the active pane — the
         // same rule the terminal settled in `eb237c61`.
-        initial_dir_pedido: cli.dir.is_some(),
+        initial_dir_requested: cli.dir.is_some(),
         attach: cli.attach,
         locale: match lang {
             Lang::Es => "es".to_owned(),
@@ -886,10 +884,10 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
         // resolving them here for `file` left that half of the
         // configuration dead as soon as a pane navigated to an `sftp://`.
         columns: columnas,
-        effects: EFECTOS,
+        effects: EFFECTS,
         settings: cfg.clone(),
         paths,
-        theme: tema_visto(tema_resuelto.as_deref(), &theme, tema_claro, tema_oscuro),
+        theme: theme_seen(theme_resolved.as_deref(), &theme, tema_claro, tema_oscuro),
         user_layouts,
         // Already APPLIED in `settings` (its layers went in above); this is
         // so the host knows and the picker marks it as set (#307).
@@ -902,8 +900,8 @@ pub async fn boot(cli: &Cli) -> Result<Boot, StartupError> {
     // ignored layer, and this one warns that the screen being looked at is
     // not the one requested — which is what the reader cannot work out on
     // their own.
-    snapshot.status.message = aviso_layout
-        .or_else(|| aviso_de_arranque(&cfg, lang, capas_lua_descartadas, cli.profile.as_deref()));
+    snapshot.status.message = notice_layout
+        .or_else(|| startup_notice(&cfg, lang, layers_lua_discarded, cli.profile.as_deref()));
     // The first-run wizard (spec 2026-09-10): without a user `norte.toml` and
     // without `NORTE_NO_WIZARD`, as in the terminal. A `stat`, outside the UI
     // thread (rule 2).
@@ -977,7 +975,7 @@ fn layout_pintable(name: &std::ffi::OsStr) -> String {
 /// `layouts/\u{fffd}.toml`.
 ///
 /// Reads from disk: goes under `spawn_blocking`.
-fn arbol_de_arranque(
+fn startup_tree(
     cli: Option<&std::ffi::OsStr>,
     config: Option<&str>,
     dir: Option<&std::path::Path>,
@@ -1000,14 +998,14 @@ fn arbol_de_arranque(
         return config::or_preset(name, leer(name)).map_err(|e| match e {
             // There is no file and no preset with that name: it is a value
             // that does not exist, and that is what gets said.
-            LayoutError::NotFound(_) | LayoutError::BadName(_) => StartupError::Desconocido {
-                que: "--layout",
+            LayoutError::NotFound(_) | LayoutError::BadName(_) => StartupError::Unknown {
+                that: "--layout",
                 valor: layout_pintable(name),
             },
             // The file IS there and does not work. Announcing it as "does
             // not exist" sends the reader looking for a name they already
             // typed correctly: what they need is the parse error.
-            otro => StartupError::Config(format!("--layout {}: {otro}", layout_pintable(name))),
+            other => StartupError::Config(format!("--layout {}: {other}", layout_pintable(name))),
         });
     }
     let name = std::ffi::OsString::from(config.unwrap_or("orthodox"));
@@ -1029,11 +1027,11 @@ fn arbol_de_arranque(
 /// The bytes are kept intact up to here (`OsString`) and the conversion
 /// fails instead of collapsing: two different invalid names cannot end up
 /// being the same one (#246).
-fn nombre_de(v: &std::ffi::OsStr, que: &'static str) -> Result<String, StartupError> {
+fn name_of(v: &std::ffi::OsStr, that: &'static str) -> Result<String, StartupError> {
     v.to_str()
         .map(str::to_owned)
-        .ok_or_else(|| StartupError::Desconocido {
-            que,
+        .ok_or_else(|| StartupError::Unknown {
+            that,
             valor: v.to_string_lossy().into_owned(),
         })
 }
@@ -1053,7 +1051,7 @@ fn nombre_de(v: &std::ffi::OsStr, que: &'static str) -> Result<String, StartupEr
 /// there from the inside, and titling it with a name whose colors are not
 /// the ones underneath is exactly what that view exists to prevent. A file
 /// theme has no preset name, so it goes with its own if it declares one.
-fn tema(nombre: Option<&str>) -> (Theme, Option<String>) {
+fn theme(nombre: Option<&str>) -> (Theme, Option<String>) {
     let Some(n) = nombre else {
         return (Theme::preset_default(), None);
     };
@@ -1061,11 +1059,11 @@ fn tema(nombre: Option<&str>) -> (Theme, Option<String>) {
         Ok(t) => {
             // A preset is titled with the requested name; a file one, with
             // whatever the file itself declares.
-            let titulo = Theme::preset(n)
+            let title = Theme::preset(n)
                 .ok()
                 .flatten()
                 .map_or_else(|| t.name.clone(), |_| Some(n.to_owned()));
-            (t, titulo)
+            (t, title)
         }
         Err(e) => {
             tracing::warn!(error = %e, "requested theme did not load: the factory one stays");
@@ -1136,19 +1134,19 @@ mod tests {
     /// norte-specific and is set for ONE run, i.e. the same kind of thing as
     /// `--layout`, which beats `[ui] layout`.
     #[test]
-    fn norte_lang_gana_a_la_config_y_la_config_al_entorno() {
+    fn norte_lang_wins_over_config_and_config_over_the_environment() {
         assert_eq!(
-            elegir_idioma(Some("en"), Some("es"), Lang::Es),
+            choose_language(Some("en"), Some("es"), Lang::Es),
             Lang::En,
             "what was set for this run rules"
         );
         assert_eq!(
-            elegir_idioma(None, Some("es"), Lang::En),
+            choose_language(None, Some("es"), Lang::En),
             Lang::Es,
             "and a decision written down rules over the system's language"
         );
         assert_eq!(
-            elegir_idioma(None, None, Lang::En),
+            choose_language(None, None, Lang::En),
             Lang::En,
             "with nothing, the system"
         );
@@ -1161,18 +1159,18 @@ mod tests {
     /// themed the terminal and left the window with the default palette,
     /// without saying anything.
     #[test]
-    fn el_tema_puede_ser_un_fichero() {
+    fn the_theme_can_be_a_file() {
         let dir = tempfile::tempdir().expect("tmp");
-        let ruta = dir.path().join("mio.toml");
-        std::fs::write(&ruta, "name = \"mío\"\n").expect("write");
-        let (t, titulo) = tema(Some(&ruta.to_string_lossy()));
+        let path = dir.path().join("mio.toml");
+        std::fs::write(&path, "name = \"mío\"\n").expect("write");
+        let (t, title) = theme(Some(&path.to_string_lossy()));
         assert_eq!(
             t.name.as_deref(),
             Some("mío"),
             "the file's theme was loaded"
         );
         assert_eq!(
-            titulo.as_deref(),
+            title.as_deref(),
             Some("mío"),
             "and it is titled with the name the file declares"
         );
@@ -1180,24 +1178,24 @@ mod tests {
 
     /// A preset is still a preset, and is titled with the requested name.
     #[test]
-    fn un_preset_sigue_yendo_por_su_nombre() {
-        let (_t, titulo) = tema(Some("nord"));
-        assert_eq!(titulo.as_deref(), Some("nord"));
+    fn a_preset_is_still_looked_up_by_its_name() {
+        let (_t, title) = theme(Some("nord"));
+        assert_eq!(title.as_deref(), Some("nord"));
     }
 
     /// And a theme that fails to load leaves the factory one, with no name:
     /// the theme view cannot be titled with colors that are not the ones
     /// underneath.
     #[test]
-    fn un_tema_que_no_carga_deja_el_de_fabrica() {
-        let (_t, titulo) = tema(Some("/no/existe/ni/de/lejos.toml"));
-        assert_eq!(titulo, None);
+    fn a_theme_that_fails_to_load_leaves_the_factory_one() {
+        let (_t, title) = theme(Some("/no/existe/ni/de/lejos.toml"));
+        assert_eq!(title, None);
     }
 
-    fn escribe_layout(dir: &std::path::Path, fichero: &std::ffi::OsStr, texto: &str) {
+    fn writes_layout(dir: &std::path::Path, file: &std::ffi::OsStr, text: &str) {
         let layouts = dir.join(norte_frontend::layout::config::LAYOUTS_DIR);
         std::fs::create_dir_all(&layouts).expect("mkdir");
-        std::fs::write(layouts.join(fichero), texto).expect("write");
+        std::fs::write(layouts.join(file), text).expect("write");
     }
 
     /// `--layout mio` opens the USER's file, same as in the TUI.
@@ -1207,35 +1205,34 @@ mod tests {
     /// window offers it in its picker, i.e. the list and the option said
     /// different things about the same file.
     #[test]
-    fn el_layout_de_la_linea_de_ordenes_puede_ser_del_usuario() {
+    fn the_command_line_layout_can_be_the_users() {
         let dir = tempfile::tempdir().expect("tmp");
-        escribe_layout(
+        writes_layout(
             dir.path(),
             std::ffi::OsStr::new("mio.toml"),
             "[slot]\nid = 1\nkind = \"browser\"\n",
         );
-        let (arbol, aviso) =
-            arbol_de_arranque(Some(std::ffi::OsStr::new("mio")), None, Some(dir.path()))
+        let (tree, notice) =
+            startup_tree(Some(std::ffi::OsStr::new("mio")), None, Some(dir.path()))
                 .expect("loads the user's");
-        assert_eq!(arbol.slot_ids().len(), 1, "the file's, with a single slot");
-        assert!(aviso.is_none());
+        assert_eq!(tree.slot_ids().len(), 1, "the file's, with a single slot");
+        assert!(notice.is_none());
     }
 
     /// And a user one named like a preset BEATS the preset, which is the
     /// rule for the rest of the configuration.
     #[test]
-    fn el_fichero_del_usuario_gana_al_preset_del_mismo_nombre() {
+    fn the_user_file_wins_over_the_preset_of_the_same_name() {
         let dir = tempfile::tempdir().expect("tmp");
-        escribe_layout(
+        writes_layout(
             dir.path(),
             std::ffi::OsStr::new("simple.toml"),
             "[slot]\nid = 1\nkind = \"browser\"\n",
         );
-        let (arbol, _) =
-            arbol_de_arranque(Some(std::ffi::OsStr::new("simple")), None, Some(dir.path()))
-                .expect("loads");
+        let (tree, _) = startup_tree(Some(std::ffi::OsStr::new("simple")), None, Some(dir.path()))
+            .expect("loads");
         assert_eq!(
-            arbol.slot_ids().len(),
+            tree.slot_ids().len(),
             1,
             "the factory `simple` has three slots: this is the user's"
         );
@@ -1244,38 +1241,37 @@ mod tests {
     /// A name that is not UTF-8 is a file name like any other (#246): it is
     /// searched for, not rejected outright.
     #[test]
-    fn un_nombre_de_layout_que_no_es_utf8_se_busca_igual() {
+    fn a_non_utf8_layout_name_is_looked_up_all_the_same() {
         use std::os::unix::ffi::OsStrExt;
         let dir = tempfile::tempdir().expect("tmp");
         let nombre = std::ffi::OsStr::from_bytes(b"\xff\xfe");
-        let mut fichero = nombre.to_os_string();
-        fichero.push(".toml");
-        escribe_layout(dir.path(), &fichero, "[slot]\nid = 1\nkind = \"browser\"\n");
-        let (arbol, _) =
-            arbol_de_arranque(Some(nombre), None, Some(dir.path())).expect("loads by bytes");
-        assert_eq!(arbol.slot_ids().len(), 1);
+        let mut file = nombre.to_os_string();
+        file.push(".toml");
+        writes_layout(dir.path(), &file, "[slot]\nid = 1\nkind = \"browser\"\n");
+        let (tree, _) = startup_tree(Some(nombre), None, Some(dir.path())).expect("loads by bytes");
+        assert_eq!(tree.slot_ids().len(), 1);
     }
 
     /// From the command line it is REQUIRED to exist; from the configuration
     /// it falls back to `orthodox`, which is what was there before the key
     /// was written.
     #[test]
-    fn un_nombre_inventado_falla_en_la_orden_y_cae_en_la_config() {
+    fn a_made_up_name_fails_on_the_command_line_and_falls_back_to_config() {
         let dir = tempfile::tempdir().expect("tmp");
         assert!(
-            arbol_de_arranque(Some(std::ffi::OsStr::new("nada")), None, Some(dir.path())).is_err(),
+            startup_tree(Some(std::ffi::OsStr::new("nada")), None, Some(dir.path())).is_err(),
             "a human just typed it: they are told"
         );
-        let (arbol, _) = arbol_de_arranque(None, Some("nada"), Some(dir.path()))
+        let (tree, _) = startup_tree(None, Some("nada"), Some(dir.path()))
             .expect("the config does not leave the screen empty");
         assert_eq!(
-            arbol,
+            tree,
             norte_frontend::layout::presets::tree("orthodox").expect("preset")
         );
     }
 
     #[test]
-    fn los_flags_se_leen_como_en_el_tui() {
+    fn flags_are_read_the_same_as_in_the_tui() {
         let cli = parse(["--socket", "/tmp/x.sock", "--layout", "simple"]).expect("parses");
         assert_eq!(
             cli.socket.as_deref(),
@@ -1288,7 +1284,7 @@ mod tests {
     /// `--profile` also exists on the window (#307), and with the BYTES
     /// intact: a profile name ends up being a directory.
     #[test]
-    fn el_perfil_se_lee_y_conserva_sus_bytes() {
+    fn the_profile_is_read_and_keeps_its_bytes() {
         let cli = parse(["--profile", "trabajo"]).expect("parses");
         assert_eq!(
             cli.profile.as_deref(),
@@ -1298,12 +1294,12 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::ffi::OsStrExt as _;
-            let crudo = std::ffi::OsStr::from_bytes(b"perf\xffil");
-            let cli = parse([std::ffi::OsString::from("--profile"), crudo.to_os_string()])
-                .expect("parses");
+            let raw = std::ffi::OsStr::from_bytes(b"perf\xffil");
+            let cli =
+                parse([std::ffi::OsString::from("--profile"), raw.to_os_string()]).expect("parses");
             assert_eq!(
                 cli.profile.as_deref(),
-                Some(crudo),
+                Some(raw),
                 "without going through text: two different invalid byte \
                  sequences would open the same directory"
             );
@@ -1314,13 +1310,13 @@ mod tests {
     /// asked for that profile, and starting as something else would be
     /// answering a different question.
     #[test]
-    fn un_perfil_que_no_existe_no_arranca() {
+    fn a_profile_that_does_not_exist_does_not_start() {
         let dir = tempfile::tempdir().expect("temp");
         // No `profiles/` inside, so the listing comes back empty.
-        let e = capas_con_perfil_en(dir.path(), std::ffi::OsStr::new("fantasma"))
+        let e = layers_with_profile_in(dir.path(), std::ffi::OsStr::new("fantasma"))
             .expect_err("not valid");
         assert!(
-            matches!(&e, StartupError::Desconocido { que, valor } if *que == "--profile" && valor == "fantasma"),
+            matches!(&e, StartupError::Unknown { that, valor } if *that == "--profile" && valor == "fantasma"),
             "{e}"
         );
     }
@@ -1328,7 +1324,7 @@ mod tests {
     /// A misspelled flag is NOT ignored: it is said. Ignoring it would be
     /// starting up without the option the user believes they set.
     #[test]
-    fn un_flag_desconocido_no_se_traga() {
+    fn an_unknown_flag_is_not_swallowed() {
         let e = parse(["--socketo", "/tmp/x"]).expect_err("not valid");
         assert!(
             matches!(&e, StartupError::UnknownFlag(f) if f == "--socketo"),
@@ -1345,7 +1341,7 @@ mod tests {
     /// the SAME function the terminal uses, so a new flag on one side
     /// without the other turns this red.
     #[test]
-    fn la_ventana_acepta_el_argv_del_relevo() {
+    fn the_window_accepts_the_handoffs_argv() {
         let cli = parse(norte_frontend::handoff::window_args())
             .expect("the window has to accept what the handoff hands it");
         assert!(cli.attach, "and understand that it comes from a handoff");
@@ -1358,24 +1354,24 @@ mod tests {
     /// `caf\u{FFFD}` and open the same file (#246).
     #[cfg(unix)]
     #[test]
-    fn dos_nombres_invalidos_distintos_siguen_siendo_distintos() {
+    fn two_different_invalid_names_stay_different() {
         use std::os::unix::ffi::OsStringExt as _;
-        let uno = std::ffi::OsString::from_vec(b"caf\xff".to_vec());
-        let otro = std::ffi::OsString::from_vec(b"caf\xfe".to_vec());
-        let a = parse([std::ffi::OsString::from("--layout"), uno]).expect("parses");
-        let b = parse([std::ffi::OsString::from("--layout"), otro]).expect("parses");
+        let one = std::ffi::OsString::from_vec(b"caf\xff".to_vec());
+        let other = std::ffi::OsString::from_vec(b"caf\xfe".to_vec());
+        let a = parse([std::ffi::OsString::from("--layout"), one]).expect("parses");
+        let b = parse([std::ffi::OsString::from("--layout"), other]).expect("parses");
         assert_ne!(a.layout, b.layout, "the bytes are kept");
     }
 
     #[test]
-    fn la_ayuda_y_la_version_se_reconocen() {
+    fn help_and_version_are_recognized() {
         assert!(parse(["--help"]).expect("parses").help);
         assert!(parse(["-V"]).expect("parses").version);
     }
 
     /// A directory that does not exist is reported BEFORE opening a window.
     #[test]
-    fn un_directorio_que_no_existe_se_dice_pronto() {
+    fn a_directory_that_does_not_exist_is_reported_early() {
         let e = start_dir(Some(PathBuf::from("/no/existe/ni/de/lejos"))).expect_err("fails");
         assert!(matches!(e, StartupError::Dir(_)), "{e}");
     }

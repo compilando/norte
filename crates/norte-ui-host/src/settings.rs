@@ -94,16 +94,16 @@ pub struct HostPaths {
 #[derive(Debug)]
 pub(crate) enum Activacion {
     /// Nothing to activate: a path, or no row at all.
-    Nada,
+    Nothing,
     /// The row cycled on its own — boolean, enum, theme, preset — and this
     /// is what has to be written. Boxed: a `PendingWrite` carries a
     /// `toml_edit::Value` and is large next to the other variants.
-    Escribir(Box<PendingWrite>),
-    /// The row wants a typed value: `nombre` and `actual` for the dialog
+    Write(Box<PendingWrite>),
+    /// The row wants a typed value: `name` and `actual` for the dialog
     /// that asks for it.
-    PedirTexto {
+    RequestText {
         /// The entry's name, already translated.
-        nombre: String,
+        name: String,
         /// What it currently says.
         actual: String,
         /// WHAT it was asked ABOUT, by its catalog id.
@@ -123,7 +123,7 @@ pub(crate) enum Activacion {
 /// paths — and is only projected onto the editor's when it is time to
 /// activate an entry: the editor knows nothing about paths, and has no
 /// reason to.
-pub(crate) struct Ajustes {
+pub(crate) struct Settings {
     /// The editor shared with the terminal, over the catalog's rows.
     ///
     /// No filter: the terminal filters by typing because its overlay eats
@@ -137,14 +137,14 @@ pub(crate) struct Ajustes {
     cursor: usize,
 }
 
-impl Ajustes {
+impl Settings {
     /// Opens the view with the configuration the host currently has set.
     ///
     /// The shared model's plugins section is left out: its rows need each
     /// extension's `[config]` schema, which arrives with the next slice.
     /// Showing its "no extension declares settings" row without having
     /// asked would assert something that has not been checked.
-    pub(crate) fn abrir(
+    pub(crate) fn open(
         cfg: &norte_frontend::config::FrontendConfig,
         paths: &HostPaths,
         lang: Lang,
@@ -163,7 +163,7 @@ impl Ajustes {
     /// the same reason: the row that just cycled already shows the new
     /// value (optimistically), and this leaves it saying what the file
     /// actually says.
-    pub(crate) fn refrescar(&mut self, cfg: &norte_frontend::config::FrontendConfig, lang: Lang) {
+    pub(crate) fn refresh(&mut self, cfg: &norte_frontend::config::FrontendConfig, lang: Lang) {
         self.state.refresh(rows_of(cfg, lang));
     }
 
@@ -189,7 +189,7 @@ impl Ajustes {
     /// The cursor is re-clamped: while filtering, the row it was pointing
     /// at may be gone, and a cursor outside the list is an Enter that
     /// activates something else.
-    pub(crate) fn consultar(&mut self, text: &str) {
+    pub(crate) fn query(&mut self, text: &str) {
         self.state.set_query(text);
         let total = self.total();
         self.cursor = if total == 0 {
@@ -201,7 +201,7 @@ impl Ajustes {
 
     /// Takes the cursor to a section's first row, named by its stable key.
     /// One that does not exist, or that the filter emptied, moves nothing.
-    pub(crate) fn saltar(&mut self, key: &str) {
+    pub(crate) fn skip(&mut self, key: &str) {
         let Some(section) = Section::ORDER
             .iter()
             .copied()
@@ -219,7 +219,7 @@ impl Ajustes {
         }
         // Decided from the PROJECTION, not by comparing the editor's cursor
         // before and after: that cursor and this window's are two different
-        // ones, and only `activar` synchronizes them — so "it did not move"
+        // ones, and only `activate` synchronizes them — so "it did not move"
         // meant nothing, and jumping to an empty section moved the cursor to
         // the list's first row.
         let Some(view) = self
@@ -241,7 +241,7 @@ impl Ajustes {
     ///
     /// # Errors
     /// Whatever the shared editor rejects, without writing anything.
-    pub(crate) fn poner(
+    pub(crate) fn set(
         &mut self,
         id: &str,
         value: &str,
@@ -255,7 +255,7 @@ impl Ajustes {
     ///
     /// Asked AFTER rereading, and it is what distinguishes "reset" from
     /// "another layer sets it" without building layer provenance.
-    pub(crate) fn sigue_modificada(&self, id: &str) -> bool {
+    pub(crate) fn follows_modificada(&self, id: &str) -> bool {
         self.state
             .rows()
             .iter()
@@ -267,10 +267,7 @@ impl Ajustes {
     ///
     /// A location is not reset — it is not a setting — and neither is a row
     /// that is already at its factory value.
-    pub(crate) fn restablecer(
-        &mut self,
-        row: usize,
-    ) -> Option<norte_frontend::settings::PendingReset> {
+    pub(crate) fn reset(&mut self, row: usize) -> Option<norte_frontend::settings::PendingReset> {
         let visible = self.visible_row(row)?;
         self.state.set_cursor(visible);
         self.state.reset()
@@ -280,22 +277,22 @@ impl Ajustes {
     ///
     /// The theme and preset lists arrive from outside and LIVE, as in the
     /// terminal: the effective theme may have changed hot.
-    pub(crate) fn activar(&mut self, themes: &[String], presets: &[&str]) -> Activacion {
+    pub(crate) fn activate(&mut self, themes: &[String], presets: &[&str]) -> Activacion {
         // From FLAT row to VISIBLE row: with the search box set, the
         // screen's third row is not the catalog's third.
         let Some(row) = self.visible_row(self.cursor) else {
-            return Activacion::Nada;
+            return Activacion::Nothing;
         };
         self.state.set_cursor(row);
         if let Some(write) = self.state.activate(themes, presets) {
-            return Activacion::Escribir(Box::new(write));
+            return Activacion::Write(Box::new(write));
         }
         if !self.state.is_editing() {
-            return Activacion::Nada;
+            return Activacion::Nothing;
         }
         // The window does not type inline: it asks with a dialog, and the
         // value comes back WHOLE on confirmation. Until then the editor is
-        // not left half-open — `confirmar_texto` reopens editing on the same
+        // not left half-open — `confirm_text` reopens editing on the same
         // row, and a cancelled dialog leaves nothing to close.
         let current = self.state.edit_buffer().unwrap_or_default().to_owned();
         self.state.edit_cancel();
@@ -307,10 +304,10 @@ impl Ajustes {
         let current_row = &self.state.rows()[resolved];
         let name = current_row.name.clone();
         let Some(id) = current_row.id() else {
-            return Activacion::Nada;
+            return Activacion::Nothing;
         };
-        Activacion::PedirTexto {
-            nombre: name,
+        Activacion::RequestText {
+            name,
             actual: current,
             id,
         }
@@ -331,7 +328,7 @@ impl Ajustes {
     /// is no longer visible — the filter changed under the dialog — or that
     /// no longer wants text is rejected like an invalid integer: it is the
     /// editor's inert failure, and there is nothing to write.
-    pub(crate) fn confirmar_texto(
+    pub(crate) fn confirm_text(
         &mut self,
         id: &str,
         text: &str,
@@ -368,12 +365,12 @@ impl Ajustes {
     /// Focus lives in the shared editor, not here: it is the same decision
     /// — and the same arrow keys — on both screens, and duplicating it is
     /// how they drift apart.
-    pub(crate) fn cambiar_lado(&mut self) {
+    pub(crate) fn change_side(&mut self) {
         self.state.toggle_focus();
     }
 
     /// Which side has the keyboard.
-    pub(crate) fn foco(&self) -> Focus {
+    pub(crate) fn focus(&self) -> Focus {
         self.state.focus()
     }
 
@@ -404,7 +401,7 @@ impl Ajustes {
 
     /// Puts the cursor on a specific row (a click). Out of range does
     /// nothing: whoever is painting can be one frame behind.
-    pub(crate) fn senalar(&mut self, row: usize) {
+    pub(crate) fn point_at(&mut self, row: usize) {
         if row < self.total() {
             self.cursor = row;
         }
@@ -466,7 +463,7 @@ impl Ajustes {
         SettingsView {
             sections,
             index,
-            focus: match self.foco() {
+            focus: match self.focus() {
                 Focus::Index => "index",
                 Focus::List => "list",
             }
@@ -495,13 +492,13 @@ fn rows_of(cfg: &norte_frontend::config::FrontendConfig, lang: Lang) -> Vec<Row>
 ///
 /// The shared catalog says what applies hot from the terminal's point of
 /// view, which reloads everything. The window rereads the WHOLE
-/// configuration when a setting is written (`aplicar_config`), and almost
+/// configuration when a setting is written (`apply_config`), and almost
 /// everything is read at the moment it is used — the bars when projecting
 /// each frame, the editor and the comparer when launching them, the search
 /// mode when searching, whether it asks on exit when exiting — so it
 /// changes instantly. What does not: what the host resolves once at startup
 /// — the language, the fonts, reduced motion, which is what
-/// `fuera_de_alcance_en_caliente` names — and what gets fixed when creating
+/// `out_of_scope_hot` names — and what gets fixed when creating
 /// each slot — the hidden files and the `..` row — which already-open slots
 /// do not reread. Marking EVERYTHING else as "requires restart" was lying
 /// sixteen times on one screen.

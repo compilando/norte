@@ -273,12 +273,12 @@ fn es_panel(n: &Node) -> bool {
 /// A CHROME row: the status bar or the tasks strip. They do not move or
 /// receive, and a layout that contains them is not flipped: the status bar
 /// sideways would stop being a bar (ADR 0138).
-fn es_cromo(n: &Node) -> bool {
+fn es_chrome(n: &Node) -> bool {
     matches!(n, Node::Slot { kind, .. } if matches!(kind.as_str(), "status" | "tasks"))
 }
 
 /// A layout's sizes with the border between `pos` and `pos + 1` at fraction
-/// `frac` of the `celdas` the two occupy (see [`Node::drag_border`]).
+/// `frac` of the `cells` the two occupy (see [`Node::drag_border`]).
 ///
 /// Two WEIGHTED ones keep their sum: what one gains the other loses, and
 /// the rest of the layout never knows. Simply renormalizing the pair to a
@@ -287,12 +287,12 @@ fn es_cromo(n: &Node) -> bool {
 /// crushed the one next to it. If the pair's sum is too small to have
 /// granularity, the WHOLE layout is multiplied by the same factor, which
 /// changes no proportion.
-fn arrastrar_pareja(sizes: &[Size], pos: usize, frac: f32, celdas_del_par: u16) -> Vec<Size> {
+fn drag_pair(sizes: &[Size], pos: usize, frac: f32, pair_cells: u16) -> Vec<Size> {
     /// The pair's minimum weight for the drag to have granularity.
-    const PESO_FINO: u32 = 100;
+    const WEIGHT_FINO: u32 = 100;
     /// The minimum left to each side, as a fraction.
-    const MARGEN: f32 = 0.05;
-    let frac = frac.clamp(MARGEN, 1.0 - MARGEN);
+    const MARGIN: f32 = 0.05;
+    let frac = frac.clamp(MARGIN, 1.0 - MARGIN);
     let mut ns = sizes.to_vec();
     let Some(next) = ns.get(pos + 1).copied() else {
         // The last one has no border to its right: what gets dragged is
@@ -303,11 +303,11 @@ fn arrastrar_pareja(sizes: &[Size], pos: usize, frac: f32, celdas_del_par: u16) 
     // In cells, and capped so each side keeps at least one: layout already
     // knows how to collapse what does not fit, but a zero written into the
     // tree stays written.
-    let celdas = f32::from(celdas_del_par);
+    let cells = f32::from(pair_cells);
     // Rounding and clipping, in ONE place: `f32` to `u16` truncates and has
     // no sign, so the clamp goes before converting and not after — an `as`
     // on a negative or on 70000 gives no warning.
-    let entero = |v: f32| -> u16 {
+    let whole = |v: f32| -> u16 {
         let v = v.round().clamp(1.0, f32::from(u16::MAX));
         // Already between 1 and `u16::MAX` with no fractional part: the
         // conversion cannot lose anything.
@@ -319,24 +319,24 @@ fn arrastrar_pareja(sizes: &[Size], pos: usize, frac: f32, celdas_del_par: u16) 
         let v = v as u16;
         v
     };
-    let left_cells = (celdas * frac).round().clamp(1.0, (celdas - 1.0).max(1.0));
+    let left_cells = (cells * frac).round().clamp(1.0, (cells - 1.0).max(1.0));
     match (ns[pos], next) {
         (Size::Fixed(_), Size::Fixed(_)) => {
-            ns[pos] = Size::Fixed(entero(left_cells));
-            ns[pos + 1] = Size::Fixed(entero(celdas - left_cells));
+            ns[pos] = Size::Fixed(whole(left_cells));
+            ns[pos + 1] = Size::Fixed(whole(cells - left_cells));
         }
         // A fixed one against a weighted one: the FIXED one is written and
         // the other keeps whatever is left, which is what layout already
         // did. Writing both would turn a weighted one into a fixed one by
         // dragging its border, and with that it would stop stretching when
         // the window resizes.
-        (Size::Fixed(_), _) => ns[pos] = Size::Fixed(entero(left_cells)),
+        (Size::Fixed(_), _) => ns[pos] = Size::Fixed(whole(left_cells)),
         (_, Size::Fixed(_)) => {
-            ns[pos + 1] = Size::Fixed(entero(celdas - left_cells));
+            ns[pos + 1] = Size::Fixed(whole(cells - left_cells));
         }
         (Size::Weight(wa), Size::Weight(wb)) => {
             let sum = u32::from(wa) + u32::from(wb);
-            let factor = PESO_FINO.div_ceil(sum.max(1)).max(1);
+            let factor = WEIGHT_FINO.div_ceil(sum.max(1)).max(1);
             if factor > 1 {
                 for s in &mut ns {
                     if let Size::Weight(w) = s {
@@ -346,8 +346,8 @@ fn arrastrar_pareja(sizes: &[Size], pos: usize, frac: f32, celdas_del_par: u16) 
             }
             let sum = f32::from(u16::try_from(sum * factor).unwrap_or(u16::MAX));
             let left = (sum * frac).round().clamp(1.0, (sum - 1.0).max(1.0));
-            ns[pos] = Size::Weight(entero(left));
-            ns[pos + 1] = Size::Weight(entero(sum - left));
+            ns[pos] = Size::Weight(whole(left));
+            ns[pos + 1] = Size::Weight(whole(sum - left));
         }
         _ => {}
     }
@@ -360,11 +360,11 @@ fn arrastrar_pareja(sizes: &[Size], pos: usize, frac: f32, celdas_del_par: u16) 
 /// up and the outer layout got flipped.
 enum Giro {
     /// Flipped: the new tree.
-    Hecho(Node),
+    Done(Node),
     /// Found, and not flipped.
     Rehusado,
     /// The slot is not in this subtree, or there is no layout to flip.
-    NoEsta,
+    NoThis,
 }
 
 /// Where a slot dropped onto another falls (ADR 0138): on one of its four
@@ -390,11 +390,11 @@ impl DropZone {
     /// same rule as `zonaDe` in the window (`render/mover.ts`).
     #[must_use]
     pub fn at(x: u16, y: u16, rect: Rect) -> Self {
-        let frac = |p: u16, o: u16, largo: u16| {
-            if largo == 0 {
+        let frac = |p: u16, o: u16, long: u16| {
+            if long == 0 {
                 0.5
             } else {
-                (f32::from(p.saturating_sub(o)) + 0.5) / f32::from(largo)
+                (f32::from(p.saturating_sub(o)) + 0.5) / f32::from(long)
             }
         };
         let fx = frac(x, rect.x, rect.width);
@@ -451,10 +451,10 @@ impl DropZone {
 /// A lone panel, or a tab group made ONLY of panels: what a new panel of
 /// the same border can join (phase F). A group with a listing inside is a
 /// listing's tab group, and a panel does not go in there.
-fn es_grupo_de_paneles(n: &Node) -> bool {
+fn is_a_group_of_panes(n: &Node) -> bool {
     match n {
         Node::Tabs { children, .. } => !children.is_empty() && children.iter().all(es_panel),
-        otro => es_panel(otro),
+        other => es_panel(other),
     }
 }
 
@@ -467,7 +467,7 @@ fn es_grupo_de_paneles(n: &Node) -> bool {
 /// same `Weight(1)` is one pixel. It is scaled by the AVERAGE of the
 /// sibling weights. A [`Size::Fixed`] or a layout with no weights does not
 /// change.
-fn peso_entre_hermanos(size: Size, hermanos: &[Size]) -> Size {
+fn weight_between_hermanos(size: Size, hermanos: &[Size]) -> Size {
     let Size::Weight(w) = size else {
         return size;
     };
@@ -589,7 +589,7 @@ impl Node {
                                 Dir::Vertical => h,
                             })
                         }
-                        Some(otro) => *otro,
+                        Some(other) => *other,
                         None => Size::Weight(1),
                     })
                     .collect();
@@ -610,7 +610,7 @@ impl Node {
         }
     }
 
-    /// Splits slot `id` in two along `dir`, with `nuevo` next to it.
+    /// Splits slot `id` in two along `dir`, with `new` next to it.
     ///
     /// Both end up with the same weight. If `id` is inside a `Tabs`, the
     /// split goes INSIDE that tab and not around the group: splitting a
@@ -648,13 +648,13 @@ impl Node {
                     && let Some(i) = children
                         .iter()
                         .position(|c| matches!(c, Self::Slot { id: s, .. } if *s == id))
-                    && let Size::Weight(peso) = sizes.get(i).copied().unwrap_or(Size::Weight(1))
+                    && let Size::Weight(weight) = sizes.get(i).copied().unwrap_or(Size::Weight(1))
                 {
                     let mut hijos = children.clone();
                     let mut tam = sizes.clone();
                     tam.resize(hijos.len(), Size::Weight(1));
                     hijos.insert(i + 1, nuevo.clone());
-                    tam.insert(i + 1, Size::Weight(peso));
+                    tam.insert(i + 1, Size::Weight(weight));
                     return Self::Split {
                         dir: *d,
                         children: hijos,
@@ -680,7 +680,7 @@ impl Node {
         }
     }
 
-    /// Docks `nuevo` against `edge` of the layout `anchor` lives in.
+    /// Docks `new` against `edge` of the layout `anchor` lives in.
     ///
     /// The exact spot is the DEEPEST `Split` that contains `anchor` and
     /// runs on `edge`'s axis; it enters there as the first child
@@ -757,7 +757,7 @@ impl Node {
     }
 
     /// `Some` if some `Split` on the path to `anchor` ran on the requested
-    /// axis and took `nuevo`; `None` if none did, and then [`Self::dock`]
+    /// axis and took `new`; `None` if none did, and then [`Self::dock`]
     /// decides.
     fn dock_inner(
         &self,
@@ -774,8 +774,8 @@ impl Node {
         let pos = hijos.iter().position(|c| c.contains(anchor))?;
         // Inward first: the layout that rules is the DEEPEST one that runs
         // on the axis, not the first one found going down.
-        if let Some(dentro) = hijos[pos].dock_inner(anchor, edge, size, nuevo, agrupar) {
-            return Some(self.with_child(pos, dentro));
+        if let Some(inside) = hijos[pos].dock_inner(anchor, edge, size, nuevo, agrupar) {
+            return Some(self.with_child(pos, inside));
         }
         // A `Tabs` does not accept the dock: putting it inside a tab would
         // make the sidebar disappear when switching tabs, which is exactly
@@ -819,19 +819,19 @@ impl Node {
         if agrupar
             && es_panel(nuevo)
             && let Some(v) = vecino
-            && nc.get(v).is_some_and(es_grupo_de_paneles)
+            && nc.get(v).is_some_and(is_a_group_of_panes)
         {
-            let grupo = match &nc[v] {
+            let group = match &nc[v] {
                 Self::Tabs { children, .. } => {
                     let mut h = children.clone();
                     h.push(nuevo.clone());
                     h
                 }
-                otro => vec![otro.clone(), nuevo.clone()],
+                other => vec![other.clone(), nuevo.clone()],
             };
-            let active = grupo.len() - 1;
+            let active = group.len() - 1;
             nc[v] = Self::Tabs {
-                children: grupo,
+                children: group,
                 active,
             };
             // The group's room is the LARGEST its panels ask for: fixed
@@ -842,7 +842,7 @@ impl Node {
             if let Some(actual) = ns.get(v).copied() {
                 ns[v] = match (actual, size) {
                     (Size::Fixed(a), Size::Fixed(b)) => Size::Fixed(a.max(b)),
-                    (Size::Fixed(_), Size::Weight(_)) => peso_entre_hermanos(size, sizes),
+                    (Size::Fixed(_), Size::Weight(_)) => weight_between_hermanos(size, sizes),
                     _ => actual,
                 };
             }
@@ -853,7 +853,7 @@ impl Node {
             });
         }
         nc.insert(at, nuevo.clone());
-        ns.insert(at.min(ns.len()), peso_entre_hermanos(size, sizes));
+        ns.insert(at.min(ns.len()), weight_between_hermanos(size, sizes));
         Some(Self::Split {
             dir: *dir,
             children: nc,
@@ -873,8 +873,8 @@ impl Node {
             Self::Slot { .. } => return None,
         };
         for (i, c) in hijos.iter().enumerate() {
-            if let Some(cambiado) = c.close_slot(id) {
-                return Some(self.with_child(i, cambiado));
+            if let Some(changed) = c.close_slot(id) {
+                return Some(self.with_child(i, changed));
             }
         }
         let pos = hijos.iter().position(|c| c.contains(id))?;
@@ -907,7 +907,7 @@ impl Node {
         }
     }
 
-    /// Moves slot `id` next to `target`: on its `zona` side, or as its tab
+    /// Moves slot `id` next to `target`: on its `zone` side, or as its tab
     /// if the zone is the center (ADR 0138). It is dragging a panel by its
     /// title and dropping it onto another, as in VS Code.
     ///
@@ -924,32 +924,32 @@ impl Node {
     /// is the only slot. Nothing is created or lost: the moved slot keeps
     /// its id, its kind, its params and its bindings.
     #[must_use]
-    pub fn move_slot(&self, id: SlotId, target: SlotId, zona: DropZone) -> Self {
-        let movible = |s: SlotId| self.find_slot(s).is_some_and(|n| !es_cromo(n));
+    pub fn move_slot(&self, id: SlotId, target: SlotId, zone: DropZone) -> Self {
+        let movible = |s: SlotId| self.find_slot(s).is_some_and(|n| !es_chrome(n));
         if id == target || !movible(id) || !movible(target) {
             return self.clone();
         }
-        let Some(nodo) = self.find_slot(id).cloned() else {
+        let Some(node) = self.find_slot(id).cloned() else {
             return self.clone();
         };
         // The CENTER only joins what is already of the same family: a
         // listing with listings, a panel with panels (ADR 0134). A listing
         // put into the places tabs would live in sixteen columns, and a
         // mixed group would stop being a panel group forever.
-        if zona == DropZone::Center
+        if zone == DropZone::Center
             && self
                 .find_slot(target)
-                .is_none_or(|t| es_panel(t) != es_panel(&nodo))
+                .is_none_or(|t| es_panel(t) != es_panel(&node))
         {
             return self.clone();
         }
-        let Some(resto) = self.close_slot(id) else {
+        let Some(rest) = self.close_slot(id) else {
             return self.clone();
         };
-        match zona.edge() {
-            None => resto.add_tab(target, &nodo),
-            Some(edge) => resto
-                .place_beside(target, edge, &nodo)
+        match zone.edge() {
+            None => rest.add_tab(target, &node),
+            Some(edge) => rest
+                .place_beside(target, edge, &node)
                 .unwrap_or_else(|| self.clone()),
         }
     }
@@ -967,7 +967,7 @@ impl Node {
 
     /// Is this node the unit that represents `target` in its parent: the
     /// slot itself, or the tab group it is a direct child of?
-    fn es_unidad_de(&self, target: SlotId) -> bool {
+    fn is_unit_of(&self, target: SlotId) -> bool {
         match self {
             Self::Slot { id, .. } => *id == target,
             Self::Tabs { children, .. } => children
@@ -977,13 +977,13 @@ impl Node {
         }
     }
 
-    /// `nodo` beside `edge` of `target`'s unit; `None` if it is not there.
-    fn place_beside(&self, target: SlotId, edge: Edge, nodo: &Self) -> Option<Self> {
-        if self.es_unidad_de(target) {
+    /// `node` beside `edge` of `target`'s unit; `None` if it is not there.
+    fn place_beside(&self, target: SlotId, edge: Edge, node: &Self) -> Option<Self> {
+        if self.is_unit_of(target) {
             let (children, sizes) = if edge.is_front() {
-                (vec![nodo.clone(), self.clone()], vec![Size::Weight(1); 2])
+                (vec![node.clone(), self.clone()], vec![Size::Weight(1); 2])
             } else {
-                (vec![self.clone(), nodo.clone()], vec![Size::Weight(1); 2])
+                (vec![self.clone(), node.clone()], vec![Size::Weight(1); 2])
             };
             return Some(Self::Split {
                 dir: edge.axis(),
@@ -1006,21 +1006,21 @@ impl Node {
             sizes,
         } = self
             && *dir == edge.axis()
-            && !children.iter().any(es_cromo)
-            && children[pos].es_unidad_de(target)
+            && !children.iter().any(es_chrome)
+            && children[pos].is_unit_of(target)
         {
             // Next to a FIXED-width panel it also enters as a weighted
             // sibling: splitting it from inside would give half of its
             // sixteen columns to a listing.
             let tam = match sizes.get(pos).copied().unwrap_or(Size::Weight(1)) {
-                Size::Weight(peso) => Size::Weight(peso),
-                Size::Fixed(_) | Size::Auto => peso_entre_hermanos(Size::Weight(1), sizes),
+                Size::Weight(weight) => Size::Weight(weight),
+                Size::Fixed(_) | Size::Auto => weight_between_hermanos(Size::Weight(1), sizes),
             };
             let mut nc = children.clone();
             let mut ns = sizes.clone();
             ns.resize(nc.len(), Size::Weight(1));
             let at = if edge.is_front() { pos } else { pos + 1 };
-            nc.insert(at, nodo.clone());
+            nc.insert(at, node.clone());
             ns.insert(at, tam);
             return Some(Self::Split {
                 dir: *dir,
@@ -1028,8 +1028,8 @@ impl Node {
                 sizes: ns,
             });
         }
-        let dentro = hijos[pos].place_beside(target, edge, nodo)?;
-        Some(self.with_child(pos, dentro))
+        let inside = hijos[pos].place_beside(target, edge, node)?;
+        Some(self.with_child(pos, inside))
     }
 
     /// Flips the innermost layout that contains `id`: side by side becomes
@@ -1050,23 +1050,23 @@ impl Node {
     #[must_use]
     pub fn flip(&self, id: SlotId) -> Self {
         match self.flip_inner(id) {
-            Giro::Hecho(n) => n,
-            Giro::Rehusado | Giro::NoEsta => self.clone(),
+            Giro::Done(n) => n,
+            Giro::Rehusado | Giro::NoThis => self.clone(),
         }
     }
 
     fn flip_inner(&self, id: SlotId) -> Giro {
         let hijos = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
-            Self::Slot { .. } => return Giro::NoEsta,
+            Self::Slot { .. } => return Giro::NoThis,
         };
         let Some(pos) = hijos.iter().position(|c| c.contains(id)) else {
-            return Giro::NoEsta;
+            return Giro::NoThis;
         };
         match hijos[pos].flip_inner(id) {
-            Giro::Hecho(dentro) => return Giro::Hecho(self.with_child(pos, dentro)),
+            Giro::Done(inside) => return Giro::Done(self.with_child(pos, inside)),
             Giro::Rehusado => return Giro::Rehusado,
-            Giro::NoEsta => {}
+            Giro::NoThis => {}
         }
         let Self::Split {
             dir,
@@ -1074,60 +1074,60 @@ impl Node {
             sizes,
         } = self
         else {
-            return Giro::NoEsta;
+            return Giro::NoThis;
         };
-        if children.iter().any(es_cromo) {
+        if children.iter().any(es_chrome) {
             return Giro::Rehusado;
         }
-        let otro = match dir {
+        let other = match dir {
             Dir::Horizontal => Dir::Vertical,
             Dir::Vertical => Dir::Horizontal,
         };
-        let pesa = |i: usize| matches!(sizes.get(i), Some(Size::Weight(_)) | None);
-        if !pesa(pos) {
+        let weighs = |i: usize| matches!(sizes.get(i), Some(Size::Weight(_)) | None);
+        if !weighs(pos) {
             return Giro::Rehusado;
         }
-        let mut desde = pos;
-        while desde > 0 && pesa(desde - 1) {
-            desde -= 1;
+        let mut from = pos;
+        while from > 0 && weighs(from - 1) {
+            from -= 1;
         }
-        let mut hasta = pos + 1;
-        while hasta < children.len() && pesa(hasta) {
-            hasta += 1;
+        let mut until = pos + 1;
+        while until < children.len() && weighs(until) {
+            until += 1;
         }
-        if hasta - desde < 2 {
+        if until - from < 2 {
             return Giro::Rehusado;
         }
-        if desde == 0 && hasta == children.len() {
-            return Giro::Hecho(Self::Split {
-                dir: otro,
+        if from == 0 && until == children.len() {
+            return Giro::Done(Self::Split {
+                dir: other,
                 children: children.clone(),
                 sizes: sizes.clone(),
             });
         }
-        let cuanto = |i: usize| match sizes.get(i) {
+        let how_much = |i: usize| match sizes.get(i) {
             Some(Size::Weight(w)) => u32::from(*w),
             _ => 1,
         };
-        let total = u16::try_from((desde..hasta).map(cuanto).sum::<u32>()).unwrap_or(u16::MAX);
+        let total = u16::try_from((from..until).map(how_much).sum::<u32>()).unwrap_or(u16::MAX);
         let racha = Self::Split {
-            dir: otro,
-            children: children[desde..hasta].to_vec(),
-            sizes: (desde..hasta)
+            dir: other,
+            children: children[from..until].to_vec(),
+            sizes: (from..until)
                 .map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1)))
                 .collect(),
         };
-        let mut nc = children[..desde].to_vec();
+        let mut nc = children[..from].to_vec();
         nc.push(racha);
-        nc.extend_from_slice(&children[hasta..]);
-        let mut ns: Vec<Size> = (0..desde)
+        nc.extend_from_slice(&children[until..]);
+        let mut ns: Vec<Size> = (0..from)
             .map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1)))
             .collect();
         ns.push(Size::Weight(total.max(1)));
         ns.extend(
-            (hasta..children.len()).map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1))),
+            (until..children.len()).map(|i| sizes.get(i).copied().unwrap_or(Size::Weight(1))),
         );
-        Giro::Hecho(Self::Split {
+        Giro::Done(Self::Split {
             dir: *dir,
             children: nc,
             sizes: ns,
@@ -1183,7 +1183,7 @@ impl Node {
     /// dragging a border repositioned all five would be a gesture that
     /// touches what nobody grabbed.
     ///
-    /// With weights the pair is renormalized to a hundred (`PESO_FINO`) so
+    /// With weights the pair is renormalized to a hundred (`WEIGHT_FINO`) so
     /// the drag has granularity: two slots by default are `Weight(1)` and
     /// `Weight(1)`, and over that pair only the exact half would exist.
     ///
@@ -1193,14 +1193,12 @@ impl Node {
     /// [`Size::Auto`] is not touched, for the same reason as in
     /// [`Self::resize`]: layout replaces it and a number saved here would
     /// be overwritten by the next frame.
-    /// `celdas_del_par` is what the two occupy together, in layout cells.
+    /// `pair_cells` is what the two occupy together, in layout cells.
     /// Whoever paints knows it, not the tree: a [`Size::Fixed`] is measured
     /// in cells and a fraction alone is not enough to write it.
     #[must_use]
-    pub fn drag_border(&self, id: SlotId, frac: f32, celdas_del_par: u16) -> Self {
-        self.map_split_of(id, &|sizes, pos| {
-            arrastrar_pareja(sizes, pos, frac, celdas_del_par)
-        })
+    pub fn drag_border(&self, id: SlotId, frac: f32, pair_cells: u16) -> Self {
+        self.map_split_of(id, &|sizes, pos| drag_pair(sizes, pos, frac, pair_cells))
     }
 
     /// The two sides of the border between `a` and `b`: the slots of the
@@ -1224,27 +1222,21 @@ impl Node {
             return hijos[pos].border_pair(a, b);
         }
         if matches!(self, Self::Split { .. })
-            && let Some(siguiente) = hijos.get(pos + 1)
-            && siguiente.contains(b)
+            && let Some(next) = hijos.get(pos + 1)
+            && next.contains(b)
         {
-            return Some((hijos[pos].slot_ids(), siguiente.slot_ids()));
+            return Some((hijos[pos].slot_ids(), next.slot_ids()));
         }
         None
     }
 
     /// Like [`Self::drag_border`], but on the border between `a` and `b` in
     /// the layout where they are neighbors ([`Self::border_pair`]), with
-    /// `frac` and `celdas_del_par` measured over the whole TWO children.
+    /// `frac` and `pair_cells` measured over the whole TWO children.
     /// This way the border that was grabbed moves, even if `a` is the last
     /// one of its own layout.
     #[must_use]
-    pub fn drag_border_between(
-        &self,
-        a: SlotId,
-        b: SlotId,
-        frac: f32,
-        celdas_del_par: u16,
-    ) -> Self {
+    pub fn drag_border_between(&self, a: SlotId, b: SlotId, frac: f32, pair_cells: u16) -> Self {
         let hijos = match self {
             Self::Split { children, .. } | Self::Tabs { children, .. } => children,
             Self::Slot { .. } => return self.clone(),
@@ -1253,8 +1245,8 @@ impl Node {
             return self.clone();
         };
         if hijos[pos].contains(b) {
-            let dentro = hijos[pos].drag_border_between(a, b, frac, celdas_del_par);
-            return self.with_child(pos, dentro);
+            let inside = hijos[pos].drag_border_between(a, b, frac, pair_cells);
+            return self.with_child(pos, inside);
         }
         if let Self::Split {
             dir,
@@ -1266,7 +1258,7 @@ impl Node {
             return Self::Split {
                 dir: *dir,
                 children: children.clone(),
-                sizes: arrastrar_pareja(sizes, pos, frac, celdas_del_par),
+                sizes: drag_pair(sizes, pos, frac, pair_cells),
             };
         }
         self.clone()
@@ -1280,7 +1272,7 @@ impl Node {
                 .iter()
                 .map(|s| match s {
                     Size::Weight(_) => Size::Weight(1),
-                    otro => *otro,
+                    other => *other,
                 })
                 .collect()
         })
@@ -1317,9 +1309,9 @@ impl Node {
         for c in hijos {
             if c.contains(id)
                 && !matches!(c, Self::Slot { .. })
-                && let Some(dentro) = c.sizes_of(id)
+                && let Some(inside) = c.sizes_of(id)
             {
-                return Some(dentro);
+                return Some(inside);
             }
         }
         if let Self::Split {
@@ -1341,9 +1333,9 @@ impl Node {
         };
         for (i, c) in hijos.iter().enumerate() {
             if c.contains(id) && !matches!(c, Self::Slot { .. }) {
-                let dentro = c.map_split_of(id, f);
-                if dentro != *c {
-                    return self.with_child(i, dentro);
+                let inside = c.map_split_of(id, f);
+                if inside != *c {
+                    return self.with_child(i, inside);
                 }
             }
         }
@@ -1459,7 +1451,7 @@ impl Node {
         }
     }
 
-    /// Opens `nuevo` as a tab next to `id`, and leaves it active.
+    /// Opens `new` as a tab next to `id`, and leaves it active.
     ///
     /// If `id` was not in tabs, it wraps it first: opening a tab from a
     /// lone panel is what turns that panel into the first of a group, and
@@ -1478,8 +1470,8 @@ impl Node {
         // Deeper inside first: the `Tabs` that rules is the INNER one, not
         // the one wrapping half the screen.
         for (i, c) in hijos.iter().enumerate() {
-            if let Some(cambiado) = c.insert_tab_near(id, nuevo) {
-                return Some(self.with_child(i, cambiado));
+            if let Some(changed) = c.insert_tab_near(id, nuevo) {
+                return Some(self.with_child(i, changed));
             }
         }
         if let Self::Tabs { children, .. } = self
@@ -1510,8 +1502,8 @@ impl Node {
             Self::Slot { .. } => return None,
         };
         for (i, c) in hijos.iter().enumerate() {
-            if let Some(cambiado) = c.close_tab(id) {
-                return Some(self.with_child(i, cambiado));
+            if let Some(changed) = c.close_tab(id) {
+                return Some(self.with_child(i, changed));
             }
         }
         if let Self::Tabs { children, active } = self
@@ -1656,13 +1648,13 @@ impl Node {
     #[must_use]
     pub fn move_tab(&self, id: SlotId, delta: isize) -> Self {
         self.map_tabs_of(id, &|children, pos| {
-            let destino = pos
+            let dest = pos
                 .saturating_add_signed(delta)
                 .min(children.len().saturating_sub(1));
             let mut nuevos = children.to_vec();
-            let quien = nuevos.remove(pos);
-            nuevos.insert(destino, quien);
-            (nuevos, destino)
+            let who = nuevos.remove(pos);
+            nuevos.insert(dest, who);
+            (nuevos, dest)
         })
     }
 
@@ -1676,9 +1668,9 @@ impl Node {
         };
         for (i, c) in hijos.iter().enumerate() {
             if c.contains(id) && !matches!(c, Self::Slot { .. }) {
-                let dentro = c.map_tabs_of(id, f);
-                if dentro != *c {
-                    return self.with_child(i, dentro);
+                let inside = c.map_tabs_of(id, f);
+                if inside != *c {
+                    return self.with_child(i, inside);
                 }
             }
         }
@@ -1695,7 +1687,7 @@ impl Node {
     }
 
     /// The same node with child `i` replaced.
-    fn with_child(&self, i: usize, hijo: Self) -> Self {
+    fn with_child(&self, i: usize, child: Self) -> Self {
         match self {
             Self::Split {
                 dir,
@@ -1704,7 +1696,7 @@ impl Node {
             } => {
                 let mut nuevos = children.clone();
                 if let Some(slot) = nuevos.get_mut(i) {
-                    *slot = hijo;
+                    *slot = child;
                 }
                 Self::Split {
                     dir: *dir,
@@ -1715,7 +1707,7 @@ impl Node {
             Self::Tabs { children, active } => {
                 let mut nuevos = children.clone();
                 if let Some(slot) = nuevos.get_mut(i) {
-                    *slot = hijo;
+                    *slot = child;
                 }
                 Self::Tabs {
                     children: nuevos,
@@ -1767,20 +1759,20 @@ impl Node {
     ///         Node::slot(SlotId(2), KindId::browser()),
     ///     ],
     /// );
-    /// let (nuevo, mapa) = arbol.rebase_slot_ids(100);
+    /// let (nuevo, map) = arbol.rebase_slot_ids(100);
     /// assert_eq!(nuevo.slot_ids(), vec![SlotId(100), SlotId(101)]);
-    /// assert_eq!(mapa[&SlotId(2)], SlotId(101));
+    /// assert_eq!(map[&SlotId(2)], SlotId(101));
     /// ```
     #[must_use]
     pub fn rebase_slot_ids(&self, base: u32) -> (Self, std::collections::BTreeMap<SlotId, SlotId>) {
-        let mut mapa = std::collections::BTreeMap::new();
+        let mut map = std::collections::BTreeMap::new();
         let mut next = base;
         for id in self.slot_ids() {
             // A tree with repeated ids is inconsistent from the start
             // (`duplicate_slot_ids` says so and `validate` rejects it); if
             // one arrives, the two slots keep sharing the id instead of one
             // taking a number nobody gave it.
-            if mapa.contains_key(&id) {
+            if map.contains_key(&id) {
                 continue;
             }
             // With no room above the TREE IS RETURNED AS IS, and this is
@@ -1791,18 +1783,18 @@ impl Node {
             // `from_value` validates it and returns `BadLayout` for the
             // WHOLE body — every profile's state, not just the broken
             // one's. That is the loss ADR 0059 promises does not happen.
-            let Some(tope) = next.checked_add(1) else {
+            let Some(cap) = next.checked_add(1) else {
                 return (self.clone(), std::collections::BTreeMap::new());
             };
-            mapa.insert(id, SlotId(next));
-            next = tope;
+            map.insert(id, SlotId(next));
+            next = cap;
         }
-        (self.remap_slot_ids(&mapa), mapa)
+        (self.remap_slot_ids(&map), map)
     }
 
     /// Applies an id map to a copy of the tree. What is not in the map
     /// stays as it is.
-    fn remap_slot_ids(&self, mapa: &std::collections::BTreeMap<SlotId, SlotId>) -> Self {
+    fn remap_slot_ids(&self, map: &std::collections::BTreeMap<SlotId, SlotId>) -> Self {
         match self {
             Self::Split {
                 dir,
@@ -1810,11 +1802,11 @@ impl Node {
                 sizes,
             } => Self::Split {
                 dir: *dir,
-                children: children.iter().map(|c| c.remap_slot_ids(mapa)).collect(),
+                children: children.iter().map(|c| c.remap_slot_ids(map)).collect(),
                 sizes: sizes.clone(),
             },
             Self::Tabs { children, active } => Self::Tabs {
-                children: children.iter().map(|c| c.remap_slot_ids(mapa)).collect(),
+                children: children.iter().map(|c| c.remap_slot_ids(map)).collect(),
                 active: *active,
             },
             Self::Slot {
@@ -1823,7 +1815,7 @@ impl Node {
                 params,
                 bindings,
             } => Self::Slot {
-                id: mapa.get(id).copied().unwrap_or(*id),
+                id: map.get(id).copied().unwrap_or(*id),
                 kind: kind.clone(),
                 params: params.clone(),
                 bindings: *bindings,
@@ -1835,11 +1827,11 @@ impl Node {
     /// same id is inconsistent and it is NOT guessed which one wins.
     #[must_use]
     pub fn duplicate_slot_ids(&self) -> Vec<SlotId> {
-        let mut cuenta: BTreeMap<SlotId, usize> = BTreeMap::new();
+        let mut count: BTreeMap<SlotId, usize> = BTreeMap::new();
         for id in self.slot_ids() {
-            *cuenta.entry(id).or_default() += 1;
+            *count.entry(id).or_default() += 1;
         }
-        cuenta
+        count
             .into_iter()
             .filter_map(|(id, n)| (n > 1).then_some(id))
             .collect()
@@ -1856,7 +1848,7 @@ mod tests {
     /// they had asked "is it visible?". This is the missing half: being
     /// able to answer "make it visible".
     #[test]
-    fn revelar_activa_la_pestana_del_hueco() {
+    fn revealing_activates_the_slots_tab() {
         let tree = Node::Tabs {
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -1880,7 +1872,7 @@ mod tests {
     /// one on another tab leaves the slot as invisible as it was, and the
     /// caller would believe it had shown it.
     #[test]
-    fn revelar_atraviesa_los_grupos_anidados() {
+    fn reveal_crosses_the_nested_groups() {
         let inner = Node::Tabs {
             children: vec![
                 Node::slot(SlotId(3), KindId::browser()),
@@ -1910,7 +1902,7 @@ mod tests {
     /// weights spreads the screen out differently without anything turning
     /// red.
     #[test]
-    fn revelar_conserva_medidas_y_los_grupos_ajenos() {
+    fn revealing_preserves_sizes_and_unrelated_groups() {
         let other = Node::Tabs {
             children: vec![
                 Node::slot(SlotId(10), KindId::browser()),
@@ -1950,7 +1942,7 @@ mod tests {
     /// nothing: revealing is not a gesture, it is an invariant being
     /// ensured.
     #[test]
-    fn revelar_lo_que_ya_se_ve_no_cambia_el_arbol() {
+    fn revealing_what_is_already_visible_does_not_change_the_tree() {
         let tree = Node::Tabs {
             children: vec![
                 Node::slot(SlotId(1), KindId::browser()),
@@ -1974,7 +1966,7 @@ mod tests {
     /// border would be the exact middle — a drag that can only land in the
     /// center is not a drag.
     #[test]
-    fn arrastrar_el_borde_reparte_la_pareja() {
+    fn dragging_the_edge_splits_the_pair() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -1995,7 +1987,7 @@ mod tests {
     /// Neither one nor the other can disappear: a slot at zero takes with
     /// it the way to give it back.
     #[test]
-    fn arrastrar_hasta_el_extremo_deja_hueco_a_los_dos() {
+    fn dragging_to_the_end_leaves_room_for_both() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2019,7 +2011,7 @@ mod tests {
     /// weighted neighbor does not turn fixed: if it did, it would stop
     /// stretching when the window is resized.
     #[test]
-    fn arrastrar_el_borde_de_un_fijo_lo_escribe_en_celdas() {
+    fn dragging_the_edge_of_a_fixed_one_writes_it_in_cells() {
         let tree = Node::Split {
             dir: Dir::Horizontal,
             children: vec![
@@ -2038,7 +2030,7 @@ mod tests {
     /// profiles share slot 1 and step on each other's directory and
     /// history — which is exactly the bug profiles exist to fix.
     #[test]
-    fn rebase_reasigna_desde_la_base_y_devuelve_el_mapa() {
+    fn rebase_reassigns_from_the_base_and_returns_the_map() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2055,7 +2047,7 @@ mod tests {
     /// Rebasing cannot change the SHAPE: same tree, same kinds, same
     /// sizes. Only the numbers.
     #[test]
-    fn rebase_conserva_la_forma() {
+    fn rebase_preserves_the_shape() {
         let tree = Node::split(
             Dir::Vertical,
             vec![
@@ -2077,7 +2069,7 @@ mod tests {
     /// A healthy tree, rebased, cannot MANUFACTURE a duplicate, whatever
     /// the order of the original ids.
     #[test]
-    fn rebase_no_fabrica_duplicados() {
+    fn rebase_no_factory_duplicados() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2094,7 +2086,7 @@ mod tests {
     /// that does not round-trip forces migrating between two, which is
     /// exactly what ADR 0058 avoids.
     #[test]
-    fn el_arbol_hace_round_trip() {
+    fn the_tree_round_trips() {
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
@@ -2120,7 +2112,7 @@ mod tests {
     /// It is the model's rule 3: a client that does not know how to paint a
     /// kind must not erase it from the OTHER's layout.
     #[test]
-    fn un_kind_desconocido_conserva_sus_params() {
+    fn an_unknown_kind_preserves_its_params() {
         let json = r#"{"slot":{"id":7,"kind":"terminal","params":{"shell":"fish"},"bindings":{}}}"#;
         let n: Node = serde_json::from_str(json).expect("a kind we do not know parses");
         let round_trip = serde_json::to_string(&n).expect("serializes");
@@ -2133,7 +2125,7 @@ mod tests {
     /// A tree's visible ids, in reading order. Used by roles, store and
     /// resolve, so it is tested here once.
     #[test]
-    fn slot_ids_recorre_tambien_las_pestanas_ocultas() {
+    fn slot_ids_also_walks_hidden_tabs() {
         let tree = Node::Tabs {
             active: 0,
             children: vec![
@@ -2148,7 +2140,7 @@ mod tests {
     /// else: the saved tree keeps its `Auto`s, the frame's copy does not
     /// have them.
     #[test]
-    fn substitute_auto_solo_cambia_los_auto() {
+    fn substitute_auto_only_changes_the_autos() {
         let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Auto, Size::Fixed(1)],
@@ -2176,7 +2168,7 @@ mod tests {
     /// A sidebar measures however wide it is; its height is set by the
     /// distribution.
     #[test]
-    fn substitute_auto_toma_el_eje_del_corte() {
+    fn substitute_auto_takes_the_cuts_axis() {
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Auto, Size::Weight(1)],
@@ -2195,7 +2187,7 @@ mod tests {
     /// A subtree's `Auto` is based on its FIRST slot: it is the only one
     /// that does not depend on how things get distributed afterward.
     #[test]
-    fn el_primer_hueco_es_a_quien_se_le_pregunta() {
+    fn the_first_slot_is_the_one_that_gets_asked() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2213,7 +2205,7 @@ mod tests {
     /// Opening a tab from a loose panel wraps it and leaves the new one
     /// active. Requiring two steps for that would make no sense.
     #[test]
-    fn abrir_una_pestana_desde_un_panel_suelto_lo_envuelve() {
+    fn opening_a_tab_from_a_loose_pane_wraps_it() {
         let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
         let new_tree = tree.add_tab(SlotId(2), &b(9));
         assert_eq!(new_tree.slot_ids(), vec![SlotId(1), SlotId(2), SlotId(9)]);
@@ -2226,7 +2218,7 @@ mod tests {
     /// The `Tabs` that wins is the INNER one, not the one wrapping half the
     /// screen.
     #[test]
-    fn una_pestana_nueva_entra_en_el_grupo_mas_interior() {
+    fn a_new_tab_enters_the_innermost_group() {
         let tree = Node::Tabs {
             children: vec![Node::split(
                 Dir::Horizontal,
@@ -2253,7 +2245,7 @@ mod tests {
     /// group, and leaving it would paint a bar with a single entry
     /// forever.
     #[test]
-    fn cerrar_la_penultima_pestana_disuelve_el_grupo() {
+    fn closing_the_second_to_last_tab_dissolves_the_group() {
         let tree = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 1,
@@ -2265,7 +2257,7 @@ mod tests {
     /// Closing a LOOSE panel is not `pane.tab-close`: it returns `None` and
     /// the caller decides (it will be `layout.close-slot`).
     #[test]
-    fn cerrar_un_panel_suelto_no_es_cerrar_una_pestana() {
+    fn closing_a_loose_pane_is_not_closing_a_tab() {
         let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
         assert_eq!(tree.close_tab(SlotId(2)), None);
     }
@@ -2273,7 +2265,7 @@ mod tests {
     /// Closing a tab before the active one drags the active index along:
     /// otherwise, the active one would end up naming the tab next to it.
     #[test]
-    fn cerrar_una_pestana_anterior_arrastra_el_activo() {
+    fn closing_an_earlier_tab_drags_the_active_one() {
         let tree = Node::Tabs {
             children: vec![b(1), b(2), b(3)],
             active: 2,
@@ -2287,7 +2279,7 @@ mod tests {
 
     /// Moving a tab takes the active one along with it.
     #[test]
-    fn mover_una_pestana_se_lleva_el_activo() {
+    fn moving_a_tab_takes_the_active_one_with_it() {
         let tree = Node::Tabs {
             children: vec![b(1), b(2), b(3)],
             active: 0,
@@ -2303,7 +2295,7 @@ mod tests {
     /// around: a tab that jumps from last to first on one keystroke too
     /// many is exactly what nobody wanted.
     #[test]
-    fn mover_una_pestana_no_da_la_vuelta() {
+    fn moving_a_tab_does_not_flip_it_over() {
         let tree = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 1,
@@ -2318,7 +2310,7 @@ mod tests {
     /// Splitting a slot leaves it with the new one alongside, both at the
     /// same weight.
     #[test]
-    fn partir_un_hueco_deja_a_los_dos_al_mismo_peso() {
+    fn splitting_a_slot_leaves_both_at_the_same_weight() {
         let tree = b(1);
         let new_tree = tree.split_slot(SlotId(1), Dir::Vertical, &b(9));
         assert_eq!(new_tree.slot_ids(), vec![SlotId(1), SlotId(9)]);
@@ -2338,7 +2330,7 @@ mod tests {
     /// the distribution demoted it to tabs — the panel just requested
     /// vanished without a word.
     #[test]
-    fn partir_en_el_mismo_eje_reparte_a_partes_iguales() {
+    fn splitting_on_the_same_axis_divides_evenly() {
         let tree = b(1).split_slot(SlotId(1), Dir::Vertical, &b(2));
         let triple = tree.split_slot(SlotId(2), Dir::Vertical, &b(3));
         let Node::Split {
@@ -2362,7 +2354,7 @@ mod tests {
     /// On the OTHER axis it still wraps: a perpendicular cut cannot enter
     /// its siblings' row.
     #[test]
-    fn partir_en_el_otro_eje_sigue_anidando() {
+    fn splitting_on_the_other_axis_keeps_nesting() {
         let tree = b(1).split_slot(SlotId(1), Dir::Vertical, &b(2));
         let cross = tree.split_slot(SlotId(2), Dir::Horizontal, &b(3));
         let Node::Split { children, dir, .. } = &cross else {
@@ -2380,7 +2372,7 @@ mod tests {
     /// its size is coupled chrome, and putting another child into that row
     /// would steal the room from what is alongside it.
     #[test]
-    fn partir_un_hueco_fijo_no_se_une_a_sus_hermanos() {
+    fn splitting_a_fixed_slot_does_not_merge_with_its_siblings() {
         let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(8)],
@@ -2402,7 +2394,7 @@ mod tests {
     /// reorganize its siblings: the cut goes inside the tab, not around
     /// the group.
     #[test]
-    fn partir_una_pestana_corta_dentro_de_ella() {
+    fn splitting_a_tab_cuts_inside_it() {
         let tree = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 1,
@@ -2417,7 +2409,7 @@ mod tests {
     }
 
     #[test]
-    fn el_arbol_round_trippea_en_toml() {
+    fn the_tree_round_trips_in_toml() {
         use crate::layout::{Dir, KindId, Node, Size, SlotId};
         let tree = Node::Split {
             dir: Dir::Vertical,
@@ -2442,7 +2434,7 @@ mod tests {
 
     /// Closing a slot leaves its sibling occupying both slots' spot.
     #[test]
-    fn cerrar_un_hueco_disuelve_el_split_de_dos() {
+    fn closing_a_slot_dissolves_the_split_of_two() {
         let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
         assert_eq!(tree.close_slot(SlotId(2)), Some(b(1)));
     }
@@ -2450,7 +2442,7 @@ mod tests {
     /// Closing the ONLY slot returns `None`: a screen with nothing in it is
     /// not the tree's call to make.
     #[test]
-    fn cerrar_el_unico_hueco_no_se_hace_solo() {
+    fn closing_the_only_slot_does_not_happen_by_itself() {
         assert_eq!(b(1).close_slot(SlotId(1)), None);
     }
 
@@ -2458,7 +2450,7 @@ mod tests {
     /// every weight one position over and the distribution would end up
     /// different without warning.
     #[test]
-    fn cerrar_un_hueco_se_lleva_su_tamano() {
+    fn closing_a_slot_takes_its_size_with_it() {
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(3), Size::Weight(1), Size::Weight(1)],
@@ -2473,7 +2465,7 @@ mod tests {
 
     /// Growing touches the focused slot's weight, up to a cap.
     #[test]
-    fn agrandar_sube_el_peso_hasta_el_tope() {
+    fn growing_raises_the_weight_up_to_the_cap() {
         let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
         let mut a = tree;
         for _ in 0..20 {
@@ -2494,7 +2486,7 @@ mod tests {
     /// on the child's size would be guessing which of the two fixed ones is
     /// a sidebar.
     #[test]
-    fn agrandar_mueve_un_hijo_fijo_en_celdas() {
+    fn growing_moves_a_fixed_child_in_cells() {
         let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
@@ -2510,7 +2502,7 @@ mod tests {
     /// Equalizing returns the weights to one and leaves the fixed ones
     /// alone.
     #[test]
-    fn igualar_solo_toca_los_ponderados() {
+    fn equalizing_only_touches_the_weighted_ones() {
         let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(7), Size::Fixed(2), Size::Weight(3)],
@@ -2546,7 +2538,7 @@ mod tests {
     /// status bar and the task strip would end up to the RIGHT of the
     /// sidebar instead of below the listings.
     #[test]
-    fn dock_izquierda_entra_en_el_split_del_cuerpo() {
+    fn dock_left_enters_the_body_split() {
         let body = Node::split(
             Dir::Horizontal,
             vec![
@@ -2586,7 +2578,7 @@ mod tests {
 
     /// To the right, at the end of the same split.
     #[test]
-    fn dock_derecha_va_al_final() {
+    fn right_dock_goes_last() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2614,7 +2606,7 @@ mod tests {
     /// sliver you cannot see. It enters with the AVERAGE of its siblings'
     /// weights, which is what `Weight(1)` means in a distribution of ones.
     #[test]
-    fn un_peso_que_entra_se_mide_contra_sus_hermanos() {
+    fn an_incoming_weight_is_measured_against_its_siblings() {
         let tree = Node::Split {
             dir: Dir::Horizontal,
             children: vec![
@@ -2653,7 +2645,7 @@ mod tests {
     /// is always above the bar; and in the terminal, the status bar has to
     /// be the last row.
     #[test]
-    fn abajo_entra_por_encima_de_la_barra_de_estado() {
+    fn below_enters_above_the_status_bar() {
         let tree = Node::Split {
             dir: Dir::Vertical,
             children: vec![
@@ -2686,7 +2678,7 @@ mod tests {
     /// the group's. A listing never groups, and closing a tab dissolves
     /// the group.
     #[test]
-    fn los_paneles_de_un_mismo_borde_se_agrupan_en_pestanas() {
+    fn panes_on_the_same_edge_group_into_tabs() {
         let body = Node::Split {
             dir: Dir::Horizontal,
             children: vec![
@@ -2778,7 +2770,7 @@ mod tests {
     /// With no ancestor on the requested axis, it WRAPS. A single pane is
     /// the real case: after closing one, the body can be a loose leaf.
     #[test]
-    fn sin_ancestro_en_el_eje_se_envuelve() {
+    fn without_ancestor_on_axis_it_wraps() {
         let tree = Node::slot(SlotId(1), KindId::browser());
         let docked = tree.dock(
             SlotId(1),
@@ -2803,7 +2795,7 @@ mod tests {
     /// An anchor INSIDE a `Tabs` docks OUTSIDE the group: a sidebar that
     /// disappears when the tab changes is not a sidebar.
     #[test]
-    fn con_el_ancla_en_una_pestana_el_acople_va_fuera_del_grupo() {
+    fn with_the_anchor_on_a_tab_the_docking_goes_outside_the_group() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2833,7 +2825,7 @@ mod tests {
 
     /// An anchor that is not in the tree invents nothing.
     #[test]
-    fn un_ancla_que_no_existe_deja_el_arbol_intacto() {
+    fn an_anchor_that_does_not_exist_leaves_the_tree_intact() {
         let tree = Node::slot(SlotId(1), KindId::browser());
         let docked = tree.dock(
             SlotId(77),
@@ -2850,7 +2842,7 @@ mod tests {
     /// keeps it from leaving a degenerate Split every time someone opened
     /// and closed the sidebar.
     #[test]
-    fn undock_es_close_slot_y_devuelve_el_arbol_de_antes() {
+    fn undock_is_close_slot_and_returns_the_previous_tree() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2891,7 +2883,7 @@ mod tests {
     /// widened with the keyboard and presets with a sidebar were born
     /// stuck.
     #[test]
-    fn un_hijo_fijo_se_mueve_en_celdas() {
+    fn a_fixed_child_moves_in_cells() {
         let tree = with_sidebar(16);
         assert_eq!(width(&tree.resize(SlotId(5), 1)), Size::Fixed(18));
         assert_eq!(width(&tree.resize(SlotId(5), -1)), Size::Fixed(14));
@@ -2900,7 +2892,7 @@ mod tests {
     /// The lower cap exists so it cannot be dropped to zero: a panel of
     /// zero width is invisible and there is no way to grow it back.
     #[test]
-    fn un_hijo_fijo_no_baja_de_dos_ni_pasa_de_cien() {
+    fn a_fixed_child_does_not_go_below_two_nor_above_a_hundred() {
         assert_eq!(
             width(&with_sidebar(2).resize(SlotId(5), -1)),
             Size::Fixed(2)
@@ -2913,7 +2905,7 @@ mod tests {
 
     /// And a WEIGHTED child keeps doing exactly what it did before.
     #[test]
-    fn un_hijo_ponderado_no_cambia_de_comportamiento() {
+    fn a_weighted_child_does_not_change_behavior() {
         let tree = Node::split(
             Dir::Horizontal,
             vec![
@@ -2942,7 +2934,7 @@ mod tests {
     /// ADR 0138: dropping to a side splits with the destination evenly, and
     /// in the center it joins as a tab. Nothing is lost.
     #[test]
-    fn mover_un_hueco_lo_suelta_al_lado_o_como_pestana() {
+    fn moving_a_slot_drops_it_beside_or_as_a_tab() {
         let t = orthodox();
         // 1 below 2: the horizontal split dissolves, and 2 splits
         // vertically INSIDE its own spot — not as a sibling at the root,
@@ -2994,7 +2986,7 @@ mod tests {
 
     /// Dropping next to a tab splits the GROUP, it does not invade it.
     #[test]
-    fn soltar_junto_a_una_pestana_parte_su_grupo() {
+    fn dropping_next_to_a_tab_splits_its_group() {
         let group = Node::Tabs {
             children: vec![b(1), b(2)],
             active: 0,
@@ -3014,7 +3006,7 @@ mod tests {
     /// What does not move: onto itself, the chrome, the only slot, an id
     /// that is not there.
     #[test]
-    fn mover_lo_que_no_se_mueve_no_cambia_nada() {
+    fn moving_what_does_not_move_changes_nothing() {
         let t = orthodox();
         assert_eq!(t.move_slot(SlotId(1), SlotId(1), DropZone::Left), t);
         assert_eq!(t.move_slot(SlotId(4), SlotId(1), DropZone::Top), t);
@@ -3028,7 +3020,7 @@ mod tests {
     /// moves the details even if the listing is the last one of its own
     /// distribution.
     #[test]
-    fn el_borde_entre_primos_mueve_su_pareja() {
+    fn the_edge_between_cousins_moves_its_pair() {
         let t = Node::Split {
             dir: Dir::Horizontal,
             children: vec![
@@ -3057,7 +3049,7 @@ mod tests {
     /// Dragging the border between two weighted ones does not crush a
     /// third: the pair keeps its sum.
     #[test]
-    fn arrastrar_una_pareja_no_aplasta_al_tercero() {
+    fn dragging_a_pair_does_not_crush_the_third() {
         let t = Node::split(Dir::Horizontal, vec![b(1), b(2), b(3)]);
         let m = t.drag_border_between(SlotId(1), SlotId(2), 0.25, 60);
         let Node::Split { sizes, .. } = &m else {
@@ -3083,7 +3075,7 @@ mod tests {
     /// The zone under the pointer, in cells: the quarter rule, same as the
     /// window; and the part that gets highlighted.
     #[test]
-    fn la_zona_de_soltar_sale_del_cuarto_mas_cercano() {
+    fn the_drop_zone_comes_from_the_nearest_quarter() {
         let r = Rect {
             x: 10,
             y: 0,
@@ -3111,7 +3103,7 @@ mod tests {
     /// with weight: splitting the fixed one by wrapping would give a
     /// listing eight columns.
     #[test]
-    fn soltar_junto_a_un_fijo_entra_como_hermano() {
+    fn dropping_next_to_a_fixed_one_enters_as_a_sibling() {
         let t = Node::Split {
             dir: Dir::Horizontal,
             children: vec![Node::slot(SlotId(7), KindId::new("places")), b(1), b(2)],
@@ -3136,7 +3128,7 @@ mod tests {
     /// The center only joins equal families (ADR 0134): a listing does not
     /// enter the places' tabs, nor a panel a listing's.
     #[test]
-    fn el_centro_no_mezcla_listados_y_paneles() {
+    fn the_center_does_not_mix_listings_and_panes() {
         let t = Node::Split {
             dir: Dir::Horizontal,
             children: vec![Node::slot(SlotId(7), KindId::new("places")), b(1), b(2)],
@@ -3151,7 +3143,7 @@ mod tests {
     /// back; it does not rotate the chrome's distribution, and a fixed one
     /// turns into a weight.
     #[test]
-    fn girar_cambia_el_eje_del_reparto_interior() {
+    fn rotating_changes_the_inner_splits_axis() {
         let t = orthodox();
         let g = t.flip(SlotId(1));
         let Node::Split { children, .. } = &g else {

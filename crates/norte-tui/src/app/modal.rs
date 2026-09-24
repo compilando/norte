@@ -202,10 +202,10 @@ pub enum Modal {
         /// entry naming it stays.
         seq: i64,
         /// How many entries are going to be attempted to undo.
-        a_deshacer: usize,
+        to_undo: usize,
         /// How many are going to be skipped (no way back, already undone,
         /// or compensations).
-        irreversibles: usize,
+        irreversible: usize,
         /// How many above the cut are NOT the reader's, and that this undo
         /// therefore doesn't touch.
         ajenas: usize,
@@ -530,7 +530,7 @@ pub enum Modal {
         /// The directory it's created in, BOUND on opening the modal.
         ///
         /// The pane isn't asked again on confirming, and it's the same
-        /// decision the window makes (`Pendiente::CrearFichero { dir }`):
+        /// decision the window makes (`Pending::CreateFile { dir }`):
         /// between opening the dialog and confirming it, the place under the
         /// pane can have changed, and creating in "wherever focus is now"
         /// creates in a directory the reader wasn't looking at when they

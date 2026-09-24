@@ -196,7 +196,7 @@ impl HelpView {
     pub fn section_next(&mut self) {
         let scroll = self.state.body_scroll();
         match self.body.heading_lines.iter().find(|&&l| l > scroll) {
-            Some(&linea) => self.state.scroll_body_to(linea),
+            Some(&line) => self.state.scroll_body_to(line),
             None => self.state.scroll_body_to(usize::MAX),
         }
     }
@@ -205,7 +205,7 @@ impl HelpView {
     /// heading, the start of the page.
     pub fn section_prev(&mut self) {
         let scroll = self.state.body_scroll();
-        let linea = self
+        let line = self
             .body
             .heading_lines
             .iter()
@@ -213,7 +213,7 @@ impl HelpView {
             .find(|&&l| l < scroll)
             .copied()
             .unwrap_or(0);
-        self.state.scroll_body_to(linea);
+        self.state.scroll_body_to(line);
     }
 
     /// Down arrow: one topic in the sidebar; in the body, the next action if

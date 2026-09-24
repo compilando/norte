@@ -28,12 +28,12 @@ pub(super) fn orden_de(b: &norte_ui_host::dto::BrowserSlotView) -> (String, Stri
 }
 
 /// A snapshot right now.
-pub(super) async fn foto(
+pub(super) async fn snapshot(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::ViewSnapshot {
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    siguiente_foto(sub).await
+    next_snapshot(sub).await
 }
 
 /// Waits for a SNAPSHOT to satisfy `cond`, with no interval clocks.
@@ -45,15 +45,15 @@ pub(super) async fn foto(
 /// it moves at the host's pace and not the scheduler's. The overall deadline
 /// is there so a condition that never holds reads as a failure with its own
 /// message, and not as a hung test.
-pub(super) async fn esperar_foto(
+pub(super) async fn wait_snapshot(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
-    que: &str,
+    that: &str,
     cond: impl Fn(&norte_ui_host::ViewSnapshot) -> bool,
 ) -> norte_ui_host::ViewSnapshot {
     let wait = async {
         loop {
-            let f = foto(h, sub).await;
+            let f = snapshot(h, sub).await;
             if cond(&f) {
                 return f;
             }
@@ -68,7 +68,7 @@ pub(super) async fn esperar_foto(
     };
     tokio::time::timeout(std::time::Duration::from_secs(10), wait)
         .await
-        .unwrap_or_else(|_| panic!("deadline exhausted waiting for {que}"))
+        .unwrap_or_else(|_| panic!("deadline exhausted waiting for {that}"))
 }
 
 /// `pane.sort-size` sorts by size and repeating it REVERSES it.
@@ -77,19 +77,19 @@ pub(super) async fn esperar_foto(
 /// what decides is `SortSpec::after_click`, not a table per surface.
 #[tokio::test]
 async fn the_sort_command_is_the_click_on_the_header() {
-    let (h, snap) = host_arbol(arbol()).await;
-    let (initial_column, _) = orden_de(listado(&snap));
+    let (h, snap) = host_tree(fake_tree()).await;
+    let (initial_column, _) = orden_de(listing(&snap));
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.sort-size").await;
-    let after = foto(&h, &mut sub).await;
-    let (column, direction) = orden_de(listado(&after));
+    run_by_palette(&h, &mut sub, "pane.sort-size").await;
+    let after = snapshot(&h, &mut sub).await;
+    let (column, direction) = orden_de(listing(&after));
     assert_ne!(column, initial_column, "it sorts by ANOTHER column");
     assert_eq!(direction, "asc", "a new column starts ascending");
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.sort-size").await;
-    let again = foto(&h, &mut sub).await;
-    let (same, direction) = orden_de(listado(&again));
+    run_by_palette(&h, &mut sub, "pane.sort-size").await;
+    let again = snapshot(&h, &mut sub).await;
+    let (same, direction) = orden_de(listing(&again));
     assert_eq!(same, column, "it is still the same column");
     assert_eq!(direction, "desc", "the active column REVERSES");
 }
@@ -100,10 +100,10 @@ async fn the_sort_command_is_the_click_on_the_header() {
 /// maintain and another one to learn.
 #[tokio::test]
 async fn the_sort_menu_is_the_columns_picker() {
-    let (h, _snap) = host_arbol(arbol()).await;
+    let (h, _snap) = host_tree(fake_tree()).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "pane.sort-menu").await;
-    let after = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sort-menu").await;
+    let after = snapshot(&h, &mut sub).await;
     assert!(
         after.columns.is_some(),
         "the sort menu is the columns picker"
@@ -118,23 +118,23 @@ async fn the_sort_menu_is_the_columns_picker() {
 /// belongs to the host.
 #[tokio::test]
 async fn a_notice_expires_and_leaves_a_badge() {
-    let mut f = Falso::default();
-    f.pon(
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![(b"docs".to_vec(), true), (b".oculto".to_vec(), false)],
     );
     let backend = Arc::new(f);
-    let mut settings = ajustes_de_prueba();
+    let mut settings = test_settings();
     settings.common.ui_chrome.notice_seconds = Some(1);
     let (h, snap) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings,
@@ -142,18 +142,18 @@ async fn a_notice_expires_and_leaves_a_badge() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts");
     assert_eq!(snap.status.notices_unread, 0);
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "pane.toggle-hidden").await;
-    let after = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.toggle-hidden").await;
+    let after = snapshot(&h, &mut sub).await;
     assert!(after.status.message.is_some(), "hiding is said in the bar");
-    foto_hasta(&h, &mut sub, "the notice expired into the badge", |f| {
+    snapshot_until(&h, &mut sub, "the notice expired into the badge", |f| {
         (f.status.message.is_none() && f.status.notices_unread == 1).then_some(())
     })
     .await;
@@ -163,8 +163,8 @@ async fn a_notice_expires_and_leaves_a_badge() {
 /// backend sees no extra request.
 #[tokio::test]
 async fn hiding_is_presentation_and_says_so() {
-    let mut f = Falso::default();
-    f.pon(
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![
             (b"docs".to_vec(), true),
@@ -173,29 +173,29 @@ async fn hiding_is_presentation_and_says_so() {
         ],
     );
     let backend = Arc::new(f);
-    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
-    let before = listado(&snap).rows.len();
+    let (h, snap) = host_tree(Arc::clone(&backend)).await;
+    let before = listing(&snap).rows.len();
     assert!(
-        listado(&snap)
+        listing(&snap)
             .rows
             .iter()
             .any(|r| r.display_name == ".oculto"),
         "with no `[ui] show_hidden` in the config, everything shows"
     );
-    let listings = backend.listados();
+    let listings = backend.listings();
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.toggle-hidden").await;
-    let after = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.toggle-hidden").await;
+    let after = snapshot(&h, &mut sub).await;
     assert!(
-        listado(&after)
+        listing(&after)
             .rows
             .iter()
             .all(|r| r.display_name != ".oculto"),
         "the hidden ones got set aside"
     );
     assert_eq!(
-        backend.listados(),
+        backend.listings(),
         listings,
         "and they got set aside WITHOUT re-requesting the directory"
     );
@@ -204,10 +204,10 @@ async fn hiding_is_presentation_and_says_so() {
         "a listing that shrinks without saying why reads as a bug"
     );
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.toggle-hidden").await;
-    let again = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.toggle-hidden").await;
+    let again = snapshot(&h, &mut sub).await;
     assert_eq!(
-        listado(&again).rows.len(),
+        listing(&again).rows.len(),
         before,
         "and it returns them, without re-listing"
     );
@@ -217,8 +217,8 @@ async fn hiding_is_presentation_and_says_so() {
 /// bytes: the row stays marked as hostile and its key is still valid.
 #[tokio::test]
 async fn cycling_the_encoding_repaints_without_touching_the_bytes() {
-    let (h, snap) = host_arbol(arbol()).await;
-    let hostile = listado(&snap)
+    let (h, snap) = host_tree(fake_tree()).await;
+    let hostile = listing(&snap)
         .rows
         .iter()
         .find(|r| r.hostile)
@@ -226,9 +226,9 @@ async fn cycling_the_encoding_repaints_without_touching_the_bytes() {
     let (key, painted) = (hostile.key, hostile.display_name.clone());
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.names-encoding").await;
-    let after = foto(&h, &mut sub).await;
-    let same = listado(&after)
+    run_by_palette(&h, &mut sub, "pane.names-encoding").await;
+    let after = snapshot(&h, &mut sub).await;
+    let same = listing(&after)
         .rows
         .iter()
         .find(|r| r.key == key)
@@ -256,32 +256,32 @@ async fn cycling_the_encoding_repaints_without_touching_the_bytes() {
 /// human.
 #[tokio::test]
 async fn cycling_the_encoding_also_repaints_the_header() {
-    let mut fake = Falso::default();
+    let mut fake = Fake::default();
     // A directory whose OWN name is not UTF-8.
-    fake.pon("mem:///caf%FF", vec![(b"a.txt".to_vec(), false)]);
+    fake.put("mem:///caf%FF", vec![(b"a.txt".to_vec(), false)]);
     let (h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(fake),
         initial_dir: norte_proto::VPath::parse("mem:///caf%FF").expect("wire"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts");
-    let before = listado(&snap).path_display.clone();
+    let before = listing(&snap).path_display.clone();
     assert!(
         before.contains('\u{fffd}'),
         "to start with, the bytes cannot be painted: {before}"
@@ -289,7 +289,7 @@ async fn cycling_the_encoding_also_repaints_the_header() {
     let mut sub = h.subscribe();
 
     // `alt+e` is `pane.names-encoding` in the `orthodox` preset. By hand and
-    // not through `tecla_mod`, which fixes `alt: false`.
+    // not through `key_mod`, which fixes `alt: false`.
     h.dispatch(UiAction::Key(norte_ui_host::keys::KeyInput {
         key: "e".to_owned(),
         ctrl: false,
@@ -319,7 +319,7 @@ async fn cycling_the_encoding_also_repaints_the_header() {
                         }
                     }
                     UiUpdate::Snapshot(s) => {
-                        header = Some(listado(&s).path_display.clone());
+                        header = Some(listing(&s).path_display.clone());
                     }
                     UiUpdate::Notice(_) => {}
                 }
@@ -347,15 +347,15 @@ async fn cycling_the_encoding_also_repaints_the_header() {
 /// directory's does not move anything.
 #[tokio::test]
 async fn a_breadcrumb_takes_you_to_its_slots_ancestor() {
-    let (h, snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
-    assert!(listado_de(&snap, 2).path_display.ends_with("/casa/docs"));
+    let (h, snap) = crate::two_panes_with_separate_destination(fake_tree()).await;
+    assert!(listing_of(&snap, 2).path_display.ends_with("/casa/docs"));
     assert_eq!(
-        listado_de(&snap, 2).path_segments,
+        listing_of(&snap, 2).path_segments,
         vec!["⟨mem⟩", "casa", "docs"],
         "the root and one segment per directory"
     );
     let mut sub = h.subscribe();
-    let generation = listado_de(&snap, 2).generation;
+    let generation = listing_of(&snap, 2).generation;
 
     // The current directory's breadcrumb: applied, and nothing moves.
     h.dispatch(UiAction::BreadcrumbActivate {
@@ -366,8 +366,8 @@ async fn a_breadcrumb_takes_you_to_its_slots_ancestor() {
     .await
     .expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let same = siguiente_foto(&mut sub).await;
-    assert!(listado_de(&same, 2).path_display.ends_with("/casa/docs"));
+    let same = next_snapshot(&mut sub).await;
+    assert!(listing_of(&same, 2).path_display.ends_with("/casa/docs"));
 
     // A breadcrumb from ANOTHER generation — the slot navigated between
     // painting and the click — is stale: it is not reinterpreted over the
@@ -380,8 +380,8 @@ async fn a_breadcrumb_takes_you_to_its_slots_ancestor() {
     .await
     .expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let stale = siguiente_foto(&mut sub).await;
-    assert!(listado_de(&stale, 2).path_display.ends_with("/casa/docs"));
+    let stale = next_snapshot(&mut sub).await;
+    assert!(listing_of(&stale, 2).path_display.ends_with("/casa/docs"));
 
     h.dispatch(UiAction::BreadcrumbActivate {
         slot_id: 2,
@@ -390,13 +390,13 @@ async fn a_breadcrumb_takes_you_to_its_slots_ancestor() {
     })
     .await
     .expect("host alive");
-    let f = esperar_foto(&h, &mut sub, "slot 2 goes up to /casa", |f| {
-        listado_de(f, 2).path_display.ends_with("/casa")
+    let f = wait_snapshot(&h, &mut sub, "slot 2 goes up to /casa", |f| {
+        listing_of(f, 2).path_display.ends_with("/casa")
     })
     .await;
-    assert_eq!(listado_de(&f, 2).path_segments, vec!["⟨mem⟩", "casa"]);
+    assert_eq!(listing_of(&f, 2).path_segments, vec!["⟨mem⟩", "casa"]);
     assert!(
-        listado_de(&f, 1).path_display.ends_with("/casa"),
+        listing_of(&f, 1).path_display.ends_with("/casa"),
         "the active slot did not move"
     );
 }
@@ -404,14 +404,14 @@ async fn a_breadcrumb_takes_you_to_its_slots_ancestor() {
 /// Activating a row of the panel that does NOT have focus focuses it AND
 /// enters it: it is the mouse's double click, and the renderer sends focus
 /// and activation as two messages. If the first one did not apply, the
-/// second one cannot stay silent — `fila_de` used to refuse it for "another
+/// second one cannot stay silent — `row_of` used to refuse it for "another
 /// slot" and a double click on the panel next to it did nothing.
 #[tokio::test]
 async fn activating_a_row_in_the_other_panel_focuses_it_and_enters() {
-    let (h, snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
-    // Slot 1 is on `/casa` and has the `docs` directory; focus is moved to 2
+    let (h, snap) = crate::two_panes_with_separate_destination(fake_tree()).await;
+    // Slot 1 is on `/home` and has the `docs` directory; focus is moved to 2
     // so 1 becomes "the other panel".
-    let a = listado_de(&snap, 1);
+    let a = listing_of(&snap, 1);
     let (generation, key) = a
         .rows
         .iter()
@@ -432,12 +432,12 @@ async fn activating_a_row_in_the_other_panel_focuses_it_and_enters() {
     })
     .await
     .expect("host alive");
-    let f = esperar_foto(&h, &mut sub, "slot 1 enters /casa/docs", |f| {
-        listado_de(f, 1).path_display.ends_with("/casa/docs")
+    let f = wait_snapshot(&h, &mut sub, "slot 1 enters /casa/docs", |f| {
+        listing_of(f, 1).path_display.ends_with("/casa/docs")
     })
     .await;
     assert!(
-        listado_de(&f, 2).path_display.ends_with("/casa/docs"),
+        listing_of(&f, 2).path_display.ends_with("/casa/docs"),
         "and the other panel stays where it was"
     );
 }
@@ -447,14 +447,14 @@ async fn activating_a_row_in_the_other_panel_focuses_it_and_enters() {
 /// change does not respect focus.
 #[tokio::test]
 async fn refreshing_re_lists_both_panels() {
-    let backend = arbol();
+    let backend = fake_tree();
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
-    let before = backend.listados();
+    let before = backend.listings();
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.refresh").await;
-    esperar_foto(&h, &mut sub, "both panels re-list", |_| {
-        backend.listados() >= before + 2
+    run_by_palette(&h, &mut sub, "pane.refresh").await;
+    wait_snapshot(&h, &mut sub, "both panels re-list", |_| {
+        backend.listings() >= before + 2
     })
     .await;
 }
@@ -463,16 +463,16 @@ async fn refreshing_re_lists_both_panels() {
 /// the target comes from the shared role — never from "the one next to it".
 #[tokio::test]
 async fn mirroring_sends_the_location_to_the_target() {
-    let (h, snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
-    // The scenario leaves 2 on `/casa/docs` and focus on 1, which is still on
-    // `/casa`: mirroring has to bring 2 back.
-    assert!(listado_de(&snap, 2).path_display.ends_with("/casa/docs"));
+    let (h, snap) = crate::two_panes_with_separate_destination(fake_tree()).await;
+    // The scenario leaves 2 on `/home/docs` and focus on 1, which is still on
+    // `/home`: mirroring has to bring 2 back.
+    assert!(listing_of(&snap, 2).path_display.ends_with("/casa/docs"));
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.mirror").await;
-    let f = esperar_foto(&h, &mut sub, "the target follows the active one", |f| {
-        listado_de(f, 2).path_display.ends_with("/casa")
-            && listado_de(f, 1).path_display.ends_with("/casa")
+    run_by_palette(&h, &mut sub, "pane.mirror").await;
+    let f = wait_snapshot(&h, &mut sub, "the target follows the active one", |f| {
+        listing_of(f, 2).path_display.ends_with("/casa")
+            && listing_of(f, 1).path_display.ends_with("/casa")
     })
     .await;
     assert_eq!(f.focus, Some(1), "mirroring does not move focus");
@@ -483,30 +483,30 @@ async fn mirroring_sends_the_location_to_the_target() {
 /// what decides it is `PaneState::target_dir` (ADR 0077).
 #[tokio::test]
 async fn mirroring_the_target_sends_the_cursors_folder() {
-    let (h, _snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
+    let (h, _snap) = crate::two_panes_with_separate_destination(fake_tree()).await;
     let mut sub = h.subscribe();
 
-    // Both on `/casa` to start: this way what gets measured afterward is the
+    // Both on `/home` to start: this way what gets measured afterward is the
     // cursor's TARGET and not the scenario's drift.
-    ejecutar_por_paleta(&h, &mut sub, "pane.mirror").await;
-    esperar_foto(&h, &mut sub, "both on /casa", |f| {
-        listado_de(f, 2).path_display.ends_with("/casa")
+    run_by_palette(&h, &mut sub, "pane.mirror").await;
+    wait_snapshot(&h, &mut sub, "both on /casa", |f| {
+        listing_of(f, 2).path_display.ends_with("/casa")
     })
     .await;
 
     // The cursor to row 0, which here is the `docs` directory: these
     // settings bring the `..` row OFF (`ui_parent_entry = false`), and the
     // scenario leaves the cursor where its own navigation left it.
-    ejecutar_por_paleta(&h, &mut sub, "cursor.top").await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.mirror-target").await;
-    let f = esperar_foto(&h, &mut sub, "the target enters the folder", |f| {
-        listado_de(f, 2).path_display.ends_with("/casa/docs")
+    run_by_palette(&h, &mut sub, "cursor.top").await;
+    run_by_palette(&h, &mut sub, "pane.mirror-target").await;
+    let f = wait_snapshot(&h, &mut sub, "the target enters the folder", |f| {
+        listing_of(f, 2).path_display.ends_with("/casa/docs")
     })
     .await;
     assert!(
-        listado_de(&f, 1).path_display.ends_with("/casa"),
+        listing_of(&f, 1).path_display.ends_with("/casa"),
         "the focused panel does not move: {}",
-        listado_de(&f, 1).path_display
+        listing_of(&f, 1).path_display
     );
     assert_eq!(f.focus, Some(1), "nor does focus");
 }
@@ -515,19 +515,19 @@ async fn mirroring_the_target_sends_the_cursors_folder() {
 /// target and the focused panel travels.
 #[tokio::test]
 async fn pulling_moves_the_focused_panel() {
-    let (h, _snap) = crate::dos_paneles_con_destino_aparte(arbol()).await;
+    let (h, _snap) = crate::two_panes_with_separate_destination(fake_tree()).await;
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.pull").await;
-    let f = esperar_foto(
+    run_by_palette(&h, &mut sub, "pane.pull").await;
+    let f = wait_snapshot(
         &h,
         &mut sub,
         "the focused panel brings in the other location",
-        |f| listado_de(f, 1).path_display.ends_with("/casa/docs"),
+        |f| listing_of(f, 1).path_display.ends_with("/casa/docs"),
     )
     .await;
     assert!(
-        listado_de(&f, 2).path_display.ends_with("/casa/docs"),
+        listing_of(&f, 2).path_display.ends_with("/casa/docs"),
         "the other one stays where it was"
     );
 }
@@ -536,24 +536,24 @@ async fn pulling_moves_the_focused_panel() {
 /// requests a directory again, and focus stays where it was.
 #[tokio::test]
 async fn swapping_requests_nothing_from_the_backend() {
-    let backend = arbol();
-    let (h, snap) = crate::dos_paneles_con_destino_aparte(Arc::clone(&backend)).await;
-    assert!(listado_de(&snap, 1).path_display.ends_with("/casa"));
-    assert!(listado_de(&snap, 2).path_display.ends_with("/casa/docs"));
-    let listings = backend.listados();
+    let backend = fake_tree();
+    let (h, snap) = crate::two_panes_with_separate_destination(Arc::clone(&backend)).await;
+    assert!(listing_of(&snap, 1).path_display.ends_with("/casa"));
+    assert!(listing_of(&snap, 2).path_display.ends_with("/casa/docs"));
+    let listings = backend.listings();
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.swap").await;
-    let after = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.swap").await;
+    let after = snapshot(&h, &mut sub).await;
     assert!(
-        listado_de(&after, 1).path_display.ends_with("/casa/docs"),
+        listing_of(&after, 1).path_display.ends_with("/casa/docs"),
         "the focused panel shows the other one's: {}",
-        listado_de(&after, 1).path_display
+        listing_of(&after, 1).path_display
     );
-    assert!(listado_de(&after, 2).path_display.ends_with("/casa"));
+    assert!(listing_of(&after, 2).path_display.ends_with("/casa"));
     assert_eq!(after.focus, Some(1), "focus does not move with the gesture");
     assert_eq!(
-        backend.listados(),
+        backend.listings(),
         listings,
         "both listings already existed: swapping them does not touch disk"
     );
@@ -570,8 +570,8 @@ async fn swapping_requests_nothing_from_the_backend() {
 /// next to it.
 #[tokio::test]
 async fn swapping_does_not_move_the_painting_window() {
-    let mut f = Falso::default();
-    f.pon(
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         (0..300).map(|i| (format!("f{i:03}").into_bytes(), false)),
     );
@@ -591,23 +591,23 @@ async fn swapping_does_not_move_the_painting_window() {
     })
     .await
     .expect("host alive");
-    let before = foto(&h, &mut sub).await;
-    assert_eq!(listado_de(&before, 1).first_visible, 200);
-    assert_eq!(listado_de(&before, 2).first_visible, 0);
+    let before = snapshot(&h, &mut sub).await;
+    assert_eq!(listing_of(&before, 1).first_visible, 200);
+    assert_eq!(listing_of(&before, 2).first_visible, 0);
 
-    h.dispatch(tecla_mod("u", true, false))
+    h.dispatch(key_mod("u", true, false))
         .await
         .expect("host alive");
-    let after = foto(&h, &mut sub).await;
+    let after = snapshot(&h, &mut sub).await;
 
     assert_eq!(
-        listado_de(&after, 1).first_visible,
+        listing_of(&after, 1).first_visible,
         200,
         "the slot that was on row 200 still paints from 200: the \
          renderer's scroll has not moved"
     );
     assert_eq!(
-        listado_de(&after, 2).first_visible,
+        listing_of(&after, 2).first_visible,
         0,
         "and the one that was at the top is still at the top"
     );
@@ -620,17 +620,17 @@ async fn swapping_does_not_move_the_painting_window() {
 /// re-requesting it, the panel stays `Loading` forever.
 #[tokio::test]
 async fn swapping_re_requests_the_in_flight_navigation() {
-    let mut f = Falso::default();
-    f.pon(
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![(b"docs".to_vec(), true), (b"notas.txt".to_vec(), false)],
     );
-    f.pon("mem:///casa/docs", vec![(b"informe.pdf".to_vec(), false)]);
+    f.put("mem:///casa/docs", vec![(b"informe.pdf".to_vec(), false)]);
     // Slow enough for the swap to land WITHIN the navigation.
     f.retraso_ms = 400;
     let (h, snap) = host_con_layout(Arc::new(f), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
-    let b1 = listado_de(&snap, 1);
+    let b1 = listing_of(&snap, 1);
     let docs = b1
         .rows
         .iter()
@@ -643,21 +643,21 @@ async fn swapping_re_requests_the_in_flight_navigation() {
     })
     .await
     .expect("host alive");
-    h.dispatch(tecla_mod("u", true, false))
+    h.dispatch(key_mod("u", true, false))
         .await
         .expect("host alive");
 
-    let f = esperar_foto(
+    let f = wait_snapshot(
         &h,
         &mut sub,
         "the interrupted navigation reaches its destination",
         |f| {
-            listado_de(f, 2).path_display.ends_with("/casa/docs")
-                && listado_de(f, 1).path_display.ends_with("/casa")
+            listing_of(f, 2).path_display.ends_with("/casa/docs")
+                && listing_of(f, 1).path_display.ends_with("/casa")
         },
     )
     .await;
-    let (left, right) = (listado_de(&f, 1), listado_de(&f, 2));
+    let (left, right) = (listing_of(&f, 1), listing_of(&f, 2));
     assert!(
         !matches!(left.state, norte_ui_host::dto::SlotState::Loading { .. })
             && !matches!(right.state, norte_ui_host::dto::SlotState::Loading { .. }),
@@ -669,40 +669,40 @@ async fn swapping_re_requests_the_in_flight_navigation() {
 
 /// A swap during the DRAIN also re-requests it.
 ///
-/// `en_vuelo` dies with the first page and `drenando` stays alive: in a
+/// `in_flight` dies with the first page and `drenando` stays alive: in a
 /// directory of more than a hundred entries — i.e. almost any — there is a
-/// window in which only the drain is alive. Looking only at `en_vuelo` left
+/// window in which only the drain is alive. Looking only at `in_flight` left
 /// the listing frozen at a hundred entries, in `Ready` and saying nothing,
 /// and marking everything acted on that slice.
 #[tokio::test]
 async fn swapping_re_requests_the_drain() {
-    let gate = Arc::new(backend_falso::Puerta::default());
-    let mut f = Falso::default();
-    f.pon(
+    let gate = Arc::new(backend_fake::Gate::default());
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         (0..250).map(|i| (format!("f{i:03}").into_bytes(), false)),
     );
-    f.puerta_drenaje = Some(Arc::clone(&gate));
+    f.gate_drenaje = Some(Arc::clone(&gate));
     let (h, _snap) = host_con_layout(Arc::new(f), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
 
     // The first page is already on screen and the rest is still stopped at
     // the gate: THIS is the state the bug needed.
-    esperar_foto(&h, &mut sub, "the first page lands", |f| {
-        listado_de(f, 1).total_rows == Some(100)
+    wait_snapshot(&h, &mut sub, "the first page lands", |f| {
+        listing_of(f, 1).total_rows == Some(100)
     })
     .await;
 
-    h.dispatch(tecla_mod("u", true, false))
+    h.dispatch(key_mod("u", true, false))
         .await
         .expect("host alive");
-    gate.abrir();
+    gate.open();
 
-    esperar_foto(
+    wait_snapshot(
         &h,
         &mut sub,
         "the drain gets re-requested and arrives whole",
-        |f| listado_de(f, 1).total_rows == Some(250) && listado_de(f, 2).total_rows == Some(250),
+        |f| listing_of(f, 1).total_rows == Some(250) && listing_of(f, 2).total_rows == Some(250),
     )
     .await;
 }
@@ -715,13 +715,13 @@ async fn swapping_re_requests_the_drain() {
 /// going.
 #[tokio::test]
 async fn hiding_says_which_marks_it_takes_with_it() {
-    let mut f = Falso::default();
-    f.pon(
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![(b".env".to_vec(), false), (b"notas.txt".to_vec(), false)],
     );
-    let (h, snap) = host_arbol(Arc::new(f)).await;
-    let hidden = listado(&snap)
+    let (h, snap) = host_tree(Arc::new(f)).await;
+    let hidden = listing(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == ".env")
@@ -729,16 +729,16 @@ async fn hiding_says_which_marks_it_takes_with_it() {
     h.dispatch(UiAction::ToggleMark {
         slot_id: 1,
         key: hidden.key,
-        generation: listado(&snap).generation,
+        generation: listing(&snap).generation,
     })
     .await
     .expect("host alive");
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.toggle-hidden").await;
-    let after = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.toggle-hidden").await;
+    let after = snapshot(&h, &mut sub).await;
 
-    assert_eq!(listado_de(&after, 1).marks, 0, "the mark left with the row");
+    assert_eq!(listing_of(&after, 1).marks, 0, "the mark left with the row");
     let said = after.status.message.clone().unwrap_or_default();
     assert!(
         said.contains('1') && said.contains("caída") || said.contains("caídas"),
@@ -754,10 +754,10 @@ async fn hiding_says_which_marks_it_takes_with_it() {
 /// TUI refuses it for the same reason (`gestures::mirror_plan`).
 #[tokio::test]
 async fn a_redundant_mirror_does_not_erase_the_others_marks() {
-    let backend = arbol();
+    let backend = fake_tree();
     let (h, snap) = host_con_layout(Arc::clone(&backend), "orthodox", (120, 40)).await;
-    let b2 = listado_de(&snap, 2);
-    // `fila_de` REJECTS a slot that is not the active one, so focus goes to
+    let b2 = listing_of(&snap, 2);
+    // `row_of` REJECTS a slot that is not the active one, so focus goes to
     // 2 first and back to 1. What is tested here is the mirror.
     h.dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
@@ -773,20 +773,20 @@ async fn a_redundant_mirror_does_not_erase_the_others_marks() {
         .await
         .expect("host alive");
     let mut sub = h.subscribe();
-    let before = foto(&h, &mut sub).await;
-    assert_eq!(listado_de(&before, 2).marks, 1);
-    let listings = backend.listados();
+    let before = snapshot(&h, &mut sub).await;
+    assert_eq!(listing_of(&before, 2).marks, 1);
+    let listings = backend.listings();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.mirror").await;
-    let after = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.mirror").await;
+    let after = snapshot(&h, &mut sub).await;
 
     assert_eq!(
-        listado_de(&after, 2).marks,
+        listing_of(&after, 2).marks,
         1,
         "both were already in the same place: the mark is still set"
     );
     assert_eq!(
-        backend.listados(),
+        backend.listings(),
         listings,
         "and nothing was requested again"
     );
@@ -796,10 +796,10 @@ async fn a_redundant_mirror_does_not_erase_the_others_marks() {
 /// tells apart "there is no other" from "there are several, pick one".
 #[tokio::test]
 async fn a_gesture_with_no_other_panel_says_so() {
-    let (h, _snap) = host_arbol(arbol()).await;
+    let (h, _snap) = host_tree(fake_tree()).await;
     let mut sub = h.subscribe();
     for cmd in ["pane.mirror", "pane.pull", "pane.swap"] {
-        let ack = ejecutar_por_paleta_ack(&h, &mut sub, cmd).await;
+        let ack = execute_via_palette_ack(&h, &mut sub, cmd).await;
         match ack {
             ActionAck::Unavailable { reason_key } => {
                 assert_eq!(reason_key, "host-no-other-slot", "{cmd}");
@@ -815,13 +815,13 @@ async fn a_gesture_with_no_other_panel_says_so() {
 /// remembers and in what order cannot depend on who paints it.
 #[tokio::test]
 async fn history_is_the_shared_trail() {
-    let (h, snap) = host_arbol(arbol()).await;
-    let docs = listado(&snap)
+    let (h, snap) = host_tree(fake_tree()).await;
+    let docs = listing(&snap)
         .rows
         .iter()
         .find(|r| r.display_name == "docs")
         .expect("the directory is there");
-    let (key, generation) = (docs.key, listado(&snap).generation);
+    let (key, generation) = (docs.key, listing(&snap).generation);
     let mut sub = h.subscribe();
     h.dispatch(UiAction::Activate {
         slot_id: 1,
@@ -830,13 +830,13 @@ async fn history_is_the_shared_trail() {
     })
     .await
     .expect("host alive");
-    let mut after = siguiente_foto(&mut sub).await;
-    while !listado(&after).path_display.ends_with("/casa/docs") {
-        after = siguiente_foto(&mut sub).await;
+    let mut after = next_snapshot(&mut sub).await;
+    while !listing(&after).path_display.ends_with("/casa/docs") {
+        after = next_snapshot(&mut sub).await;
     }
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.history").await;
-    let open = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.history").await;
+    let open = snapshot(&h, &mut sub).await;
     let picker = open.picker.expect("history is open");
     assert!(
         picker.rows.iter().any(|r| r.label.ends_with("/casa")),
@@ -844,9 +844,9 @@ async fn history_is_the_shared_trail() {
         picker.rows
     );
 
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    esperar_foto(&h, &mut sub, "picking from history navigates", |f| {
-        f.picker.is_none() && listado(f).path_display.ends_with("/casa")
+    h.dispatch(press("Enter")).await.expect("host alive");
+    wait_snapshot(&h, &mut sub, "picking from history navigates", |f| {
+        f.picker.is_none() && listing(f).path_display.ends_with("/casa")
     })
     .await;
 }
@@ -856,7 +856,7 @@ async fn history_is_the_shared_trail() {
 /// favorite that disappears silently is a bug nobody can see.
 #[tokio::test]
 async fn an_invalid_favorite_stays_and_says_so() {
-    let mut settings = ajustes_de_prueba();
+    let mut settings = test_settings();
     settings.common.hotlist = vec![
         norte_config::HotlistItem {
             name: "casa".to_owned(),
@@ -868,14 +868,14 @@ async fn an_invalid_favorite_stays_and_says_so() {
         },
     ];
     let (h, _snap) = UiHost::start(UiHostOptions {
-        backend: arbol(),
+        backend: fake_tree(),
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings,
@@ -883,16 +883,16 @@ async fn an_invalid_favorite_stays_and_says_so() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts");
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.hotlist").await;
-    let open = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.hotlist").await;
+    let open = snapshot(&h, &mut sub).await;
     let picker = open.picker.expect("favorites are open");
     assert_eq!(
         picker.rows.len(),
@@ -907,8 +907,8 @@ async fn an_invalid_favorite_stays_and_says_so() {
 
     // The cursor on the invalid one: choosing it cannot navigate anywhere,
     // and staying silent is indistinguishable from a broken key.
-    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
-    let ack = h.dispatch(tecla("Enter")).await.expect("host alive");
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
+    let ack = h.dispatch(press("Enter")).await.expect("host alive");
     match ack {
         ActionAck::Unavailable { reason_key } => assert_eq!(reason_key, "hotlist-invalid"),
         other => panic!("an invalid favorite: {other:?}"),
@@ -926,10 +926,10 @@ async fn per_side_volumes_do_not_follow_focus() {
         ("pane.select-drive-left", 1_u32, 2_u32),
         ("pane.select-drive-right", 2, 1),
     ] {
-        let mut f = Falso::default();
-        f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
-        f.pon("mem:///otro", vec![(b"raiz.txt".to_vec(), false)]);
-        f.volumenes = vec![volumen("mem:///otro", "ext4", false)];
+        let mut f = Fake::default();
+        f.put("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+        f.put("mem:///otro", vec![(b"raiz.txt".to_vec(), false)]);
+        f.volumes = vec![volume("mem:///otro", "ext4", false)];
         let (h, _snap) = host_con_layout(Arc::new(f), "orthodox", (200, 60)).await;
         // Focus is set on the OPPOSITE panel from the one the command names.
         h.dispatch(UiAction::FocusSlot { slot_id: still })
@@ -937,8 +937,8 @@ async fn per_side_volumes_do_not_follow_focus() {
             .expect("host alive");
         let mut sub = h.subscribe();
 
-        ejecutar_por_paleta(&h, &mut sub, command).await;
-        let with_rows = foto_hasta(&h, &mut sub, "the mount table", |f| {
+        run_by_palette(&h, &mut sub, command).await;
+        let with_rows = snapshot_until(&h, &mut sub, "the mount table", |f| {
             f.picker
                 .as_ref()
                 .is_some_and(|p| !p.rows.is_empty())
@@ -950,21 +950,21 @@ async fn per_side_volumes_do_not_follow_focus() {
             "{command}: the mount table reaches the picker"
         );
 
-        h.dispatch(tecla("Enter")).await.expect("host alive");
-        let mounted = foto_hasta(
+        h.dispatch(press("Enter")).await.expect("host alive");
+        let mounted = snapshot_until(
             &h,
             &mut sub,
             &format!("{command}: the volume mounted on side {moved}'s slot"),
             |f| {
-                (f.picker.is_none() && listado_de(f, moved).path_display.contains("otro"))
+                (f.picker.is_none() && listing_of(f, moved).path_display.contains("otro"))
                     .then(|| f.clone())
             },
         )
         .await;
         assert!(
-            listado_de(&mounted, still).path_display.ends_with("/casa"),
+            listing_of(&mounted, still).path_display.ends_with("/casa"),
             "{command}: the focused panel has NOT moved: {}",
-            listado_de(&mounted, still).path_display
+            listing_of(&mounted, still).path_display
         );
     }
 }
@@ -974,7 +974,7 @@ async fn per_side_volumes_do_not_follow_focus() {
 /// differently, just like it sorts by pressing the header.
 #[tokio::test]
 async fn properties_opens_the_attributes_sheet() {
-    let (h, snap) = host_arbol(arbol()).await;
+    let (h, snap) = host_tree(fake_tree()).await;
     assert!(
         !snap
             .slots
@@ -984,8 +984,8 @@ async fn properties_opens_the_attributes_sheet() {
     );
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.properties").await;
-    let after = foto(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.properties").await;
+    let after = snapshot(&h, &mut sub).await;
     assert!(
         after
             .slots
@@ -1002,8 +1002,8 @@ async fn properties_opens_the_attributes_sheet() {
 /// or setting dotfiles aside only lasted until closing.
 #[tokio::test]
 async fn the_session_returns_the_sort_and_the_hidden_ones() {
-    let mut fake = Falso::default();
-    fake.pon(
+    let mut fake = Fake::default();
+    fake.put(
         "mem:///casa",
         vec![
             (b"docs".to_vec(), true),
@@ -1031,7 +1031,7 @@ async fn the_session_returns_the_sort_and_the_hidden_ones() {
             marks: Vec::new(),
         },
     );
-    *fake.sesion.lock().expect("session") = (
+    *fake.session.lock().expect("session") = (
         norte_proto::methods::Session {
             version: norte_frontend::session::SCHEMA_VERSION,
             revision: 7,
@@ -1040,8 +1040,8 @@ async fn the_session_returns_the_sort_and_the_hidden_ones() {
         true,
     );
 
-    let (_h, snap) = host_arbol(Arc::new(fake)).await;
-    let b = listado(&snap);
+    let (_h, snap) = host_tree(Arc::new(fake)).await;
+    let b = listing(&snap);
     assert!(
         b.rows.iter().all(|r| r.display_name != ".oculto"),
         "the session said they were set aside"
@@ -1054,22 +1054,22 @@ async fn the_session_returns_the_sort_and_the_hidden_ones() {
 /// the TUI (#107). Without this, the key was dead in this window.
 #[tokio::test]
 async fn the_config_seeds_hiding() {
-    let mut f = Falso::default();
-    f.pon(
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![(b".oculto".to_vec(), false), (b"notas.txt".to_vec(), false)],
     );
-    let mut settings = ajustes_de_prueba();
+    let mut settings = test_settings();
     settings.common.ui_show_hidden = Some(false);
     let (_h, snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(f),
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings,
@@ -1077,14 +1077,14 @@ async fn the_config_seeds_hiding() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts");
     assert!(
-        listado(&snap)
+        listing(&snap)
             .rows
             .iter()
             .all(|r| r.display_name != ".oculto"),

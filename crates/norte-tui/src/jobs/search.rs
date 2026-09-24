@@ -83,7 +83,7 @@ pub fn on_search_dialog_key(
             // return the whole tree, and that reads just like a result: it's
             // the same trap the version warning avoids against an old
             // daemon.
-            if let Some(field) = dialog.campo_ilegible() {
+            if let Some(field) = dialog.field_unreadable() {
                 dialog.field = field;
                 app.message = Some(t("search-bad-field"));
                 return None;

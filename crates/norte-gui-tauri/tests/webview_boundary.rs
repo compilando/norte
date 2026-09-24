@@ -7,12 +7,12 @@
 
 use std::path::{Path, PathBuf};
 
-fn raiz() -> PathBuf {
+fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 fn json(rel: &str) -> serde_json::Value {
-    let p = raiz().join(rel);
+    let p = root().join(rel);
     let raw = std::fs::read_to_string(&p)
         .unwrap_or_else(|e| panic!("could not read {}: {e}", p.display()));
     serde_json::from_str(&raw).expect("valid JSON")
@@ -78,7 +78,7 @@ fn la_csp_no_deja_puertas() {
 /// The webview has neither Tauri's global object, nor an asset protocol, nor
 /// a dev server to reach in production.
 #[test]
-fn la_ventana_no_trae_nada_de_serie() {
+fn the_window_brings_nothing_stock() {
     let cfg = json("tauri.conf.json");
     assert_eq!(
         cfg["app"]["withGlobalTauri"],
@@ -110,16 +110,16 @@ fn la_ventana_no_trae_nada_de_serie() {
 /// The capabilities file grants the BARE MINIMUM: listening for events.
 /// Nothing about filesystem, shell, http, native dialog or window control.
 #[test]
-fn las_capacidades_son_las_minimas() {
+fn the_capabilities_are_the_minimum() {
     let cap = json("capabilities/main.json");
-    let permisos: Vec<&str> = cap["permissions"]
+    let permissions: Vec<&str> = cap["permissions"]
         .as_array()
         .expect("there is a permission list")
         .iter()
         .map(|p| p.as_str().expect("each permission is a string"))
         .collect();
     assert_eq!(
-        permisos,
+        permissions,
         vec!["core:event:allow-listen", "core:event:allow-unlisten"],
         "any extra permission is a decision, and it shows up here"
     );
@@ -136,25 +136,25 @@ fn las_capacidades_son_las_minimas() {
 /// command does not show up in any list that can be compared at compile
 /// time. This turns it into something that breaks the test.
 #[test]
-fn la_superficie_de_comandos_es_la_declarada() {
-    let src = std::fs::read_to_string(raiz().join("src/main.rs")).expect("main.rs");
+fn the_command_surface_is_the_declared_one() {
+    let src = std::fs::read_to_string(root().join("src/main.rs")).expect("main.rs");
     // The PRODUCTION block, which is `not(feature = "metrics")`'s: 3.6's
     // instrumentation adds one more command and cannot sneak in here.
-    let (_, tras_cfg) = src
+    let (_, after_cfg) = src
         .split_once("#[cfg(not(feature = \"metrics\"))]")
         .expect("the production handler is marked");
-    let (_, resto) = tras_cfg
+    let (_, rest) = after_cfg
         .split_once("generate_handler![")
         .expect("the binary registers commands");
-    let (bloque, _) = resto.split_once(']').expect("the macro closes");
-    let registrados: Vec<String> = bloque
+    let (block, _) = rest.split_once(']').expect("the macro closes");
+    let registered: Vec<String> = block
         .split(',')
         .map(|s| s.trim().to_owned())
         .filter(|s| !s.is_empty())
         .collect();
     assert_eq!(
-        registrados,
-        norte_gui_tauri::commands::COMANDOS,
+        registered,
+        norte_gui_tauri::commands::COMMANDS,
         "the declared list and the registered one have to be the same"
     );
 }
@@ -165,8 +165,8 @@ fn la_superficie_de_comandos_es_la_declarada() {
 /// If there is no bundle yet, the test SAYS SO and does not look past it: a
 /// "there was nothing to look at" that reads as green is worse than a red.
 #[test]
-fn el_bundle_no_llama_a_casa() {
-    let dist = raiz().join("ui/dist");
+fn the_bundle_does_not_phone_home() {
+    let dist = root().join("ui/dist");
     let index = dist.join("index.html");
     assert!(
         index.exists(),
@@ -176,20 +176,20 @@ fn el_bundle_no_llama_a_casa() {
         dist.display()
     );
     let mut mirados = 0usize;
-    for entrada in walk(&dist) {
-        let Some(ext) = entrada.extension().and_then(|e| e.to_str()) else {
+    for entry in walk(&dist) {
+        let Some(ext) = entry.extension().and_then(|e| e.to_str()) else {
             continue;
         };
         if !matches!(ext, "html" | "js" | "css") {
             continue;
         }
-        let texto = std::fs::read_to_string(&entrada).unwrap_or_default();
+        let text = std::fs::read_to_string(&entry).unwrap_or_default();
         // The ONLY exception, and an exact one: the SVG namespace
         // `createElementNS` needs for the activity bar's icons (ADR 0131).
         // It is an XML identifier, not an address: the browser never
         // requests it. The whole string is removed before looking, so
         // `http://www.w3.org/something-else` is still red.
-        let texto = texto.replace("http://www.w3.org/2000/svg", "");
+        let text = text.replace("http://www.w3.org/2000/svg", "");
         mirados += 1;
         for prohibido in [
             "http://",
@@ -200,9 +200,9 @@ fn el_bundle_no_llama_a_casa() {
             "new Function(",
         ] {
             assert!(
-                !texto.contains(prohibido),
+                !text.contains(prohibido),
                 "{} contains `{prohibido}`",
-                entrada.display()
+                entry.display()
             );
         }
     }
@@ -232,14 +232,14 @@ fn walk(dir: &Path) -> Vec<PathBuf> {
 /// unrestricted webview") had NEITHER an implementation NOR a test: the CSP
 /// does not cover top-level navigation. This pins the guard that does.
 #[test]
-fn la_webview_no_navega_a_ninguna_parte() {
-    let src = std::fs::read_to_string(raiz().join("src/main.rs")).expect("main.rs");
+fn the_webview_does_not_navigate_anywhere() {
+    let src = std::fs::read_to_string(root().join("src/main.rs")).expect("main.rs");
     assert!(
-        src.contains("guardia_de_navegacion"),
+        src.contains("navigation_guard"),
         "the binary has to install the navigation guard"
     );
     assert!(
-        src.contains(r#"const ESQUEMAS_DE_PAGINA: &[&str] = &["tauri", "ipc"];"#),
+        src.contains(r#"const PAGE_SCHEMAS: &[&str] = &["tauri", "ipc"];"#),
         "and the scheme list is EXACTLY that: any addition is a decision \
          that shows up in the diff"
     );
@@ -251,43 +251,43 @@ fn la_webview_no_navega_a_ninguna_parte() {
 /// `CloseRequested` and therefore through `[ui] confirm_quit` — and never
 /// with `destroy()`, which would skip the question and the session save.
 #[test]
-fn la_puerta_de_la_ventana_es_estrecha() {
+fn the_windows_door_is_narrow() {
     use norte_gui_tauri::commands::WindowVerb;
-    for (texto, verbo) in [
+    for (text, verb) in [
         ("\"minimize\"", WindowVerb::Minimize),
         ("\"toggle_maximize\"", WindowVerb::ToggleMaximize),
         ("\"close\"", WindowVerb::Close),
         ("\"drag\"", WindowVerb::Drag),
     ] {
-        assert_eq!(serde_json::from_str::<WindowVerb>(texto).ok(), Some(verbo));
+        assert_eq!(serde_json::from_str::<WindowVerb>(text).ok(), Some(verb));
     }
-    for ajeno in [
+    for foreign in [
         "\"destroy\"",
         "\"set_position\"",
         "\"set_size\"",
         "\"hide\"",
     ] {
         assert!(
-            serde_json::from_str::<WindowVerb>(ajeno).is_err(),
-            "{ajeno} is not a title-bar verb"
+            serde_json::from_str::<WindowVerb>(foreign).is_err(),
+            "{foreign} is not a title-bar verb"
         );
     }
-    let src = std::fs::read_to_string(raiz().join("src/main.rs")).expect("main.rs");
-    let (_, cuerpo) = src
+    let src = std::fs::read_to_string(root().join("src/main.rs")).expect("main.rs");
+    let (_, body) = src
         .split_once("fn window_control(")
         .expect("the binary declares `window_control`");
-    let (cuerpo, _) = cuerpo.split_once("\n}\n").expect("the function closes");
-    let rechazo = cuerpo
+    let (body, _) = body.split_once("\n}\n").expect("the function closes");
+    let rejection = body
         .find("custom_titlebar")
         .expect("checks whether the bar is the custom one");
-    let primer_verbo = cuerpo.find("match verb").expect("dispatches by verb");
+    let primer_verb = body.find("match verb").expect("dispatches by verb");
     assert!(
-        rechazo < primer_verbo,
+        rejection < primer_verb,
         "rejects with the native bar BEFORE touching the window"
     );
-    assert!(cuerpo.contains("window.close()"), "closes with `close()`");
+    assert!(body.contains("window.close()"), "closes with `close()`");
     assert!(
-        !cuerpo.contains("destroy"),
+        !body.contains("destroy"),
         "`destroy()` skips `confirm_quit` and the session save"
     );
 }
@@ -298,11 +298,11 @@ fn la_puerta_de_la_ventana_es_estrecha() {
 /// just the same with `default = ["metrics"]` in the manifest: the fifth
 /// command would enter through the features door and no test would see it.
 #[test]
-fn la_feature_de_medida_no_es_la_de_por_defecto() {
-    let toml = std::fs::read_to_string(raiz().join("Cargo.toml")).expect("Cargo.toml");
+fn the_measurement_feature_is_not_the_default_one() {
+    let toml = std::fs::read_to_string(root().join("Cargo.toml")).expect("Cargo.toml");
     let features = toml
         .split_once("[features]")
-        .map(|(_, resto)| resto.split("\n[").next().unwrap_or_default().to_owned())
+        .map(|(_, rest)| rest.split("\n[").next().unwrap_or_default().to_owned())
         .unwrap_or_default();
     assert!(
         features.contains("metrics"),
@@ -321,9 +321,9 @@ fn la_feature_de_medida_no_es_la_de_por_defecto() {
 /// and any sweep there is guessing. In `ui/src` it is, and that is where
 /// someone would add a new command.
 #[test]
-fn el_renderer_solo_invoca_comandos_conocidos() {
-    let src = raiz().join("ui/src");
-    let conocidos: Vec<&str> = norte_gui_tauri::commands::COMANDOS
+fn the_renderer_only_invokes_known_commands() {
+    let src = root().join("ui/src");
+    let conocidos: Vec<&str> = norte_gui_tauri::commands::COMMANDS
         .iter()
         .copied()
         // `metrics` only exists with its feature; the renderer calls it
@@ -331,25 +331,25 @@ fn el_renderer_solo_invoca_comandos_conocidos() {
         .chain(std::iter::once("metrics"))
         .collect();
     let mut vistos = Vec::new();
-    for entrada in walk(&src) {
-        if entrada.extension().and_then(|e| e.to_str()) != Some("ts") {
+    for entry in walk(&src) {
+        if entry.extension().and_then(|e| e.to_str()) != Some("ts") {
             continue;
         }
-        let texto = std::fs::read_to_string(&entrada).unwrap_or_default();
-        for trozo in texto.split("invoke").skip(1) {
+        let text = std::fs::read_to_string(&entry).unwrap_or_default();
+        for chunk in text.split("invoke").skip(1) {
             // `invoke<T>("name"` or `invoke("name"`.
-            let Some(abre) = trozo.find('(') else {
+            let Some(opens) = chunk.find('(') else {
                 continue;
             };
-            let resto = &trozo[abre + 1..];
-            let Some(nombre) = resto
+            let rest = &chunk[opens + 1..];
+            let Some(name) = rest
                 .trim_start()
                 .strip_prefix('"')
                 .and_then(|r| r.split('"').next())
             else {
                 continue;
             };
-            vistos.push(nombre.to_owned());
+            vistos.push(name.to_owned());
         }
     }
     assert!(!vistos.is_empty(), "the renderer calls something");
@@ -361,7 +361,7 @@ fn el_renderer_solo_invoca_comandos_conocidos() {
     }
     // And all four production ones are used: a declared surface nobody
     // calls is a surface nobody maintains.
-    for c in norte_gui_tauri::commands::COMANDOS {
+    for c in norte_gui_tauri::commands::COMMANDS {
         assert!(
             vistos.iter().any(|v| v == c),
             "nobody calls `{c}`: is it extra in the list?"
@@ -380,8 +380,8 @@ fn el_renderer_solo_invoca_comandos_conocidos() {
 /// invisible. It shows when clicked and shows in no behavior test, because
 /// `jsdom` does not lay out a screen.
 #[test]
-fn el_orden_de_los_anclajes_es_el_de_quien_tapa_a_quien() {
-    let html = std::fs::read_to_string(raiz().join("ui/index.html")).expect("the index is there");
+fn the_order_of_the_anchors_is_who_covers_whom() {
+    let html = std::fs::read_to_string(root().join("ui/index.html")).expect("the index is there");
     let pos = |id: &str| {
         html.find(&format!("id=\"{id}\""))
             .unwrap_or_else(|| panic!("missing anchor #{id}"))
@@ -393,10 +393,10 @@ fn el_orden_de_los_anclajes_es_el_de_quien_tapa_a_quien() {
     );
     // And the surfaces that grab the keyboard go after the menu: a dialog or
     // help rule over a menu bar, never the other way around.
-    for encima in ["palette", "dialogs", "help", "profiles"] {
+    for above in ["palette", "dialogs", "help", "profiles"] {
         assert!(
-            pos("menu") < pos(encima),
-            "#{encima} has to cover the menu, so it goes after"
+            pos("menu") < pos(above),
+            "#{above} has to cover the menu, so it goes after"
         );
     }
 }
@@ -405,18 +405,18 @@ fn el_orden_de_los_anclajes_es_el_de_quien_tapa_a_quien() {
 ///
 /// The switch was flipped by task 5.4 (the mutation security review phase
 /// 5's exit gate requires), and this test changed at the same time: while it
-/// was `SoloLectura` (read-only), the whole promise rested on a constant no
+/// was `SoloRead` (read-only), the whole promise rested on a constant no
 /// test looked at, and changing it by accident left the whole suite green
 /// and the window deleting files.
 ///
-/// It stays here in the other direction too: going back to `SoloLectura`
+/// It stays here in the other direction too: going back to `SoloRead`
 /// also has to be a decision, not a merge. The constant's rustdoc says what
 /// backs it.
 #[test]
-fn la_ventana_muta_y_es_una_decision() {
+fn the_window_mutates_and_it_is_a_decision() {
     assert_eq!(
-        norte_gui_tauri::startup::EFECTOS,
-        norte_ui_host::commands::Efectos::Completo,
+        norte_gui_tauri::startup::EFFECTS,
+        norte_ui_host::commands::Effects::Full,
         "changing the effects switch is a 5.4 decision, not an oversight"
     );
 }

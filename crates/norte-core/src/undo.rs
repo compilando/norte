@@ -207,7 +207,7 @@ async fn same_node(provider: &dyn Provider, a: &VPath, b: &VPath) -> Result<bool
 /// paths are the same node and the provider's rename cannot overwrite
 /// (#274).
 ///
-/// The twin of `ops::rename_de_ortografia`, for the undo path. It lives
+/// The twin of `ops::spelling_rename`, for the undo path. It lives
 /// apart and shares no code with it because there is no `TaskCtx` here, no
 /// observer, no retries: undoing already runs inside its own task, and what
 /// the journal emits is the compensation above.
@@ -469,7 +469,7 @@ pub(crate) async fn revert_entry(
             if let Some(expected) = entry
                 .reversal_ref
                 .as_deref()
-                .and_then(crate::journal::huella_a_nodo)
+                .and_then(crate::journal::footprint_to_node)
             {
                 match provider.node_id(&path, norte_vfs::FollowLinks::No).await {
                     Ok(Some(current)) if current != expected => {
@@ -1281,7 +1281,7 @@ async fn revert_mode_batch(
 /// been undone by someone else meanwhile.
 ///
 /// Asked ONCE, for the whole plan, as soon as the Task gets its turn
-/// (`Engine::undo_en_curso`): from then on only it writes undo
+/// (`Engine::undo_in_progress`): from then on only it writes undo
 /// compensations, so the answer doesn't go stale while it runs. Asking per
 /// unit would cost a journal scan for each one.
 ///
@@ -1302,15 +1302,15 @@ pub(crate) async fn deshechas(
 
 /// What state a unit chosen for undo is in NOW (#358).
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum Vigencia {
+pub(crate) enum Validity {
     /// None of it is undone: revert it exactly as chosen.
-    Entera(Vec<JournalEntry>),
+    Whole(Vec<JournalEntry>),
     /// Already fully undone: nothing left to do with it.
-    Deshecha,
+    Undone,
     /// Part of it already came back, in a unit that knows how to revert in
     /// pieces (sync, organize, permissions): continue with the REST, which
     /// is exactly what a new undo would choose.
-    EnParte(Vec<JournalEntry>),
+    InPart(Vec<JournalEntry>),
     /// Part of it already came back, in a unit that is all-or-nothing (a
     /// rename batch): it can neither continue nor be skipped. Continuing
     /// would revert half the batch; skipping it would let the LIFO cross a
@@ -1319,32 +1319,32 @@ pub(crate) enum Vigencia {
     Parada(i64),
 }
 
-/// Classifies `unit` against what's already been undone (see [`Vigencia`]).
+/// Classifies `unit` against what's already been undone (see [`Validity`]).
 ///
 /// Why "skip if something is undone" isn't enough: an undo that stopped
 /// halfway through a sync unit (a block, a cancellation) leaves that unit
 /// halfway, and the undo waiting behind it, by skipping it, would continue
 /// with the OLDER units — below something half-returned, which is exactly
 /// what strict LIFO exists to prevent.
-pub(crate) fn vigencia(unit: Vec<JournalEntry>, already_undone: &HashSet<i64>) -> Vigencia {
+pub(crate) fn validity(unit: Vec<JournalEntry>, already_undone: &HashSet<i64>) -> Validity {
     let how_many = unit
         .iter()
         .filter(|e| already_undone.contains(&e.seq))
         .count();
     if how_many == 0 {
-        return Vigencia::Entera(unit);
+        return Validity::Whole(unit);
     }
     if how_many == unit.len() {
-        return Vigencia::Deshecha;
+        return Validity::Undone;
     }
     if is_sync_unit(&unit) || is_organize_unit(&unit) || is_mode_unit(&unit) {
-        return Vigencia::EnParte(
+        return Validity::InPart(
             unit.into_iter()
                 .filter(|e| !already_undone.contains(&e.seq))
                 .collect(),
         );
     }
-    Vigencia::Parada(unit.first().map_or(0, |e| e.seq))
+    Validity::Parada(unit.first().map_or(0, |e| e.seq))
 }
 
 /// Reverts ONE undo unit, whatever kind it is.
@@ -1828,23 +1828,20 @@ mod tests {
         };
         let batch = || vec![entry(5, Some(9)), entry(4, Some(9))];
         let none = HashSet::new();
-        assert!(matches!(vigencia(sync(), &none), Vigencia::Entera(u) if u.len() == 2));
-        assert_eq!(vigencia(sync(), &HashSet::from([3, 2])), Vigencia::Deshecha);
-        match vigencia(sync(), &HashSet::from([3])) {
-            Vigencia::EnParte(rest) => {
+        assert!(matches!(validity(sync(), &none), Validity::Whole(u) if u.len() == 2));
+        assert_eq!(validity(sync(), &HashSet::from([3, 2])), Validity::Undone);
+        match validity(sync(), &HashSet::from([3])) {
+            Validity::InPart(rest) => {
                 assert_eq!(rest.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![2]);
             }
             other => panic!("a sync unit halfway continues with the rest: {other:?}"),
         }
         assert_eq!(
-            vigencia(batch(), &HashSet::from([4])),
-            Vigencia::Parada(5),
+            validity(batch(), &HashSet::from([4])),
+            Validity::Parada(5),
             "a rename batch halfway STOPS the LIFO: it's neither continued nor skipped"
         );
-        assert_eq!(
-            vigencia(batch(), &HashSet::from([4, 5])),
-            Vigencia::Deshecha
-        );
+        assert_eq!(validity(batch(), &HashSet::from([4, 5])), Validity::Undone);
     }
 
     /// A MIXED unit is not a sync one: whoever slipped a `created` into a

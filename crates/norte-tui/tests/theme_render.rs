@@ -35,7 +35,7 @@ fn app_con_dir(depth: ColorDepth) -> App {
 /// all of them, it falls back to letters; and the mouse zones measure the
 /// same as what is painted in both cases.
 #[test]
-fn la_barra_de_paneles_pinta_nombres_con_la_letra_subrayada_y_cae_a_letras() {
+fn the_pane_bar_paints_names_with_the_underlined_letter_and_falls_back_to_letters() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let mut app = app_con_dir(ColorDepth::Truecolor);
     app.panel_bar = true;
@@ -58,10 +58,10 @@ fn la_barra_de_paneles_pinta_nombres_con_la_letra_subrayada_y_cae_a_letras() {
             .contains(ratatui::style::Modifier::UNDERLINED),
         "the access letter is underlined"
     );
-    let zonas = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 80, 16));
-    let ancho_zona = zonas[0].x1 - zonas[0].x0 + 1;
+    let zones = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 80, 16));
+    let width_zone = zones[0].x1 - zones[0].x0 + 1;
     assert_eq!(
-        usize::from(ancho_zona),
+        usize::from(width_zone),
         "Sitios".len() + 2,
         "the zone measures what is painted"
     );
@@ -73,8 +73,8 @@ fn la_barra_de_paneles_pinta_nombres_con_la_letra_subrayada_y_cae_a_letras() {
         .map(|x| terminal.backend().buffer()[(x, 1)].symbol().to_string())
         .collect();
     assert!(!fila.contains("Sitios"), "no room, letters: {fila:?}");
-    let zonas = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 30, 16));
-    assert_eq!(zonas[0].x1 - zonas[0].x0 + 1, 3);
+    let zones = ui::panel_zones(&app, ratatui::layout::Rect::new(0, 0, 30, 16));
+    assert_eq!(zones[0].x1 - zones[0].x0 + 1, 3);
 
     // `letters` requested by hand, with room to spare: letters just the same.
     app.chrome.panel_bar_style = Some(norte_config::PanelBarStyle::Letters);
@@ -91,7 +91,7 @@ fn la_barra_de_paneles_pinta_nombres_con_la_letra_subrayada_y_cae_a_letras() {
 /// free space of the volume cached in `App`; off, the border stays clean;
 /// and with the incremental search open it shows the search instead.
 #[test]
-fn el_pie_del_panel_cuenta_y_dice_el_espacio_libre() {
+fn the_pane_footer_counts_and_tells_the_free_space() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let mut app = app_con_dir(ColorDepth::Truecolor);
     app.chrome.pane_footer = Some(true);
@@ -104,7 +104,7 @@ fn el_pie_del_panel_cuenta_y_dice_el_espacio_libre() {
         free_bytes: Some(120 << 30),
         read_only: false,
     }];
-    let fila_baja = |app: &App| -> String {
+    let row_down = |app: &App| -> String {
         let mut terminal = Terminal::new(TestBackend::new(100, 16)).expect("terminal");
         terminal.draw(|f| ui::draw(f, app)).expect("draw");
         // The panes' bottom border row: the last one minus the status bar.
@@ -112,7 +112,7 @@ fn el_pie_del_panel_cuenta_y_dice_el_espacio_libre() {
             .map(|x| terminal.backend().buffer()[(x, 14)].symbol().to_string())
             .collect()
     };
-    let con = fila_baja(&app);
+    let con = row_down(&app);
     assert!(
         con.contains("1 dirs") && con.contains("0 ficheros"),
         "{con:?}"
@@ -120,7 +120,7 @@ fn el_pie_del_panel_cuenta_y_dice_el_espacio_libre() {
     assert!(con.contains("120") && con.contains("libres"), "{con:?}");
 
     app.chrome.pane_footer = Some(false);
-    let sin = fila_baja(&app);
+    let sin = row_down(&app);
     assert!(
         !sin.contains("dirs"),
         "off, the border stays clean: {sin:?}"
@@ -133,7 +133,7 @@ fn el_pie_del_panel_cuenta_y_dice_el_espacio_libre() {
 /// leaves the key synthesized for the loop to dispatch through `on_key`.
 /// Off, the last row goes back to being the status one.
 #[test]
-fn la_barra_de_teclas_pinta_lo_atado_y_un_clic_es_la_tecla() {
+fn the_key_bar_paints_what_is_bound_and_a_click_is_the_key() {
     use norte_frontend::keybar::KeyCell;
     let mut app = app_con_dir(ColorDepth::Truecolor);
     app.chrome.key_bar = Some(true);
@@ -172,25 +172,25 @@ fn la_barra_de_teclas_pinta_lo_atado_y_un_clic_es_la_tecla() {
         "the status bar moves up one row"
     );
 
-    let zonas = ui::key_zones(&app, area);
-    assert_eq!(zonas.len(), 1, "an empty cell is not a zone: {zonas:?}");
-    assert_eq!((zonas[0].key, zonas[0].row), (2, 15));
+    let zones = ui::key_zones(&app, area);
+    assert_eq!(zones.len(), 1, "an empty cell is not a zone: {zones:?}");
+    assert_eq!((zones[0].key, zones[0].row), (2, 15));
     norte_tui::mouse::after_frame(
         &mut app,
         None,
         norte_tui::mouse::FrameZones {
-            keys: zonas.clone(),
+            keys: zones.clone(),
             ..Default::default()
         },
     );
-    let clic = crossterm::event::MouseEvent {
+    let click = crossterm::event::MouseEvent {
         kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-        column: zonas[0].x0,
+        column: zones[0].x0,
         row: 15,
         modifiers: crossterm::event::KeyModifiers::NONE,
     };
     assert_eq!(
-        norte_tui::mouse::handle(&mut app, clic),
+        norte_tui::mouse::handle(&mut app, click),
         norte_tui::mouse::After::SynthKey
     );
     assert_eq!(
@@ -219,7 +219,7 @@ fn la_barra_de_teclas_pinta_lo_atado_y_un_clic_es_la_tecla() {
 /// carry a background different from the bar's. With that, any theme that
 /// inverts that role breaks it again and it shows here.
 #[test]
-fn un_panel_cerrado_no_se_pinta_como_un_bloque_encendido() {
+fn a_closed_panel_is_not_painted_as_a_lit_block() {
     for preset in norte_theme::preset_names() {
         let mut app = app_con_dir(ColorDepth::Truecolor);
         let theme = norte_theme::Theme::preset(preset)
@@ -234,15 +234,15 @@ fn un_panel_cerrado_no_se_pinta_como_un_bloque_encendido() {
         // Row 1 is the panel bar: 0 is the menu. With this test's `App`
         // there is no side panel open, so ALL buttons are closed and the
         // whole row has to read as the bar's background with text on top.
-        let fondo = buf[(0, 1)].bg;
-        let distintos: Vec<String> = (0..80)
-            .filter(|x| buf[(*x, 1)].bg != fondo)
+        let background = buf[(0, 1)].bg;
+        let different: Vec<String> = (0..80)
+            .filter(|x| buf[(*x, 1)].bg != background)
             .map(|x| buf[(x, 1)].symbol().to_string())
             .collect();
         assert!(
-            distintos.is_empty(),
+            different.is_empty(),
             "[{preset}] with every panel CLOSED, the bar paints color blocks \
-             at {distintos:?} — the visual weight backward: what is off \
+             at {different:?} — the visual weight backward: what is off \
              standing out and what is open as normal text"
         );
     }
@@ -261,7 +261,7 @@ fn hay_fg(app: &App, want: Color) -> bool {
 }
 
 #[test]
-fn truecolor_pinta_el_dir_con_el_azul_del_tema() {
+fn truecolor_paints_the_dir_with_the_themes_blue() {
     // catppuccin-mocha: dir = #89b4fa. In truecolor it comes out as is.
     let app = app_con_dir(ColorDepth::Truecolor);
     assert!(
@@ -280,7 +280,7 @@ fn truecolor_pinta_el_dir_con_el_azul_del_tema() {
 /// one marked row, it shows up in EXACTLY one cell, and that cell is the
 /// gutter's `*` glyph.
 #[test]
-fn el_gutter_de_marca_solo_pinta_la_fila_marcada() {
+fn the_mark_gutter_only_paints_the_marked_row() {
     let dir = vp("file:///casa");
     let entries = vec![
         Entry {
@@ -342,18 +342,18 @@ fn el_gutter_de_marca_solo_pinta_la_fila_marcada() {
 }
 
 #[test]
-fn degradacion_evita_rgb_en_terminal_pobre() {
+fn degradation_avoids_rgb_on_poor_terminal() {
     // At 16 colors there can be NO Rgb at all: everything goes indexed.
     let app = app_con_dir(ColorDepth::Ansi16);
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let ningun_rgb = terminal
+    let no_rgb = terminal
         .backend()
         .buffer()
         .content
         .iter()
         .all(|cell| !matches!(cell.fg, Color::Rgb(..)) && !matches!(cell.bg, Color::Rgb(..)));
-    assert!(ningun_rgb, "a 16-color terminal must not receive Rgb");
+    assert!(no_rgb, "a 16-color terminal must not receive Rgb");
 }
 
 /// No VISIBLE glyph can be left with the TERMINAL's foreground when the
@@ -366,9 +366,9 @@ fn degradacion_evita_rgb_en_terminal_pobre() {
 /// Checked across EVERY shipped preset and with the text overlays open
 /// (help, palette, settings, modal), which also painted with `Line::raw`.
 #[test]
-fn ningun_texto_hereda_el_frente_del_terminal_con_tema_de_fondo() {
-    for nombre in norte_theme::preset_names() {
-        let theme = Theme::preset(nombre)
+fn no_text_inherits_the_terminals_foreground_with_a_background_theme() {
+    for name in norte_theme::preset_names() {
+        let theme = Theme::preset(name)
             .expect("preset parses")
             .expect("preset exists");
         let dir = vp("file:///casa");
@@ -411,7 +411,7 @@ fn ningun_texto_hereda_el_frente_del_terminal_con_tema_de_fondo() {
             .collect();
         assert!(
             huerfanas.is_empty(),
-            "{nombre}: {} glyphs with the terminal's foreground over the theme's background: {:?}",
+            "{name}: {} glyphs with the terminal's foreground over the theme's background: {:?}",
             huerfanas.len(),
             &huerfanas[..huerfanas.len().min(20)]
         );
@@ -433,7 +433,7 @@ fn ningun_texto_hereda_el_frente_del_terminal_con_tema_de_fondo() {
 /// color, which is all the buffer knows: the terminal applies the dimming,
 /// and over a light background it darkens it (more contrast, not less).
 #[test]
-fn el_texto_de_cada_preset_llega_al_suelo_de_contraste() {
+fn each_presets_text_reaches_the_contrast_floor() {
     fn luminancia(c: (u8, u8, u8)) -> f64 {
         let canal = |v: u8| {
             let s = f64::from(v) / 255.0;
@@ -447,8 +447,8 @@ fn el_texto_de_cada_preset_llega_al_suelo_de_contraste() {
     }
     fn contraste(a: (u8, u8, u8), b: (u8, u8, u8)) -> f64 {
         let (l1, l2) = (luminancia(a), luminancia(b));
-        let (height, bajo) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
-        (height + 0.05) / (bajo + 0.05)
+        let (height, below) = if l1 > l2 { (l1, l2) } else { (l2, l1) };
+        (height + 0.05) / (below + 0.05)
     }
     fn rgb(c: Color) -> Option<(u8, u8, u8)> {
         match c {
@@ -458,7 +458,7 @@ fn el_texto_de_cada_preset_llega_al_suelo_de_contraste() {
     }
 
     let dir = vp("file:///casa");
-    for nombre in norte_theme::preset_names() {
+    for name in norte_theme::preset_names() {
         let entries = vec![
             Entry {
                 attrs: std::collections::BTreeMap::new(),
@@ -480,28 +480,28 @@ fn el_texto_de_cada_preset_llega_al_suelo_de_contraste() {
             Pane::new(dir.clone(), Vec::new()),
         );
         app.theme = TuiTheme::new(
-            Theme::preset(nombre).expect("parses").expect("exists"),
+            Theme::preset(name).expect("parses").expect("exists"),
             ColorDepth::Truecolor,
         );
         app.render_now_ms = Some(2);
         let mut terminal = Terminal::new(TestBackend::new(80, 12)).expect("terminal");
         terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-        for celda in &terminal.backend().buffer().content {
-            let glifo = celda.symbol();
-            let decoracion = glifo == " "
-                || glifo
+        for cell in &terminal.backend().buffer().content {
+            let glyph = cell.symbol();
+            let decoracion = glyph == " "
+                || glyph
                     .chars()
                     .all(|c| matches!(c, '\u{2500}'..='\u{257f}' | '\u{2580}'..='\u{259f}'));
             if decoracion {
                 continue;
             }
-            let (Some(fg), Some(bg)) = (rgb(celda.fg), rgb(celda.bg)) else {
+            let (Some(fg), Some(bg)) = (rgb(cell.fg), rgb(cell.bg)) else {
                 continue;
             };
             let r = contraste(fg, bg);
             assert!(
                 r >= 3.0,
-                "{nombre}: glyph {glifo:?} paints at {r:.2}:1 over its background (the floor is 3.0)"
+                "{name}: glyph {glyph:?} paints at {r:.2}:1 over its background (the floor is 3.0)"
             );
         }
     }

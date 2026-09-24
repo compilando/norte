@@ -170,7 +170,7 @@ mod tests {
     /// The row is split whole and in order; with fewer than ten cells,
     /// whichever fit; and a cell's text measures exactly its width. A label
     /// that does not fit is cut at the last WHOLE word if there is one:
-    /// `7 Crear di` glued to `8 Borrar` used to read as a single broken
+    /// `7 Crear di` glued to `8 Delete` used to read as a single broken
     /// word; `7 Crear` leaves the gap that separates the two cells.
     #[test]
     fn the_cut_respects_the_last_whole_word() {

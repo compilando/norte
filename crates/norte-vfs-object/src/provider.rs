@@ -315,7 +315,7 @@ fn map_err(e: &opendal::Error) -> Error {
 /// hydration re-stats the focused entry). `s3.storage_class` is impossible
 /// with opendal 0.58 (it discards it while parsing the XML) — debt with its
 /// own issue at the block's close.
-fn catalogo_s3() -> &'static [norte_proto::AttrInfo] {
+fn catalog_s3() -> &'static [norte_proto::AttrInfo] {
     use norte_proto::{AttrHint, AttrInfo, AttrType};
     static CAT: std::sync::LazyLock<Vec<AttrInfo>> = std::sync::LazyLock::new(|| {
         let mk = |id: &str, label: &str| AttrInfo {
@@ -405,7 +405,7 @@ impl Provider for ObjectProvider {
     }
 
     fn attrs(&self) -> &[norte_proto::AttrInfo] {
-        catalogo_s3()
+        catalog_s3()
     }
 
     async fn stat_with(&self, p: &VPath, opt: &norte_vfs::ListOptions) -> Result<Entry, Error> {
@@ -1015,7 +1015,7 @@ mod tests {
     /// #49: the rename's containment, case by case — the helper is the only
     /// gate through which an echoed path becomes an operation key.
     #[test]
-    fn validated_suffix_contiene_lo_hostil() {
+    fn validated_suffix_contains_the_hostile_part() {
         let d = "src/";
         // The listed dir itself: skipped, not an error.
         assert_eq!(validated_suffix(d, "src/"), Ok(None));

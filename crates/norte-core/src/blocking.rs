@@ -28,7 +28,7 @@ where
 /// Without this, whatever a task launched from a request logs comes out
 /// without its `rpc`. When there is no active span it attaches the empty
 /// one, which changes nothing. What must NOT inherit the span of whoever
-/// launches it goes through [`spawn_raiz`]. A source test
+/// launches it goes through [`spawn_root`]. A source test
 /// (`tests/spans_en_spawn.rs`) blocks calling bare `tokio::spawn` outside
 /// this module.
 pub(crate) fn spawn<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
@@ -50,7 +50,7 @@ where
 /// launched it, and each job brings its own span). A different name so the
 /// decision shows at the call site, instead of a bare call that looks like
 /// an oversight.
-pub(crate) fn spawn_raiz<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
+pub(crate) fn spawn_root<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
 where
     F: std::future::Future + Send + 'static,
     F::Output: Send + 'static,

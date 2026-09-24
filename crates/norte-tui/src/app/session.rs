@@ -271,7 +271,7 @@ impl App {
         // kind of silence the whole key had before ADR 0098 — you write
         // something in the file and nothing happens, with nothing to
         // explain why.
-        let orphans = norte_frontend::config::profile_start_huerfanos(start, &placed);
+        let orphans = norte_frontend::config::profile_start_orphans(start, &placed);
         if !orphans.is_empty() {
             let ids: Vec<String> = orphans.iter().map(u32::to_string).collect();
             self.message = Some(ta(

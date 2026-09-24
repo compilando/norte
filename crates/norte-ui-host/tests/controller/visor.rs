@@ -8,7 +8,7 @@ use super::*;
 /// the PNG signature: the signature alone is eight bytes with no NUL at all
 /// and the heuristic takes them for text, which would make `is_image()` come
 /// out `false`. Same mold as the TUI's `png_bytes_binarios`.
-fn png_binario() -> Vec<u8> {
+fn png_binary() -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
     bytes.resize(40, 0);
     bytes
@@ -22,8 +22,8 @@ fn png_binario() -> Vec<u8> {
 /// reel it says there are no more instead of wrapping back to the first.
 #[tokio::test]
 async fn next_sibling_skips_the_text_in_the_middle() {
-    let mut f = Falso::default();
-    f.pon(
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![
             (b"a.png".to_vec(), false),
@@ -31,22 +31,22 @@ async fn next_sibling_skips_the_text_in_the_middle() {
             (b"c.png".to_vec(), false),
         ],
     );
-    f.contenido
-        .insert("mem:///casa/a.png".to_owned(), png_binario());
-    f.contenido
-        .insert("mem:///casa/c.png".to_owned(), png_binario());
-    f.contenido
+    f.content
+        .insert("mem:///casa/a.png".to_owned(), png_binary());
+    f.content
+        .insert("mem:///casa/c.png".to_owned(), png_binary());
+    f.content
         .insert("mem:///casa/b.txt".to_owned(), b"texto\n".to_vec());
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
-    let v = siguiente_visor(&mut sub).await.expect("the viewer opens");
+    h.dispatch(press("F3")).await.expect("host alive");
+    let v = next_visor(&mut sub).await.expect("the viewer opens");
     assert!(v.path_display.ends_with("a.png"), "opens the first image");
 
     // F9 = `viewer.next`: the NEXT image, not the text in the middle.
-    h.dispatch(tecla("F9")).await.expect("host alive");
-    let v = siguiente_visor(&mut sub)
+    h.dispatch(press("F9")).await.expect("host alive");
+    let v = next_visor(&mut sub)
         .await
         .expect("the viewer opens another");
     assert!(
@@ -57,17 +57,15 @@ async fn next_sibling_skips_the_text_in_the_middle() {
 
     // And from the last one there are no more: it does not wrap to the
     // first.
-    let ack = h.dispatch(tecla("F9")).await.expect("host alive");
+    let ack = h.dispatch(press("F9")).await.expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-sibling"),
         "at the end of the reel it says there are no more: {ack:?}"
     );
 
     // F8 goes back, with the same rule.
-    h.dispatch(tecla("F8")).await.expect("host alive");
-    let v = siguiente_visor(&mut sub)
-        .await
-        .expect("the viewer goes back");
+    h.dispatch(press("F8")).await.expect("host alive");
+    let v = next_visor(&mut sub).await.expect("the viewer goes back");
     assert!(
         v.path_display.ends_with("a.png"),
         "going backward also skips the text: {}",
@@ -79,18 +77,18 @@ async fn next_sibling_skips_the_text_in_the_middle() {
 /// detection, and what travels are already-sanitized lines.
 #[tokio::test]
 async fn viewing_a_file_decodes_it_and_paints_it() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
-    f.contenido.insert(
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    f.content.insert(
         "mem:///casa/notas.txt".to_owned(),
         b"primera\nsegunda\ntercera\n".to_vec(),
     );
     let backend = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
-    let v = siguiente_visor(&mut sub).await.expect("the viewer is open");
+    h.dispatch(press("F3")).await.expect("host alive");
+    let v = next_visor(&mut sub).await.expect("the viewer is open");
     assert!(v.path_display.ends_with("notas.txt"));
     assert_eq!(v.total_rows, 3, "three lines");
     assert!(
@@ -106,56 +104,53 @@ async fn viewing_a_file_decodes_it_and_paints_it() {
 /// the TUI uses, not a second keymap written here.
 #[tokio::test]
 async fn with_the_viewer_open_the_keys_belong_to_the_viewer() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
     let mut body = String::new();
     for i in 0..200 {
         use std::fmt::Write as _;
         let _ = writeln!(body, "linea {i}");
     }
     let body = body.into_bytes();
-    f.contenido.insert("mem:///casa/notas.txt".to_owned(), body);
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    f.content.insert("mem:///casa/notas.txt".to_owned(), body);
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F3")).await.expect("host alive");
-    let opened = siguiente_visor(&mut sub).await.expect("viewer open");
+    h.dispatch(press("F3")).await.expect("host alive");
+    let opened = next_visor(&mut sub).await.expect("viewer open");
     assert_eq!(opened.first_line, 0);
 
     // `down` in the viewer SCROLLS the viewer; it does not move the
     // listing's cursor.
-    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
-    let scrolled = siguiente_visor(&mut sub).await.expect("viewer open");
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
+    let scrolled = next_visor(&mut sub).await.expect("viewer open");
     assert_eq!(scrolled.first_line, 1);
 
     // And `esc` closes it.
-    h.dispatch(tecla("Escape")).await.expect("host alive");
-    assert!(
-        siguiente_visor(&mut sub).await.is_none(),
-        "the viewer closes"
-    );
+    h.dispatch(press("Escape")).await.expect("host alive");
+    assert!(next_visor(&mut sub).await.is_none(), "the viewer closes");
 
     // The listing underneath did not move, and seeing that takes a
     // snapshot: the viewer travels in patches precisely so it does not send
     // one on every keystroke.
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let snap = siguiente_foto(&mut sub).await;
-    assert_eq!(listado(&snap).cursor, Some(RowKey(0)));
+    let snap = next_snapshot(&mut sub).await;
+    assert_eq!(listing(&snap).cursor, Some(RowKey(0)));
 }
 
 /// A binary is not painted as if it were text: it shows in hexadecimal, and
 /// the shared layer decides by CONTENT, not by extension.
 #[tokio::test]
 async fn a_binary_shows_in_hexadecimal() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"raro.txt".to_vec(), false)]);
-    f.contenido.insert(
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"raro.txt".to_vec(), false)]);
+    f.content.insert(
         "mem:///casa/raro.txt".to_owned(),
         vec![0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x03],
     );
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F3")).await.expect("host alive");
-    let snap = siguiente_foto(&mut sub).await;
+    h.dispatch(press("F3")).await.expect("host alive");
+    let snap = next_snapshot(&mut sub).await;
     let v = snap.viewer.as_ref().expect("viewer");
     assert!(
         v.hex,
@@ -197,9 +192,9 @@ pub(super) fn preview_de(
 /// requested the thumbnail: two plugins compiled in just to open a photo.
 #[tokio::test]
 async fn a_native_image_does_not_ask_the_plugins() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
-    f.contenido
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
+    f.content
         .insert("mem:///casa/foto.png".to_owned(), png_de(640, 480, 4096));
     // A previewer that would match: it must not be asked.
     f.previews.insert(
@@ -207,13 +202,13 @@ async fn a_native_image_does_not_ask_the_plugins() {
         preview_de("Imagen ANSI", &["▀▀▀"], false),
     );
     let f = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let (h, _snap) = host_tree(Arc::clone(&f)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     let mut v = None;
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if let Some(x) = siguiente_foto(&mut sub).await.viewer.clone() {
+        if let Some(x) = next_snapshot(&mut sub).await.viewer.clone() {
             v = Some(x);
             break;
         }
@@ -229,7 +224,7 @@ async fn a_native_image_does_not_ask_the_plugins() {
     // had time to arrive.
     for _ in 0..5 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let _ = siguiente_foto(&mut sub).await;
+        let _ = next_snapshot(&mut sub).await;
     }
     assert!(
         f.anchos_de_preview.lock().expect("mutex").is_empty(),
@@ -244,9 +239,9 @@ async fn a_native_image_does_not_ask_the_plugins() {
 /// the file's own bytes.
 #[tokio::test]
 async fn the_viewer_shows_a_plugins_preview_and_says_whose_it_is() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"informe.pdf".to_vec(), false)]);
-    f.contenido.insert(
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"informe.pdf".to_vec(), false)]);
+    f.content.insert(
         "mem:///casa/informe.pdf".to_owned(),
         b"%PDF-1.7 crudo".to_vec(),
     );
@@ -254,16 +249,16 @@ async fn the_viewer_shows_a_plugins_preview_and_says_whose_it_is() {
         "mem:///casa/informe.pdf".to_owned(),
         preview_de("PDF de ACME", &["Annual report", "Page 1 of 12"], true),
     );
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     // The plugin's view arrives AFTER opening (ADR 0141): the viewer opens
     // with the raw one and this replaces it. It is waited for.
     let mut viewer = None;
     for _ in 0..40 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone()
+        if let Some(v) = next_snapshot(&mut sub).await.viewer.clone()
             && !v.preview_by.is_empty()
         {
             viewer = Some(v);
@@ -306,9 +301,9 @@ async fn the_viewer_shows_a_plugins_preview_and_says_whose_it_is() {
 /// gray what the TUI painted in color.
 #[tokio::test]
 async fn the_viewer_carries_the_previews_fragments() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"main.rs".to_vec(), false)]);
-    f.contenido
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"main.rs".to_vec(), false)]);
+    f.content
         .insert("mem:///casa/main.rs".to_owned(), b"fn main() {}".to_vec());
     f.previews.insert(
         "mem:///casa/main.rs".to_owned(),
@@ -350,14 +345,14 @@ async fn the_viewer_carries_the_previews_fragments() {
         },
     );
     let f = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let (h, _snap) = host_tree(Arc::clone(&f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     let mut viewer = None;
     for _ in 0..40 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone()
+        if let Some(v) = next_snapshot(&mut sub).await.viewer.clone()
             && !v.styled.is_empty()
         {
             viewer = Some(v);
@@ -409,26 +404,26 @@ async fn the_viewer_carries_the_previews_fragments() {
 /// and an image shrunk to it used to stick out on the right.
 #[tokio::test]
 async fn the_viewer_requests_the_width_the_renderer_measured() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"main.rs".to_vec(), false)]);
-    f.contenido
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"main.rs".to_vec(), false)]);
+    f.content
         .insert("mem:///casa/main.rs".to_owned(), b"fn main() {}".to_vec());
     let f = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let (h, _snap) = host_tree(Arc::clone(&f)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     assert_eq!(
-        anchos_de_preview_tras(&h, &mut sub, &f, 1).await.as_slice(),
+        preview_widths_after(&h, &mut sub, &f, 1).await.as_slice(),
         &[Some(120)]
     );
 
     h.dispatch(UiAction::SetViewerCols { cols: 77 })
         .await
         .expect("host alive");
-    h.dispatch(tecla("Escape")).await.expect("host alive");
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("Escape")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     assert_eq!(
-        anchos_de_preview_tras(&h, &mut sub, &f, 2).await.as_slice(),
+        preview_widths_after(&h, &mut sub, &f, 2).await.as_slice(),
         &[Some(120), Some(77)],
         "the second opening requests the measured width"
     );
@@ -436,16 +431,16 @@ async fn the_viewer_requests_the_width_the_renderer_measured() {
 
 /// Requests snapshots until the fake backend has seen `n` styled-preview
 /// requests, and returns the widths they carried.
-pub(super) async fn anchos_de_preview_tras(
+pub(super) async fn preview_widths_after(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
-    f: &Falso,
+    f: &Fake,
     n: usize,
 ) -> Vec<Option<u32>> {
     let mut widths = Vec::new();
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let _ = siguiente_foto(sub).await;
+        let _ = next_snapshot(sub).await;
         widths.clone_from(&f.anchos_de_preview.lock().expect("mutex"));
         if widths.len() >= n {
             break;
@@ -458,19 +453,19 @@ pub(super) async fn anchos_de_preview_tras(
 /// the file.
 #[tokio::test]
 async fn with_no_previewer_the_viewer_shows_the_file() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
-    f.contenido.insert(
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    f.content.insert(
         "mem:///casa/notas.txt".to_owned(),
         b"hola\nmundo\n".to_vec(),
     );
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() {
+        if let Some(v) = next_snapshot(&mut sub).await.viewer.clone() {
             assert!(v.lines.iter().any(|l| l.contains("hola")));
             assert!(
                 v.preview_by.is_empty(),
@@ -486,21 +481,21 @@ async fn with_no_previewer_the_viewer_shows_the_file() {
 /// A previewer's name is THIRD-PARTY text and arrives masked.
 #[tokio::test]
 async fn a_previewers_name_arrives_masked() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"x.bin".to_vec(), false)]);
-    f.contenido
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"x.bin".to_vec(), false)]);
+    f.content
         .insert("mem:///casa/x.bin".to_owned(), b"\x00\x01".to_vec());
     f.previews.insert(
         "mem:///casa/x.bin".to_owned(),
         preview_de("ACME\u{202e}gpj", &["contenido"], false),
     );
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() {
+        if let Some(v) = next_snapshot(&mut sub).await.viewer.clone() {
             assert!(
                 !v.preview_by.contains('\u{202e}'),
                 "the plugin's name goes through raw: {:?}",
@@ -531,18 +526,18 @@ pub(super) fn png_de(w: u32, h: u32, bytes: usize) -> Vec<u8> {
 /// its bytes do NOT travel in the snapshot.
 #[tokio::test]
 async fn an_image_is_accepted_and_its_bytes_travel_separately() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
-    f.contenido
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
+    f.content
         .insert("mem:///casa/foto.png".to_owned(), png_de(1920, 1080, 4096));
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     let mut v = None;
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if let Some(x) = siguiente_foto(&mut sub).await.viewer.clone() {
+        if let Some(x) = next_snapshot(&mut sub).await.viewer.clone() {
             v = Some(x);
             break;
         }
@@ -577,19 +572,19 @@ async fn an_image_is_accepted_and_its_bytes_travel_separately() {
 /// decodes, which is the only cheap defense (ADR 0069).
 #[tokio::test]
 async fn a_header_declaring_a_bomb_is_rejected() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"bomba.png".to_vec(), false)]);
-    f.contenido.insert(
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"bomba.png".to_vec(), false)]);
+    f.content.insert(
         "mem:///casa/bomba.png".to_owned(),
         png_de(60000, 60000, 4096),
     );
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() else {
+        let Some(v) = next_snapshot(&mut sub).await.viewer.clone() else {
             continue;
         };
         assert!(v.image.is_none(), "it is not painted");
@@ -618,22 +613,21 @@ async fn a_header_declaring_a_bomb_is_rejected() {
 /// close.
 #[tokio::test]
 async fn a_header_that_is_not_understood_is_rejected() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"raro.png".to_vec(), false)]);
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"raro.png".to_vec(), false)]);
     // Valid PNG signature, but the first chunk is NOT IHDR.
     let mut broken = b"\x89PNG\r\n\x1a\n".to_vec();
     broken.extend_from_slice(&[0, 0, 0, 13]);
     broken.extend_from_slice(b"iTXt");
     broken.resize(64, 0);
-    f.contenido
-        .insert("mem:///casa/raro.png".to_owned(), broken);
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    f.content.insert("mem:///casa/raro.png".to_owned(), broken);
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let Some(v) = siguiente_foto(&mut sub).await.viewer.clone() else {
+        let Some(v) = next_snapshot(&mut sub).await.viewer.clone() else {
             continue;
         };
         assert!(v.image.is_none());
@@ -646,23 +640,23 @@ async fn a_header_that_is_not_understood_is_rejected() {
 /// Closing the viewer RELEASES the bytes: they are megabytes.
 #[tokio::test]
 async fn closing_the_viewer_releases_the_image() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
-    f.contenido
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"foto.png".to_vec(), false)]);
+    f.content
         .insert("mem:///casa/foto.png".to_owned(), png_de(64, 64, 2048));
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     for _ in 0..20 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if siguiente_foto(&mut sub).await.viewer.is_some() {
+        if next_snapshot(&mut sub).await.viewer.is_some() {
             break;
         }
     }
     assert!(h.image_bytes().await.expect("host alive").is_some());
 
-    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(press("Escape")).await.expect("host alive");
     assert!(
         h.image_bytes().await.expect("host alive").is_none(),
         "a closed viewer holds onto no image megabytes"
@@ -675,9 +669,9 @@ async fn closing_the_viewer_releases_the_image() {
 /// native image, and releases them on close.
 #[tokio::test]
 async fn the_viewer_shows_a_plugins_thumbnail_and_says_whose_it_is() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"informe.pdf".to_vec(), false)]);
-    f.contenido.insert(
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"informe.pdf".to_vec(), false)]);
+    f.content.insert(
         "mem:///casa/informe.pdf".to_owned(),
         b"%PDF-1.7 crudo".to_vec(),
     );
@@ -692,14 +686,14 @@ async fn the_viewer_shows_a_plugins_thumbnail_and_says_whose_it_is() {
             height: 60,
         },
     );
-    let (h, _snap) = host_arbol(Arc::new(f)).await;
+    let (h, _snap) = host_tree(Arc::new(f)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla("F3")).await.expect("host alive");
+    h.dispatch(press("F3")).await.expect("host alive");
     let mut viewer = None;
     for _ in 0..40 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if let Some(v) = siguiente_foto(&mut sub).await.viewer.clone()
+        if let Some(v) = next_snapshot(&mut sub).await.viewer.clone()
             && v.image.is_some()
         {
             viewer = Some(v);
@@ -728,6 +722,6 @@ async fn the_viewer_shows_a_plugins_thumbnail_and_says_whose_it_is() {
         .expect("the bytes");
     assert!(bytes.starts_with(b"\x89PNG"), "the thumbnail's");
 
-    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(press("Escape")).await.expect("host alive");
     assert!(h.image_bytes().await.expect("host alive").is_none());
 }

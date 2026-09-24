@@ -17,7 +17,7 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
 }
 
-fn entradas(dir: &VPath) -> Vec<Entry> {
+fn entries(dir: &VPath) -> Vec<Entry> {
     (0..3)
         .map(|i| Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -31,11 +31,11 @@ fn entradas(dir: &VPath) -> Vec<Entry> {
         .collect()
 }
 
-fn app_de_prueba() -> App {
+fn test_app() -> App {
     let dir = vp("file:///casa");
     App::new(
-        Pane::new(dir.clone(), entradas(&dir)),
-        Pane::new(dir.clone(), entradas(&dir)),
+        Pane::new(dir.clone(), entries(&dir)),
+        Pane::new(dir.clone(), entries(&dir)),
     )
 }
 
@@ -43,8 +43,8 @@ fn app_de_prueba() -> App {
 /// one has focus, or where its cursor is. It is spec rule 7: the sidebar is
 /// not a side.
 #[test]
-fn abrir_el_sidebar_no_toca_los_lados() {
-    let mut app = app_de_prueba();
+fn opening_the_sidebar_does_not_touch_the_sides() {
+    let mut app = test_app();
     let before = (app.panes.len(), app.focus(), app.focused().dir().clone());
     app.toggle_places();
     assert_eq!(app.panes.len(), before.0, "still two listings");
@@ -57,8 +57,8 @@ fn abrir_el_sidebar_no_toca_los_lados() {
 /// And closing it leaves the tree EXACTLY as it was: no degenerate `Split`
 /// piling up every time someone opens and closes the sidebar.
 #[test]
-fn cerrar_el_sidebar_devuelve_el_arbol_de_antes() {
-    let mut app = app_de_prueba();
+fn closing_the_sidebar_returns_the_previous_tree() {
+    let mut app = test_app();
     let before = app.layout.clone();
     app.toggle_places();
     assert_ne!(app.layout, before, "opening it does change the tree");
@@ -72,8 +72,8 @@ fn cerrar_el_sidebar_devuelve_el_arbol_de_antes() {
 /// close. Closing something the reader just glanced at is the wrong
 /// answer.
 #[test]
-fn con_el_sidebar_abierto_y_el_teclado_fuera_la_tecla_lo_enfoca() {
-    let mut app = app_de_prueba();
+fn with_the_sidebar_open_and_the_keyboard_outside_the_key_focuses_it() {
+    let mut app = test_app();
     app.toggle_places();
     app.return_keys_to_panes();
     app.toggle_places();
@@ -85,8 +85,8 @@ fn con_el_sidebar_abierto_y_el_teclado_fuera_la_tecla_lo_enfoca() {
 /// the panes still gives only listings, which is what half the run loop
 /// lives on.
 #[test]
-fn el_hueco_del_sidebar_no_aparece_como_listado() {
-    let mut app = app_de_prueba();
+fn the_sidebar_slot_does_not_appear_as_a_listing() {
+    let mut app = test_app();
     app.toggle_places();
     let sidebar = app.places_slot().expect("open");
     assert!(app.layout.slot_ids().contains(&sidebar));
@@ -98,13 +98,13 @@ fn el_hueco_del_sidebar_no_aparece_como_listado() {
 /// An extra `Split` does not appear from opening the sidebar twice: the
 /// second press does not mint another slot.
 #[test]
-fn abrirlo_dos_veces_no_acuna_dos_huecos() {
-    let mut app = app_de_prueba();
+fn opening_it_twice_does_not_nest_two_slots() {
+    let mut app = test_app();
     app.toggle_places();
-    let primero = app.places_slot().expect("open");
+    let first = app.places_slot().expect("open");
     app.return_keys_to_panes();
     app.toggle_places();
-    assert_eq!(app.places_slot(), Some(primero));
+    assert_eq!(app.places_slot(), Some(first));
     assert_eq!(
         app.layout
             .slot_ids()
@@ -118,7 +118,7 @@ fn abrirlo_dos_veces_no_acuna_dos_huecos() {
     );
 }
 
-fn volumen(mount: &str, free: u64, total: u64) -> Volume {
+fn volume(mount: &str, free: u64, total: u64) -> Volume {
     Volume {
         mount: vp(mount),
         label: None,
@@ -132,14 +132,14 @@ fn volumen(mount: &str, free: u64, total: u64) -> Volume {
 
 /// An `App` with the sidebar open and populated, ready to paint.
 fn app_con_sidebar() -> App {
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     app.render_now_ms = Some(0);
     app.toggle_places();
     let id = app.places_slot().expect("open");
     let sidebar = app.panes.places_mut(id).expect("it is a sidebar");
     sidebar.set_drives(&[
-        volumen("file:///", 41_000_000_000, 120_000_000_000),
-        volumen("file:///boot", 402_000_000, 1_000_000_000),
+        volume("file:///", 41_000_000_000, 120_000_000_000),
+        volume("file:///boot", 402_000_000, 1_000_000_000),
     ]);
     sidebar.set_favorites(&[
         ("trabajo".to_owned(), Ok(vp("file:///trabajo"))),
@@ -177,7 +177,7 @@ fn buffer_de(app: &App, w: u16, h: u16) -> ratatui::buffer::Buffer {
 /// quotes, so any per-column clip comes out shifted by one cell — and a
 /// `contains()` hides it. A geometry test with `contains` does not check
 /// geometry.
-fn filas(buf: &ratatui::buffer::Buffer) -> Vec<String> {
+fn rows(buf: &ratatui::buffer::Buffer) -> Vec<String> {
     (buf.area.top()..buf.area.bottom())
         .map(|y| {
             (buf.area.left()..buf.area.right())
@@ -191,23 +191,23 @@ fn filas(buf: &ratatui::buffer::Buffer) -> Vec<String> {
 /// after. `Fixed` wins over the kind's minimum, so this number is the real
 /// width and not a suggestion.
 #[test]
-fn el_sidebar_ocupa_dieciseis_celdas_y_el_listado_empieza_en_la_diecisiete() {
+fn the_sidebar_occupies_sixteen_cells_and_the_listing_starts_at_seventeen() {
     let app = app_con_sidebar();
     let buf = buffer_de(&app, 100, 30);
-    let f = filas(&buf);
+    let f = rows(&buf);
     // Row 3: inside both blocks, already past the top border. THREE since
     // there are two chrome rows pinned: 0 is the menu bar, 1 the panel bar
     // (#324) and 2 the blocks' top border.
     let row = &f[3];
-    let celda = |x: usize| row.chars().nth(x).expect("the cell is painted");
-    assert_eq!(celda(0), '│', "sidebar's left border");
-    assert_eq!(celda(15), '│', "sidebar's right border, at cell 15");
-    assert_eq!(celda(16), '│', "first listing's left border, at 16");
+    let cell = |x: usize| row.chars().nth(x).expect("the cell is painted");
+    assert_eq!(cell(0), '│', "sidebar's left border");
+    assert_eq!(cell(15), '│', "sidebar's right border, at cell 15");
+    assert_eq!(cell(16), '│', "first listing's left border, at 16");
 }
 
 /// The whole screen with the sidebar open.
 #[test]
-fn snapshot_sidebar_abierto() {
+fn snapshot_sidebar_open() {
     let app = app_con_sidebar();
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
     terminal
@@ -220,14 +220,14 @@ fn snapshot_sidebar_abierto() {
 /// config error the reader cannot see; and the whole reason does not fit in
 /// fourteen cells, so the status bar says it (see `places_activate`).
 #[test]
-fn el_favorito_roto_se_pinta_marcado_y_atenuado() {
+fn the_broken_favorite_is_painted_marked_and_dimmed() {
     let app = app_con_sidebar();
     let mut terminal = Terminal::new(TestBackend::new(100, 30)).expect("terminal");
     terminal
         .draw(|f| norte_tui::ui::draw(f, &app))
         .expect("draw");
     let buf = terminal.backend().buffer().clone();
-    let f = filas(&buf);
+    let f = rows(&buf);
     let y = f
         .iter()
         .position(|row| row.chars().take(16).collect::<String>().contains("roto"))
@@ -253,11 +253,11 @@ fn el_favorito_roto_se_pinta_marcado_y_atenuado() {
 /// it, and the orthodox snapshots that already exist check it cell by
 /// cell.
 #[test]
-fn cerrado_no_pinta_nada() {
-    let mut app = app_de_prueba();
+fn closed_paints_nothing() {
+    let mut app = test_app();
     app.render_now_ms = Some(0);
     let buf = buffer_de(&app, 100, 30);
-    let f = filas(&buf);
+    let f = rows(&buf);
     // Row 1 is the panel bar, which since spec 2026-09-10 names the panel
     // ("Sitios") precisely so its existence is known: it is skipped.
     assert!(
@@ -273,7 +273,7 @@ fn cerrado_no_pinta_nada() {
 /// returns the keyboard. The sidebar is a REMOTE, not a panel with its own
 /// directory.
 #[test]
-fn enter_en_un_favorito_da_el_destino_y_suelta_el_teclado() {
+fn enter_on_a_favorite_gives_the_destination_and_releases_the_keyboard() {
     let mut app = app_con_sidebar();
     // Units header, two disks, Favorites header, trabajo.
     for _ in 0..4 {
@@ -288,7 +288,7 @@ fn enter_en_un_favorito_da_el_destino_y_suelta_el_teclado() {
 
 /// Enter on a header does nothing, and the keyboard stays put.
 #[test]
-fn enter_en_una_cabecera_no_hace_nada() {
+fn enter_on_a_header_does_nothing() {
     let mut app = app_con_sidebar();
     assert!(app.places_activate().is_none());
     assert_eq!(app.key_owner(), KeyOwner::Places);
@@ -298,7 +298,7 @@ fn enter_en_una_cabecera_no_hace_nada() {
 /// the other half of painting it marked, because fourteen cells fit the
 /// warning but not the explanation.
 #[test]
-fn enter_en_un_favorito_roto_explica_en_la_barra() {
+fn enter_on_a_broken_favorite_explains_in_the_bar() {
     let mut app = app_con_sidebar();
     for _ in 0..5 {
         app.places_down();
@@ -318,7 +318,7 @@ fn enter_en_un_favorito_roto_explica_en_la_barra() {
 
 /// Enter on a disk goes to its mount point.
 #[test]
-fn enter_en_un_disco_da_su_montaje() {
+fn enter_on_a_disk_gives_its_mount() {
     let mut app = app_con_sidebar();
     app.places_down();
     assert_eq!(app.places_activate(), Some(vp("file:///")));
@@ -326,7 +326,7 @@ fn enter_en_un_disco_da_su_montaje() {
 
 /// Folding a section hides its rows without closing anything.
 #[test]
-fn plegar_desde_la_app_esconde_las_filas() {
+fn folding_from_the_app_hides_the_rows() {
     let mut app = app_con_sidebar();
     let id = app.places_slot().expect("open");
     let before = app.panes.places(id).expect("sidebar").rows().len();
@@ -349,7 +349,7 @@ fn plegar_desde_la_app_esconde_las_filas() {
 /// returned `None`, and every arm was a no-op: the whole manager stopped
 /// responding with nothing on screen to explain why.
 #[test]
-fn una_disposicion_sin_el_panel_devuelve_el_teclado() {
+fn a_layout_without_the_panel_returns_the_keyboard() {
     use norte_frontend::layout::{KindId, Node, SlotId};
 
     // `app_con_sidebar` already opens it, and opening it ALREADY gives the
@@ -376,7 +376,7 @@ fn una_disposicion_sin_el_panel_devuelve_el_teclado() {
 /// gets tried first on something that opens, and nothing happened. Folding
 /// was Space and only Space.
 #[test]
-fn el_cursor_arranca_sobre_una_cabecera() {
+fn the_cursor_starts_on_a_header() {
     let app = app_con_sidebar();
     assert!(
         app.places_cursor_on_header(),
@@ -387,7 +387,7 @@ fn el_cursor_arranca_sobre_una_cabecera() {
 /// And scrolling down to a drive stops being one: there `⏎` navigates,
 /// which is what Enter means on a leaf.
 #[test]
-fn sobre_una_unidad_el_cursor_ya_no_esta_en_una_cabecera() {
+fn over_a_drive_the_cursor_is_no_longer_on_a_header() {
     let mut app = app_con_sidebar();
     app.places_down();
     assert!(!app.places_cursor_on_header());
@@ -406,20 +406,20 @@ fn sobre_una_unidad_el_cursor_ya_no_esta_en_una_cabecera() {
 /// why BOTH screens are checked: the one that fires is the one that
 /// matters.
 #[test]
-fn layout_places_esta_atado_en_los_siete_presets_y_en_las_dos_pantallas() {
+fn layout_places_is_bound_in_all_seven_presets_and_both_screens() {
     use norte_frontend::keymap::{CATALOGUE, Effective, Screen, parse_keymap, presets};
     let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
-    for nombre in presets::NAMES {
-        let src = presets::source(nombre).expect("the preset exists");
+    for name in presets::NAMES {
+        let src = presets::source(name).expect("the preset exists");
         let kf = parse_keymap(src).expect("the preset parses");
-        for pantalla in [Screen::Browse, Screen::Dialog] {
+        for screen in [Screen::Browse, Screen::Dialog] {
             let eff =
-                Effective::build_for(&kf, &[], &conocidos, pantalla).expect("the preset merges");
+                Effective::build_for(&kf, &[], &conocidos, screen).expect("the preset merges");
             assert!(
                 eff.bindings()
                     .iter()
                     .any(|(_, cmd)| *cmd == "layout.places"),
-                "{nombre} does not bind layout.places in {pantalla:?}"
+                "{name} does not bind layout.places in {screen:?}"
             );
         }
     }
@@ -432,7 +432,7 @@ fn layout_places_esta_atado_en_los_siete_presets_y_en_las_dos_pantallas() {
 /// belong to no listing, so a click there landed on "outside the panes"
 /// and did nothing — a panel that paints and cannot be touched.
 #[test]
-fn pulsar_una_fila_del_sidebar_la_selecciona_y_repulsarla_la_activa() {
+fn pressing_a_sidebar_row_selects_it_and_pressing_again_activates_it() {
     let mut app = app_con_sidebar();
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let _ = buffer_de(&app, 100, 30);
@@ -454,17 +454,17 @@ fn pulsar_una_fila_del_sidebar_la_selecciona_y_repulsarla_la_activa() {
             ..Default::default()
         },
     );
-    let zonas = norte_tui::ui::places_zones(&app, area);
-    assert!(!zonas.is_empty(), "the sidebar has clickable rows");
+    let zones = norte_tui::ui::places_zones(&app, area);
+    assert!(!zones.is_empty(), "the sidebar has clickable rows");
     // The first drive: row 0 is the section's header.
-    let unidad = zonas
+    let unit = zones
         .iter()
         .find(|z| z.index == 1)
         .copied()
         .expect("the first drive is visible");
 
     app.return_keys_to_panes();
-    let after = pulsar_en(&mut app, unidad.x0 + 1, unidad.row);
+    let after = pulsar_en(&mut app, unit.x0 + 1, unit.row);
     assert_eq!(after, norte_tui::mouse::After::Nothing, "only selects");
     assert_eq!(app.key_owner(), KeyOwner::Places, "and brings the keyboard");
     let cursor = app
@@ -475,7 +475,7 @@ fn pulsar_una_fila_del_sidebar_la_selecciona_y_repulsarla_la_activa() {
 
     // The same row again: that is activating, and activating it is
     // resolved by the run loop through the usual `cd` flow.
-    let after = pulsar_en(&mut app, unidad.x0 + 1, unidad.row);
+    let after = pulsar_en(&mut app, unit.x0 + 1, unit.row);
     assert_eq!(after, norte_tui::mouse::After::PlacesActivate);
     assert!(
         app.places_activate().is_some(),
@@ -487,7 +487,7 @@ fn pulsar_una_fila_del_sidebar_la_selecciona_y_repulsarla_la_activa() {
 /// the run loop asks for the drives again — the same path as the key, not
 /// a fourth refresh trigger (#226).
 #[test]
-fn pulsar_una_cabecera_pliega_su_seccion() {
+fn pressing_a_header_folds_its_section() {
     let mut app = app_con_sidebar();
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
     let _ = buffer_de(&app, 100, 30);
@@ -509,13 +509,13 @@ fn pulsar_una_cabecera_pliega_su_seccion() {
             ..Default::default()
         },
     );
-    let zonas = norte_tui::ui::places_zones(&app, area);
-    let header = zonas
+    let zones = norte_tui::ui::places_zones(&app, area);
+    let header = zones
         .iter()
         .find(|z| z.index == 0)
         .copied()
         .expect("the header is visible");
-    let filas_antes = app
+    let rows_before = app
         .places_slot()
         .and_then(|id| app.panes.places(id))
         .map(|s| s.rows().len())
@@ -523,14 +523,14 @@ fn pulsar_una_cabecera_pliega_su_seccion() {
 
     let after = pulsar_en(&mut app, header.x0 + 1, header.row);
     assert_eq!(after, norte_tui::mouse::After::PlacesFolded);
-    let filas_ahora = app
+    let rows_now = app
         .places_slot()
         .and_then(|id| app.panes.places(id))
         .map(|s| s.rows().len())
         .expect("sidebar");
     assert!(
-        filas_ahora < filas_antes,
-        "folding hides its rows: {filas_antes} → {filas_ahora}"
+        rows_now < rows_before,
+        "folding hides its rows: {rows_before} → {rows_now}"
     );
     assert!(!app.places_drives_visible(), "and the drives stay folded");
 }
@@ -545,10 +545,10 @@ fn pulsar_una_cabecera_pliega_su_seccion() {
 /// (#244 M1). `resize`'s tests passed because they handed it the sidebar's
 /// id by hand.
 #[test]
-fn con_el_teclado_dentro_el_sidebar_cambia_de_ancho() {
+fn with_the_keyboard_inside_the_sidebar_changes_width() {
     use norte_frontend::layout::Size;
 
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     app.toggle_places();
     assert_eq!(app.key_owner(), KeyOwner::Places, "the keyboard is inside");
     let id = app.places_slot().expect("open");
@@ -582,7 +582,7 @@ fn con_el_teclado_dentro_el_sidebar_cambia_de_ancho() {
 /// falls into the allowlist, which is the same dead screen with a
 /// different culprit.
 #[test]
-fn el_sidebar_despacha_su_propia_tecla() {
+fn the_sidebar_dispatches_its_own_key() {
     assert!(norte_tui::app::ALLOW_PLACES.contains(&"layout.places"));
 }
 
@@ -595,9 +595,9 @@ fn el_sidebar_despacha_su_propia_tecla() {
 /// switching profile, which mounts a new screen and with it an empty
 /// panel.
 #[test]
-fn los_tres_caminos_dejan_las_unidades_pedidas() {
+fn the_three_paths_leave_the_requested_units() {
     use norte_frontend::layout::{Edge, KindId, Node, Size, SlotId};
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     assert!(
         !app.places_wants_drives,
         "with no sidebar nothing is requested"
@@ -616,18 +616,18 @@ fn los_tres_caminos_dejan_las_unidades_pedidas() {
     app.places_wants_drives = false;
 
     // 3 — a layout that already brings it, without going through the key.
-    let arbol = Node::slot(SlotId(0), KindId::browser()).dock(
+    let tree = Node::slot(SlotId(0), KindId::browser()).dock(
         SlotId(0),
         Edge::Left,
         Size::Fixed(16),
         &Node::slot(SlotId(9), KindId::new("places")),
     );
-    app.set_layout(arbol);
+    app.set_layout(tree);
     assert!(app.places_wants_drives);
 }
 
 /// A valid favorite, as the already-loaded config leaves it.
-fn favorito(name: &str, wire: &str) -> norte_tui::config::HotlistItem {
+fn favorite(name: &str, wire: &str) -> norte_tui::config::HotlistItem {
     norte_tui::config::HotlistItem {
         name: name.to_owned(),
         target: Ok(vp(wire)),
@@ -635,7 +635,7 @@ fn favorito(name: &str, wire: &str) -> norte_tui::config::HotlistItem {
 }
 
 /// The names of the favorites the sidebar paints right now.
-fn favoritos_del_sidebar(app: &App) -> Vec<String> {
+fn sidebar_favorites(app: &App) -> Vec<String> {
     let id = app.places_slot().expect("the sidebar is open");
     app.panes
         .places(id)
@@ -654,39 +654,36 @@ fn favoritos_del_sidebar(app: &App) -> Vec<String> {
 /// that copied the favorites: the panel came out empty and nothing inside
 /// the program ever filled it.
 #[test]
-fn un_layout_que_trae_el_sidebar_lo_arranca_con_los_favoritos() {
+fn a_layout_that_brings_the_sidebar_starts_it_with_the_favorites() {
     use norte_frontend::layout::{Edge, KindId, Node, Size, SlotId};
-    let mut app = app_de_prueba();
-    app.set_hotlist(vec![favorito("descargas", "file:///casa/descargas")]);
+    let mut app = test_app();
+    app.set_hotlist(vec![favorite("descargas", "file:///casa/descargas")]);
     // The sidebar comes in through the TREE, not through `toggle_places`.
-    let arbol = Node::slot(SlotId(0), KindId::browser()).dock(
+    let tree = Node::slot(SlotId(0), KindId::browser()).dock(
         SlotId(0),
         Edge::Left,
         Size::Fixed(16),
         &Node::slot(SlotId(9), KindId::new("places")),
     );
-    app.set_layout(arbol);
-    assert_eq!(favoritos_del_sidebar(&app), vec!["descargas".to_owned()]);
+    app.set_layout(tree);
+    assert_eq!(sidebar_favorites(&app), vec!["descargas".to_owned()]);
 }
 
 /// And a favorite added with the sidebar ALREADY open shows up in it. The
 /// popup got rebuilt and the sidebar did not, so the two surfaces for the
 /// same data said different things — the complaint was exactly that.
 #[test]
-fn anadir_un_favorito_lo_pinta_tambien_en_el_sidebar() {
-    let mut app = app_de_prueba();
+fn adding_a_favorite_also_paints_it_in_the_sidebar() {
+    let mut app = test_app();
     app.toggle_places();
-    assert!(
-        favoritos_del_sidebar(&app).is_empty(),
-        "it starts with none"
-    );
+    assert!(sidebar_favorites(&app).is_empty(), "it starts with none");
 
     app.hotlist_apply_saved("descargas", vp("file:///casa/descargas"));
-    assert_eq!(favoritos_del_sidebar(&app), vec!["descargas".to_owned()]);
+    assert_eq!(sidebar_favorites(&app), vec!["descargas".to_owned()]);
 
     app.hotlist_apply_removed("descargas");
     assert!(
-        favoritos_del_sidebar(&app).is_empty(),
+        sidebar_favorites(&app).is_empty(),
         "and removing it removes it from both places"
     );
 }
@@ -694,12 +691,12 @@ fn anadir_un_favorito_lo_pinta_tambien_en_el_sidebar() {
 /// A hot reload of `norte.toml` — or a profile switch, which goes through
 /// the same place — replaces the whole list, and the sidebar follows it.
 #[test]
-fn recargar_la_config_reemplaza_los_favoritos_del_sidebar() {
-    let mut app = app_de_prueba();
+fn reloading_the_config_replaces_the_sidebars_favorites() {
+    let mut app = test_app();
     app.toggle_places();
-    app.set_hotlist(vec![favorito("viejo", "file:///viejo")]);
-    assert_eq!(favoritos_del_sidebar(&app), vec!["viejo".to_owned()]);
+    app.set_hotlist(vec![favorite("viejo", "file:///viejo")]);
+    assert_eq!(sidebar_favorites(&app), vec!["viejo".to_owned()]);
 
-    app.set_hotlist(vec![favorito("nuevo", "file:///nuevo")]);
-    assert_eq!(favoritos_del_sidebar(&app), vec!["nuevo".to_owned()]);
+    app.set_hotlist(vec![favorite("nuevo", "file:///nuevo")]);
+    assert_eq!(sidebar_favorites(&app), vec!["nuevo".to_owned()]);
 }

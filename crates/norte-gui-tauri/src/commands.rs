@@ -63,11 +63,11 @@ impl Bridge {
     /// it to `spawn_blocking` when it is not a preset. It used to only look
     /// at presets, and a profile with `theme = "…/mine.toml"` silently ended
     /// up without new colors.
-    pub fn cambiar_tema(&self, name: &str) -> bool {
+    pub fn change_theme(&self, name: &str) -> bool {
         let Ok(theme) = norte_frontend::theme::resolve_theme(Some(name)) else {
             return false;
         };
-        let mut updated = crate::catalog::catalogo(self.host.instance(), self.lang, &theme);
+        let mut updated = crate::catalog::catalog(self.host.instance(), self.lang, &theme);
         // The appearance is PRESERVED: this path changes colors, and rebuilding
         // the catalogue from scratch would reset the fonts to the system's
         // without anyone asking for that. It is the same catalogue with a
@@ -95,7 +95,7 @@ impl Bridge {
     /// The same one, shareable: the native-effects pump needs it, since it
     /// lives in its own task and answers the host.
     #[must_use]
-    pub fn host_compartido(&self) -> Arc<UiHost> {
+    pub fn host_shared(&self) -> Arc<UiHost> {
         Arc::clone(&self.host)
     }
 
@@ -128,7 +128,7 @@ impl Bridge {
     pub fn catalog(&self) -> Arc<HostCatalog> {
         match self.catalog.read() {
             Ok(guard) => Arc::clone(&guard),
-            // See `cambiar_tema`: what is inside is still a whole catalogue,
+            // See `change_theme`: what is inside is still a whole catalogue,
             // and ending up without strings is worse than carrying on.
             Err(poisoned) => Arc::clone(&poisoned.into_inner()),
         }
@@ -184,7 +184,7 @@ impl AppState {
 ///
 /// Exists so the surface is a LIST you read, not something you have to
 /// deduce from a macro: adding one has to be visible in the diff.
-pub const COMANDOS: &[&str] = &[
+pub const COMMANDS: &[&str] = &[
     "initial_snapshot",
     "dispatch",
     "request_snapshot",
@@ -210,14 +210,14 @@ pub enum WindowVerb {
     /// Close, by the same path as the desktop's X: `[ui] confirm_quit` still
     /// asks. It has to stay `Window::close()`, which emits `CloseRequested`;
     /// `destroy()` would skip the question and the session save
-    /// (`la_puerta_de_la_ventana_es_estrecha` watches for that).
+    /// (`the_windows_door_is_narrow` watches for that).
     Close,
     /// Start dragging the window with whichever button is pressed.
     Drag,
 }
 
 #[cfg(test)]
-pub(crate) mod tests_soporte {
+pub(crate) mod tests_support {
     //! A host against a REAL daemon, for this crate's tests.
     //!
     //! There is no screen and no Node anywhere: what is being tested is the
@@ -240,7 +240,7 @@ pub(crate) mod tests_soporte {
     /// The `TempDir` is deliberately leaked (not `Box::leak`; it is kept
     /// alive in a `static`-like way): a test that deletes the socket
     /// mid-pump measures something else.
-    pub async fn host_de_prueba() -> (UiHost, ViewSnapshot) {
+    pub async fn test_host() -> (UiHost, ViewSnapshot) {
         let dir = tempfile::tempdir().expect("tempdir");
         let mem = Arc::new(MemProvider::new());
         let vp = |w: &str| VPath::parse(w).expect("test wire");
@@ -275,22 +275,21 @@ pub(crate) mod tests_soporte {
         let out = UiHost::start(UiHostOptions {
             backend: Arc::new(backend),
             initial_dir: vp("mem:///casa"),
-            initial_dir_pedido: false,
+            initial_dir_requested: false,
             attach: false,
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-            keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
-                .expect("preset"),
+            keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
             layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
             viewport: (120, 40),
-            settings: norte_ui_host::ajustes_por_defecto(),
+            settings: norte_ui_host::default_settings(),
             paths: norte_ui_host::settings::HostPaths::default(),
             theme: norte_ui_host::pickers::HostTheme::default(),
             user_layouts: Vec::new(),
             profile: None,
-            columns: norte_ui_host::columnas_por_defecto(),
-            effects: norte_ui_host::commands::Efectos::Completo,
+            columns: norte_ui_host::default_columns(),
+            effects: norte_ui_host::commands::Effects::Full,
             log_ring: None,
         })
         .await
@@ -309,8 +308,8 @@ mod tests {
     /// contract version.
     #[tokio::test]
     async fn startup_frame_is_sequence_zero() {
-        let (host, snap) = tests_soporte::host_de_prueba().await;
-        let cat = crate::catalog::catalogo(
+        let (host, snap) = tests_support::test_host().await;
+        let cat = crate::catalog::catalog(
             host.instance(),
             norte_i18n::Lang::Es,
             &norte_theme::Theme::preset_default(),
@@ -326,8 +325,8 @@ mod tests {
     /// acknowledgment.
     #[tokio::test]
     async fn an_action_goes_and_comes_back() {
-        let (host, snap) = tests_soporte::host_de_prueba().await;
-        let cat = crate::catalog::catalogo(
+        let (host, snap) = tests_support::test_host().await;
+        let cat = crate::catalog::catalog(
             host.instance(),
             norte_i18n::Lang::Es,
             &norte_theme::Theme::preset_default(),

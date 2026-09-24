@@ -116,7 +116,7 @@ mod presets_catalog_tests {
 ///   whatever replaces it.
 /// - **Check 6** ("only `vim` sets `counts`") already has a pinned test that
 ///   iterates `NAMES`/`source` exactly this way:
-///   [`super::tests::solo_vim_trae_los_contadores_encendidos`] in this
+///   [`super::tests::only_vim_ships_with_counters_turned_on`] in this
 ///   module's parent (`keymap/mod.rs`), predating this task. Duplicating it
 ///   here would just be two tests that can drift from each other.
 ///
@@ -529,7 +529,7 @@ mod k2b_gate_tests {
     /// this crate, and the rule is about what a preset is allowed to
     /// promise.
     #[test]
-    fn ningun_preset_ata_un_acorde_que_el_terminal_no_entrega() {
+    fn no_preset_binds_a_chord_the_terminal_cannot_deliver() {
         let mut dead: Vec<String> = Vec::new();
         for name in NAMES {
             let src = source(name).expect("NAMES resolves");
@@ -578,7 +578,7 @@ mod k2b_gate_tests {
     /// through the palette and the menu, and whoever wants a chord binds it
     /// themselves.
     #[test]
-    fn los_comandos_de_perfil_existen_y_no_los_ata_ningun_preset() {
+    fn profile_commands_exist_and_no_preset_binds_them() {
         let profile = [
             "profile.pick",
             "profile.next",

@@ -20,7 +20,7 @@
 //!
 //! **This does NOT assert that what is classified is right.** It says it has
 //! been decided. The ones decided today as "nobody reads it" are named debt,
-//! and the plan `docs/superpowers/plans/2026-09-05-paridad-tui-ventana.md`
+//! and the plan `docs/superpowers/plans/2026-09-05-paridad-tui-window.md`
 //! lists them.
 
 /// Every `CommonConfig` key is classified by what the window does with it.
@@ -63,7 +63,7 @@ fn every_config_key_is_classified_for_the_window() {
         // buttons. Every snapshot reads them.
         ui_chrome: _,
         // The bar's plugin items (ADR 0137): every snapshot reads them
-        // (`elementos_de_estado`) and every listing round asks for their
+        // (`state_items`) and every listing round asks for their
         // columns (`columns::plugin_requests`).
         ui_status_plugins: _,
 
@@ -71,7 +71,7 @@ fn every_config_key_is_classified_for_the_window() {
         //     accepts a preset or the path to a `.toml` (ADR 0020).
         //
         //     There is still half a debt, and it has a name: on PROFILE
-        //     CHANGE the host only applies presets (`aplicar_tema`), because
+        //     CHANGE the host only applies presets (`apply_theme`), because
         //     resolving a path requires reading a file and that runs inside
         //     the actor (rule 2). Plan, phase 3.
         ui_theme: _,
@@ -136,7 +136,7 @@ fn every_config_key_is_classified_for_the_window() {
         ui_reduce_motion: _,
 
         // ─── Read at STARTUP and on profile change, not in the snapshot:
-        //     `Estado::siembra_de_perfil` fills in the slot the session
+        //     `State::profile_seed` fills in the slot the session
         //     knows nothing about, once (ADR 0098).
         profile_start: _,
 
@@ -144,10 +144,10 @@ fn every_config_key_is_classified_for_the_window() {
         //
         //     `project_warnings` and `profile_warnings` are both shown, and
         //     by the same path: the count to the bar from
-        //     `aviso_de_arranque` and each reason to the log. The profile one
+        //     `startup_notice` and each reason to the log. The profile one
         //     is also repeated on every profile change.
         //     `sources` is for the config watcher, which the window does not
-        //     have: its "where does this live" view is built from `capas`.
+        //     have: its "where does this live" view is built from `layers`.
         //     `profile_title` is re-read by the file's profile picker, not
         //     from this field.
         sources: _,
@@ -165,7 +165,7 @@ fn every_config_key_is_classified_for_the_window() {
 /// had slipped through. Closed here.
 #[test]
 fn every_frontend_config_field_is_classified_for_the_window() {
-    let cfg = norte_ui_host::ajustes_por_defecto();
+    let cfg = norte_ui_host::default_settings();
     let norte_frontend::config::FrontendConfig {
         // The scalars, with their own guard above.
         common: _,

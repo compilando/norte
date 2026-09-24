@@ -846,7 +846,7 @@ impl RemoteBackend {
     }
 
     /// Remote listing as a lazy stream: an EAGER first page (error parity)
-    /// + `try_unfold` over the `next_cursor`. No new deps. The container's
+    /// plus `try_unfold` over the `next_cursor`. No new deps. The container's
     /// `skipped` (#93) travels on every page — the first one's is enough
     /// (an N-1 daemon does not send it: `None` = unknown).
     ///
@@ -3530,10 +3530,10 @@ mod tests {
     fn refreshing_saves_from_eviction() {
         let inner = test_inner();
         let panel = vpd("file:///panel");
-        let ancla = norte_proto::DirAnchor::new("a".repeat(32));
-        inner.remember_anchor(&panel, Some(ancla.clone()));
+        let anchor = norte_proto::DirAnchor::new("a".repeat(32));
+        inner.remember_anchor(&panel, Some(anchor.clone()));
         for i in 0..ANCHORS_MAX {
-            inner.remember_anchor(&panel, Some(ancla.clone()));
+            inner.remember_anchor(&panel, Some(anchor.clone()));
             inner.remember_anchor(
                 &vpd(&format!("file:///d{i}")),
                 Some(norte_proto::DirAnchor::new(format!("{i:032x}"))),
@@ -3541,7 +3541,7 @@ mod tests {
         }
         assert_eq!(
             inner.anchor_for(&panel),
-            Some(ancla),
+            Some(anchor),
             "what keeps being looked at is not evicted"
         );
     }

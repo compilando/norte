@@ -1,29 +1,29 @@
 //! The layout: slots, columns, and the screen's split.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// Opens the layout selector.
     ///
     /// The user's are already read at startup: the selector paints each
     /// one's SHAPE, and reading them on moving the cursor would be I/O in the
     /// event loop.
-    pub(super) fn abrir_disposiciones(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.selector_disposicion = Some(norte_frontend::layout_picker::LayoutPicker::open(
-            self.disposiciones.clone(),
+    pub(super) fn open_layouts(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        self.selector_layout = Some(norte_frontend::layout_picker::LayoutPicker::open(
+            self.layouts.clone(),
         ));
         let change = ViewChange::Layouts {
-            layouts: self.vista_disposiciones(),
+            layouts: self.vista_layouts(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Opens the COLUMNS selector over the focused slot's scheme.
@@ -32,14 +32,14 @@ impl Estado {
     /// scheme (`sftp` does not show the same as `file`), and opening it over
     /// a different one would be editing a screen other than the one being
     /// looked at.
-    pub(super) fn abrir_columnas(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let slot = self.hueco();
+    pub(super) fn open_columns(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let slot = self.slot();
         let scheme = slot.pane.dir().scheme().to_owned();
         let sort = slot.pane.sort();
         let catalog = self.catalogos.get(scheme.as_str()).cloned();
-        self.selector_columnas = Some(
+        self.selector_columns = Some(
             norte_frontend::columns_picker::ColumnsPicker::open_with_catalog(
-                &self.columnas,
+                &self.columns,
                 &scheme,
                 sort,
                 catalog.as_ref(),
@@ -53,14 +53,14 @@ impl Estado {
             ),
         );
         let change = ViewChange::ColumnsPicker {
-            columns: self.vista_columnas(),
+            columns: self.vista_columns(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// The columns selector's projection.
-    pub(super) fn vista_columnas(&self) -> Option<crate::dto::ColumnsPickerView> {
-        let p = self.selector_columnas.as_ref()?;
+    pub(super) fn vista_columns(&self) -> Option<crate::dto::ColumnsPickerView> {
+        let p = self.selector_columns.as_ref()?;
         let scheme = p.scheme().to_owned();
         Some(crate::dto::ColumnsPickerView {
             // The title already carries the SCOPE, with the key the TUI uses
@@ -87,12 +87,11 @@ impl Estado {
                     // An `attr:` or `plugin:` column's label is given by its
                     // catalogue, i.e. THIRD-PARTY text. A builtin's comes
                     // from Fluent and is ours.
-                    let (label, hostile) =
-                        etiqueta_de_columna(r, &scheme, &self.columnas, self.lang);
+                    let (label, hostile) = column_label(r, &scheme, &self.columns, self.lang);
                     crate::dto::ColumnsPickerRowView {
                         // Identity: whole or empty, never truncated — it is
                         // what comes back to enable, disable and move.
-                        id: identidad_de_texto(&r.id),
+                        id: text_identity(&r.id),
                         label: clamp_display(label),
                         hostile,
                         enabled: r.enabled,
@@ -109,7 +108,7 @@ impl Estado {
             // holds for it and is lost on closing it. Staying quiet about it
             // would leave the user believing they just configured norte.
             note: clamp_display(norte_i18n::t_in(self.lang, "columns-picker-session-only")),
-            hint: clamp_display(self.pie_de_columnas()),
+            hint: clamp_display(self.column_footer()),
         })
     }
 
@@ -119,7 +118,7 @@ impl Estado {
     /// rebound, and a translated string that names specific keys stops being
     /// true the moment someone does. An unbound verb drops out of the whole
     /// footer: announcing it with no key helps nobody.
-    pub(super) fn pie_de_columnas(&self) -> String {
+    pub(super) fn column_footer(&self) -> String {
         let parts = [
             ("dialog.toggle-enabled", "columns-picker-hint-toggle"),
             ("dialog.move-up", "columns-picker-hint-move"),
@@ -131,7 +130,7 @@ impl Estado {
         parts
             .iter()
             .filter_map(|(cmd, key)| {
-                let chord = self.acorde_de_dialogo(cmd);
+                let chord = self.dialog_chord(cmd);
                 if chord.is_empty() {
                     return None;
                 }
@@ -146,14 +145,14 @@ impl Estado {
     /// The same as the TUI's overlay's, by the same model: enabling and
     /// disabling, moving the row up and down, choosing what to sort by, and
     /// cycling the format of the one that allows it.
-    pub(super) fn tecla_en_columnas(
+    pub(super) fn key_in_columns(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.selector_columnas.is_none() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        if self.selector_columns.is_none() {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
         // Through the SHARED resolver (#287), not fixed keys: a preset that
         // rebinds `dialog.move-up` has to change this window the same way it
@@ -161,14 +160,14 @@ impl Estado {
         // the footer is painted with the chords that come out of here, not a
         // literal: a footer that says `Shift+↑/↓` over code that listens for
         // something else is a lie only discovered by trying it.
-        let Some(verb) = self.verbo_de_dialogo(k) else {
-            return (self.aplicada(), Vec::new());
+        let Some(verb) = self.dialog_verb(k) else {
+            return (self.applied(), Vec::new());
         };
-        let Some(p) = self.selector_columnas.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(p) = self.selector_columns.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match verb.as_str() {
-            "dialog.cancel" => self.selector_columnas = None,
+            "dialog.cancel" => self.selector_columns = None,
             "dialog.down" => p.down(),
             "dialog.up" => p.up(),
             "dialog.move-down" => p.move_down(),
@@ -176,13 +175,13 @@ impl Estado {
             "dialog.toggle-enabled" => p.toggle(),
             "dialog.sort" => p.sort_current(),
             "dialog.cycle-format" => p.cycle_format(),
-            "dialog.confirm" => return self.aplicar_columnas(backend, mailbox),
-            _ => return (self.aplicada(), Vec::new()),
+            "dialog.confirm" => return self.apply_columns(backend, mailbox),
+            _ => return (self.applied(), Vec::new()),
         }
         let change = ViewChange::ColumnsPicker {
-            columns: self.vista_columnas(),
+            columns: self.vista_columns(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Applies what was chosen TO THIS WINDOW.
@@ -197,31 +196,31 @@ impl Estado {
     /// "this file has no such attribute" — until the next `cd`. What decides
     /// that is the SHARED fingerprint (`pane_fingerprint`), not a count of
     /// its own here.
-    pub(super) fn aplicar_columnas(
+    pub(super) fn apply_columns(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(p) = self.selector_columnas.as_ref() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(p) = self.selector_columns.as_ref() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let picked = p.finish();
-        self.selector_columnas = None;
-        let before = self.huellas_de_columnas();
-        self.columnas
+        self.selector_columns = None;
+        let before = self.column_footprints();
+        self.columns
             .apply_picked(picked.scheme_target.as_deref(), &picked.ids, picked.sort);
         for (id, fmt) in &picked.formats {
-            self.columnas.apply_format(id, fmt);
+            self.columns.apply_format(id, fmt);
         }
-        for id in self.huecos.keys().copied().collect::<Vec<_>>() {
-            if before.get(&id) != self.huellas_de_columnas().get(&id) {
-                self.re_listar(id, backend, mailbox);
+        for id in self.slots.keys().copied().collect::<Vec<_>>() {
+            if before.get(&id) != self.column_footprints().get(&id) {
+                self.re_list(id, backend, mailbox);
             }
         }
         let snap = self.snapshot();
         (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
     }
 
@@ -231,24 +230,24 @@ impl Estado {
     /// requested in `fs.list`, so a new column over the old listing would
     /// stay blank — indistinguishable from "this file has no such
     /// attribute".
-    pub(super) fn re_listar(
+    pub(super) fn re_list(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         // A single reload path. This used to have its own copy and was
         // missing the two things that make a reload go unnoticed: it did not
         // anchor the cursor nor keep the marks, so changing columns sent the
         // cursor to the first row and erased the selection.
-        let _ = self.refrescar(slot, backend, mailbox);
+        let _ = self.refresh(slot, backend, mailbox);
     }
 
     /// Each slot's column fingerprint: which `attr:`/`plugin:` it paints.
-    pub(super) fn huellas_de_columnas(&self) -> std::collections::BTreeMap<u32, Vec<String>> {
-        self.huecos
+    pub(super) fn column_footprints(&self) -> std::collections::BTreeMap<u32, Vec<String>> {
+        self.slots
             .iter()
-            .map(|(id, h)| (*id, self.columnas.pane_fingerprint(h.pane.dir().scheme())))
+            .map(|(id, h)| (*id, self.columns.pane_fingerprint(h.pane.dir().scheme())))
             .collect()
     }
 
@@ -256,11 +255,11 @@ impl Estado {
     ///
     /// The thumbnail is painted by the SAME engine that splits the real
     /// screen, so it cannot lie about what will come out.
-    pub(super) fn vista_disposiciones(&self) -> Option<crate::dto::LayoutPickerView> {
+    pub(super) fn vista_layouts(&self) -> Option<crate::dto::LayoutPickerView> {
         /// The thumbnail's size, in characters.
-        const MINIATURA: (u16, u16) = (32, 12);
+        const THUMBNAIL: (u16, u16) = (32, 12);
 
-        let p = self.selector_disposicion.as_ref()?;
+        let p = self.selector_layout.as_ref()?;
         let current = p.current();
         // The parser's diagnostic can QUOTE the user's file: it goes through
         // the same gate as everything else, with its flag (#266) — what is
@@ -293,7 +292,7 @@ impl Estado {
             preview: current
                 .and_then(|r| r.tree.as_ref())
                 .map_or_else(Vec::new, |t| {
-                    norte_frontend::layout_picker::preview(t, MINIATURA.0, MINIATURA.1, &self.kinds)
+                    norte_frontend::layout_picker::preview(t, THUMBNAIL.0, THUMBNAIL.1, &self.kinds)
                 }),
             problem: clamp_display(diagnostic.0),
             problem_hostile: diagnostic.1,
@@ -301,48 +300,48 @@ impl Estado {
     }
 
     /// The keys while the layout selector is open.
-    pub(super) fn tecla_en_disposiciones(
+    pub(super) fn key_in_layouts(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.selector_disposicion.is_none() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        if self.selector_layout.is_none() {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        let verb = self.verbo_de_dialogo(k);
-        let Some(p) = self.selector_disposicion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let verb = self.dialog_verb(k);
+        let Some(p) = self.selector_layout.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match verb.as_deref() {
-            Some("dialog.cancel") => self.selector_disposicion = None,
+            Some("dialog.cancel") => self.selector_layout = None,
             Some("dialog.down") => p.down(),
             Some("dialog.up") => p.up(),
-            Some("dialog.confirm") => return self.aplicar_disposicion_elegida(backend, mailbox),
-            _ => return (self.aplicada(), Vec::new()),
+            Some("dialog.confirm") => return self.apply_layout_chosen(backend, mailbox),
+            _ => return (self.applied(), Vec::new()),
         }
         let change = ViewChange::Layouts {
-            layouts: self.vista_disposiciones(),
+            layouts: self.vista_layouts(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// A click on a selector row: selects it AND applies it.
-    pub(super) fn elegir_disposicion(
+    pub(super) fn choose_layout(
         &mut self,
         row: u32,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(p) = self.selector_disposicion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(p) = self.selector_layout.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         // Out of range is NOT clamped: the `while` below stops at the last
         // row, so an old index used to apply THE LAST layout in the list —
         // the host's most invasive operation — instead of doing nothing. The
         // three sibling actions that only point already do it this way.
         if row as usize >= p.rows().len() {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         // The shared selector has no `set_cursor`: it walks to the row,
         // which for a list of five to ten is the same and does not add
@@ -353,7 +352,7 @@ impl Estado {
         while p.cursor() < row as usize && p.cursor() + 1 < p.rows().len() {
             p.down();
         }
-        self.aplicar_disposicion_elegida(backend, mailbox)
+        self.apply_layout_chosen(backend, mailbox)
     }
 
     /// Applies the cursor's layout.
@@ -363,13 +362,13 @@ impl Estado {
     /// would be worse than doing nothing. It is applied for THIS window and
     /// not written to the configuration: writing is mutating, and it arrives
     /// with phase 5.
-    pub(super) fn aplicar_disposicion_elegida(
+    pub(super) fn apply_layout_chosen(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(p) = self.selector_disposicion.as_ref() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(p) = self.selector_layout.as_ref() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let Some(tree) = p.current().and_then(|r| r.tree.clone()) else {
             return (
@@ -379,8 +378,8 @@ impl Estado {
                 Vec::new(),
             );
         };
-        self.selector_disposicion = None;
-        self.aplicar_disposicion(tree, backend, mailbox)
+        self.selector_layout = None;
+        self.apply_layout(tree, backend, mailbox)
     }
 
     /// Changes the WHOLE TREE: a different layout.
@@ -390,55 +389,55 @@ impl Estado {
     /// that did not exist start in the directory the one already there was
     /// in, which is the least surprising thing: changing the screen's shape
     /// is not going somewhere else.
-    pub(super) fn aplicar_disposicion(
+    pub(super) fn apply_layout(
         &mut self,
-        arbol: Node,
+        tree: Node,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.aplicar_disposicion_con(arbol, None, backend, mailbox)
+        self.apply_layout_with(tree, None, backend, mailbox)
     }
 
-    /// Like [`Self::aplicar_disposicion`], saying which slot STAYS active.
+    /// Like [`Self::apply_layout`], saying which slot STAYS active.
     ///
     /// `None` = the reconciliation decides, which is what is needed when the
     /// tree comes from outside. `Some` is for whoever just created a slot and
     /// wants focus there: in two steps it would be two snapshots, and the
     /// first would show focus where it no longer is.
-    pub(super) fn aplicar_disposicion_con(
+    pub(super) fn apply_layout_with(
         &mut self,
-        arbol: Node,
-        activo: Option<SlotId>,
+        tree: Node,
+        active: Option<SlotId>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        self.poner_arbol(arbol, activo);
-        self.despertar_visibles(backend, mailbox);
-        if self.hueco_de_sitios().is_some() {
-            self.sembrar_sitios();
-            self.pedir_sitios(backend, mailbox);
+        self.set_tree(tree, active);
+        self.despertar_visible(backend, mailbox);
+        if self.places_slot().is_some() {
+            self.seed_places();
+            self.request_places(backend, mailbox);
         }
         // The tree changed: to the session NOW, without waiting for the tick.
         // An open panel or a chosen template is exactly what the reader
         // expects to find on returning, and a close that does not make it in
         // time must not lose it.
-        self.empujar_sesion(backend, mailbox);
+        self.empujar_session(backend, mailbox);
         let snap = self.snapshot();
         (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
     }
 
-    /// Sets `arbol` as the screen's tree and seeds the slots it debuts, WITHOUT
+    /// Sets `tree` as the screen's tree and seeds the slots it debuts, WITHOUT
     /// requesting any listing nor touching the session.
     ///
-    /// It is the I/O-free half of [`Self::aplicar_disposicion_con`], and what
+    /// It is the I/O-free half of [`Self::apply_layout_with`], and what
     /// startup uses for the layout the session saved: there the listings are
     /// requested later, once the session has said where each one was, and
     /// waking them here would request the startup directory just to
     // TODO(translation): review — this doc comment is interrupted midway
-    /// (it breaks off at "...just to") by `rehacer_reparto`'s own doc and
+    /// (it breaks off at "...just to") by `redo_split`'s own doc and
     /// function landing in between, and the sentence's tail
     /// ("throw it away an instant later.") is stranded below as its own
     /// one-line comment right before this function's signature; it looks
@@ -451,45 +450,45 @@ impl Estado {
     /// viewport: the panels plugins contribute arrive AFTER the first
     /// snapshot, so the slot already placed was stuck with the split that
     /// did not know it.
-    pub(super) fn rehacer_reparto(&mut self) {
-        self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
+    pub(super) fn redo_split(&mut self) {
+        self.split = resolve(rect(self.viewport), &self.tree, &self.kinds);
     }
 
     /// throw it away an instant later.
-    pub(super) fn poner_arbol(&mut self, arbol: Node, activo: Option<SlotId>) {
-        let dir = self.hueco().pane.dir().clone();
+    pub(super) fn set_tree(&mut self, tree: Node, active: Option<SlotId>) {
+        let dir = self.slot().pane.dir().clone();
         // A slot that debuts is born like the startup ones: with the
         // configuration's hidden-files setting applied.
         let hidden_default = self.config.common.ui_show_hidden.unwrap_or(true);
-        self.arbol = arbol;
-        self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
+        self.tree = tree;
+        self.split = resolve(rect(self.viewport), &self.tree, &self.kinds);
         // From the TREE, not from the layout. `placements` and `hidden`
         // PARTITION the tree, so seeding from `placements` erases the slot of
         // a listing the layout does not place — a `Tabs` whose active one is
         // a different kind, or an all-weighted split that does not fit — and
-        // with it the LAST one can go: `huecos` ends up empty and the next
-        // key dies on `hueco()`'s `expect`, inside the actor's task.
+        // with it the LAST one can go: `slots` ends up empty and the next
+        // key dies on `slot()`'s `expect`, inside the actor's task.
         // `validate` guarantees the tree HAS a listing, not that the layout
         // places it, so the guarantee has to be taken from the tree.
         let new_ids: Vec<u32> = self
-            .arbol
+            .tree
             .slot_ids()
             .into_iter()
             .map(|SlotId(id)| id)
-            .filter(|id| es_listado(&self.arbol, SlotId(*id), &self.kinds))
+            .filter(|id| es_listing(&self.tree, SlotId(*id), &self.kinds))
             .collect();
-        self.huecos.retain(|id, _| new_ids.contains(id));
+        self.slots.retain(|id, _| new_ids.contains(id));
         for id in new_ids {
-            if let std::collections::btree_map::Entry::Vacant(slot) = self.huecos.entry(id) {
-                slot.insert(Hueco::vacio(
+            if let std::collections::btree_map::Entry::Vacant(slot) = self.slots.entry(id) {
+                slot.insert(Slot::empty(
                     dir.clone(),
                     hidden_default,
-                    self.columnas.sort_for(dir.scheme()),
+                    self.columns.sort_for(dir.scheme()),
                     self.config.common.ui_parent_entry.unwrap_or(true),
                 ));
             }
         }
-        match activo {
+        match active {
             Some(id) => self.roles.set(RoleId::Active, id),
             None => self.roles.clear(RoleId::Active),
         }
@@ -499,86 +498,86 @@ impl Estado {
     /// Changes the size of the slot with FOCUS, not the active listing.
     ///
     /// From focus on purpose: the only way to widen the side bar is to have
-    /// it focused and grow, and `activo()` — which skips whatever is not a
+    /// it focused and grow, and `active()` — which skips whatever is not a
     /// listing — would have resized the panel next to it.
     ///
     /// Resizing is a decision about THE TREE, so it is saved in it: the split
     /// is recomputed from the new tree, not the other way around.
-    pub(super) fn redimensionar(
+    pub(super) fn resize(
         &mut self,
         delta: i64,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let step = i16::try_from(delta.clamp(i64::from(i16::MIN), i64::from(i16::MAX)))
             .unwrap_or(if delta < 0 { -1 } else { 1 });
-        let updated = self.arbol.resize(SlotId(self.enfocado()), step);
-        self.aplicar_arbol(updated, backend, mailbox)
+        let updated = self.tree.resize(SlotId(self.focused()), step);
+        self.apply_tree(updated, backend, mailbox)
     }
 
     /// Equalizes the weight of the focused slot's siblings.
-    pub(super) fn igualar(
+    pub(super) fn equalize(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let updated = self.arbol.equalize(SlotId(self.enfocado()));
-        self.aplicar_arbol(updated, backend, mailbox)
+        let updated = self.tree.equalize(SlotId(self.focused()));
+        self.apply_tree(updated, backend, mailbox)
     }
 
     /// Flips the focused slot's split (ADR 0138): side by side becomes one on
     /// top of the other. A split with chrome does not flip, and then
-    /// `aplicar_arbol` sends nothing.
-    pub(super) fn girar(
+    /// `apply_tree` sends nothing.
+    pub(super) fn rotate(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let updated = self.arbol.flip(SlotId(self.enfocado()));
-        self.aplicar_si_cabe(updated, None, backend, mailbox)
+        let updated = self.tree.flip(SlotId(self.focused()));
+        self.apply_si_fits(updated, None, backend, mailbox)
     }
 
     /// Moves slot `slot` next to `target` (ADR 0138): dropping a panel dragged
     /// by its title. An id that is not there — the layout changed between the
-    /// drag and the drop — leaves the tree as it was, and `aplicar_arbol`
+    /// drag and the drop — leaves the tree as it was, and `apply_tree`
     /// sends nothing.
-    pub(super) fn mover_hueco(
+    pub(super) fn mover_slot(
         &mut self,
         slot: u32,
         target: u32,
-        zona: norte_frontend::layout::DropZone,
+        zone: norte_frontend::layout::DropZone,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let updated = self.arbol.move_slot(SlotId(slot), SlotId(target), zona);
+        let updated = self.tree.move_slot(SlotId(slot), SlotId(target), zone);
         // In the center, the target goes behind a tab on purpose.
         let tolerated =
-            (zona == norte_frontend::layout::DropZone::Center).then_some(SlotId(target));
-        self.aplicar_si_cabe(updated, tolerated, backend, mailbox)
+            (zone == norte_frontend::layout::DropZone::Center).then_some(SlotId(target));
+        self.apply_si_fits(updated, tolerated, backend, mailbox)
     }
 
-    /// Like [`Self::aplicar_arbol`], but only if `nuevo` leaves visible what
+    /// Like [`Self::apply_tree`], but only if `new` leaves visible what
     /// was visible (`keeps_on_screen`, the SAME rule as the TUI's). If not, it
     /// touches nothing and says so on the bar, like splitting with no room.
-    fn aplicar_si_cabe(
+    fn apply_si_fits(
         &mut self,
-        nuevo: Node,
+        new: Node,
         tolerado: Option<SlotId>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let after = resolve(rect(self.viewport), &nuevo, &self.kinds);
-        if nuevo != self.arbol
-            && !norte_frontend::layout::keeps_on_screen(&self.reparto, &after, &nuevo, tolerado)
+        let after = resolve(rect(self.viewport), &new, &self.kinds);
+        if new != self.tree
+            && !norte_frontend::layout::keeps_on_screen(&self.split, &after, &new, tolerado)
         {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-layout-move-no-room".to_owned(),
                 },
-                self.decir("msg-layout-move-no-room"),
+                self.say("msg-layout-move-no-room"),
             );
         }
-        self.aplicar_arbol(nuevo, backend, mailbox)
+        self.apply_tree(new, backend, mailbox)
     }
 
     /// Replaces the tree and re-splits.
@@ -587,30 +586,30 @@ impl Estado {
     /// siblings to split with — NOTHING is sent: a patch that changes nothing
     /// forces a repaint for nothing, and the key already said its piece
     /// without moving anything.
-    pub(super) fn aplicar_arbol(
+    pub(super) fn apply_tree(
         &mut self,
-        nuevo: Node,
+        new: Node,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let before = self.reparto.clone();
-        let tree_before = std::mem::replace(&mut self.arbol, nuevo);
-        self.reparto = resolve(rect(self.viewport), &self.arbol, &self.kinds);
+        let before = self.split.clone();
+        let tree_before = std::mem::replace(&mut self.tree, new);
+        self.split = resolve(rect(self.viewport), &self.tree, &self.kinds);
         // The same on screen AND in the tree: nothing to say. The split alone
         // is not enough — reordering a group's tabs (ADR 0138) does not move
         // a rectangle, and with neither patch nor session the new order
         // reached neither the window nor got saved.
-        if self.reparto.placements == before.placements && self.arbol == tree_before {
-            return (self.aplicada(), Vec::new());
+        if self.split.placements == before.placements && self.tree == tree_before {
+            return (self.applied(), Vec::new());
         }
         self.reconcilia_roles();
         // The split changed: whatever just came out of `hidden` has no
         // listing and nobody else is going to request it.
-        self.despertar_visibles(backend, mailbox);
+        self.despertar_visible(backend, mailbox);
         // And to the session now: a size is a decision about the tree.
-        self.empujar_sesion(backend, mailbox);
-        let change = ViewChange::Layout(self.disposicion());
-        (self.aplicada(), vec![self.parche(vec![change])])
+        self.empujar_session(backend, mailbox);
+        let change = ViewChange::Layout(self.layout());
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// This size's split, with the roles set.
@@ -619,11 +618,11 @@ impl Estado {
     /// rectangles in cells and not a list of slots it has to place itself,
     /// which would be a second layout rule written in another language
     /// (decision D14).
-    pub(super) fn disposicion(&self) -> LayoutView {
+    pub(super) fn layout(&self) -> LayoutView {
         let active = self.roles.get(RoleId::Active);
         let target = self.roles.get(RoleId::Target);
         let placements = self
-            .reparto
+            .split
             .placements
             .iter()
             .map(|(slot, r)| {
@@ -636,7 +635,7 @@ impl Estado {
                     None
                 };
                 let focus_index = self
-                    .reparto
+                    .split
                     .focus_order
                     .iter()
                     .position(|s| s == slot)
@@ -654,18 +653,18 @@ impl Estado {
             .collect();
         LayoutView {
             cells: self.viewport,
-            tabs: self.grupos_de_pestanas(),
+            tabs: self.tab_groups(),
             placements,
             // Slots that CAN be a target are counted, not the placed ones: a
             // split also carries the status bar and the task strip, and
             // counting them would make "three or more" always hold — which
             // is the same as not having the rule.
             mark_target: norte_frontend::layout::target_worth_marking(
-                self.reparto
+                self.split
                     .placements
                     .iter()
                     .filter(|(slot, _)| {
-                        self.arbol
+                        self.tree
                             .kind_of(*slot)
                             .is_some_and(|k| self.kinds.holds_role(k, RoleId::Target))
                     })
@@ -680,10 +679,10 @@ impl Estado {
     /// placed — the shared splitter does not paint them — and without this
     /// the window would show the front one without saying there are two
     /// others open.
-    pub(super) fn grupos_de_pestanas(&self) -> Vec<crate::dto::TabGroupView> {
+    pub(super) fn tab_groups(&self) -> Vec<crate::dto::TabGroupView> {
         let mut groups = Vec::new();
-        for (slot, _) in &self.reparto.placements {
-            let Some((tabs, active)) = self.arbol.tabs_of(*slot) else {
+        for (slot, _) in &self.split.placements {
+            let Some((tabs, active)) = self.tree.tabs_of(*slot) else {
                 continue;
             };
             if tabs.len() < 2 {
@@ -694,10 +693,10 @@ impl Estado {
             let SlotId(id) = *slot;
             let panels = tabs
                 .iter()
-                .all(|t| kind_de(&self.arbol, *t).is_some_and(|k| k.as_str() != "browser"));
+                .all(|t| kind_de(&self.tree, *t).is_some_and(|k| k.as_str() != "browser"));
             groups.push(crate::dto::TabGroupView {
                 slot_id: id,
-                tabs: tabs.iter().map(|t| self.pestana(*t)).collect(),
+                tabs: tabs.iter().map(|t| self.tab(*t)).collect(),
                 active: active as u64,
                 panels,
             });
@@ -712,9 +711,9 @@ impl Estado {
     /// is as hostile as inside a listing. A root directory has no name: it
     /// falls back to the scheme, which is the only thing that sets it apart
     /// from another.
-    pub(super) fn pestana(&self, slot: SlotId) -> crate::dto::TabView {
+    pub(super) fn tab(&self, slot: SlotId) -> crate::dto::TabView {
         let SlotId(id) = slot;
-        let (title, hostile) = if let Some(h) = self.huecos.get(&id) {
+        let (title, hostile) = if let Some(h) = self.slots.get(&id) {
             let dir = h.pane.dir();
             match dir.file_name() {
                 Some(seg) => norte_frontend::display_name(seg.as_bytes()),
@@ -728,7 +727,7 @@ impl Estado {
             // tabs (phase F) this label is READ, and the kind's id is not a
             // name. The kind comes from a layout file, so the result goes
             // through the same gate.
-            let kind = kind_de(&self.arbol, slot)
+            let kind = kind_de(&self.tree, slot)
                 .map_or_else(|| "unknown".to_owned(), |k| k.as_str().to_owned());
             let name =
                 norte_frontend::panelbar::label_in(self.lang, &kind, &format!("layout.{kind}"));

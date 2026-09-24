@@ -39,7 +39,7 @@ fn fresh_fs() -> ObjectProvider {
 }
 
 #[tokio::test]
-async fn nombre_no_utf8_se_rechaza_limpio() {
+async fn a_non_utf8_name_is_rejected_cleanly() {
     let p = fresh_fs();
     let f = child(&root(), b"latin1-\xe9.txt");
     assert_eq!(p.stat(&f).await.unwrap_err(), Error::InvalidPath);
@@ -48,7 +48,7 @@ async fn nombre_no_utf8_se_rechaza_limpio() {
 }
 
 #[tokio::test]
-async fn key_de_mas_de_1024_bytes_se_rechaza_upfront() {
+async fn key_over_1024_bytes_is_rejected_upfront() {
     let p = fresh_fs();
     // 5 segments of 250 bytes = a 1254-byte key: S3 would reject it midway
     // through an operation with an ambiguous error — here it is InvalidPath
@@ -62,7 +62,7 @@ async fn key_de_mas_de_1024_bytes_se_rechaza_upfront() {
 }
 
 #[tokio::test]
-async fn whitespace_en_extremos_se_rechaza_no_se_renombra() {
+async fn whitespace_at_the_ends_is_rejected_it_does_not_rename() {
     let p = fresh_fs();
     // opendal-core's normalize_path does `path.trim()`: "file " would turn
     // INTO "file" SILENTLY (byte corruption, rule 1). Fail-loud until
@@ -79,7 +79,7 @@ async fn whitespace_en_extremos_se_rechaza_no_se_renombra() {
 }
 
 #[tokio::test]
-async fn scheme_ajeno_se_rechaza() {
+async fn a_foreign_scheme_is_rejected() {
     let p = fresh_fs();
     let foreign = VPath::parse("ftp://host/f.txt").expect("vpath");
     assert_eq!(p.stat(&foreign).await.unwrap_err(), Error::InvalidPath);
@@ -175,10 +175,10 @@ async fn lying_provider(keys: Vec<String>) -> ObjectProvider {
     ObjectProvider::new(common::s3_operator(addr), "s3")
 }
 
-/// A `/` injected into the name (key `dir/../fuera` echoed by the server)
+/// A `/` injected into the name (key `dir/../outside` echoed by the server)
 /// tries to escape the listed directory: cuts with `InvalidPath`.
 #[tokio::test]
-async fn listado_con_slash_inyectado_corta() {
+async fn listing_with_injected_slash_cuts_off() {
     let p = lying_provider(vec!["dir/../fuera".into(), "dir/normal.txt".into()]).await;
     let d = child(&root(), b"dir");
     let res: Result<Vec<_>, Error> = p.list(&d).await.expect("opens").try_collect().await;
@@ -189,7 +189,7 @@ async fn listado_con_slash_inyectado_corta() {
 /// lossy decoding at some hop): fail-loud rejection, never a corrupt Entry
 /// (rule 1).
 #[tokio::test]
-async fn listado_con_ufffd_corta() {
+async fn listing_with_ufffd_cuts_off() {
     let p = lying_provider(vec!["dir/mal\u{FFFD}nombre".into()]).await;
     let d = child(&root(), b"dir");
     let res: Result<Vec<_>, Error> = p.list(&d).await.expect("opens").try_collect().await;
@@ -198,7 +198,7 @@ async fn listado_con_ufffd_corta() {
 
 /// The server's self-entry (`dir/`) does not appear as a child.
 #[tokio::test]
-async fn listado_filtra_self_entry() {
+async fn listing_filters_self_entry() {
     let p = lying_provider(vec!["dir/".into(), "dir/ok.txt".into()]).await;
     let d = child(&root(), b"dir");
     let entries: Vec<_> = p
@@ -218,8 +218,8 @@ async fn listado_filtra_self_entry() {
 /// A key OUTSIDE the requested prefix (no `/`, which the old fallback let
 /// through as a phantom Entry) cuts with `InvalidPath`.
 #[tokio::test]
-async fn listado_key_fuera_de_prefijo_corta() {
-    // The server serves these keys when asked for prefix=dir; `dirx`/`otra`
+async fn listing_key_outside_prefix_cuts_off() {
+    // The server serves these keys when asked for prefix=dir; `dirx`/`other`
     // do not hang off `dir/`.
     let p = lying_provider(vec!["dirx".into(), "dir/ok.txt".into()]).await;
     let d = child(&root(), b"dir");
@@ -230,7 +230,7 @@ async fn listado_key_fuera_de_prefijo_corta() {
 /// An EMPTY segment (`dir//x` → name `""` after the delimiter) is a legal
 /// S3 key the dir model cannot represent: cuts instead of hiding it.
 #[tokio::test]
-async fn listado_segmento_vacio_corta() {
+async fn listing_empty_segment_cuts_off() {
     let p = lying_provider(vec!["dir//oculto".into()]).await;
     let d = child(&root(), b"dir");
     let res: Result<Vec<_>, Error> = p.list(&d).await.expect("opens").try_collect().await;
@@ -241,10 +241,10 @@ async fn listado_segmento_vacio_corta() {
 
 /// The reviewers' BLOCKER: a dir `rename`'s walk must NOT operate
 /// (copy/delete) on keys the server lists OUTSIDE the source prefix. A
-/// hostile listing (`otra/x`, `../victima`, `src/file `) must cut with
+/// hostile listing (`other/x`, `../victim`, `src/file `) must cut with
 /// `InvalidPath` having emitted ZERO PUT/DELETE.
 #[tokio::test]
-async fn rename_dir_con_listado_hostil_no_muta_nada() {
+async fn renaming_a_dir_with_a_hostile_listing_mutates_nothing() {
     let mutations = Arc::new(AtomicUsize::new(0));
     // The server serves the hostile listing when asked for prefix=src (the
     // from_dir); the destination's probe (prefix=dst) comes back empty →
@@ -275,7 +275,7 @@ async fn rename_dir_con_listado_hostil_no_muta_nada() {
 
 /// `rename(a, a/b)` (destination inside its own subtree) is cleanly rejected.
 #[tokio::test]
-async fn rename_dentro_de_su_subarbol_se_rechaza() {
+async fn renaming_into_its_own_subtree_is_rejected() {
     let p = fresh_fs();
     let r = root();
     let a = child(&r, b"a");
@@ -290,7 +290,7 @@ async fn rename_dentro_de_su_subarbol_se_rechaza() {
 /// `is_ascii_whitespace` does not): shields the anti-trim predicate against
 /// an ASCII-only regression (opendal's `normalize_path` uses `str::trim`).
 #[tokio::test]
-async fn nombre_con_nbsp_final_se_rechaza() {
+async fn a_name_with_trailing_nbsp_is_rejected() {
     let p = fresh_fs();
     let f = child(&root(), "file\u{A0}".as_bytes());
     assert_eq!(p.stat(&f).await.unwrap_err(), Error::InvalidPath);
@@ -301,7 +301,7 @@ async fn nombre_con_nbsp_final_se_rechaza() {
 /// single-object; the engine copies trees leaf by leaf). Over services-fs
 /// because s3s-fs lies on a directory path's HEAD (issue #50).
 #[tokio::test]
-async fn copy_native_origen_dir_es_typemismatch() {
+async fn copy_native_source_dir_es_typemismatch() {
     let p = fresh_fs();
     let r = root();
     let d = child(&r, b"undir");
@@ -320,7 +320,7 @@ async fn copy_native_origen_dir_es_typemismatch() {
 /// copy's `If-None-Match` does not see the dir, the guard is
 /// `ensure_absent`. Over services-fs (reliable dirs).
 #[tokio::test]
-async fn copy_native_destino_dir_es_conflict() {
+async fn copy_native_dest_dir_es_conflict() {
     let p = fresh_fs();
     let r = root();
     let src = child(&r, b"origen.bin");

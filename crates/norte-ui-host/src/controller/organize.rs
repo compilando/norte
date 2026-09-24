@@ -1,6 +1,6 @@
 //! The ORGANIZE plan and its review (phase 8 of the WOW programme).
 //!
-//! Part of `controller`: these are methods of `Estado`, with the same
+//! Part of `controller`: these are methods of `State`, with the same
 //! discipline as the rename plan next door (ADR 0086). The only writer is
 //! still the actor.
 //!
@@ -21,7 +21,7 @@ use super::*;
 /// there is no verdict to wait for, because the plan's token came WITH the
 /// plan. Everything else is identical, and on purpose — it is the same class
 /// of screen and the same defense.
-pub(super) struct RevisionOrganizar {
+pub(super) struct RevisionOrganize {
     /// The directory it was planned over.
     dir: VPath,
     /// The moves, exactly as the producer proposed them. This is what is sent
@@ -42,7 +42,7 @@ pub(super) struct RevisionOrganizar {
     epoch: u64,
 }
 
-impl Estado {
+impl State {
     /// Requests an organize plan over the focused slot's directory.
     ///
     /// `organizer` chooses the producer: `None` is the model, `Some((plugin,
@@ -53,42 +53,42 @@ impl Estado {
     /// **No instruction prompt**, unlike rename: what is being asked is "look
     /// at this directory and propose a shape", and an empty text box in front
     /// would suggest there is something to type.
-    pub(super) fn pedir_plan_de_organizar(
+    pub(super) fn request_organize_plan(
         &mut self,
         organizer: Option<(String, String)>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // Organize MUTATES (creates folders and moves), so the read-only lock
         // is checked on REQUESTING, not only on approving: showing a plan that
         // cannot be applied is promising work.
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
-        self.epoca_organizar += 1;
-        let epoch = self.epoca_organizar;
-        let dir = self.hueco().pane.dir().clone();
+        self.epoch_organize += 1;
+        let epoch = self.epoch_organize;
+        let dir = self.slot().pane.dir().clone();
         // The directory's names, at REQUEST time: the tree needs to know
         // which folder already existed, and by the time the producer answers
         // the reader may be somewhere else. Only the ones that are TEXT — the
         // tree compares them against segments of a `proposed_rel`, which
         // travels UTF-8.
-        let existing = self.hueco().pane.existing_names();
+        let existing = self.slot().pane.existing_names();
         // A plugin does NOT list the directory (rule 9), so the names have to
         // be given to it by the caller: with an empty list, an organizer
         // answers — correctly — that it moves nothing. The model is the
         // opposite case: the engine lists for it, and there, empty DOES mean
         // "everything", with no cap to respect.
-        let operable = self.hueco().pane.organizable_names();
+        let operable = self.slot().pane.organizable_names();
         if organizer.is_some() && operable.len() > norte_proto::methods::AI_RENAME_NAMES_MAX {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "msg-organize-too-many",
             )));
             let change = ViewChange::Status(self.status.clone());
-            return (self.aplicada(), vec![self.parche(vec![change])]);
+            return (self.applied(), vec![self.parche(vec![change])]);
         }
-        self.organizar_en_vuelo = Some((epoch, dir.clone(), existing));
+        self.organize_in_flight = Some((epoch, dir.clone(), existing));
         let backend2 = Arc::clone(backend);
         let mailbox2 = mailbox.clone();
         tokio::spawn(async move {
@@ -96,10 +96,10 @@ impl Estado {
                 Some((plugin, org)) => backend2.plugin_organize_plan(plugin, org, dir, operable),
                 None => backend2.ai_organize_plan(dir, String::new(), Vec::new()),
             };
-            let res = (tokio::time::timeout(PLAZO_IA, request).await)
+            let res = (tokio::time::timeout(DEADLINE_IA, request).await)
                 .unwrap_or(Err(Error::ProviderUnavailable { retryable: true }));
             let _ = mailbox2
-                .send(Mensaje::Fondo(Box::new(Fondo::PlanOrganizar(
+                .send(Message::Background(Box::new(Background::PlanOrganize(
                     epoch,
                     Box::new(res),
                 ))))
@@ -113,7 +113,7 @@ impl Estado {
             "msg-organize-running",
         )));
         let change = ViewChange::Status(self.status.clone());
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// What the producer answered, checked before showing it.
@@ -122,7 +122,7 @@ impl Estado {
     /// what a directory can hold gives away a hostile daemon inflating the
     /// response, and a plan without a token cannot be approved — opening it
     /// would promise a button that can do nothing.
-    pub(super) fn aplicar_plan_de_organizar(
+    pub(super) fn apply_organize_plan(
         &mut self,
         epoch: u64,
         res: Result<norte_proto::methods::AiOrganizePlanResult, Error>,
@@ -130,14 +130,14 @@ impl Estado {
         // The request in flight has to be THIS one. `take_if` and not
         // `take().filter(...)`: emptying the slot before checking would let an
         // old response take the live request down with it.
-        let Some((_, dir, existing)) = self.organizar_en_vuelo.take_if(|(e, _, _)| *e == epoch)
+        let Some((_, dir, existing)) = self.organize_in_flight.take_if(|(e, _, _)| *e == epoch)
         else {
             return Vec::new();
         };
         let plan = match res {
             Ok(p) => p,
             Err(e) => {
-                return self.decir_de_organizar(epoch, norte_frontend::error::error_key(&e));
+                return self.say_from_organize(epoch, norte_frontend::error::error_key(&e));
             }
         };
         // The producer said WHY it does not propose (#332). The phrase
@@ -151,7 +151,7 @@ impl Estado {
             )));
             let mut changes = vec![ViewChange::Status(self.status.clone())];
             if self
-                .revision_organizar
+                .revision_organize
                 .take_if(|r| r.epoch == epoch)
                 .is_some()
             {
@@ -160,16 +160,16 @@ impl Estado {
             return vec![self.parche(changes)];
         }
         if plan.moves.is_empty() {
-            return self.decir_de_organizar(epoch, "msg-organize-empty");
+            return self.say_from_organize(epoch, "msg-organize-empty");
         }
         if plan.moves.len() > norte_frontend::MAX_AI_PLAN_ENTRIES {
-            return self.decir_de_organizar(epoch, "msg-organize-invalid-plan");
+            return self.say_from_organize(epoch, "msg-organize-invalid-plan");
         }
         let Some(plan_hash) = plan.plan_hash else {
-            return self.decir_de_organizar(epoch, "msg-organize-invalid-plan");
+            return self.say_from_organize(epoch, "msg-organize-invalid-plan");
         };
         let lines = norte_frontend::organize::tree_lines(&plan.moves, &existing);
-        self.revision_organizar = Some(RevisionOrganizar {
+        self.revision_organize = Some(RevisionOrganize {
             dir,
             moves: plan.moves,
             lines,
@@ -182,7 +182,7 @@ impl Estado {
         self.status.message = None;
         let changes = vec![
             ViewChange::Organize {
-                organize: self.vista_organizar(),
+                organize: self.vista_organize(),
             },
             ViewChange::Status(self.status.clone()),
         ];
@@ -194,10 +194,10 @@ impl Estado {
     /// The names are proposed by a third party over names anyone could have
     /// typed: they go through canonical sanitizing, and each line says
     /// whether what is painted differs from the real thing.
-    pub(super) fn vista_organizar(&self) -> Option<crate::dto::OrganizeView> {
+    pub(super) fn vista_organize(&self) -> Option<crate::dto::OrganizeView> {
         use norte_frontend::organize::{ORGANIZE_LINE_LIMIT, TreeKind};
 
-        let r = self.revision_organizar.as_ref()?;
+        let r = self.revision_organize.as_ref()?;
         let line = |text: &str| {
             let (displayable, hostile) = norte_frontend::display_name(text.as_bytes());
             crate::dto::DialogLine {
@@ -226,7 +226,7 @@ impl Estado {
         let hidden_hostile = r.lines.iter().enumerate().any(|(i, l)| {
             (i < r.first || i >= last) && norte_frontend::display_name(l.text.as_bytes()).1
         });
-        let (folders, files) = norte_frontend::organize::resumen(&r.lines);
+        let (folders, files) = norte_frontend::organize::summary(&r.lines);
         Some(crate::dto::OrganizeView {
             dir: {
                 let (displayable, hostile) = norte_frontend::path_display(&r.dir);
@@ -269,11 +269,11 @@ impl Estado {
     /// chord with a modifier was meant elsewhere, and the FIRST key only
     /// acknowledges the screen — this one opens on its own, tens of seconds
     /// after the gesture that requested it, and it keeps the keyboard.
-    pub(super) fn tecla_en_revision_organizar(
+    pub(super) fn key_in_organize_review(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if k.ctrl || k.alt || k.meta {
             return (
@@ -284,11 +284,11 @@ impl Estado {
             );
         }
         let acknowledged = self
-            .revision_organizar
+            .revision_organize
             .as_ref()
             .is_some_and(|r| r.acknowledged);
         if !acknowledged && k.key != "Escape" && k.key != "esc" {
-            if let Some(r) = self.revision_organizar.as_mut() {
+            if let Some(r) = self.revision_organize.as_mut() {
                 r.acknowledged = true;
             }
             self.status.message = Some(clamp_display(norte_i18n::t_in(
@@ -297,20 +297,17 @@ impl Estado {
             )));
             let changes = vec![
                 ViewChange::Organize {
-                    organize: self.vista_organizar(),
+                    organize: self.vista_organize(),
                 },
                 ViewChange::Status(self.status.clone()),
             ];
-            return (self.aplicada(), vec![self.parche(changes)]);
+            return (self.applied(), vec![self.parche(changes)]);
         }
-        let total = self
-            .revision_organizar
-            .as_ref()
-            .map_or(0, |r| r.lines.len());
+        let total = self.revision_organize.as_ref().map_or(0, |r| r.lines.len());
         let window = norte_frontend::organize::ORGANIZE_LINE_LIMIT;
         let cap = total.saturating_sub(window);
         let page = i64::try_from(window).unwrap_or(1);
-        let move_by = |r: &mut RevisionOrganizar, delta: i64| {
+        let move_by = |r: &mut RevisionOrganize, delta: i64| {
             let target = i64::try_from(r.first).unwrap_or(0).saturating_add(delta);
             r.first = usize::try_from(target.max(0)).unwrap_or(0).min(cap);
             // HIGH watermark: going back up does not un-read what was read.
@@ -318,31 +315,31 @@ impl Estado {
         };
         match k.key.as_str() {
             "ArrowDown" | "j" => {
-                if let Some(r) = self.revision_organizar.as_mut() {
+                if let Some(r) = self.revision_organize.as_mut() {
                     move_by(r, 1);
                 }
             }
             "ArrowUp" | "k" => {
-                if let Some(r) = self.revision_organizar.as_mut() {
+                if let Some(r) = self.revision_organize.as_mut() {
                     move_by(r, -1);
                 }
             }
             "PageDown" => {
-                if let Some(r) = self.revision_organizar.as_mut() {
+                if let Some(r) = self.revision_organize.as_mut() {
                     move_by(r, page);
                 }
             }
             "PageUp" => {
-                if let Some(r) = self.revision_organizar.as_mut() {
+                if let Some(r) = self.revision_organize.as_mut() {
                     move_by(r, -page);
                 }
             }
-            "Escape" | "n" | "N" => return self.cerrar_revision_organizar(),
+            "Escape" | "n" | "N" => return self.close_revision_organize(),
             // `Enter` does NOT approve, for the same reason as the rename
             // review: this screen opens on its own, and `Enter` is the key
             // that was being used to walk the tree while the producer was
             // thinking.
-            "y" | "Y" => return self.aprobar_revision_organizar(backend, mailbox),
+            "y" | "Y" => return self.approve_revision_organize(backend, mailbox),
             _ => {
                 return (
                     ActionAck::Unavailable {
@@ -353,9 +350,9 @@ impl Estado {
             }
         }
         let change = ViewChange::Organize {
-            organize: self.vista_organizar(),
+            organize: self.vista_organize(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Walks the tree with a mouse gesture (the wheel, or a button).
@@ -365,18 +362,15 @@ impl Estado {
     /// to walk with the mouse that requirement turned the screen into one a
     /// keyboardless reader could never approve. It moves the SAME watermark
     /// as the keys — reading with the wheel is reading.
-    pub(super) fn recorrer_organizar(
+    pub(super) fn walk_organize(
         &mut self,
         down: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let total = self
-            .revision_organizar
-            .as_ref()
-            .map_or(0, |r| r.lines.len());
+        let total = self.revision_organize.as_ref().map_or(0, |r| r.lines.len());
         let window = norte_frontend::organize::ORGANIZE_LINE_LIMIT;
         let cap = total.saturating_sub(window);
-        let Some(r) = self.revision_organizar.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(r) = self.revision_organize.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         r.first = if down {
             (r.first + 1).min(cap)
@@ -385,42 +379,40 @@ impl Estado {
         };
         r.seen_until = r.seen_until.max((r.first + window).min(total));
         let change = ViewChange::Organize {
-            organize: self.vista_organizar(),
+            organize: self.vista_organize(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Answers the review with a gesture AIMED at it (a button), which does
     /// not need the acknowledgment a key does.
-    pub(super) fn decidir_revision_organizar(
+    pub(super) fn decide_revision_organize(
         &mut self,
         approve: bool,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.revision_organizar.is_none() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        if self.revision_organize.is_none() {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
-        if let Some(r) = self.revision_organizar.as_mut() {
+        if let Some(r) = self.revision_organize.as_mut() {
             r.acknowledged = true;
         }
         if approve {
-            self.aprobar_revision_organizar(backend, mailbox)
+            self.approve_revision_organize(backend, mailbox)
         } else {
-            self.cerrar_revision_organizar()
+            self.close_revision_organize()
         }
     }
 
     /// Discards the plan without applying anything.
-    pub(super) fn cerrar_revision_organizar(
-        &mut self,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        // Neither the epoch is bumped nor `organizar_en_vuelo` touched, for
+    pub(super) fn close_revision_organize(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // Neither the epoch is bumped nor `organize_in_flight` touched, for
         // the same reason as in the rename review: whatever is there is a
         // LATER request, and releasing it here would kill it silently.
-        self.revision_organizar = None;
+        self.revision_organize = None;
         let change = ViewChange::Organize { organize: None };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Approves the plan: ONE Task for the whole batch, a single undo.
@@ -428,18 +420,18 @@ impl Estado {
     /// With the `plan_hash` that came WITH the plan, so what runs is exactly
     /// what was shown — if the directory changed underneath, the core answers
     /// `PlanStale` and moves nothing.
-    pub(super) fn aprobar_revision_organizar(
+    pub(super) fn approve_revision_organize(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(r) = self.revision_organizar.as_ref() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(r) = self.revision_organize.as_ref() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         // The second lock, here too: approving runs N moves and creates
         // folders.
-        if self.efectos == crate::commands::Efectos::SoloLectura {
-            return Self::no_muta();
+        if self.effects == crate::commands::Effects::SoloRead {
+            return Self::no_mutates();
         }
         if r.seen_until < r.lines.len() {
             // And it says WHICH thing is missing: "you haven't read it all"
@@ -457,23 +449,23 @@ impl Estado {
         let mailbox2 = mailbox.clone();
         tokio::spawn(async move {
             let message = match backend2.organize(dir, moves, hash).await {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, affected, None))),
-                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+                Ok(task) => Message::TaskNew(Box::new((task, affected, None))),
+                Err(e) => Message::TaskFailed(Box::new(e)),
             };
             let _ = mailbox2.send(message).await;
         });
-        self.cerrar_revision_organizar()
+        self.close_revision_organize()
     }
 
     /// Says it on the status bar and opens nothing. Closes THIS epoch's
     /// review if there was one: a plan that could not be requested does not
     /// leave half a screen open, and closing whatever was there would throw
     /// away a good plan because a later request failed.
-    fn decir_de_organizar(&mut self, epoch: u64, key: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
+    fn say_from_organize(&mut self, epoch: u64, key: &str) -> Vec<BridgeEnvelope<UiUpdate>> {
         self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
         let mut changes = vec![ViewChange::Status(self.status.clone())];
         if self
-            .revision_organizar
+            .revision_organize
             .take_if(|r| r.epoch == epoch)
             .is_some()
         {

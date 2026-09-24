@@ -13,26 +13,25 @@
 
 use std::path::PathBuf;
 
-fn raiz() -> PathBuf {
+fn root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
 fn conf() -> serde_json::Value {
-    let p = raiz().join("tauri.conf.json");
+    let p = root().join("tauri.conf.json");
     let raw = std::fs::read_to_string(&p)
         .unwrap_or_else(|e| panic!("could not read {}: {e}", p.display()));
     serde_json::from_str(&raw).expect("valid JSON")
 }
 
 fn desktop() -> String {
-    let p = raiz().join("norte.desktop");
+    let p = root().join("norte.desktop");
     std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("could not read {}: {e}", p.display()))
 }
 
 /// A desktop entry key, without comments or spaces.
-fn clave(texto: &str, k: &str) -> Option<String> {
-    texto
-        .lines()
+fn key(text: &str, k: &str) -> Option<String> {
+    text.lines()
         .map(str::trim)
         .filter(|l| !l.starts_with('#'))
         .find_map(|l| l.strip_prefix(&format!("{k}=")))
@@ -46,7 +45,7 @@ fn clave(texto: &str, k: &str) -> Option<String> {
 /// and if it is not there, there is no daemon to start. It was #256's open
 /// question.
 #[test]
-fn el_paquete_trae_el_daemon_y_el_cli() {
+fn the_package_brings_the_daemon_and_the_cli() {
     let cfg = conf();
     let externos: Vec<&str> = cfg["bundle"]["externalBin"]
         .as_array()
@@ -82,7 +81,7 @@ fn el_paquete_trae_el_daemon_y_el_cli() {
 /// cost is zero; after the first stable release it would have been a
 /// migration.
 #[test]
-fn el_identificador_no_dice_spike() {
+fn the_identifier_does_not_say_spike() {
     let cfg = conf();
     let id = cfg["identifier"].as_str().expect("there is an identifier");
     assert!(
@@ -96,32 +95,32 @@ fn el_identificador_no_dice_spike() {
 }
 
 #[test]
-fn la_descripcion_no_habla_de_un_spike() {
+fn the_description_does_not_speak_of_a_spike() {
     let cfg = conf();
-    let larga = cfg["bundle"]["longDescription"]
+    let long = cfg["bundle"]["longDescription"]
         .as_str()
         .expect("there is a long description")
         .to_lowercase();
     assert!(
-        !larga.contains("spike"),
-        "the package's description is not a development note: {larga:?}"
+        !long.contains("spike"),
+        "the package's description is not a development note: {long:?}"
     );
     assert!(
-        larga.contains("ficheros"),
-        "and it says what this is: {larga:?}"
+        long.contains("ficheros"),
+        "and it says what this is: {long:?}"
     );
 }
 
 /// **`Exec` hands over a PATH, not a URL.**
 ///
-/// `%U` gives `file:///casa`, and the binary puts it into a `PathBuf`: that
+/// `%U` gives `file:///home`, and the binary puts it into a `PathBuf`: that
 /// is a RELATIVE path that does not exist, so the window would open on an
 /// error instead of on the folder the desktop just named. `%f` gives the
 /// local path, which is what `norte-gui [DIR]` knows how to read.
 #[test]
-fn el_exec_entrega_una_ruta_y_no_una_url() {
+fn the_exec_delivers_a_path_and_not_a_url() {
     let d = desktop();
-    let exec = clave(&d, "Exec").expect("there is an Exec");
+    let exec = key(&d, "Exec").expect("there is an Exec");
     assert!(
         !exec.contains("%U") && !exec.contains("%u"),
         "a URL is not a path: {exec:?}"
@@ -138,14 +137,14 @@ fn el_exec_entrega_una_ruta_y_no_una_url() {
 /// norte. For a file manager that is the entire desktop integration, and its
 /// absence shows up nowhere else.
 #[test]
-fn el_escritorio_lo_ofrece_para_abrir_carpetas() {
+fn the_desktop_offers_it_to_open_directories() {
     let d = desktop();
-    let mime = clave(&d, "MimeType").unwrap_or_default();
+    let mime = key(&d, "MimeType").unwrap_or_default();
     assert!(
         mime.contains("inode/directory"),
         "a file manager opens directories: {mime:?}"
     );
-    let cats = clave(&d, "Categories").unwrap_or_default();
+    let cats = key(&d, "Categories").unwrap_or_default();
     assert!(
         cats.contains("FileManager"),
         "and it declares itself as what it is: {cats:?}"
@@ -168,12 +167,12 @@ fn el_escritorio_lo_ofrece_para_abrir_carpetas() {
         "System",
         "Utility",
     ];
-    let cuantas = principales
+    let how_many = principales
         .iter()
         .filter(|p| cats.split(';').any(|c| c == **p))
         .count();
     assert_eq!(
-        cuantas, 1,
+        how_many, 1,
         "a single main category, or it shows up twice in the menu: {cats:?}"
     );
 }
@@ -184,7 +183,7 @@ fn el_escritorio_lo_ofrece_para_abrir_carpetas() {
 /// Without this line in the configuration, everything above gets written to
 /// a file nobody uses: the bundler composes its own and discards this one.
 #[test]
-fn la_entrada_de_escritorio_es_la_que_esta_en_el_repo() {
+fn the_desktop_entry_is_the_one_in_the_repo() {
     let cfg = conf();
     assert_eq!(
         cfg["bundle"]["linux"]["deb"]["desktopTemplate"].as_str(),
@@ -192,7 +191,7 @@ fn la_entrada_de_escritorio_es_la_que_esta_en_el_repo() {
         "the bundler has to use the repo's template"
     );
     assert!(
-        raiz().join("norte.desktop").is_file(),
+        root().join("norte.desktop").is_file(),
         "and that template exists"
     );
 }

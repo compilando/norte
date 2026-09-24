@@ -43,7 +43,7 @@ const EXT: &str = "toml";
 /// was answered twice. The canonical one lives in `norte-config` because it
 /// is downstream: profiles need it so a name cannot point the config layer
 /// anywhere else on disk, and two copies of a security rule diverge.
-fn nombre_usable(name: &OsStr) -> bool {
+fn name_usable(name: &OsStr) -> bool {
     norte_config::valid_profile_name(name)
 }
 
@@ -74,7 +74,7 @@ fn con_extension(name: &OsStr) -> OsString {
 /// tree, and whatever [`super::validate`] returns if the tree is
 /// inconsistent.
 pub fn load(dir: &Path, name: &OsStr) -> Result<Node, LayoutError> {
-    if !nombre_usable(name) {
+    if !name_usable(name) {
         return Err(LayoutError::BadName(name.to_string_lossy().into_owned()));
     }
     let folder = dir.join(LAYOUTS_DIR);
@@ -123,7 +123,7 @@ pub fn list(dir: &Path) -> Vec<OsString> {
         .filter_map(|e| e.path().file_stem().map(OsStr::to_os_string))
         // A name `load` would not accept is not offered: the row would be
         // there just to fail when clicked.
-        .filter(|n| nombre_usable(n))
+        .filter(|n| name_usable(n))
         .collect();
     names.sort();
     names
@@ -224,7 +224,7 @@ mod tests {
     }
 
     #[test]
-    fn un_layout_escrito_se_vuelve_a_leer() {
+    fn a_written_layout_is_read_back() {
         let dir = tempfile::tempdir().expect("tmp");
         write(
             dir.path(),
@@ -236,7 +236,7 @@ mod tests {
 
     /// The user's file WINS over a preset of the same name.
     #[test]
-    fn el_fichero_del_usuario_gana_al_preset() {
+    fn the_user_file_wins_over_the_preset() {
         let (placed_tree, notice) =
             or_preset(OsStr::new("simple"), Ok(tree())).expect("there is a tree");
         assert_eq!(placed_tree, tree(), "the user's, not the factory one");
@@ -247,7 +247,7 @@ mod tests {
     /// no screen, but nobody is hidden the fact that their file is no good
     /// either.
     #[test]
-    fn un_fichero_roto_cae_al_preset_avisando() {
+    fn a_broken_file_falls_back_to_the_preset_with_a_warning() {
         let (placed_tree, notice) = or_preset(
             OsStr::new("simple"),
             Err(LayoutError::Parse("line 3".to_owned())),
@@ -266,7 +266,7 @@ mod tests {
     /// And a name that is neither a factory one nor has a file returns the
     /// FILE's error, which is what the reader can fix.
     #[test]
-    fn sin_fichero_ni_preset_manda_el_error_del_fichero() {
+    fn with_neither_file_nor_preset_the_files_error_wins() {
         let e = or_preset(
             OsStr::new("mio"),
             Err(LayoutError::Parse("line 3".to_owned())),
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn listar_devuelve_los_toml_ordenados_y_sin_extension() {
+    fn listing_returns_the_tomls_sorted_and_without_extension() {
         let dir = tempfile::tempdir().expect("tmp");
         assert!(list(dir.path()).is_empty(), "no directory, no names");
         for n in ["zeta.toml", "alfa.toml", "notas.txt"] {
@@ -292,7 +292,7 @@ mod tests {
     /// `--layout MIO` loaded it: not appearing in the picker was a missing
     /// row, not a protection (#246 m2).
     #[test]
-    fn la_extension_no_distingue_mayusculas() {
+    fn the_extension_is_case_insensitive() {
         let dir = tempfile::tempdir().expect("tmp");
         write(dir.path(), OsStr::new("MIO.TOML"), "");
         assert_eq!(list(dir.path()), vec![OsString::from("MIO")]);
@@ -302,7 +302,7 @@ mod tests {
     /// user's config — from ANY layer, the project's included — and
     /// `../something` would leave the layouts directory.
     #[test]
-    fn un_nombre_con_ruta_dentro_se_rechaza() {
+    fn a_name_with_a_path_inside_it_is_rejected() {
         let dir = tempfile::tempdir().expect("tmp");
         for bad in ["../secreto", "", "sub/mio", "sub\\mio", ".", ".."] {
             assert!(
@@ -320,7 +320,7 @@ mod tests {
     /// admitted it and the read went to drive C's current directory (#246
     /// M2).
     #[test]
-    fn un_prefijo_de_unidad_no_es_un_nombre() {
+    fn a_drive_prefix_is_not_a_name() {
         let dir = tempfile::tempdir().expect("tmp");
         assert!(matches!(
             load(dir.path(), OsStr::new("C:")),
@@ -339,7 +339,7 @@ mod tests {
     /// CONSOLE, from a TUI with the terminal in raw mode (#246 M2). Rejected
     /// on every system: the file syncs, the reserved name travels with it.
     #[test]
-    fn los_nombres_de_dispositivo_de_windows_se_rechazan_en_todas_partes() {
+    fn windows_device_names_are_rejected_everywhere() {
         let dir = tempfile::tempdir().expect("tmp");
         for bad in ["CON", "con", "NUL", "com1", "LPT9", "CON.toml"] {
             assert!(
@@ -359,7 +359,7 @@ mod tests {
     /// Windows eats trailing dots and spaces: the file that opens would not
     /// be the one named.
     #[test]
-    fn un_punto_o_un_espacio_al_final_no_es_un_nombre() {
+    fn a_trailing_dot_or_space_is_not_a_name() {
         let dir = tempfile::tempdir().expect("tmp");
         for bad in ["mio.", "mio "] {
             assert!(
@@ -377,7 +377,7 @@ mod tests {
     /// user's file while the row said "factory" (#245); here there is no
     /// file with that name, period — the same answer on all three systems.
     #[test]
-    fn un_nombre_que_solo_difiere_en_mayusculas_no_es_el_mismo_fichero() {
+    fn a_name_that_only_differs_in_case_is_not_the_same_file() {
         let dir = tempfile::tempdir().expect("tmp");
         write(
             dir.path(),
@@ -395,7 +395,7 @@ mod tests {
     }
 
     #[test]
-    fn un_layout_que_no_esta_lo_dice_por_su_nombre() {
+    fn a_missing_layout_is_reported_by_its_name() {
         let dir = tempfile::tempdir().expect("tmp");
         assert!(matches!(
             load(dir.path(), OsStr::new("nada")),
@@ -406,7 +406,7 @@ mod tests {
     /// An INCONSISTENT tree is rejected at load time, not at paint time: the
     /// place where a user can do something about it is startup.
     #[test]
-    fn un_layout_incoherente_no_llega_a_pintarse() {
+    fn an_incoherent_layout_never_gets_painted() {
         let dir = tempfile::tempdir().expect("tmp");
         let repeated = Node::split(
             Dir::Horizontal,
@@ -429,7 +429,7 @@ mod tests {
     /// With no listing at all there is no layout: rejected at load time,
     /// which is where the previous screen still remains (#242).
     #[test]
-    fn un_layout_sin_listado_no_llega_a_aplicarse() {
+    fn a_layout_without_a_listing_never_gets_applied() {
         let dir = tempfile::tempdir().expect("tmp");
         let none = Node::split(
             Dir::Horizontal,
@@ -460,7 +460,7 @@ mod tests {
     /// that was valid.
     #[cfg(unix)]
     #[test]
-    fn ningun_nombre_del_corpus_sale_del_directorio_de_layouts() {
+    fn no_corpus_name_escapes_the_layouts_directory() {
         use std::os::unix::ffi::OsStrExt as _;
 
         let dir = tempfile::tempdir().expect("tmp");
@@ -486,7 +486,7 @@ mod tests {
     /// M1).
     #[cfg(unix)]
     #[test]
-    fn un_nombre_que_no_es_utf8_ni_se_pierde_ni_se_confunde() {
+    fn a_non_utf8_name_is_neither_lost_nor_confused() {
         use std::os::unix::ffi::OsStrExt as _;
 
         let dir = tempfile::tempdir().expect("tmp");

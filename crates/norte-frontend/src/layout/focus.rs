@@ -45,7 +45,7 @@ mod tests {
     }
 
     #[test]
-    fn el_foco_cicla_en_los_dos_sentidos() {
+    fn focus_cycles_in_both_directions() {
         let r = resolved(&[1, 2, 3]);
         assert_eq!(focus_next(&r, SlotId(3)), Some(SlotId(1)));
         assert_eq!(focus_prev(&r, SlotId(1)), Some(SlotId(3)));
@@ -57,14 +57,14 @@ mod tests {
     /// shrank and collapsed it): it is NOT lost, it falls to the first
     /// visible one.
     #[test]
-    fn un_foco_que_ya_no_se_ve_cae_al_primer_visible() {
+    fn a_focus_that_is_no_longer_visible_falls_back_to_the_first_visible() {
         let r = resolved(&[2, 3]);
         assert_eq!(focus_next(&r, SlotId(1)), Some(SlotId(2)));
         assert_eq!(focus_prev(&r, SlotId(1)), Some(SlotId(2)));
     }
 
     #[test]
-    fn sin_nada_enfocable_no_hay_foco() {
+    fn with_nothing_focusable_there_is_no_focus() {
         let r = resolved(&[]);
         assert_eq!(focus_next(&r, SlotId(1)), None);
         assert_eq!(focus_prev(&r, SlotId(1)), None);
@@ -74,7 +74,7 @@ mod tests {
     /// a wrongly written `(i + 1) % 1` returns `None` and the switch-pane key
     /// stops responding when there is only one.
     #[test]
-    fn con_un_solo_hueco_ciclar_se_queda_en_el() {
+    fn with_a_single_slot_cycling_stays_on_it() {
         let r = resolved(&[7]);
         assert_eq!(focus_next(&r, SlotId(7)), Some(SlotId(7)));
         assert_eq!(focus_prev(&r, SlotId(7)), Some(SlotId(7)));

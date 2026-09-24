@@ -39,7 +39,7 @@ fn ctx(cwd: &str) -> PaneCtx {
 }
 
 #[tokio::test]
-async fn invoke_ejecuta_y_reporta_ok() {
+async fn invoke_executes_and_reports_ok() {
     let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///a", b"x").await;
     let h = LuaHost::new().expect("lua");
@@ -70,7 +70,7 @@ async fn invoke_ejecuta_y_reporta_ok() {
 }
 
 #[tokio::test]
-async fn invoke_desconocido_es_none() {
+async fn invoke_unknown_es_none() {
     let (backend, _mem) = backend_mem();
     let h = LuaHost::new().expect("lua");
     assert!(
@@ -85,7 +85,7 @@ async fn invoke_desconocido_es_none() {
 }
 
 #[tokio::test]
-async fn cancelar_mata_el_script_y_sus_tasks() {
+async fn cancelling_kills_the_script_and_its_tasks() {
     let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///a", b"x").await;
     // Front 1 for real: with per-operation latency, the copy Task is still
@@ -169,7 +169,7 @@ async fn timeout_duro_abandona() {
 }
 
 #[tokio::test]
-async fn run_cerrado_mata_bindings_stasheados() {
+async fn run_closed_kills_stashed_bindings() {
     let (backend, mem) = backend_mem();
     write_file(&mem, "mem:///a", b"x").await;
     let h = LuaHost::new().expect("lua");

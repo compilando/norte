@@ -41,18 +41,18 @@ pub struct Subshell {
     ///
     /// SHARED with the reader thread, which also writes: it is the one that
     /// answers the shell's terminal queries ([`Escritor`]).
-    escritura: Escritor,
+    write: Escritor,
     /// The pty, which is also the one that resizes.
     maestro: Box<dyn portable_pty::MasterPty + Send>,
     /// The child. Kept so it can be killed and so we know whether it is
     /// still alive.
-    hijo: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
     /// What the shell has written and has not been painted yet, plus the
     /// LAST cwd it announced. Filled by a reader thread.
     buzon: Arc<Mutex<Buzon>>,
     /// Which of the three it is, if it is one of the three. `None` = norte
     /// installed nothing in it and does not type anything into it.
-    cual: Option<norte_frontend::shell::Shell>,
+    which: Option<norte_frontend::shell::Shell>,
     /// This session's MAILBOX: how the shell is told to change directory,
     /// instead of typing a `cd` into it (#363).
     ///
@@ -67,13 +67,13 @@ pub struct Subshell {
     /// Deleted on releasing the subshell. If norte dies abruptly, a file of
     /// a few dozen bytes is left in a directory the system cleans up on
     /// logout.
-    buzon_fichero: Option<std::path::PathBuf>,
+    buzon_file: Option<std::path::PathBuf>,
 }
 
 /// The pty's input, shared between whoever attaches and the reader thread.
 ///
 /// Two writers, and both legitimate: the reader's keys come in through
-/// [`Subshell::escribir`], and the RESPONSES to the shell's terminal queries
+/// [`Subshell::write`], and the RESPONSES to the shell's terminal queries
 /// are sent by the thread that sees them go by. A modern shell asks what
 /// terminal it has in front of it and STOPS until it is answered (fish 4
 /// does it before its first prompt), so the response cannot wait for
@@ -84,13 +84,13 @@ type Escritor = Arc<Mutex<Box<dyn std::io::Write + Send>>>;
 #[derive(Default)]
 struct Buzon {
     /// Bytes pending painting, already WITHOUT the markers.
-    pendiente: Vec<u8>,
+    pending: Vec<u8>,
     /// The last cwd announced, in bytes (rule 1).
     cwd: Option<Vec<u8>>,
     /// A marker split between two reads, waiting for its end.
     cola: Vec<u8>,
     /// The pty closed: the shell is gone.
-    cerrado: bool,
+    closed: bool,
 }
 
 /// How much of what the shell wrote is kept while nobody is looking.
@@ -108,20 +108,20 @@ impl Subshell {
     ///
     /// # Errors
     /// Whatever fails when opening the pty or launching the shell.
-    pub fn arrancar(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<Self> {
-        Self::arrancar_con(&norte_frontend::shell::login_shell(), &[], dir, size)
+    pub fn start(dir: &std::path::Path, size: (u16, u16)) -> std::io::Result<Self> {
+        Self::start_with(&norte_frontend::shell::login_shell(), &[], dir, size)
     }
 
-    /// [`Self::arrancar`] with the GIVEN program and arguments.
+    /// [`Self::start`] with the GIVEN program and arguments.
     ///
-    /// Exists for the tests, and it is not a convenience: `arrancar` uses
+    /// Exists for the tests, and it is not a convenience: `start` uses
     /// `$SHELL`, i.e. the shell of whoever runs the suite, with its whole
     /// configuration behind it. On this machine that is a zsh whose first
     /// interactive start launches the powerlevel10k wizard and never reaches
     /// a prompt — a red test that says nothing about the code. A test that
     /// needs a shell needs A shell, not the one of whoever runs it.
-    fn arrancar_con(
-        programa: &std::path::Path,
+    fn start_with(
+        program: &std::path::Path,
         args: &[&str],
         dir: &std::path::Path,
         size: (u16, u16),
@@ -135,7 +135,7 @@ impl Subshell {
                 pixel_height: 0,
             })
             .map_err(std::io::Error::other)?;
-        let shell = programa.to_path_buf();
+        let shell = program.to_path_buf();
         let mut cmd = portable_pty::CommandBuilder::new(&shell);
         for a in args {
             cmd.arg(a);
@@ -148,7 +148,7 @@ impl Subshell {
             norte_frontend::shell::LEVEL_VAR,
             norte_frontend::shell::next_norte_level(),
         );
-        let hijo = pair
+        let child = pair
             .slave
             .spawn_command(cmd)
             .map_err(std::io::Error::other)?;
@@ -166,24 +166,24 @@ impl Subshell {
         // THIS session's nonce: what separates a marker the hook printed
         // from one that came from inside a file. See `Nonce`.
         let nonce = Nonce::new();
-        lanzar_lector(
+        launch_reader(
             reader,
             Arc::clone(&buzon),
             Arc::clone(&escritura),
             nonce.clone(),
         );
 
-        let cual = shell_conocido(&shell);
+        let which = shell_conocido(&shell);
         // The mailbox is created BEFORE the hook: the hook carries its path
         // inside.
-        let buzon_fichero = cual.and_then(|_| crear_buzon(&nonce));
+        let buzon_file = which.and_then(|_| create_buzon(&nonce));
         let mut me = Self {
-            escritura,
+            write: escritura,
             maestro: pair.master,
-            hijo,
+            child,
             buzon,
-            cual,
-            buzon_fichero,
+            which,
+            buzon_file,
         };
         // The prompt hook is sent as if the reader typed it: NONE of their
         // files is touched. A `.bashrc` norte edited would be a permanent
@@ -193,13 +193,13 @@ impl Subshell {
         // With no mailbox, nothing is installed: the hook carries its path
         // inside, and one pointing at a file that does not exist would be
         // plumbing typed into the reader's face for nothing in return.
-        if let (Some(cual), Some(buzon)) = (cual, me.buzon_fichero.clone()) {
-            let _ = me.escribir(install(cual, &nonce, &buzon).as_bytes());
+        if let (Some(which), Some(buzon)) = (which, me.buzon_file.clone()) {
+            let _ = me.write(install(which, &nonce, &buzon).as_bytes());
             // Ctrl+L: the `readline`/ZLE/fish command that clears the
             // screen and repaints the prompt. Without this, the first thing
             // the reader sees on their first Ctrl+O is the wall of plumbing
             // we just typed.
-            let _ = me.escribir_tecla(b"\x0c");
+            let _ = me.write_key(b"\x0c");
         }
         Ok(me)
     }
@@ -213,13 +213,13 @@ impl Subshell {
     ///
     /// # Errors
     /// Whatever the pty fails at.
-    pub fn escribir(&mut self, bytes: &[u8]) -> std::io::Result<()> {
-        escribir_crudo(&self.escritura, bytes)
+    pub fn write(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        write_raw(&self.write, bytes)
     }
 
     /// Writes ONE key from the reader to the shell.
     ///
-    /// Today it is [`Self::escribir`] and nothing more. It stays as a
+    /// Today it is [`Self::write`] and nothing more. It stays as a
     /// separate door because what comes in through here was TYPED by
     /// someone and what comes in through the other one is sent by norte,
     /// and it is worth that showing at the call site. What used to be here
@@ -230,8 +230,8 @@ impl Subshell {
     ///
     /// # Errors
     /// Whatever the pty fails at.
-    pub fn escribir_tecla(&mut self, bytes: &[u8]) -> std::io::Result<()> {
-        self.escribir(bytes)
+    pub fn write_key(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.write(bytes)
     }
 
     /// Sends the shell to directory `dir` (native bytes), IF it can be done.
@@ -275,10 +275,10 @@ impl Subshell {
     /// Whatever fails when writing the mailbox.
     pub fn ir_a(&mut self, dir: &std::path::Path) -> std::io::Result<bool> {
         use std::os::unix::ffi::OsStrExt as _;
-        if self.cual.is_none() {
+        if self.which.is_none() {
             return Ok(false);
         }
-        let Some(buzon) = self.buzon_fichero.as_deref() else {
+        let Some(buzon) = self.buzon_file.as_deref() else {
             return Ok(false);
         };
         // The trailing `_` is a sentinel and not decoration: the shell
@@ -286,7 +286,7 @@ impl Subshell {
         // directory CAN end in one.
         let mut bytes = dir.as_os_str().as_bytes().to_vec();
         bytes.push(b'_');
-        escribir_buzon(buzon, &bytes)?;
+        write_buzon(buzon, &bytes)?;
         Ok(true)
     }
 
@@ -300,7 +300,7 @@ impl Subshell {
     #[must_use]
     pub fn drenar(&self) -> Vec<u8> {
         let mut b = buzon_de(&self.buzon);
-        std::mem::take(&mut b.pendiente)
+        std::mem::take(&mut b.pending)
     }
 
     /// The last directory the shell announced, if it announced any.
@@ -320,13 +320,13 @@ impl Subshell {
     /// # Panics
     /// Same as [`Self::drenar`]: poisoned mailbox.
     #[must_use]
-    pub fn muerto(&mut self) -> bool {
-        let cerrado = buzon_de(&self.buzon).cerrado;
-        cerrado || matches!(self.hijo.try_wait(), Ok(Some(_)))
+    pub fn dead(&mut self) -> bool {
+        let closed = buzon_de(&self.buzon).closed;
+        closed || matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     /// Tells the shell what size the terminal is now.
-    pub fn redimensionar(&self, size: (u16, u16)) {
+    pub fn resize(&self, size: (u16, u16)) {
         let _ = self.maestro.resize(portable_pty::PtySize {
             rows: size.1,
             cols: size.0,
@@ -338,8 +338,8 @@ impl Subshell {
     /// Kills it. Called by norte's shutdown: an orphaned shell talking to a
     /// pty nobody reads anymore is a process nobody knows exists.
     pub fn matar(&mut self) {
-        let _ = self.hijo.kill();
-        let _ = self.hijo.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -358,7 +358,7 @@ impl Drop for Subshell {
         // shell is already gone and there is nobody to tell—, and what is
         // left if norte dies abruptly is a few dozen bytes in a directory
         // the system cleans up on logout.
-        if let Some(p) = &self.buzon_fichero {
+        if let Some(p) = &self.buzon_file {
             let _ = std::fs::remove_file(p);
             let _ = std::fs::remove_file(p.with_extension("cd.tmp"));
         }
@@ -413,7 +413,7 @@ fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
 /// `None` if it cannot be done. The caller degrades: the panel does not
 /// drag the shell along and the hook is not installed. That is preferable
 /// to the two alternatives —crashing, or typing the `cd` again—.
-fn crear_buzon(nonce: &Nonce) -> Option<std::path::PathBuf> {
+fn create_buzon(nonce: &Nonce) -> Option<std::path::PathBuf> {
     use std::os::unix::fs::OpenOptionsExt as _;
     let dir = match std::env::var_os("XDG_RUNTIME_DIR").filter(|v| !v.is_empty()) {
         Some(r) => std::path::PathBuf::from(r).join("norte"),
@@ -421,7 +421,7 @@ fn crear_buzon(nonce: &Nonce) -> Option<std::path::PathBuf> {
         // `/tmp/norte-<uid>`. The uid comes from the owner of a file we just
         // created, which is our euid with no `unsafe` (rule 5) — the same
         // trick `norte-client` uses to name that directory.
-        None => std::path::PathBuf::from(format!("/tmp/norte-{}", uid_propio()?)),
+        None => std::path::PathBuf::from(format!("/tmp/norte-{}", uid_own()?)),
     };
     std::fs::create_dir_all(&dir).ok()?;
     let path = dir.join(format!("subshell-{}.cd", nonce.as_str()));
@@ -441,7 +441,7 @@ fn crear_buzon(nonce: &Nonce) -> Option<std::path::PathBuf> {
 /// Only used to NAME the `/tmp` directory, as in `norte-client`. What
 /// truly protects it is that directory's 0700 mode and the mailbox's 0600,
 /// not the number in the name.
-fn uid_propio() -> Option<u32> {
+fn uid_own() -> Option<u32> {
     use std::os::unix::fs::MetadataExt as _;
     let probe = std::env::temp_dir().join(format!(".norte-uid-{}", std::process::id()));
     std::fs::File::create(&probe).ok()?;
@@ -457,7 +457,7 @@ fn uid_propio() -> Option<u32> {
 /// `cd` to somewhere it should not be. The `rename` within the same
 /// directory is atomic, so the shell sees the whole path or the previous
 /// one, never a fragment.
-fn escribir_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+fn write_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
     use std::io::Write as _;
     use std::os::unix::fs::OpenOptionsExt as _;
     let tmp = path.with_extension("cd.tmp");
@@ -479,7 +479,7 @@ fn escribir_buzon(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Used by both writers. The distinction matters: typing a command puts
 /// something on the line, and answering a terminal query does not — the
 /// program that asked is waiting for those bytes, not `readline`.
-fn escribir_crudo(escritura: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
+fn write_raw(escritura: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
     let mut e = escritura
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -487,8 +487,8 @@ fn escribir_crudo(escritura: &Escritor, bytes: &[u8]) -> std::io::Result<()> {
     e.flush()
 }
 
-fn lanzar_lector(
-    mut reader: LectorDelPty,
+fn launch_reader(
+    mut reader: PtyReader,
     buzon: Arc<Mutex<Buzon>>,
     escritura: Escritor,
     nonce: norte_frontend::subshell::Nonce,
@@ -498,16 +498,16 @@ fn lanzar_lector(
         loop {
             match reader.read(&mut buf) {
                 Ok(0) | Err(_) => {
-                    buzon_de(&buzon).cerrado = true;
+                    buzon_de(&buzon).closed = true;
                     return;
                 }
                 Ok(n) => {
                     // Answering comes BEFORE anything else: the shell is
                     // STOPPED waiting for it. Outside the mailbox's lock,
-                    // which does not matter here, and `escribir_crudo`
+                    // which does not matter here, and `write_raw`
                     // takes its own.
                     if let Some(r) = norte_frontend::subshell::terminal_reply(&buf[..n]) {
-                        let _ = escribir_crudo(&escritura, &r);
+                        let _ = write_raw(&escritura, &r);
                     }
                     let mut b = buzon_de(&buzon);
                     // The previous chunk's tail goes FIRST: a marker split
@@ -528,7 +528,7 @@ fn lanzar_lector(
                         // where it was.
                         b.cwd = Some(c);
                     }
-                    b.pendiente.extend_from_slice(&s.visible);
+                    b.pending.extend_from_slice(&s.visible);
                     // The TAIL of what was written is kept: a process
                     // writing without end while nobody is looking must not
                     // eat up norte's memory.
@@ -539,13 +539,13 @@ fn lanzar_lector(
                     // would leave the terminal eating the bytes behind it
                     // as parameters — the dump's first line would come out
                     // broken.
-                    if b.pendiente.len() > BUFFER_MAX {
-                        let overflow = b.pendiente.len() - BUFFER_MAX;
-                        let cut = b.pendiente[overflow..]
+                    if b.pending.len() > BUFFER_MAX {
+                        let overflow = b.pending.len() - BUFFER_MAX;
+                        let cut = b.pending[overflow..]
                             .iter()
                             .position(|c| *c == b'\n')
-                            .map_or(b.pendiente.len(), |p| overflow + p + 1);
-                        b.pendiente.drain(..cut);
+                            .map_or(b.pending.len(), |p| overflow + p + 1);
+                        b.pending.drain(..cut);
                     }
                 }
             }
@@ -555,7 +555,7 @@ fn lanzar_lector(
 
 /// The BLOCKING reader `portable_pty` returns, given its own name so the
 /// thread's signature reads well.
-type LectorDelPty = Box<dyn std::io::Read + Send>;
+type PtyReader = Box<dyn std::io::Read + Send>;
 
 /// The bytes a key sends to a shell, or `None` if this key means nothing
 /// there.
@@ -573,15 +573,15 @@ type LectorDelPty = Box<dyn std::io::Read + Send>;
 ///
 /// ```
 /// use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-/// use norte_tui::subshell::tecla_a_bytes;
+/// use norte_tui::subshell::key_to_bytes;
 ///
-/// assert_eq!(tecla_a_bytes(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)), Some(b"a".to_vec()));
-/// assert_eq!(tecla_a_bytes(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(b"\r".to_vec()));
+/// assert_eq!(key_to_bytes(&KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE)), Some(b"a".to_vec()));
+/// assert_eq!(key_to_bytes(&KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)), Some(b"\r".to_vec()));
 /// // Ctrl+C travels as byte 3, which is what makes it interrupt.
-/// assert_eq!(tecla_a_bytes(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), Some(vec![3]));
+/// assert_eq!(key_to_bytes(&KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)), Some(vec![3]));
 /// ```
 #[must_use]
-pub fn tecla_a_bytes(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
+pub fn key_to_bytes(k: &crossterm::event::KeyEvent) -> Option<Vec<u8>> {
     use norte_frontend::keymap::{Chord, KeyCode, Mods};
     // **The TABLE is shared** (`norte_frontend::subshell::chord_a_bytes`),
     // and all that is left here is translating the crossterm event into
@@ -616,7 +616,7 @@ mod tests {
     /// non-interactive shell has no prompt, and the prompt hook is exactly
     /// what needs to be seen working.
     fn bash(dir: &std::path::Path) -> Subshell {
-        Subshell::arrancar_con(
+        Subshell::start_with(
             std::path::Path::new("/bin/bash"),
             &["--norc", "--noprofile", "-i"],
             dir,
@@ -632,20 +632,20 @@ mod tests {
     /// as-is, so looking for the command itself in the output does not
     /// prove anything was executed.
     #[test]
-    fn un_subshell_vive_entre_dos_ordenes() {
+    fn a_subshell_lives_between_two_commands() {
         let dir = tempfile::tempdir().expect("tempdir");
-        // `arrancar` uses `$SHELL` (`login_shell`), i.e. the test runner's:
+        // `start` uses `$SHELL` (`login_shell`), i.e. the test runner's:
         // only what every POSIX shell does the same way is checked.
         let mut sh = bash(dir.path());
 
-        sh.escribir(b"echo uno-$((6*7))\n").expect("escribe");
+        sh.write(b"echo uno-$((6*7))\n").expect("escribe");
         assert!(
-            espera_hasta(&sh, b"uno-42").is_some(),
+            wait_until(&sh, b"uno-42").is_some(),
             "the shell EXECUTES the first one"
         );
-        sh.escribir(b"echo dos-$((6*7))\n").expect("escribe");
+        sh.write(b"echo dos-$((6*7))\n").expect("escribe");
         assert!(
-            espera_hasta(&sh, b"dos-42").is_some(),
+            wait_until(&sh, b"dos-42").is_some(),
             "and stays alive for the second: that is what makes it a subshell"
         );
         sh.matar();
@@ -656,7 +656,7 @@ mod tests {
     /// This is the test that was missing, and its absence let through a bug
     /// where the hook carried the `ESC` and the `BEL` RAW: the line editor
     /// ate the `ESC ]` as a meta prefix, so what ended up installed printed
-    /// `777;norte-cwd;/casa` with no OSC frame. `scan_cwd` recognized
+    /// `777;norte-cwd;/home` with no OSC frame. `scan_cwd` recognized
     /// nothing, the panel NEVER followed the shell —#142's whole promise—
     /// and the reader saw that text on every prompt. With the shell started
     /// in `dir`, the first prompt already has to announce it.
@@ -665,7 +665,7 @@ mod tests {
     /// one. It skips whichever is not installed — it is an integration
     /// test, not a reason to redden someone's machine.
     #[test]
-    fn el_shell_anuncia_donde_esta() {
+    fn the_shell_announces_where_it_is() {
         let mut tested = 0;
         for (bin, args) in [
             ("/bin/bash", &["--norc", "--noprofile", "-i"][..]),
@@ -679,7 +679,7 @@ mod tests {
             tested += 1;
             let dir = tempfile::tempdir().expect("tempdir");
             let real = dir.path().canonicalize().expect("canonicalize");
-            let sh = Subshell::arrancar_con(path, args, &real, (80, 24)).expect("arranca");
+            let sh = Subshell::start_with(path, args, &real, (80, 24)).expect("arranca");
             let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
             let mut announced = None;
             while std::time::Instant::now() < until && announced.is_none() {
@@ -704,7 +704,7 @@ mod tests {
     /// enters the buffer, and that one does not enter it. `/tmp/…\x15id #`
     /// executed `id`.
     #[test]
-    fn el_subshell_sigue_al_panel_con_un_nombre_hostil() {
+    fn the_subshell_follows_the_pane_with_a_hostile_name() {
         use std::os::unix::ffi::OsStrExt as _;
         let root = tempfile::tempdir().expect("tempdir");
         let root = root.path().canonicalize().expect("canonicalize");
@@ -772,7 +772,7 @@ mod tests {
     ///
     /// It used to turn it off all the same. When norte typed the `cd`, a
     /// permission was needed —"a marker arrived and nobody has typed since
-    /// then"— and `escribir` lowered it for EVERYTHING that was sent. The
+    /// then"— and `write` lowered it for EVERYTHING that was sent. The
     /// repaint does not run `PROMPT_COMMAND` —bash runs that before reading
     /// a NEW command—, so no marker came after the Ctrl+L and the
     /// permission stayed down until the next Enter. In between, the panel
@@ -791,14 +791,14 @@ mod tests {
     /// exchange for closing the injection: the move applies at the next
     /// prompt and not instantly.
     #[test]
-    fn un_ctrl_l_no_apaga_el_seguimiento() {
+    fn a_ctrl_l_does_not_turn_off_tailing() {
         let dir = tempfile::tempdir().expect("tempdir");
         let dir = dir.path().canonicalize().expect("canonicalize");
         let other = dir.join("otro");
         std::fs::create_dir(&other).expect("mkdir");
         let mut sh = bash(&dir);
-        espera_quieto(&sh);
-        sh.escribir_tecla(b"\x0c").expect("ctrl+l");
+        wait_idle(&sh);
+        sh.write_key(b"\x0c").expect("ctrl+l");
         let _ = sh.drenar();
 
         assert!(
@@ -808,7 +808,7 @@ mod tests {
         // The line is empty, so the reader's Enter executes nothing: it
         // only takes the shell to its next prompt, which is where the
         // hook picks up the mailbox.
-        sh.escribir_tecla(b"\n").expect("intro");
+        sh.write_key(b"\n").expect("intro");
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut arrived = false;
         while std::time::Instant::now() < until {
@@ -827,7 +827,7 @@ mod tests {
     ///
     /// This is the worst bug this had: the `cd` was typed in on entering,
     /// so an `rm -rf tmpdir` the reader had typed and not executed turned
-    /// into `rm -rf tmpdircd -- \'/otro\'` as soon as they came back. And
+    /// into `rm -rf tmpdircd -- \'/other\'` as soon as they came back. And
     /// what the normal, not the rare, case does is that this subshell
     /// PROMISES to keep the half-typed line intact.
     ///
@@ -836,7 +836,7 @@ mod tests {
     /// there is somewhere to note it down— and what is checked is that the
     /// reader's line stays intact and is not executed.
     #[test]
-    fn una_linea_a_medias_no_se_ejecuta() {
+    fn a_half_typed_line_is_not_executed() {
         let dir = tempfile::tempdir().expect("tempdir");
         let dir = dir.path().canonicalize().expect("canonicalize");
         let other = dir.join("otro");
@@ -845,12 +845,12 @@ mod tests {
         // Wait for the shell to SETTLE, and only then leave something
         // half-typed: the install commands each produce a prompt, and
         // typing over one that has not arrived yet would be a test race.
-        espera_quieto(&sh);
+        wait_idle(&sh);
         // `pwn''ed` and not `pwned`: what the pty ECHOES is the line
         // as-is, so looking for "pwned" would find the echo and not the
         // execution. With the quotes in the middle, the whole string only
         // appears if bash executed it.
-        sh.escribir(b"echo pwn''ed").expect("media linea");
+        sh.write(b"echo pwn''ed").expect("media linea");
         std::thread::sleep(std::time::Duration::from_millis(300));
         let _ = sh.drenar();
 
@@ -865,7 +865,7 @@ mod tests {
             "what the reader did not execute got executed: {text}"
         );
         // And the line is still there: Enter executes it WHOLE and alone.
-        sh.escribir(b"\n").expect("intro");
+        sh.write(b"\n").expect("intro");
         std::thread::sleep(std::time::Duration::from_millis(400));
         let text = String::from_utf8_lossy(&sh.drenar()).into_owned();
         assert!(
@@ -888,21 +888,21 @@ mod tests {
     /// here with a `sleep` in front, which is what keeps readline from
     /// reading.
     #[test]
-    fn lo_tecleado_mientras_el_shell_esta_ocupado_no_arrastra_un_cd() {
+    fn what_is_typed_while_the_shell_is_busy_does_not_drag_in_a_cd() {
         let dir = tempfile::tempdir().expect("tempdir");
         let dir = dir.path().canonicalize().expect("canonicalize");
         let other = dir.join("otro");
         std::fs::create_dir(&other).expect("mkdir");
         let mut sh = bash(&dir);
-        espera_quieto(&sh);
+        wait_idle(&sh);
 
         // The shell goes to sleep, and the reader types over it with no
         // Enter: those bytes stay in the pty's queue until `sleep` ends.
-        sh.escribir(b"sleep 1\n").expect("sleep");
+        sh.write(b"sleep 1\n").expect("sleep");
         std::thread::sleep(std::time::Duration::from_millis(150));
         // Same trick as the test next door: the echo cannot be confused
         // with the execution.
-        sh.escribir(b"echo pwn''ed").expect("type-ahead");
+        sh.write(b"echo pwn''ed").expect("type-ahead");
         // And norte moves the panel exactly when the prompt comes back.
         assert!(sh.ir_a(&other).expect("cd"), "noted in the mailbox");
         std::thread::sleep(std::time::Duration::from_millis(1800));
@@ -925,9 +925,9 @@ mod tests {
     /// The keys a shell needs arrive as the bytes it expects, and whatever
     /// means nothing there does not arrive.
     #[test]
-    fn las_teclas_llegan_como_bytes_de_terminal() {
+    fn keys_arrive_as_terminal_bytes() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        let t = |code, mods| tecla_a_bytes(&KeyEvent::new(code, mods));
+        let t = |code, mods| key_to_bytes(&KeyEvent::new(code, mods));
         assert_eq!(t(KeyCode::Up, KeyModifiers::NONE), Some(b"\x1b[A".to_vec()));
         assert_eq!(t(KeyCode::Backspace, KeyModifiers::NONE), Some(vec![0x7f]));
         assert_eq!(t(KeyCode::Char('d'), KeyModifiers::CONTROL), Some(vec![4]));
@@ -961,10 +961,10 @@ mod tests {
     /// A non-ASCII character travels as whole UTF-8: typing `ñ` into the
     /// subshell must not send half a character.
     #[test]
-    fn un_caracter_multibyte_viaja_entero() {
+    fn a_multibyte_character_travels_whole() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         assert_eq!(
-            tecla_a_bytes(&KeyEvent::new(KeyCode::Char('ñ'), KeyModifiers::NONE)),
+            key_to_bytes(&KeyEvent::new(KeyCode::Char('ñ'), KeyModifiers::NONE)),
             Some("ñ".as_bytes().to_vec())
         );
     }
@@ -984,7 +984,7 @@ mod tests {
     /// The install commands each produce a prompt —and a marker— ONE AT A
     /// TIME, and they arrive when they arrive: a test that types over one
     /// that has not arrived yet goes red from the race, not from the code.
-    fn espera_quieto(sh: &Subshell) {
+    fn wait_idle(sh: &Subshell) {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut still = 0;
         while std::time::Instant::now() < until {
@@ -1001,7 +1001,7 @@ mod tests {
         panic!("the shell never settled");
     }
 
-    fn espera_hasta(sh: &Subshell, needle: &[u8]) -> Option<Vec<u8>> {
+    fn wait_until(sh: &Subshell, needle: &[u8]) -> Option<Vec<u8>> {
         let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
         let mut seen: Vec<u8> = Vec::new();
         while std::time::Instant::now() < until {

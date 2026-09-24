@@ -134,14 +134,14 @@ pub struct ConfigKeyDisplay {
 pub fn sanitize_config_keys(keys: &[PluginConfigKeyWire]) -> Vec<ConfigKeyRow> {
     keys.iter()
         .map(|k| {
-            let (value, v_hostil) = crate::display_name(k.value.as_bytes());
-            let (default, d_hostil) = crate::display_name(k.default.as_bytes());
+            let (value, v_hostile) = crate::display_name(k.value.as_bytes());
+            let (default, d_hostile) = crate::display_name(k.default.as_bytes());
             let dominio: Vec<(String, bool)> = k
                 .values
                 .iter()
                 .map(|v| crate::display_name(v.as_bytes()))
                 .collect();
-            let hostile = v_hostil || d_hostil || dominio.iter().any(|(_, h)| *h);
+            let hostile = v_hostile || d_hostile || dominio.iter().any(|(_, h)| *h);
             ConfigKeyRow {
                 key: k.key.clone(),
                 kind: k.kind.clone(),

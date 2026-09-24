@@ -2999,7 +2999,7 @@ pub struct FsDeleteParams {
 /// ```
 /// use norte_proto::methods::FsCreateParams;
 /// let p: FsCreateParams =
-///     serde_json::from_str(r#"{"path":"file:///casa/nuevo.txt"}"#).expect("params");
+///     serde_json::from_str(r#"{"path":"file:///home/nuevo.txt"}"#).expect("params");
 /// assert_eq!(p.path.file_name().expect("name").as_bytes(), b"nuevo.txt");
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -3184,7 +3184,7 @@ impl FsSearchParams {
     /// use norte_proto::methods::FsSearchParams;
     /// use norte_proto::VPath;
     ///
-    /// let root = VPath::parse("file:///casa").expect("vpath");
+    /// let root = VPath::parse("file:///home").expect("vpath");
     /// let p = FsSearchParams {
     ///     name_glob: Some("*.rs".to_owned()),
     ///     ..FsSearchParams::new(root)
@@ -3524,7 +3524,7 @@ pub enum OrganizeRelError {
 /// ```
 /// use norte_proto::methods::validar_proposed_rel;
 /// assert!(validar_proposed_rel("facturas/2026/marzo.pdf").is_ok());
-/// assert!(validar_proposed_rel("../fuera.txt").is_err());
+/// assert!(validar_proposed_rel("../outside.txt").is_err());
 /// assert!(validar_proposed_rel("/etc/passwd").is_err());
 /// assert!(validar_proposed_rel("a//b").is_err());
 /// ```
@@ -4019,15 +4019,15 @@ pub struct FsRenameBatchParams {
 /// ```
 /// use norte_proto::{VPath, methods::RenameStuckStep};
 /// let s = RenameStuckStep {
-///     from: VPath::parse("file:///fotos/a").expect("path"),
-///     to: VPath::parse("file:///fotos/b").expect("path"),
+///     from: VPath::parse("file:///snapshots/a").expect("path"),
+///     to: VPath::parse("file:///snapshots/b").expect("path"),
 ///     pair_index: 0,
 ///     error: norte_proto::Error::Io { retryable: false },
 ///     journalled: true,
 ///     still_applied: 1,
 /// };
 /// let json = serde_json::to_value(&s).expect("json");
-/// assert_eq!(json["to"], serde_json::json!("file:///fotos/b"));
+/// assert_eq!(json["to"], serde_json::json!("file:///snapshots/b"));
 /// assert_eq!(json["journalled"], serde_json::json!(true));
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -4236,7 +4236,7 @@ pub struct FsChecksumReportParams {
 /// use norte_proto::methods::FsDirUsageParams;
 /// // Omitted `depth` is ONE, which is what a map paints.
 /// let p: FsDirUsageParams =
-///     serde_json::from_str(r#"{"path":"file:///casa"}"#).expect("params");
+///     serde_json::from_str(r#"{"path":"file:///home"}"#).expect("params");
 /// assert_eq!(p.depth, 1);
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -5657,7 +5657,7 @@ impl CompareRow {
 /// ```
 /// use norte_proto::methods::ConnectionCloseParams;
 /// let p: ConnectionCloseParams =
-///     serde_json::from_str(r#"{"path":"sftp://host/casa"}"#).expect("params");
+///     serde_json::from_str(r#"{"path":"sftp://host/home"}"#).expect("params");
 /// assert_eq!(p.path.scheme(), "sftp");
 /// ```
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -6027,7 +6027,7 @@ pub const ARCHIVE_PACK_REPORT_MAX: usize = 64;
 /// ```
 /// use norte_proto::methods::FileSplitParams;
 /// let p: FileSplitParams = serde_json::from_str(
-///     r#"{"path":"file:///g.iso","part_bytes":1048576,"dest_dir":"file:///trozos"}"#,
+///     r#"{"path":"file:///g.iso","part_bytes":1048576,"dest_dir":"file:///chunks"}"#,
 /// )
 /// .expect("params");
 /// assert_eq!(p.part_bytes, 1_048_576);
@@ -6299,8 +6299,8 @@ impl RelPath {
     ///     "sub/a.txt"
     /// );
     /// // By SEGMENTS, not by string prefix.
-    /// let otro = VPath::parse("file:///origenes/a.txt").expect("path");
-    /// assert!(RelPath::under(&root, &otro).is_none());
+    /// let other = VPath::parse("file:///origenes/a.txt").expect("path");
+    /// assert!(RelPath::under(&root, &other).is_none());
     /// // The root itself comes out as the ROOT, and deciding what to do
     /// // about that is the caller's.
     /// assert!(RelPath::under(&root, &root).expect("is the root").is_root());
@@ -7827,7 +7827,7 @@ pub enum SyncFailureCause {
 /// ```
 /// use norte_proto::methods::{RelPath, SyncFailure, SyncFailureCause, SyncStepKind};
 /// let f = SyncFailure {
-///     rel: RelPath::parse_wire("viejo").expect("rel"),
+///     rel: RelPath::parse_wire("old").expect("rel"),
 ///     dest_rel: None,
 ///     cause: SyncFailureCause::Denied,
 ///     kind: SyncStepKind::DeleteTree,
@@ -8174,7 +8174,7 @@ pub struct ConnectionFailed {
     /// NEVER contract: it is not parsed, not compared, and may be absent.
     ///
     /// Only filled in by the variants whose sentence is composed of fields
-    /// norte itself sets — see `ConnectError::detalle_publico`. The ones
+    /// norte itself sets — see `ConnectError::detail_publico`. The ones
     /// wrapping third-party text, paths or the config file do NOT reach
     /// here: rule 10 does not distinguish between "a secret" and
     /// "something that may contain a secret".

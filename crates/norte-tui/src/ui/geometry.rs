@@ -58,7 +58,7 @@ pub fn pane_list_rows(app: &App, area: Rect) -> u16 {
 /// other way around cost a frame of lag, and the delayed frame is exactly
 /// the one the user is looking at when the cursor touches the edge.
 pub fn before_frame(app: &mut App, area: Rect) {
-    app.ultimo_frame = Some(area);
+    app.last_frame = Some(area);
     let res = resolved_frame(app, area);
     // Who is seen where: with tabs, each side's slot changes.
     let vis = visible_browsers(&res, &app.layout);
@@ -78,13 +78,13 @@ pub fn before_frame(app: &mut App, area: Rect) {
     // echo.
     //
     // The pty learns the size or a full-screen program keeps painting for
-    // the previous one, and what shows is garbage. `redimensionar` does
+    // the previous one, and what shows is garbage. `resize` does
     // nothing if it did not change.
     if let Some((_, rect)) = placed_of_kind(&res, &app.layout, crate::termpanel::KIND)
         && let Some(t) = app.terminal.as_mut()
     {
         // The frame is subtracted: the shell paints INSIDE.
-        t.redimensionar((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
+        t.resize((rect.width.saturating_sub(2), rect.height.saturating_sub(2)));
         t.bombear();
     }
     // And if the shell left, the panel stops having a shell: it is released
@@ -94,11 +94,11 @@ pub fn before_frame(app: &mut App, area: Rect) {
     if app
         .terminal
         .as_mut()
-        .is_some_and(crate::termpanel::TermPanel::muerto)
+        .is_some_and(crate::termpanel::TermPanel::dead)
     {
         app.terminal = None;
         if app.key_owner() == crate::app::KeyOwner::Terminal {
-            app.soltar_teclado();
+            app.release_keyboard();
         }
     }
     // Focus cannot stay on a pane this frame does not paint: that would be
@@ -236,11 +236,11 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
                     slot: *a,
                     vecino: *b,
                     dir: Dir::Horizontal,
-                    linea: ra.x + ra.width,
-                    desde: ra.y.max(rb.y),
-                    hasta: (ra.y + ra.height).min(rb.y + rb.height),
-                    inicio: start,
-                    largo: len,
+                    line: ra.x + ra.width,
+                    from: ra.y.max(rb.y),
+                    until: (ra.y + ra.height).min(rb.y + rb.height),
+                    start,
+                    long: len,
                 });
             }
             if rb.y == ra.y + ra.height
@@ -251,11 +251,11 @@ pub fn resize_borders(app: &App, area: Rect) -> Vec<crate::mouse::ResizeBorder> 
                     slot: *a,
                     vecino: *b,
                     dir: Dir::Vertical,
-                    linea: ra.y + ra.height,
-                    desde: ra.x.max(rb.x),
-                    hasta: (ra.x + ra.width).min(rb.x + rb.width),
-                    inicio: start,
-                    largo: len,
+                    line: ra.y + ra.height,
+                    from: ra.x.max(rb.x),
+                    until: (ra.x + ra.width).min(rb.x + rb.width),
+                    start,
+                    long: len,
                 });
             }
         }
@@ -280,7 +280,7 @@ pub fn panel_slots(app: &App, area: Rect) -> Vec<crate::mouse::PanelSlot> {
         .into_iter()
         .map(|(slot, r)| {
             // Without a panel group's strip: that row belongs to its zones.
-            let r = contenido_de_hueco(&app.layout, slot, crate::panel::to_ratatui(r));
+            let r = slot_content(&app.layout, slot, crate::panel::to_ratatui(r));
             crate::mouse::PanelSlot {
                 slot,
                 x: r.x,
@@ -333,7 +333,7 @@ pub(crate) fn body_area(app: &App, area: Rect) -> Rect {
     // the width, from the origin. The question goes to `panel_bar_area`,
     // which already knows whether it fits: a rail that is not painted
     // cannot eat three columns.
-    let left = if barra_en_columna(app) {
+    let left = if bar_in_column(app) {
         panel_bar_area(app, area).map_or(0, |r| r.width)
     } else {
         0
@@ -356,13 +356,13 @@ pub(crate) const RAIL_W: u16 = 3;
 /// Does the panel bar go in a COLUMN? `[ui] panel_bar_position`, with the
 /// terminal's answer for `auto`: on top, because width is short here.
 #[must_use]
-pub(crate) fn barra_en_columna(app: &App) -> bool {
+pub(crate) fn bar_in_column(app: &App) -> bool {
     app.panel_bar && app.chrome.panel_bar_position().vertical(false)
 }
 
 /// How many top rows the panel bar eats: one in a row, none in a column.
 fn panel_bar_row(app: &App) -> u16 {
-    u16::from(app.panel_bar && !barra_en_columna(app))
+    u16::from(app.panel_bar && !bar_in_column(app))
 }
 
 /// The row where the key bar goes (spec 2026-09-10), if there is one: the
@@ -402,7 +402,7 @@ pub(crate) fn panel_bar_area(app: &App, area: Rect) -> Option<Rect> {
     if !app.panel_bar || area.height <= u16::from(app.menu_bar) {
         return None;
     }
-    if barra_en_columna(app) {
+    if bar_in_column(app) {
         // A terminal that leaves no body next to the rail loses the rail:
         // better a listing with no buttons than buttons with no listing.
         let bottom = u16::from(key_bar_area(app, area).is_some());
@@ -494,12 +494,7 @@ pub(crate) fn placed_of_kind(
     res.placements
         .iter()
         .find(|(id, _)| tree.kind_of(*id).is_some_and(|k| k.as_str() == kind))
-        .map(|(id, r)| {
-            (
-                *id,
-                contenido_de_hueco(tree, *id, crate::panel::to_ratatui(*r)),
-            )
-        })
+        .map(|(id, r)| (*id, slot_content(tree, *id, crate::panel::to_ratatui(*r))))
 }
 
 /// Where the CONTENT of a slot placed in `rect` lands.
@@ -507,7 +502,7 @@ pub(crate) fn placed_of_kind(
 /// In a panel group (ADR 0134) the first row is the tab STRIP, and the
 /// content starts one row below. ONE count for the painter and for the
 /// mouse: with two, a click on the disk map picked the child next door.
-pub(crate) fn contenido_de_hueco(
+pub(crate) fn slot_content(
     tree: &norte_frontend::layout::Node,
     id: norte_frontend::layout::SlotId,
     mut rect: Rect,

@@ -1,9 +1,9 @@
 //! Checksums: requesting them, queuing them, and reading their report.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
@@ -16,7 +16,7 @@ use super::*;
 /// Task. It is a type and not an `Option<Option<_>>` because "there is no
 /// batch" and "there is one that compares against nothing" are two different
 /// things, and nesting two options to say so reads badly where it matters.
-pub(super) struct SumasEncoladas {
+pub(super) struct ChecksumsEncoladas {
     /// What the sums file published, if this is a verification.
     pub(super) publicado: Option<Publicado>,
 }
@@ -33,30 +33,30 @@ pub(super) struct Publicado {
     refused: usize,
 }
 
-impl Estado {
+impl State {
     /// The checksum Task finished: its report is requested (#311).
     ///
     /// The same guards as sync's, and for the same reason: the CLASS, the
     /// connection EPOCH, and idempotency — a reconnection re-announces the
     /// terminal, and this is an RPC.
-    pub(super) fn pedir_informe_de_sumas(
+    pub(super) fn request_checksums_report(
         &mut self,
         p: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        let Some(s) = self.sumas.as_ref() else {
+        let Some(s) = self.checksums.as_ref() else {
             return;
         };
         if s.task != p.task_id
-            || s.epoca_conexion != self.epoca_conexion
+            || s.epoch_connection != self.epoch_connection
             || !matches!(p.kind, norte_proto::TaskKind::Checksum)
-            || s.informe_pedido
+            || s.report_requested
         {
             return;
         }
-        if let Some(s) = self.sumas.as_mut() {
-            s.informe_pedido = true;
+        if let Some(s) = self.checksums.as_mut() {
+            s.report_requested = true;
         }
         let state = p.state.clone();
         let id = p.task_id;
@@ -65,7 +65,7 @@ impl Estado {
         tokio::spawn(async move {
             let report = backend.checksum_report(id).await;
             let _ = mailbox
-                .send(Mensaje::Fondo(Box::new(Fondo::InformeDeSumas(
+                .send(Message::Background(Box::new(Background::ChecksumsReport(
                     id,
                     state,
                     Box::new(report),
@@ -81,7 +81,7 @@ impl Estado {
     /// judging that would accuse — "does not match or is missing" — files
     /// nobody ever got to read, which is the worst possible error in the one
     /// tool whose job is to verify.
-    pub(super) fn informe_de_sumas(
+    pub(super) fn checksums_report(
         &mut self,
         task: norte_proto::TaskId,
         state: &norte_proto::TaskState,
@@ -89,38 +89,38 @@ impl Estado {
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         use norte_frontend::checksums;
 
-        let Some(sumas) = self.sumas.take().filter(|s| s.task == task) else {
+        let Some(checksums) = self.checksums.take().filter(|s| s.task == task) else {
             return Vec::new();
         };
         let Ok(report) = report else {
-            return self.decir("err-checksum-failed");
+            return self.say("err-checksum-failed");
         };
         if *state != norte_proto::TaskState::Completed || report.pending > 0 {
-            return self.decir("err-checksum-partial");
+            return self.say("err-checksum-partial");
         }
         let computed: Vec<checksums::Computed> = report
             .entries
             .iter()
             .map(|e| (e.digest.clone(), e.miss))
             .collect();
-        let (lines, copyable, message) = if let Some(published) = sumas.publicado {
+        let (lines, copyable, message) = if let Some(published) = checksums.publicado {
             let verdicts = checksums::judge(&published.lines, &published.asked, &computed);
             let rows: Vec<crate::dto::DialogLine> = published
                 .lines
                 .iter()
                 .zip(&verdicts)
-                .map(|(line, v)| self.fila_de_suma(&line.name, None, Some(*v)))
+                .map(|(line, v)| self.checksum_row(&line.name, None, Some(*v)))
                 .collect();
             let message = match checksums::summarize(&verdicts, published.refused) {
-                checksums::Summary::Unreadable { n, refused } => self.decir_con(
+                checksums::Summary::Unreadable { n, refused } => self.say_with(
                     "msg-checksum-unreadable-lines",
                     &[("n", &n.to_string()), ("refused", &refused.to_string())],
                 ),
                 checksums::Summary::AllOk { n } => {
-                    self.decir_con("msg-checksum-all-ok", &[("n", &n.to_string())])
+                    self.say_with("msg-checksum-all-ok", &[("n", &n.to_string())])
                 }
                 checksums::Summary::Bad { n } => {
-                    self.decir_con("msg-checksum-bad", &[("n", &n.to_string())])
+                    self.say_with("msg-checksum-bad", &[("n", &n.to_string())])
                 }
             };
             // A verification carries no digests: there is no list to copy.
@@ -141,7 +141,7 @@ impl Estado {
                         }
                         _ => checksums::Verdict::Missing,
                     });
-                    self.fila_de_suma(&name, e.digest.as_deref(), verdict)
+                    self.checksum_row(&name, e.digest.as_deref(), verdict)
                 })
                 .collect();
             let copyable: Vec<checksums::Computed> = computed.clone();
@@ -165,13 +165,13 @@ impl Estado {
             .collect();
         let bytes = checksums::to_sums_bytes(&to_copy);
         let mut outgoing = message;
-        outgoing.extend(self.abrir_sumas(lines, bytes));
+        outgoing.extend(self.open_checksums(lines, bytes));
         outgoing
     }
 
     /// A row of the checksums dialog: the verdict — or the clamped digest —
     /// and the name, sanitized like anything else this window paints.
-    pub(super) fn fila_de_suma(
+    pub(super) fn checksum_row(
         &self,
         name: &[u8],
         digest: Option<&str>,
@@ -194,13 +194,13 @@ impl Estado {
     /// Confirming COPIES the list to the clipboard when there are digests to
     /// copy, and when there are not — a verification does not carry them —
     /// the dialog just closes.
-    pub(super) fn abrir_sumas(
+    pub(super) fn open_checksums(
         &mut self,
         body: Vec<crate::dto::DialogLine>,
         bytes: Vec<u8>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let copyable = !bytes.is_empty();
         let mut choices = Vec::new();
         if copyable {
@@ -233,15 +233,15 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista: view.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: copyable.then_some(Pendiente::CopiarSumas { bytes }),
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: copyable.then_some(Pending::CopyChecksums { bytes }),
         });
         let change = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+            dialogs: self.dialog_views(),
         };
         vec![self.parche(vec![change])]
     }
@@ -253,19 +253,19 @@ impl Estado {
     /// there are no paths to request. That `read` is spawned, like everything
     /// that talks to the backend from here, and it comes back through the
     /// mailbox.
-    pub(super) fn lanzar_sumas(
+    pub(super) fn launch_checksums(
         &mut self,
         verify: bool,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if verify {
-            let Some(sums) = self.hueco().pane.selected().map(|e| e.path.clone()) else {
+            let Some(sums) = self.slot().pane.selected().map(|e| e.path.clone()) else {
                 return (
                     ActionAck::Unavailable {
                         reason_key: "host-nothing-selected".to_owned(),
                     },
-                    self.decir("host-nothing-selected"),
+                    self.say("host-nothing-selected"),
                 );
             };
             let backend2 = Arc::clone(backend);
@@ -284,46 +284,46 @@ impl Estado {
                     )
                     .await;
                 let _ = mailbox2
-                    .send(Mensaje::Fondo(Box::new(Fondo::FicheroDeSumas(
+                    .send(Message::Background(Box::new(Background::ChecksumsFile(
                         Box::new(sums),
                         Box::new(bytes),
                     ))))
                     .await;
             });
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         }
-        let paths = self.hueco().pane.marked_paths();
+        let paths = self.slot().pane.marked_paths();
         if paths.is_empty() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-nothing-selected".to_owned(),
                 },
-                self.decir("host-nothing-selected"),
+                self.say("host-nothing-selected"),
             );
         }
-        let outgoing = self.encolar_sumas(paths, None, backend, mailbox);
-        (self.aplicada(), outgoing)
+        let outgoing = self.enqueue_checksums(paths, None, backend, mailbox);
+        (self.applied(), outgoing)
     }
 
     /// The sums file arrived: it is read and the Task is launched (#311).
-    pub(super) fn fichero_de_sumas(
+    pub(super) fn checksums_file(
         &mut self,
         sums: &VPath,
         bytes: Result<Vec<u8>, Error>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let Ok(bytes) = bytes else {
-            return self.decir("err-checksum-not-a-sums-file");
+            return self.say("err-checksum-not-a-sums-file");
         };
         if bytes.len() as u64 > SUMS_MAX_BYTES {
-            return self.decir("err-checksum-sums-too-big");
+            return self.say("err-checksum-sums-too-big");
         }
         let parsed = norte_frontend::checksums::parse_sums(&bytes);
         if parsed.lines.is_empty() {
             // Say WHY when it is known: a PowerShell file is a perfectly
             // valid sums file in a different encoding.
-            return self.decir(if norte_frontend::checksums::looks_utf16(&bytes) {
+            return self.say(if norte_frontend::checksums::looks_utf16(&bytes) {
                 "err-checksum-sums-utf16"
             } else {
                 "err-checksum-not-a-sums-file"
@@ -332,27 +332,27 @@ impl Estado {
         // Against the SUMS FILE's directory, not the panel's: a `SHA256SUMS`
         // talks about what sits next to it.
         let Some(base) = sums.parent() else {
-            return self.decir("err-checksum-not-a-sums-file");
+            return self.say("err-checksum-not-a-sums-file");
         };
         let (paths, asked) = norte_frontend::checksums::resolve_targets(&base, &parsed.lines);
         if paths.is_empty() {
-            return self.decir("err-checksum-not-a-sums-file");
+            return self.say("err-checksum-not-a-sums-file");
         }
         let published = Publicado {
             lines: parsed.lines,
             asked,
             refused: parsed.refused,
         };
-        self.encolar_sumas(paths, Some(published), backend, mailbox)
+        self.enqueue_checksums(paths, Some(published), backend, mailbox)
     }
 
     /// Queues the checksum Task and notes which report needs waiting for.
-    pub(super) fn encolar_sumas(
+    pub(super) fn enqueue_checksums(
         &mut self,
         paths: Vec<VPath>,
         publicado: Option<Publicado>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let params = norte_proto::methods::FsChecksumParams {
             paths,
@@ -364,18 +364,18 @@ impl Estado {
             match backend2.checksum(params).await {
                 Ok(task) => {
                     let _ = mailbox2
-                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
+                        .send(Message::TaskNew(Box::new((task, Vec::new(), None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = mailbox2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = mailbox2.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
         // The Task does not have an id yet: what is noted here is the
         // INTENT, and `apuntar_sumas` matches it with the id once the task is
         // born.
-        self.sumas_pendientes = Some(SumasEncoladas { publicado });
-        self.decir("msg-checksum-started")
+        self.checksums_pendientes = Some(ChecksumsEncoladas { publicado });
+        self.say("msg-checksum-started")
     }
 }

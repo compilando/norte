@@ -6,7 +6,7 @@
 //! silence (ADR 0077). What stays in this crate is the `KIND` — what the
 //! layout writes — and which key does what while the pane holds the keyboard.
 
-pub use norte_frontend::diskmap::{DiskMap, Estado};
+pub use norte_frontend::diskmap::{DiskMap, State};
 
 /// The kind that occupies a disk-map slot.
 pub const KIND: &str = "disk-map";
@@ -17,7 +17,7 @@ pub enum MapAction {
     /// Move the selection `n` rectangles.
     Mover(isize),
     /// Enter the chosen child.
-    Entrar,
+    Enter,
     /// Re-measure this directory.
     Remedir,
     /// Return the keyboard without closing the pane.
@@ -53,7 +53,7 @@ pub fn key(
         KeyCode::PageUp => MapAction::Mover(-PAGE),
         KeyCode::Home => MapAction::Mover(isize::MIN),
         KeyCode::End => MapAction::Mover(isize::MAX),
-        KeyCode::Enter => MapAction::Entrar,
+        KeyCode::Enter => MapAction::Enter,
         KeyCode::Char('r') => MapAction::Remedir,
         KeyCode::Esc => MapAction::Leave,
         _ => return None,
@@ -88,7 +88,7 @@ mod tests {
     fn the_maps_own_keys() {
         assert_eq!(
             key(KeyCode::Enter, KeyModifiers::NONE),
-            Some(MapAction::Entrar)
+            Some(MapAction::Enter)
         );
         assert_eq!(
             key(KeyCode::Char('r'), KeyModifiers::NONE),

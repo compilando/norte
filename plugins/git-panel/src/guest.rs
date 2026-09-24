@@ -103,7 +103,7 @@ impl PanelGuest for GitPanel {
             return Ok(single_line("aquí no hay un repositorio", state));
         };
 
-        let branch = crate::rama_de_head(&head);
+        let branch = crate::head_branch(&head);
         let reflog = location::read(&loc.token, b".git/logs/HEAD").unwrap_or_default();
         let (commit, moves) = crate::del_reflog(&reflog, moves_cap());
 

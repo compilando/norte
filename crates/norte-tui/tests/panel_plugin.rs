@@ -81,7 +81,7 @@ fn marco(texto: &str, hits: Vec<Hit>) -> StyledFrame {
     )
 }
 
-fn texto_de(f: Option<&StyledFrame>) -> String {
+fn text_of(f: Option<&StyledFrame>) -> String {
     f.map(|f| {
         f.lines
             .iter()
@@ -91,11 +91,11 @@ fn texto_de(f: Option<&StyledFrame>) -> String {
     .unwrap_or_default()
 }
 
-fn pantalla(app: &App, ancho: u16, alto: u16) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(ancho, alto)).expect("backend");
+fn screen(app: &App, width: u16, alto: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, alto)).expect("backend");
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
     (0..alto)
-        .flat_map(|y| (0..ancho).map(move |x| (x, y)))
+        .flat_map(|y| (0..width).map(move |x| (x, y)))
         .map(|(x, y)| terminal.backend().buffer()[(x, y)].symbol().to_owned())
         .collect()
 }
@@ -107,13 +107,13 @@ fn pantalla(app: &App, ancho: u16, alto: u16) -> String {
 /// go through the `placed_of_kind` chain its neighbors have: it resolves
 /// by prefix. Without that path, the slot got placed and stayed blank.
 #[test]
-fn el_marco_del_plugin_se_pinta_con_su_titulo() {
+fn the_plugin_frame_is_painted_with_its_title() {
     let mut app = app_con_panel();
-    app.paneles.entry(PANEL).frame = Some(marco("rama: main", Vec::new()));
+    app.panels.entry(PANEL).frame = Some(marco("rama: main", Vec::new()));
 
-    let visto = pantalla(&app, 80, 16);
-    assert!(visto.contains("rama: main"), "the frame paints: {visto:?}");
-    assert!(visto.contains("status"), "and the title says what it is");
+    let seen = screen(&app, 80, 16);
+    assert!(seen.contains("rama: main"), "the frame paints: {seen:?}");
+    assert!(seen.contains("status"), "and the title says what it is");
 }
 
 /// Clicking a zone of the frame dispatches ITS command, through the usual
@@ -125,10 +125,10 @@ fn el_marco_del_plugin_se_pinta_con_su_titulo() {
 /// guest talks about cells INSIDE the frame — and that the command ends up
 /// in the same queue as a bar button.
 #[test]
-fn pulsar_una_zona_del_panel_deja_su_comando_para_el_despacho() {
+fn pressing_a_panel_zone_leaves_its_command_for_dispatch() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
     let mut app = app_con_panel();
-    app.paneles.entry(PANEL).frame = Some(marco(
+    app.panels.entry(PANEL).frame = Some(marco(
         "recargar",
         vec![Hit {
             row: 0,
@@ -140,12 +140,12 @@ fn pulsar_una_zona_del_panel_deja_su_comando_para_el_despacho() {
     ));
 
     let slots = ui::panel_slots(&app, area);
-    let hueco = slots
+    let slot = slots
         .iter()
         .find(|s| s.slot == PANEL)
         .expect("the panel was placed");
     // The first cell INSIDE: one past the border, in both directions.
-    let (col, row) = (hueco.x + 1, hueco.y + 1);
+    let (col, row) = (slot.x + 1, slot.y + 1);
     mouse::after_frame(
         &mut app,
         None,
@@ -179,10 +179,10 @@ fn pulsar_una_zona_del_panel_deja_su_comando_para_el_despacho() {
 /// copies files. The click has the same reach as a focused panel's key, not
 /// one bit more.
 #[test]
-fn una_zona_no_puede_nombrar_un_comando_fuera_de_su_alcance() {
+fn a_zone_cannot_name_a_command_outside_its_scope() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
     let mut app = app_con_panel();
-    app.paneles.entry(PANEL).frame = Some(marco(
+    app.panels.entry(PANEL).frame = Some(marco(
         "Actualizar",
         vec![Hit {
             row: 0,
@@ -193,11 +193,11 @@ fn una_zona_no_puede_nombrar_un_comando_fuera_de_su_alcance() {
         }],
     ));
     let slots = ui::panel_slots(&app, area);
-    let hueco = slots
+    let slot = slots
         .iter()
         .find(|s| s.slot == PANEL)
         .expect("the panel was placed");
-    let (col, row) = (hueco.x + 1, hueco.y + 1);
+    let (col, row) = (slot.x + 1, slot.y + 1);
     mouse::after_frame(
         &mut app,
         None,
@@ -227,10 +227,10 @@ fn una_zona_no_puede_nombrar_un_comando_fuera_de_su_alcance() {
 /// zone spanning the whole width fired when clicking the frame itself — for
 /// instance, going to drag it.
 #[test]
-fn pulsar_el_borde_del_panel_no_dispara_su_zona() {
+fn pressing_the_panes_border_does_not_trigger_its_zone() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
     let mut app = app_con_panel();
-    app.paneles.entry(PANEL).frame = Some(marco(
+    app.panels.entry(PANEL).frame = Some(marco(
         "ancho entero",
         vec![Hit {
             row: 0,
@@ -241,12 +241,12 @@ fn pulsar_el_borde_del_panel_no_dispara_su_zona() {
         }],
     ));
     let slots = ui::panel_slots(&app, area);
-    let hueco = slots
+    let slot = slots
         .iter()
         .find(|s| s.slot == PANEL)
         .expect("the panel was placed");
     // The RIGHT border, at the height of the first interior row.
-    let (col, row) = (hueco.x + hueco.width - 1, hueco.y + 1);
+    let (col, row) = (slot.x + slot.width - 1, slot.y + 1);
     mouse::after_frame(
         &mut app,
         None,
@@ -268,10 +268,10 @@ fn pulsar_el_borde_del_panel_no_dispara_su_zona() {
 
 /// A frame cell where there is NO zone runs nothing.
 #[test]
-fn fuera_de_una_zona_no_se_despacha_nada() {
+fn outside_a_zone_nothing_is_dispatched() {
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
     let mut app = app_con_panel();
-    app.paneles.entry(PANEL).frame = Some(marco(
+    app.panels.entry(PANEL).frame = Some(marco(
         "recargar",
         vec![Hit {
             row: 0,
@@ -282,12 +282,12 @@ fn fuera_de_una_zona_no_se_despacha_nada() {
         }],
     ));
     let slots = ui::panel_slots(&app, area);
-    let hueco = slots
+    let slot = slots
         .iter()
         .find(|s| s.slot == PANEL)
         .expect("the panel was placed");
     // Two rows further down: inside the panel, outside the only zone.
-    let (col, row) = (hueco.x + 1, hueco.y + 3);
+    let (col, row) = (slot.x + 1, slot.y + 3);
     mouse::after_frame(
         &mut app,
         None,
@@ -313,26 +313,26 @@ fn fuera_de_una_zona_no_se_despacha_nada() {
 /// describes a screen that no longer is. And it does not clear the live
 /// request, which has a different signature and is still the one in charge.
 #[test]
-fn una_respuesta_vieja_no_pisa_el_marco_de_ahora() {
+fn an_old_response_does_not_stomp_on_the_current_frame() {
     let mut app = app_con_panel();
-    app.paneles.entry(PANEL).frame = Some(marco("lo de ahora", Vec::new()));
-    let vieja = panelplugin::Firma {
+    app.panels.entry(PANEL).frame = Some(marco("lo de ahora", Vec::new()));
+    let vieja = panelplugin::Signature {
         kind: "plugin:git:status".to_owned(),
         dir: vp("file:///otro"),
         cols: 22,
         rows: 4,
         cursor: None,
     };
-    let viva = panelplugin::Firma {
+    let viva = panelplugin::Signature {
         kind: "plugin:git:status".to_owned(),
         dir: vp("file:///casa"),
         cols: 22,
         rows: 4,
         cursor: None,
     };
-    app.paneles.entry(PANEL).en_vuelo = Some(viva);
+    app.panels.entry(PANEL).in_flight = Some(viva);
 
-    panelplugin::aterrizar(
+    panelplugin::land(
         &mut app,
         PANEL,
         &vieja,
@@ -349,9 +349,9 @@ fn una_respuesta_vieja_no_pisa_el_marco_de_ahora() {
         }))),
     );
 
-    let panel = app.paneles.entry(PANEL);
-    assert!(panel.en_vuelo.is_some(), "the live request is still alive");
-    assert_eq!(texto_de(panel.frame.as_ref()), "lo de ahora");
+    let panel = app.panels.entry(PANEL);
+    assert!(panel.in_flight.is_some(), "the live request is still alive");
+    assert_eq!(text_of(panel.frame.as_ref()), "lo de ahora");
 }
 
 /// The guest's text gets MASKED, and a chrome role is not granted to it.
@@ -360,21 +360,21 @@ fn una_respuesta_vieja_no_pisa_el_marco_de_ahora() {
 /// exists because the panel once managed to skip them: copying the fields
 /// by hand compiled just as well.
 #[test]
-fn el_texto_del_guest_se_enmascara_y_el_cromo_no_se_concede() {
+fn the_guests_text_is_masked_and_chrome_is_not_granted() {
     let mut app = app_con_panel();
-    let firma = panelplugin::Firma {
+    let signature = panelplugin::Signature {
         kind: "plugin:git:status".to_owned(),
         dir: vp("file:///casa"),
         cols: 22,
         rows: 4,
         cursor: None,
     };
-    app.paneles.entry(PANEL).en_vuelo = Some(firma.clone());
+    app.panels.entry(PANEL).in_flight = Some(signature.clone());
 
-    panelplugin::aterrizar(
+    panelplugin::land(
         &mut app,
         PANEL,
-        &firma,
+        &signature,
         Some(Ok(Some(norte_proto::methods::PanelFrame {
             plugin_id: "git".to_owned(),
             lines: vec![vec![norte_proto::methods::SpanWire {
@@ -388,11 +388,11 @@ fn el_texto_del_guest_se_enmascara_y_el_cromo_no_se_concede() {
         }))),
     );
 
-    let panel = app.paneles.entry(PANEL);
-    let pintado = texto_de(panel.frame.as_ref());
+    let panel = app.panels.entry(PANEL);
+    let painted = text_of(panel.frame.as_ref());
     assert!(
-        !pintado.contains('\u{1b}'),
-        "no escape reaches the screen: {pintado:?}"
+        !painted.contains('\u{1b}'),
+        "no escape reaches the screen: {painted:?}"
     );
     let rol = panel
         .frame

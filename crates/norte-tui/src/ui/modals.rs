@@ -175,11 +175,11 @@ fn line_style(kind: LineKind, theme: &TuiTheme) -> ratatui::style::Style {
 /// [`draw_nav_popup`]/[`middle_ellipsis`]), not `chars` — a body with CJK
 /// (two cells per char, e.g. a path with `日本語`) overflowed the box with
 /// the old char count.
-pub(crate) fn modal_width(titulo: &str, cuerpo: &ModalBody, frame_width: u16) -> u16 {
+pub(crate) fn modal_width(title: &str, cuerpo: &ModalBody, frame_width: u16) -> u16 {
     let content_max = cuerpo
         .iter()
         .map(ModalLine::width)
-        .chain(std::iter::once(titulo.width() + 2))
+        .chain(std::iter::once(title.width() + 2))
         .max()
         .unwrap_or(0);
     u16::try_from(content_max + 4)
@@ -480,8 +480,8 @@ fn modal_title_body_raw(
     {
         return organize_plan_modal(dir, lines, *offset, hints);
     }
-    let (titulo, cuerpo) = modal_title_text(modal, reinterpret, hints);
-    (titulo, plain_body(&cuerpo))
+    let (title, cuerpo) = modal_title_text(modal, reinterpret, hints);
+    (title, plain_body(&cuerpo))
 }
 
 #[expect(clippy::too_many_lines, reason = "modal→text table, not logic")]
@@ -512,8 +512,8 @@ fn modal_title_text(
                     if *name_hostile { HOSTILE_BADGE } else { "" }
                 )],
                 caps.iter()
-                    .map(|(texto, hostil)| {
-                        format!("  · {texto}{}", if *hostil { HOSTILE_BADGE } else { "" })
+                    .map(|(text, hostile)| {
+                        format!("  · {text}{}", if *hostile { HOSTILE_BADGE } else { "" })
                     })
                     .collect(),
                 vec![t("modal-plugin-approval-note"), hints.approval.clone()],
@@ -546,19 +546,19 @@ fn modal_title_text(
         // the reader's are only said if there are any: a line saying "0 are
         // not yours" is noise that pushes down what actually matters.
         Modal::ConfirmUndoAfter {
-            a_deshacer,
-            irreversibles,
+            to_undo,
+            irreversible,
             ajenas,
             ..
         } => {
             let mut lineas = vec![
                 t("timeline-undo-body"),
-                ta("timeline-undo-count", &[("n", &a_deshacer.to_string())]),
+                ta("timeline-undo-count", &[("n", &to_undo.to_string())]),
             ];
-            if *irreversibles > 0 {
+            if *irreversible > 0 {
                 lineas.push(ta(
                     "timeline-undo-skipped",
-                    &[("n", &irreversibles.to_string())],
+                    &[("n", &irreversible.to_string())],
                 ));
             }
             if *ajenas > 0 {
@@ -718,12 +718,12 @@ fn modal_title_text(
                 free_text_modal_text("modal-chmod", "modal-chmod-hint", mode, error.as_deref());
             // The singular has its own id: i18n args are strings, and a
             // plural selector over a string never picks anything.
-            let titulo = if targets.len() == 1 {
+            let title = if targets.len() == 1 {
                 t("modal-chmod-one")
             } else {
                 norte_i18n::ta("modal-chmod", &[("n", &targets.len().to_string())])
             };
-            (titulo, cuerpo)
+            (title, cuerpo)
         }
         // Same masking: the typed address and its diagnostic are user text,
         // and an address arrives by paste as easily as a name.
@@ -825,7 +825,7 @@ fn modal_title_text(
 /// that declared `+2` gain that row; the ones that declared `+4` lose it.
 ///
 /// **Does not work for the modal that WRAPS.** There, one body line takes up
-/// several rows and `cuerpo.len()` does not count them. The obvious
+/// several rows and `body.len()` does not count them. The obvious
 /// division — `width / interior` rounding up — falls short: `ratatui` wraps
 /// by words, so a long word cuts the row short before filling it. Asking it
 /// directly would be the right thing (`Paragraph::line_count`) but it is an
@@ -904,13 +904,13 @@ pub(crate) fn draw_modal(
             // it holds. This is a painting decision, and that is why it
             // lives here: whoever composes the body does not yet know how
             // wide the box will come out.
-            let texto = if l.kind == LineKind::Field {
-                let hueco = interior.saturating_sub(l.width());
-                format!("{}{}", l.text, " ".repeat(hueco))
+            let text = if l.kind == LineKind::Field {
+                let slot = interior.saturating_sub(l.width());
+                format!("{}{}", l.text, " ".repeat(slot))
             } else {
                 l.text.clone()
             };
-            let estilo = line_style(l.kind, theme);
+            let style = line_style(l.kind, theme);
             // The altered-name mark, in its own span and with ITS role: it
             // is the only signal in this box whose contrast is guaranteed
             // (spec §6), and inheriting a dimmed line's style left it
@@ -921,10 +921,10 @@ pub(crate) fn draw_modal(
                         format!("{HOSTILE_BADGE} "),
                         theme.role(Role::HostileBadge),
                     ),
-                    ratatui::text::Span::styled(texto, estilo),
+                    ratatui::text::Span::styled(text, style),
                 ])
             } else {
-                ratatui::text::Line::styled(texto, estilo)
+                ratatui::text::Line::styled(text, style)
             }
         })
         .collect();
@@ -1109,12 +1109,12 @@ pub(crate) fn checksums_modal_text(
         } else {
             name
         };
-        let estado = match (row.verdict, &row.digest) {
+        let state = match (row.verdict, &row.digest) {
             (Some(v), _) => t(v.label_key()),
             (None, Some(d)) => d.chars().take(12).collect::<String>(),
             (None, None) => t("checksum-unreadable"),
         };
-        lines.push(format!("{estado}  {name}"));
+        lines.push(format!("{state}  {name}"));
     }
     // What is left BELOW the window, which with `offset` is not the same
     // thing as "the ones that do not fit": scrolling down, this number has
@@ -1231,7 +1231,7 @@ pub(crate) fn report_text(lines: &[norte_frontend::ReportLine]) -> String {
     lines
         .iter()
         .map(|l| match l {
-            norte_frontend::ReportLine::Phrase(texto) => texto.clone(),
+            norte_frontend::ReportLine::Phrase(text) => text.clone(),
             norte_frontend::ReportLine::Path(p) => {
                 let (path_text, hostile) = norte_frontend::path_display(p);
                 format!("  {}", badge_prefixed(hostile, path_text))
@@ -1439,11 +1439,11 @@ pub(crate) fn ai_rename_plan_modal_text(
     // frontend only adds ITS badge.
     // In PARTS, with the name on its own line (#273): composing
     // `✗ 3. already exists: <name>` let a file named
-    // `✗ 4. already exists: otro.txt` fabricate a list entry. Here there
+    // `✗ 4. already exists: other.txt` fabricate a list entry. Here there
     // are no sibling elements to separate the cause from the name, so the
     // LINE BREAK separates them, and only the name carries the badge.
-    for parte in plan.detail_parts(entries.len(), norte_i18n::active()) {
-        match parte {
+    for part in plan.detail_parts(entries.len(), norte_i18n::active()) {
+        match part {
             norte_frontend::DetailPart::Temp { count } => {
                 lines.push(ta("modal-rename-batch-temp", &[("n", &count.to_string())]));
             }
@@ -1543,7 +1543,7 @@ pub(crate) fn organize_plan_modal(
     let offset = offset.min(lineas.len().saturating_sub(ORGANIZE_LINE_LIMIT));
     let last = (offset + ORGANIZE_LINE_LIMIT).min(lineas.len());
     let (dir_txt, dir_hostile) = norte_frontend::path_display(dir);
-    let (dirs, files) = norte_frontend::organize::resumen(lineas);
+    let (dirs, files) = norte_frontend::organize::summary(lineas);
     let mut body: ModalBody = vec![
         ModalLine::new(
             ta(
@@ -1562,12 +1562,12 @@ pub(crate) fn organize_plan_modal(
         ),
     ];
     for l in lineas.iter().take(last).skip(offset) {
-        let (texto, hostil) = display_name(l.text.as_bytes());
+        let (text, hostile) = display_name(l.text.as_bytes());
         // The indent is bounded: the depth is validated by the proto
         // (`ORGANIZE_MAX_DEPTH`), but a painted body does not depend on the
         // other end having validated anything.
         let indent = "  ".repeat(l.depth.min(norte_proto::methods::ORGANIZE_MAX_DEPTH));
-        let (marca, papel) = match l.kind {
+        let (mark, paper) = match l.kind {
             TreeKind::NewDir => (ORGANIZE_NEW, LineKind::Strong),
             TreeKind::ExistingDir => (ORGANIZE_EXISTING, LineKind::Dim),
             TreeKind::Moved => (ORGANIZE_FILE, LineKind::Plain),
@@ -1575,17 +1575,17 @@ pub(crate) fn organize_plan_modal(
         let width = 44usize.saturating_sub(indent.width()).max(8);
         body.push(
             ModalLine::new(
-                format!("{indent}{marca}{}", middle_ellipsis(&texto, width)),
-                papel,
+                format!("{indent}{mark}{}", middle_ellipsis(&text, width)),
+                paper,
             )
-            .hostile(hostil),
+            .hostile(hostile),
         );
     }
     if lineas.len() > ORGANIZE_LINE_LIMIT {
         // What is hidden does not slip through clean: if any line OUTSIDE
         // the window is painted different from its bytes, the indicator
         // says so.
-        let oculto_hostil = lineas
+        let oculto_hostile = lineas
             .iter()
             .enumerate()
             .any(|(i, l)| (i < offset || i >= last) && display_name(l.text.as_bytes()).1);
@@ -1600,7 +1600,7 @@ pub(crate) fn organize_plan_modal(
                 ),
                 LineKind::Dim,
             )
-            .hostile(oculto_hostil),
+            .hostile(oculto_hostile),
         );
     }
     // H3c: with help on top the modal's keys do not respond, and the footer
@@ -2172,9 +2172,9 @@ mod free_text_modal_text_tests {
             ("modal-ai-rename", "modal-ai-rename-hint"),
             ("modal-semantic", "modal-semantic-hint"),
         ];
-        for (titulo, hint) in cases {
-            let (t, body) = free_text_modal_text(titulo, hint, "x", None);
-            assert_ne!(t, titulo, "{titulo} untranslated: the raw id comes out");
+        for (title, hint) in cases {
+            let (t, body) = free_text_modal_text(title, hint, "x", None);
+            assert_ne!(t, title, "{title} untranslated: the raw id comes out");
             let hint_line = body.lines().nth(1).expect("hint");
             assert_ne!(hint_line, hint, "{hint} untranslated: the raw id comes out");
         }
@@ -2407,7 +2407,7 @@ mod ai_rename_plan_modal_tests {
 
     /// The NORMAL case: the core answered that the batch can be executed.
     fn plan_ok() -> norte_frontend::BatchPlan {
-        listo(FsRenameBatchPlanResult {
+        ready(FsRenameBatchPlanResult {
             steps: vec![RenameStep {
                 from: seg(b"a"),
                 to: seg(b"b"),
@@ -2420,14 +2420,14 @@ mod ai_rename_plan_modal_tests {
     }
 
     /// Wraps a core plan in the "already answered" state.
-    fn listo(p: FsRenameBatchPlanResult) -> norte_frontend::BatchPlan {
+    fn ready(p: FsRenameBatchPlanResult) -> norte_frontend::BatchPlan {
         norte_frontend::BatchPlan::Ready(Box::new(p))
     }
 
     /// A batch STOPPED by a verdict (`steps` empty: the proto's invariant —
     /// an unexecutable plan never comes half-sorted).
-    fn plan_con_colision(kind: RenameCollisionKind, name: &[u8]) -> norte_frontend::BatchPlan {
-        listo(FsRenameBatchPlanResult {
+    fn plan_with_collision(kind: RenameCollisionKind, name: &[u8]) -> norte_frontend::BatchPlan {
+        ready(FsRenameBatchPlanResult {
             steps: vec![],
             collisions: vec![RenameCollision {
                 pair_index: 0,
@@ -2664,7 +2664,7 @@ mod ai_rename_plan_modal_tests {
     #[test]
     fn a_collision_is_painted_and_the_plan_is_marked_unapplicable() {
         use norte_i18n::t;
-        let plan = plan_con_colision(RenameCollisionKind::External, b"z.txt");
+        let plan = plan_with_collision(RenameCollisionKind::External, b"z.txt");
         let (_, body) = ai_rename_plan_modal_text(
             &dir(),
             &[entry("a.txt", "z.txt")],
@@ -2710,7 +2710,7 @@ mod ai_rename_plan_modal_tests {
         let future: RenameCollisionKind =
             serde_json::from_str(r#""clase_del_futuro""#).expect("fallback");
         assert_eq!(future, RenameCollisionKind::Unknown);
-        let plan = plan_con_colision(future, b"z.txt");
+        let plan = plan_with_collision(future, b"z.txt");
         let (_, body) = ai_rename_plan_modal_text(
             &dir(),
             &[entry("a.txt", "z.txt")],
@@ -2734,7 +2734,7 @@ mod ai_rename_plan_modal_tests {
     #[test]
     fn a_temp_step_is_counted_never_named() {
         use norte_i18n::t;
-        let plan = listo(FsRenameBatchPlanResult {
+        let plan = ready(FsRenameBatchPlanResult {
             steps: vec![
                 RenameStep {
                     from: seg(b"a"),
@@ -2807,7 +2807,7 @@ mod ai_rename_plan_modal_tests {
         use norte_i18n::t;
         let verdict = t("modal-rename-batch-collision-internal");
         for n in norte_testkit::corpus::hostile_names() {
-            let plan = plan_con_colision(RenameCollisionKind::Internal, &n.bytes);
+            let plan = plan_with_collision(RenameCollisionKind::Internal, &n.bytes);
             let (_, body) = ai_rename_plan_modal_text(
                 &dir(),
                 &[entry("a", "b")],
@@ -2827,21 +2827,21 @@ mod ai_rename_plan_modal_tests {
             // fabricate a list entry that does not exist. They are still
             // exactly two: a name cannot fabricate a third.
             assert_eq!(body.lines().count(), 7, "corpus {}: {body:?}", n.id);
-            let causa = body.lines().nth(4).expect("cause line");
-            let nombre = body.lines().nth(5).expect("name line");
+            let cause = body.lines().nth(4).expect("cause line");
+            let name = body.lines().nth(5).expect("name line");
             assert!(
-                causa.contains(&verdict),
+                cause.contains(&verdict),
                 "corpus {}: the verdict goes on ITS OWN line: {body:?}",
                 n.id
             );
             assert!(
-                !nombre.contains(&verdict),
+                !name.contains(&verdict),
                 "corpus {}: the name does not carry the cause inside: {body:?}",
                 n.id
             );
             if display_name(&n.bytes).1 {
                 assert!(
-                    nombre.trim_start().starts_with(HOSTILE_BADGE),
+                    name.trim_start().starts_with(HOSTILE_BADGE),
                     "corpus {}: masked WITHOUT a badge: {body:?}",
                     n.id
                 );
@@ -2864,7 +2864,7 @@ mod ai_rename_plan_modal_tests {
             .collect();
         collisions[7].name = seg("x\u{202e}y".as_bytes());
         let total = collisions.len();
-        let plan = listo(FsRenameBatchPlanResult {
+        let plan = ready(FsRenameBatchPlanResult {
             steps: vec![],
             collisions,
             executable: false,
@@ -2957,7 +2957,7 @@ mod semantic_hits_modal_tests {
     /// decimals, all printable — NO badge would warn) never displaces the
     /// REAL score. Pinned in two shapes: the fixture as-is (fits whole, the
     /// genuine score stays the LAST field) and the fixture inflated to
-    /// >120 chars (forces middle ellipsis: the path gets CLIPPED, flagged,
+    /// over 120 chars (forces middle ellipsis: the path gets CLIPPED, flagged,
     /// but the score is still there — never the other way around).
     #[test]
     fn score_spoof_inband_never_displaces_the_real_score() {
@@ -3103,7 +3103,7 @@ mod approval_modal_tests {
         }
     }
 
-    fn rutas(n: usize) -> Vec<String> {
+    fn sample_paths(n: usize) -> Vec<String> {
         (1..=n).map(|i| format!("mem:///proj/f{i}.txt")).collect()
     }
 
@@ -3115,7 +3115,7 @@ mod approval_modal_tests {
     /// it is a deceived one.
     #[test]
     fn the_servers_clipping_is_told_to_the_human() {
-        let mut r = req(rutas(3));
+        let mut r = req(sample_paths(3));
         r.paths_total = 8192;
         let (_, body) = approval_modal_text(&r, "PIE");
         let lines: Vec<&str> = body.lines().collect();
@@ -3141,7 +3141,7 @@ mod approval_modal_tests {
     /// other way is invented.
     #[test]
     fn with_no_paths_total_no_clipping_is_invented() {
-        let mut r = req(rutas(2));
+        let mut r = req(sample_paths(2));
         r.paths_total = 0;
         let (_, body) = approval_modal_text(&r, "PIE");
         assert_eq!(
@@ -3163,7 +3163,7 @@ mod approval_modal_tests {
     fn the_path_list_is_windowed_and_the_footer_always_fits() {
         let limit = norte_frontend::MODAL_ITEM_LIMIT;
         let total = limit + 7;
-        let (_, body) = approval_modal_text(&req(rutas(total)), "PIE-DEL-MODAL");
+        let (_, body) = approval_modal_text(&req(sample_paths(total)), "PIE-DEL-MODAL");
         let lines: Vec<&str> = body.lines().collect();
 
         // header + deadline + LIMIT paths + summary + footer.
@@ -3192,7 +3192,7 @@ mod approval_modal_tests {
         // height is derived from it, so it is enough for the list to be
         // BOUNDED. 17 paths and 400 paint the same.
         let alto_de = |n: usize| {
-            let (_, cuerpo) = approval_modal_text(&req(rutas(n)), "PIE-DEL-MODAL");
+            let (_, cuerpo) = approval_modal_text(&req(sample_paths(n)), "PIE-DEL-MODAL");
             body_height(&plain_body(&cuerpo))
         };
         assert_eq!(
@@ -3215,7 +3215,7 @@ mod approval_modal_tests {
     /// windowing cannot invent an "and N more" that does not exist.
     #[test]
     fn a_batch_that_fits_carries_no_summary() {
-        let (_, body) = approval_modal_text(&req(rutas(2)), "PIE");
+        let (_, body) = approval_modal_text(&req(sample_paths(2)), "PIE");
         let lines: Vec<&str> = body.lines().collect();
         // Header + DEADLINE + 2 paths + footer. The deadline always appears
         // since this modal says how much time is left, like the window's.
@@ -3231,7 +3231,7 @@ mod approval_modal_tests {
     #[test]
     fn the_summary_flags_a_hidden_hostile_path() {
         let limit = norte_frontend::MODAL_ITEM_LIMIT;
-        let mut paths = rutas(limit + 2);
+        let mut paths = sample_paths(limit + 2);
         paths[limit + 1] = "mem:///proj/x\u{202e}y.txt".to_owned();
         let (_, body) = approval_modal_text(&req(paths), "PIE");
         let summary = body.lines().nth(limit + 2).expect("summary");
@@ -3242,7 +3242,7 @@ mod approval_modal_tests {
 
         // With ALL the hidden ones clean, it does not flag (or the badge
         // would say nothing).
-        let (_, clean) = approval_modal_text(&req(rutas(limit + 2)), "PIE");
+        let (_, clean) = approval_modal_text(&req(sample_paths(limit + 2)), "PIE");
         let clean_summary = clean.lines().nth(limit + 2).expect("summary");
         assert!(!clean_summary.starts_with(HOSTILE_BADGE), "{clean:?}");
     }
@@ -3297,20 +3297,20 @@ mod approval_modal_tests {
             "the folder that ALREADY existed is not painted as new: {facturas:?}"
         );
         assert!(facturas.text.starts_with(ORGANIZE_EXISTING), "{facturas:?}");
-        let nueva = body
+        let new = body
             .iter()
             .find(|l| l.text.contains("nueva"))
             .expect("is there");
-        assert_eq!(nueva.kind, LineKind::Strong, "{nueva:?}");
-        assert!(nueva.text.starts_with(ORGANIZE_NEW), "{nueva:?}");
+        assert_eq!(new.kind, LineKind::Strong, "{new:?}");
+        assert!(new.text.starts_with(ORGANIZE_NEW), "{new:?}");
         // And a file is indented under its folder, with ITS mark.
-        let fichero = body
+        let file = body
             .iter()
             .find(|l| l.text.contains("a.pdf"))
             .expect("is there");
         assert!(
-            fichero.text.starts_with(&format!("  {ORGANIZE_FILE}")),
-            "{fichero:?}"
+            file.text.starts_with(&format!("  {ORGANIZE_FILE}")),
+            "{file:?}"
         );
     }
 }

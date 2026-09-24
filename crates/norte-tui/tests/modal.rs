@@ -69,9 +69,9 @@ fn trust_host() -> Modal {
     }
 }
 
-fn ask_secret_con(texto: &str) -> Modal {
+fn ask_secret_con(text: &str) -> Modal {
     let mut input = norte_tui::app::TypedSecret::default();
-    for c in texto.chars() {
+    for c in text.chars() {
         input.push(c);
     }
     Modal::AskSecret {
@@ -92,14 +92,14 @@ fn ask_secret() -> Modal {
 /// approval — approving an agent mutation is not a
 // TODO(translation): review — source comment was cut off mid-sentence before translation; restore the missing rationale from history if available.
 #[test]
-fn aprobacion_ignora_confirm() {
+fn approval_ignores_confirm() {
     assert_eq!(dialog_action(&approval(), "dialog.confirm"), None);
 }
 
 /// Safety pin H1 T2: same principle for the SSH host key TOFU (#45) — Enter
 /// never trusts an unverified key.
 #[test]
-fn trust_host_ignora_confirm() {
+fn trust_host_ignores_confirm() {
     assert_eq!(dialog_action(&trust_host(), "dialog.confirm"), None);
 }
 
@@ -109,7 +109,7 @@ fn trust_host_ignora_confirm() {
 /// anything, and offering the approve key here would suggest it is good
 /// for that.
 #[test]
-fn ask_secret_acepta_confirm_y_no_approve() {
+fn ask_secret_accepts_confirm_and_not_approve() {
     assert_eq!(
         dialog_action(&ask_secret(), "dialog.confirm"),
         Some(DialogOutcome::Confirmed)
@@ -132,7 +132,7 @@ fn ask_secret_acepta_confirm_y_no_approve() {
 /// (Control mutation: removing the `is_empty` guard makes the first
 /// assertion return `Confirmed`.)
 #[test]
-fn ask_secret_vacio_no_confirma_pero_si_cancela() {
+fn ask_secret_empty_does_not_confirm_but_does_cancel() {
     assert_eq!(dialog_action(&ask_secret_con(""), "dialog.confirm"), None);
     assert_eq!(
         dialog_action(&ask_secret_con(""), "dialog.cancel"),
@@ -152,7 +152,7 @@ fn ask_secret_vacio_no_confirma_pero_si_cancela() {
 /// (Control mutation: removing `AskSecret`'s arm from `route_paste` leaves
 /// the field empty and the second assertion turns red.)
 #[test]
-fn pegar_llena_el_campo_de_contrasena() {
+fn pasting_fills_the_password_field() {
     let dir = vp("file:///x");
     let mut app = norte_tui::app::App::new(
         norte_tui::app::Pane::new(dir.clone(), Vec::new()),
@@ -177,7 +177,7 @@ fn pegar_llena_el_campo_de_contrasena() {
 /// would leak silently — `tracing`, a panic message, an `assert_eq!`'s diff
 /// — and the wrapper exists exactly for that (rule 10).
 #[test]
-fn el_debug_del_modal_no_lleva_el_secreto() {
+fn the_modal_debug_does_not_carry_the_secret() {
     let mut input = norte_tui::app::TypedSecret::default();
     for c in "hunter2".chars() {
         input.push(c);
@@ -190,20 +190,20 @@ fn el_debug_del_modal_no_lleva_el_secreto() {
         pane: 0,
         trail: Trail::Record,
     };
-    let pintado = format!("{modal:?}");
+    let painted = format!("{modal:?}");
     assert!(
-        !pintado.contains("hunter2"),
-        "the modal's Debug leaked the password: {pintado}"
+        !painted.contains("hunter2"),
+        "the modal's Debug leaked the password: {painted}"
     );
     // And the connection's name DOES show, which is what makes Debug useful.
-    assert!(pintado.contains("rosetta"), "{pintado}");
+    assert!(painted.contains("rosetta"), "{painted}");
 }
 
 /// Safety pin H1 T2: a collision has no dangerous default — neither
 /// `dialog.confirm` (Enter) nor `dialog.deny` (`n`, which on a collision is
 /// not a valid policy) do anything; only overwrite/skip/rename/newer/cancel.
 #[test]
-fn colision_ignora_confirm_y_deny() {
+fn collision_ignores_confirm_and_deny() {
     assert_eq!(dialog_action(&collision(), "dialog.confirm"), None);
     assert_eq!(dialog_action(&collision(), "dialog.deny"), None);
 }
@@ -212,7 +212,7 @@ fn colision_ignora_confirm_y_deny() {
 /// `dialog.confirm` (Enter) and `dialog.approve` (`y`) accept — same
 /// behavior as before H1.
 #[test]
-fn confirm_acepta_confirm_y_approve() {
+fn confirm_accepts_confirm_and_approve() {
     assert_eq!(
         dialog_action(&confirm(), "dialog.confirm"),
         Some(DialogOutcome::Confirmed)
@@ -224,7 +224,7 @@ fn confirm_acepta_confirm_y_approve() {
 }
 
 #[test]
-fn confirmacion_acepta_y_cancela() {
+fn confirmation_accepts_and_cancels() {
     for cmd in ["dialog.confirm", "dialog.approve"] {
         assert_eq!(
             dialog_action(&confirm(), cmd),
@@ -239,29 +239,29 @@ fn confirmacion_acepta_y_cancela() {
     }
     // Command outside the allowlist: inert (the dialog stays open).
     assert_eq!(dialog_action(&confirm(), "dialog.overwrite"), None);
-    let borrar = Modal::ConfirmDelete {
+    let delete = Modal::ConfirmDelete {
         items: vec![vp("file:///x")],
         permanent: false,
     };
     assert_eq!(
-        dialog_action(&borrar, "dialog.confirm"),
+        dialog_action(&delete, "dialog.confirm"),
         Some(DialogOutcome::Confirmed)
     );
     assert_eq!(
-        dialog_action(&borrar, "dialog.cancel"),
+        dialog_action(&delete, "dialog.cancel"),
         Some(DialogOutcome::Cancelled)
     );
 }
 
 #[test]
-fn colision_elige_politica_o_cancela() {
+fn collision_chooses_policy_or_cancels() {
     let cases = [
         ("dialog.overwrite", CollisionPolicy::Overwrite),
         ("dialog.skip", CollisionPolicy::Skip),
         ("dialog.rename", CollisionPolicy::RenameAuto),
         // The collision switched `n`→`w` (dialog.newer, H1 plan decision
         // 5): `n` is now `dialog.deny`, inert on this modal (pin above,
-        // `colision_ignora_confirm_y_deny`).
+        // `collision_ignores_confirm_and_deny`).
         ("dialog.newer", CollisionPolicy::Newer),
     ];
     for (cmd, policy) in cases {
@@ -279,9 +279,9 @@ fn colision_elige_politica_o_cancela() {
 
 /// Agent approval (M3-3b T5): `dialog.approve` approves, `dialog.deny` and
 /// `dialog.cancel` DENY (closing is denying, fail-safe); `dialog.confirm`
-/// is inert (pin `aprobacion_ignora_confirm`).
+/// is inert (pin `approval_ignores_confirm`).
 #[test]
-fn aprobacion_aprueba_con_approve_y_deniega_con_deny_cancel() {
+fn approval_approves_with_approve_and_denies_with_deny_cancel() {
     assert_eq!(
         dialog_action(&approval(), "dialog.approve"),
         Some(DialogOutcome::Confirmed)
@@ -303,7 +303,7 @@ fn aprobacion_aprueba_con_approve_y_deniega_con_deny_cancel() {
 /// `dialog_action` obeys the resolved command, not the physical key: agent
 /// approval is now DENIED.
 #[test]
-fn una_capa_de_usuario_rebindea_dialog_y_dialog_action_lo_obedece() {
+fn a_user_layer_rebinds_dialog_and_dialog_action_obeys_it() {
     let preset = presets_orthodox();
     let layer =
         parse_keymap("[dialog]\nprepend_keymap = [{ on = [\"y\"], run = \"dialog.deny\" }]\n")
@@ -348,7 +348,7 @@ fn una_capa_de_usuario_rebindea_dialog_y_dialog_action_lo_obedece() {
 /// factory preset brings it — so it is informed consent, not a key firing
 /// on its own.
 #[test]
-fn rebind_explicito_de_enter_a_approve_es_consentimiento_informado() {
+fn explicit_rebind_of_enter_to_approve_is_informed_consent() {
     let preset = presets_orthodox();
     let layer = parse_keymap(
         "[dialog]\nprepend_keymap = [{ on = [\"enter\"], run = \"dialog.approve\" }]\n",
@@ -440,7 +440,7 @@ fn batch_plan(executable: bool) -> norte_frontend::BatchPlan {
 /// the real flow model failures arrive async with the prompt already closed
 /// and go to the bar); only `ai_rename_submitted` closes it.
 #[test]
-fn ai_rename_instruccion_conserva_texto_tras_fallo() {
+fn ai_rename_instruction_keeps_text_after_failure() {
     let mut app = app();
     app.open_ai_rename();
     for c in "kebab".chars() {
@@ -462,7 +462,7 @@ fn ai_rename_instruccion_conserva_texto_tras_fallo() {
 /// M4-IA: confirming with an empty instruction returns nothing and leaves
 /// the diagnostic under the field (the modal stays open).
 #[test]
-fn ai_rename_confirm_vacio_no_devuelve_y_deja_diagnostico() {
+fn ai_rename_confirm_empty_does_not_return_and_leaves_a_diagnostic() {
     let mut app = app();
     app.open_ai_rename();
     assert!(app.ai_rename_confirm().is_none());
@@ -476,10 +476,10 @@ fn ai_rename_confirm_vacio_no_devuelve_y_deja_diagnostico() {
 /// initiated and REVIEWED — it uses `ALLOW_CONFIRM` (Enter confirms, like a
 /// delete), NOT the agent-approval allowlist: `dialog.confirm` confirming
 /// here is exactly what `ALLOW_APPROVAL` forbids (pin
-/// `aprobacion_ignora_confirm`), and collision commands are inert. The
+/// `approval_ignores_confirm`), and collision commands are inert. The
 /// instruction prompt is free text: it never goes through `dialog_action`.
 #[test]
-fn plan_ia_confirma_como_confirmacion_no_como_aprobacion_de_agente() {
+fn ai_plan_confirms_as_a_confirmation_not_as_an_agent_approval() {
     for cmd in ["dialog.confirm", "dialog.approve"] {
         assert_eq!(
             dialog_action(&ai_plan(), cmd),
@@ -510,7 +510,7 @@ fn plan_ia_confirma_como_confirmacion_no_como_aprobacion_de_agente() {
 /// (Control mutation: removing `dialog_action`'s gate puts `Some(Confirmed)`
 /// on the first two rounds and breaks this test.)
 #[test]
-fn plan_ia_no_confirma_sin_un_lote_aplicable() {
+fn ai_plan_does_not_confirm_without_an_applicable_batch() {
     for plan in [
         norte_frontend::BatchPlan::Pending,
         norte_frontend::BatchPlan::Failed,
@@ -549,7 +549,7 @@ fn plan_ia_no_confirma_sin_un_lote_aplicable() {
 /// (Control mutation: removing the `Pending` guard makes the second round
 /// overwrite and breaks this test.)
 #[test]
-fn el_plan_del_lote_solo_rellena_al_modal_que_lo_esperaba() {
+fn the_batch_plan_only_fills_the_modal_that_was_waiting_for_it() {
     let mut app = app();
     // No modal: the answer is dropped, and it SAYS SO.
     assert!(!app.settle_ai_batch_plan(&batch_plan(true)));
@@ -584,8 +584,8 @@ fn el_plan_del_lote_solo_rellena_al_modal_que_lo_esperaba() {
 /// required it: the same question with two answers, on the surface where
 /// it costs the most.
 #[test]
-fn un_plan_sin_leer_no_se_aprueba() {
-    let largo: Vec<norte_proto::methods::AiRenameEntry> = (1..=40)
+fn an_unread_plan_is_not_approved() {
+    let long: Vec<norte_proto::methods::AiRenameEntry> = (1..=40)
         .map(|i| norte_proto::methods::AiRenameEntry {
             from: format!("f{i}"),
             to: format!("t{i}"),
@@ -594,7 +594,7 @@ fn un_plan_sin_leer_no_se_aprueba() {
     let mut app = app();
     app.modal = Some(Modal::AiRenamePlan {
         dir: vp("file:///x"),
-        entries: largo.clone(),
+        entries: long.clone(),
         offset: 0,
         seen: norte_frontend::AI_RENAME_PAIR_LIMIT,
         plan: batch_plan(true),
@@ -610,10 +610,10 @@ fn un_plan_sin_leer_no_se_aprueba() {
 
     // Scroll all the way down: the watermark rises, and going back up does
     // NOT un-read what was already read.
-    for _ in 0..largo.len() {
+    for _ in 0..long.len() {
         app.ai_plan_scroll(true);
     }
-    for _ in 0..largo.len() {
+    for _ in 0..long.len() {
         app.ai_plan_scroll(false);
     }
     assert_eq!(
@@ -630,7 +630,7 @@ fn un_plan_sin_leer_no_se_aprueba() {
 /// (never overshoots or goes negative) and advances/retreats one at a time
 /// with stable numbering.
 #[test]
-fn scroll_del_plan_clampa_en_ambos_extremos() {
+fn the_plans_scroll_clamps_at_both_ends() {
     let offset_de = |app: &norte_tui::app::App| match &app.modal {
         Some(Modal::AiRenamePlan { offset, .. }) => *offset,
         other => panic!("unexpected modal: {other:?}"),
@@ -662,7 +662,7 @@ fn scroll_del_plan_clampa_en_ambos_extremos() {
 /// have PRIORITY over them: an approval expires by TTL on the daemon; a
 /// collision waits as long as it takes.
 #[test]
-fn las_aprobaciones_hacen_cola_con_prioridad_sobre_colisiones() {
+fn approvals_queue_with_priority_over_collisions() {
     use norte_tui::app::{App, Pane};
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -697,7 +697,7 @@ fn las_aprobaciones_hacen_cola_con_prioridad_sobre_colisiones() {
 }
 
 #[test]
-fn las_colisiones_hacen_cola_y_jamas_pisan_un_modal() {
+fn collisions_queue_and_never_step_on_a_modal() {
     use norte_tui::app::{App, Pane};
     let dir = vp("file:///x");
     let mut app = App::new(
@@ -746,7 +746,7 @@ fn semantic_hits(n: u16) -> Modal {
 /// confirming does NOT close (returns the trimmed query); only
 /// `semantic_submitted` closes it after spawning.
 #[test]
-fn semantic_query_modal_edita_y_confirma() {
+fn semantic_query_modal_edits_and_confirms() {
     let mut app = app();
     app.open_semantic_search();
     for c in "facturas 2024".chars() {
@@ -765,7 +765,7 @@ fn semantic_query_modal_edita_y_confirma() {
 /// diagnostic under the field (the modal stays open); `semantic_set_error`
 /// keeps what was typed.
 #[test]
-fn semantic_query_vacia_no_confirma() {
+fn an_empty_semantic_query_does_not_confirm() {
     let mut app = app();
     app.open_semantic_search();
     assert!(app.semantic_confirm().is_none());
@@ -815,7 +815,7 @@ fn semantic_hits_cursor_scroll_clampa() {
 /// routes the cursor, it is never an outcome); the query prompt is free
 /// text and never goes through here.
 #[test]
-fn semantic_hits_confirma_como_decision_y_cursor_es_inerte() {
+fn semantic_hits_confirms_as_a_decision_and_the_cursor_is_inert() {
     for cmd in ["dialog.confirm", "dialog.approve"] {
         assert_eq!(
             dialog_action(&semantic_hits(1), cmd),

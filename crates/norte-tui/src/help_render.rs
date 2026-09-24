@@ -199,8 +199,8 @@ pub fn render_topic<'a>(
     // `links()`: the `see_also` and the prose's `[[links]]`, in the SAME
     // order as the model's actions — otherwise the cursor would point at one
     // row and Enter would follow another.
-    let links = topic.links();
-    let mut action_lines = Vec::with_capacity(rows.len() + links.len());
+    let see_also = topic.links();
+    let mut action_lines = Vec::with_capacity(rows.len() + see_also.len());
 
     if !rows.is_empty() {
         lines.push(Line::default());
@@ -217,9 +217,9 @@ pub fn render_topic<'a>(
         }
     }
 
-    if !links.is_empty() {
+    if !see_also.is_empty() {
         lines.push(Line::default());
-        for id in &links {
+        for id in &see_also {
             action_lines.push(lines.len());
             // The TITLE of the page the link opens, not its id: the sidebar
             // row for that same page says exactly this, and a reader who
@@ -737,7 +737,7 @@ struct Unit<'f> {
 /// The defect this exists to kill: `wrap` used to walk each fragment
 /// independently, so the boundary BETWEEN two fragments was a break
 /// opportunity even with no space at it. A sentence ending in an inline code
-/// span — `…dentro de un `.zip`.` — is a `Code(".zip")` fragment followed by a
+/// span — `…inside de un `.zip`.` — is a `Code(".zip")` fragment followed by a
 /// `Text(".")` one, and at any width where the boundary lands near the margin
 /// the full stop was pushed onto a line of its own. Two fragments with nothing
 /// between them are one word and wrap as one unit.
@@ -1420,7 +1420,7 @@ mod tests {
     /// space at it is inside a word, and the two halves wrap together.
     ///
     /// The shape that shipped: a sentence closing on an inline code span
-    /// broke as `…dentro de un .zip` / `.`, leaving the full stop alone on
+    /// broke as `…inside de un .zip` / `.`, leaving the full stop alone on
     /// the next line, because `wrap` walked one fragment at a time. Pinned at
     /// EVERY width where the boundary can land near the margin, not at one
     /// hand-picked one — the defect only shows at the widths that put the
@@ -1483,7 +1483,7 @@ mod tests {
     /// one after the last block.
     #[test]
     fn a_heading_is_given_more_air_than_a_paragraph_break() {
-        let para = |s: &str| Block::Paragraph(vec![HSpan::Text(s.to_owned())]);
+        let for_ = |s: &str| Block::Paragraph(vec![HSpan::Text(s.to_owned())]);
         let heading = |s: &str| Block::Heading {
             level: 1,
             text: s.to_owned(),
@@ -1495,7 +1495,7 @@ mod tests {
             see_also: Vec::new(),
             commands: Vec::new(),
             context: Vec::new(),
-            blocks: vec![para("one"), heading("Section"), para("two")],
+            blocks: vec![for_("one"), heading("Section"), for_("two")],
             origin: norte_help::Origin::BuiltIn,
         };
         let out = render_topic(&topic, Lang::En, &Fake, 40, &theme());
@@ -1521,7 +1521,7 @@ mod tests {
         // A topic that OPENS on a heading gets no extra blank: the rule above
         // it already separates it from the title.
         let first = Topic {
-            blocks: vec![heading("Section"), para("one")],
+            blocks: vec![heading("Section"), for_("one")],
             ..topic
         };
         let out = render_topic(&first, Lang::En, &Fake, 40, &theme());

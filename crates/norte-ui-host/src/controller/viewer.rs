@@ -1,26 +1,26 @@
 //! The file and image viewer.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// The keys while the viewer is open.
     ///
     /// They resolve with the `viewer` screen's map, and whatever is not bound
     /// there does NOT fall through to the listing: an open viewer that let
     /// `F8` through would be a delete with the screen covered.
-    pub(super) fn tecla_en_visor(
+    pub(super) fn key_in_viewer(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Ok(chord) = k.to_chord() else {
             return (
@@ -33,7 +33,7 @@ impl Estado {
         let Resolution::Run { command, count } = self.resolver_visor.push(chord) else {
             // Half-finished prefix, a count, or nothing: the viewer has no
             // status bar of its own yet, so there is nothing to paint.
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         };
         if command == "app.help" {
             // Help belongs to the APPLICATION and not to the viewer, so it is
@@ -41,9 +41,9 @@ impl Estado {
             // disjoint on purpose. It is handled here so that `F1` with the
             // viewer open opens the viewer's help page instead of answering
             // "not here".
-            return self.abrir_ayuda(backend, mailbox);
+            return self.open_help(backend, mailbox);
         }
-        let Some(effect) = crate::commands::efecto_visor_de(&command, count.times()) else {
+        let Some(effect) = crate::commands::viewer_effect_of(&command, count.times()) else {
             // In the catalogue and bound to this screen, but this host does
             // not do it: it is said, with the same phrase as the TUI.
             let phrase = norte_frontend::keymap::unavailable_message_in(
@@ -62,12 +62,12 @@ impl Estado {
         };
         // Siblings are handled BEFORE borrowing the viewer: they do not move
         // it, they open ANOTHER file, so they need the whole state.
-        if let crate::commands::EfectoVisor::Hermana { adelante } = effect {
-            return self.hermana_del_visor(adelante, backend, mailbox);
+        if let crate::commands::EffectVisor::Sibling { forward } = effect {
+            return self.viewer_sibling(forward, backend, mailbox);
         }
         let height = self.alto_del_visor();
         let Some(v) = self.visor.as_mut() else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         // `unsigned_abs`, not `abs`: the wheel's delta arrives RAW from the
         // renderer, and `i64::MIN.abs()` overflows — panics in debug, wraps
@@ -75,45 +75,45 @@ impl Estado {
         // down.
         let steps = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
         match effect {
-            crate::commands::EfectoVisor::Cerrar => {
+            crate::commands::EffectVisor::Close => {
                 self.visor = None;
-                self.visor_en_vuelo = None;
+                self.viewer_in_flight = None;
                 self.visor_token = None;
                 // The image is RELEASED on closing: it is megabytes, and a
                 // closed viewer has nothing to show.
                 self.imagen = None;
-                self.miniatura = None;
+                self.thumbnail = None;
             }
-            crate::commands::EfectoVisor::Linea(n) if n < 0 => v.scroll_up(steps(n)),
-            crate::commands::EfectoVisor::Linea(n) => v.scroll_down(steps(n)),
-            crate::commands::EfectoVisor::Pagina(n) if n < 0 => {
+            crate::commands::EffectVisor::Line(n) if n < 0 => v.scroll_up(steps(n)),
+            crate::commands::EffectVisor::Line(n) => v.scroll_down(steps(n)),
+            crate::commands::EffectVisor::Page(n) if n < 0 => {
                 v.scroll_up(steps(n).saturating_mul(height));
             }
-            crate::commands::EfectoVisor::Pagina(n) => {
+            crate::commands::EffectVisor::Page(n) => {
                 v.scroll_down(steps(n).saturating_mul(height));
             }
-            crate::commands::EfectoVisor::Columna(n) if n < 0 => v.scroll_left(steps(n)),
-            crate::commands::EfectoVisor::Columna(n) => v.scroll_right(steps(n)),
-            crate::commands::EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
-            crate::commands::EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
-            crate::commands::EfectoVisor::Hex => v.toggle_hex(),
-            crate::commands::EfectoVisor::Encoding => v.cycle_encoding(),
-            crate::commands::EfectoVisor::EncodingAuto => v.reset_encoding(),
-            crate::commands::EfectoVisor::Zoom { acercar: true } => v.zoom_in(),
-            crate::commands::EfectoVisor::Zoom { acercar: false } => v.zoom_out(),
-            crate::commands::EfectoVisor::ZoomAjustar => v.zoom_fit(),
+            crate::commands::EffectVisor::Column(n) if n < 0 => v.scroll_left(steps(n)),
+            crate::commands::EffectVisor::Column(n) => v.scroll_right(steps(n)),
+            crate::commands::EffectVisor::Extremo { al_final: false } => v.scroll_top(),
+            crate::commands::EffectVisor::Extremo { al_final: true } => v.scroll_bottom(),
+            crate::commands::EffectVisor::Hex => v.toggle_hex(),
+            crate::commands::EffectVisor::Encoding => v.cycle_encoding(),
+            crate::commands::EffectVisor::EncodingAuto => v.reset_encoding(),
+            crate::commands::EffectVisor::Zoom { zoom_in: true } => v.zoom_in(),
+            crate::commands::EffectVisor::Zoom { zoom_in: false } => v.zoom_out(),
+            crate::commands::EffectVisor::ZoomFit => v.zoom_fit(),
             // Handled above, BEFORE borrowing the viewer: it opens another
             // file instead of moving this one, so it never reaches here. The
             // arm exists because the compiler requires covering the variant,
             // and does nothing because there is nothing to move.
-            crate::commands::EfectoVisor::Hermana { .. } => {}
+            crate::commands::EffectVisor::Sibling { .. } => {}
         }
         // A viewer PATCH. The whole snapshot used to send, for every scroll
         // line, the visible rows of every listing underneath.
         let change = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// The WHEEL over the full-screen viewer (bridge 59).
@@ -123,13 +123,13 @@ impl Estado {
     /// snapshot, for the same reason as the keys: the whole snapshot would
     /// send, on every turn, the visible rows of every listing underneath that
     /// nobody sees.
-    pub(super) fn desplazar_visor(
+    pub(super) fn scroll_visor(
         &mut self,
         lines: i64,
         columns: i64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(v) = self.visor.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         // `unsigned_abs`, not `abs`: the wheel's delta arrives RAW from the
         // renderer, and `i64::MIN.abs()` overflows — panics in debug, wraps
@@ -149,7 +149,7 @@ impl Estado {
         let change = ViewChange::Viewer {
             viewer: self.vista_visor(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Stores a scheme's attribute catalogue and repaints.
@@ -158,23 +158,23 @@ impl Estado {
     /// already travelled are read — a mode that arrived as a number and is
     /// now `rwx` — and that is not a row change, it is a different reading of
     /// everything there is.
-    pub(super) fn aplicar_catalogo(
+    pub(super) fn apply_catalog(
         &mut self,
         scheme: String,
         catalog: norte_proto::AttrCatalog,
     ) -> BridgeEnvelope<UiUpdate> {
         self.catalogos.insert(scheme, catalog);
         let snap = self.snapshot();
-        self.sobre(UiUpdate::Snapshot(Box::new(snap)))
+        self.over(UiUpdate::Snapshot(Box::new(snap)))
     }
 
     /// Requests the content of the entry under the cursor to open the viewer.
-    pub(super) fn pedir_visor(
+    pub(super) fn request_visor(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(entry) = self.hueco().pane.selected().cloned() else {
+        let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-nothing-to-view".to_owned(),
@@ -192,7 +192,7 @@ impl Estado {
                 Vec::new(),
             );
         }
-        self.pedir_visor_de(entry.path, backend, mailbox)
+        self.request_viewer_of(entry.path, backend, mailbox)
     }
 
     /// The same, but for an EXPLICIT path instead of the cursor's row.
@@ -201,15 +201,15 @@ impl Estado {
     /// NOT the selected one — under a quick-search filter, "the selected one"
     /// is not even the cursor's row — so the path is brought by whoever chose
     /// it, and it is not resolved again here.
-    pub(super) fn pedir_visor_de(
+    pub(super) fn request_viewer_of(
         &mut self,
         path: VPath,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.token += 1;
         let token = RequestToken(self.token);
-        self.visor_en_vuelo = Some(token);
+        self.viewer_in_flight = Some(token);
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         tokio::spawn(async move {
@@ -224,7 +224,7 @@ impl Estado {
             );
             // With a deadline: a hung mount cannot leave the F3 key with no
             // outcome forever.
-            let read_bytes = match tokio::time::timeout(PLAZO_VISOR, reading).await {
+            let read_bytes = match tokio::time::timeout(DEADLINE_VISOR, reading).await {
                 Ok(r) => r,
                 // The wire has no "timed out"; what happened is a read that
                 // did not arrive, and to the user that is the same as a
@@ -232,16 +232,14 @@ impl Estado {
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             // It opens RIGHT AWAY with what was read. Plugins are asked
-            // afterwards (`pedir_estilo`, ADR 0141): the viewer used to wait
+            // afterwards (`request_style`, ADR 0141): the viewer used to wait
             // for the previewer to open, and a previewer takes however long
             // it takes — with compilation in the mix, seconds per F3.
             let _ = mailbox
-                .send(Mensaje::Contenido(Box::new((
-                    token, path, read_bytes, None,
-                ))))
+                .send(Message::Content(Box::new((token, path, read_bytes, None))))
                 .await;
         });
-        (self.aplicada(), Vec::new())
+        (self.applied(), Vec::new())
     }
 
     /// Opens the next (or previous) sibling of the same class, without
@@ -259,22 +257,22 @@ impl Estado {
     /// - **The cursor moves to the sibling**, and that is why on closing the
     ///   viewer the listing is where the reader was looking, not where they
     ///   entered.
-    fn hermana_del_visor(
+    fn viewer_sibling(
         &mut self,
-        adelante: bool,
+        forward: bool,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(v) = self.visor.as_ref() else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         let wanted = if v.is_image_by_bytes() {
-            norte_frontend::viewer::Clase::Imagen
+            norte_frontend::viewer::Class::Imagen
         } else {
-            norte_frontend::viewer::Clase::Otro
+            norte_frontend::viewer::Class::Other
         };
         let open_path = v.path.clone();
-        let pane = &self.hueco().pane;
+        let pane = &self.slot().pane;
         let entries = pane.entries();
         // Only by what the reader SEES: with a live filter, the ladder is the
         // filter's and not the whole listing's.
@@ -283,7 +281,7 @@ impl Estado {
             .iter()
             .position(|e| e.path == open_path)
             .and_then(|from| {
-                norte_frontend::viewer::hermana(entries, visible, from, adelante, wanted)
+                norte_frontend::viewer::sibling(entries, visible, from, forward, wanted)
             })
             .and_then(|i| entries.get(i).map(|e| (i, e.path.clone())));
         let Some((row, path)) = target else {
@@ -301,8 +299,8 @@ impl Estado {
         };
         // An earlier "no more" cannot survive a jump that DID happen.
         self.status.message = None;
-        self.hueco_mut().pane.senalar(row);
-        self.pedir_visor_de(path, backend, mailbox)
+        self.slot_mut().pane.point_at(row);
+        self.request_viewer_of(path, backend, mailbox)
     }
 
     /// Requests the STYLED view of the viewer's file from plugins, without
@@ -311,12 +309,12 @@ impl Estado {
     /// still the same one. A previewer that fails, that takes too long, or
     /// that does not apply is NOT an error: the raw one stays, which is what
     /// the TUI already does.
-    fn pedir_estilo(
+    fn request_style(
         &self,
         path: &VPath,
         token: RequestToken,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
@@ -324,10 +322,10 @@ impl Estado {
         // The viewer's width, in cells, for the previewer (proto 0.66.0): the
         // one the renderer measured, or the viewport if it has not painted it
         // yet.
-        let columns = Some(self.visor_columnas.unwrap_or(u32::from(self.viewport.0)));
+        let columns = Some(self.visor_columns.unwrap_or(u32::from(self.viewport.0)));
         tokio::spawn(async move {
             let preview = match tokio::time::timeout(
-                PLAZO_PLUGINS,
+                DEADLINE_PLUGINS,
                 backend.plugin_preview_styled(path, columns),
             )
             .await
@@ -336,14 +334,16 @@ impl Estado {
                 _ => None,
             };
             let _ = mailbox
-                .send(Mensaje::Fondo(Box::new(Fondo::Estilo(token, preview))))
+                .send(Message::Background(Box::new(Background::Style(
+                    token, preview,
+                ))))
                 .await;
         });
     }
 
     /// The styled view, arrived: it replaces the raw one if the viewer is
     /// still the one that requested it, at the same line it was at.
-    pub(super) fn aplicar_estilo(
+    pub(super) fn apply_style(
         &mut self,
         token: RequestToken,
         preview: Option<norte_proto::methods::PluginPreviewStyled>,
@@ -384,28 +384,28 @@ impl Estado {
     }
 
     /// Opens the viewer with what was read.
-    pub(super) fn abrir_visor(
+    pub(super) fn open_visor(
         &mut self,
         token: RequestToken,
         path: VPath,
         read_bytes: Result<Vec<u8>, Error>,
         preview: Option<norte_proto::methods::PluginPreviewStyled>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        if self.visor_en_vuelo != Some(token) {
+        if self.viewer_in_flight != Some(token) {
             // The user closed the viewer, requested another file, or moved
             // elsewhere while this was in flight. Opening it now would be
             // opening a window nobody asked for — and switching their
             // keyboard's map.
             return None;
         }
-        self.visor_en_vuelo = None;
+        self.viewer_in_flight = None;
         self.visor_token = Some(token);
         // A new viewer: the previous one's image is no longer needed. And it
         // has to be released, not just stop being painted: it is megabytes.
         self.imagen = None;
-        self.miniatura = None;
+        self.thumbnail = None;
         match read_bytes {
             Ok(mut bytes) => {
                 let cap = usize::try_from(VISOR_CAP).unwrap_or(usize::MAX);
@@ -440,10 +440,10 @@ impl Estado {
                     .visor
                     .as_ref()
                     .is_some_and(|v| matches!(Self::imagen_de(v), Ok(Some(_))));
-                self.pedir_imagen(&target_path, token, backend, mailbox);
+                self.request_imagen(&target_path, token, backend, mailbox);
                 if !own_image {
-                    self.pedir_miniatura(&target_path, token, backend, mailbox);
-                    self.pedir_estilo(&target_path, token, backend, mailbox);
+                    self.request_thumbnail(&target_path, token, backend, mailbox);
+                    self.request_style(&target_path, token, backend, mailbox);
                 }
             }
             Err(e) => {
@@ -459,7 +459,7 @@ impl Estado {
             }
         }
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }
 
     /// Brings the image's WHOLE bytes, if the viewer has an accepted one.
@@ -471,12 +471,12 @@ impl Estado {
     /// The cap is a REFUSAL, not a truncation. Half a decoded image is an
     /// image of something else, so a file above [`IMAGEN_CAP`] is not painted
     /// and it is said.
-    pub(super) fn pedir_imagen(
+    pub(super) fn request_imagen(
         &mut self,
         path: &VPath,
         token: RequestToken,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         let Some(v) = self.visor.as_ref() else {
             return;
@@ -503,12 +503,14 @@ impl Estado {
                     len: Some(IMAGEN_CAP + 1),
                 }),
             );
-            let read_bytes = match tokio::time::timeout(PLAZO_VISOR, reading).await {
+            let read_bytes = match tokio::time::timeout(DEADLINE_VISOR, reading).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = mailbox
-                .send(Mensaje::Fondo(Box::new(Fondo::Imagen(token, read_bytes))))
+                .send(Message::Background(Box::new(Background::Imagen(
+                    token, read_bytes,
+                ))))
                 .await;
         });
     }
@@ -518,8 +520,8 @@ impl Estado {
     /// Discarded if the viewer is already a different one: painting the
     /// previous picture over the current file is the same class of error as
     /// opening a viewer nobody asked for.
-    // TODO(translation): review — this paragraph documents `aplicar_imagen`
-    /// below, but the item right after it is `pedir_miniatura`'s doc, about
+    // TODO(translation): review — this paragraph documents `apply_imagen`
+    /// below, but the item right after it is `request_thumbnail`'s doc, about
     /// requesting a plugin thumbnail; it looks like a stale fragment left by
     /// an earlier edit.
     /// Asks a plugin for the viewer's file's THUMBNAIL (ADR 0107), and only
@@ -527,17 +529,17 @@ impl Estado {
     /// does not decode, or an image that does not fit its caps. With its own
     /// image, nobody is bothered. The requested side is the viewer's height
     /// in estimated pixels (`height` rows × 22), bounded.
-    pub(super) fn pedir_miniatura(
+    pub(super) fn request_thumbnail(
         &mut self,
         path: &VPath,
         token: RequestToken,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         // The ceiling is the plugin-host's (`THUMB_MAX_EDGE`), repeated here
         // because this crate does not know it: it bounds the same on both
         // sides.
-        const MINIATURA_MAX_EDGE: u32 = 2048;
+        const THUMBNAIL_MAX_EDGE: u32 = 2048;
         let Some(v) = self.visor.as_ref() else {
             return;
         };
@@ -545,20 +547,24 @@ impl Estado {
             return;
         }
         let rows = u32::from(self.viewport.1).max(10);
-        let max_edge = (rows * 22).clamp(128, MINIATURA_MAX_EDGE);
+        let max_edge = (rows * 22).clamp(128, THUMBNAIL_MAX_EDGE);
         let backend = Arc::clone(backend);
         let mailbox = mailbox.clone();
         let path = path.clone();
         tokio::spawn(async move {
-            let thumb =
-                match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_thumbnail(path, max_edge))
-                    .await
-                {
-                    Ok(Ok(t)) => t,
-                    _ => None,
-                };
+            let thumb = match tokio::time::timeout(
+                DEADLINE_PLUGINS,
+                backend.plugin_thumbnail(path, max_edge),
+            )
+            .await
+            {
+                Ok(Ok(t)) => t,
+                _ => None,
+            };
             let _ = mailbox
-                .send(Mensaje::Fondo(Box::new(Fondo::Miniatura(token, thumb))))
+                .send(Message::Background(Box::new(Background::Thumbnail(
+                    token, thumb,
+                ))))
                 .await;
         });
     }
@@ -567,7 +573,7 @@ impl Estado {
     /// as an image and says whose it is; without it, nothing changes. The
     /// bytes already come verified by the plugin-host (ADR 0107 decision 3);
     /// here only the plugin's name is clamped, which is its own text.
-    pub(super) fn aplicar_miniatura(
+    pub(super) fn apply_thumbnail(
         &mut self,
         token: RequestToken,
         thumb: Option<norte_proto::methods::PluginThumbnail>,
@@ -581,7 +587,7 @@ impl Estado {
         }
         let (name, _) = norte_frontend::display_name(t.plugin_name.as_bytes());
         self.imagen = Some(std::sync::Arc::new(t.bytes));
-        self.miniatura = Some((
+        self.thumbnail = Some((
             crate::dto::ImageView {
                 // The label the viewer paints for its own image is the
                 // format in uppercase (`PNG`); the same shape here.
@@ -602,7 +608,7 @@ impl Estado {
         Some(self.parche(vec![change]))
     }
 
-    pub(super) fn aplicar_imagen(
+    pub(super) fn apply_imagen(
         &mut self,
         token: RequestToken,
         read_bytes: Result<Vec<u8>, Error>,

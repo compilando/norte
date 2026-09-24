@@ -980,7 +980,7 @@
       ]
     },
     "ConnectionCloseParams": {
-      "description": "Params of [`CONNECTION_CLOSE`] (0.49.0, #140).\n\n```\nuse norte_proto::methods::ConnectionCloseParams;\nlet p: ConnectionCloseParams =\n    serde_json::from_str(r#\"{\"path\":\"sftp://host/casa\"}\"#).expect(\"params\");\nassert_eq!(p.path.scheme(), \"sftp\");\n```",
+      "description": "Params of [`CONNECTION_CLOSE`] (0.49.0, #140).\n\n```\nuse norte_proto::methods::ConnectionCloseParams;\nlet p: ConnectionCloseParams =\n    serde_json::from_str(r#\"{\"path\":\"sftp://host/home\"}\"#).expect(\"params\");\nassert_eq!(p.path.scheme(), \"sftp\");\n```",
       "properties": {
         "path": {
           "$ref": "#/$defs/VPath",
@@ -1062,7 +1062,7 @@
           ]
         },
         "detail": {
-          "description": "Human detail, already in the daemon's language. Presentation,\nNEVER contract: it is not parsed, not compared, and may be absent.\n\nOnly filled in by the variants whose sentence is composed of fields\nnorte itself sets — see `ConnectError::detalle_publico`. The ones\nwrapping third-party text, paths or the config file do NOT reach\nhere: rule 10 does not distinguish between \"a secret\" and\n\"something that may contain a secret\".",
+          "description": "Human detail, already in the daemon's language. Presentation,\nNEVER contract: it is not parsed, not compared, and may be absent.\n\nOnly filled in by the variants whose sentence is composed of fields\nnorte itself sets — see `ConnectError::detail_publico`. The ones\nwrapping third-party text, paths or the config file do NOT reach\nhere: rule 10 does not distinguish between \"a secret\" and\n\"something that may contain a secret\".",
           "type": [
             "string",
             "null"
@@ -1731,7 +1731,7 @@
           "type": "object"
         },
         {
-          "description": "The connection needs a secret that is nowhere to be found, and its\n`connections.toml` says to ASK for it (`secret = \"prompt\"`, #325).\n\nSame flow as the TOFU above, on purpose: the frontend opens its\ndialog, sends what was typed with `connection.provide_secret`, and\nRETRIES this same navigation. The core cannot ask on its own — the\nsecret resolver has no user interface and must not have one — so the\nonly way a human gets asked is for the question to travel up this way.\n\nCarries the connection's name AND its destination, and the\ndestination is mandatory: **a password dialog that does not say who\nit is going to hand it to is not answerable.** The name was chosen by\n`connections.toml`, which may come from someone else's dotfiles or an\nedited line; `trabajo` says nothing about whether that entry points\ntoday at the usual machine or at `ftp://evil.example`. It is the same\nreason the TOFU above carries host, algorithm and fingerprint: whoever\nanswers verifies the OTHER END, not a local label.\n\nAnd the risk is not theoretical across every scheme: with `sftp` the\nSSH handshake still goes through TOFU before sending anything, but an\n`ftp` goes in the clear and an `s3` with a foreign `endpoint` signs a\nrequest against whatever server the entry chose.\n\nA 0.62 client degrades to `Unknown` and shows an error instead of a\ndialog — i.e. it cannot connect that connection, same as today.",
+          "description": "The connection needs a secret that is nowhere to be found, and its\n`connections.toml` says to ASK for it (`secret = \"prompt\"`, #325).\n\nSame flow as the TOFU above, on purpose: the frontend opens its\ndialog, sends what was typed with `connection.provide_secret`, and\nRETRIES this same navigation. The core cannot ask on its own — the\nsecret resolver has no user interface and must not have one — so the\nonly way a human gets asked is for the question to travel up this way.\n\nCarries the connection's name AND its destination, and the\ndestination is mandatory: **a password dialog that does not say who\nit is going to hand it to is not answerable.** The name was chosen by\n`connections.toml`, which may come from someone else's dotfiles or an\nedited line; `work` says nothing about whether that entry points\ntoday at the usual machine or at `ftp://evil.example`. It is the same\nreason the TOFU above carries host, algorithm and fingerprint: whoever\nanswers verifies the OTHER END, not a local label.\n\nAnd the risk is not theoretical across every scheme: with `sftp` the\nSSH handshake still goes through TOFU before sending anything, but an\n`ftp` goes in the clear and an `s3` with a foreign `endpoint` signs a\nrequest against whatever server the entry chose.\n\nA 0.62 client degrades to `Unknown` and shows an error instead of a\ndialog — i.e. it cannot connect that connection, same as today.",
           "properties": {
             "conn": {
               "description": "Connection name in `connections.toml`, the same one that goes in\n[`crate::methods::CONNECTION_PROVIDE_SECRET`].",
@@ -1896,7 +1896,7 @@
       "type": "object"
     },
     "FileSplitParams": {
-      "description": "Params of [`FILE_SPLIT`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::FileSplitParams;\nlet p: FileSplitParams = serde_json::from_str(\n    r#\"{\"path\":\"file:///g.iso\",\"part_bytes\":1048576,\"dest_dir\":\"file:///trozos\"}\"#,\n)\n.expect(\"params\");\nassert_eq!(p.part_bytes, 1_048_576);\n```",
+      "description": "Params of [`FILE_SPLIT`] (0.50.0, #132).\n\n```\nuse norte_proto::methods::FileSplitParams;\nlet p: FileSplitParams = serde_json::from_str(\n    r#\"{\"path\":\"file:///g.iso\",\"part_bytes\":1048576,\"dest_dir\":\"file:///chunks\"}\"#,\n)\n.expect(\"params\");\nassert_eq!(p.part_bytes, 1_048_576);\n```",
       "properties": {
         "dest_dir": {
           "$ref": "#/$defs/VPath",
@@ -2127,7 +2127,7 @@
       "type": "object"
     },
     "FsCreateParams": {
-      "description": "Params of [`FS_CREATE`] (#290).\n\n```\nuse norte_proto::methods::FsCreateParams;\nlet p: FsCreateParams =\n    serde_json::from_str(r#\"{\"path\":\"file:///casa/nuevo.txt\"}\"#).expect(\"params\");\nassert_eq!(p.path.file_name().expect(\"name\").as_bytes(), b\"nuevo.txt\");\n```",
+      "description": "Params of [`FS_CREATE`] (#290).\n\n```\nuse norte_proto::methods::FsCreateParams;\nlet p: FsCreateParams =\n    serde_json::from_str(r#\"{\"path\":\"file:///home/nuevo.txt\"}\"#).expect(\"params\");\nassert_eq!(p.path.file_name().expect(\"name\").as_bytes(), b\"nuevo.txt\");\n```",
       "properties": {
         "dest_anchor": {
           "anyOf": [
@@ -2183,7 +2183,7 @@
       "type": "object"
     },
     "FsDirUsageParams": {
-      "description": "Params of [`FS_DIR_USAGE`] (0.75.0, phase 4).\n\nONE root and not several, unlike [`FsDirSizeParams`]: that one sums a\nselection into a number, and this one describes what ONE directory is\nmade of. Mixing two roots would give a list of children from different\nplaces with names that can repeat, which is not a map of anything.\n\n```\nuse norte_proto::methods::FsDirUsageParams;\n// Omitted `depth` is ONE, which is what a map paints.\nlet p: FsDirUsageParams =\n    serde_json::from_str(r#\"{\"path\":\"file:///casa\"}\"#).expect(\"params\");\nassert_eq!(p.depth, 1);\n```",
+      "description": "Params of [`FS_DIR_USAGE`] (0.75.0, phase 4).\n\nONE root and not several, unlike [`FsDirSizeParams`]: that one sums a\nselection into a number, and this one describes what ONE directory is\nmade of. Mixing two roots would give a list of children from different\nplaces with names that can repeat, which is not a map of anything.\n\n```\nuse norte_proto::methods::FsDirUsageParams;\n// Omitted `depth` is ONE, which is what a map paints.\nlet p: FsDirUsageParams =\n    serde_json::from_str(r#\"{\"path\":\"file:///home\"}\"#).expect(\"params\");\nassert_eq!(p.depth, 1);\n```",
       "properties": {
         "depth": {
           "default": 1,
@@ -5139,7 +5139,7 @@
       "type": "object"
     },
     "RenameStuckStep": {
-      "description": "A step of a batch that was left APPLIED and that the core could not put\nback in its place (0.36.0). In other words: the directory is\nhalf-renamed and this says where to look.\n\nBoth sides travel as an absolute [`VPath`] and not as [`Segment`]:\nwhoever reads this is looking for a file, and giving it the bare name\nwould force it to reconstruct the request's directory to be able to go\nget it.\n\n```\nuse norte_proto::{VPath, methods::RenameStuckStep};\nlet s = RenameStuckStep {\n    from: VPath::parse(\"file:///fotos/a\").expect(\"path\"),\n    to: VPath::parse(\"file:///fotos/b\").expect(\"path\"),\n    pair_index: 0,\n    error: norte_proto::Error::Io { retryable: false },\n    journalled: true,\n    still_applied: 1,\n};\nlet json = serde_json::to_value(&s).expect(\"json\");\nassert_eq!(json[\"to\"], serde_json::json!(\"file:///fotos/b\"));\nassert_eq!(json[\"journalled\"], serde_json::json!(true));\n```",
+      "description": "A step of a batch that was left APPLIED and that the core could not put\nback in its place (0.36.0). In other words: the directory is\nhalf-renamed and this says where to look.\n\nBoth sides travel as an absolute [`VPath`] and not as [`Segment`]:\nwhoever reads this is looking for a file, and giving it the bare name\nwould force it to reconstruct the request's directory to be able to go\nget it.\n\n```\nuse norte_proto::{VPath, methods::RenameStuckStep};\nlet s = RenameStuckStep {\n    from: VPath::parse(\"file:///snapshots/a\").expect(\"path\"),\n    to: VPath::parse(\"file:///snapshots/b\").expect(\"path\"),\n    pair_index: 0,\n    error: norte_proto::Error::Io { retryable: false },\n    journalled: true,\n    still_applied: 1,\n};\nlet json = serde_json::to_value(&s).expect(\"json\");\nassert_eq!(json[\"to\"], serde_json::json!(\"file:///snapshots/b\"));\nassert_eq!(json[\"journalled\"], serde_json::json!(true));\n```",
       "properties": {
         "error": {
           "$ref": "#/$defs/Error",
@@ -5795,7 +5795,7 @@
       "type": "object"
     },
     "SyncFailure": {
-      "description": "ONE step that never happened (0.40.0, ADR 0049).\n\n```\nuse norte_proto::methods::{RelPath, SyncFailure, SyncFailureCause, SyncStepKind};\nlet f = SyncFailure {\n    rel: RelPath::parse_wire(\"viejo\").expect(\"rel\"),\n    dest_rel: None,\n    cause: SyncFailureCause::Denied,\n    kind: SyncStepKind::DeleteTree,\n};\nlet json = serde_json::to_value(&f).expect(\"json\");\nassert_eq!(json[\"kind\"], serde_json::json!(\"delete_tree\"));\n// And with the class in front, the row says which root its `rel`\n// hangs from without anyone having to deduce it (0.42.0, #195).\nassert!(!json.as_object().expect(\"object\").contains_key(\"dest_rel\"));\n```",
+      "description": "ONE step that never happened (0.40.0, ADR 0049).\n\n```\nuse norte_proto::methods::{RelPath, SyncFailure, SyncFailureCause, SyncStepKind};\nlet f = SyncFailure {\n    rel: RelPath::parse_wire(\"old\").expect(\"rel\"),\n    dest_rel: None,\n    cause: SyncFailureCause::Denied,\n    kind: SyncStepKind::DeleteTree,\n};\nlet json = serde_json::to_value(&f).expect(\"json\");\nassert_eq!(json[\"kind\"], serde_json::json!(\"delete_tree\"));\n// And with the class in front, the row says which root its `rel`\n// hangs from without anyone having to deduce it (0.42.0, #195).\nassert!(!json.as_object().expect(\"object\").contains_key(\"dest_rel\"));\n```",
       "properties": {
         "cause": {
           "$ref": "#/$defs/SyncFailureCause",

@@ -1,6 +1,6 @@
 //! Task 3 (phase 5 WOW): the decision of which mode the viewer uses for an
 //! image, resolved against `[ui] images` and what the kitty probe answered
-//! — see `viewer_open::modo_efectivo` — and two invariants that fix round 1
+//! — see `viewer_open::modo_effective` — and two invariants that fix round 1
 //! left as a regression: `App.viewer_imagen` cannot stay dangling when the
 //! viewer closes, and it is not decided by `Viewer::is_image()` (which a
 //! plugin previewer turns off).
@@ -9,9 +9,9 @@ use norte_config::Images;
 use norte_proto::VPath;
 use norte_proto::methods::PluginThumbnail;
 use norte_tui::app::{App, Modal, Pane};
-use norte_tui::kitty_graphics::{escape_borrar, escape_colocar};
+use norte_tui::kitty_graphics::{escape_colocar, escape_delete};
 use norte_tui::viewer_open::{
-    ImagenColocada, Miniatura, Modo, aviso_de_imagen, imagen_desde_miniatura, modo_efectivo,
+    ImagenPlaced, Modo, Thumbnail, image_notice, imagen_from_thumbnail, modo_effective,
 };
 use ratatui::layout::Rect;
 
@@ -25,7 +25,7 @@ fn vp(wire: &str) -> VPath {
 /// single-byte encoding (`Viewer::recompute` then sets `self.image = None`,
 /// text branch) and `is_image()` comes out `false` even though the bytes DO
 /// start with the PNG signature — a real regression, caught while writing
-/// these tests. Same pattern `fila_de_estado_con_png_sin_previewer` already
+/// these tests. Same pattern `status_row_with_png_without_previewer` already
 /// used (signature + `IHDR` + zero padding up to 40 bytes).
 fn png_bytes_binarios() -> Vec<u8> {
     let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
@@ -41,28 +41,28 @@ fn app_en(dir: &VPath) -> App {
 }
 
 #[test]
-fn auto_usa_kitty_solo_si_el_terminal_sabe() {
-    assert_eq!(modo_efectivo(Images::Auto, true), Modo::Kitty);
-    assert_eq!(modo_efectivo(Images::Auto, false), Modo::Bloques);
+fn auto_uses_kitty_only_if_terminal_knows() {
+    assert_eq!(modo_effective(Images::Auto, true), Modo::Kitty);
+    assert_eq!(modo_effective(Images::Auto, false), Modo::Blocks);
 }
 
 #[test]
-fn kitty_forzado_manda_aunque_la_sonda_dijera_que_no() {
+fn forced_kitty_wins_even_if_the_probe_said_no() {
     // The probe can be wrong — a multiplexer with passthrough, a terminal
     // that does not answer but knows — and forcing exists for that. If it
     // truly does not know, what you see is garbage on screen, and that is
     // why it is not the default value.
-    assert_eq!(modo_efectivo(Images::Kitty, false), Modo::Kitty);
+    assert_eq!(modo_effective(Images::Kitty, false), Modo::Kitty);
 }
 
 #[test]
-fn blocks_no_usa_kitty_aunque_el_terminal_sepa() {
-    assert_eq!(modo_efectivo(Images::Blocks, true), Modo::Bloques);
+fn blocks_does_not_use_kitty_even_if_the_terminal_knows() {
+    assert_eq!(modo_effective(Images::Blocks, true), Modo::Blocks);
 }
 
 #[test]
-fn off_no_pinta_nada_y_deja_el_visor_como_estaba() {
-    assert_eq!(modo_efectivo(Images::Off, true), Modo::Nada);
+fn off_paints_nothing_and_leaves_the_viewer_as_it_was() {
+    assert_eq!(modo_effective(Images::Off, true), Modo::Nothing);
 }
 
 /// FINDING 1 of fix round 1: `Command::ViewerClose` set `app.viewer = None`
@@ -73,7 +73,7 @@ fn off_no_pinta_nada_y_deja_el_visor_como_estaba() {
 /// method, without going through `dispatch` (which needs a `Backend` this
 /// test does not).
 #[test]
-fn cerrar_el_visor_limpia_tambien_su_miniatura() {
+fn closing_the_viewer_also_clears_its_thumbnail() {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     app.viewer = Some(norte_tui::viewer::Viewer::new(
@@ -81,14 +81,14 @@ fn cerrar_el_visor_limpia_tambien_su_miniatura() {
         b"\x89PNG\r\n\x1a\n".to_vec(),
         false,
     ));
-    app.viewer_imagen = Some(ImagenColocada {
+    app.viewer_imagen = Some(ImagenPlaced {
         path: vp("mem:///x.png"),
         bytes: vec![0u8; 4],
         mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 7,
-        puesta_en: None,
+        placed_in: None,
     });
 
     app.close_viewer();
@@ -117,7 +117,7 @@ fn cerrar_el_visor_limpia_tambien_su_miniatura() {
 /// does not exist today in `norte-tui/tests` — debt noted in the report,
 /// not built in this round.
 #[test]
-fn un_previewer_de_plugin_no_esconde_que_los_bytes_son_imagen() {
+fn a_plugin_previewer_does_not_hide_that_the_bytes_are_an_image() {
     let png: &[u8] = b"\x89PNG\r\n\x1a\n";
     let con_previewer = norte_frontend::viewer::Viewer::with_plugin_preview_styled(
         vp("mem:///x.png"),
@@ -139,7 +139,7 @@ fn un_previewer_de_plugin_no_esconde_que_los_bytes_son_imagen() {
 /// (`c`/`r`, not pixels) and the bytes in base64 — never raw, because an
 /// APC closes with `\x1b\\` and a PNG normally contains that byte pair.
 #[test]
-fn colocar_lleva_el_id_el_tamano_y_base64() {
+fn placing_carries_the_id_the_size_and_base64() {
     let esc = escape_colocar(7, b"PNGFALSO", Rect::new(1, 2, 40, 20), None);
     assert!(esc.starts_with("\x1b_G"), "starts with APC: {esc}");
     assert!(esc.contains("i=7"), "carries the id: {esc}");
@@ -187,10 +187,10 @@ fn thumb(mimetype: &str) -> PluginThumbnail {
 /// gets rejected by kitty SILENTLY (`q=2`), and without this filter nobody
 /// finds out: no trace, no retry, no notice.
 #[test]
-fn una_miniatura_jpeg_se_descarta() {
-    let imagen = imagen_desde_miniatura(&vp("mem:///x.jpg"), thumb("image/jpeg"));
+fn a_jpeg_thumbnail_is_discarded() {
+    let imagen = imagen_from_thumbnail(&vp("mem:///x.jpg"), thumb("image/jpeg"));
     assert!(
-        matches!(imagen, Miniatura::FormatoAjeno),
+        matches!(imagen, Thumbnail::FormatForeign),
         "kitty does not know f= for JPEG: it must be discarded, not placed \
          wrong — and discarded SAYING it was the format, not as a \"there is \
          none\": {imagen:?}"
@@ -200,10 +200,10 @@ fn una_miniatura_jpeg_se_descarta() {
 /// Same chain for WebP — the third format `plugin.thumbnail` can return and
 /// that kitty also cannot place.
 #[test]
-fn una_miniatura_webp_se_descarta() {
-    let imagen = imagen_desde_miniatura(&vp("mem:///x.webp"), thumb("image/webp"));
+fn a_webp_thumbnail_is_discarded() {
+    let imagen = imagen_from_thumbnail(&vp("mem:///x.webp"), thumb("image/webp"));
     assert!(
-        matches!(imagen, Miniatura::FormatoAjeno),
+        matches!(imagen, Thumbnail::FormatForeign),
         "kitty does not know f= for WebP: {imagen:?}"
     );
 }
@@ -212,9 +212,9 @@ fn una_miniatura_webp_se_descarta() {
 /// and carries its mimetype along, so the invariant is checkable through
 /// the rest of the path (not just documented).
 #[test]
-fn una_miniatura_png_se_coloca() {
+fn a_png_thumbnail_is_placed() {
     let path = vp("mem:///x.png");
-    let imagen = imagen_desde_miniatura(&path, thumb("image/png"))
+    let imagen = imagen_from_thumbnail(&path, thumb("image/png"))
         .colocable()
         .expect("a PNG does get placed");
     assert_eq!(imagen.mimetype, "image/png");
@@ -226,23 +226,23 @@ fn una_miniatura_png_se_coloca() {
 /// Without this test, the ones above pass with an `escape_colocar` that
 /// does not know how to chunk — 8 bytes never reach the cap.
 #[test]
-fn un_contenido_grande_se_trocea() {
-    let grande = vec![0u8; 12 * 1024];
-    let esc = escape_colocar(7, &grande, Rect::new(1, 2, 40, 20), None);
-    let trozos: Vec<&str> = esc.split("\x1b_G").skip(1).collect();
+fn large_content_is_chunked() {
+    let large = vec![0u8; 12 * 1024];
+    let esc = escape_colocar(7, &large, Rect::new(1, 2, 40, 20), None);
+    let chunks: Vec<&str> = esc.split("\x1b_G").skip(1).collect();
     assert!(
-        trozos.len() > 1,
+        chunks.len() > 1,
         "a large image goes in several chunks: {}",
-        trozos.len()
+        chunks.len()
     );
-    let (ultimo, previos) = trozos.split_last().expect("there is at least one");
+    let (last, previos) = chunks.split_last().expect("there is at least one");
     for t in previos {
         assert!(
             t.contains("m=1"),
             "a chunk that is not the last continues: {t}"
         );
     }
-    assert!(ultimo.contains("m=0"), "the last one closes: {ultimo}");
+    assert!(last.contains("m=0"), "the last one closes: {last}");
 }
 
 /// `d=I` (uppercase) deletes the placement AND frees the bytes the
@@ -253,8 +253,8 @@ fn un_contenido_grande_se_trocea() {
 /// bounding the deletion to THIS image: without it every image on the whole
 /// terminal would be deleted, including another program's in another tab.
 #[test]
-fn borrar_nombra_solo_ese_id_y_libera_los_datos() {
-    let esc = escape_borrar(7);
+fn deleting_names_only_that_id_and_frees_the_data() {
+    let esc = escape_delete(7);
     assert!(
         esc.contains("a=d") && esc.contains("d=I") && esc.contains("i=7"),
         "{esc}"
@@ -271,7 +271,7 @@ fn borrar_nombra_solo_ese_id_y_libera_los_datos() {
 /// only look at the escape's SHAPE, never where it really lands. This one
 /// really renders and checks the CELLS.
 #[test]
-fn el_rect_del_visor_es_el_hueco_que_draw_viewer_deja_en_blanco() {
+fn the_viewer_rect_is_the_slot_draw_viewer_leaves_blank() {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     let path = vp("mem:///x.png");
@@ -280,14 +280,14 @@ fn el_rect_del_visor_es_el_hueco_que_draw_viewer_deja_en_blanco() {
         b"\x89PNG\r\n\x1a\n".to_vec(),
         false,
     ));
-    app.viewer_imagen = Some(ImagenColocada {
+    app.viewer_imagen = Some(ImagenPlaced {
         path,
         bytes: vec![0u8; 4],
         mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 7,
-        puesta_en: None,
+        placed_in: None,
     });
     let area = Rect::new(0, 0, 40, 12);
     let mut terminal =
@@ -296,14 +296,14 @@ fn el_rect_del_visor_es_el_hueco_que_draw_viewer_deja_en_blanco() {
     terminal
         .draw(|f| norte_tui::ui::draw(f, &app))
         .expect("draw");
-    let hueco = norte_tui::ui::rect_del_visor(&app, area);
+    let slot = norte_tui::ui::rect_del_visor(&app, area);
     assert!(
-        hueco.width > 0 && hueco.height > 0,
-        "the slot cannot be empty on a {area:?} terminal: {hueco:?}"
+        slot.width > 0 && slot.height > 0,
+        "the slot cannot be empty on a {area:?} terminal: {slot:?}"
     );
     let buf = terminal.backend().buffer();
-    for y in hueco.top()..hueco.bottom() {
-        for x in hueco.left()..hueco.right() {
+    for y in slot.top()..slot.bottom() {
+        for x in slot.left()..slot.right() {
             assert_eq!(
                 buf[(x, y)].symbol(),
                 " ",
@@ -316,17 +316,17 @@ fn el_rect_del_visor_es_el_hueco_que_draw_viewer_deja_en_blanco() {
     // test above would pass with any rect bigger than the real one —
     // exactly the CRITICAL 2 bug, which overran the borders and covered the
     // frame with `z=0`.
-    let borde_y = hueco.top() - 1;
-    let fila: String = (0..area.width)
-        .map(|x| buf[(x, borde_y)].symbol().chars().next().unwrap_or(' '))
+    let border_and = slot.top() - 1;
+    let row: String = (0..area.width)
+        .map(|x| buf[(x, border_and)].symbol().chars().next().unwrap_or(' '))
         .collect();
     assert!(
-        fila.contains(['┌', '─', '┐']),
-        "above the slot the viewer's frame is still there, not more blank: {fila:?}"
+        row.contains(['┌', '─', '┐']),
+        "above the slot the viewer's frame is still there, not more blank: {row:?}"
     );
 }
 
-fn app_con_imagen_colocada(area_no_vacia: bool) -> (App, Rect) {
+fn app_with_placed_image(area_no_empty: bool) -> (App, Rect) {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     let path = vp("mem:///x.png");
@@ -335,16 +335,16 @@ fn app_con_imagen_colocada(area_no_vacia: bool) -> (App, Rect) {
         png_bytes_binarios(),
         false,
     ));
-    app.viewer_imagen = Some(ImagenColocada {
+    app.viewer_imagen = Some(ImagenPlaced {
         path,
         bytes: vec![0u8; 4],
         mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 7,
-        puesta_en: None,
+        placed_in: None,
     });
-    let area = if area_no_vacia {
+    let area = if area_no_empty {
         Rect::new(0, 0, 40, 12)
     } else {
         Rect::new(0, 0, 0, 0)
@@ -361,8 +361,8 @@ fn app_con_imagen_colocada(area_no_vacia: bool) -> (App, Rect) {
 /// the run loop refused to place pixels: neither image nor hexview. Both
 /// questions are now the SAME function (`ui::imagen_a_colocar`).
 #[test]
-fn con_algo_encima_no_se_coloca_aunque_el_path_case() {
-    let (mut app, area) = app_con_imagen_colocada(true);
+fn with_something_on_top_it_is_not_placed_even_though_the_path_matches() {
+    let (mut app, area) = app_with_placed_image(true);
     assert!(
         norte_tui::ui::imagen_a_colocar(&app, area).is_some(),
         "with nothing on top, the thumbnail is placed"
@@ -380,8 +380,8 @@ fn con_algo_encima_no_se_coloca_aunque_el_path_case() {
 /// above: before this pass, `imagen_a_colocar` did not exist and nothing
 /// tested this branch in isolation from the rest of `coloca`.
 #[test]
-fn con_el_rect_vacio_no_se_coloca() {
-    let (app, area) = app_con_imagen_colocada(false);
+fn with_an_empty_rect_it_is_not_placed() {
+    let (app, area) = app_with_placed_image(false);
     assert!(
         norte_tui::ui::imagen_a_colocar(&app, area).is_none(),
         "with no slot to land in, there is nothing to place: {area:?}"
@@ -397,10 +397,10 @@ fn con_el_rect_vacio_no_se_coloca() {
 /// (`reload_config` itself needs a `Backend`, three `Resolver`s and a
 /// `Layers`, too much for a unit test of this).
 #[test]
-fn kitty_a_off_suelta_la_miniatura_colocada_ya_puesta() {
-    let (mut app, _) = app_con_imagen_colocada(true);
+fn kitty_to_off_releases_the_already_placed_thumbnail() {
+    let (mut app, _) = app_with_placed_image(true);
     app.viewer_modo = Modo::Kitty;
-    let soltada = app.soltar_miniatura_si_deja_de_ser_kitty(Modo::Nada);
+    let soltada = app.drop_thumbnail_if_no_longer_kitty(Modo::Nothing);
     assert!(
         soltada,
         "a Kitty that switches to off must release the thumbnail"
@@ -412,17 +412,17 @@ fn kitty_a_off_suelta_la_miniatura_colocada_ya_puesta() {
     );
     assert_eq!(
         app.viewer_modo,
-        Modo::Nada,
+        Modo::Nothing,
         "the pinned mode updates at the same time the thumbnail is released"
     );
 }
 
-/// The opposite direction (`Bloques`/`Nada` → `Kitty`) does NOT release or
+/// The opposite direction (`Blocks`/`Nothing` → `Kitty`) does NOT release or
 /// update anything, on purpose: doing so would revive the review's other
 /// hole — the "approve the thumbnail extension" notice would show over a
 /// file the new mode NEVER requested one for.
 #[test]
-fn blocks_a_kitty_no_toca_el_modo_pineado() {
+fn blocks_to_kitty_does_not_touch_pinned_mode() {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     app.viewer = Some(norte_tui::viewer::Viewer::new(
@@ -430,15 +430,15 @@ fn blocks_a_kitty_no_toca_el_modo_pineado() {
         png_bytes_binarios(),
         false,
     ));
-    app.viewer_modo = Modo::Bloques;
-    let soltada = app.soltar_miniatura_si_deja_de_ser_kitty(Modo::Kitty);
+    app.viewer_modo = Modo::Blocks;
+    let soltada = app.drop_thumbnail_if_no_longer_kitty(Modo::Kitty);
     assert!(
         !soltada,
         "it only acts when the pinned mode was ALREADY Kitty"
     );
     assert_eq!(
         app.viewer_modo,
-        Modo::Bloques,
+        Modo::Blocks,
         "it stays pinned until the reader reopens the file"
     );
 }
@@ -446,9 +446,9 @@ fn blocks_a_kitty_no_toca_el_modo_pineado() {
 /// End to end of the same finding: `panels::draw_viewer` has to read
 /// `App::viewer_modo` (pinned) and NOT recompute against `app.chrome` LIVE.
 /// It simulates exactly the scenario the review described — the reader
-/// opened the PNG under `Bloques` (a thumbnail was never requested) and
+/// opened the PNG under `Blocks` (a thumbnail was never requested) and
 /// THEN the config switched to `kitty` on the fly, without the reader
-/// reopening anything — and it checks that the notice stays `Bloques`'s
+/// reopening anything — and it checks that the notice stays `Blocks`'s
 /// ("preview"), not `Kitty`'s ("thumbnails") on a file that extension was
 /// never asked for.
 #[test]
@@ -462,12 +462,12 @@ fn el_pintor_usa_el_modo_pineado_no_el_chrome_en_vivo() {
         false,
     ));
     // What `open_viewer` set when the reader opened the file.
-    app.viewer_modo = Modo::Bloques;
+    app.viewer_modo = Modo::Blocks;
     // What a hot reload changed AFTERWARD, without touching `viewer_modo`
     // (finding 3's own fix: only the Kitty→something-else direction
     // updates the pinned mode).
     app.chrome.images = Some(Images::Kitty);
-    // With no `viewer_imagen`: a thumbnail was never requested under `Bloques`.
+    // With no `viewer_imagen`: a thumbnail was never requested under `Blocks`.
 
     let area = Rect::new(0, 0, 80, 16);
     let mut terminal =
@@ -478,17 +478,17 @@ fn el_pintor_usa_el_modo_pineado_no_el_chrome_en_vivo() {
         .expect("draw");
     let buf = terminal.backend().buffer();
     let status_y = area.height - 1;
-    let fila: String = (0..area.width)
+    let row: String = (0..area.width)
         .map(|x| buf[(x, status_y)].symbol().chars().next().unwrap_or(' '))
         .collect();
     assert!(
-        fila.contains("vista previa"),
-        "the notice must stay Bloques's, the mode it was opened under: {fila:?}"
+        row.contains("vista previa"),
+        "the notice must stay Bloques's, the mode it was opened under: {row:?}"
     );
     assert!(
-        !fila.contains("miniaturas"),
+        !row.contains("miniaturas"),
         "the Kitty notice would lie: a thumbnail was never requested for \
-         this file: {fila:?}"
+         this file: {row:?}"
     );
 }
 
@@ -496,11 +496,11 @@ fn el_pintor_usa_el_modo_pineado_no_el_chrome_en_vivo() {
 /// the browser (not the viewer) in front must not touch `viewer_imagen`,
 /// which is already `None`.
 #[test]
-fn sin_visor_no_hay_nada_que_soltar() {
+fn without_a_viewer_there_is_nothing_to_drop() {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
-    assert_eq!(app.viewer_modo, Modo::Nada);
-    let soltada = app.soltar_miniatura_si_deja_de_ser_kitty(Modo::Nada);
+    assert_eq!(app.viewer_modo, Modo::Nothing);
+    let soltada = app.drop_thumbnail_if_no_longer_kitty(Modo::Nothing);
     assert!(
         !soltada,
         "with no viewer open there is no thumbnail to release"
@@ -508,44 +508,44 @@ fn sin_visor_no_hay_nada_que_soltar() {
 }
 
 /// Task 5: the usability hole the pilot found — with no previewer approved,
-/// a PNG in `Modo::Bloques` falls to hexview just like a file nobody knows
+/// a PNG in `Modo::Blocks` falls to hexview just like a file nobody knows
 /// how to interpret, and nothing on screen told the two cases apart.
 #[test]
-fn en_bloques_sin_previewer_el_visor_lo_dice() {
+fn in_blocks_without_previewer_the_viewer_says_so() {
     // A silent hexview is indistinguishable from "norte does not know how".
-    let aviso = aviso_de_imagen(Modo::Bloques, false, false);
-    assert!(aviso.is_some(), "it has to say the plugin needs approving");
+    let notice = image_notice(Modo::Blocks, false, false);
+    assert!(notice.is_some(), "it has to say the plugin needs approving");
 }
 
 #[test]
-fn con_previewer_no_se_avisa_de_nada() {
-    assert!(aviso_de_imagen(Modo::Bloques, true, false).is_none());
+fn with_previewer_nothing_is_warned() {
+    assert!(image_notice(Modo::Blocks, true, false).is_none());
 }
 
 #[test]
-fn en_off_no_se_avisa_porque_lo_pidio_el_lector() {
-    assert!(aviso_de_imagen(Modo::Nada, false, false).is_none());
+fn in_off_mode_there_is_no_warning_because_the_reader_asked_for_it() {
+    assert!(image_notice(Modo::Nothing, false, false).is_none());
 }
 
 /// Task 5b (finding from round 6's review): the same hole as Task 5, but
-/// in `Modo::Kitty`. `aviso_de_imagen`'s docstring said that in Kitty "the
+/// in `Modo::Kitty`. `image_notice`'s docstring said that in Kitty "the
 /// terminal already paints pixels on its own" and so there was nothing to
 /// warn about — false: the pixels come from a `thumbnail` plugin
 /// (`plugins/image-thumb`), just as approvable and absent by default as
-/// `Modo::Bloques`'s previewer. With none approved, `Modo::Kitty` fell to
+/// `Modo::Blocks`'s previewer. With none approved, `Modo::Kitty` fell to
 /// hexview as silently as the hole Task 5 covered on the other branch.
 #[test]
-fn en_kitty_sin_miniatura_el_visor_lo_dice() {
-    let aviso = aviso_de_imagen(Modo::Kitty, false, false);
+fn in_kitty_without_thumbnail_the_viewer_says_so() {
+    let notice = image_notice(Modo::Kitty, false, false);
     assert!(
-        aviso.is_some(),
+        notice.is_some(),
         "it has to say the thumbnail plugin needs approving"
     );
 }
 
 #[test]
-fn con_miniatura_colocada_no_se_avisa_de_nada_en_kitty() {
-    assert!(aviso_de_imagen(Modo::Kitty, true, false).is_none());
+fn with_thumbnail_placed_nothing_is_warned_in_kitty() {
+    assert!(image_notice(Modo::Kitty, true, false).is_none());
 }
 
 /// The TWO reasons there are no pixels in Kitty are not fixed the same
@@ -554,19 +554,18 @@ fn con_miniatura_colocada_no_se_avisa_de_nada_en_kitty() {
 /// F12 to approve what was already approved. A notice that asks for the
 /// impossible is worse than one that stays quiet.
 #[test]
-fn un_formato_que_kitty_no_coloca_no_manda_a_aprobar_nada() {
-    let falta = aviso_de_imagen(Modo::Kitty, false, false).expect("with no plugin, it warns");
-    let formato =
-        aviso_de_imagen(Modo::Kitty, false, true).expect("with a foreign format, it warns");
+fn a_format_kitty_cannot_place_does_not_send_anything_for_approval() {
+    let missing = image_notice(Modo::Kitty, false, false).expect("with no plugin, it warns");
+    let format = image_notice(Modo::Kitty, false, true).expect("with a foreign format, it warns");
     assert_ne!(
-        falta, formato,
+        missing, format,
         "\"there is no extension\" and \"there is one and it answered in \
          another format\" are two different things"
     );
     assert!(
-        !formato.contains("F12"),
+        !format.contains("F12"),
         "there is nothing to approve at F12: the extension is already \
-         approved — {formato}"
+         approved — {format}"
     );
 }
 
@@ -574,57 +573,57 @@ fn un_formato_que_kitty_no_coloca_no_manda_a_aprobar_nada() {
 /// not go through the terminal's protocol, so a rejected thumbnail says
 /// nothing on that branch.
 #[test]
-fn el_formato_ajeno_no_cambia_el_aviso_de_bloques() {
+fn a_foreign_format_does_not_change_the_blocks_warning() {
     assert_eq!(
-        aviso_de_imagen(Modo::Bloques, false, true),
-        aviso_de_imagen(Modo::Bloques, false, false)
+        image_notice(Modo::Blocks, false, true),
+        image_notice(Modo::Blocks, false, false)
     );
 }
 
 /// The two branches ask to approve DIFFERENT extensions (`previewer` vs
-/// `thumbnail`): a notice that reused `Modo::Bloques`'s text in
+/// `thumbnail`): a notice that reused `Modo::Blocks`'s text in
 /// `Modo::Kitty` would send the reader to approve the wrong one, which is
 /// worse than not warning (the brief calls this out explicitly).
 #[test]
-fn el_aviso_de_bloques_y_el_de_kitty_son_textos_distintos() {
-    let bloques = aviso_de_imagen(Modo::Bloques, false, false).expect("bloques warns");
-    let kitty = aviso_de_imagen(Modo::Kitty, false, false).expect("kitty warns");
+fn the_blocks_warning_and_the_kitty_one_are_different_texts() {
+    let blocks = image_notice(Modo::Blocks, false, false).expect("bloques warns");
+    let kitty = image_notice(Modo::Kitty, false, false).expect("kitty warns");
     assert_ne!(
-        bloques, kitty,
+        blocks, kitty,
         "each mode asks for a different extension to be approved"
     );
 }
 
-/// Counterpart of `no_hace_falta_avisar_de_imagen` for `Modo::Kitty`: it
+/// Counterpart of `no_need_to_warn_about_image` for `Modo::Kitty`: it
 /// uses the `thumbnail` plugin, not the `previewer`, so the "it is already
 /// visible" condition is different — a thumbnail PLACED for THIS file, not
 /// a previewer that replaced the raw view.
 #[test]
-fn no_hace_falta_avisar_de_miniatura_cuando_no_es_imagen() {
-    use norte_tui::viewer_open::no_hace_falta_avisar_de_miniatura;
+fn no_thumbnail_notice_needed_when_it_is_not_an_image() {
+    use norte_tui::viewer_open::no_need_to_warn_about_thumbnail;
     let v = norte_tui::viewer::Viewer::new(vp("mem:///x.txt"), b"hola mundo".to_vec(), false);
     assert!(
-        no_hace_falta_avisar_de_miniatura(&v, None),
+        no_need_to_warn_about_thumbnail(&v, None),
         "it is not an image: nothing to warn about"
     );
 }
 
 #[test]
-fn no_hace_falta_avisar_de_miniatura_cuando_ya_hay_una_colocada() {
-    use norte_tui::viewer_open::no_hace_falta_avisar_de_miniatura;
+fn no_thumbnail_notice_needed_when_one_is_already_placed() {
+    use norte_tui::viewer_open::no_need_to_warn_about_thumbnail;
     let path = vp("mem:///x.png");
     let v = norte_tui::viewer::Viewer::new(path.clone(), png_bytes_binarios(), false);
-    let imagen = ImagenColocada {
+    let imagen = ImagenPlaced {
         path,
         bytes: vec![0u8; 4],
         mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 1,
-        puesta_en: None,
+        placed_in: None,
     };
     assert!(
-        no_hace_falta_avisar_de_miniatura(&v, Some(&imagen)),
+        no_need_to_warn_about_thumbnail(&v, Some(&imagen)),
         "there are already pixels placed: nothing to warn about"
     );
 }
@@ -633,31 +632,31 @@ fn no_hace_falta_avisar_de_miniatura_cuando_ya_hay_una_colocada() {
 /// T4 has not replaced it yet): it is still necessary to warn about the one
 /// showing NOW.
 #[test]
-fn no_hace_falta_avisar_de_miniatura_compara_el_path() {
-    use norte_tui::viewer_open::no_hace_falta_avisar_de_miniatura;
+fn no_thumbnail_notice_needed_compares_the_path() {
+    use norte_tui::viewer_open::no_need_to_warn_about_thumbnail;
     let v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), png_bytes_binarios(), false);
-    let de_otro_fichero = ImagenColocada {
+    let from_another_file = ImagenPlaced {
         path: vp("mem:///otro.png"),
         bytes: vec![0u8; 4],
         mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 1,
-        puesta_en: None,
+        placed_in: None,
     };
     assert!(
-        !no_hace_falta_avisar_de_miniatura(&v, Some(&de_otro_fichero)),
+        !no_need_to_warn_about_thumbnail(&v, Some(&from_another_file)),
         "the placed thumbnail is of ANOTHER file: this one's is still missing"
     );
 }
 
 /// Half-blocks painted (a plugin previewer replaced the raw view, as in
-/// `Modo::Bloques`) also turn off `is_image()`: if THAT is already visible,
+/// `Modo::Blocks`) also turn off `is_image()`: if THAT is already visible,
 /// there is nothing to warn about for the thumbnail plugin either, even
-/// with no `ImagenColocada`.
+/// with no `ImagenPlaced`.
 #[test]
-fn no_hace_falta_avisar_de_miniatura_cuando_un_previewer_ya_sustituyo_la_vista() {
-    use norte_tui::viewer_open::no_hace_falta_avisar_de_miniatura;
+fn no_thumbnail_notice_needed_when_a_previewer_already_replaced_the_view() {
+    use norte_tui::viewer_open::no_need_to_warn_about_thumbnail;
     let v = norte_frontend::viewer::Viewer::with_plugin_preview_styled(
         vp("mem:///x.png"),
         "un-previewer".to_owned(),
@@ -665,7 +664,7 @@ fn no_hace_falta_avisar_de_miniatura_cuando_un_previewer_ya_sustituyo_la_vista()
         false,
     );
     assert!(
-        no_hace_falta_avisar_de_miniatura(&v, None),
+        no_need_to_warn_about_thumbnail(&v, None),
         "a previewer already painted something: nothing to warn about for \
          the thumbnail plugin"
     );
@@ -674,20 +673,20 @@ fn no_hace_falta_avisar_de_miniatura_cuando_un_previewer_ya_sustituyo_la_vista()
 /// Renders the app with a PNG in hexview (no previewer) and returns the
 /// terminal's last row (the full-screen viewer's status bar,
 /// `status_area`), at 80 columns — the task's reference width
-/// (`snapshot_viewer_texto_y_hex` uses the same one).
+/// (`snapshot_viewer_text_and_hex` uses the same one).
 ///
 /// Real PNG magic signature (`is_image()` recognizes it) + padding up to 40
 /// bytes: at 16 bytes per hexview row (`HEX_COLS`) that gives 3 rows, so
 /// `scroll_down(1)` leaves a position that is NOT the trivial "1/1".
-fn fila_de_estado_con_png_sin_previewer() -> String {
+fn status_row_with_png_without_previewer() -> String {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     // Finding 3: `panels::draw_viewer` reads `App::viewer_modo` (set on
     // open), not a live recalculation — `Auto` with no terminal probe
-    // (there is no tty in a test) is `Modo::Bloques`
-    // (`auto_usa_kitty_solo_si_el_terminal_sabe`), which is exactly what
+    // (there is no tty in a test) is `Modo::Blocks`
+    // (`auto_uses_kitty_only_if_terminal_knows`), which is exactly what
     // `open_viewer` would have set here.
-    app.viewer_modo = Modo::Bloques;
+    app.viewer_modo = Modo::Blocks;
     let mut bytes = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR".to_vec();
     bytes.resize(40, 0);
     let mut v = norte_tui::viewer::Viewer::new(vp("mem:///x.png"), bytes, false);
@@ -711,58 +710,58 @@ fn fila_de_estado_con_png_sin_previewer() -> String {
 /// Fix round 1, IMPORTANT 2: with no previewer approved is the DEFAULT
 /// state of any install (nothing to approve yet), so the notice branch is
 /// the COMMON case, not the rare one. Before that fix,
-/// `format!(" {aviso}")` replaced the whole status bar and ate `n/total` —
+/// `format!(" {notice}")` replaced the whole status bar and ate `n/total` —
 /// a large PNG in hexview lost the position count exactly while it was
 /// being scrolled.
 ///
-/// Fix round 2: round 1's `format!(" {aviso}  {pos}")` was correct in the
+/// Fix round 2: round 1's `format!(" {notice}  {pos}")` was correct in the
 /// code but NOT on screen — the ORIGINAL text (82 characters) already
 /// overflowed the 80 columns by itself, so `pos` stayed invisible.
 /// `es.ftl`/`en.ftl` were shortened so both fit with `pos` next to them;
 /// this test fixes the locale to ES (`norte_i18n::force`, only the
 /// process's FIRST call wins — nextest gives one process per test, so it
 /// does not clash with
-/// `el_aviso_no_se_come_la_posicion_de_scroll_en_ingles` below, which fixes
+/// `the_warning_does_not_eat_the_scroll_position_in_english` below, which fixes
 /// EN in ANOTHER process) to test the case that was really broken, not the
 /// one this machine's environment (`LANG=en_US.UTF-8`) happened to pass by
 /// chance.
 #[test]
-fn el_aviso_no_se_come_la_posicion_de_scroll() {
+fn the_warning_does_not_eat_the_scroll_position() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    let fila = fila_de_estado_con_png_sin_previewer();
+    let row = status_row_with_png_without_previewer();
     assert!(
-        fila.contains("2/3"),
-        "the notice must not eat the position, in ES: {fila:?}"
+        row.contains("2/3"),
+        "the notice must not eat the position, in ES: {row:?}"
     );
     assert!(
-        fila.contains("F12"),
-        "and the notice is still present at the same time, in ES: {fila:?}"
+        row.contains("F12"),
+        "and the notice is still present at the same time, in ES: {row:?}"
     );
 }
 
-/// Same case as [`el_aviso_no_se_come_la_posicion_de_scroll`], in EN —
+/// Same case as [`the_warning_does_not_eat_the_scroll_position`], in EN —
 /// separate process under nextest, same reason to fix the locale.
 #[test]
-fn el_aviso_no_se_come_la_posicion_de_scroll_en_ingles() {
+fn the_warning_does_not_eat_the_scroll_position_in_english() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
-    let fila = fila_de_estado_con_png_sin_previewer();
+    let row = status_row_with_png_without_previewer();
     assert!(
-        fila.contains("2/3"),
-        "the notice must not eat the position, in EN: {fila:?}"
+        row.contains("2/3"),
+        "the notice must not eat the position, in EN: {row:?}"
     );
     assert!(
-        fila.contains("F12"),
-        "and the notice is still present at the same time, in EN: {fila:?}"
+        row.contains("F12"),
+        "and the notice is still present at the same time, in EN: {row:?}"
     );
 }
 
-/// Task 5b: the same render as `fila_de_estado_con_png_sin_previewer`, but
+/// Task 5b: the same render as `status_row_with_png_without_previewer`, but
 /// forcing `images = "kitty"` (`Images::Kitty` rules the same with no probe,
-/// see `kitty_forzado_manda_aunque_la_sonda_dijera_que_no`) and WITHOUT
+/// see `forced_kitty_wins_even_if_the_probe_said_no`) and WITHOUT
 /// placing `app.viewer_imagen` — the real case: `Modo::Kitty` requested the
 /// thumbnail through the `thumbnail` plugin and none was approved, so
 /// `viewer_for_width` returned `None` and nothing got placed.
-fn fila_de_estado_con_png_en_kitty_sin_miniatura() -> String {
+fn status_row_with_png_in_kitty_without_thumbnail() -> String {
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     app.chrome.images = Some(Images::Kitty);
@@ -795,34 +794,34 @@ fn fila_de_estado_con_png_en_kitty_sin_miniatura() -> String {
 
 /// The defect T6's review reported: in `Modo::Kitty` with no thumbnail
 /// plugin, the viewer stayed in hexview with NO notice at all — exactly the
-/// hole Task 5 covered in `Modo::Bloques`, reopened on the other branch.
+/// hole Task 5 covered in `Modo::Blocks`, reopened on the other branch.
 /// Same 80-column budget: the notice AND `pos` visible at the same time.
 #[test]
-fn en_kitty_sin_miniatura_el_visor_lo_dice_y_no_se_come_la_posicion() {
+fn in_kitty_without_thumbnail_the_viewer_says_so_and_does_not_eat_the_position() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
-    let fila = fila_de_estado_con_png_en_kitty_sin_miniatura();
+    let row = status_row_with_png_in_kitty_without_thumbnail();
     assert!(
-        fila.contains("2/3"),
-        "the notice must not eat the position, in ES: {fila:?}"
+        row.contains("2/3"),
+        "the notice must not eat the position, in ES: {row:?}"
     );
     assert!(
-        fila.contains("F12"),
-        "and the thumbnail notice is still present at the same time, in ES: {fila:?}"
+        row.contains("F12"),
+        "and the thumbnail notice is still present at the same time, in ES: {row:?}"
     );
 }
 
 /// Same case, in EN — separate process under nextest.
 #[test]
-fn en_kitty_sin_miniatura_el_visor_lo_dice_y_no_se_come_la_posicion_en_ingles() {
+fn in_kitty_without_thumbnail_the_viewer_says_so_and_does_not_eat_the_position_in_english() {
     let _ = norte_i18n::force(norte_i18n::Lang::En);
-    let fila = fila_de_estado_con_png_en_kitty_sin_miniatura();
+    let row = status_row_with_png_in_kitty_without_thumbnail();
     assert!(
-        fila.contains("2/3"),
-        "the notice must not eat the position, in EN: {fila:?}"
+        row.contains("2/3"),
+        "the notice must not eat the position, in EN: {row:?}"
     );
     assert!(
-        fila.contains("F12"),
-        "and the thumbnail notice is still present at the same time, in EN: {fila:?}"
+        row.contains("F12"),
+        "and the thumbnail notice is still present at the same time, in EN: {row:?}"
     );
 }
 
@@ -831,13 +830,13 @@ fn en_kitty_sin_miniatura_el_visor_lo_dice_y_no_se_come_la_posicion_en_ingles() 
 /// about" (brief). The content slot goes blank (T4), but the status bar
 /// stays the normal one (encoding/EOL/…), with no F12 text.
 #[test]
-fn en_kitty_con_miniatura_colocada_no_sale_el_aviso() {
+fn in_kitty_with_thumbnail_placed_the_warning_does_not_appear() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let dir = vp("mem:///");
     let mut app = app_en(&dir);
     app.chrome.images = Some(Images::Kitty);
     // Same as before: set the pinned mode by hand, see the comment in
-    // `fila_de_estado_con_png_en_kitty_sin_miniatura`.
+    // `status_row_with_png_in_kitty_without_thumbnail`.
     app.viewer_modo = Modo::Kitty;
     let path = vp("mem:///x.png");
     app.viewer = Some(norte_tui::viewer::Viewer::new(
@@ -845,14 +844,14 @@ fn en_kitty_con_miniatura_colocada_no_sale_el_aviso() {
         png_bytes_binarios(),
         false,
     ));
-    app.viewer_imagen = Some(ImagenColocada {
+    app.viewer_imagen = Some(ImagenPlaced {
         path,
         bytes: vec![0u8; 4],
         mimetype: "image/png".to_owned(),
         width: 8,
         height: 4,
         id: 1,
-        puesta_en: None,
+        placed_in: None,
     });
 
     let area = Rect::new(0, 0, 80, 16);
@@ -864,11 +863,11 @@ fn en_kitty_con_miniatura_colocada_no_sale_el_aviso() {
         .expect("draw");
     let buf = terminal.backend().buffer();
     let status_y = area.height - 1;
-    let fila: String = (0..area.width)
+    let row: String = (0..area.width)
         .map(|x| buf[(x, status_y)].symbol().chars().next().unwrap_or(' '))
         .collect();
     assert!(
-        !fila.contains("F12"),
-        "with pixels already placed there is nothing to warn about: {fila:?}"
+        !row.contains("F12"),
+        "with pixels already placed there is nothing to warn about: {row:?}"
     );
 }

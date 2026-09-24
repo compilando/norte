@@ -118,7 +118,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
         }
         block = block.title(Line::from(spans).right_aligned());
     }
-    // T5 (phase 5 WOW): with no plugin preview, a PNG in `Modo::Bloques`
+    // T5 (phase 5 WOW): with no plugin preview, a PNG in `Modo::Blocks`
     // falls back to hexview just like a file nobody knows how to interpret
     // — nothing on screen told the two cases apart until the pilot found
     // it.
@@ -148,41 +148,39 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // lives there: the right title right-aligns WITHOUT clipping when it
     // does not fit, so the warning's long text (with the F12 hint) used to
     // eat the whole left title — a real regression, caught by
-    // `snapshot_viewer_texto_y_hex`. The bottom status bar is full width and
+    // `snapshot_viewer_text_and_hex`. The bottom status bar is full width and
     // already yields the whole spot to `app.message` when there is one;
     // this warning follows the same pattern.
     //
     // Task 5b (T6 review finding): the same hole existed in `Modo::Kitty` —
     // with no `thumbnail` plugin approved, `viewer_for_width` never places
     // `App::viewer_imagen` and the viewer falls back to hexview as silently
-    // as `Modo::Bloques` with no previewer. Which condition makes the
-    // warning unnecessary depends on the mode — `Modo::Bloques`'s
+    // as `Modo::Blocks` with no previewer. Which condition makes the
+    // warning unnecessary depends on the mode — `Modo::Blocks`'s
     // `previewer` and `Modo::Kitty`'s `thumbnail` are two different
     // plugins, with separate documentation in
-    // `viewer_open::no_hace_falta_avisar_de_imagen` /
-    // `no_hace_falta_avisar_de_miniatura` (with the "simplify it to"
+    // `viewer_open::no_need_to_warn_about_image` /
+    // `no_need_to_warn_about_thumbnail` (with the "simplify it to"
     // `preview_plugin().is_some()` trap written on the first one); that
     // `match` decides which applies.
     let modo = app.viewer_modo;
     let no_warning_needed = match modo {
-        crate::viewer_open::Modo::Kitty => crate::viewer_open::no_hace_falta_avisar_de_miniatura(
-            viewer,
-            app.viewer_imagen.as_ref(),
-        ),
-        crate::viewer_open::Modo::Bloques | crate::viewer_open::Modo::Nada => {
-            crate::viewer_open::no_hace_falta_avisar_de_imagen(viewer)
+        crate::viewer_open::Modo::Kitty => {
+            crate::viewer_open::no_need_to_warn_about_thumbnail(viewer, app.viewer_imagen.as_ref())
+        }
+        crate::viewer_open::Modo::Blocks | crate::viewer_open::Modo::Nothing => {
+            crate::viewer_open::no_need_to_warn_about_image(viewer)
         }
     };
     // Against the viewer's path: a thumbnail rejected for the PREVIOUS file
     // says nothing about this one (the same trap
-    // `no_hace_falta_avisar_de_miniatura` documents for the already-placed
+    // `no_need_to_warn_about_thumbnail` documents for the already-placed
     // image).
     let foreign_format = app
-        .viewer_miniatura_ajena
+        .viewer_thumbnail_foreign
         .as_ref()
         .is_some_and(|p| *p == viewer.path);
-    let image_warning =
-        crate::viewer_open::aviso_de_imagen(modo, no_warning_needed, foreign_format);
+    let image_warning = crate::viewer_open::image_notice(modo, no_warning_needed, foreign_format);
     // `rect_del_visor` — the SAME function the run loop uses for the APC,
     // not a hand-written subtraction — is what guarantees that the slot
     // left blank below and the slot where the pixels land are structurally
@@ -197,7 +195,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
     // Branch review, finding 2: `imagen_a_colocar` (not a check separate
     // from the `path`) is the SAME function the run loop uses to decide
     // whether to place pixels — this line used to only look at `path`, and
-    // the run loop additionally added `!algo_encima_del_visor` and that the
+    // the run loop additionally added `!something_above_the_viewer` and that the
     // rect not be empty; with an overlay that does not cover the whole
     // screen (the menu, which-key…) this painter used to blank the slot as
     // always while the run loop refused to place pixels over it: neither
@@ -245,7 +243,7 @@ pub(crate) fn draw_viewer(frame: &mut Frame<'_>, viewer: &crate::viewer::Viewer,
             // case, not the rare one — losing `pos` here loses it exactly
             // where it is noticed most (a big PNG in hexview, scrolling
             // with no guide but the bar's thumb).
-            Some(aviso) => Line::styled(format!(" {aviso}  {pos}"), app.theme.role(Role::Info)),
+            Some(notice) => Line::styled(format!(" {notice}  {pos}"), app.theme.role(Role::Info)),
             None => Line::styled(
                 format!(" {}  {pos}", crate::viewer::status(viewer)),
                 app.theme.role(Role::StatusBar),
@@ -396,19 +394,19 @@ pub(crate) fn draw_plugin_panel(
     // not know (ADR 0059). The alphabet is demanded when it is DECLARED,
     // which is a different path. So it is masked like any name coming from
     // a file.
-    let titulo = app
+    let title = app
         .layout
         .kind_of(id)
-        .and_then(|k| crate::panelplugin::partes(k.as_str()).map(|(_, kind)| kind.to_owned()))
+        .and_then(|k| crate::panelplugin::parts(k.as_str()).map(|(_, kind)| kind.to_owned()))
         .map(|k| norte_frontend::display_name(k.as_bytes()).0)
         .unwrap_or_default();
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(format!(" {titulo} "))
+        .title(format!(" {title} "))
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(border));
     let lines: Vec<Line<'_>> = app
-        .paneles
+        .panels
         .get(id)
         .and_then(|p| p.frame.as_ref())
         .map(|f| frame_lines(f, &app.theme))
@@ -427,10 +425,9 @@ fn frame_lines<'a>(marco: &norte_frontend::frame::StyledFrame, theme: &TuiTheme)
     marco
         .lines
         .iter()
-        .map(|linea| {
+        .map(|line| {
             Line::from(
-                linea
-                    .iter()
+                line.iter()
                     .map(|span| Span::raw(span.text.clone()).style(span_style(span, theme)))
                     .collect::<Vec<_>>(),
             )
@@ -451,11 +448,11 @@ fn frame_lines<'a>(marco: &norte_frontend::frame::StyledFrame, theme: &TuiTheme)
 pub(crate) fn draw_disk_map(
     frame: &mut Frame<'_>,
     area: Rect,
-    mapa: &norte_frontend::diskmap::DiskMap,
+    map: &norte_frontend::diskmap::DiskMap,
     app: &App,
     with_keyboard: bool,
 ) {
-    use norte_frontend::diskmap::Estado;
+    use norte_frontend::diskmap::State;
 
     let border = if with_keyboard {
         Role::BorderFocus
@@ -465,24 +462,24 @@ pub(crate) fn draw_disk_map(
     // The title carries the STATUS, which is half the information:
     // "measuring" over a half-finished map is what keeps it from being read
     // as a total.
-    let estado = match mapa.estado() {
+    let estado = match map.state() {
         // Idle and Done add nothing, and it is the SAME result on purpose:
         // one is "nobody has asked for anything" and the other "it is
         // already done", and in both the title is enough on its own. What
         // needs to show is when it is NOT finished, because a half-finished
         // map that does not say so reads as a total.
-        Estado::Quieto | Estado::Hecho => String::new(),
-        Estado::Midiendo(_) => format!(" — {}", t("disk-map-measuring")),
-        Estado::Fallo(motivo) => format!(" — {motivo}"),
+        State::Idle | State::Done => String::new(),
+        State::Measuring(_) => format!(" — {}", t("disk-map-measuring")),
+        State::Failure(motivo) => format!(" — {motivo}"),
     };
     let block = Block::default()
         .borders(Borders::ALL)
         .title(format!(" {}{estado} ", t("disk-map-title")))
         .title_style(app.theme.role(Role::Title))
         .border_style(app.theme.role(border));
-    let dentro = block.inner(area);
+    let inside = block.inner(area);
     let marco =
-        norte_frontend::treemap::squarify(&mapa.informe().children, dentro.width, dentro.height);
+        norte_frontend::treemap::squarify(&map.report().children, inside.width, inside.height);
     let lines = frame_lines(&marco, &app.theme);
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
@@ -790,13 +787,13 @@ fn operand_text(row: &crate::tasks::TaskRow, app: &App, max: usize) -> String {
     let Some(p) = row.operand.as_ref() else {
         return String::new();
     };
-    let (texto, hostil) = norte_frontend::path_display_with(p, app.focused().name_encoding());
-    let texto = if hostil {
-        format!("{HOSTILE_BADGE} {texto}")
+    let (text, hostile) = norte_frontend::path_display_with(p, app.focused().name_encoding());
+    let text = if hostile {
+        format!("{HOSTILE_BADGE} {text}")
     } else {
-        texto
+        text
     };
-    norte_frontend::middle_ellipsis(&texto, max)
+    norte_frontend::middle_ellipsis(&text, max)
 }
 
 /// The processes panel (phase A): one row per task, with a bar and status.
@@ -932,7 +929,7 @@ pub(crate) fn draw_processes(
         );
         return;
     }
-    let cursor = processes.fila_o_cero(&app.board.task_ids());
+    let cursor = processes.row_or_zero(&app.board.task_ids());
     let items: Vec<ListItem<'_>> = rows
         .iter()
         .enumerate()
@@ -962,13 +959,13 @@ pub(crate) fn draw_processes(
             // snapshots — and both stay silent when unknown. A bar with no
             // speed says something is happening; with it, it says whether
             // waiting is worth it.
-            let ritmo = norte_frontend::tasks::human_rate(row.rate.bps());
-            let queda = norte_frontend::tasks::human_eta(row.rate.eta_secs(p));
-            let medida = match (ritmo.is_empty(), queda.is_empty()) {
+            let pace = norte_frontend::tasks::human_rate(row.rate.bps());
+            let remains = norte_frontend::tasks::human_eta(row.rate.eta_secs(p));
+            let measured = match (pace.is_empty(), remains.is_empty()) {
                 (true, true) => String::new(),
-                (false, true) => format!("{ritmo} "),
-                (true, false) => format!("{queda} "),
-                (false, false) => format!("{ritmo} · {queda} "),
+                (false, true) => format!("{pace} "),
+                (true, false) => format!("{remains} "),
+                (false, false) => format!("{pace} · {remains} "),
             };
             // The row's fixed width: the mark, the class, the bar, the
             // status and the FOUR spaces that separate them. What is left
@@ -984,14 +981,14 @@ pub(crate) fn draw_processes(
                 + kind.chars().count()
                 + 10
                 + state_txt.chars().count()
-                + medida.chars().count();
-            let hueco = usize::from(inner.width).saturating_sub(fijo);
-            let operando = operand_text(row, app, hueco);
-            let marca = if i == cursor { '▶' } else { ' ' };
-            let header = if operando.is_empty() {
-                format!("{marca} {kind} {bar} {medida}")
+                + measured.chars().count();
+            let slot = usize::from(inner.width).saturating_sub(fijo);
+            let operating = operand_text(row, app, slot);
+            let mark = if i == cursor { '▶' } else { ' ' };
+            let header = if operating.is_empty() {
+                format!("{mark} {kind} {bar} {measured}")
             } else {
-                format!("{marca} {kind} {operando} {bar} {medida}")
+                format!("{mark} {kind} {operating} {bar} {measured}")
             };
             let tail = match role {
                 Some(r) => Span::styled(state_txt, theme.role(r)),
@@ -1033,12 +1030,12 @@ pub(crate) fn draw_metadata(
     // cursor and watch whether the sheet moved. The path is clipped in the
     // middle and with a mark, like any other path in this file: the
     // block's border does not warn of a clip.
-    let titulo = match follows {
-        Some((ruta, hostil)) => format!(
+    let title = match follows {
+        Some((path, hostile)) => format!(
             " {} · {} ",
             t("metadata-title"),
             norte_frontend::middle_ellipsis(
-                &with_badge(ruta, *hostil),
+                &with_badge(path, *hostile),
                 (area.width as usize).saturating_sub(t("metadata-title").chars().count() + 6),
             )
         ),
@@ -1046,7 +1043,7 @@ pub(crate) fn draw_metadata(
     };
     let block = Block::default()
         .borders(Borders::ALL)
-        .title(titulo)
+        .title(title)
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
     let inner = block.inner(area);
@@ -1063,7 +1060,7 @@ pub(crate) fn draw_metadata(
     };
 
     let catalog = app.attr_catalog(e.path.scheme());
-    let ancho = inner.width as usize;
+    let width = inner.width as usize;
     let lines: Vec<Line<'_>> =
         norte_frontend::metadata::sheet(e, *is_parent_row, catalog, norte_i18n::active())
             .into_iter()
@@ -1076,12 +1073,12 @@ pub(crate) fn draw_metadata(
                 // as `⟨file⟩/home/oscar/projects`, which is another
                 // directory that also exists. It is the same rule as the
                 // rest of this file's paths.
-                let etiqueta = format!("{} ", f.label);
-                let sitio = ancho.saturating_sub(crate::ui::text::cells(&etiqueta));
+                let label = format!("{} ", f.label);
+                let place = width.saturating_sub(crate::ui::text::cells(&label));
                 let valor =
-                    norte_frontend::middle_ellipsis(&with_badge(&f.value, f.hostile), sitio);
+                    norte_frontend::middle_ellipsis(&with_badge(&f.value, f.hostile), place);
                 Line::from(vec![
-                    Span::styled(etiqueta, theme.role(Role::Title)),
+                    Span::styled(label, theme.role(Role::Title)),
                     Span::raw(valor),
                 ])
             })
@@ -1120,12 +1117,12 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
             // strip used to say " copy #7318349021 45% ", which is the same
             // line for any copy of anything.
             let fijo = 1 + kind.chars().count() + 2 + state.chars().count();
-            let hueco = usize::from(area.width).saturating_sub(fijo);
-            let operando = operand_text(row, app, hueco);
-            let head = if operando.is_empty() {
+            let slot = usize::from(area.width).saturating_sub(fijo);
+            let operating = operand_text(row, app, slot);
+            let head = if operating.is_empty() {
                 Span::raw(format!(" {kind} "))
             } else {
-                Span::raw(format!(" {kind} {operando} "))
+                Span::raw(format!(" {kind} {operating} "))
             };
             let tail = match role {
                 Some(r) => Span::styled(state, app.theme.role(r)),
@@ -1142,7 +1139,7 @@ pub(crate) fn draw_tasks(frame: &mut Frame<'_>, area: Rect, app: &App) {
 /// It used to live here until the window needed the same one (#326): two
 /// ideas of what time it is in each frontend's log panel is the kind of
 /// difference nobody notices until they compare two screenshots.
-use norte_frontend::format::hora_utc;
+use norte_frontend::format::time_utc;
 
 /// The log panel (#323): what is happening, without leaving the TUI.
 /// The terminal panel (#362): the shell's grid inside its frame.
@@ -1177,20 +1174,20 @@ pub(crate) fn draw_terminal(frame: &mut Frame<'_>, area: Rect, app: &App, with_k
             theme.role(Role::Muted),
         ));
     }
-    let dentro = block.inner(area);
+    let inside = block.inner(area);
     frame.render_widget(block, area);
     let Some(term) = app.terminal.as_ref() else {
         // With no shell the slot is still useful: it says there is none. An
         // empty panel with no explanation is what makes a panel distrusted.
         frame.render_widget(
             Paragraph::new(Line::styled(t("terminal-none"), theme.role(Role::Muted))),
-            dentro,
+            inside,
         );
         return;
     };
-    let p = term.pantalla();
-    frame.render_widget(Paragraph::new(crate::termpanel::filas(p)), dentro);
-    if let Some((x, y)) = crate::termpanel::cursor_en(p, dentro, with_keyboard) {
+    let p = term.screen();
+    frame.render_widget(Paragraph::new(crate::termpanel::rows(p)), inside);
+    if let Some((x, y)) = crate::termpanel::cursor_en(p, inside, with_keyboard) {
         frame.set_cursor_position((x, y));
     }
 }
@@ -1204,7 +1201,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
         Role::BorderUnfocused
     };
     let panel = &app.log_panel;
-    let fuente = crate::logview::fuente_efectiva(app);
+    let fuente = crate::logview::source_efectiva(app);
     // The title says the level, the SOURCE and the filter: without that, a
     // panel that looks empty cannot tell "nothing has happened" apart from
     // "you are filtering it out" or from "you are looking at the other
@@ -1217,14 +1214,14 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
     // possible mistake for the panel — with the daemon on `trace` and the
     // panel on `info`, the header would say `trace` while every `debug`
     // line crossing the socket is silently dropped.
-    let mut titulo = format!(" {} · {} ", t("log-title"), panel.level().label().trim());
+    let mut title = format!(" {} · {} ", t("log-title"), panel.level().label().trim());
     // The source only when there are two places a line could come from.
     // With no daemon there is no segment and nothing is missing: a plain
     // `ntc` has one process and one ring, and a sentence about the origin
     // would answer a question nobody asked — exactly the panel #326 left
     // behind.
-    if let Some(fuente_txt) = crate::logview::etiqueta_de_fuente(app, fuente) {
-        let _ = write!(titulo, "· {fuente_txt} ");
+    if let Some(source_txt) = crate::logview::source_label(app, fuente) {
+        let _ = write!(title, "· {source_txt} ");
     }
     // If some ring is capturing MORE than what is shown, it is said, and
     // with both in view each part says whom it is talking about. Asking for
@@ -1232,13 +1229,13 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
     // the rest of the session — on purpose, so that going and coming back
     // does not erase what happened in between — and without this line that
     // shows up nowhere.
-    let captura = crate::logview::nota_de_captura(app, fuente);
-    if !captura.is_empty() {
-        let _ = write!(titulo, "· {captura} ");
+    let capture = crate::logview::capture_note(app, fuente);
+    if !capture.is_empty() {
+        let _ = write!(title, "· {capture} ");
     }
     if !panel.filter().is_empty() {
         let _ = write!(
-            titulo,
+            title,
             "· /{} ",
             norte_encoding::mask_terminal_hazards(panel.filter())
         );
@@ -1248,13 +1245,13 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
     // opening lost. They are different numbers and do not add up. A ring
     // that silently drops the old stuff makes the reader look for a line
     // that was there and no longer is, and conclude the log is lying.
-    let descartes = crate::logview::nota_de_descartes(app, fuente);
+    let descartes = crate::logview::discard_note(app, fuente);
     if !descartes.is_empty() {
-        let _ = write!(titulo, "· {descartes} ");
+        let _ = write!(title, "· {descartes} ");
     }
     let mut block = Block::default()
         .borders(Borders::ALL)
-        .title(titulo)
+        .title(title)
         .title_style(theme.role(Role::Title))
         .border_style(theme.role(border));
     // The footer: either the filter being typed, or the keys. The field WINS
@@ -1272,12 +1269,12 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
         // same ring is promising something that does not exist. It is the
         // same rule as in the window, where the selector simply is not
         // painted.
-        let teclas = if app.log_remote.servicio == crate::logview::Servicio::Sirve {
+        let keys = if app.log_remote.servicio == crate::logview::Servicio::Serves {
             format!("{} · {}", t("log-keys"), t("log-keys-source"))
         } else {
             t("log-keys")
         };
-        block = block.title_bottom(Line::styled(format!(" {teclas} "), theme.role(Role::Info)));
+        block = block.title_bottom(Line::styled(format!(" {keys} "), theme.role(Role::Info)));
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1301,20 +1298,20 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
     // Both sources, mixed by timestamp and already filtered (#328).
     // Borrowed, not cloned: the ring already cloned once in its `snapshot`
     // and here at most one screen is painted.
-    let lineas = crate::logview::instantanea(app);
-    let visibles = crate::logview::visibles(app, &lineas);
+    let lines = crate::logview::snapshot(app);
+    let visible = crate::logview::visible(app, &lines);
     let alto = usize::from(inner.height);
-    let desde = panel.window_start(visibles.len(), alto);
-    if visibles.is_empty() {
+    let from = panel.window_start(visible.len(), alto);
+    if visible.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::styled(t("log-empty"), theme.role(Role::Title))),
             inner,
         );
         return;
     }
-    let pintadas: Vec<Line<'_>> = visibles
+    let pintadas: Vec<Line<'_>> = visible
         .iter()
-        .skip(desde)
+        .skip(from)
         .take(alto)
         .map(|(l, origen)| {
             let rol = match l.level {
@@ -1326,7 +1323,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
             // by someone who is not the reader: they go through the same
             // masking as any other foreign text before touching the
             // terminal.
-            let cuerpo =
+            let body =
                 norte_encoding::mask_terminal_hazards(&format!("{}: {}", l.target, l.message));
             // A DAEMON line is flagged in the margin, and only with both
             // sources on screen: with just one there is nothing to tell
@@ -1334,7 +1331,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
             // nothing. A rule and not a color, same as in the window: the
             // color is already taken by the level, which is what is
             // searched for at a glance.
-            let margen = match (fuente, origen) {
+            let margin = match (fuente, origen) {
                 (
                     norte_frontend::logpanel::LogSource::Both,
                     norte_frontend::logpanel::LogSource::Daemon,
@@ -1343,10 +1340,10 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
                 _ => "",
             };
             Line::from(vec![
-                Span::styled(margen, theme.role(Role::BorderUnfocused)),
-                Span::raw(format!("{} ", hora_utc(l.epoch_ms))),
+                Span::styled(margin, theme.role(Role::BorderUnfocused)),
+                Span::raw(format!("{} ", time_utc(l.epoch_ms))),
                 Span::styled(format!("{} ", l.level.label()), theme.role(rol)),
-                Span::raw(cuerpo),
+                Span::raw(body),
             ])
         })
         .collect();
@@ -1363,7 +1360,7 @@ pub(crate) fn draw_log(frame: &mut Frame<'_>, area: Rect, app: &App, with_keyboa
 #[must_use]
 pub(crate) fn rol_de_actor(actor_kind: &str) -> Role {
     match actor_kind {
-        norte_frontend::timeline::ACTOR_HUMANO => Role::Regular,
+        norte_frontend::timeline::ACTOR_HUMAN => Role::Regular,
         "agent" => Role::Warning,
         _ => Role::Info,
     }
@@ -1376,16 +1373,16 @@ pub(crate) fn rol_de_actor(actor_kind: &str) -> Role {
 /// dot is what carries the actor's color — the text stays legible and the
 /// class reads at a glance through the column, which is what a timeline is
 /// for.
-fn linea_de_timeline<'a>(
+fn timeline_line<'a>(
     fila: &norte_frontend::timeline::TimelineRow,
     theme: &TuiTheme,
-    ancho: usize,
+    width: usize,
 ) -> Line<'a> {
     use std::fmt::Write as _;
 
     let mut spans = vec![
         Span::styled(
-            format!("{} ", norte_frontend::format::hora_utc(fila.ts_ms)),
+            format!("{} ", norte_frontend::format::time_utc(fila.ts_ms)),
             theme.role(Role::BorderUnfocused),
         ),
         Span::styled("● ", theme.role(rol_de_actor(&fila.actor_kind))),
@@ -1410,15 +1407,15 @@ fn linea_de_timeline<'a>(
     if !fila.reversible {
         let _ = write!(cola, " · {}", t("timeline-irreversible"));
     }
-    let usado = spans.iter().map(Span::width).sum::<usize>() + super::text::cells(&cola);
-    let verbo = format!("{} ", fila.op);
-    let sitio = ancho
-        .saturating_sub(usado + super::text::cells(&verbo))
+    let used = spans.iter().map(Span::width).sum::<usize>() + super::text::cells(&cola);
+    let verb = format!("{} ", fila.op);
+    let place = width
+        .saturating_sub(used + super::text::cells(&verb))
         .max(1);
-    spans.push(Span::raw(verbo));
+    spans.push(Span::raw(verb));
     spans.push(Span::raw(norte_frontend::display::middle_ellipsis(
         &norte_frontend::timeline::path_label(&fila.path),
-        sitio,
+        place,
     )));
     if !cola.is_empty() {
         spans.push(Span::styled(cola, theme.role(Role::BorderUnfocused)));
@@ -1452,13 +1449,13 @@ pub(crate) fn draw_timeline(
     // in front while the cursor moves is what turns the list into a
     // decision.
     if with_keyboard && !timeline.is_empty() {
-        let c = timeline.resumen();
-        let texto = if c.no_hace_nada() {
+        let c = timeline.summary();
+        let text = if c.no_does_nothing() {
             t("timeline-undo-nothing")
         } else {
-            ta("timeline-undo-count", &[("n", &c.a_deshacer.to_string())])
+            ta("timeline-undo-count", &[("n", &c.to_undo.to_string())])
         };
-        block = block.title_bottom(Line::styled(format!(" {texto} "), theme.role(Role::Info)));
+        block = block.title_bottom(Line::styled(format!(" {text} "), theme.role(Role::Info)));
     }
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -1470,13 +1467,13 @@ pub(crate) fn draw_timeline(
         // CHECKED. A panel inherited from a saved layout has not asked yet,
         // and stating there that the journal is empty is the worst possible
         // mistake on a history screen.
-        let texto = if timeline.cargada() {
+        let text = if timeline.loaded() {
             t("timeline-empty")
         } else {
             t("timeline-loading")
         };
         frame.render_widget(
-            Paragraph::new(Line::styled(texto, theme.role(Role::Title))),
+            Paragraph::new(Line::styled(text, theme.role(Role::Title))),
             inner,
         );
         return;
@@ -1485,18 +1482,18 @@ pub(crate) fn draw_timeline(
     // The same window as any long list in this binary: what fits is
     // painted, not the whole history (`draw_pane`, and the reason measured
     // there).
-    let ventana = super::pane::painted_rows(
+    let window = super::pane::painted_rows(
         timeline.cursor().saturating_sub(alto.saturating_sub(1) / 2),
         timeline.len(),
         alto,
     );
-    let ancho = usize::from(inner.width);
+    let width = usize::from(inner.width);
     let items: Vec<ListItem<'_>> = timeline
         .rows()
         .iter()
-        .skip(ventana.start)
-        .take(ventana.len())
-        .map(|f| ListItem::new(linea_de_timeline(f, theme, ancho)))
+        .skip(window.start)
+        .take(window.len())
+        .map(|f| ListItem::new(timeline_line(f, theme, width)))
         .collect();
     let list = List::new(items).highlight_style(theme.role(if with_keyboard {
         Role::Selection
@@ -1504,7 +1501,7 @@ pub(crate) fn draw_timeline(
         Role::SelectionUnfocused
     }));
     let mut state = ListState::default();
-    state.select(timeline.cursor().checked_sub(ventana.start));
+    state.select(timeline.cursor().checked_sub(window.start));
     *state.offset_mut() = 0;
     frame.render_stateful_widget(list, inner, &mut state);
 }
@@ -1516,8 +1513,8 @@ mod draw_log_tests {
     use ratatui::backend::TestBackend;
 
     /// Paints the log panel and returns what was left in the buffer.
-    fn pintado(app: &App, ancho: u16, alto: u16) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(ancho, alto)).expect("test terminal");
+    fn painted(app: &App, width: u16, alto: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, alto)).expect("test terminal");
         terminal
             .draw(|f| draw_log(f, f.area(), app, true))
             .expect("draw");
@@ -1530,7 +1527,7 @@ mod draw_log_tests {
     /// `Display` adds, and the block's LEFT border, which is another `│`
     /// and which this test's first version confused with the daemon's
     /// rule — declaring a line from this terminal flagged as remote.
-    fn margen(fila: &str) -> String {
+    fn margin(fila: &str) -> String {
         fila.chars()
             .skip_while(|c| *c == '"')
             .skip(1)
@@ -1548,21 +1545,21 @@ mod draw_log_tests {
     /// them silently diverge (ADR 0077).
     #[test]
     fn the_panel_paints_the_terminal_and_the_daemon_and_tells_them_apart() {
-        let mut app = crate::app::testutil::app_dos_panes();
-        let anillo = norte_config::logring::LogRing::new(10);
+        let mut app = crate::app::testutil::app_two_panes();
+        let ring = norte_config::logring::LogRing::new(10);
         {
             use tracing_subscriber::layer::SubscriberExt as _;
-            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&anillo));
+            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&ring));
             tracing::subscriber::with_default(s, || tracing::info!("linea-de-la-terminal"));
         }
-        let local_ms = anillo.snapshot()[0].epoch_ms;
-        app.log_ring = Some(anillo);
+        let local_ms = ring.snapshot()[0].epoch_ms;
+        app.log_ring = Some(ring);
         app.log_remote.hay_daemon = true;
         app.toggle_log();
-        let epoca = app.log_remote.epoca;
-        crate::logview::aterrizar_tail(
+        let epoch = app.log_remote.epoch;
+        crate::logview::land_tail(
             &mut app,
-            epoca,
+            epoch,
             Ok(norte_proto::methods::LogTailResult {
                 lines: vec![norte_proto::methods::LogLine {
                     epoch_ms: local_ms + 1,
@@ -1579,12 +1576,12 @@ mod draw_log_tests {
             }),
         );
 
-        let texto = pintado(&app, 120, 8);
-        let fila_local = texto
+        let text = painted(&app, 120, 8);
+        let row_local = text
             .lines()
             .find(|l| l.contains("linea-de-la-terminal"))
             .expect("this terminal's line was not painted");
-        let fila_daemon = texto
+        let row_daemon = text
             .lines()
             .find(|l| l.contains("linea-del-daemon"))
             .expect("the daemon's line was not painted");
@@ -1592,14 +1589,14 @@ mod draw_log_tests {
         // terminal could not paint it", which read the same and are two
         // different failures.
         assert_eq!(
-            margen(fila_daemon),
+            margin(row_daemon),
             "│ ",
-            "the daemon's line was not flagged in the margin: {fila_daemon:?}"
+            "the daemon's line was not flagged in the margin: {row_daemon:?}"
         );
         assert_eq!(
-            margen(fila_local),
+            margin(row_local),
             "  ",
-            "this terminal's line was flagged as the daemon's: {fila_local:?}"
+            "this terminal's line was flagged as the daemon's: {row_local:?}"
         );
 
         // The level that gets FLAGGED is the one being SHOWN, across every
@@ -1607,20 +1604,20 @@ mod draw_log_tests {
         // header. With the header saying `trace` while the filter stays on
         // `info`, every DEBUG line from the daemon would cross the socket
         // and be silently dropped.
-        let cabecera = texto.lines().next().unwrap_or_default();
+        let header = text.lines().next().unwrap_or_default();
         assert!(
-            cabecera.contains(norte_config::logline::LogLevel::Info.label().trim()),
-            "the header does not flag the level being shown: {cabecera:?}"
+            header.contains(norte_config::logline::LogLevel::Info.label().trim()),
+            "the header does not flag the level being shown: {header:?}"
         );
         assert!(
-            texto.contains(&norte_i18n::ta(
+            text.contains(&norte_i18n::ta(
                 "log-capturing-daemon",
                 &[(
                     "level",
                     norte_config::logline::LogLevel::Trace.label().trim()
                 )]
             )),
-            "it does not say the daemon is capturing more than what is shown: {texto}"
+            "it does not say the daemon is capturing more than what is shown: {text}"
         );
     }
 
@@ -1629,18 +1626,18 @@ mod draw_log_tests {
     /// promises something that does not exist.
     #[test]
     fn the_source_key_is_only_offered_when_there_are_two() {
-        let mut app = crate::app::testutil::app_dos_panes();
+        let mut app = crate::app::testutil::app_two_panes();
         app.log_ring = Some(norte_config::logring::LogRing::new(10));
         app.toggle_log();
-        let sin = pintado(&app, 120, 8);
+        let sin = painted(&app, 120, 8);
         assert!(
             !sin.contains(&norte_i18n::t("log-keys-source")),
             "the source was offered with no second one to offer: {sin}"
         );
 
         app.log_remote.hay_daemon = true;
-        app.log_remote.servicio = crate::logview::Servicio::Sirve;
-        let con = pintado(&app, 120, 8);
+        app.log_remote.servicio = crate::logview::Servicio::Serves;
+        let con = painted(&app, 120, 8);
         assert!(
             con.contains(&norte_i18n::t("log-keys-source")),
             "with a daemon, the source key is not announced: {con}"
@@ -1657,23 +1654,23 @@ mod draw_log_tests {
     /// someone who does not exist.
     #[test]
     fn with_no_daemon_the_panel_is_326s() {
-        let mut app = crate::app::testutil::app_dos_panes();
-        let anillo = norte_config::logring::LogRing::new(10);
+        let mut app = crate::app::testutil::app_two_panes();
+        let ring = norte_config::logring::LogRing::new(10);
         {
             use tracing_subscriber::layer::SubscriberExt as _;
-            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&anillo));
+            let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(&ring));
             tracing::subscriber::with_default(s, || tracing::info!("una linea cualquiera"));
         }
-        app.log_ring = Some(anillo);
+        app.log_ring = Some(ring);
         app.toggle_log();
 
-        let texto = pintado(&app, 120, 8);
-        let cabecera = texto.lines().next().unwrap_or_default();
+        let text = painted(&app, 120, 8);
+        let header = text.lines().next().unwrap_or_default();
         assert!(
-            texto.contains("una linea cualquiera"),
-            "the usual panel stopped painting: {texto}"
+            text.contains("una linea cualquiera"),
+            "the usual panel stopped painting: {text}"
         );
-        for clave in [
+        for key in [
             "log-source-window",
             "log-source-both",
             "log-source-daemon",
@@ -1682,15 +1679,15 @@ mod draw_log_tests {
             "log-keys-source",
         ] {
             assert!(
-                !texto.contains(&norte_i18n::t(clave)),
-                "it talked about a daemon that does not exist ({clave}): {texto}"
+                !text.contains(&norte_i18n::t(key)),
+                "it talked about a daemon that does not exist ({key}): {text}"
             );
         }
         // And what does have to still be there: the title and the level.
         assert!(
-            cabecera.contains(&norte_i18n::t("log-title"))
-                && cabecera.contains(norte_config::logline::LogLevel::Info.label().trim()),
-            "the title lost what was its own: {cabecera:?}"
+            header.contains(&norte_i18n::t("log-title"))
+                && header.contains(norte_config::logline::LogLevel::Info.label().trim()),
+            "the title lost what was its own: {header:?}"
         );
     }
 }

@@ -258,7 +258,7 @@ mod tests {
     /// already arrived.
     #[test]
     fn caps_are_cached_by_location() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let mem = vp("mem:///");
         assert!(app.caps(&mem).is_none(), "nothing gets made up unseeded");
         app.insert_caps(&mem, test_caps());
@@ -308,7 +308,7 @@ mod tests {
     /// it can be written to.
     #[test]
     fn without_caps_yet_the_scheme_decides_read_only() {
-        let app = app_dos_panes();
+        let app = app_two_panes();
         assert!(!app.pane_read_only(0), "mem:// isn't read-only");
 
         let inside_a_zip = app_en("zip+file:///a.zip/!", "file:///home");
@@ -324,7 +324,7 @@ mod tests {
     /// remote mount) gets vetoed just the same.
     #[test]
     fn once_caps_arrive_the_read_only_flag_rules() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let dir = app.panes[0].dir().clone();
         app.insert_caps(
             &dir,
@@ -345,7 +345,7 @@ mod tests {
     /// would run.
     #[test]
     fn help_facts_follow_the_dispatch_predicates() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         // The cursor is on a plain File: it isn't entered, it's viewed.
         let f = app.help_facts();
         assert!(!f.enterable, "an ordinary file isn't entered");

@@ -316,9 +316,9 @@ pub struct SessionPush {
     /// Toward the writer. Capacity 1: if it is busy, this tick is skipped,
     /// which is coalescing and not loss —the next body carries the same and
     /// more—.
-    ordenes: tokio::sync::mpsc::Sender<SessionOrder>,
+    commands: tokio::sync::mpsc::Sender<SessionOrder>,
     /// From the writer.
-    avisos: tokio::sync::mpsc::Receiver<SessionNotice>,
+    notices: tokio::sync::mpsc::Receiver<SessionNotice>,
     /// The writer, to await it on exit.
     task: Option<tokio::task::JoinHandle<()>>,
 }
@@ -335,30 +335,30 @@ impl SessionPush {
         tokio::sync::mpsc::Receiver<SessionOrder>,
         tokio::sync::mpsc::Sender<SessionNotice>,
     ) {
-        let (ordenes_tx, ordenes_rx) = tokio::sync::mpsc::channel(1);
-        let (avisos_tx, avisos_rx) = tokio::sync::mpsc::channel(4);
+        let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(1);
+        let (notices_tx, notices_rx) = tokio::sync::mpsc::channel(4);
         (
             Self {
                 policy: norte_frontend::session::PushPolicy::new(OWNER_RETRY_TICKS),
-                ordenes: ordenes_tx,
-                avisos: avisos_rx,
+                commands: commands_tx,
+                notices: notices_rx,
                 task: None,
             },
-            ordenes_rx,
-            avisos_tx,
+            commands_rx,
+            notices_tx,
         )
     }
 
     /// Starts this run's session writer.
     pub fn start(backend: &Backend, revision: u64) -> Self {
-        let (ordenes_tx, ordenes_rx) = tokio::sync::mpsc::channel(1);
-        let (avisos_tx, avisos_rx) = tokio::sync::mpsc::channel(4);
+        let (commands_tx, commands_rx) = tokio::sync::mpsc::channel(1);
+        let (notices_tx, notices_rx) = tokio::sync::mpsc::channel(4);
         let b = backend.clone();
-        let task = tokio::spawn(write_session(b, revision, ordenes_rx, avisos_tx));
+        let task = tokio::spawn(write_session(b, revision, commands_rx, notices_tx));
         Self {
             policy: norte_frontend::session::PushPolicy::new(OWNER_RETRY_TICKS),
-            ordenes: ordenes_tx,
-            avisos: avisos_rx,
+            commands: commands_tx,
+            notices: notices_rx,
             task: Some(task),
         }
     }
@@ -371,13 +371,15 @@ impl SessionPush {
     /// exactly the write this path exists to not lose.
     pub async fn close(&mut self, last: Option<Arc<norte_frontend::session::SessionBody>>) {
         if let Some(body) = last {
-            let _ =
-                tokio::time::timeout(SHUTDOWN_GRACE, self.ordenes.send(SessionOrder::Write(body)))
-                    .await;
+            let _ = tokio::time::timeout(
+                SHUTDOWN_GRACE,
+                self.commands.send(SessionOrder::Write(body)),
+            )
+            .await;
         }
         let (empty, _) = tokio::sync::mpsc::channel(1);
         // Releasing the sender is what ends the writer's loop.
-        self.ordenes = empty;
+        self.commands = empty;
         if let Some(task) = self.task.take() {
             let _ = tokio::time::timeout(SHUTDOWN_GRACE, task).await;
         }
@@ -395,8 +397,8 @@ impl SessionPush {
 async fn write_session(
     backend: Backend,
     mut revision: u64,
-    mut ordenes: tokio::sync::mpsc::Receiver<SessionOrder>,
-    avisos: tokio::sync::mpsc::Sender<SessionNotice>,
+    mut commands: tokio::sync::mpsc::Receiver<SessionOrder>,
+    notices: tokio::sync::mpsc::Sender<SessionNotice>,
 ) {
     use norte_frontend::session::{SCHEMA_VERSION, SessionBody};
 
@@ -414,11 +416,11 @@ async fn write_session(
     // session has to be released. Remembered here and not done in the
     // `match` arm because writing comes next, and releasing before that
     // would leave the other frontend reading the screen from a second ago.
-    while let Some(order) = ordenes.recv().await {
+    while let Some(order) = commands.recv().await {
         let handing_off = matches!(order, SessionOrder::Handoff(_));
         let mut body = match order {
             SessionOrder::Ask => {
-                if let Some(rev) = preguntar_si_ya_es_mia(&backend, last.as_ref(), &avisos).await {
+                if let Some(rev) = ask_si_ya_es_mia(&backend, last.as_ref(), &notices).await {
                     revision = rev;
                     stopped = false;
                 }
@@ -432,7 +434,7 @@ async fn write_session(
             // old body inside. It answers that it could not, which is the
             // truth.
             if handing_off {
-                let _ = avisos
+                let _ = notices
                     .send(SessionNotice::HandedOff { released: false })
                     .await;
             }
@@ -484,7 +486,7 @@ async fn write_session(
                         written = true;
                     }
                 }
-                let _ = avisos.send(SessionNotice::Retry { orphans }).await;
+                let _ = notices.send(SessionNotice::Retry { orphans }).await;
             }
             Err(Error::LimitExceeded { .. }) => {
                 if truncating {
@@ -497,7 +499,7 @@ async fn write_session(
                     // the window degrades with the same one, and before it
                     // did not degrade.
                     body.degrade_for_size();
-                    let _ = avisos.send(SessionNotice::TooLarge).await;
+                    let _ = notices.send(SessionNotice::TooLarge).await;
                     match backend
                         .session_put(SCHEMA_VERSION, revision, body.to_value())
                         .await
@@ -518,7 +520,7 @@ async fn write_session(
             // any daemon handoff.
             Err(Error::PermissionDenied | Error::Cancelled) => {
                 stopped = true;
-                let _ = avisos.send(SessionNotice::Released).await;
+                let _ = notices.send(SessionNotice::Released).await;
             }
             // Any other failure —transport down, an `Io`, a timeout— does
             // NOT count the body as written: the screen considered it sent
@@ -526,7 +528,7 @@ async fn write_session(
             // until the reader moved something again.
             Err(e) => {
                 tracing::debug!(error = %e, "session could not be written");
-                let _ = avisos
+                let _ = notices
                     .send(SessionNotice::Retry {
                         orphans: std::collections::BTreeMap::new(),
                     })
@@ -535,7 +537,7 @@ async fn write_session(
         }
         // And the handoff, AFTER writing.
         if handing_off {
-            stopped |= soltar_para_relevo(&backend, written, &avisos).await;
+            stopped |= release_for_handoff(&backend, written, &notices).await;
         }
     }
 }
@@ -547,10 +549,10 @@ async fn write_session(
 /// previous session owner saved that this screen does not know about would
 /// be lost on the handoff's first dump, and that gap was a panel's history
 /// its owner was going to come back to (#231).
-async fn preguntar_si_ya_es_mia(
+async fn ask_si_ya_es_mia(
     backend: &Backend,
     last: Option<&norte_frontend::session::SessionBody>,
-    avisos: &tokio::sync::mpsc::Sender<SessionNotice>,
+    notices: &tokio::sync::mpsc::Sender<SessionNotice>,
 ) -> Option<u64> {
     use norte_frontend::session::SessionBody;
 
@@ -562,7 +564,7 @@ async fn preguntar_si_ya_es_mia(
     let orphans = SessionBody::from_value(session.version, &session.body)
         .map(|remote| foreign_orphans(last.unwrap_or(&SessionBody::default()), &remote))
         .unwrap_or_default();
-    let _ = avisos
+    let _ = notices
         .send(SessionNotice::Owner { revision, orphans })
         .await;
     Some(revision)
@@ -578,13 +580,13 @@ async fn preguntar_si_ya_es_mia(
 /// handing off. A `release` answering `false` —we were not the owner—
 /// leaves the handoff undone, and whoever asked for it finds out: launching
 /// the other half then would open a blank window.
-async fn soltar_para_relevo(
+async fn release_for_handoff(
     backend: &Backend,
     written: bool,
-    avisos: &tokio::sync::mpsc::Sender<SessionNotice>,
+    notices: &tokio::sync::mpsc::Sender<SessionNotice>,
 ) -> bool {
     let released = written && backend.session_release().await.unwrap_or(false);
-    let _ = avisos.send(SessionNotice::HandedOff { released }).await;
+    let _ = notices.send(SessionNotice::HandedOff { released }).await;
     // We are no longer the owner: stopping writing is the honest thing, and
     // the screen goes detached on receiving the notice.
     released
@@ -626,7 +628,7 @@ pub fn push_session(app: &mut App, st: &mut SessionPush) {
     match st.policy.tick(app.session.detached, app.modal.is_some()) {
         norte_frontend::session::PushStep::Skip => return,
         norte_frontend::session::PushStep::Ask => {
-            let _ = st.ordenes.try_send(SessionOrder::Ask);
+            let _ = st.commands.try_send(SessionOrder::Ask);
             return;
         }
         norte_frontend::session::PushStep::Capture => {}
@@ -637,7 +639,7 @@ pub fn push_session(app: &mut App, st: &mut SessionPush) {
     // `try_send` and not `send`: with the writer busy, this tick is skipped
     // and the next one sends a newer body. And `last` is only updated if it
     // was truly sent, or a skipped body would be counted as written.
-    match st.ordenes.try_send(SessionOrder::Write(Arc::clone(&body))) {
+    match st.commands.try_send(SessionOrder::Write(Arc::clone(&body))) {
         Ok(()) => st.policy.sent(body),
         Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {}
         // The writer died (a panic inside the task). Without this the
@@ -663,7 +665,7 @@ pub fn push_session(app: &mut App, st: &mut SessionPush) {
 /// which is correct for a gesture the human just requested and can repeat.
 pub fn request_handoff(app: &mut App, st: &mut SessionPush) -> bool {
     let body = Arc::new(app.session_body_for_handoff());
-    if st.ordenes.try_send(SessionOrder::Handoff(body)).is_err() {
+    if st.commands.try_send(SessionOrder::Handoff(body)).is_err() {
         app.message = Some(t("msg-handoff-failed"));
         return false;
     }
@@ -684,7 +686,7 @@ pub fn reclaim_soon(st: &mut SessionPush) {
 
 /// What the writer has reported since the last round.
 pub fn drain_notices(app: &mut App, st: &mut SessionPush) {
-    while let Ok(notice) = st.avisos.try_recv() {
+    while let Ok(notice) = st.notices.try_recv() {
         match notice {
             SessionNotice::TooLarge => app.message = Some(t("msg-session-too-large")),
             SessionNotice::Retry { orphans } => {
@@ -789,7 +791,7 @@ mod session_push_tests {
     /// Paused tokio clock: the provider's latency and the deadline are the
     /// same virtual clock, so this is deterministic and does not sleep.
     #[tokio::test(start_paused = true)]
-    async fn restaurar_la_sesion_no_puede_colgar_el_arranque() {
+    async fn restoring_the_session_cannot_hang_startup() {
         use norte_core::backend::Backend;
         use std::sync::Arc;
         use std::time::Duration;
@@ -849,15 +851,15 @@ mod session_push_tests {
     /// not requesting a connection. The question is opened by the first
     /// gesture over that panel.
     #[tokio::test]
-    async fn un_hueco_que_pide_secreto_al_restaurar_lo_dice_y_no_finge_vacio() {
+    async fn a_slot_that_asks_for_a_secret_on_restore_says_so_and_does_not_fake_empty() {
         use norte_core::backend::Backend;
         use std::sync::Arc;
 
         /// Provider that only knows how to ask for `rosetta`'s password.
-        struct PideSecreto;
+        struct AsksSecret;
 
         #[async_trait::async_trait]
-        impl norte_vfs::Provider for PideSecreto {
+        impl norte_vfs::Provider for AsksSecret {
             fn scheme(&self) -> &'static str {
                 "mem"
             }
@@ -901,7 +903,7 @@ mod session_push_tests {
         }
 
         let engine = norte_core::Engine::new();
-        engine.register_provider(Arc::new(PideSecreto));
+        engine.register_provider(Arc::new(AsksSecret));
         let backend = Backend::Embedded(Arc::new(engine));
         let d = VPath::parse("mem:///").expect("test wire");
         let mut app = App::new(Pane::new(d.clone(), Vec::new()), Pane::new(d, Vec::new()));
@@ -939,7 +941,7 @@ mod session_push_tests {
     /// state, not a notice, so a key does not clear it and it does not
     /// survive the listing.
     #[test]
-    fn la_marca_de_sin_listar_se_va_con_el_primer_listado() {
+    fn the_unlisted_mark_goes_away_with_the_first_listing() {
         let d = VPath::parse("mem:///").expect("test wire");
         let mut p = Pane::new(d.clone(), Vec::new());
         p.unlisted = true;
@@ -953,37 +955,37 @@ mod session_push_tests {
     /// guarantee that was wanted, because the cost of that `await` was one
     /// lost key per second while navigating, and no assert shows that.
     #[test]
-    fn mandar_la_sesion_no_bloquea_el_bucle() {
+    fn sending_the_session_does_not_block_the_loop() {
         let mut app = app();
-        let (mut st, mut ordenes, _avisos) = SessionPush::for_test();
+        let (mut st, mut commands, _notices) = SessionPush::for_test();
         push_session(&mut app, &mut st);
         assert!(
-            matches!(ordenes.try_recv(), Ok(SessionOrder::Write(_))),
+            matches!(commands.try_recv(), Ok(SessionOrder::Write(_))),
             "the first round sends the screen"
         );
         // And the same thing is not sent twice: coalescing is the whole
         // point of this.
         push_session(&mut app, &mut st);
-        assert!(ordenes.try_recv().is_err(), "nothing has changed");
+        assert!(commands.try_recv().is_err(), "nothing has changed");
     }
 
     /// A DETACHED window does not write, but it asks again (#234): the
     /// owner may have closed, and there is no notification to report it.
     #[test]
-    fn una_ventana_suelta_no_escribe_y_vuelve_a_preguntar() {
+    fn a_detached_window_does_not_write_and_asks_again() {
         let mut app = app();
         app.session.detached = true;
-        let (mut st, mut ordenes, _avisos) = SessionPush::for_test();
+        let (mut st, mut commands, _notices) = SessionPush::for_test();
         for _ in 0..OWNER_RETRY_TICKS - 1 {
             push_session(&mut app, &mut st);
             assert!(
-                ordenes.try_recv().is_err(),
+                commands.try_recv().is_err(),
                 "detached neither writes nor asks"
             );
         }
         push_session(&mut app, &mut st);
         assert!(
-            matches!(ordenes.try_recv(), Ok(SessionOrder::Ask)),
+            matches!(commands.try_recv(), Ok(SessionOrder::Ask)),
             "at {OWNER_RETRY_TICKS} ticks it asks"
         );
     }
@@ -992,10 +994,10 @@ mod session_push_tests {
     /// message bar: they are a state, the persistent indicator paints it,
     /// and a message per handoff was noise over something already visible.
     #[test]
-    fn soltar_y_tomar_la_sesion_no_dejan_mensaje() {
+    fn dropping_and_taking_the_session_leave_no_message() {
         let mut app = app();
-        let (mut st, _ordenes, avisos) = SessionPush::for_test();
-        avisos.try_send(SessionNotice::Released).expect("fits");
+        let (mut st, _commands, notices) = SessionPush::for_test();
+        notices.try_send(SessionNotice::Released).expect("fits");
         push_session(&mut app, &mut st);
         assert!(app.session.detached, "detached");
         assert!(app.message.is_none(), "no message: {:?}", app.message);
@@ -1004,7 +1006,7 @@ mod session_push_tests {
             "the persistent indicator says so"
         );
 
-        avisos
+        notices
             .try_send(SessionNotice::Owner {
                 revision: 3,
                 orphans: std::collections::BTreeMap::new(),
@@ -1022,11 +1024,11 @@ mod session_push_tests {
     /// And when the writer says it is already the owner, this window
     /// starts writing again from whatever revision it is given.
     #[test]
-    fn al_tomar_la_propiedad_se_vuelve_a_escribir() {
+    fn taking_ownership_writes_again() {
         let mut app = app();
         app.session.detached = true;
-        let (mut st, mut ordenes, avisos) = SessionPush::for_test();
-        avisos
+        let (mut st, mut commands, notices) = SessionPush::for_test();
+        notices
             .try_send(SessionNotice::Owner {
                 revision: 9,
                 orphans: std::collections::BTreeMap::new(),
@@ -1036,7 +1038,7 @@ mod session_push_tests {
         assert!(!app.session.detached);
         assert_eq!(app.session.revision, 9);
         assert!(
-            matches!(ordenes.try_recv(), Ok(SessionOrder::Write(_))),
+            matches!(commands.try_recv(), Ok(SessionOrder::Write(_))),
             "and it writes now"
         );
     }
@@ -1045,19 +1047,19 @@ mod session_push_tests {
     /// a single round's conflict left the screen unsaved until the reader
     /// moved something again.
     #[test]
-    fn lo_que_no_llego_se_vuelve_a_mandar() {
+    fn what_did_not_arrive_is_sent_again() {
         let mut app = app();
-        let (mut st, mut ordenes, avisos) = SessionPush::for_test();
+        let (mut st, mut commands, notices) = SessionPush::for_test();
         push_session(&mut app, &mut st);
-        assert!(ordenes.try_recv().is_ok());
-        avisos
+        assert!(commands.try_recv().is_ok());
+        notices
             .try_send(SessionNotice::Retry {
                 orphans: std::collections::BTreeMap::new(),
             })
             .expect("fits");
         push_session(&mut app, &mut st);
         assert!(
-            matches!(ordenes.try_recv(), Ok(SessionOrder::Write(_))),
+            matches!(commands.try_recv(), Ok(SessionOrder::Write(_))),
             "it is sent again even though the screen has not changed"
         );
     }
@@ -1069,16 +1071,16 @@ mod session_push_tests {
     /// —a slow `fsync`, a stalled daemon—, which is the case it was added
     /// for.
     #[tokio::test]
-    async fn la_ultima_foto_al_salir_espera_su_turno() {
+    async fn the_last_snapshot_on_exit_waits_its_turn() {
         let mut app = app();
-        let (mut st, mut ordenes, _avisos) = SessionPush::for_test();
+        let (mut st, mut commands, _notices) = SessionPush::for_test();
         // The writer is busy: the channel already carries an unconsumed
         // order.
-        st.ordenes.try_send(SessionOrder::Ask).expect("fits one");
+        st.commands.try_send(SessionOrder::Ask).expect("fits one");
         let last = capture_session(&mut app, &mut st).expect("there is a screen to save");
         let received = tokio::spawn(async move {
             let mut v = Vec::new();
-            while let Some(o) = ordenes.recv().await {
+            while let Some(o) = commands.recv().await {
                 v.push(o);
             }
             v
@@ -1102,16 +1104,16 @@ mod session_push_tests {
     /// Without the state, the window believed itself the owner and never
     /// saved again for the rest of its life — nor did it show it.
     #[test]
-    fn perder_la_propiedad_se_dice_y_se_vuelve_a_preguntar() {
+    fn losing_ownership_is_reported_and_asked_again() {
         let mut app = app();
-        let (mut st, mut ordenes, avisos) = SessionPush::for_test();
-        avisos.try_send(SessionNotice::Released).expect("fits");
+        let (mut st, mut commands, notices) = SessionPush::for_test();
+        notices.try_send(SessionNotice::Released).expect("fits");
         push_session(&mut app, &mut st);
         assert!(app.session.detached, "this window no longer rules");
         assert!(app.session_banner().is_some(), "and the indicator shows it");
         // And on the next tick it asks, without waiting the thirty seconds.
         push_session(&mut app, &mut st);
-        assert!(matches!(ordenes.try_recv(), Ok(SessionOrder::Ask)));
+        assert!(matches!(commands.try_recv(), Ok(SessionOrder::Ask)));
     }
 
     /// **The handoff keeps what the one who left had saved.**
@@ -1121,13 +1123,13 @@ mod session_push_tests {
     /// the window taking over the session overwrote, on its first dump,
     /// everything the other one had saved while this one ran detached.
     #[test]
-    fn al_tomar_el_relevo_no_se_pisa_lo_que_guardaba_la_otra() {
+    fn taking_the_handoff_does_not_overwrite_what_the_other_saved() {
         let mut app = app();
         app.session.detached = true;
-        let (mut st, _ordenes, avisos) = SessionPush::for_test();
+        let (mut st, _commands, notices) = SessionPush::for_test();
         let mut orphans = std::collections::BTreeMap::new();
         orphans.insert(77, slot("file:///lo-suyo"));
-        avisos
+        notices
             .try_send(SessionNotice::Owner {
                 revision: 5,
                 orphans,
@@ -1146,10 +1148,10 @@ mod session_push_tests {
     /// A dead writer does not leave the screen talking to itself: saving
     /// stops and the bar's indicator shows it.
     #[test]
-    fn si_el_escritor_se_muere_la_pantalla_se_entera() {
+    fn if_the_writer_dies_the_screen_finds_out() {
         let mut app = app();
-        let (mut st, ordenes, _avisos) = SessionPush::for_test();
-        drop(ordenes);
+        let (mut st, commands, _notices) = SessionPush::for_test();
+        drop(commands);
         push_session(&mut app, &mut st);
         assert!(app.session.detached);
         assert!(app.session_banner().is_some());
@@ -1159,7 +1161,7 @@ mod session_push_tests {
     /// slots the LIVE layout has are ours —this screen is the one that just
     /// moved—; the rest go back to the orphans corner.
     #[test]
-    fn de_un_conflicto_se_conservan_los_huecos_ajenos() {
+    fn from_a_conflict_the_other_slots_are_kept() {
         let mut local = norte_frontend::session::SessionBody::default();
         local.slots.insert(1, slot("file:///mio"));
         let mut remote = norte_frontend::session::SessionBody::default();

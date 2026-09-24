@@ -1,16 +1,16 @@
 //! Shutting the host down.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// Shuts down: flushes the session if this window owns it, and SAYS if
     /// something was left unwritten.
     ///
@@ -18,7 +18,7 @@ impl Estado {
     /// after navigating save the new directory and not the previous one. A
     /// last-moment conflict is not retried wildly: it is reported, which is
     /// the only honest thing to do once there is no screen left to fix it.
-    pub(super) async fn apagar(&mut self, backend: &dyn HostBackend) -> ShutdownReport {
+    pub(super) async fn turn_off(&mut self, backend: &dyn HostBackend) -> ShutdownReport {
         // A task still alive at shutdown is unfinished work, whether the
         // session says so or not: closing mid-copy and reporting "all good"
         // is exactly what this report exists not to do.
@@ -30,27 +30,32 @@ impl Estado {
                     | crate::dto::TaskStateView::Paused
             )
         });
-        if !self.sesion.owner || self.sesion.futuro {
+        if !self.session.owner || self.session.futuro {
             // A loose window does not write, and a future session is not
             // clobbered.
             return ShutdownReport {
                 incomplete: has_tasks,
             };
         }
-        let now = u64::try_from(ahora_ms()).unwrap_or(0);
-        let mut body = self.capturar_sesion();
+        let now = u64::try_from(now_ms()).unwrap_or(0);
+        let mut body = self.capture_session();
         // With a tick's write IN FLIGHT, another is not sent on top of it: it
         // would carry the same revision and one of the two would conflict for
         // sure. If what was being written is what's there now, there is
         // nothing left to write; if not, the last one did not make it, and
         // that is what gets reported.
-        if let Some(in_flight) = &self.sesion.en_vuelo {
+        if let Some(in_flight) = &self.session.in_flight {
             return ShutdownReport {
                 incomplete: has_tasks || **in_flight != body,
             };
         }
-        let alive: Vec<SlotId> = self.huecos.keys().map(|id| SlotId(*id)).collect();
-        if self.sesion.policy.prepare(&mut body, &alive, now).is_none() {
+        let alive: Vec<SlotId> = self.slots.keys().map(|id| SlotId(*id)).collect();
+        if self
+            .session
+            .policy
+            .prepare(&mut body, &alive, now)
+            .is_none()
+        {
             // Nothing changed since the last thing sent.
             return ShutdownReport {
                 incomplete: has_tasks,
@@ -62,7 +67,7 @@ impl Estado {
         let put_result = backend
             .session_put(
                 norte_frontend::session::SCHEMA_VERSION,
-                self.sesion.revision,
+                self.session.revision,
                 json,
             )
             .await;
@@ -88,7 +93,7 @@ impl Estado {
                     backend
                         .session_put(
                             norte_frontend::session::SCHEMA_VERSION,
-                            self.sesion.revision,
+                            self.session.revision,
                             json,
                         )
                         .await
@@ -102,11 +107,11 @@ impl Estado {
         // and ours is reported as not having made it. Overwriting it would
         // lose someone's session.
         let Ok(rev) = put_result else {
-            self.sesion.policy.resend();
+            self.session.policy.resend();
             return ShutdownReport { incomplete: true };
         };
-        self.sesion.revision = rev;
-        self.sesion.policy.sent(std::sync::Arc::new(body));
+        self.session.revision = rev;
+        self.session.policy.sent(std::sync::Arc::new(body));
         ShutdownReport {
             incomplete: has_tasks,
         }

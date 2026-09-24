@@ -13,7 +13,7 @@
 /// Not `file:`, not `data:`, not `javascript:`, nothing of the system: a link
 /// that appears in a help topic, in a plugin's output or in a file name is
 /// DATA, and data does not choose what program gets launched.
-pub const ESQUEMAS: &[&str] = &["https", "http", "mailto"];
+pub const SCHEMES: &[&str] = &["https", "http", "mailto"];
 
 /// Why it is not opened.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -65,7 +65,7 @@ pub fn validar(url: &str) -> Result<(), LinkError> {
     // `javascript:` to the browser, and a list that only looks at lowercase
     // is a list you can skip past by writing uppercase.
     let scheme = scheme.to_ascii_lowercase();
-    if !ESQUEMAS.contains(&scheme.as_str()) {
+    if !SCHEMES.contains(&scheme.as_str()) {
         return Err(LinkError::Scheme);
     }
     if scheme == "mailto" && rest.contains('?') {

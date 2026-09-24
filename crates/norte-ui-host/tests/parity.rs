@@ -7,7 +7,7 @@
 //! surfaces to start reading differently without anything turning red.
 //!
 //! Each scenario runs THREE times — against bare `norte_frontend::PaneState`
-//! + `nav::History`, against the host through its actions and snapshots, and
+//! plus `nav::History`, against the host through its actions and snapshots, and
 //! against `norte-tui` through its own decision functions — and the
 //! SEMANTIC state is compared step by step: where the cursor is, what is
 //! marked, which directory is shown and with which names. Never pixels.
@@ -41,8 +41,8 @@ use norte_ui_host::action::UiAction;
 use norte_ui_host::dto::SlotView;
 use norte_ui_host::{UiHost, UiHostOptions, UiSubscription, Update, ViewSnapshot, dto::UiUpdate};
 
-mod backend_falso;
-use backend_falso::{Falso, arbol_de_prueba};
+mod backend_fake;
+use backend_fake::{Fake, test_tree};
 
 /// A scenario step, in SEMANTIC vocabulary: neither keys nor bridge actions,
 /// so the comparison does not depend on how each surface gets there.
@@ -80,7 +80,7 @@ struct Semantic {
 
 /// The scenario run against the bare shared primitives.
 fn via_primitives(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
-    let tree = arbol_de_prueba();
+    let tree = test_tree();
     let start = VPath::parse("mem:///casa").expect("vpath");
     let mut pane = PaneState::new(start.clone(), entries_of(&tree, &start));
     pane.set_parent_row(parent_row);
@@ -191,7 +191,7 @@ fn via_primitives(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
 fn via_tui(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
     use norte_tui::app::{App, Pane};
 
-    let tree = arbol_de_prueba();
+    let tree = test_tree();
     let start = VPath::parse("mem:///casa").expect("vpath");
     let mut app = App::new(
         Pane::new(start.clone(), entries_of(&tree, &start)),
@@ -276,7 +276,7 @@ fn via_tui(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
 }
 
 /// A terminal `cd`: record the step, remember the cursor, list.
-fn cd_tui(app: &mut norte_tui::app::App, target: &VPath, tree: &Falso) {
+fn cd_tui(app: &mut norte_tui::app::App, target: &VPath, tree: &Fake) {
     let previous = app.focused().dir().clone();
     let slot = app.panes.slot_of(app.focus());
     if previous != *target {
@@ -320,7 +320,7 @@ fn navigate(
     history: &mut History,
     target: &VPath,
     trail: Trail,
-    tree: &Falso,
+    tree: &Fake,
 ) {
     let previous = pane.dir().clone();
     if previous != *target && trail == Trail::Record {
@@ -330,8 +330,8 @@ fn navigate(
     pane.set_listing(target.clone(), entries_of(tree, target));
 }
 
-fn entries_of(tree: &Falso, dir: &VPath) -> Vec<Entry> {
-    tree.entradas_de(dir)
+fn entries_of(tree: &Fake, dir: &VPath) -> Vec<Entry> {
+    tree.entries_of(dir)
 }
 
 fn primitives_snapshot(pane: &PaneState) -> Semantic {
@@ -365,16 +365,16 @@ fn primitives_snapshot(pane: &PaneState) -> Semantic {
 
 /// The same scenario, against the host, through its actions and snapshots.
 async fn via_host(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
-    let backend = Arc::new(arbol_de_prueba());
+    let backend = Arc::new(test_tree());
     let (host, first) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         // Each scenario runs TWICE, with the `..` row off and on, and both
@@ -382,7 +382,7 @@ async fn via_host(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
         // test the one state nobody starts in: out of the box the row is
         // there, and the cursor is born right on top of it.
         settings: {
-            let mut cfg = norte_ui_host::ajustes_por_defecto();
+            let mut cfg = norte_ui_host::default_settings();
             cfg.common.ui_parent_entry = Some(parent_row);
             cfg
         },
@@ -390,8 +390,8 @@ async fn via_host(steps: &[Step], parent_row: bool) -> Vec<Semantic> {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -710,20 +710,20 @@ async fn profile_start_opens_the_same_thing_on_both() {
         std::collections::BTreeMap::from([(1, VPath::parse("mem:///casa/fotos").expect("vpath"))]);
 
     // The WINDOW: starts with the configuration and no session to read.
-    let backend = Arc::new(arbol_de_prueba());
+    let backend = Arc::new(test_tree());
     let (host, first) = UiHost::start(UiHostOptions {
         backend,
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: {
-            let mut cfg = norte_ui_host::ajustes_por_defecto();
+            let mut cfg = norte_ui_host::default_settings();
             cfg.common.profile_start = start.clone();
             cfg
         },
@@ -731,8 +731,8 @@ async fn profile_start_opens_the_same_thing_on_both() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -741,7 +741,7 @@ async fn profile_start_opens_the_same_thing_on_both() {
     drop(host);
 
     // The TERMINAL: the same startup, by its own path.
-    let tree = arbol_de_prueba();
+    let tree = test_tree();
     let start_dir = VPath::parse("mem:///casa").expect("vpath");
     let mut app = norte_tui::app::App::new(
         norte_tui::app::Pane::new(start_dir.clone(), entries_of(&tree, &start_dir)),

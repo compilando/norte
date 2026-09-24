@@ -18,7 +18,7 @@ use crate::keymap::{COMMANDS, Effective, help_id};
 /// Builds the rows for ALL commands in [`COMMANDS`] (browse + viewer share
 /// the same catalogue, ADR 0006): the description comes from `help-cmd-*`
 /// (the SAME source as F1 — the i18n suite already requires it to exist,
-/// `todo_comando_tiene_ayuda_traducida`), the chord is the FIRST key by real
+/// `every_command_has_translated_help`), the chord is the FIRST key by real
 /// precedence in the effective `browse`, or, if the command does not live
 /// there (it is `viewer.*`), the effective `viewer`'s; with none, `"—"` (a
 /// valid command with no key in THIS preset+layers — the palette remains the

@@ -97,7 +97,7 @@ pub(crate) fn draw_extensions(
             // rest, like the buttons they are. Without this difference
             // `tab` would move something invisible, which is how it was
             // before the ring existed.
-            let role = if mgr.foco == crate::app::ExtFoco::Boton(n) {
+            let role = if mgr.focus == crate::app::ExtFocus::Button(n) {
                 Role::Selection
             } else {
                 Role::Button
@@ -380,7 +380,7 @@ fn extensions_list_lines<'a>(
     // With focus on a card button, the list's cursor dims: two cursors
     // equally bright do not say which one receives the keys, which is what
     // `SelectionUnfocused` exists for.
-    let cursor_role = if mgr.foco == crate::app::ExtFoco::Lista {
+    let cursor_role = if mgr.focus == crate::app::ExtFocus::List {
         Role::Selection
     } else {
         Role::SelectionUnfocused

@@ -765,7 +765,7 @@ impl Backend {
                 match spool.drop_connection(EMBEDDED_CONN_ID).await {
                     Ok(report) if report.is_clean() => {}
                     Ok(report) => {
-                        tracing::warn!(failed = report.failed, "sync spools were left undeleted")
+                        tracing::warn!(failed = report.failed, "sync spools were left undeleted");
                     }
                     Err(e) => tracing::warn!(error = %e, "could not release the spool"),
                 }

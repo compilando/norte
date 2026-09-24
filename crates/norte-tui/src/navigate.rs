@@ -54,7 +54,7 @@ pub fn cd_landed_pane(outcome: &Cd) -> Option<usize> {
         // The READER's: it is the one that sorts its listing, requests
         // decorations and drags the tree along. The mirror's settles on its
         // own in [`settle_cd`], which splits the two apart.
-        Cd::Espejado { lector, .. } => cd_landed_pane(lector),
+        Cd::Espejado { reader, .. } => cd_landed_pane(reader),
     }
 }
 
@@ -122,9 +122,9 @@ pub enum Cd {
     /// and with `loading` set forever (#78).
     Espejado {
         /// The panel's the reader moved.
-        lector: Box<Cd>,
+        reader: Box<Cd>,
         /// The panel's that repeated it.
-        espejo: Box<Cd>,
+        mirror: Box<Cd>,
     },
 }
 
@@ -190,7 +190,11 @@ pub fn settle_cd(
     // decorations, volumes — because both replaced a listing. Settling only
     // the reader's left the other panel with no icons and the previous
     // scheme's sort order.
-    if let Cd::Espejado { lector, espejo } = outcome {
+    if let Cd::Espejado {
+        reader,
+        mirror: espejo,
+    } = outcome
+    {
         settle_cd(
             app,
             backend,
@@ -198,7 +202,7 @@ pub fn settle_cd(
             decorate_fetch,
             last_probed,
             search_run,
-            *lector,
+            *reader,
         );
         settle_cd(
             app,
@@ -294,14 +298,17 @@ pub fn apply_cd(
         ),
         // Both, each against ITS OWN pane. The order does not matter: they
         // are different panes, and the fill slots are indexed by pane.
-        Cd::Espejado { lector, espejo } => {
+        Cd::Espejado {
+            reader,
+            mirror: espejo,
+        } => {
             apply_cd(
                 panes,
                 fill,
                 decorate_fetch,
                 last_probed,
                 search_run,
-                *lector,
+                *reader,
             );
             apply_cd(
                 panes,
@@ -329,7 +336,7 @@ pub fn apply_cd(
 /// directories reach it on the next tick.
 ///
 /// That rests on two facts, and only one of them is pinned.
-/// `swap_tests::watch_targets_sigue_a_los_panes_tras_el_intercambio` proves
+/// `swap_tests::watch_targets_follows_the_panes_after_the_swap` proves
 /// `watch_targets` is a pure function of `app.panes` — nobody caches a target
 /// per side, which is the half that could rot silently. The other half, that
 /// the `rewatch` call really is the first statement of the loop body, is
@@ -437,7 +444,7 @@ pub fn needs_capabilities(app: &App, dir: &VPath) -> bool {
 ///
 /// Named since the wait became shared: whoever lands the result receives it
 /// as a parameter, and a four-tuple in a signature does not read.
-pub type PrimeraPagina = (
+pub type FirstPage = (
     Vec<Entry>,
     Option<EntryStream>,
     Option<u64>,
@@ -466,7 +473,7 @@ pub async fn first_page(
     dir: &VPath,
     attrs: &[String],
     fetch_caps: bool,
-) -> Result<PrimeraPagina, Error> {
+) -> Result<FirstPage, Error> {
     // Capabilities BEFORE the stream (same connection, and only when
     // something is missing from the cache — `needs_capabilities`); a
     // failure does NOT bring down the cd: with no hints it paints Opaque
@@ -585,7 +592,7 @@ pub async fn cd_in(
     )
     .await
     {
-        Waited::Done(res) => aterrizar(app, pane, dir, trail, &prev, res),
+        Waited::Done(res) => land(app, pane, dir, trail, &prev, res),
         Waited::Cancelled => Cd::Cancelled,
         Waited::Quit => {
             app.quit = true;
@@ -613,7 +620,7 @@ pub async fn cd_in(
         && pane == app.focus()
         && cd_landed_pane(&out).is_some()
         && let Some(other) = app.target_index()
-        && let Some(dest) = norte_frontend::nav::destino_en_espejo(
+        && let Some(dest) = norte_frontend::nav::mirrored_destination(
             app.panes[pane].dir(),
             app.panes[other].dir(),
             app.panes[other].virtual_search,
@@ -624,8 +631,8 @@ pub async fn cd_in(
         // it.
         let mirror = Box::pin(cd_in(app, backend, events, other, dest, Trail::Seed)).await;
         return Cd::Espejado {
-            lector: Box::new(out),
-            espejo: Box::new(mirror),
+            reader: Box::new(out),
+            mirror: Box::new(mirror),
         };
     }
     out
@@ -648,13 +655,13 @@ fn is_local(dir: &VPath) -> bool {
 /// wait is [`crate::console::wait_painting`], shared with the TUI's other
 /// two long waits, and this is the only part that was specific to a
 /// navigation.
-fn aterrizar(
+fn land(
     app: &mut App,
     pane: usize,
     dir: VPath,
     trail: Trail,
     prev: &VPath,
-    res: Result<PrimeraPagina, Error>,
+    res: Result<FirstPage, Error>,
 ) -> Cd {
     match res {
         Ok((first, stream, skipped, catalog)) => {

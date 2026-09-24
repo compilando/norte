@@ -3322,8 +3322,8 @@ mod tests {
     /// index would go unnoticed.
     struct ReorderedProvider {
         inner: LazyProvider,
-        /// How many pairs there are in total: index `i` yields `total - 1
-        /// - i` times, so pair `total - 1` (the last submitted) yields
+        /// How many pairs there are in total: index `i` yields
+        /// `total - 1 - i` times, so pair `total - 1` (the last submitted) yields
         /// nothing and `0` yields more than any other.
         total: usize,
     }

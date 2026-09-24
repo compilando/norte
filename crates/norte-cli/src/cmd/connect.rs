@@ -63,7 +63,7 @@ fn plugin_schemes() -> &'static [String] {
 /// A command-line argument, as a `VPath`.
 ///
 /// Stays in the CLI on purpose, and not in `norte-frontend` next to
-/// `goto::parece_ruta`: they are TWO grammars for two different inputs.
+/// `goto::looks_path`: they are TWO grammars for two different inputs.
 /// The TUI's and the window's "go to" rejects a relative path (where it
 /// leads cannot depend on the pane) and takes any `x://` as a URL; a
 /// shell argument is almost always relative to the cwd, and `a://b` has

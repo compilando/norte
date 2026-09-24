@@ -55,7 +55,7 @@ norte_vfs::provider_contract! {
 }
 
 /// The same provider with the logical trash TURNED ON (ADR 0019).
-fn fresh_con_papelera() -> ObjectProvider {
+fn fresh_with_trash() -> ObjectProvider {
     fresh().with_logical_trash(true)
 }
 
@@ -76,8 +76,8 @@ fn fresh_con_papelera() -> ObjectProvider {
 // this can be undone" and then would have buried things somewhere it knew
 // how to reach.
 norte_vfs::provider_contract! {
-    mod object_fs_papelera,
-    factory: fresh_con_papelera(),
+    mod object_fs_trash,
+    factory: fresh_with_trash(),
     root: ObjectProvider::root("s3", Authority::new("norte-test").expect("valid authority")),
     hostile_names: hostile_names(),
 }

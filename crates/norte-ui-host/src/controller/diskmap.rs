@@ -31,7 +31,7 @@ use norte_frontend::layout::SlotId;
 use norte_proto::VPath;
 use tokio::sync::mpsc;
 
-use super::{Estado, Mensaje, RequestToken, kind_de};
+use super::{Message, RequestToken, State, kind_de};
 use crate::backend::HostBackend;
 use crate::bridge::{BridgeEnvelope, clamp_display};
 use crate::dto::UiUpdate;
@@ -41,36 +41,36 @@ pub(super) const KIND: &str = "disk-map";
 
 /// What a map slot has NOW and what it is requesting.
 #[derive(Default)]
-pub(super) struct EstadoMapa {
+pub(super) struct StateMap {
     /// What was measured, with its directory and its selection. The SHARED
     /// state.
-    pub(super) mapa: norte_frontend::diskmap::DiskMap,
+    pub(super) map: norte_frontend::diskmap::DiskMap,
     /// The directory of the last measurement requested — or attempted and
     /// failed.
     ///
     /// Both things in one field because they answer the same question: does
     /// this need requesting? Without noting the failed attempt, a directory
     /// that cannot be measured would be retried after every actor message.
-    pub(super) pedido: Option<VPath>,
+    pub(super) requested: Option<VPath>,
     /// The request in flight, with its token.
-    pub(super) en_vuelo: Option<(RequestToken, VPath)>,
+    pub(super) in_flight: Option<(RequestToken, VPath)>,
 }
 
-impl Estado {
+impl State {
     /// Which directory the map in slot `slot` should be describing.
     ///
     /// The link is resolved with the shared engine, same as the preview, the
     /// viewer, and the plugin panel: a followed slot that dies degrades to
     /// the `active` role. It also returns the SLOT, because the click
     /// navigates THAT listing, not the map's.
-    fn seguido_de_mapa(&self, slot: SlotId) -> Option<(u32, VPath)> {
+    fn followed_by_map(&self, slot: SlotId) -> Option<(u32, VPath)> {
         let mut diags = Vec::new();
         let followed =
-            norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
+            norte_frontend::layout::resolve_follow(&self.tree, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active))
-                .unwrap_or(SlotId(self.activo()));
+                .unwrap_or(SlotId(self.active()));
         let SlotId(id) = followed;
-        let slot_state = self.huecos.get(&id)?;
+        let slot_state = self.slots.get(&id)?;
         Some((id, slot_state.pane.dir().clone()))
     }
 
@@ -80,46 +80,46 @@ impl Estado {
     /// first thing is to bail out cheaply when there is nothing to do:
     /// walking the tree to discover there is no map at all is paid on every
     /// keystroke of every session that does not use it.
-    pub(super) fn sondear_mapas(
+    pub(super) fn sondear_maps(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let slots: Vec<SlotId> = self
-            .reparto
+            .split
             .placements
             .iter()
-            .filter(|(slot, _)| kind_de(&self.arbol, *slot).is_some_and(|k| k.as_str() == KIND))
+            .filter(|(slot, _)| kind_de(&self.tree, *slot).is_some_and(|k| k.as_str() == KIND))
             .map(|(slot, _)| *slot)
             .collect();
-        if slots.is_empty() && self.mapas.is_empty() {
+        if slots.is_empty() && self.maps.is_empty() {
             return Vec::new();
         }
         // A slot that no longer exists keeps nothing: a `SlotId` gets reused,
         // and without pruning, a new slot's map would inherit the previous
         // one's measurement — another directory's sizes, under this title.
         let alive: Vec<u32> = slots.iter().map(|SlotId(id)| *id).collect();
-        self.mapas.retain(|id, _| alive.contains(id));
+        self.maps.retain(|id, _| alive.contains(id));
 
         for slot in slots {
             let SlotId(id) = slot;
-            let Some((_, dir)) = self.seguido_de_mapa(slot) else {
+            let Some((_, dir)) = self.followed_by_map(slot) else {
                 continue;
             };
-            let state = self.mapas.entry(id).or_default();
-            if state.pedido.as_ref() == Some(&dir) || state.en_vuelo.is_some() {
+            let state = self.maps.entry(id).or_default();
+            if state.requested.as_ref() == Some(&dir) || state.in_flight.is_some() {
                 continue;
             }
             // Pointing at it FORGETS what was measured: the previous
             // directory's map under the new one's title is the wrong answer
             // for exactly the while the measurement lasts, which is when
             // someone is looking at it.
-            if state.mapa.dir() != Some(&dir) {
-                state.mapa.apuntar(dir.clone());
+            if state.map.dir() != Some(&dir) {
+                state.map.apuntar(dir.clone());
             }
             self.token += 1;
             let token = RequestToken(self.token);
-            self.mapas.entry(id).or_default().en_vuelo = Some((token, dir.clone()));
+            self.maps.entry(id).or_default().in_flight = Some((token, dir.clone()));
 
             let params = norte_proto::methods::FsDirUsageParams {
                 path: dir.clone(),
@@ -137,7 +137,7 @@ impl Estado {
                 // measurement would kill it exactly on the trees for which it
                 // exists.
                 let launched =
-                    match tokio::time::timeout(super::PLAZO_PLUGINS, backend.dir_usage(params))
+                    match tokio::time::timeout(super::DEADLINE_PLUGINS, backend.dir_usage(params))
                         .await
                     {
                         Ok(r) => r,
@@ -147,7 +147,7 @@ impl Estado {
                     Ok(t) => t,
                     Err(e) => {
                         let _ = mailbox
-                            .send(Mensaje::MapaContenido(Box::new((id, token, Err(e)))))
+                            .send(Message::MapContent(Box::new((id, token, Err(e)))))
                             .await;
                         return;
                     }
@@ -174,7 +174,7 @@ impl Estado {
                     Err(norte_proto::Error::ProviderUnavailable { retryable: true })
                 };
                 let _ = mailbox
-                    .send(Mensaje::MapaContenido(Box::new((id, token, res))))
+                    .send(Message::MapContent(Box::new((id, token, res))))
                     .await;
             });
         }
@@ -188,7 +188,7 @@ impl Estado {
     /// takes a while, and in that time the panel may be pointing elsewhere: a
     /// report landed without checking would paint one directory's sizes
     /// under another one's title.
-    pub(super) fn aterrizar_mapa(
+    pub(super) fn land_map(
         &mut self,
         slot: u32,
         token: RequestToken,
@@ -200,16 +200,16 @@ impl Estado {
             norte_proto::Error,
         >,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let state = self.mapas.get_mut(&slot)?;
-        if state.en_vuelo.as_ref().map(|(t, _)| *t) != Some(token) {
+        let state = self.maps.get_mut(&slot)?;
+        if state.in_flight.as_ref().map(|(t, _)| *t) != Some(token) {
             return None;
         }
-        let (_, dir) = state.en_vuelo.take()?;
+        let (_, dir) = state.in_flight.take()?;
         // The attempt is recorded no matter what: without this, a directory
         // that cannot be measured would be retried after every actor
         // message.
-        state.pedido = Some(dir.clone());
-        if state.mapa.dir() != Some(&dir) {
+        state.requested = Some(dir.clone());
+        if state.map.dir() != Some(&dir) {
             return None; // arrived late: the panel is already somewhere else
         }
         let (task_state, report) = match res {
@@ -219,90 +219,90 @@ impl Estado {
                 // translated to the session's language and clamped, like
                 // search's.
                 state
-                    .mapa
-                    .fallo(clamp_display(norte_frontend::error::error_category_in(
+                    .map
+                    .failure(clamp_display(norte_frontend::error::error_category_in(
                         self.lang, &e,
                     )));
                 let snap = self.snapshot();
-                return Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))));
+                return Some(self.over(UiUpdate::Snapshot(Box::new(snap))));
             }
         };
         let complete = task_state == norte_proto::TaskState::Completed;
-        state.mapa.aterrizar(report, complete);
+        state.map.land(report, complete);
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }
 
     /// A click on a rectangle: enters that child.
     ///
     /// It is resolved against the SAME layout that was painted —
-    /// `vista_de_mapa` uses the size inside the border and so does this — so
+    /// `map_view` uses the size inside the border and so does this — so
     /// the rectangle that is seen and the one that answers are the same one
     /// by construction.
     ///
-    /// **Without `zona_puede`**: that filter exists because in a plugin panel
+    /// **Without `zone_can`**: that filter exists because in a plugin panel
     /// the label and the command are chosen by a third party and nothing
     /// binds them together. Here `squarify` sets them, so filtering them
     /// would be guarding against oneself.
-    pub(super) fn clic_en_mapa(
+    pub(super) fn click_on_map(
         &mut self,
         slot: u32,
         row: u16,
         col: u16,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (crate::bridge::ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // A HIDDEN slot keeps its map, so its zones would keep resolving even
         // though nobody sees them. The renderer does not paint what is
         // hidden, so a click there does not come from a person.
         if self.oculto(slot) {
-            return (Self::obsoleta(crate::StaleAction::Generation), Vec::new());
+            return (Self::stale(crate::StaleAction::Generation), Vec::new());
         }
         let Some((cols, rows)) = self
-            .reparto
+            .split
             .placements
             .iter()
             .find(|(SlotId(s), _)| *s == slot)
             .map(|(_, r)| (r.width.saturating_sub(2), r.height.saturating_sub(2)))
         else {
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         };
-        let chosen = self.mapas.get(&slot).and_then(|e| {
-            let frame = norte_frontend::treemap::squarify(&e.mapa.informe().children, cols, rows);
+        let chosen = self.maps.get(&slot).and_then(|e| {
+            let frame = norte_frontend::treemap::squarify(&e.map.report().children, cols, rows);
             let arg = frame.hit_at(row, col)?.arg.clone()?;
             let seg = norte_proto::Segment::parse_wire(&arg).ok()?;
             // Only a DIRECTORY opens: the map shows both kinds, and
             // "entering" a file is not navigating.
-            let child = e.mapa.informe().children.iter().find(|c| c.name == seg)?;
+            let child = e.map.report().children.iter().find(|c| c.name == seg)?;
             (child.kind == norte_proto::EntryKind::Dir).then_some(seg)
         });
         let Some(seg) = chosen else {
             // A cell with no rectangle, or a file: nothing happens, and it is
             // not a reader error.
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         };
         // Pointing ALSO selects: keyboard and mouse leave the map in the same
         // place, which is what makes clicking and then using the arrows
         // continue from where you were.
-        if let Some(e) = self.mapas.get_mut(&slot) {
-            e.mapa.elegir(&seg);
+        if let Some(e) = self.maps.get_mut(&slot) {
+            e.map.choose(&seg);
         }
-        let Some((target_slot, dir)) = self.seguido_de_mapa(SlotId(slot)) else {
-            return (self.aplicada(), Vec::new());
+        let Some((target_slot, dir)) = self.followed_by_map(SlotId(slot)) else {
+            return (self.applied(), Vec::new());
         };
         let target = dir.join(seg);
         // Navigate the FOLLOWED listing, not the map: the map points, and the
         // `cd` goes the same way as any other (ADR 0077). `Record` because
         // this is a move the reader asked for: it enters the trail and prunes
         // forward.
-        let updates = self.navegar_hueco(
+        let updates = self.navigate_slot(
             target_slot,
             &target,
             norte_frontend::nav::Trail::Record,
             backend,
             mailbox,
         );
-        (self.aplicada(), updates)
+        (self.applied(), updates)
     }
 
     /// Projects a slot's disk map into what the renderer paints.
@@ -316,12 +316,12 @@ impl Estado {
     /// Without a placed slot there is no size, and then there is no map: an
     /// empty one is sent with its title, like a panel whose first frame has
     /// not arrived yet.
-    pub(super) fn vista_de_mapa(&self, id: u32) -> crate::dto::DiskMapSlotView {
-        let state = self.mapas.get(&id);
+    pub(super) fn map_view(&self, id: u32) -> crate::dto::DiskMapSlotView {
+        let state = self.maps.get(&id);
         // The title is the NAME of the directory being described, not its
         // path: the slot is narrow and the whole path does not fit. It comes
         // from a file name, so it is masked like any other.
-        let (title, title_hostile) = state.and_then(|e| e.mapa.dir()).map_or_else(
+        let (title, title_hostile) = state.and_then(|e| e.map.dir()).map_or_else(
             || (String::new(), false),
             |d| {
                 d.file_name().map_or_else(
@@ -334,7 +334,7 @@ impl Estado {
         );
 
         let cells = self
-            .reparto
+            .split
             .placements
             .iter()
             .find(|(SlotId(s), _)| *s == id)
@@ -342,8 +342,7 @@ impl Estado {
 
         let (lines, hits) = match (state, cells) {
             (Some(e), Some((cols, rows))) => {
-                let frame =
-                    norte_frontend::treemap::squarify(&e.mapa.informe().children, cols, rows);
+                let frame = norte_frontend::treemap::squarify(&e.map.report().children, cols, rows);
                 let lines = frame
                     .lines
                     .iter()
@@ -369,7 +368,7 @@ impl Estado {
             title_hostile,
             lines,
             hits,
-            measuring: state.is_some_and(|e| e.en_vuelo.is_some()),
+            measuring: state.is_some_and(|e| e.in_flight.is_some()),
         }
     }
 }

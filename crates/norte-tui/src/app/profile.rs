@@ -57,7 +57,7 @@ impl crate::app::App {
 /// don't apply at all: they belong to the window, and saying "couldn't be
 /// applied" about something this frontend never applies would be noise.
 #[must_use]
-pub fn no_aplicable_en_caliente(
+pub fn not_hot_reloadable(
     before: &norte_config::CommonConfig,
     after: &norte_config::CommonConfig,
 ) -> Vec<&'static str> {
@@ -125,13 +125,13 @@ mod tests {
         let mut other = base.clone();
         other.ui_theme = Some("nord".to_owned());
         assert!(
-            no_aplicable_en_caliente(&base, &other).is_empty(),
+            not_hot_reloadable(&base, &other).is_empty(),
             "the theme is hot-reloadable (ADR 0020)"
         );
 
         let mut with_lang = base.clone();
         with_lang.ui_lang = Some("es".to_owned());
-        assert_eq!(no_aplicable_en_caliente(&base, &with_lang), vec!["ui.lang"]);
+        assert_eq!(not_hot_reloadable(&base, &with_lang), vec!["ui.lang"]);
     }
 
     /// Every `CommonConfig` field is CLASSIFIED: either it applies hot, or

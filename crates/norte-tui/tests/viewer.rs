@@ -15,7 +15,7 @@ fn vp() -> VPath {
 }
 
 #[test]
-fn texto_del_corpus_se_ve_decodificado() {
+fn corpus_text_is_shown_decoded() {
     for f in norte_testkit::corpus::content_fixtures() {
         let v = Viewer::new(vp(), f.bytes.clone(), false);
         assert!(!v.hex, "{}: text, not hexview", f.id);
@@ -51,7 +51,7 @@ fn texto_del_corpus_se_ve_decodificado() {
 }
 
 #[test]
-fn recargar_como_cicla_y_marca_forzado() {
+fn reload_as_cycles_and_marks_forced() {
     // latin1: detection gives windows-1252; forcing UTF-8 produces losses.
     let bytes = b"a\xF1o 2026\n".to_vec();
     let mut v = Viewer::new(vp(), bytes, false);
@@ -69,7 +69,7 @@ fn recargar_como_cicla_y_marca_forzado() {
 }
 
 #[test]
-fn scroll_con_topes_y_truncado_visible() {
+fn scroll_with_caps_and_visible_truncation() {
     use std::fmt::Write;
     let mut text = String::new();
     for i in 0..50 {
@@ -98,7 +98,7 @@ fn scroll_con_topes_y_truncado_visible() {
 /// H6: CR-only (classic Mac) splits lines to PAINT; the real EOL is still
 /// announced in the status.
 #[test]
-fn cr_only_se_parte_en_lineas() {
+fn cr_only_splits_into_lines() {
     let v = Viewer::new(vp(), b"uno\rdos\rtres\r".to_vec(), false);
     assert_eq!(v.total_rows(), 3);
     assert_eq!(v.rows(3), vec!["uno", "dos", "tres"]);
@@ -121,50 +121,50 @@ fn cr_only_se_parte_en_lineas() {
 /// one row loses a column another does not, the two stop lining up and
 /// horizontal scroll stops doing the one thing it is for.
 #[test]
-fn el_corte_por_la_izquierda_mantiene_la_rejilla() {
+fn the_cut_from_the_left_keeps_the_grid() {
     use unicode_width::UnicodeWidthChar;
 
-    let lineas = norte_testkit::corpus::viewer_grid_lines();
-    let texto: String = lineas
+    let lines = norte_testkit::corpus::viewer_grid_lines();
+    let text: String = lines
         .iter()
         .map(|l| format!("{}\n", l.text))
         .collect::<Vec<_>>()
         .concat();
-    let mut v = Viewer::new(vp(), texto.into_bytes(), false);
-    let alto = lineas.len();
+    let mut v = Viewer::new(vp(), text.into_bytes(), false);
+    let alto = lines.len();
     let anchas: Vec<usize> = v
         .rows(alto)
         .iter()
         .map(|f| norte_frontend::cells(f))
         .collect();
-    let tope = v.max_cols();
-    assert!(tope >= 200, "the fixture is wide on purpose: {tope}");
+    let cap = v.max_cols();
+    assert!(cap >= 200, "the fixture is wide on purpose: {cap}");
 
-    for pedido in 0..=tope {
+    for requested in 0..=cap {
         v.scroll_left(usize::MAX);
-        v.scroll_right(pedido);
+        v.scroll_right(requested);
         // The REAL scroll, not the requested one: the cap always leaves one
         // column visible, so the last round gets bounded.
         let h = v.hscroll();
-        let filas = v.rows(alto);
-        for (i, fila) in filas.iter().enumerate() {
-            let id = lineas[i].id;
-            let visto = norte_frontend::cells(fila);
+        let rows = v.rows(alto);
+        for (i, row) in rows.iter().enumerate() {
+            let id = lines[i].id;
+            let seen = norte_frontend::cells(row);
             assert_eq!(
-                visto + h.min(anchas[i]),
+                seen + h.min(anchas[i]),
                 anchas[i],
                 "`{id}` scrolled {h}: loses or gains columns relative to the \
                  others, so its columns stop lining up ({})",
-                lineas[i].why
+                lines[i].why
             );
-            if let Some(c) = fila.chars().next() {
+            if let Some(c) = row.chars().next() {
                 assert_ne!(
                     UnicodeWidthChar::width(c),
                     Some(0),
                     "`{id}` scrolled {h} starts at zero width: the mark lost \
                      its base on the other side of the clip and reparents to \
                      the next letter ({})",
-                    lineas[i].why
+                    lines[i].why
                 );
             }
         }
@@ -174,7 +174,7 @@ fn el_corte_por_la_izquierda_mantiene_la_rejilla() {
 /// And hex scrolls the SAME way, with its own width: its rows are 77 cells,
 /// and in a split slot the right-hand ASCII column does not fit.
 #[test]
-fn el_hexadecimal_del_corpus_tambien_se_desplaza() {
+fn the_corpus_hex_also_scrolls() {
     let f = norte_testkit::corpus::content_fixtures()
         .into_iter()
         .find(|f| f.id == "utf16le_bom")
@@ -182,10 +182,10 @@ fn el_hexadecimal_del_corpus_tambien_se_desplaza() {
     let mut v = Viewer::new(vp(), f.bytes.clone(), false);
     v.toggle_hex();
     assert!(v.hex);
-    let entera = v.rows(1)[0].clone();
+    let whole = v.rows(1)[0].clone();
     assert_eq!(v.max_cols(), 77, "the DUMP's width, not the text's");
     v.scroll_right(11);
-    assert_eq!(v.rows(1)[0], entera[11..]);
+    assert_eq!(v.rows(1)[0], whole[11..]);
     assert!(
         status(&v).contains("12/77"),
         "and the column IS stated, which is the only thing that states it \
@@ -197,7 +197,7 @@ fn el_hexadecimal_del_corpus_tambien_se_desplaza() {
 /// H1 applied to the viewer: forcing windows-1252 over a spurious BOM shows
 /// it as DATA (þÿ), not as UTF-16.
 #[test]
-fn recargar_como_vence_al_bom() {
+fn reload_as_overrides_the_bom() {
     let f = norte_testkit::corpus::content_fixtures_forced()
         .into_iter()
         .find(|f| f.id == "w1252_fake_bom")

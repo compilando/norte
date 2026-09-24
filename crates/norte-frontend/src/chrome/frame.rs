@@ -89,7 +89,7 @@ pub fn lang_code() -> &'static str {
 /// first addition (ADR 0077). Whatever a plugin wants to offer beyond this
 /// is requested with its own command, which goes through the catalogue,
 /// through consent and through policy like any other.
-pub const ZONA_PERMITIDA: &[&str] = &[
+pub const ZONE_PERMITIDA: &[&str] = &[
     "layout.grow",
     "layout.shrink",
     "layout.focus-next",
@@ -105,15 +105,15 @@ pub const ZONA_PERMITIDA: &[&str] = &[
 /// Can a panel zone name this command?
 ///
 /// ```
-/// use norte_frontend::frame::zona_puede;
+/// use norte_frontend::frame::zone_can;
 ///
-/// assert!(zona_puede("layout.focus-next"));
-/// assert!(!zona_puede("pane.unpack"), "a plugin does not drive the file manager");
-/// assert!(!zona_puede("app.quit"));
+/// assert!(zone_can("layout.focus-next"));
+/// assert!(!zone_can("pane.unpack"), "a plugin does not drive the file manager");
+/// assert!(!zone_can("app.quit"));
 /// ```
 #[must_use]
-pub fn zona_puede(command: &str) -> bool {
-    ZONA_PERMITIDA.contains(&command)
+pub fn zone_can(command: &str) -> bool {
+    ZONE_PERMITIDA.contains(&command)
 }
 
 /// A paintable frame: styled lines and clickable zones.

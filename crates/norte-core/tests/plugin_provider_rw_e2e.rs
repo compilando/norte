@@ -93,7 +93,7 @@ async fn plugin_provider_write_path() {
     ));
 
     // ---- remove ----
-    // NOTE: `vacio.txt` is fixture data baked into the `provider-mem-rw` guest
+    // NOTE: `empty.txt` is fixture data baked into the `provider-mem-rw` guest
     // (crates/norte-plugin-host/examples-wasm/provider-mem-rw/src/lib.rs,
     // owned by another task) and kept verbatim — see the T05 report's
     // cross-file literals.

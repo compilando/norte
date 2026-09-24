@@ -458,7 +458,7 @@ fn map_call_error(e: &wasmtime::Error) -> RuntimeError {
 }
 
 /// Starts a "ticker" thread that increments the engine's epoch every
-/// [`EPOCH_TICK`] (50 ms); combined with the per-store deadline
+/// `EPOCH_TICK` (50 ms); combined with the per-store deadline
 /// ([`Store::set_epoch_deadline`]) it puts a CLOCK cap on every guest call
 /// (hard rule 3). The thread stops cleanly in [`Drop`].
 pub struct PluginRuntime {

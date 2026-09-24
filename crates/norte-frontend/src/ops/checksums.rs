@@ -501,12 +501,12 @@ pub fn to_sums_bytes(entries: &[(Vec<u8>, Option<String>)]) -> Vec<u8> {
 mod tests {
     use super::*;
 
-    const VACIO: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    const EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     const ABC: &str = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
     #[test]
-    fn lee_las_dos_formas_de_sha256sum_y_tolera_crlf() {
-        let text = format!("{VACIO}  texto.txt\r\n{ABC} *binario.bin\n");
+    fn reads_both_sha256sum_forms_and_tolerates_crlf() {
+        let text = format!("{EMPTY}  texto.txt\r\n{ABC} *binario.bin\n");
         let l = parse_sums(text.as_bytes()).lines;
         assert_eq!(l.len(), 2);
         assert_eq!(l[0].name, b"texto.txt");
@@ -519,11 +519,11 @@ mod tests {
     /// LOOKED like a sum and was not understood is counted, or the summary
     /// would lie.
     #[test]
-    fn se_salta_lo_que_no_es_una_linea_de_sumas_y_cuenta_lo_que_lo_parecia() {
+    fn it_skips_what_is_not_a_checksum_line_and_counts_what_looked_like_one() {
         let text = format!(
             "# comment\n\n-----BEGIN PGP SIGNED MESSAGE-----\nHash: SHA256\n\
-             {VACIO}  good\nzz{}  bad hex\n{VACIO} one-space-only\n",
-            &VACIO[2..]
+             {EMPTY}  good\nzz{}  bad hex\n{EMPTY} one-space-only\n",
+            &EMPTY[2..]
         );
         let read = parse_sums(text.as_bytes());
         assert_eq!(read.lines.len(), 1, "only the good one: {read:?}");
@@ -539,8 +539,8 @@ mod tests {
     /// Without this the line disappeared entirely: neither checked nor
     /// listed, and the summary said "all correct".
     #[test]
-    fn lee_la_forma_escapada_de_coreutils() {
-        let text = format!("\\{VACIO}  a\\nb\n\\{ABC}  c\\\\d\n");
+    fn reads_the_escaped_coreutils_form() {
+        let text = format!("\\{EMPTY}  a\\nb\n\\{ABC}  c\\\\d\n");
         let l = parse_sums(text.as_bytes()).lines;
         assert_eq!(l.len(), 2);
         assert_eq!(l[0].name, b"a\nb", "`\\n` is a real line feed");
@@ -549,23 +549,23 @@ mod tests {
 
     /// `sha256sum --tag`, which `sha256sum -c` also reads.
     #[test]
-    fn lee_la_forma_bsd() {
-        let text = format!("SHA256 (mi (fichero).txt) = {VACIO}\n");
+    fn reads_the_bsd_form() {
+        let text = format!("SHA256 (mi (fichero).txt) = {EMPTY}\n");
         let l = parse_sums(text.as_bytes()).lines;
         assert_eq!(l.len(), 1);
         assert_eq!(
             l[0].name, b"mi (fichero).txt",
             "the name goes up to the LAST parenthesis"
         );
-        assert_eq!(l[0].digest, VACIO);
+        assert_eq!(l[0].digest, EMPTY);
     }
 
     /// A file generated on Windows starts with a BOM, and that BOM ate the
     /// first line without saying anything.
     #[test]
-    fn un_bom_utf8_no_se_lleva_la_primera_linea() {
+    fn a_utf8_bom_does_not_take_the_first_line_with_it() {
         let mut bytes = b"\xEF\xBB\xBF".to_vec();
-        bytes.extend_from_slice(format!("{VACIO}  primero\n").as_bytes());
+        bytes.extend_from_slice(format!("{EMPTY}  primero\n").as_bytes());
         assert_eq!(parse_sums(&bytes).lines.len(), 1);
     }
 
@@ -573,9 +573,9 @@ mod tests {
     /// possible to say why instead of "this does not look like a sums
     /// file".
     #[test]
-    fn un_fichero_utf16_se_reconoce_como_tal() {
+    fn a_utf16_file_is_recognized_as_such() {
         let mut bytes = vec![0xFF, 0xFE];
-        for c in format!("{VACIO}  x\n").encode_utf16() {
+        for c in format!("{EMPTY}  x\n").encode_utf16() {
             bytes.extend_from_slice(&c.to_le_bytes());
         }
         assert!(parse_sums(&bytes).lines.is_empty());
@@ -585,17 +585,17 @@ mod tests {
     /// Published uppercase, computed lowercase: it is the same hash, and
     /// saying it is not would be the worst possible false negative.
     #[test]
-    fn el_digest_se_normaliza_a_minuscula() {
-        let text = format!("{}  x\n", VACIO.to_uppercase());
-        assert_eq!(parse_sums(text.as_bytes()).lines[0].digest, VACIO);
+    fn the_digest_normalizes_to_lowercase() {
+        let text = format!("{}  x\n", EMPTY.to_uppercase());
+        assert_eq!(parse_sums(text.as_bytes()).lines[0].digest, EMPTY);
     }
 
     /// A name that is NOT UTF-8 survives the byte-by-byte parse: going
     /// through `String` would turn it into another name and the check
     /// would say "missing" about a file that is there.
     #[test]
-    fn un_nombre_que_no_es_utf8_sobrevive() {
-        let mut line = format!("{VACIO}  caf").into_bytes();
+    fn a_non_utf8_name_survives() {
+        let mut line = format!("{EMPTY}  caf").into_bytes();
         line.extend_from_slice(&[0xE9, b'.', b't', b'x', b't', b'\n']);
         let l = parse_sums(&line).lines;
         assert_eq!(l.len(), 1);
@@ -603,11 +603,11 @@ mod tests {
     }
 
     #[test]
-    fn los_tres_veredictos() {
-        let published = parse_sums(format!("{VACIO}  a\n{ABC}  b\n{VACIO}  c\n").as_bytes()).lines;
+    fn the_three_verdicts() {
+        let published = parse_sums(format!("{EMPTY}  a\n{ABC}  b\n{EMPTY}  c\n").as_bytes()).lines;
         let computed = vec![
-            (b"a".to_vec(), Some(VACIO.to_owned())),
-            (b"b".to_vec(), Some(VACIO.to_owned())),
+            (b"a".to_vec(), Some(EMPTY.to_owned())),
+            (b"b".to_vec(), Some(EMPTY.to_owned())),
             (b"c".to_vec(), None),
         ];
         assert_eq!(
@@ -619,14 +619,14 @@ mod tests {
     /// The clipboard text is the one `sha256sum -c` knows how to read, and
     /// what has no digest does not get a made-up line.
     #[test]
-    fn el_texto_de_sumas_omite_lo_que_no_tiene_digest() {
+    fn the_checksums_text_omits_what_has_no_digest() {
         let entries = vec![
-            (b"a.txt".to_vec(), Some(VACIO.to_owned())),
+            (b"a.txt".to_vec(), Some(EMPTY.to_owned())),
             (b"carpeta".to_vec(), None),
         ];
         assert_eq!(
             to_sums_bytes(&entries),
-            format!("{VACIO}  a.txt\n").into_bytes()
+            format!("{EMPTY}  a.txt\n").into_bytes()
         );
     }
 
@@ -635,9 +635,9 @@ mod tests {
     /// name in the hostile corpus, what is copied reads back as the same
     /// name, byte for byte.**
     #[test]
-    fn lo_copiado_vuelve_a_leerse_igual_para_todo_el_corpus_hostil() {
+    fn the_copy_reads_back_identical_for_the_whole_hostile_corpus() {
         for n in norte_testkit::corpus::hostile_names() {
-            let entries = vec![(n.bytes.clone(), Some(VACIO.to_owned()))];
+            let entries = vec![(n.bytes.clone(), Some(EMPTY.to_owned()))];
             let bytes = to_sums_bytes(&entries);
             let read = parse_sums(&bytes);
             assert_eq!(read.refused, 0, "[{}] {}", n.id, n.why);
@@ -660,9 +660,9 @@ mod tests {
     /// most: two names that look the same once run through `String` are
     /// still two different lines here.
     #[test]
-    fn dos_nombres_que_colapsan_en_texto_no_colapsan_aqui() {
+    fn two_names_that_collapse_in_text_do_not_collapse_here() {
         let entries = vec![
-            (b"\xFF.rs".to_vec(), Some(VACIO.to_owned())),
+            (b"\xFF.rs".to_vec(), Some(EMPTY.to_owned())),
             (b"\xFE.rs".to_vec(), Some(ABC.to_owned())),
         ];
         let read = parse_sums(&to_sums_bytes(&entries));
@@ -679,18 +679,18 @@ mod tests {
     /// written on this system. Collapsing them into "missing" sends the
     /// reader looking in the wrong place.
     #[test]
-    fn cada_motivo_tiene_su_veredicto() {
+    fn every_reason_has_its_verdict() {
         use norte_proto::methods::ChecksumMiss;
 
         let published = parse_sums(
-            format!("{VACIO}  ok\n{ABC}  cambiado\n{VACIO}  ausente\n{VACIO}  carpeta\n{VACIO}  \0malo\n")
+            format!("{EMPTY}  ok\n{ABC}  cambiado\n{EMPTY}  ausente\n{EMPTY}  carpeta\n{EMPTY}  \0malo\n")
                 .as_bytes(),
         )
         .lines;
         let asked = [Some(0), Some(1), Some(2), Some(3), None];
         let computed: Vec<Computed> = vec![
-            (Some(VACIO.to_owned()), None),
-            (Some(VACIO.to_owned()), None),
+            (Some(EMPTY.to_owned()), None),
+            (Some(EMPTY.to_owned()), None),
             (None, Some(ChecksumMiss::Unreadable)),
             (None, Some(ChecksumMiss::NotAFile)),
         ];
@@ -710,12 +710,12 @@ mod tests {
     /// writes — talks about a file that is there, and pairing by BASE
     /// name gave it "missing". It is paired by position in the request.
     #[test]
-    fn un_nombre_con_directorio_se_juzga_contra_su_propia_ruta() {
+    fn a_name_with_a_directory_is_judged_against_its_own_path() {
         let published =
-            parse_sums(format!("{VACIO}  sub/dentro.txt\n{ABC}  otro/dentro.txt\n").as_bytes())
+            parse_sums(format!("{EMPTY}  sub/dentro.txt\n{ABC}  otro/dentro.txt\n").as_bytes())
                 .lines;
         let computed: Vec<Computed> =
-            vec![(Some(VACIO.to_owned()), None), (Some(ABC.to_owned()), None)];
+            vec![(Some(EMPTY.to_owned()), None), (Some(ABC.to_owned()), None)];
         assert_eq!(
             judge(&published, &[Some(0), Some(1)], &computed),
             vec![Verdict::Ok, Verdict::Ok],
@@ -728,7 +728,7 @@ mod tests {
     /// parser: the ones that fell out are exactly the odd-named ones, and
     /// those are the ones an attacker would control.
     #[test]
-    fn una_linea_que_no_se_entendio_impide_cantar_verde() {
+    fn a_line_that_was_not_understood_prevents_calling_it_green() {
         let all_ok = [Verdict::Ok, Verdict::Ok];
         assert_eq!(summarize(&all_ok, 0), Summary::AllOk { n: 2 });
         assert_eq!(
@@ -746,9 +746,9 @@ mod tests {
     /// A name with a line feed must not be able to split the list nor
     /// sneak in an entry nobody computed.
     #[test]
-    fn un_nombre_con_salto_de_linea_no_inyecta_una_entrada() {
+    fn a_name_with_a_newline_does_not_inject_an_entry() {
         let hostile = format!("x\n{ABC}  forjado").into_bytes();
-        let bytes = to_sums_bytes(&[(hostile.clone(), Some(VACIO.to_owned()))]);
+        let bytes = to_sums_bytes(&[(hostile.clone(), Some(EMPTY.to_owned()))]);
         let read = parse_sums(&bytes);
         assert_eq!(read.lines.len(), 1, "one entry in, one out");
         assert_eq!(read.lines[0].name, hostile);

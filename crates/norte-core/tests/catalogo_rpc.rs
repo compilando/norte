@@ -16,7 +16,7 @@
 //! it exists. That is exactly the class of oversight that was slipping
 //! through.
 
-use norte_proto::catalog::{CATALOGO, Kind, MethodInfo, Shape};
+use norte_proto::catalog::{CATALOG, Kind, MethodInfo, Shape};
 
 /// Reads a workspace file from the crate's root.
 fn source(rel: &str) -> String {
@@ -151,7 +151,7 @@ fn the_catalogues_shape_matches_what_the_daemon_does() {
     let registers = |t: &str| t.contains("FsTaskResult") || t.contains("register_task");
 
     let mut bad = Vec::new();
-    for m in CATALOGO.iter().filter(|m| m.kind == Kind::Request) {
+    for m in CATALOG.iter().filter(|m| m.kind == Kind::Request) {
         let Some(arm) = arm_of(&src, &constant_of(m)) else {
             continue; // Covered by `the_daemon_dispatches_every_request`.
         };
@@ -190,7 +190,7 @@ fn the_daemon_dispatches_every_request() {
     // Notifications are not dispatched: the daemon EMITS them, and they also
     // appear in this file, so they are checked the same way further below.
     let mut missing = Vec::new();
-    for m in CATALOGO.iter().filter(|m| m.kind == Kind::Request) {
+    for m in CATALOG.iter().filter(|m| m.kind == Kind::Request) {
         if !has_arm(&src, &constant_of(m)) {
             missing.push(m.name);
         }
@@ -213,7 +213,7 @@ fn the_daemon_dispatches_every_request() {
 fn a_notification_is_not_dispatched_as_a_request() {
     let src = source("src/daemon/server.rs");
     let mut extra = Vec::new();
-    for m in CATALOGO.iter().filter(|m| m.kind == Kind::Notification) {
+    for m in CATALOG.iter().filter(|m| m.kind == Kind::Notification) {
         if has_arm(&src, &constant_of(m)) {
             extra.push(m.name);
         }
@@ -238,7 +238,7 @@ fn the_daemon_emits_every_notification() {
     ]
     .join("\n");
     let mut missing = Vec::new();
-    for m in CATALOGO.iter().filter(|m| m.kind == Kind::Notification) {
+    for m in CATALOG.iter().filter(|m| m.kind == Kind::Notification) {
         if !names(&src, &constant_of(m)) {
             missing.push(m.name);
         }
@@ -292,7 +292,7 @@ fn the_remote_client_knows_how_to_ask_for_everything() {
     ];
 
     let mut missing = Vec::new();
-    for m in CATALOGO.iter().filter(|m| m.kind == Kind::Request) {
+    for m in CATALOG.iter().filter(|m| m.kind == Kind::Request) {
         if exceptions.iter().any(|e| e.method == m.name) {
             continue;
         }
@@ -310,7 +310,7 @@ fn the_remote_client_knows_how_to_ask_for_everything() {
     // An exception that is no longer needed is debt that lingers: if the
     // client learned to ask for it, it comes off the list.
     for e in &exceptions {
-        let Some(m) = norte_proto::catalog::buscar(e.method) else {
+        let Some(m) = norte_proto::catalog::search(e.method) else {
             panic!(
                 "the exception `{}` names a method that does not exist",
                 e.method
@@ -334,7 +334,7 @@ fn the_remote_client_knows_how_to_ask_for_everything() {
 fn the_catalogues_types_are_in_the_schema() {
     let src = source("../norte-proto/tests/schema.rs");
     let mut missing = Vec::new();
-    for m in CATALOGO {
+    for m in CATALOG {
         for ty in [m.params(), m.result()].into_iter().flatten() {
             // `methods::FsStatParams` → `FsStatParams`, which is how the
             // aggregate names it (with or without the module prefix).

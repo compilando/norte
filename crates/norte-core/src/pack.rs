@@ -81,7 +81,7 @@ fn relative_name(base: &VPath, p: &VPath) -> Option<Vec<u8>> {
 /// (`nav::archive_root_for`), and here for the same reason as there: it is
 /// presentation sugar over proto's whitelist, not validation — `archive_compose`
 /// handles that.
-pub(crate) fn formato_de_nombre(name: &[u8]) -> Option<&'static str> {
+pub(crate) fn name_format(name: &[u8]) -> Option<&'static str> {
     const ALIAS: &[(&[u8], &str)] = &[(b".tar.gz", "tar+gz"), (b".tgz", "tar+gz")];
     let ends_with = |suf: &[u8]| {
         name.len() >= suf.len() && name[name.len() - suf.len()..].eq_ignore_ascii_case(suf)
@@ -106,7 +106,7 @@ pub(crate) fn formato_de_nombre(name: &[u8]) -> Option<&'static str> {
 /// all — the only thing verifiable there is that each declared size is
 /// reached. A client that painted "intact" over that would be claiming what
 /// the format cannot back up.
-pub(crate) fn que_se_comprueba(token: &str) -> Vec<String> {
+pub(crate) fn that_is_checked(token: &str) -> Vec<String> {
     let v = match token {
         "zip" => "crc",
         "tar+gz" => "gzip_crc",
@@ -121,7 +121,7 @@ pub(crate) fn que_se_comprueba(token: &str) -> Vec<String> {
 /// A type and not two loose parameters because `pack` already carried eight,
 /// and the two that go together are exactly these: the provider is the ONE
 /// FOR that path.
-pub(crate) struct Destino {
+pub(crate) struct Dest {
     /// The destination's provider, which may not be the sources' one.
     pub(crate) provider: Arc<dyn Provider>,
     /// The file being created.
@@ -130,7 +130,7 @@ pub(crate) struct Destino {
 
 /// How to pack: against which base the entries are named, in which format
 /// and with how much compression.
-pub(crate) struct Empaquetado {
+pub(crate) struct Packed {
     /// The directory the stored names hang off of.
     pub(crate) base: VPath,
     /// Format, decided by the client.
@@ -406,17 +406,17 @@ async fn walk_sources(
 /// entry is emitted after the `commit`, which is when the node truly exists.
 pub(crate) async fn pack(
     sources: Vec<(Arc<dyn Provider>, VPath)>,
-    destination: Destino,
-    spec: Empaquetado,
+    destination: Dest,
+    spec: Packed,
     observer: Arc<dyn MutationObserver>,
     report: Arc<std::sync::Mutex<methods::ArchivePackReportResult>>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    let Destino {
-        provider: provider_destino,
+    let Dest {
+        provider: provider_dest,
         dest,
     } = destination;
-    let Empaquetado {
+    let Packed {
         base,
         format,
         level,
@@ -429,7 +429,7 @@ pub(crate) async fn pack(
     // The destination is NOT overwritten: manufacturing an archive on top of
     // a file that already exists is silent data loss, and the caller already
     // knows how to ask.
-    if provider_destino.stat(&dest).await.is_ok() {
+    if provider_dest.stat(&dest).await.is_ok() {
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::Exists,
         });
@@ -457,7 +457,7 @@ pub(crate) async fn pack(
         pack_format(format),
         u32::from(level.unwrap_or(DEFAULT_LEVEL)),
     );
-    let mut sink = provider_destino.write(&dest).await?;
+    let mut sink = provider_dest.write(&dest).await?;
     let mut bytes_read: u64 = 0;
     let mut done: u64 = 0;
 
@@ -496,7 +496,7 @@ pub(crate) async fn pack(
     sink.commit().await?;
     // After the commit: before it, the journal would point at a node that
     // does not exist yet (rule 4), and the identity would be the staging's.
-    let node = crate::ops::identidad_de(&*provider_destino, &dest, &observer).await;
+    let node = crate::ops::identity_of(&*provider_dest, &dest, &observer).await;
     observer
         .on_mutation(&Mutation::Created { path: &dest, node }, &ctx.actor)
         .await?;
@@ -596,11 +596,11 @@ fn from_pack_error(e: norte_vfs_archive::write::PackError) -> Error {
     match e {
         // A name that does not fit the format is an impossible request, not
         // an I/O failure.
-        P::Nombre => Error::InvalidPath,
+        P::Name => Error::InvalidPath,
         // NOT retryable: retrying produces exactly the same failure. An
-        // `Estado` is a bug in this code and a `Tamano` is a source that
+        // `State` is a bug in this code and a `Size` is a source that
         // moved under our feet.
-        P::Tamano | P::Estado | P::Io => Error::Io { retryable: false },
+        P::Size | P::State | P::Io => Error::Io { retryable: false },
     }
 }
 
@@ -726,19 +726,19 @@ pub(crate) async fn split(
     src: Arc<dyn Provider>,
     path: VPath,
     part_bytes: u64,
-    provider_destino: Arc<dyn Provider>,
+    provider_dest: Arc<dyn Provider>,
     dest_dir: VPath,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
     let observer = crate::observer::pin_for_task(observer).await?;
-    let (name, total, piece_count) = mide_el_reparto(&*src, &path, part_bytes).await?;
+    let (name, total, piece_count) = measures_the_distribution(&*src, &path, part_bytes).await?;
     ctx.progress.update(|p| {
         p.bytes_total = Some(total);
         p.entries_total = Some(piece_count);
     });
 
-    check_slots_free(&*provider_destino, &dest_dir, &name, piece_count).await?;
+    check_slots_free(&*provider_dest, &dest_dir, &name, piece_count).await?;
 
     // **No accumulating.** The first version gathered `part_bytes` into a
     // `Vec` and then drained it: a peak of twice the piece size, and with a
@@ -764,7 +764,7 @@ pub(crate) async fn split(
             if let Some(s) = $sink.take() {
                 let _ = s.abort().await;
             }
-            remove_pieces(&*provider_destino, &$published, &observer, ctx).await;
+            remove_pieces(&*provider_dest, &$published, &observer, ctx).await;
             return Err($e);
         }};
     }
@@ -798,7 +798,7 @@ pub(crate) async fn split(
                     norte_proto::Segment::new(piece_name(&name, done + 1))
                         .map_err(|_| Error::InvalidPath)?,
                 );
-                sink = Some(provider_destino.write(&dest_path).await?);
+                sink = Some(provider_dest.write(&dest_path).await?);
                 current_dest = Some(dest_path);
                 current = 0;
             }
@@ -817,7 +817,7 @@ pub(crate) async fn split(
             rest = tail;
             if current == part_bytes {
                 let closed = close_piece(
-                    &*provider_destino,
+                    &*provider_dest,
                     &mut sink,
                     current_dest.take(),
                     &observer,
@@ -839,7 +839,7 @@ pub(crate) async fn split(
     // none is left open, and that is why an empty piece is NOT written at
     // the end.
     let closed = close_piece(
-        &*provider_destino,
+        &*provider_dest,
         &mut sink,
         current_dest.take(),
         &observer,
@@ -866,13 +866,13 @@ pub(crate) async fn split(
 /// there used to be. What cannot be removed is said in the log and not
 /// retried — this path is already leaving because of an error.
 async fn remove_pieces(
-    provider_destino: &dyn Provider,
+    provider_dest: &dyn Provider,
     published: &[VPath],
     observer: &Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
 ) {
     for p in published.iter().rev() {
-        match provider_destino.remove(p).await {
+        match provider_dest.remove(p).await {
             Ok(()) => {
                 let _ = observer
                     .on_mutation(&Mutation::Removed(p), &ctx.actor)
@@ -892,7 +892,7 @@ async fn remove_pieces(
 /// ridiculous, the source is a file, and the set fits the three-digit
 /// convention. Finding out the last one at piece 1000 would leave a set
 /// nobody can join back together.
-pub(crate) async fn mide_el_reparto(
+pub(crate) async fn measures_the_distribution(
     src: &dyn Provider,
     path: &VPath,
     part_bytes: u64,
@@ -924,7 +924,7 @@ pub(crate) async fn mide_el_reparto(
 /// three new pieces mixed in with the stale ones from an earlier batch, and
 /// that set joins back together without anything creaking.
 async fn check_slots_free(
-    provider_destino: &dyn Provider,
+    provider_dest: &dyn Provider,
     dest_dir: &VPath,
     name: &[u8],
     piece_count: u64,
@@ -932,7 +932,7 @@ async fn check_slots_free(
     for i in 1..=piece_count {
         let p = dest_dir
             .join(norte_proto::Segment::new(piece_name(name, i)).map_err(|_| Error::InvalidPath)?);
-        if provider_destino.stat(&p).await.is_ok() {
+        if provider_dest.stat(&p).await.is_ok() {
             return Err(Error::Conflict {
                 conflict: norte_proto::ConflictKind::Exists,
             });
@@ -958,7 +958,7 @@ async fn close_piece(
         return Ok(None);
     };
     s.commit().await?;
-    let node = crate::ops::identidad_de(provider, &dest, observer).await;
+    let node = crate::ops::identity_of(provider, &dest, observer).await;
     observer
         .on_mutation(&Mutation::Created { path: &dest, node }, &ctx.actor)
         .await?;
@@ -1024,7 +1024,7 @@ async fn has_pieces_above(
 pub(crate) async fn combine(
     src: Arc<dyn Provider>,
     first: VPath,
-    provider_destino: Arc<dyn Provider>,
+    provider_dest: Arc<dyn Provider>,
     dest: VPath,
     observer: Arc<dyn MutationObserver>,
     ctx: &TaskCtx,
@@ -1048,13 +1048,13 @@ pub(crate) async fn combine(
         p.bytes_total = Some(total);
         p.entries_total = Some(pieces.len() as u64);
     });
-    if provider_destino.stat(&dest).await.is_ok() {
+    if provider_dest.stat(&dest).await.is_ok() {
         return Err(Error::Conflict {
             conflict: norte_proto::ConflictKind::Exists,
         });
     }
-    write_combined(&*src, pieces, &*provider_destino, &dest, ctx).await?;
-    let node = crate::ops::identidad_de(&*provider_destino, &dest, &observer).await;
+    write_combined(&*src, pieces, &*provider_dest, &dest, ctx).await?;
+    let node = crate::ops::identity_of(&*provider_dest, &dest, &observer).await;
     observer
         .on_mutation(&Mutation::Created { path: &dest, node }, &ctx.actor)
         .await?;
@@ -1135,11 +1135,11 @@ async fn list_pieces(
 async fn write_combined(
     src: &dyn Provider,
     pieces: Vec<(VPath, u64)>,
-    provider_destino: &dyn Provider,
+    provider_dest: &dyn Provider,
     dest: &VPath,
     ctx: &TaskCtx,
 ) -> Result<(), Error> {
-    let mut sink = provider_destino.write(dest).await?;
+    let mut sink = provider_dest.write(dest).await?;
     let mut written: u64 = 0;
     for (i, (p, _)) in pieces.iter().enumerate() {
         if ctx.cancel.is_cancelled() {
@@ -1364,26 +1364,26 @@ mod tests {
     /// has nothing to back it up with.
     #[test]
     fn each_format_says_what_it_checks() {
-        assert_eq!(que_se_comprueba("zip"), vec!["crc".to_owned()]);
-        assert_eq!(que_se_comprueba("tar+gz"), vec!["gzip_crc".to_owned()]);
-        assert_eq!(que_se_comprueba("tar"), vec!["sizes".to_owned()]);
-        assert_eq!(que_se_comprueba("rar"), vec!["sizes".to_owned()]);
+        assert_eq!(that_is_checked("zip"), vec!["crc".to_owned()]);
+        assert_eq!(that_is_checked("tar+gz"), vec!["gzip_crc".to_owned()]);
+        assert_eq!(that_is_checked("tar"), vec!["sizes".to_owned()]);
+        assert_eq!(that_is_checked("rar"), vec!["sizes".to_owned()]);
     }
 
     /// The container's format comes from its name, with the aliases people
     /// actually write: `.tgz` is `tar+gz`, and the case does not matter.
     #[test]
     fn the_container_format_comes_from_the_name() {
-        assert_eq!(formato_de_nombre(b"a.zip"), Some("zip"));
-        assert_eq!(formato_de_nombre(b"a.TGZ"), Some("tar+gz"));
-        assert_eq!(formato_de_nombre(b"a.tar.gz"), Some("tar+gz"));
-        assert_eq!(formato_de_nombre(b"a.tar"), Some("tar"));
+        assert_eq!(name_format(b"a.zip"), Some("zip"));
+        assert_eq!(name_format(b"a.TGZ"), Some("tar+gz"));
+        assert_eq!(name_format(b"a.tar.gz"), Some("tar+gz"));
+        assert_eq!(name_format(b"a.tar"), Some("tar"));
         assert_eq!(
-            formato_de_nombre(b"a.rar"),
+            name_format(b"a.rar"),
             Some("rar"),
             "reading it IS known how"
         );
-        assert_eq!(formato_de_nombre(b"leeme"), None);
+        assert_eq!(name_format(b"leeme"), None);
     }
 
     /// Pieces are numbered with three digits starting from 001, which is the

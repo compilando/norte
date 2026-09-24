@@ -884,7 +884,7 @@ keymap = [ { on = ['g', 'g'], run = 'cursor.top' } ]
                 // not work: the terminal sends the SAME byte for Ctrl+A and
                 // Ctrl+Shift+A, so `mark.clear` was advertised and dead in
                 // all three native presets. Caught by
-                // `ningun_preset_ata_un_acorde_que_el_terminal_no_entrega`.
+                // `no_preset_binds_a_chord_the_terminal_cannot_deliver`.
                 Chord::new(
                     Mods {
                         alt: true,

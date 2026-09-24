@@ -48,7 +48,7 @@
 //!
 //! - **It retries, with a brake.** If on the first mutation the journal
 //!   belonged to someone else, this session tries again — at most once every
-//!   [`FRENO_TRAS_FALLO`], so as not to pay `LOCK_WAIT` per mutation.
+//!   [`FRENO_AFTER_FAILURE`], so as not to pay `LOCK_WAIT` per mutation.
 //!   The occupant is usually transient (another `norte cp` from a script, a
 //!   `norte audit`, a daemon restarting) and a quarter of a second of overlap
 //!   used to mark a three-hour session. Retrying after a failure is safe: a
@@ -109,7 +109,7 @@
 //!
 //! The window knowing how to reopen exposed an edge that did not exist
 //! before: with the journal asked about PER MUTATION, a `copy_tree` that
-//! starts with the file busy and runs longer than [`FRENO_TRAS_FALLO`] started
+//! starts with the file busy and runs longer than [`FRENO_AFTER_FAILURE`] started
 //! recording halfway through — the first k entries without a row, the
 //! following n-k with one, inside ONE Task and ONE actor. And then `undo`
 //! walks back the recorded tail and leaves the head that isn't recorded:
@@ -300,7 +300,7 @@ const LOCK_WAIT: std::time::Duration = std::time::Duration::from_millis(250);
 /// occupant is still there —and the usual occupant, a daemon, stays there all
 /// afternoon. Thirty seconds is the order of magnitude of "restarting a
 /// daemon", not of "noticing it while copying".
-pub const FRENO_TRAS_FALLO: std::time::Duration = std::time::Duration::from_secs(30);
+pub const FRENO_AFTER_FAILURE: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// How long a journal has been `Busy` before it's worth wondering whether a
 /// daemon holds it (#203).
@@ -474,12 +474,12 @@ impl LazyJournal {
     /// nobody. That's the point of #177.
     #[must_use]
     pub fn in_state_dir(state_dir: &Path) -> Self {
-        Self::with_retry_brake(state_dir, FRENO_TRAS_FALLO)
+        Self::with_retry_brake(state_dir, FRENO_AFTER_FAILURE)
     }
 
     /// Like [`Self::in_state_dir`], with another retry brake.
     ///
-    /// Exists for the tests —which cannot wait for [`FRENO_TRAS_FALLO`] to see
+    /// Exists for the tests —which cannot wait for [`FRENO_AFTER_FAILURE`] to see
     /// a retry, nor rely on a clock to see that there wasn't one— and for an
     /// embedder with a different cadence. `Duration::ZERO` retries on every
     /// mutation, with whatever that costs.
@@ -646,7 +646,7 @@ impl LazyJournal {
     /// TAKEN OUT of the window while the pool keeps closing on its own in
     /// `sqlx`'s worker: the next `resolve` opens against our own dying
     /// connection and gets a `Busy` that we made up ourselves — a false
-    /// "unrecorded session" warning, and [`FRENO_TRAS_FALLO`] worth of real
+    /// "unrecorded session" warning, and [`FRENO_AFTER_FAILURE`] worth of real
     /// mutations left unrecorded until the retry cures it. In other words,
     /// exactly the bug this function exists to not have.
     ///

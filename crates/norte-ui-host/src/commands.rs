@@ -17,12 +17,12 @@
 /// bound to `pane.delete` in the preset is answered instead of executed:
 /// the key existing is not permission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Efectos {
+pub enum Effects {
     /// Only look: navigate, mark, sort, view. Nothing that writes, and no
     /// approving an agent's write either.
-    SoloLectura,
+    SoloRead,
     /// Everything the host implements.
-    Completo,
+    Full,
 }
 
 /// The commands the host runs in each mode.
@@ -34,21 +34,17 @@ pub enum Efectos {
 /// 0126). It used to be its own list, `MUTAN`, and forgetting to update it
 /// when adding a command that writes left the "look only" window running it.
 #[must_use]
-pub fn implementados(efectos: Efectos) -> Vec<&'static str> {
-    match efectos {
-        Efectos::Completo => IMPLEMENTADOS.to_vec(),
-        Efectos::SoloLectura => IMPLEMENTADOS
-            .iter()
-            .copied()
-            .filter(|c| inerte(c))
-            .collect(),
+pub fn implementados(effects: Effects) -> Vec<&'static str> {
+    match effects {
+        Effects::Full => IMPLEMENTADOS.to_vec(),
+        Effects::SoloRead => IMPLEMENTADOS.iter().copied().filter(|c| inert(c)).collect(),
     }
 }
 
 /// Whether the catalogue declares `command` inert. A name the catalogue
 /// does not know is NOT one: not knowing what it does does not authorize
 /// running it.
-fn inerte(command: &str) -> bool {
+fn inert(command: &str) -> bool {
     norte_frontend::keymap::catalogue::effect(command)
         .is_some_and(norte_frontend::keymap::Effect::is_inert)
 }
@@ -224,7 +220,7 @@ pub const IMPLEMENTADOS: &[&str] = &[
 /// answers to dialogs that do not exist here. A preset can bind them: the
 /// key will say no, here, with the same phrase as any other command this
 /// window does not do.
-pub const IMPLEMENTADOS_DIALOGO: &[&str] = &[
+pub const IMPLEMENTADOS_DIALOG: &[&str] = &[
     "dialog.confirm",
     "dialog.cancel",
     "dialog.approve",
@@ -301,32 +297,32 @@ pub const IMPLEMENTADOS_VISOR: &[&str] = &[
 /// not do it" apart from "norte does not have it", and that question is not
 /// per screen.
 #[must_use]
-pub fn todos() -> Vec<&'static str> {
-    todos_con(Efectos::Completo)
+pub fn all() -> Vec<&'static str> {
+    all_with(Effects::Full)
 }
 
 /// Same, with the effects mode stated.
 #[must_use]
-pub fn todos_con(efectos: Efectos) -> Vec<&'static str> {
-    let mut v = implementados(efectos);
+pub fn all_with(effects: Effects) -> Vec<&'static str> {
+    let mut v = implementados(effects);
     v.extend_from_slice(IMPLEMENTADOS_VISOR);
     v
 }
 
 /// What a VIEWER command asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EfectoVisor {
+pub enum EffectVisor {
     /// Closes the viewer.
-    Cerrar,
+    Close,
     /// Scrolls this many lines (negative is upward).
-    Linea(i64),
+    Line(i64),
     /// Scrolls this many PAGES (negative is upward).
-    Pagina(i64),
+    Page(i64),
     /// Scrolls this many COLUMNS (negative is toward the left).
     ///
     /// The viewer does not wrap: without this, the tail of a line wider
     /// than the window was nowhere to be found.
-    Columna(i64),
+    Column(i64),
     /// To the beginning or the end.
     Extremo {
         /// `true` = to the end.
@@ -341,15 +337,15 @@ pub enum EfectoVisor {
     /// Moves the image's zoom one notch (spec 2026-09-20).
     Zoom {
         /// `true` = zoom in.
-        acercar: bool,
+        zoom_in: bool,
     },
     /// Returns the image to FIT.
-    ZoomAjustar,
+    ZoomFit,
     /// Opens the next (or previous) sibling of the same class, without
     /// exiting.
-    Hermana {
+    Sibling {
         /// `true` = the next one.
-        adelante: bool,
+        forward: bool,
     },
 }
 
@@ -358,26 +354,26 @@ pub enum EfectoVisor {
 /// `None` = the host does not implement it; the caller turns it into an
 /// `Unavailable` the user sees.
 #[must_use]
-pub fn efecto_visor_de(command: &str, veces: u32) -> Option<EfectoVisor> {
-    let n = i64::from(veces.max(1).min(u32::from(u16::MAX)));
+pub fn viewer_effect_of(command: &str, times: u32) -> Option<EffectVisor> {
+    let n = i64::from(times.max(1).min(u32::from(u16::MAX)));
     Some(match command {
-        "viewer.close" => EfectoVisor::Cerrar,
-        "viewer.up" => EfectoVisor::Linea(-n),
-        "viewer.down" => EfectoVisor::Linea(n),
-        "viewer.page-up" => EfectoVisor::Pagina(-n),
-        "viewer.page-down" => EfectoVisor::Pagina(n),
-        "viewer.top" => EfectoVisor::Extremo { al_final: false },
-        "viewer.bottom" => EfectoVisor::Extremo { al_final: true },
-        "viewer.left" => EfectoVisor::Columna(-n),
-        "viewer.right" => EfectoVisor::Columna(n),
-        "viewer.hex" => EfectoVisor::Hex,
-        "viewer.encoding" => EfectoVisor::Encoding,
-        "viewer.encoding-auto" => EfectoVisor::EncodingAuto,
-        "viewer.zoom-in" => EfectoVisor::Zoom { acercar: true },
-        "viewer.zoom-out" => EfectoVisor::Zoom { acercar: false },
-        "viewer.zoom-fit" => EfectoVisor::ZoomAjustar,
-        "viewer.next" => EfectoVisor::Hermana { adelante: true },
-        "viewer.prev" => EfectoVisor::Hermana { adelante: false },
+        "viewer.close" => EffectVisor::Close,
+        "viewer.up" => EffectVisor::Line(-n),
+        "viewer.down" => EffectVisor::Line(n),
+        "viewer.page-up" => EffectVisor::Page(-n),
+        "viewer.page-down" => EffectVisor::Page(n),
+        "viewer.top" => EffectVisor::Extremo { al_final: false },
+        "viewer.bottom" => EffectVisor::Extremo { al_final: true },
+        "viewer.left" => EffectVisor::Column(-n),
+        "viewer.right" => EffectVisor::Column(n),
+        "viewer.hex" => EffectVisor::Hex,
+        "viewer.encoding" => EffectVisor::Encoding,
+        "viewer.encoding-auto" => EffectVisor::EncodingAuto,
+        "viewer.zoom-in" => EffectVisor::Zoom { zoom_in: true },
+        "viewer.zoom-out" => EffectVisor::Zoom { zoom_in: false },
+        "viewer.zoom-fit" => EffectVisor::ZoomFit,
+        "viewer.next" => EffectVisor::Sibling { forward: true },
+        "viewer.prev" => EffectVisor::Sibling { forward: false },
         _ => return None,
     })
 }
@@ -388,51 +384,51 @@ pub fn efecto_visor_de(command: &str, veces: u32) -> Option<EfectoVisor> {
 /// exists so the resolver and the mouse end up in the same place — a gesture
 /// and a key that mean the same thing have to do the same thing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Efecto {
+pub enum Effect {
     /// Moves the cursor this many rows (negative is upward).
     Cursor(i64),
     /// Moves the cursor this many PAGES (negative is upward). How many rows
     /// that is is decided by the slot, with the window the renderer told it.
-    Pagina(i64),
+    Page(i64),
     /// Cursor to the start or the end of the listing.
     Extremo {
         /// `true` = to the end.
         al_final: bool,
     },
     /// Enters whatever is under the cursor.
-    Entrar,
+    Enter,
     /// Goes up to the parent directory.
-    Subir,
+    Up,
     /// Navigation trail.
-    Rastro {
+    Trail {
         /// `true` = back.
-        atras: bool,
+        back: bool,
     },
     /// Marks or unmarks the cursor's row.
-    Marcar,
+    Mark,
     /// Marks or unmarks the cursor's row and MOVES UP (`shift+↑`).
-    MarcarSubiendo,
+    MarkSubiendo,
     /// Marks (or unmarks) a page's span and moves there.
-    MarcarPagina {
+    MarkPage {
         /// `true` = downward.
-        abajo: bool,
+        down: bool,
     },
     /// Marks from the cursor to one end and UNMARKS the other side
     /// (Krusader's `shift+Home`/`shift+End`).
-    MarcarHastaElBorde {
+    MarkToEdge {
         /// `true` = upward.
-        arriba: bool,
+        up: bool,
     },
     /// Clears all marks.
-    DesmarcarTodo,
+    UnmarkAll,
     /// Moves focus to the next focusable slot (or the previous one).
     ///
     /// With two panes it is the usual switch; with more, it follows the
     /// tab ORDER the shared layer resolves, which already skips what is not
     /// visible and what cannot be focused.
-    Foco {
+    Focus {
         /// `true` = backward.
-        atras: bool,
+        back: bool,
         /// `true` = only LISTINGS stop; side panels are skipped.
         ///
         /// It is the difference between `pane.switch` and
@@ -441,43 +437,43 @@ pub enum Efecto {
         /// A single ring for both forced five presses to get back to the
         /// listing next door with the places bar, the tree and the viewer
         /// open.
-        solo_listados: bool,
+        solo_listings: bool,
     },
     /// Designates ANOTHER slot as the destination of the next operation.
-    Destino,
+    Dest,
     /// Resizes the focused slot. Negative shrinks it.
-    Tamano(i64),
+    Size(i64),
     /// Equalizes the weight of the focused slot's siblings.
-    Igualar,
+    Equalize,
     /// Rotates the focused slot's split (ADR 0138).
-    Girar,
+    Rotate,
     /// Opens the layout picker.
-    Disposiciones,
+    Layouts,
     /// Opens the column picker.
-    Columnas,
+    Columns,
     /// Opens the command palette.
-    Paleta,
+    Palette,
     /// Opens "go to anywhere" (#357).
     IrA,
     /// Opens settings: they are read, cycled and written.
-    Ajustes,
+    Settings,
     /// Opens the extension manager, read-only.
-    Extensiones,
+    Extensions,
     /// The agent sessions viewed, and undoing a whole one.
-    Agentes,
+    Agents,
     /// Opens another TAB next to the focused slot.
-    PestanaNueva,
+    TabNew,
     /// Closes the focused tab. Without a group, does nothing.
-    CerrarPestana,
+    CloseTab,
     /// Moves to the next — or previous — tab, cycling.
-    CiclarPestana {
+    CycleTab {
         /// Backward.
-        atras: bool,
+        back: bool,
     },
     /// Moves the focused tab within its group.
-    MoverPestana {
+    MoverTab {
         /// To the right.
-        derecha: bool,
+        right: bool,
     },
     /// Goes to tab `n` (1-based) of the focused group.
     IrAPestana {
@@ -485,23 +481,23 @@ pub enum Efecto {
         n: usize,
     },
     /// Splits the focused slot and puts another LISTING next to it.
-    Partir {
+    Split {
         /// One above the other instead of one beside the other.
         vertical: bool,
     },
     /// Closes the focused slot.
-    CerrarHueco,
+    CloseSlot,
     /// Opens the TERMINAL panel, or brings it to front and gives it focus
     /// (#362).
     ///
     /// **It never closes it**, and that is a deliberate divergence from
-    /// [`Self::AlternarHueco`]: inside there is a shell belonging to the
+    /// [`Self::ToggleSlot`]: inside there is a shell belonging to the
     /// reader, with whatever it had half-done. Closing it would kill it, and
     /// that cannot be what the same key that enters it does. To close it
     /// there is `layout.close-slot`, named for what it does.
-    AbrirTerminal,
+    OpenTerminal,
     /// Opens — or closes — the auxiliary slot of this kind.
-    AlternarHueco {
+    ToggleSlot {
         /// `places`, `processes`, `metadata` or `tree`: the ones this window
         /// knows how to PAINT. Opening one that would only paint gray is not
         /// opening it.
@@ -510,53 +506,53 @@ pub enum Efecto {
     /// Moves the BOARD's selected row, without needing to focus it.
     TaskVecina {
         /// Upward.
-        atras: bool,
+        back: bool,
     },
     /// Removes the selected row from the board, if it already finished.
-    DescartarTask,
+    DiscardTask,
     /// Marks ALL rows of the active pane.
-    MarcarTodo,
+    MarkAll,
     /// Inverts the active pane's marks.
-    InvertirMarcas,
+    InvertMarks,
     /// Marks — or unmarks — the ones with the SAME extension as the cursor's
     /// (#313).
-    MarcarExtension {
+    MarkExtension {
         /// `true` adds marks, `false` removes them.
-        marcar: bool,
+        mark: bool,
     },
     /// Marks entries of a CLASS: directories or files (#313).
-    MarcarClase {
+    MarkClass {
         /// `true` marks directories, `false` files.
         dirs: bool,
     },
     /// Restores the selection prior to the last block gesture (#313).
-    RestaurarMarcas,
+    RestoreMarks,
     /// Changes the POSIX PERMISSIONS of what is marked (#314): asks for the
     /// mode in octal.
-    Permisos,
+    Permissions,
     /// Computes checksums of what is marked, or VERIFIES the checksum file
     /// under the cursor (#311).
-    Sumas {
+    Checksums {
         /// `true` verifies against a checksum file; `false` computes.
-        verificar: bool,
+        verify: bool,
     },
     /// Marks — or unmarks — by PATTERN: opens the glob prompt.
-    MarcarPatron {
+    MarkPatron {
         /// `true` adds marks, `false` removes them.
-        marcar: bool,
+        mark: bool,
     },
     /// Copies the paths of what is marked (or of what is selected) to the
     /// clipboard.
-    CopiarRuta,
+    CopyPath,
     /// Opens what is selected with the application the desktop picks.
-    AbrirExterno,
+    OpenExternal,
     /// Edits what is selected with the editor `[ui] editor` names; without
-    /// one, the same as [`Efecto::AbrirExterno`].
-    EditarExterno,
+    /// one, the same as [`Effect::OpenExternal`].
+    EditExternal,
     /// Compares TWO files (#312) with the program from `[ui] diff` — or
     /// `diff -u` — launched by the host process: detached if it opens a
     /// window, waited on and its output captured if not.
-    CompararFicheros,
+    CompareFiles,
     /// Opens a terminal sitting in the active pane's directory.
     Terminal,
     /// Hands the screen off to the TERMINAL and closes this window (phase
@@ -565,52 +561,52 @@ pub enum Efecto {
     /// Not inert (ADR 0126) and does not write a file: what it writes is the
     /// SESSION, and it also releases it and closes the window. A look-only
     /// window does none of the three.
-    Relevo,
+    Handoff,
     /// Shows the active theme from the inside.
-    Tema,
+    Theme,
     /// Unfolds the menu bar. Neither adds capabilities nor removes them: it
     /// offers the same catalogue commands, sorted by topic, for whoever
     /// does not know the name of what they are looking for.
     Menu,
     /// Asks to close the window: the same path as the close button, with
     /// the same `[ui] confirm_quit` question.
-    Salir,
+    Exit,
     /// Opens the PROFILE picker (ADR 0079).
-    PerfilElegir,
+    ProfileChoose,
     /// Saves the CURRENT workspace as a profile (#318).
-    PerfilGuardarComo,
+    ProfileSaveAs,
     /// Jumps to the next or previous profile, without opening anything.
-    PerfilVecino {
+    ProfileVecino {
         /// Toward the previous one.
-        atras: bool,
+        back: bool,
     },
     /// Opens the host's volume picker.
-    Volumenes,
+    Volumes,
     /// Opens help. On the page for the CONTEXT the reader is in — an open
     /// dialog, the viewer, the listing — and not always on the index:
     /// whoever presses F1 while looking at a question wants that answer.
-    Ayuda,
+    Help,
     /// Opens the viewer on the entry under the cursor.
-    Ver,
+    View,
     /// Opens the listing's incremental search.
-    BuscarRapido,
+    SearchFast,
     /// Asks for the PLAN to sync the active pane onto the destination.
     ///
     /// The plan does NOT write: it says what it would do. Still not inert,
     /// because it is the door to a write and a window that declares itself
     /// look-only does not open it.
-    Sincronizar,
+    Sync,
     /// Compares the two panes and opens the differences pane.
     ///
     /// Does NOT mutate: it walks both trees and answers. It is a long,
     /// cancellable task, and cancelling it is its only brake.
-    Comparar,
+    Compare,
     /// Packs what is MARKED into a new container (#132).
     ///
     /// Not inert (ADR 0126): it writes a file. The name is typed, and the
     /// FORMAT comes from it — a name with no known extension is refused
     /// instead of packing into something nobody asked for.
-    Empaquetar,
+    Pack,
     /// Copies the container's INSIDE under the cursor to the destination
     /// pane (#132).
     ///
@@ -618,67 +614,67 @@ pub enum Efecto {
     /// accepts an archive's inside as a source, so unpacking is the copy the
     /// reader could have done by hand — with its journal, its undo, its
     /// collision policy and its cancellation.
-    Desempaquetar,
+    Unpack,
     /// Checks the container under the cursor (#132).
     ///
     /// Inert (ADR 0126): it reads the whole archive and answers whether it
     /// is sound, without writing anything. Same category as comparing.
-    ComprobarArchivo,
+    CheckArchive,
     /// The configured-connections picker (#264).
     ///
     /// Inert (ADR 0126): listing opens nothing. Choosing one NAVIGATES, and
     /// navigating is what establishes the session — with the same gate as
     /// any other listing, and its TOFU if needed.
-    Conexiones,
+    Connections,
     /// Closes the active pane's session and takes it out of there (#140).
     ///
     /// Inert (ADR 0126): releasing a session does not write a single byte
     /// anywhere. What it does do is leave the pane looking at something it
     /// can no longer read, which is why it navigates afterward.
-    Desconectar,
+    Disconnect,
     /// Splits the file under the cursor into chunks of the typed size
     /// (#132). Not inert (ADR 0126): it writes the chunks.
     ///
-    /// `PartirFichero` and not plain `Partir`: [`Efecto::Partir`] is
+    /// `SplitFile` and not plain `Split`: [`Effect::Split`] is
     /// splitting a layout SLOT, which has nothing to do with this.
-    PartirFichero,
+    SplitFile,
     /// Joins the chunks starting from the `.001` under the cursor (#132).
     /// Also writes, so it is not inert either.
-    Juntar,
+    Join,
     /// Counts how much space what is MARKED — or what is under the cursor —
     /// takes up (#139).
     ///
-    /// Inert for the same reason as [`Efecto::Comparar`]: it walks a tree
+    /// Inert for the same reason as [`Effect::Compare`]: it walks a tree
     /// and answers, without writing or sending out of the process anything
     /// listing did not already send. It is long and cancellable, and the
     /// board shows it as `dir-size`.
-    TamanoDeDirectorio,
+    DirectorySize,
     /// Asks for a SEMANTIC search against the index: opens the query prompt.
     ///
     /// Not inert (ADR 0126) and does not write a byte: the query LEAVES the
     /// process toward the configured AI provider, same as a directory's
-    /// contents in [`Efecto::RenameIa`].
-    BuscarSemantica,
+    /// contents in [`Effect::RenameIa`].
+    SearchSemantic,
     /// Opens the subtree search prompt.
-    Buscar,
+    Search,
     /// Opens the create-directory prompt.
-    CrearDirectorio,
+    CreateDirectory,
     /// Opens the prompt to create an EMPTY file and edit it (#290).
     ///
     /// Not inert (ADR 0126): it creates a node on disk, with its journal
     /// entry and its undo, exactly like creating a directory.
-    CrearFichero,
+    CreateFile,
     /// Asks to delete what is marked (or whatever is under the cursor). Does
     /// NOT delete: it opens the confirmation, which is where ALL paths pass
     /// through — key, menu, gesture — because a destructive operation with
     /// two doors ends up with one unlocked.
-    Borrar {
+    Delete {
         /// Permanent, no trash.
-        permanente: bool,
+        permanent: bool,
     },
     /// Asks to copy or move what is marked (or whatever is under the
     /// cursor) to the DESTINATION slot. Does NOT transfer: it opens the
-    /// confirmation, for the same reason as [`Efecto::Borrar`] — and here
+    /// confirmation, for the same reason as [`Effect::Delete`] — and here
     /// the confirmation is also the only thing that shows WHERE it goes,
     /// which in a window with three listings is not obvious.
     Transferir {
@@ -695,35 +691,35 @@ pub enum Efecto {
     /// no prompt: what is asked is "look at this directory and propose a
     /// shape", so the plan arrives on its own and is reviewed as a tree
     /// before anything else.
-    Organizar,
+    Organize,
     /// Batch rename by TEMPLATE (#310): opens the template prompt, and the
     /// plan — deterministic, no model — goes through the SAME review as the
     /// AI's.
-    RenameLote,
+    RenameBatch,
     /// Asks to stop a task on the board.
     ///
-    /// Survives [`Efectos::SoloLectura`] **only for its own tasks**, and the
+    /// Survives [`Effects::SoloRead`] **only for its own tasks**, and the
     /// distinction is not formalism: stopping a copy DOES touch disk — the
     /// destination gets cleaned up or a `.norte-partial` is left, which is
     /// the project's rule — so a window mounted with no effects cannot abort
     /// ANOTHER client's transfer and leave it a partial. Its own tasks are a
     /// different matter: if it could launch them, it can stop them.
-    CancelarTask,
+    CancelTask,
     /// Pauses the selected task, or resumes it if already paused (ADR
-    /// 0147). The same choice as [`Self::CancelarTask`], and the same rule
+    /// 0147). The same choice as [`Self::CancelTask`], and the same rule
     /// for ANOTHER client's tasks in a window with no effects.
-    PausarTask,
+    PauseTask,
     /// Retries the most recent failed transfer with the same options (ADR
     /// 0148). Mutates, so a window with no effects refuses it.
-    ReintentarTask,
+    RetryTask,
     /// Sends transfers launched from now on to the serial queue, or stops
     /// doing so (ADR 0149). Does not touch what is already queued.
-    AlternarCola,
-    /// Moves the selected task up (`arriba`) or down the queue, if it has
+    ToggleCola,
+    /// Moves the selected task up (`up`) or down the queue, if it has
     /// not started yet.
     MoverEnCola {
         /// Toward the front of the queue.
-        arriba: bool,
+        up: bool,
     },
     /// Sorts the focused listing by this column.
     ///
@@ -734,69 +730,69 @@ pub enum Efecto {
     /// The KEY of a sort column, not the column itself: only sort keys
     /// arrive here (`pane.sort-name`, `-size`…), which are always built-ins.
     /// Sorting by an attribute enters through a click on its header
-    /// (`ordenar_por`), so putting the whole `SortColumn` here — which
+    /// (`sort_by`), so putting the whole `SortColumn` here — which
     /// stopped being `Copy` once it could carry an id (ADR 0144) — would
-    /// strip `Copy` from all of `Efecto` for a case that never arrives
+    /// strip `Copy` from all of `Effect` for a case that never arrives
     /// through this path.
-    Ordenar(norte_config::SortColumnKey),
+    Sort(norte_config::SortColumnKey),
     /// Asks again for the listing of the slots that are visible.
     ///
     /// For ALL of them, not just the focused one: an external change rarely
     /// respects focus, which is why the TUI refreshes both panes.
-    Refrescar,
+    Refresh,
     /// Hides or restores the active pane's hidden files.
     ///
     /// Presentation-only (#107): the provider does not re-list.
-    AlternarOcultos,
+    ToggleHidden,
     /// Cycles the reinterpretation of names that are not UTF-8 (#57).
     ///
     /// Display-only, rule 1: the bytes are not touched.
-    CiclarEncoding,
+    CycleEncoding,
     /// The ACTIVE slot's location travels to the DESTINATION slot.
-    Espejo,
+    Mirror,
     /// Turns SYNCED navigation on or off: while it is on, every navigation
     /// of the active slot is repeated by the destination.
     ///
     /// Does not navigate on its own, which is why it is not in the pane
     /// gesture group next to it: all it does is flip a switch.
-    EspejoPermanente,
-    /// Like [`Efecto::Espejo`], but what travels is the CURSOR'S TARGET: the
+    MirrorPermanent,
+    /// Like [`Effect::Mirror`], but what travels is the CURSOR'S TARGET: the
     /// folder under it if it is one, and if not the active slot's location
     /// (Krusader's `Ctrl+←`/`Ctrl+→`). Which directory that is is decided by
     /// `PaneState::target_dir`, one shared by both frontends (ADR 0077).
-    EspejoObjetivo,
+    MirrorObjetivo,
     /// The DESTINATION slot's location travels to the ACTIVE one: the
     /// mirror in reverse.
-    Traer,
+    Bring,
     /// The two slots — active and destination — swap places.
     ///
     /// Does not touch disk: both listings already existed.
-    Intercambiar,
+    Swap,
     /// Opens the active slot's navigation-trail list.
-    Historial,
+    History,
     /// Opens the configuration's favorites list.
     Hotlist,
     /// Opens the session's POPULAR directories (spec 2026-09-15 D6).
-    Populares,
+    Popular,
     /// Opens the history of one SIDE of the screen (D7), resolved by the
-    /// split's geometry as in [`Efecto::VolumenesDeLado`].
-    HistorialDeLado {
+    /// split's geometry as in [`Effect::SideVolumes`].
+    SideHistory {
         /// The rightmost one instead of the leftmost.
-        derecha: bool,
+        right: bool,
     },
     /// Returns to the active slot's jump point (D5).
-    SaltoAtras,
+    JumpBack,
     /// Sets the jump point at the active slot's directory (D5).
-    FijarSalto,
+    PinJump,
     /// Opens the volume picker for one SIDE of the screen.
     ///
     /// A side, not the focus: it is what Total Commander's
     /// `Alt+F1`/`Alt+F2` do, and what the TUI does with its
     /// `panes[0]`/`panes[1]`. Here the side is decided by the split's
     /// GEOMETRY, the only thing that means "left" in a tree of slots.
-    VolumenesDeLado {
+    SideVolumes {
         /// The rightmost one instead of the leftmost.
-        derecha: bool,
+        right: bool,
     },
     /// Asks to rename the entry under the cursor. Does NOT rename: it opens
     /// the name for editing.
@@ -806,7 +802,7 @@ pub enum Efecto {
     /// what it refuses is a different thing (a multi-selection, not a
     /// missing destination) and what seeds the field has a rule no other
     /// surface has — the UNTOUCHED name travels as bytes.
-    Renombrar,
+    Rename,
 }
 
 /// Translates a catalogue command into the effect the host applies.
@@ -823,108 +819,108 @@ pub enum Efecto {
     clippy::too_many_lines,
     reason = "command→effect table: readable whole, like the actor's message dispatch"
 )]
-pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
-    let n = i64::from(veces.max(1).min(u32::from(u16::MAX)));
+pub fn effect_of(command: &str, times: u32) -> Option<Effect> {
+    let n = i64::from(times.max(1).min(u32::from(u16::MAX)));
     Some(match command {
-        "cursor.up" => Efecto::Cursor(-n),
-        "cursor.down" => Efecto::Cursor(n),
+        "cursor.up" => Effect::Cursor(-n),
+        "cursor.down" => Effect::Cursor(n),
         // A page is the VISIBLE rows, and how many that is is known by the
         // slot (the renderer told it via `SetVisibleRange`): that is why it
         // travels as pages and not as rows.
-        "cursor.page-up" => Efecto::Pagina(-n),
-        "cursor.page-down" => Efecto::Pagina(n),
-        "cursor.top" => Efecto::Extremo { al_final: false },
-        "cursor.bottom" => Efecto::Extremo { al_final: true },
-        "nav.enter" => Efecto::Entrar,
-        "nav.parent" => Efecto::Subir,
-        "nav.back" => Efecto::Rastro { atras: true },
-        "nav.forward" => Efecto::Rastro { atras: false },
-        "nav.jump-back" => Efecto::SaltoAtras,
-        "nav.set-jump-point" => Efecto::FijarSalto,
-        "mark.toggle" => Efecto::Marcar,
-        "mark.clear" => Efecto::DesmarcarTodo,
-        "mark.all" => Efecto::MarcarTodo,
-        "mark.invert" => Efecto::InvertirMarcas,
-        "mark.pattern-add" => Efecto::MarcarPatron { marcar: true },
-        "mark.pattern-remove" => Efecto::MarcarPatron { marcar: false },
-        "mark.extension-add" => Efecto::MarcarExtension { marcar: true },
-        "mark.extension-remove" => Efecto::MarcarExtension { marcar: false },
-        "mark.files" => Efecto::MarcarClase { dirs: false },
-        "mark.dirs" => Efecto::MarcarClase { dirs: true },
-        "mark.restore" => Efecto::RestaurarMarcas,
-        "mark.toggle-up" => Efecto::MarcarSubiendo,
-        "mark.toggle-page-down" => Efecto::MarcarPagina { abajo: true },
-        "mark.toggle-page-up" => Efecto::MarcarPagina { abajo: false },
-        "mark.to-top" => Efecto::MarcarHastaElBorde { arriba: true },
-        "mark.to-bottom" => Efecto::MarcarHastaElBorde { arriba: false },
+        "cursor.page-up" => Effect::Page(-n),
+        "cursor.page-down" => Effect::Page(n),
+        "cursor.top" => Effect::Extremo { al_final: false },
+        "cursor.bottom" => Effect::Extremo { al_final: true },
+        "nav.enter" => Effect::Enter,
+        "nav.parent" => Effect::Up,
+        "nav.back" => Effect::Trail { back: true },
+        "nav.forward" => Effect::Trail { back: false },
+        "nav.jump-back" => Effect::JumpBack,
+        "nav.set-jump-point" => Effect::PinJump,
+        "mark.toggle" => Effect::Mark,
+        "mark.clear" => Effect::UnmarkAll,
+        "mark.all" => Effect::MarkAll,
+        "mark.invert" => Effect::InvertMarks,
+        "mark.pattern-add" => Effect::MarkPatron { mark: true },
+        "mark.pattern-remove" => Effect::MarkPatron { mark: false },
+        "mark.extension-add" => Effect::MarkExtension { mark: true },
+        "mark.extension-remove" => Effect::MarkExtension { mark: false },
+        "mark.files" => Effect::MarkClass { dirs: false },
+        "mark.dirs" => Effect::MarkClass { dirs: true },
+        "mark.restore" => Effect::RestoreMarks,
+        "mark.toggle-up" => Effect::MarkSubiendo,
+        "mark.toggle-page-down" => Effect::MarkPage { down: true },
+        "mark.toggle-page-up" => Effect::MarkPage { down: false },
+        "mark.to-top" => Effect::MarkToEdge { up: true },
+        "mark.to-bottom" => Effect::MarkToEdge { up: false },
         // `pane.switch` is "the other pane": it cycles the LISTINGS, all of
         // them there are, and nothing else. `layout.focus-*` is the whole
         // screen's traversal, side panels included. They used to share an
         // arm, and that meant that with the tree and the viewer open, tab
         // took five stops to get back to the listing next door.
-        "pane.switch" => Efecto::Foco {
-            atras: false,
-            solo_listados: true,
+        "pane.switch" => Effect::Focus {
+            back: false,
+            solo_listings: true,
         },
-        "layout.focus-next" => Efecto::Foco {
-            atras: false,
-            solo_listados: false,
+        "layout.focus-next" => Effect::Focus {
+            back: false,
+            solo_listings: false,
         },
-        "layout.focus-prev" => Efecto::Foco {
-            atras: true,
-            solo_listados: false,
+        "layout.focus-prev" => Effect::Focus {
+            back: true,
+            solo_listings: false,
         },
-        "layout.set-target" => Efecto::Destino,
-        "layout.grow" => Efecto::Tamano(n),
-        "layout.shrink" => Efecto::Tamano(-n),
-        "layout.equalize" => Efecto::Igualar,
-        "layout.flip" => Efecto::Girar,
-        "layout.pick" => Efecto::Disposiciones,
-        "layout.split-h" => Efecto::Partir { vertical: false },
-        "layout.split-v" => Efecto::Partir { vertical: true },
-        "layout.close-slot" => Efecto::CerrarHueco,
-        "layout.places" => Efecto::AlternarHueco { kind: "places" },
-        "layout.processes" => Efecto::AlternarHueco { kind: "processes" },
-        "layout.log" => Efecto::AlternarHueco { kind: "log" },
-        "layout.terminal" => Efecto::AbrirTerminal,
-        "layout.disk-map" => Efecto::AlternarHueco { kind: "disk-map" },
-        "layout.timeline" => Efecto::AlternarHueco { kind: "timeline" },
+        "layout.set-target" => Effect::Dest,
+        "layout.grow" => Effect::Size(n),
+        "layout.shrink" => Effect::Size(-n),
+        "layout.equalize" => Effect::Equalize,
+        "layout.flip" => Effect::Rotate,
+        "layout.pick" => Effect::Layouts,
+        "layout.split-h" => Effect::Split { vertical: false },
+        "layout.split-v" => Effect::Split { vertical: true },
+        "layout.close-slot" => Effect::CloseSlot,
+        "layout.places" => Effect::ToggleSlot { kind: "places" },
+        "layout.processes" => Effect::ToggleSlot { kind: "processes" },
+        "layout.log" => Effect::ToggleSlot { kind: "log" },
+        "layout.terminal" => Effect::OpenTerminal,
+        "layout.disk-map" => Effect::ToggleSlot { kind: "disk-map" },
+        "layout.timeline" => Effect::ToggleSlot { kind: "timeline" },
         // The last of the seven from ADR 0058 (#291): the docked viewer.
-        "layout.preview" => Efecto::AlternarHueco { kind: "viewer" },
-        "pane.tree" => Efecto::AlternarHueco { kind: "tree" },
+        "layout.preview" => Effect::ToggleSlot { kind: "viewer" },
+        "pane.tree" => Effect::ToggleSlot { kind: "tree" },
         // `pane.properties` falls here on purpose: this window's properties
         // ARE the attribute sheet, which already shows name, class, size and
         // date of what is selected. It does it a different way, same as
         // sorting by clicking the header.
-        "layout.metadata" | "pane.properties" => Efecto::AlternarHueco { kind: "metadata" },
-        "pane.tab-new" => Efecto::PestanaNueva,
-        "pane.tab-close" => Efecto::CerrarPestana,
-        "pane.tab-next" => Efecto::CiclarPestana { atras: false },
-        "pane.tab-prev" => Efecto::CiclarPestana { atras: true },
-        "pane.tab-move-left" => Efecto::MoverPestana { derecha: false },
-        "pane.tab-move-right" => Efecto::MoverPestana { derecha: true },
-        "pane.tab-goto-1" => Efecto::IrAPestana { n: 1 },
-        "pane.tab-goto-2" => Efecto::IrAPestana { n: 2 },
-        "pane.tab-goto-3" => Efecto::IrAPestana { n: 3 },
-        "pane.tab-goto-4" => Efecto::IrAPestana { n: 4 },
-        "pane.tab-goto-5" => Efecto::IrAPestana { n: 5 },
-        "pane.tab-goto-6" => Efecto::IrAPestana { n: 6 },
-        "pane.tab-goto-7" => Efecto::IrAPestana { n: 7 },
-        "pane.tab-goto-8" => Efecto::IrAPestana { n: 8 },
-        "pane.tab-goto-9" => Efecto::IrAPestana { n: 9 },
+        "layout.metadata" | "pane.properties" => Effect::ToggleSlot { kind: "metadata" },
+        "pane.tab-new" => Effect::TabNew,
+        "pane.tab-close" => Effect::CloseTab,
+        "pane.tab-next" => Effect::CycleTab { back: false },
+        "pane.tab-prev" => Effect::CycleTab { back: true },
+        "pane.tab-move-left" => Effect::MoverTab { right: false },
+        "pane.tab-move-right" => Effect::MoverTab { right: true },
+        "pane.tab-goto-1" => Effect::IrAPestana { n: 1 },
+        "pane.tab-goto-2" => Effect::IrAPestana { n: 2 },
+        "pane.tab-goto-3" => Effect::IrAPestana { n: 3 },
+        "pane.tab-goto-4" => Effect::IrAPestana { n: 4 },
+        "pane.tab-goto-5" => Effect::IrAPestana { n: 5 },
+        "pane.tab-goto-6" => Effect::IrAPestana { n: 6 },
+        "pane.tab-goto-7" => Effect::IrAPestana { n: 7 },
+        "pane.tab-goto-8" => Effect::IrAPestana { n: 8 },
+        "pane.tab-goto-9" => Effect::IrAPestana { n: 9 },
         // The "sort menu" IS the columns dialog: the column, the direction
         // and `dirs_first` are all there. A second screen for the same
         // thing would be one more to maintain and one more to learn, and it
         // is the same decision the TUI made.
-        "pane.columns" | "pane.sort-menu" => Efecto::Columnas,
-        "app.palette" => Efecto::Paleta,
-        "app.goto" => Efecto::IrA,
-        "app.help" => Efecto::Ayuda,
-        "app.settings" => Efecto::Ajustes,
-        "app.quit" => Efecto::Salir,
-        "app.extensions" => Efecto::Extensiones,
-        "app.agents" => Efecto::Agentes,
-        "pane.copy-path" => Efecto::CopiarRuta,
+        "pane.columns" | "pane.sort-menu" => Effect::Columns,
+        "app.palette" => Effect::Palette,
+        "app.goto" => Effect::IrA,
+        "app.help" => Effect::Help,
+        "app.settings" => Effect::Settings,
+        "app.quit" => Effect::Exit,
+        "app.extensions" => Effect::Extensions,
+        "app.agents" => Effect::Agents,
+        "pane.copy-path" => Effect::CopyPath,
         // F4 launches the editor `[ui] editor` names, and if there is none
         // it falls back to `pane.open` — i.e. to `openers.toml` and,
         // ultimately, to the DESKTOP's application.
@@ -934,87 +930,87 @@ pub fn efecto_de(command: &str, veces: u32) -> Option<Efecto> {
         // this window has none to put it in. `[ui] editor` is a different
         // thing — a program the reader names, which can be graphical — and
         // this window already honors its sibling key `[ui] diff`.
-        "pane.open" => Efecto::AbrirExterno,
-        "pane.edit" => Efecto::EditarExterno,
-        "pane.compare-files" => Efecto::CompararFicheros,
-        "app.terminal" => Efecto::Terminal,
-        "app.handoff" => Efecto::Relevo,
-        "app.theme" => Efecto::Tema,
-        "app.menu" => Efecto::Menu,
-        "profile.pick" => Efecto::PerfilElegir,
-        "profile.save-as" => Efecto::PerfilGuardarComo,
-        "profile.next" => Efecto::PerfilVecino { atras: false },
-        "profile.prev" => Efecto::PerfilVecino { atras: true },
-        "pane.select-drive" => Efecto::Volumenes,
-        "pane.connect" => Efecto::Conexiones,
-        "pane.disconnect" => Efecto::Desconectar,
-        "pane.view" => Efecto::Ver,
-        "pane.quick-search" => Efecto::BuscarRapido,
-        "pane.search" => Efecto::Buscar,
-        "pane.mkdir" => Efecto::CrearDirectorio,
-        "pane.edit-new" => Efecto::CrearFichero,
-        "pane.delete" => Efecto::Borrar { permanente: false },
-        "pane.delete-permanent" => Efecto::Borrar { permanente: true },
-        "pane.copy" => Efecto::Transferir { mover: false },
-        "pane.move" => Efecto::Transferir { mover: true },
-        "pane.rename" => Efecto::Renombrar,
-        "pane.chmod" => Efecto::Permisos,
-        "pane.checksum" => Efecto::Sumas { verificar: false },
-        "pane.checksum-verify" => Efecto::Sumas { verificar: true },
-        "pane.ai-rename" => Efecto::RenameIa,
-        "pane.organize" => Efecto::Organizar,
-        "pane.rename-batch" => Efecto::RenameLote,
-        "pane.semantic-search" => Efecto::BuscarSemantica,
-        "pane.compare-dirs" => Efecto::Comparar,
-        "pane.dir-size" => Efecto::TamanoDeDirectorio,
-        "pane.pack" => Efecto::Empaquetar,
-        "pane.unpack" => Efecto::Desempaquetar,
-        "pane.test-archive" => Efecto::ComprobarArchivo,
-        "pane.split-file" => Efecto::PartirFichero,
-        "pane.combine-files" => Efecto::Juntar,
-        "pane.sync-dirs" => Efecto::Sincronizar,
+        "pane.open" => Effect::OpenExternal,
+        "pane.edit" => Effect::EditExternal,
+        "pane.compare-files" => Effect::CompareFiles,
+        "app.terminal" => Effect::Terminal,
+        "app.handoff" => Effect::Handoff,
+        "app.theme" => Effect::Theme,
+        "app.menu" => Effect::Menu,
+        "profile.pick" => Effect::ProfileChoose,
+        "profile.save-as" => Effect::ProfileSaveAs,
+        "profile.next" => Effect::ProfileVecino { back: false },
+        "profile.prev" => Effect::ProfileVecino { back: true },
+        "pane.select-drive" => Effect::Volumes,
+        "pane.connect" => Effect::Connections,
+        "pane.disconnect" => Effect::Disconnect,
+        "pane.view" => Effect::View,
+        "pane.quick-search" => Effect::SearchFast,
+        "pane.search" => Effect::Search,
+        "pane.mkdir" => Effect::CreateDirectory,
+        "pane.edit-new" => Effect::CreateFile,
+        "pane.delete" => Effect::Delete { permanent: false },
+        "pane.delete-permanent" => Effect::Delete { permanent: true },
+        "pane.copy" => Effect::Transferir { mover: false },
+        "pane.move" => Effect::Transferir { mover: true },
+        "pane.rename" => Effect::Rename,
+        "pane.chmod" => Effect::Permissions,
+        "pane.checksum" => Effect::Checksums { verify: false },
+        "pane.checksum-verify" => Effect::Checksums { verify: true },
+        "pane.ai-rename" => Effect::RenameIa,
+        "pane.organize" => Effect::Organize,
+        "pane.rename-batch" => Effect::RenameBatch,
+        "pane.semantic-search" => Effect::SearchSemantic,
+        "pane.compare-dirs" => Effect::Compare,
+        "pane.dir-size" => Effect::DirectorySize,
+        "pane.pack" => Effect::Pack,
+        "pane.unpack" => Effect::Unpack,
+        "pane.test-archive" => Effect::CheckArchive,
+        "pane.split-file" => Effect::SplitFile,
+        "pane.combine-files" => Effect::Join,
+        "pane.sync-dirs" => Effect::Sync,
         // #138: the same semantics as a click on the header, and on the
         // FOCUSED slot — the sort belongs to a listing, like the cursor.
-        "pane.sort-name" => Efecto::Ordenar(norte_config::SortColumnKey::Name),
-        "pane.sort-ext" => Efecto::Ordenar(norte_config::SortColumnKey::Extension),
-        "pane.sort-size" => Efecto::Ordenar(norte_config::SortColumnKey::Size),
-        "pane.sort-time" => Efecto::Ordenar(norte_config::SortColumnKey::Mtime),
-        "pane.refresh" => Efecto::Refrescar,
-        "pane.toggle-hidden" => Efecto::AlternarOcultos,
-        "pane.names-encoding" => Efecto::CiclarEncoding,
-        "pane.mirror" => Efecto::Espejo,
-        "pane.sync-nav" => Efecto::EspejoPermanente,
-        "pane.mirror-target" => Efecto::EspejoObjetivo,
-        "pane.pull" => Efecto::Traer,
-        "pane.swap" => Efecto::Intercambiar,
-        "pane.history" => Efecto::Historial,
-        "pane.hotlist" => Efecto::Hotlist,
-        "pane.popular" => Efecto::Populares,
-        "pane.history-left" => Efecto::HistorialDeLado { derecha: false },
-        "pane.history-right" => Efecto::HistorialDeLado { derecha: true },
-        "pane.select-drive-left" => Efecto::VolumenesDeLado { derecha: false },
-        "pane.select-drive-right" => Efecto::VolumenesDeLado { derecha: true },
-        otro => return board_effect(otro),
+        "pane.sort-name" => Effect::Sort(norte_config::SortColumnKey::Name),
+        "pane.sort-ext" => Effect::Sort(norte_config::SortColumnKey::Extension),
+        "pane.sort-size" => Effect::Sort(norte_config::SortColumnKey::Size),
+        "pane.sort-time" => Effect::Sort(norte_config::SortColumnKey::Mtime),
+        "pane.refresh" => Effect::Refresh,
+        "pane.toggle-hidden" => Effect::ToggleHidden,
+        "pane.names-encoding" => Effect::CycleEncoding,
+        "pane.mirror" => Effect::Mirror,
+        "pane.sync-nav" => Effect::MirrorPermanent,
+        "pane.mirror-target" => Effect::MirrorObjetivo,
+        "pane.pull" => Effect::Bring,
+        "pane.swap" => Effect::Swap,
+        "pane.history" => Effect::History,
+        "pane.hotlist" => Effect::Hotlist,
+        "pane.popular" => Effect::Popular,
+        "pane.history-left" => Effect::SideHistory { right: false },
+        "pane.history-right" => Effect::SideHistory { right: true },
+        "pane.select-drive-left" => Effect::SideVolumes { right: false },
+        "pane.select-drive-right" => Effect::SideVolumes { right: true },
+        other => return board_effect(other),
     })
 }
 
-/// The tail of [`efecto_de`]: what acts on the task BOARD.
+/// The tail of [`effect_of`]: what acts on the task BOARD.
 ///
 /// Lives apart because a single function's `match` goes over the line cap,
 /// and this is the natural cut: everything above acts on a listing or on
 /// what is shown above it; this, on tasks in progress, which are neither one
 /// nor the other.
-fn board_effect(command: &str) -> Option<Efecto> {
+fn board_effect(command: &str) -> Option<Effect> {
     Some(match command {
-        "task.next" => Efecto::TaskVecina { atras: false },
-        "task.prev" => Efecto::TaskVecina { atras: true },
-        "task.dismiss" => Efecto::DescartarTask,
-        "task.cancel" => Efecto::CancelarTask,
-        "task.pause" => Efecto::PausarTask,
-        "task.retry" => Efecto::ReintentarTask,
-        "task.queue" => Efecto::AlternarCola,
-        "task.up" => Efecto::MoverEnCola { arriba: true },
-        "task.down" => Efecto::MoverEnCola { arriba: false },
+        "task.next" => Effect::TaskVecina { back: false },
+        "task.prev" => Effect::TaskVecina { back: true },
+        "task.dismiss" => Effect::DiscardTask,
+        "task.cancel" => Effect::CancelTask,
+        "task.pause" => Effect::PauseTask,
+        "task.retry" => Effect::RetryTask,
+        "task.queue" => Effect::ToggleCola,
+        "task.up" => Effect::MoverEnCola { up: true },
+        "task.down" => Effect::MoverEnCola { up: false },
         _ => return None,
     })
 }
@@ -1030,7 +1026,7 @@ mod tests {
     fn the_list_and_the_effects_cannot_come_apart() {
         for c in IMPLEMENTADOS {
             assert!(
-                efecto_de(c, 1).is_some(),
+                effect_of(c, 1).is_some(),
                 "{c} is in the list and has no effect"
             );
         }
@@ -1041,7 +1037,7 @@ mod tests {
     fn the_viewer_list_and_its_effects_cannot_come_apart() {
         for c in IMPLEMENTADOS_VISOR {
             assert!(
-                efecto_visor_de(c, 1).is_some(),
+                viewer_effect_of(c, 1).is_some(),
                 "{c} is in the viewer list and has no effect"
             );
         }
@@ -1064,7 +1060,7 @@ mod tests {
     /// invented here would not be bound by any preset.
     #[test]
     fn everything_declared_is_in_the_catalogue() {
-        for c in todos() {
+        for c in all() {
             assert!(
                 norte_frontend::keymap::CATALOGUE
                     .iter()
@@ -1080,11 +1076,11 @@ mod tests {
     /// does.
     #[test]
     fn read_only_removes_what_is_not_inert() {
-        let solo_lectura = implementados(Efectos::SoloLectura);
+        let solo_read = implementados(Effects::SoloRead);
         let mut quitados: Vec<&str> = IMPLEMENTADOS
             .iter()
             .copied()
-            .filter(|c| !solo_lectura.contains(c))
+            .filter(|c| !solo_read.contains(c))
             .collect();
         quitados.sort_unstable();
         assert_eq!(
@@ -1121,8 +1117,8 @@ mod tests {
                 "pane.unpack",
             ]
         );
-        for c in &solo_lectura {
-            assert!(inerte(c), "{c} survives read-only without being inert");
+        for c in &solo_read {
+            assert!(inert(c), "{c} survives read-only without being inert");
         }
     }
 
@@ -1133,9 +1129,9 @@ mod tests {
     /// promised to only look (ADR 0126).
     #[test]
     fn the_viewer_and_the_dialogs_only_have_inert_commands() {
-        for c in IMPLEMENTADOS_VISOR.iter().chain(IMPLEMENTADOS_DIALOGO) {
+        for c in IMPLEMENTADOS_VISOR.iter().chain(IMPLEMENTADOS_DIALOG) {
             assert!(
-                inerte(c),
+                inert(c),
                 "{c} is not inert and its list is not filtered in read-only"
             );
         }
@@ -1144,15 +1140,15 @@ mod tests {
     /// A name the catalogue does not know is not inert.
     #[test]
     fn the_unknown_is_not_inert() {
-        assert!(!inerte("pane.does-not-exist-ever"));
-        assert!(inerte("cursor.down"));
+        assert!(!inert("pane.does-not-exist-ever"));
+        assert!(inert("cursor.down"));
     }
 
     /// The counter multiplies whatever can be repeated.
     #[test]
     fn the_counter_multiplies() {
-        assert_eq!(efecto_de("cursor.down", 3), Some(Efecto::Cursor(3)));
-        assert_eq!(efecto_de("cursor.up", 3), Some(Efecto::Cursor(-3)));
-        assert_eq!(efecto_de("cursor.page-down", 2), Some(Efecto::Pagina(2)));
+        assert_eq!(effect_of("cursor.down", 3), Some(Effect::Cursor(3)));
+        assert_eq!(effect_of("cursor.up", 3), Some(Effect::Cursor(-3)));
+        assert_eq!(effect_of("cursor.page-down", 2), Some(Effect::Page(2)));
     }
 }

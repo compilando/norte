@@ -24,7 +24,7 @@ fn cert_de_test(dir: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
 
 /// Starts libunftp in-process (anonymous, tempdir backend) on an ephemeral
 /// port. With `ftps = Some((cert, key))` it requires AUTH TLS before login.
-async fn servidor(base: &Path, ftps: Option<(std::path::PathBuf, std::path::PathBuf)>) -> u16 {
+async fn server(base: &Path, ftps: Option<(std::path::PathBuf, std::path::PathBuf)>) -> u16 {
     let home = base.to_path_buf();
     let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("ephemeral bind");
     let port = probe.local_addr().expect("addr").port();
@@ -62,7 +62,7 @@ async fn servidor(base: &Path, ftps: Option<(std::path::PathBuf, std::path::Path
 /// FAKE FTP server (raw TCP): responds with the greeting, `331` to USER and
 /// the `pass_reply` line to PASS. Lets us simulate hostile/strict servers
 /// that libunftp does not allow (echoing the password, 530...).
-async fn servidor_falso(pass_reply: &'static str) -> u16 {
+async fn server_fake(pass_reply: &'static str) -> u16 {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
         .await
@@ -124,10 +124,10 @@ async fn connect_err(
 /// Login travels ALREADY encrypted and the session stays operational (pwd
 /// responds).
 #[tokio::test]
-async fn ftps_require_conecta_y_valida_cert() {
+async fn ftps_require_connects_and_validates_cert() {
     let dir = tempfile::tempdir().unwrap();
     let (cert, key) = cert_de_test(dir.path());
-    let port = servidor(dir.path(), Some((cert.clone(), key))).await;
+    let port = server(dir.path(), Some((cert.clone(), key))).await;
     let conn = FtpConnector {
         extra_root_ca: Some(cert),
     };
@@ -147,10 +147,10 @@ async fn ftps_require_conecta_y_valida_cert() {
 /// `require` against a cert that is NOT in the roots (nor in the extra CA):
 /// rustls validation takes it down — never degrades or logs in the clear.
 #[tokio::test]
-async fn require_rechaza_cert_desconocido() {
+async fn require_rejects_an_unknown_cert() {
     let dir = tempfile::tempdir().unwrap();
     let (cert, key) = cert_de_test(dir.path());
-    let port = servidor(dir.path(), Some((cert, key))).await;
+    let port = server(dir.path(), Some((cert, key))).await;
     let conn = FtpConnector {
         extra_root_ca: None, // without the self-signed's CA
     };
@@ -160,9 +160,9 @@ async fn require_rechaza_cert_desconocido() {
 
 /// `require` against a server WITHOUT TLS: error, no silent fallback.
 #[tokio::test]
-async fn require_contra_servidor_sin_tls_falla() {
+async fn require_against_a_server_without_tls_fails() {
     let dir = tempfile::tempdir().unwrap();
-    let port = servidor(dir.path(), None).await;
+    let port = server(dir.path(), None).await;
     let conn = FtpConnector::default();
     let err = connect_err(&conn, &spec(port, TlsMode::Require), Some(&secret_anon())).await;
     assert!(matches!(err, ConnectError::Tls(_)), "was {err:?}");
@@ -171,9 +171,9 @@ async fn require_contra_servidor_sin_tls_falla() {
 /// `allow` degrades to plain (with a tracing warning) if the server gives no
 /// TLS.
 #[tokio::test]
-async fn allow_degrada_a_plano_si_no_hay_tls() {
+async fn allow_degrades_to_plaintext_if_there_is_no_tls() {
     let dir = tempfile::tempdir().unwrap();
-    let port = servidor(dir.path(), None).await;
+    let port = server(dir.path(), None).await;
     let conn = FtpConnector::default();
     let mut out = conn
         .connect(&spec(port, TlsMode::Allow), Some(&secret_anon()))
@@ -195,7 +195,7 @@ async fn allow_degrada_a_plano_si_no_hay_tls() {
 #[tokio::test]
 async fn plain_es_optin_explicito() {
     let dir = tempfile::tempdir().unwrap();
-    let port = servidor(dir.path(), None).await;
+    let port = server(dir.path(), None).await;
     let conn = FtpConnector::default();
     let mut out = conn
         .connect(&spec(port, TlsMode::Plain), Some(&secret_anon()))
@@ -212,7 +212,7 @@ async fn plain_es_optin_explicito() {
 /// Wrong password (530) → `AuthFailed { user, host }`, no secret.
 #[tokio::test]
 async fn password_incorrecta_es_auth_failed() {
-    let port = servidor_falso("530 Not logged in").await;
+    let port = server_fake("530 Not logged in").await;
     let conn = FtpConnector::default();
     let err = connect_err(
         &conn,
@@ -232,8 +232,8 @@ async fn password_incorrecta_es_auth_failed() {
 /// echo never reaches the error (which would end up in logs — rule 10). The
 /// server already knew the secret; the sink to protect is the local log.
 #[tokio::test]
-async fn echo_del_servidor_no_llega_al_error() {
-    let port = servidor_falso("500 password 'hunter2-ftp' rejected on a whim").await;
+async fn server_echo_does_not_reach_the_error() {
+    let port = server_fake("500 password 'hunter2-ftp' rejected on a whim").await;
     let conn = FtpConnector::default();
     let err = connect_err(
         &conn,
@@ -256,10 +256,10 @@ async fn echo_del_servidor_no_llega_al_error() {
 /// active MITM), do NOT degrade to plain with the same credentials. The
 /// legitimate degradation is only when the server REJECTS the AUTH command.
 #[tokio::test]
-async fn allow_con_cert_invalido_falla_cerrado() {
+async fn allow_with_invalid_cert_fails_closed() {
     let dir = tempfile::tempdir().unwrap();
     let (cert, key) = cert_de_test(dir.path());
-    let port = servidor(dir.path(), Some((cert, key))).await;
+    let port = server(dir.path(), Some((cert, key))).await;
     let conn = FtpConnector {
         extra_root_ca: None, // the self-signed one does NOT validate
     };
@@ -296,9 +296,9 @@ async fn ca_extra_corrupta_es_error_local() {
 
 /// `auth = "agent"` on FTP = anonymous (guest convention), no secret.
 #[tokio::test]
-async fn agent_es_anonimo_sin_secreto() {
+async fn agent_is_anonymous_without_a_secret() {
     let dir = tempfile::tempdir().unwrap();
-    let port = servidor(dir.path(), None).await;
+    let port = server(dir.path(), None).await;
     let conn = FtpConnector::default();
     let spec = ConnectionSpec {
         url: format!("ftp://127.0.0.1:{port}"),
@@ -314,7 +314,7 @@ async fn agent_es_anonimo_sin_secreto() {
 /// `auth = "key"` does not exist in FTP: local config error, without
 /// touching the network.
 #[tokio::test]
-async fn auth_key_no_aplica_a_ftp() {
+async fn auth_key_does_not_apply_to_ftp() {
     let conn = FtpConnector::default();
     let spec = ConnectionSpec {
         // Closed port 1: if connect touched the network, the error would be

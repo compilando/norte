@@ -2229,7 +2229,7 @@ pub struct TerminalSlotView {
 /// not have.
 // All six are independent SGR flags: the shell sets and clears them one at
 // a time (`SGR 1` / `SGR 22`), so a struct of bools IS that representation.
-// Same criterion as `norte_theme::Style` and `norte_term::Estilo`, from
+// Same criterion as `norte_theme::Style` and `norte_term::Style`, from
 // which this one is translated field by field.
 #[expect(
     clippy::struct_excessive_bools,
@@ -4075,9 +4075,9 @@ pub enum NativeEffect {
     /// delivers it.
     Notify {
         /// The first line: what happened, by category.
-        titulo: String,
+        title: String,
         /// The detail, with the file name when there is one.
-        cuerpo: String,
+        body: String,
     },
     /// Asks the DESKTOP for the reader to choose a directory (#284).
     ///
@@ -4095,7 +4095,7 @@ pub enum NativeEffect {
         /// Where to open the picker: the active pane's directory. It is a
         /// suggestion, not a restriction — the reader can go somewhere
         /// else.
-        desde: norte_proto::VPath,
+        from: norte_proto::VPath,
     },
     /// Runs a PROGRAM with these arguments (#312): detached (a graphical
     /// comparer that opens its own window) or WAITED FOR and with its

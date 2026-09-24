@@ -18,13 +18,13 @@ pub mod connect;
 pub mod daemon;
 pub mod embedded;
 mod engine;
-pub mod equipo;
 pub mod ftp_plugin;
 mod hashing;
 pub mod hooks;
 mod index_build;
 mod index_embed;
 pub mod journal;
+pub mod team;
 /// The `tracing` setup has lived in `norte-config` since #255: the graphical
 /// window needs it just the same and cannot depend on the engine (ADR 0066).
 /// It's re-exported here because this used to be its home and the CLI calls

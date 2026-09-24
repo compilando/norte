@@ -29,7 +29,7 @@ use super::*;
     clippy::too_many_lines,
     reason = "surface table: one assertion and its message per block"
 )]
-pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
+pub(super) async fn no_surface_masks_silently() {
     let corpus = norte_testkit::corpus::hostile_names();
     assert!(
         corpus.len() >= 48,
@@ -64,30 +64,29 @@ pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
 
         // 1. A FAVORITE's name: the user writes it, and the project layer
         //    is "I have opened this repo", not "I vouch for this string".
-        let mut cfg = ajustes_de_prueba();
+        let mut cfg = test_settings();
         cfg.common.hotlist = vec![norte_config::HotlistItem {
             name: text.clone(),
             target: norte_proto::VPath::parse("mem:///casa").map_err(|_| "err".to_owned()),
         }];
-        let mut f = Falso::default();
+        let mut f = Fake::default();
         // The entry under the cursor is the hostile one: its name is the
         // ATTRIBUTES SHEET's first field, which is the third surface.
-        f.pon("mem:///casa", vec![(n.bytes.clone(), false)]);
+        f.put("mem:///casa", vec![(n.bytes.clone(), false)]);
         // 2. A VOLUME's label: the system gives it and it is bytes.
-        f.volumenes = vec![norte_proto::methods::Volume {
+        f.volumes = vec![norte_proto::methods::Volume {
             label: Some(n.bytes.clone()),
-            ..volumen("mem:///casa", "ext4", false)
+            ..volume("mem:///casa", "ext4", false)
         }];
         let (h, snap) = UiHost::start(UiHostOptions {
             backend: Arc::new(f),
             initial_dir: dir(),
-            initial_dir_pedido: false,
+            initial_dir_requested: false,
             attach: false,
             locale: "es".to_owned(),
             keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
             keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-            keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox")
-                .expect("preset"),
+            keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
             layout: norte_frontend::layout::presets::tree("full").expect("layout"),
             viewport: (200, 60),
             settings: cfg,
@@ -95,15 +94,15 @@ pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
             theme: norte_ui_host::pickers::HostTheme::default(),
             user_layouts: Vec::new(),
             profile: None,
-            columns: norte_ui_host::columnas_por_defecto(),
-            effects: norte_ui_host::commands::Efectos::Completo,
+            columns: norte_ui_host::default_columns(),
+            effects: norte_ui_host::commands::Effects::Full,
             log_ring: None,
         })
         .await
         .expect("starts");
         let mut sub = h.subscribe();
 
-        let bar = sitios(&snap).expect("`full` places the bar").clone();
+        let bar = places(&snap).expect("`full` places the bar").clone();
         if !text.is_empty() {
             let favorite = bar
                 .rows
@@ -126,8 +125,8 @@ pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
         // The side bar, once the volumes arrive.
         for _ in 0..20 {
             h.dispatch(UiAction::Resync).await.expect("host alive");
-            let snap = siguiente_foto(&mut sub).await;
-            let v = sitios(&snap).expect("placed");
+            let snap = next_snapshot(&mut sub).await;
+            let v = places(&snap).expect("placed");
             let drive = v.rows.iter().find_map(|r| match r {
                 norte_ui_host::dto::PlaceRowView::Drive { label, hostile, .. } => {
                     Some((label.clone(), *hostile))
@@ -149,11 +148,11 @@ pub(super) async fn ninguna_superficie_enmascara_en_silencio() {
         //    the entry under the cursor, i.e. bytes from the provider
         //    (#277). This test's doc named it from the start and nobody
         //    exercised it.
-        let snap = esperar_foto(&h, &mut sub, "the sheet has the name", |f| {
-            hoja(f).is_some_and(|m| !m.fields.is_empty())
+        let snap = wait_snapshot(&h, &mut sub, "the sheet has the name", |f| {
+            sheet(f).is_some_and(|m| !m.fields.is_empty())
         })
         .await;
-        let field = hoja(&snap)
+        let field = sheet(&snap)
             .expect("the `full` layout places the sheet")
             .fields
             .first()

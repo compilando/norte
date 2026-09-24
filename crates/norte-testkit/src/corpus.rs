@@ -389,7 +389,7 @@ pub fn lossy_content_fixtures() -> Vec<ContentFixture> {
 /// short Latin needle `ñ` (0xF1 in legacy) matches by chance in blind mode.
 pub(crate) const CJK_UTF8_LEAD_F1: &str = "汉字 \u{44001} texto\n";
 
-/// Hostile line for `fs.search`'s preview: needle `aguja` + RLO + an
+/// Hostile line for `fs.search`'s preview: needle `needle` + RLO + an
 /// unclosed isolate + ESC+OSC + a raw C0. No terminal-hazard char must
 /// survive sanitizing at the source.
 pub(crate) const PREVIEW_BIDI_CTRL_INJECTION: &str =
@@ -418,7 +418,7 @@ pub struct HostileChord {
 
 /// The 4 canonical hostile chords: a single codepoint each (two or more
 /// codepoints are already rejected by `parse_chord`, see
-/// `parse_chord_rechaza_tokens_multi_codepoint_sin_partir` in
+/// `parse_chord_rejects_multi_codepoint_tokens_without_splitting` in
 /// `norte-frontend`), each a different terminal hazard.
 ///
 /// ```

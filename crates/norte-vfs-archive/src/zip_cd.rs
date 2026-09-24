@@ -45,7 +45,7 @@ pub(crate) struct CdEntry {
     pub flags: u16,
     /// Compression method (0 stored / 8 deflate / others).
     pub method: u16,
-    /// Declared CRC-32 of the UNcompressed bytes.
+    /// Declared CRC-32 of the **un**compressed bytes.
     pub crc32: u32,
     /// Compressed size.
     pub comp_size: u64,

@@ -1,19 +1,19 @@
 //! The first-run wizard in the window (spec 2026-09-10): opening, moving,
 //! confirming, and writing what was chosen through the SAME path as the
-//! settings screen (`escribir_ajuste`). The model is shared with the
+//! settings screen (`write_setting`). The model is shared with the
 //! terminal; what lives here is the live theme preview and the writing.
 
-// The same `impl Estado` split into pieces: the parent's imports, like the
+// The same `impl State` split into pieces: the parent's imports, like the
 // other `controller` modules (ADR 0086).
 #[allow(clippy::wildcard_imports)]
 use super::*;
 use norte_frontend::wizard::{Outcome, Wizard};
 
-impl Estado {
+impl State {
     /// Opens the wizard with the presets and themes there are, starting on
     /// whatever is current. The renderer sends this when the catalogue says
     /// `first_run`.
-    pub(super) fn abrir_asistente(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn open_wizard(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let names = norte_frontend::theme::theme_names(&self.config.user_themes);
         let themes: Vec<&str> = names.iter().map(String::as_str).collect();
         let theme = self
@@ -22,13 +22,13 @@ impl Estado {
             .ui_theme
             .clone()
             .unwrap_or_else(|| "default".to_owned());
-        self.asistente = Some(Wizard::new(
+        self.wizard = Some(Wizard::new(
             norte_frontend::keymap::presets::NAMES,
             &themes,
             &self.config.common.preset,
             &theme,
         ));
-        (self.aplicada(), vec![self.parche_asistente()])
+        (self.applied(), vec![self.parche_wizard()])
     }
 
     /// Sets up the splash screen (spec 2026-09-15, ADR 0115).
@@ -37,7 +37,7 @@ impl Estado {
     /// wins — of two things that would cover the first frame, the one that
     /// asks something goes first — and `brief` removes itself once its
     /// deadline passes.
-    pub(super) fn abrir_splash(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn open_splash(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         use norte_config::load::SplashMode;
         let mode = self.config.common.ui_chrome.splash();
         // It is shown ONCE per host session, and only if nothing is already
@@ -49,14 +49,14 @@ impl Estado {
         // no digit ends up navigating the panel behind it while a question
         // with a deadline is waiting for an answer.
         if mode == SplashMode::Off
-            || self.splash_visto
-            || self.asistente.is_some()
-            || !self.dialogos.is_empty()
+            || self.splash_seen
+            || self.wizard.is_some()
+            || !self.dialogs.is_empty()
             || self.visor.is_some()
         {
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         }
-        self.splash_visto = true;
+        self.splash_seen = true;
         let sections = if mode == SplashMode::Home {
             self.fuentes_de_splash()
         } else {
@@ -77,9 +77,9 @@ impl Estado {
         // The deadline comes from `[ui] splash_ms`, not a constant: a splash
         // screen that does not give time to read it is just in the way, and
         // how much "time" is depends on who is looking.
-        self.splash_hasta_ms = (mode == SplashMode::Brief)
-            .then(|| super::ahora_ms() + i64::from(self.config.common.ui_chrome.splash_ms()));
-        (self.aplicada(), vec![self.parche_splash()])
+        self.splash_until_ms = (mode == SplashMode::Brief)
+            .then(|| super::now_ms() + i64::from(self.config.common.ui_chrome.splash_ms()));
+        (self.applied(), vec![self.parche_splash()])
     }
 
     /// THIS window's sections: where you usually go, and what you saved.
@@ -168,8 +168,8 @@ impl Estado {
             // a clock with the host — not even a process — so an absolute
             // timestamp would be a number that means nothing there.
             close_after_ms: self
-                .splash_hasta_ms
-                .map(|until| u32::try_from((until - super::ahora_ms()).max(0)).unwrap_or(u32::MAX)),
+                .splash_until_ms
+                .map(|until| u32::try_from((until - super::now_ms()).max(0)).unwrap_or(u32::MAX)),
         })
     }
 
@@ -191,11 +191,11 @@ impl Estado {
     /// It navigates with [`Trail::Record`] on purpose: entering from here is
     /// a visit like any other, and `alt+left` has to be able to undo it (ADR
     /// 0114).
-    pub(super) fn activar_fila_de_splash(
+    pub(super) fn activate_splash_row(
         &mut self,
         number: u8,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // The chosen row's `arg`, if the screen is up and that number names a
         // row. `None` here is "that number offers nothing" — a click that
@@ -213,9 +213,9 @@ impl Estado {
         // does not parse: we wrote it ourselves with `to_wire`, so getting
         // here is on us.
         let broken = wire.is_some() && target.is_none();
-        let mut outgoing = self.cerrar_splash();
+        let mut outgoing = self.close_splash();
         if let Some(target) = target {
-            outgoing.extend(self.navegar(&target, Trail::Record, backend, mailbox));
+            outgoing.extend(self.navigate(&target, Trail::Record, backend, mailbox));
         } else if broken {
             // And if the row named a place that does not parse, it is SAID.
             // It is a failure of ours — we wrote the row ourselves with
@@ -229,24 +229,24 @@ impl Estado {
             )));
             outgoing.push(self.parche(vec![ViewChange::Status(self.status.clone())]));
         }
-        (self.aplicada(), outgoing)
+        (self.applied(), outgoing)
     }
 
     /// Removes the splash screen (a key, a click, or its deadline).
     ///
     /// Returns the patch only if something was showing: a close that sends
     /// empty patches spends sequence numbers nobody receives.
-    pub(super) fn cerrar_splash(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
+    pub(super) fn close_splash(&mut self) -> Vec<BridgeEnvelope<UiUpdate>> {
         if self.splash.take().is_none() {
             return Vec::new();
         }
-        self.splash_hasta_ms = None;
+        self.splash_until_ms = None;
         vec![self.parche_splash()]
     }
 
     /// The wizard, for the snapshot and for the patch.
-    pub(super) fn vista_asistente(&self) -> Option<crate::dto::WizardView> {
-        let w = self.asistente.as_ref()?;
+    pub(super) fn vista_wizard(&self) -> Option<crate::dto::WizardView> {
+        let w = self.wizard.as_ref()?;
         Some(crate::dto::WizardView {
             title: clamp_display(w.title(self.lang)),
             question: clamp_display(w.question(self.lang)),
@@ -256,40 +256,40 @@ impl Estado {
         })
     }
 
-    fn parche_asistente(&mut self) -> BridgeEnvelope<UiUpdate> {
+    fn parche_wizard(&mut self) -> BridgeEnvelope<UiUpdate> {
         let change = ViewChange::Wizard {
-            wizard: self.vista_asistente(),
+            wizard: self.vista_wizard(),
         };
         self.parche(vec![change])
     }
 
     /// A click on a row: it selects it AND confirms it, which is what a click
     /// means in a list of three.
-    pub(super) fn activar_fila_de_asistente(
+    pub(super) fn activate_wizard_row(
         &mut self,
         row: u32,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(w) = self.asistente.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(w) = self.wizard.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         w.select(row as usize);
         let outcome = w.confirm();
-        self.tras_el_paso(outcome, backend, mailbox)
+        self.after_the_step(outcome, backend, mailbox)
     }
 
     /// A key with the wizard open: up, down, confirm, back, or leave. FIXED
     /// keys, like the palette: there is no preset yet, that is exactly what
     /// is being asked.
-    pub(super) fn tecla_en_asistente(
+    pub(super) fn key_in_wizard(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(w) = self.asistente.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(w) = self.wizard.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let outcome = match k.key.as_str() {
             "ArrowUp" | "up" | "Up" => {
@@ -306,36 +306,36 @@ impl Estado {
             }
             "Enter" | "enter" => w.confirm(),
             "Escape" | "esc" => w.dismiss(),
-            _ => return (self.aplicada(), Vec::new()),
+            _ => return (self.applied(), Vec::new()),
         };
-        self.tras_el_paso(outcome, backend, mailbox)
+        self.after_the_step(outcome, backend, mailbox)
     }
 
     /// What follows moving or confirming: the theme preview if it applies,
     /// and on finishing, writing and closing.
-    fn tras_el_paso(
+    fn after_the_step(
         &mut self,
         outcome: Outcome,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         match outcome {
             Outcome::Continue => {
                 if let Some(name) = self
-                    .asistente
+                    .wizard
                     .as_ref()
                     .and_then(Wizard::preview_theme)
                     .map(str::to_owned)
                 {
-                    self.aplicar_tema(&name, mailbox);
+                    self.apply_theme(&name, mailbox);
                 }
-                (self.aplicada(), vec![self.parche_asistente()])
+                (self.applied(), vec![self.parche_wizard()])
             }
             done => {
-                self.asistente = None;
-                let mut outgoing = vec![self.parche_asistente()];
-                outgoing.extend(self.terminar_asistente(done, backend, mailbox));
-                (self.aplicada(), outgoing)
+                self.wizard = None;
+                let mut outgoing = vec![self.parche_wizard()];
+                outgoing.extend(self.finish_wizard(done, backend, mailbox));
+                (self.applied(), outgoing)
             }
         }
     }
@@ -344,11 +344,11 @@ impl Estado {
     /// `Dismissed` it writes ONLY the current theme, so the file exists and
     /// it is not asked again. Icons go to the `file-icons` plugin through the
     /// daemon; without the plugin, the refusal is ignored.
-    fn terminar_asistente(
+    fn finish_wizard(
         &mut self,
         outcome: Outcome,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         // With `Dismissed`, the theme the wizard OPENED with is written: the
         // model carries it, so the terminal and the window write the same
@@ -371,7 +371,7 @@ impl Estado {
                 &v,
                 norte_i18n::t_in(self.lang, "wizard-title"),
             );
-            let (_, envelopes) = self.escribir_ajuste(write, mailbox);
+            let (_, envelopes) = self.write_setting(write, mailbox);
             outgoing.extend(envelopes);
         }
         if let Some(icons) = icons {

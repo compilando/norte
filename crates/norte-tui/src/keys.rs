@@ -305,9 +305,9 @@ pub async fn on_key(
             app.toggle_terminal();
         } else if let Some(t) = app.terminal.as_mut()
             && key.kind == crossterm::event::KeyEventKind::Press
-            && let Some(bytes) = crate::subshell::tecla_a_bytes(&key)
+            && let Some(bytes) = crate::subshell::key_to_bytes(&key)
         {
-            t.escribir(&bytes);
+            t.write(&bytes);
         }
     } else if app.key_owner() == crate::app::KeyOwner::Panel && !modal_wins(app) {
         // Plugin panel (phase 3), for the same reason as the two above:
@@ -404,13 +404,13 @@ pub async fn on_key(
                 if let Some(g) = &mut app.goto {
                     g.push_char(c);
                 }
-                crate::jobs::goto::pedir_al_indice(app, backend, work);
+                crate::jobs::goto::ask_the_index(app, backend, work);
             }
             KeyCode::Backspace if plain => {
                 if let Some(g) = &mut app.goto {
                     g.backspace();
                 }
-                crate::jobs::goto::pedir_al_indice(app, backend, work);
+                crate::jobs::goto::ask_the_index(app, backend, work);
             }
             KeyCode::Esc if plain => {
                 app.goto = None;
@@ -438,8 +438,8 @@ pub async fn on_key(
                 app.goto = None;
                 crate::jobs::goto::olvidar(work);
                 let Some(key) = key else { return };
-                match crate::goto::accion(app, &key) {
-                    crate::goto::Accion::Ir(dir) => {
+                match crate::goto::action(app, &key) {
+                    crate::goto::Action::Ir(dir) => {
                         let outcome = crate::navigate::cd(app, backend, events, dir).await;
                         settle_cd(
                             app,
@@ -460,7 +460,7 @@ pub async fn on_key(
                     // Its rows are the palette's, born from `COMMANDS`, so
                     // the parse cannot fail; the guard is defensive, same as
                     // there.
-                    crate::goto::Accion::Comando(cmd) => {
+                    crate::goto::Action::Command(cmd) => {
                         let Some(cmd) = Command::parse(&cmd) else {
                             debug_assert!(false, "goto outside COMMANDS");
                             return;
@@ -483,7 +483,7 @@ pub async fn on_key(
                         .await;
                         launch_pending(app, events, capture).await;
                     }
-                    crate::goto::Accion::Nada(msg_id) => {
+                    crate::goto::Action::Nothing(msg_id) => {
                         app.message = Some(norte_i18n::t(msg_id));
                     }
                 }

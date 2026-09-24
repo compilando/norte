@@ -218,7 +218,7 @@ async fn ambiguous_commit_does_not_lose_the_created() {
     // The destination exists with the source's size.
     assert_eq!(
         mem.stat(&vp("mem:///dst.bin")).await.unwrap().size,
-        Some(19)
+        Some(12)
     );
     // And there IS exactly one `Created` (rule 4): undo will know about it.
     let es = journal.journal().entries().await.expect("entries");
@@ -273,7 +273,7 @@ async fn ambiguous_mkdir_does_not_lose_the_created() {
     // The tree copied entirely.
     assert_eq!(
         mem.stat(&vp("mem:///d2/f.bin")).await.unwrap().size,
-        Some(9)
+        Some(7)
     );
     // And the journal has the DIR's `Created` (rule 4): undo knows about it.
     let es = journal.journal().entries().await.expect("entries");

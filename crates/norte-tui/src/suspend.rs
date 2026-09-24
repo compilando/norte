@@ -191,7 +191,7 @@ pub async fn run_suspended(
 ///
 /// There is ONE single terminal reader — crossterm's, the one the TUI
 /// already uses — and keys are TRANSLATED into the bytes a shell expects
-/// ([`crate::subshell::tecla_a_bytes`]). A thread reading `/dev/tty` raw
+/// ([`crate::subshell::key_to_bytes`]). A thread reading `/dev/tty` raw
 /// would have been more faithful and would have left that thread blocked
 /// inside a `read` when the shell is released, eating the reader's next
 /// key: the one that already belonged to the panels.
@@ -245,7 +245,7 @@ pub fn attach_subshell(
     // never found out: its full-screen programs would paint over a
     // geometry that no longer exists until someone resized WHILE inside.
     if let Ok(size) = crossterm::terminal::size() {
-        sub.redimensionar(size);
+        sub.resize(size);
     }
     // The starting point is where the PANEL IS, not where the shell was: on
     // entry it is sent there, so comparing against its previous position
@@ -280,21 +280,21 @@ pub fn attach_subshell(
                     }
                     Event::Key(k) => {
                         if k.kind == crossterm::event::KeyEventKind::Press
-                            && let Some(bytes) = crate::subshell::tecla_a_bytes(&k)
+                            && let Some(bytes) = crate::subshell::key_to_bytes(&k)
                         {
-                            let _ = sub.escribir_tecla(&bytes);
+                            let _ = sub.write_key(&bytes);
                         }
                     }
                     // The shell has to know the new size or it paints over
                     // a screen that does not exist.
-                    Event::Resize(w, h) => sub.redimensionar((w, h)),
+                    Event::Resize(w, h) => sub.resize((w, h)),
                     // A paste DOES arrive, even though the mouse does not:
                     // the "a shell does not ask for it" argument falls
                     // apart the moment the shell has a `vim` in front,
                     // which DID ask for it — and the paste was lost whole,
                     // with no error and leaving no half behind.
                     Event::Paste(text) => {
-                        let _ = sub.escribir(text.as_bytes());
+                        let _ = sub.write(text.as_bytes());
                     }
                     _ => {}
                 }
@@ -304,7 +304,7 @@ pub fn attach_subshell(
                 out.write_all(&pending)?;
                 out.flush()?;
             }
-            if sub.muerto() {
+            if sub.dead() {
                 return Ok(());
             }
         }
@@ -368,7 +368,7 @@ pub fn suspend_terminal(
     // Kitty's keyboard protocol (`[ui] alt_menu`), for the same reason as
     // the capture: the shell did not ask for it and would read escapes
     // instead of letters.
-    crate::alt_menu::ceder(terminal.backend_mut())?;
+    crate::alt_menu::yield_(terminal.backend_mut())?;
     // T4 (phase 5 WOW), moment 3 of 4: if the viewer had an image placed,
     // it is erased BEFORE releasing the terminal — the program coming next
     // did not ask for it either, and without erasing it it would be left
@@ -379,7 +379,7 @@ pub fn suspend_terminal(
     // alive, and the first frame the run loop paints after resuming places
     // it again on its own (the same mechanism that closes the viewer or
     // moves it to another file).
-    crate::kitty_graphics::borrar_colocada(terminal.backend_mut());
+    crate::kitty_graphics::delete_placed(terminal.backend_mut());
     disable_raw_mode()?;
     crossterm::execute!(
         terminal.backend_mut(),
@@ -426,7 +426,7 @@ pub fn resume_terminal(
     )?;
     enable_raw_mode()?;
     mouse::restore_after_suspend(capture, mouse_on, terminal.backend_mut())?;
-    crate::alt_menu::recuperar(terminal.backend_mut())?;
+    crate::alt_menu::recover(terminal.backend_mut())?;
     // NOT `Terminal::clear()`, and this is not a style preference: in
     // ratatui 0.30 that function asks for the cursor's position
     // (`get_cursor_position` → `crossterm::cursor::position`), which emits

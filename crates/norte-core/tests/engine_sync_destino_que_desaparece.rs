@@ -33,8 +33,8 @@ use norte_proto::methods::{
 use norte_proto::{ConflictKind, Error, TaskState, VPath};
 use norte_vfs::Provider;
 
-mod origen_a_peticion;
-use origen_a_peticion::OrigenAPeticion;
+mod origin_on_request;
+use origin_on_request::OnRequestSource;
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
@@ -222,7 +222,7 @@ async fn with_a_single_step_the_final_check_is_the_one_that_catches_it() {
             .expect("chunk");
         sink.commit().await.expect("commit");
     }
-    let (source, mut mando) = OrigenAPeticion::nuevo(Arc::clone(&mem));
+    let (source, mut command) = OnRequestSource::wrap(Arc::clone(&mem));
 
     let journal = Arc::new(SqliteJournal::new(
         Journal::open_in_memory().await.expect("journal"),
@@ -241,12 +241,12 @@ async fn with_a_single_step_the_final_check_is_the_one_that_catches_it() {
         .expect("sync.apply accepted");
 
     assert!(
-        mando.empezo().await,
+        command.started().await,
         "the sync never got to read anything: this test proved nothing"
     );
     std::fs::rename(dir.path().join("destination"), dir.path().join("trash"))
         .expect("to the trash");
-    mando.sigue();
+    command.follows();
 
     gone(&outcome(handle).await, "a single-step plan");
 }

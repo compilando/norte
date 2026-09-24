@@ -773,7 +773,7 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
     // named here rather than filtered away in silence — and H3h emptied it.
     // What the assertion pins now is that it STAYS empty: a context added
     // without its page fails here as well as in the frontend's gate.
-    let sin_pagina: Vec<&str> = issues
+    let no_page: Vec<&str> = issues
         .iter()
         .filter_map(|i| match i {
             Issue::ContextWithoutTopic { context, .. } => Some(context.as_str()),
@@ -781,8 +781,8 @@ fn the_shipped_corpus_claims_only_contexts_the_ui_has() {
         })
         .collect();
     assert!(
-        sin_pagina.is_empty(),
-        "every context the UI can open must have a page: {sin_pagina:?}"
+        no_page.is_empty(),
+        "every context the UI can open must have a page: {no_page:?}"
     );
 }
 

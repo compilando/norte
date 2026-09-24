@@ -52,7 +52,7 @@ pub struct OrganizeStep {
 impl OrganizeStep {
     /// The absolute destination path, hanging off `dir`.
     #[must_use]
-    pub fn destino(&self, dir: &VPath) -> VPath {
+    pub fn dest(&self, dir: &VPath) -> VPath {
         let mut p = dir.clone();
         for s in &self.rel {
             p = p.join(s.clone());
@@ -63,7 +63,7 @@ impl OrganizeStep {
     /// The folders this step needs under `dir`, from shallowest to deepest.
     /// The LAST segment is the file and is not included.
     #[must_use]
-    pub fn carpetas(&self, dir: &VPath) -> Vec<VPath> {
+    pub fn folders(&self, dir: &VPath) -> Vec<VPath> {
         let mut out = Vec::new();
         let mut p = dir.clone();
         for s in self.rel.iter().take(self.rel.len().saturating_sub(1)) {
@@ -116,7 +116,7 @@ impl OrganizePlan {
 
     /// The validated steps.
     #[must_use]
-    pub fn pasos(&self) -> &[OrganizeStep] {
+    pub fn steps(&self) -> &[OrganizeStep] {
         &self.steps
     }
 
@@ -134,11 +134,11 @@ impl OrganizePlan {
     /// to do that —the rule is that the core knows what it created, so it
     /// can undo it—.
     #[must_use]
-    pub fn carpetas(&self, dir: &VPath) -> Vec<VPath> {
+    pub fn folders(&self, dir: &VPath) -> Vec<VPath> {
         let mut seen: BTreeSet<String> = BTreeSet::new();
         let mut out: Vec<VPath> = Vec::new();
         for step in &self.steps {
-            for c in step.carpetas(dir) {
+            for c in step.folders(dir) {
                 if seen.insert(c.to_wire()) {
                     out.push(c);
                 }
@@ -266,7 +266,7 @@ mod tests {
         )
         .expect("valid plan");
         let folders: Vec<String> = plan
-            .carpetas(&dir())
+            .folders(&dir())
             .iter()
             .map(|p| p.to_wire().replace("mem:///downloads/", ""))
             .collect();
@@ -289,9 +289,9 @@ mod tests {
     #[test]
     fn a_destination_with_no_folder_is_a_rename() {
         let plan = OrganizePlan::bind(&dir(), &[mov("a.txt", "b.txt")]).expect("valid plan");
-        assert!(plan.carpetas(&dir()).is_empty());
+        assert!(plan.folders(&dir()).is_empty());
         assert_eq!(
-            plan.pasos()[0].destino(&dir()).to_wire(),
+            plan.steps()[0].dest(&dir()).to_wire(),
             "mem:///downloads/b.txt"
         );
     }

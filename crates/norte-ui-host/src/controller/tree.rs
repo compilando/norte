@@ -1,47 +1,47 @@
 //! The branch tree in the side panel.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// Cap on child branches of ONE branch.
     ///
     /// A directory with a hundred thousand subdirectories is not painted: it
     /// is clamped, and what is shown is "up to here". Without a cap, a single
     /// open branch turns every host snapshot into a message of megabytes.
-    pub(super) const MAX_RAMAS: usize = 2000;
+    pub(super) const MAX_BRANCHES: usize = 2000;
 
     /// The tree's slot, if the layout places one.
-    pub(super) fn hueco_de_ramas(&self) -> Option<SlotId> {
-        self.arbol
+    pub(super) fn branches_slot(&self) -> Option<SlotId> {
+        self.tree
             .slot_ids()
             .into_iter()
-            .find(|s| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == "tree"))
+            .find(|s| kind_de(&self.tree, *s).is_some_and(|k| k.as_str() == "tree"))
     }
 
     /// Anchors the tree wherever the focused listing is LOOKING.
-    pub(super) fn sembrar_ramas(&mut self) {
+    pub(super) fn seed_branches(&mut self) {
         // Near, not AT, the directory: hung right off it, a directory with no
         // subfolders was a one-row tree (captured 2026-09-21).
-        let dir = self.hueco().pane.dir().clone();
-        self.ramas
+        let dir = self.slot().pane.dir().clone();
+        self.branches
             .get_or_insert_with(norte_frontend::tree::Tree::default)
             .anchor_near(&dir, &norte_frontend::shell::home_vpath());
-        self.gen_ramas += 1;
+        self.gen_branches += 1;
     }
 
     /// The tree follows the ACTIVE listing: reveals its directory and
     /// requests whatever is missing to paint it.
     ///
     /// It is called from the funnel every listing that lands passes through
-    /// ([`Estado::aterrizar_listado`]) and from the focus change, which are
+    /// ([`State::land_listing`]) and from the focus change, which are
     /// the two moments when "where the panel is looking" changes. Putting it
     /// in every gesture that triggers a `cd` — the mouse, the palette, the
     /// menu, the trail, the tree itself — would be the list that falls short
@@ -54,20 +54,20 @@ impl Estado {
     /// And it reveals, it does not re-anchor
     /// ([`norte_frontend::tree::Tree::follow`]): what the reader opened by
     /// hand stays open.
-    pub(super) fn seguir_ramas(
+    pub(super) fn follow_branches(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> bool {
-        if self.hueco_de_ramas().is_none() || slot != self.activo() {
+        if self.branches_slot().is_none() || slot != self.active() {
             return false;
         }
-        let Some(dir) = self.huecos.get(&slot).map(|h| h.pane.dir().clone()) else {
+        let Some(dir) = self.slots.get(&slot).map(|h| h.pane.dir().clone()) else {
             return false;
         };
         let moved = self
-            .ramas
+            .branches
             .get_or_insert_with(norte_frontend::tree::Tree::default)
             .follow(&dir);
         if !moved {
@@ -81,8 +81,8 @@ impl Estado {
         // The rows have moved — there are expanded ancestors that were not
         // there before — so every index painted until now names a different
         // branch.
-        self.gen_ramas += 1;
-        self.pedir_ramas(backend, mailbox);
+        self.gen_branches += 1;
+        self.request_branches(backend, mailbox);
         true
     }
 
@@ -93,16 +93,16 @@ impl Estado {
     /// `$HOME` and hours against a remote. One branch per round also bounds
     /// what a huge directory or a slow server can jam up: the next one
     /// requests the one after.
-    pub(super) fn pedir_ramas(
+    pub(super) fn request_branches(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
-        if self.hueco_de_ramas().is_none() {
+        if self.branches_slot().is_none() {
             return;
         }
         let Some(dir) = self
-            .ramas
+            .branches
             .as_ref()
             .and_then(norte_frontend::tree::Tree::wants)
         else {
@@ -115,23 +115,25 @@ impl Estado {
             // else, and requesting sizes or permissions per branch would be
             // paying for them on every folder someone expands.
             let children = match backend.list(dir.clone(), Vec::new()).await {
-                Ok((stream, _)) => Some(Self::ramas_del_listado(stream).await),
+                Ok((stream, _)) => Some(Self::listing_branches(stream).await),
                 // A branch that cannot be read: the shared model decides
                 // (`Tree::branch_unreadable`).
                 Err(_) => None,
             };
             let _ = mailbox
-                .send(Mensaje::Fondo(Box::new(Fondo::RamasDeArbol(dir, children))))
+                .send(Message::Background(Box::new(Background::TreeBranches(
+                    dir, children,
+                ))))
                 .await;
         });
     }
 
     /// The subdirectories of a listing, in the same order as the panel next
     /// to it.
-    pub(super) async fn ramas_del_listado(mut stream: norte_client::EntryStream) -> Vec<VPath> {
+    pub(super) async fn listing_branches(mut stream: norte_client::EntryStream) -> Vec<VPath> {
         use futures::StreamExt as _;
         let mut entries = Vec::new();
-        while entries.len() < Self::MAX_RAMAS {
+        while entries.len() < Self::MAX_BRANCHES {
             match stream.next().await {
                 Some(Ok(e)) => {
                     if e.kind == norte_proto::EntryKind::Dir {
@@ -156,28 +158,28 @@ impl Estado {
     ///
     /// And the next one is requested right here: that is what chains the
     /// lazy walk without a clock in between.
-    pub(super) fn aplicar_ramas(
+    pub(super) fn apply_branches(
         &mut self,
         dir: VPath,
         children: Option<Vec<VPath>>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
         // Only if the tree EXISTS in this layout: a late response for a panel
         // that is already closed does not resurrect its state nor send a
         // snapshot.
-        self.hueco_de_ramas()?;
-        let tree = self.ramas.as_mut()?;
+        self.branches_slot()?;
+        let tree = self.branches.as_mut()?;
         match children {
             Some(h) => tree.insert_children(dir, h),
             None => tree.branch_unreadable(dir),
         }
         // The new rows are inserted IN THE MIDDLE: every index painted until
         // now names a different branch.
-        self.gen_ramas += 1;
-        self.pedir_ramas(backend, mailbox);
+        self.gen_branches += 1;
+        self.request_branches(backend, mailbox);
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }
 
     /// The tree, projected.
@@ -186,9 +188,9 @@ impl Estado {
     /// slot the layout places and the host does not paint would vanish from
     /// the screen, and preserving what is there is the session's rule (ADR
     /// 0059).
-    pub(super) fn arbol_de_ramas(&self, id: u32) -> crate::dto::TreeSlotView {
+    pub(super) fn branch_tree(&self, id: u32) -> crate::dto::TreeSlotView {
         let empty = norte_frontend::tree::Tree::default();
-        let tree = self.ramas.as_ref().unwrap_or(&empty);
+        let tree = self.branches.as_ref().unwrap_or(&empty);
         let rows_in = tree.rows();
         let root = tree.root().cloned();
         let rows = rows_in
@@ -220,58 +222,58 @@ impl Estado {
             slot_id: id,
             rows,
             cursor: tree.cursor() as u64,
-            generation: self.gen_ramas,
+            generation: self.gen_branches,
         }
     }
 
     /// A click on a branch: selects it, and depending on the gesture,
     /// navigates or collapses it.
-    pub(super) fn tocar_rama(
+    pub(super) fn touch_branch(
         &mut self,
         row: u32,
         generation: u64,
         navigate: bool,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if generation != self.gen_ramas {
+        if generation != self.gen_branches {
             // What was clicked and what is there now are not the same tree:
             // a branch's children land IN THE MIDDLE. Rejecting is the only
             // correct thing — going ahead would have navigated to a
             // different folder.
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
-        let Some(tree) = self.ramas.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(tree) = self.branches.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         if row as usize >= tree.rows().len() {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         tree.set_cursor(row as usize);
         if !navigate {
             tree.toggle();
-            self.gen_ramas += 1;
-            self.pedir_ramas(backend, mailbox);
+            self.gen_branches += 1;
+            self.request_branches(backend, mailbox);
             let snap = self.snapshot();
             return (
-                self.aplicada(),
-                vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+                self.applied(),
+                vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
             );
         }
         // Expand AND navigate: whoever clicks a branch wants to see what is
         // inside, and seeing it in the listing is the complete answer.
         tree.expand();
         let Some(destination) = tree.selected() else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        self.gen_ramas += 1;
-        self.pedir_ramas(backend, mailbox);
+        self.gen_branches += 1;
+        self.request_branches(backend, mailbox);
         // To the FOCUSED listing, through the same path as any other
         // navigation: that is what makes having the tree open not change
         // where operations go.
         (
-            self.aplicada(),
-            self.navegar(&destination, Trail::Record, backend, mailbox),
+            self.applied(),
+            self.navigate(&destination, Trail::Record, backend, mailbox),
         )
     }
 }

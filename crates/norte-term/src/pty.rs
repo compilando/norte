@@ -1,4 +1,4 @@
-//! A LIVE shell behind a [`Pantalla`], for whoever wants a terminal pane.
+//! A LIVE shell behind a [`Screen`], for whoever wants a terminal pane.
 //!
 //! It is behind the `pty` feature and off by default, so the crate stays
 //! what its front cover says: a pure grid. Whoever only wants to parse
@@ -15,7 +15,7 @@
 //! # What this module does NOT decide
 //!
 //! **What program gets launched and with what environment.** That is
-//! brought by the caller, in [`Arranque`]: resolving the reader's shell and
+//! brought by the caller, in [`Startup`]: resolving the reader's shell and
 //! the `NORTE_LEVEL` contract are norte's rules, not an emulator's, and
 //! putting them here would tie this crate to the presentation one — exactly
 //! backwards from how the layers go.
@@ -27,7 +27,7 @@
 use std::io::{Read as _, Write as _};
 use std::sync::{Arc, Mutex};
 
-use crate::Pantalla;
+use crate::Screen;
 
 /// What the child on the other side is told.
 ///
@@ -65,11 +65,11 @@ pub const TERM: &str = "xterm-256color";
 const BUFFER_MAX: usize = 256 * 1024;
 
 /// What shell to start, where, and with what environment.
-pub struct Arranque<'a> {
+pub struct Startup<'a> {
     /// The program. An ABSOLUTE path: `portable_pty` searches by `cwd` if it
     /// is not one, and a file manager's `cwd` is the directory being looked
     /// at — a `bash` left there would get executed (#302, ADR 0082).
-    pub programa: &'a std::path::Path,
+    pub program: &'a std::path::Path,
     /// Where it sits.
     pub dir: &'a std::path::Path,
     /// Columns and rows.
@@ -86,9 +86,9 @@ pub struct Arranque<'a> {
 #[derive(Default)]
 struct Buzon {
     /// Bytes read from the pty and not yet fed to the grid.
-    pendiente: Vec<u8>,
+    pending: Vec<u8>,
     /// The pty closed: the shell is gone.
-    cerrado: bool,
+    closed: bool,
 }
 
 /// How something is sent to the pty.
@@ -107,7 +107,7 @@ struct Buzon {
 ///
 /// With the channel, the only one that writes to the pty is its own
 /// thread, so there is nothing to share and nobody can hold anybody up.
-type Entrada = std::sync::mpsc::SyncSender<Vec<u8>>;
+type Entry = std::sync::mpsc::SyncSender<Vec<u8>>;
 
 /// How many sends fit before dropping.
 ///
@@ -133,10 +133,10 @@ pub type Responder = fn(&[u8]) -> Option<Vec<u8>>;
 
 /// A live shell with its grid.
 pub struct Shell {
-    pantalla: Pantalla,
-    entrada: Entrada,
+    screen: Screen,
+    entry: Entry,
     maestro: Box<dyn portable_pty::MasterPty + Send>,
-    hijo: Box<dyn portable_pty::Child + Send + Sync>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
     buzon: Arc<Mutex<Buzon>>,
     tam: (u16, u16),
 }
@@ -146,10 +146,10 @@ impl Shell {
     ///
     /// # Errors
     /// Whatever fails while opening the pty or launching the program.
-    pub fn abrir(a: &Arranque<'_>, responder: Responder) -> std::io::Result<Self> {
+    pub fn open(a: &Startup<'_>, responder: Responder) -> std::io::Result<Self> {
         let tam = (a.tam.0.max(1), a.tam.1.max(1));
-        let sistema = portable_pty::native_pty_system();
-        let par = sistema
+        let system = portable_pty::native_pty_system();
+        let par = system
             .openpty(portable_pty::PtySize {
                 rows: tam.1,
                 cols: tam.0,
@@ -157,7 +157,7 @@ impl Shell {
                 pixel_height: 0,
             })
             .map_err(std::io::Error::other)?;
-        let mut cmd = portable_pty::CommandBuilder::new(a.programa);
+        let mut cmd = portable_pty::CommandBuilder::new(a.program);
         cmd.cwd(a.dir);
         for (k, v) in a.env {
             cmd.env(k, v);
@@ -169,7 +169,7 @@ impl Shell {
         // `TIOCGWINSZ`.
         cmd.env_remove("COLUMNS");
         cmd.env_remove("LINES");
-        let hijo = par
+        let child = par
             .slave
             .spawn_command(cmd)
             .map_err(std::io::Error::other)?;
@@ -177,18 +177,18 @@ impl Shell {
         // does not close the pty and the reader would never see EOF.
         drop(par.slave);
         let escritor = par.master.take_writer().map_err(std::io::Error::other)?;
-        let lector = par
+        let reader = par
             .master
             .try_clone_reader()
             .map_err(std::io::Error::other)?;
-        let entrada = lanzar_escritor(escritor);
+        let entry = launch_escritor(escritor);
         let buzon = Arc::new(Mutex::new(Buzon::default()));
-        lanzar_lector(lector, Arc::clone(&buzon), entrada.clone(), responder);
+        launch_reader(reader, Arc::clone(&buzon), entry.clone(), responder);
         Ok(Self {
-            pantalla: Pantalla::nueva(tam.0, tam.1),
-            entrada,
+            screen: Screen::new(tam.0, tam.1),
+            entry,
             maestro: par.master,
-            hijo,
+            child,
             buzon,
             tam,
         })
@@ -200,14 +200,14 @@ impl Shell {
     /// Returning whether there were bytes is what avoids repainting when
     /// the shell is quiet, which is almost always.
     pub fn bombear(&mut self) -> bool {
-        let pendiente = {
+        let pending = {
             let mut b = buzon_de(&self.buzon);
-            std::mem::take(&mut b.pendiente)
+            std::mem::take(&mut b.pending)
         };
-        if pendiente.is_empty() {
+        if pending.is_empty() {
             return false;
         }
-        self.pantalla.alimentar(&pendiente);
+        self.screen.alimentar(&pending);
         true
     }
 
@@ -222,8 +222,8 @@ impl Shell {
     /// up requires the child to be a thousand sends behind on reading its
     /// input, so what gets dropped are keystrokes that child was not going
     /// to read either.
-    pub fn escribir(&mut self, bytes: &[u8]) {
-        let _ = self.entrada.try_send(bytes.to_vec());
+    pub fn write(&mut self, bytes: &[u8]) {
+        let _ = self.entry.try_send(bytes.to_vec());
     }
 
     /// Adjusts the grid AND the pty to the pane's size.
@@ -231,13 +231,13 @@ impl Shell {
     /// Both, and it matters that it is both: without telling the pty, a
     /// full-screen program keeps painting for the old size and what shows
     /// is garbage. Does nothing if it did not change.
-    pub fn redimensionar(&mut self, tam: (u16, u16)) {
+    pub fn resize(&mut self, tam: (u16, u16)) {
         let tam = (tam.0.max(1), tam.1.max(1));
         if tam == self.tam {
             return;
         }
         self.tam = tam;
-        self.pantalla.redimensionar(tam.0, tam.1);
+        self.screen.resize(tam.0, tam.1);
         let _ = self.maestro.resize(portable_pty::PtySize {
             rows: tam.1,
             cols: tam.0,
@@ -247,14 +247,14 @@ impl Shell {
     }
 
     /// Is the shell gone?
-    pub fn muerto(&mut self) -> bool {
-        buzon_de(&self.buzon).cerrado || matches!(self.hijo.try_wait(), Ok(Some(_)))
+    pub fn dead(&mut self) -> bool {
+        buzon_de(&self.buzon).closed || matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     /// The grid, to paint it.
     #[must_use]
-    pub fn pantalla(&self) -> &Pantalla {
-        &self.pantalla
+    pub fn screen(&self) -> &Screen {
+        &self.screen
     }
 
     /// Kills the shell and waits for it.
@@ -262,8 +262,8 @@ impl Shell {
     /// Waiting after the `kill` is not courtesy: without reaping the child
     /// it stays a zombie until the process exits.
     pub fn matar(&mut self) {
-        let _ = self.hijo.kill();
-        let _ = self.hijo.wait();
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -294,7 +294,7 @@ fn buzon_de(buzon: &Mutex<Buzon>) -> std::sync::MutexGuard<'_, Buzon> {
 /// waiting.
 ///
 /// Dies when the last sender is dropped, i.e. with the `Shell`.
-fn lanzar_escritor(mut escritor: Box<dyn std::io::Write + Send>) -> Entrada {
+fn launch_escritor(mut escritor: Box<dyn std::io::Write + Send>) -> Entry {
     let (tx, rx) = std::sync::mpsc::sync_channel::<Vec<u8>>(COLA_MAX);
     std::thread::spawn(move || {
         while let Ok(bytes) = rx.recv() {
@@ -306,18 +306,18 @@ fn lanzar_escritor(mut escritor: Box<dyn std::io::Write + Send>) -> Entrada {
     tx
 }
 
-fn lanzar_lector(
-    mut lector: Box<dyn std::io::Read + Send>,
+fn launch_reader(
+    mut reader: Box<dyn std::io::Read + Send>,
     buzon: Arc<Mutex<Buzon>>,
-    entrada: Entrada,
+    entry: Entry,
     responder: Responder,
 ) {
     std::thread::spawn(move || {
         let mut buf = [0u8; 8192];
         loop {
-            match lector.read(&mut buf) {
+            match reader.read(&mut buf) {
                 Ok(0) | Err(_) => {
-                    buzon_de(&buzon).cerrado = true;
+                    buzon_de(&buzon).closed = true;
                     return;
                 }
                 Ok(n) => {
@@ -329,10 +329,10 @@ fn lanzar_lector(
                     // inside a `write_all` with a child that is not reading
                     // was half the jam the channel exists to prevent.
                     if let Some(r) = responder(&buf[..n]) {
-                        let _ = entrada.try_send(r);
+                        let _ = entry.try_send(r);
                     }
                     let mut b = buzon_de(&buzon);
-                    b.pendiente.extend_from_slice(&buf[..n]);
+                    b.pending.extend_from_slice(&buf[..n]);
                     // The cut falls on WHATEVER byte, and that is accepted:
                     // an escape split there loses its `ESC [` and its tail
                     // gets painted as text. It is ugly and not dangerous
@@ -341,9 +341,9 @@ fn lanzar_lector(
                     // wrote 256 KiB while nobody was repainting. Looking
                     // for a sequence boundary here would force the parser
                     // into the reader thread just to drop bytes.
-                    if b.pendiente.len() > BUFFER_MAX {
-                        let sobra = b.pendiente.len() - BUFFER_MAX;
-                        b.pendiente.drain(..sobra);
+                    if b.pending.len() > BUFFER_MAX {
+                        let extra = b.pending.len() - BUFFER_MAX;
+                        b.pending.drain(..extra);
                     }
                 }
             }

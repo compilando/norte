@@ -1,16 +1,16 @@
 //! The keys: which verb resolves each chord, and on which screen.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// The key, when there is an open INPUT CONTEXT that keeps it.
     ///
     /// `None` = there was none (or the one there was did not want it) and the
@@ -22,7 +22,7 @@ impl Estado {
     /// only keeps TEXT keys.
     // TODO(translation): review — this paragraph describes the general
     /// input-context precedence order, but the item right after it is
-    /// `tecla_en_dialogo`'s own doc, about dialog keys specifically; it looks
+    /// `key_in_dialog`'s own doc, about dialog keys specifically; it looks
     /// like a stale fragment left by an earlier edit.
     /// A dialog's keys: answering it or cancelling it, and nothing else.
     ///
@@ -36,14 +36,14 @@ impl Estado {
     ///
     /// A key that is neither of the two is EATEN just the same: a modal that
     /// lets through a key it does not understand is not a modal.
-    pub(super) fn tecla_en_dialogo(
+    pub(super) fn key_in_dialog(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(d) = self.dialogos.last() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(d) = self.dialogs.last() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let id = d.id;
         let typing = d.vista.input.is_some();
@@ -62,9 +62,9 @@ impl Estado {
             }
         } else {
             let Ok(chord) = k.to_chord() else {
-                return (self.aplicada(), Vec::new());
+                return (self.applied(), Vec::new());
             };
-            match self.resolver_dialogo.push(chord) {
+            match self.resolver_dialog.push(chord) {
                 Resolution::Run { command, .. } => match command.as_str() {
                     "dialog.confirm" => Some("dialog.confirm"),
                     "dialog.cancel" => Some("dialog.cancel"),
@@ -84,8 +84,8 @@ impl Estado {
                 _ => None,
             }
         };
-        let Some(d) = self.dialogos.last() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(d) = self.dialogs.last() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         // The VERB chooses among the answers THIS dialog offers: one it does
         // not offer is not interpreted — there are no implicit answers on a
@@ -116,7 +116,7 @@ impl Estado {
         }
         .map(|c| c.id.clone());
         let Some(choice) = chosen else {
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         };
         // No secret, and it is not an oversight (#327): a KEY cannot carry a
         // password. Over a dialog that asks for one, this path confirms with
@@ -124,7 +124,7 @@ impl Estado {
         // renderer's — the button and the field's own Enter — which does have
         // the value. That is what is wanted: the host does not store what was
         // typed, so a chord cannot deliver something the host does not have.
-        self.responder_dialogo(id, &choice, None, backend, mailbox)
+        self.responder_dialog(id, &choice, None, backend, mailbox)
     }
 
     /// A key's `dialog.*` verb, through the SHARED resolver (#287).
@@ -137,9 +137,9 @@ impl Estado {
     /// sequence still unresolved. In all three cases the surface does
     /// nothing, which is what it used to do with a key it did not
     /// understand.
-    pub(super) fn verbo_de_dialogo(&mut self, k: &crate::keys::KeyInput) -> Option<String> {
+    pub(super) fn dialog_verb(&mut self, k: &crate::keys::KeyInput) -> Option<String> {
         let chord = k.to_chord().ok()?;
-        match self.resolver_dialogo.push(chord) {
+        match self.resolver_dialog.push(chord) {
             Resolution::Run { command, .. } => Some(command),
             _ => None,
         }
@@ -150,54 +150,54 @@ impl Estado {
     /// For modal surfaces' FOOTERS: they are painted with what the keymap
     /// says, not with a translated literal, because the literal stops being
     /// true the moment someone rebinds the key.
-    pub(super) fn acorde_de_dialogo(&self, comando: &str) -> String {
-        self.resolver_dialogo
+    pub(super) fn dialog_chord(&self, command: &str) -> String {
+        self.resolver_dialog
             .effective()
             .bindings()
             .into_iter()
-            .find(|(_, c)| *c == comando)
+            .find(|(_, c)| *c == command)
             .map(|(seq, _)| norte_frontend::keymap::paint_chord(&seq))
             .unwrap_or_default()
     }
 
     /// Is there a screen in front that would keep a key before the listing?
-    /// The SAME ones [`Self::tecla_de_un_overlay`] handles, except the menu,
+    /// The SAME ones [`Self::key_of_an_overlay`] handles, except the menu,
     /// which belongs to whoever asks.
     ///
     /// It is a second list on purpose and not a detour through that function:
     /// that one HANDLES the key (cancels a viewer read in flight, abandons a
     /// plan), and asking cannot have effects. Whoever adds an overlay there
     /// adds it here too;
-    /// `alt_solo_no_abre_el_menu_encima_de_un_dialogo` pins the case that
+    /// `alt_alone_does_not_open_the_menu_over_a_dialog` pins the case that
     /// matters.
-    pub(super) fn algo_se_queda_las_teclas(&self) -> bool {
-        !self.dialogos.is_empty()
-            || self.asistente.is_some()
-            || self.escritorio.salida.is_some()
-            || self.escritorio.programa.is_some()
-            || self.ayuda.is_some()
-            || self.sincronizacion.is_some()
-            || self.comparacion.is_some()
+    pub(super) fn something_keeps_the_keys(&self) -> bool {
+        !self.dialogs.is_empty()
+            || self.wizard.is_some()
+            || self.desktop.output.is_some()
+            || self.desktop.program.is_some()
+            || self.help.is_some()
+            || self.sync.is_some()
+            || self.comparison.is_some()
             || self.revision_ia.is_some()
-            || self.busqueda.is_some()
-            || self.selector_disposicion.is_some()
-            || self.selector_columnas.is_some()
+            || self.search.is_some()
+            || self.selector_layout.is_some()
+            || self.selector_columns.is_some()
             || self.selector.is_some()
-            || self.selector_perfil.is_some()
-            || self.tema_elegido.is_some()
-            || self.extensiones.is_some()
+            || self.selector_profile.is_some()
+            || self.theme_chosen.is_some()
+            || self.extensions.is_some()
             || self.agencia.panel
-            || self.ajustes.is_some()
+            || self.settings.is_some()
             || self.visor.is_some()
-            || self.paleta.is_some()
+            || self.palette.is_some()
             || self.ir_a.is_some()
     }
 
-    pub(super) fn tecla_de_un_overlay(
+    pub(super) fn key_of_an_overlay(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
         // The DIALOG comes before everything else: it is the only truly modal
         // surface — a question that must be answered before continuing —
@@ -206,14 +206,14 @@ impl Estado {
         // parent while typing and `Enter` entered the directory under the
         // cursor instead of confirming; with a delete confirmation open,
         // `Enter` navigated the screen the question was covering.
-        if !self.dialogos.is_empty() {
-            return Some(self.tecla_en_dialogo(k, backend, mailbox));
+        if !self.dialogs.is_empty() {
+            return Some(self.key_in_dialog(k, backend, mailbox));
         }
         // The first-run wizard (spec 2026-09-10): behind the dialog, which is
         // a security question, and in front of everything else — it is
         // asking which keys to have, so its own are fixed.
-        if self.asistente.is_some() {
-            return Some(self.tecla_en_asistente(k, backend, mailbox));
+        if self.wizard.is_some() {
+            return Some(self.key_in_wizard(k, backend, mailbox));
         }
         // An extension command's OUTPUT keeps ALL the keys while it is up: it
         // paints full screen, so a modal that let through a key it does not
@@ -223,19 +223,19 @@ impl Estado {
         // underneath, where a delete confirmation could be waiting for a yes
         // the reader cannot see. The PLUGIN chooses the moment, deciding when
         // its command answers.
-        if self.escritorio.salida.is_some() {
+        if self.desktop.output.is_some() {
             if matches!(k.key.as_str(), "Escape" | "esc" | "Enter" | "enter") {
-                return Some(self.cerrar_salida());
+                return Some(self.close_output());
             }
-            return Some((self.aplicada(), Vec::new()));
+            return Some((self.applied(), Vec::new()));
         }
         // A program's output (#312), for the same reason and with the same
         // keys: it is read and closed.
-        if self.escritorio.programa.is_some() {
+        if self.desktop.program.is_some() {
             if matches!(k.key.as_str(), "Escape" | "esc" | "Enter" | "enter") {
-                return Some(self.cerrar_salida_de_programa());
+                return Some(self.close_program_output());
             }
-            return Some((self.aplicada(), Vec::new()));
+            return Some((self.applied(), Vec::new()));
         }
         // HELP goes first, even before the viewer, and not out of taste: it
         // opens ON TOP of whatever was there — also on top of the viewer,
@@ -243,8 +243,8 @@ impl Estado {
         // whoever is on top keeps the keys. The other way around, `F1` in the
         // viewer opened a help screen that received not a single key and that
         // none could close.
-        if self.ayuda.is_some() {
-            return Some(self.tecla_en_ayuda(k, backend, mailbox));
+        if self.help.is_some() {
+            return Some(self.key_in_help(k, backend, mailbox));
         }
         // The REVIEW of a rename plan goes before the rest of the overlays
         // and only after the dialog and help: it is a screen read in full
@@ -253,53 +253,53 @@ impl Estado {
         // waiting for a yes.
         // The sync panel, same as the diff one: while it is open it keeps the
         // keys.
-        if self.sincronizacion.is_some() {
-            return Some(self.tecla_en_sincronizacion(k, backend, mailbox));
+        if self.sync.is_some() {
+            return Some(self.key_in_sync(k, backend, mailbox));
         }
         // The diff panel, when open, keeps the keys: it is a whole screen,
         // and an arrow that slipped through it would move the listing
         // underneath.
-        if self.comparacion.is_some() {
-            return Some(self.tecla_en_comparacion(k, backend, mailbox));
+        if self.comparison.is_some() {
+            return Some(self.key_in_comparison(k, backend, mailbox));
         }
         if self.revision_ia.is_some() {
-            return Some(self.tecla_en_revision_ia(k, backend, mailbox));
+            return Some(self.key_in_ai_review(k, backend, mailbox));
         }
         // Phase 8: the organize tree keeps the keys for the same reason as
         // the review next door — it is a whole screen and it is approved with
         // them.
-        if self.revision_organizar.is_some() {
-            return Some(self.tecla_en_revision_organizar(k, backend, mailbox));
+        if self.revision_organize.is_some() {
+            return Some(self.key_in_organize_review(k, backend, mailbox));
         }
-        if self.busqueda.is_some() {
-            return Some(self.tecla_en_busqueda(k, backend, mailbox));
+        if self.search.is_some() {
+            return Some(self.key_in_search(k, backend, mailbox));
         }
-        if self.selector_disposicion.is_some() {
-            return Some(self.tecla_en_disposiciones(k, backend, mailbox));
+        if self.selector_layout.is_some() {
+            return Some(self.key_in_layouts(k, backend, mailbox));
         }
-        if self.selector_columnas.is_some() {
-            return Some(self.tecla_en_columnas(k, backend, mailbox));
+        if self.selector_columns.is_some() {
+            return Some(self.key_in_columns(k, backend, mailbox));
         }
         if self.selector.is_some() {
-            return Some(self.tecla_en_selector(k, backend, mailbox));
+            return Some(self.key_in_selector(k, backend, mailbox));
         }
-        if self.selector_perfil.is_some() {
-            return Some(self.tecla_en_perfiles(k, backend, mailbox));
+        if self.selector_profile.is_some() {
+            return Some(self.key_in_profiles(k, backend, mailbox));
         }
-        if self.tema_elegido.is_some() {
-            return Some(self.tecla_en_tema(k, mailbox));
+        if self.theme_chosen.is_some() {
+            return Some(self.key_in_theme(k, mailbox));
         }
-        if self.extensiones.is_some() {
-            return Some(self.tecla_en_extensiones(k, backend, mailbox));
+        if self.extensions.is_some() {
+            return Some(self.key_in_extensions(k, backend, mailbox));
         }
         if self.agencia.panel {
-            return Some(self.tecla_en_agentes(k, backend, mailbox));
+            return Some(self.key_in_agents(k, backend, mailbox));
         }
-        if self.ajustes.is_some() {
-            return Some(self.tecla_en_ajustes(k, mailbox));
+        if self.settings.is_some() {
+            return Some(self.key_in_settings(k, mailbox));
         }
         if self.visor.is_some() {
-            return Some(self.tecla_en_visor(k, backend, mailbox));
+            return Some(self.key_in_viewer(k, backend, mailbox));
         }
         // Any LISTING key cancels a viewer read in flight. The user pressed
         // F3, got tired of waiting and moved on to something else: opening
@@ -307,23 +307,23 @@ impl Estado {
         // for anymore — and switching their keyboard's map with no gesture of
         // theirs. (A second F3 requests its own read and keeps the new
         // token.)
-        self.visor_en_vuelo = None;
+        self.viewer_in_flight = None;
         // The open menu keeps the keys, same as the palette: an arrow that
         // slipped through it would move the listing underneath.
         if self.menu.is_some() {
-            return Some(self.tecla_en_menu(k, backend, mailbox));
+            return Some(self.key_in_menu(k, backend, mailbox));
         }
-        if self.paleta.is_some() {
-            return Some(self.tecla_en_paleta(k, backend, mailbox));
+        if self.palette.is_some() {
+            return Some(self.key_in_palette(k, backend, mailbox));
         }
         // "Go to" (#357), for the same reason as the palette: it is a free
         // text editor, and a letter that slipped through it would act on the
         // listing.
         if self.ir_a.is_some() {
-            return Some(self.tecla_en_ir_a(k, backend, mailbox));
+            return Some(self.key_in_goto(k, backend, mailbox));
         }
-        if self.hueco().pane.quick().is_some() {
-            return self.tecla_en_quick(k);
+        if self.slot().pane.quick().is_some() {
+            return self.key_in_quick(k);
         }
         // And, when NOBODY else wanted it, `Escape` abandons a rename plan
         // still thinking. It goes LAST, which is the only position where
@@ -336,15 +336,15 @@ impl Estado {
         // does take a while, and continuing to navigate while it thinks is
         // normal. What cannot happen is the plan opening on the screen half a
         // minute after its owner has moved on to something else.
-        if self.ia_en_vuelo.is_some() && (k.key == "Escape" || k.key == "esc") {
-            self.epoca_ia += 1;
-            self.ia_en_vuelo = None;
+        if self.ai_in_flight.is_some() && (k.key == "Escape" || k.key == "esc") {
+            self.epoch_ia += 1;
+            self.ai_in_flight = None;
             self.status.message = Some(clamp_display(norte_i18n::t_in(
                 self.lang,
                 "host-plan-abandoned",
             )));
             let change = ViewChange::Status(self.status.clone());
-            return Some((self.aplicada(), vec![self.parche(vec![change])]));
+            return Some((self.applied(), vec![self.parche(vec![change])]));
         }
         None
     }
@@ -357,11 +357,11 @@ impl Estado {
     /// means nothing else. Typing onto the listing behind it would be acting
     /// on something the reader is not looking at. The terminal resolves the
     /// same thing in `norte-tui/src/splash.rs`.
-    fn tecla_en_splash(
+    fn key_in_splash(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
         self.splash.as_ref()?;
         // A digit WITH a modifier is not the shortcut: `ctrl+1` is a keymap
@@ -373,9 +373,9 @@ impl Estado {
             .filter(|n| *n >= 1);
         if let Some(n) = digit {
             let number = u8::try_from(n).unwrap_or(0);
-            return Some(self.activar_fila_de_splash(number, backend, mailbox));
+            return Some(self.activate_splash_row(number, backend, mailbox));
         }
-        Some((self.aplicada(), self.cerrar_splash()))
+        Some((self.applied(), self.close_splash()))
     }
 
     /// A key: the SHARED keymap resolves it and the host only executes.
@@ -385,28 +385,28 @@ impl Estado {
     /// cannot be cancelled), a key bound to something that cannot be done
     /// here says so, and a key with no binding is discarded leaving the state
     /// clean.
-    pub(super) fn tecla(
+    pub(super) fn key(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // The splash screen is removed by WHATEVER KEY, and that key does
         // nothing else (ADR 0115). It goes first of all because whatever is
         // in front rules: typing the key onto the listing behind it would be
         // acting on something the reader is not looking at. The terminal does
         // the same (`norte-tui/src/splash.rs`).
-        if let Some(outcome) = self.tecla_en_splash(k, backend, mailbox) {
+        if let Some(outcome) = self.key_in_splash(k, backend, mailbox) {
             return outcome;
         }
-        if let Some(outcome) = self.tecla_de_un_overlay(k, backend, mailbox) {
+        if let Some(outcome) = self.key_of_an_overlay(k, backend, mailbox) {
             return outcome;
         }
         // The DOCKED viewer with focus keeps the viewer's keys (#291), as in
         // the TUI: it is the same viewer somewhere else. Whatever its keymap
         // does not bind — the tab key, a global shortcut — goes its normal
         // way.
-        if let Some(outcome) = self.tecla_en_preview(k) {
+        if let Some(outcome) = self.key_in_preview(k) {
             return outcome;
         }
         // The TERMINAL panel with focus keeps the BYTES (#362), and this arm
@@ -417,7 +417,7 @@ impl Estado {
         // With ONE exception, which is the door: the lone chord that opened
         // the panel takes you out. The byte table is SHARED with the
         // terminal.
-        if let Some(outcome) = self.tecla_en_terminal(k, backend, mailbox) {
+        if let Some(outcome) = self.key_in_terminal(k, backend, mailbox) {
             return outcome;
         }
         let Ok(chord) = k.to_chord() else {
@@ -432,7 +432,7 @@ impl Estado {
         match self.resolver.push(chord) {
             Resolution::Run { command, count } => {
                 let times = count.times();
-                let Some(effect) = efecto_de(&command, times) else {
+                let Some(effect) = effect_of(&command, times) else {
                     // In the catalogue, bound, and this host does not do it.
                     // Said with the SAME phrase as the TUI.
                     let phrase = norte_frontend::keymap::unavailable_message_in(
@@ -455,7 +455,7 @@ impl Estado {
                 // that are no longer live, and its own contract says it is
                 // dropped as soon as the resolver's state changes.
                 self.whichkey = None;
-                self.aplicar_efecto(effect, backend, mailbox)
+                self.apply_effect(effect, backend, mailbox)
             }
             Resolution::Pending(_) | Resolution::Counting(_) => {
                 self.status.pending = Some(PendingView {
@@ -472,7 +472,7 @@ impl Estado {
                 // projecting: `build` costs several strings and one or two
                 // Fluent formats per row.
                 self.whichkey = Some(norte_frontend::whichkey::WhichKeyRows::build(
-                    &self.efectivo,
+                    &self.effective,
                     self.resolver.pending(),
                     self.resolver.count(),
                     self.lang,
@@ -483,7 +483,7 @@ impl Estado {
                         whichkey: self.vista_whichkey(),
                     },
                 ];
-                (self.aplicada(), vec![self.parche(changes)])
+                (self.applied(), vec![self.parche(changes)])
             }
             Resolution::Unavailable { command, why } => {
                 let phrase =
@@ -512,9 +512,9 @@ impl Estado {
                         ViewChange::Status(self.status.clone()),
                         ViewChange::WhichKey { whichkey: None },
                     ];
-                    return (self.aplicada(), vec![self.parche(changes)]);
+                    return (self.applied(), vec![self.parche(changes)]);
                 }
-                (self.aplicada(), Vec::new())
+                (self.applied(), Vec::new())
             }
         }
     }
@@ -526,7 +526,7 @@ impl Estado {
     /// does, and for the same reason — the catalogue has no commands for
     /// this.
     // TODO(translation): review — this paragraph documents the palette's
-    /// keys, but the item right after it is `tecla_en_menu`'s doc, about the
+    /// keys, but the item right after it is `key_in_menu`'s doc, about the
     /// menu's keys; it looks like a stale fragment left by an earlier edit.
     /// Open menu keys.
     ///
@@ -536,14 +536,14 @@ impl Estado {
     /// other is discarded instead of falling through to the listing
     /// underneath, which would be acted on for a screen the reader is not
     /// looking at.
-    pub(super) fn tecla_en_menu(
+    pub(super) fn key_in_menu(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(menu_state) = self.menu.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         match k.key.as_str() {
             "Escape" | "esc" => self.olvidar_menu(),
@@ -553,14 +553,14 @@ impl Estado {
             "ArrowDown" | "down" => menu_state.cycle_item(1),
             "Enter" | "enter" => {
                 let chosen = menu_state.selected();
-                return self.ejecutar_del_menu(chosen, backend, mailbox);
+                return self.run_from_menu(chosen, backend, mailbox);
             }
-            _ => return (self.aplicada(), Vec::new()),
+            _ => return (self.applied(), Vec::new()),
         }
         let change = ViewChange::Menu {
             menu: self.vista_menu(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Closes the menu and runs what was chosen.
@@ -569,23 +569,23 @@ impl Estado {
     /// reason as the palette: the command can open another screen, and doing
     /// it behind the menu would leave it eating the keys of the one that just
     /// opened.
-    pub(super) fn ejecutar_del_menu(
+    pub(super) fn run_from_menu(
         &mut self,
         chosen: Option<&'static str>,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.olvidar_menu();
         let closing = self.parche(vec![ViewChange::Menu {
             menu: self.vista_menu(),
         }]);
         let Some(cmd) = chosen else {
-            return (self.aplicada(), vec![closing]);
+            return (self.applied(), vec![closing]);
         };
         // Through the SAME path as a key: a menu is another door into the
         // catalogue, not a second dispatcher.
-        let (ack, mut rest) = match efecto_de(cmd, 1) {
-            Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
+        let (ack, mut rest) = match effect_of(cmd, 1) {
+            Some(effect) => self.apply_effect(effect, backend, mailbox),
             None => self.no_implementado(cmd),
         };
         let mut outgoing = vec![closing];
@@ -593,25 +593,25 @@ impl Estado {
         (ack, outgoing)
     }
 
-    pub(super) fn tecla_en_paleta(
+    pub(super) fn key_in_palette(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(palette) = self.paleta.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(palette) = self.palette.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let height = 10;
         match k.key.as_str() {
             "Escape" | "esc" => {
-                self.paleta = None;
+                self.palette = None;
             }
             "Enter" | "enter" => {
                 let chosen = palette.selected();
-                self.paleta = None;
+                self.palette = None;
                 if let Some(cmd) = chosen {
-                    norte_frontend::session::note_palette_recent(&mut self.paleta_recientes, &cmd);
+                    norte_frontend::session::note_palette_recent(&mut self.palette_recent, &cmd);
                     // The close travels in its OWN patch and before the
                     // effect. Without it, a renderer that applies patches —
                     // which is what the reference one does — received the
@@ -621,18 +621,18 @@ impl Estado {
                     // It runs through the SAME path as a key: the palette is
                     // another door into the catalogue, not a second
                     // dispatcher.
-                    let (ack, mut rest) = match efecto_de(&cmd, 1) {
-                        Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
+                    let (ack, mut rest) = match effect_of(&cmd, 1) {
+                        Some(effect) => self.apply_effect(effect, backend, mailbox),
                         // A PLUGIN row is not in the command catalogue and
                         // cannot be: a third party contributes it at
                         // runtime.
                         None if cmd.starts_with("plugin:") => {
-                            self.ejecutar_de_plugin(&cmd, backend, mailbox)
+                            self.run_from_plugin(&cmd, backend, mailbox)
                         }
                         // A RENAMER row (C3, ADR 0095): requests the plan and
                         // puts it into the SAME review as the AI's.
                         None if cmd.starts_with("renamer:") => {
-                            self.ejecutar_de_renamer(&cmd, backend, mailbox)
+                            self.run_from_renamer(&cmd, backend, mailbox)
                         }
                         // An ORGANIZER row (phase 8): the same dispatch,
                         // another method, and the plan lands on the same
@@ -641,7 +641,7 @@ impl Estado {
                             match norte_frontend::palette::parse_organizer_key(&cmd) {
                                 Some((id, org)) => {
                                     let (id, org) = (id.to_owned(), org.to_owned());
-                                    self.pedir_plan_de_organizar(Some((id, org)), backend, mailbox)
+                                    self.request_organize_plan(Some((id, org)), backend, mailbox)
                                 }
                                 None => self.no_implementado(&cmd),
                             }
@@ -664,14 +664,14 @@ impl Estado {
                 let mut chars = other.chars();
                 match (chars.next(), chars.next()) {
                     (Some(c), None) if !k.ctrl && !k.alt && !k.meta => palette.push_char(c),
-                    _ => return (self.aplicada(), Vec::new()),
+                    _ => return (self.applied(), Vec::new()),
                 }
             }
         }
         let change = ViewChange::Palette {
-            palette: self.vista_paleta(),
+            palette: self.vista_palette(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// A catalogue command this host does not execute, said with the same

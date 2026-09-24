@@ -887,7 +887,7 @@ mod tests {
             mtime_ms: None,
             attrs: std::collections::BTreeMap::default(),
         };
-        // `informe\xff.dat` percent-encoded: the bytes come back exact.
+        // `report\xff.dat` percent-encoded: the bytes come back exact.
         let raw = entry("file:///a/informe%FF.dat");
         assert_eq!(raw.pair_name(), b"informe\xff.dat");
 

@@ -1035,7 +1035,7 @@ fn create_exclusive(dir: RawFd, name: &CString) -> Result<std::fs::File, Error> 
 /// And they're checked on the OPEN FILE, not on the path: a prior `lstat`
 /// answers about what was there, not about what got opened.
 #[allow(unsafe_code)]
-pub(crate) fn abre_staging_estable(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
+pub(crate) fn opens_staging_estable(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
 
     // No `O_EXCL` on purpose — it's REOPENED, which is what resuming is
@@ -1087,9 +1087,9 @@ pub(crate) fn abre_staging_estable(path: &std::path::Path) -> Result<(std::fs::F
 ///
 /// `Ok(None)` is "there's no partial of ours": the caller degrades to
 /// `Length`, and rejecting whatever's there on resume is
-/// [`abre_staging_estable`]'s job.
+/// [`opens_staging_estable`]'s job.
 #[allow(unsafe_code)]
-pub(crate) fn abre_parcial_verificado(
+pub(crate) fn opens_partial_verificado(
     path: &std::path::Path,
 ) -> Result<Option<std::fs::File>, Error> {
     use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};

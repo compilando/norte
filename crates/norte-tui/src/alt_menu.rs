@@ -74,8 +74,8 @@ pub fn set(want: bool, supported: impl FnOnce() -> bool, out: &mut impl Write) -
 }
 
 /// Requested, but withdrawn while another program has the terminal. This is
-/// what pairs [`ceder`] with [`recuperar`]: without it, a failure BEFORE
-/// yielding left `recuperar` stacking a second entry that exiting does not
+/// what pairs [`yield_`] with [`recover`]: without it, a failure BEFORE
+/// yielding left `recover` stacking a second entry that exiting does not
 /// pop.
 static YIELDED: AtomicBool = AtomicBool::new(false);
 
@@ -94,17 +94,17 @@ static SUPPORT: OnceLock<bool> = OnceLock::new();
 ///   terminal on stdout, it does not ask: it assumes "no".
 ///
 /// An error reads as "no": a presentation key must not bring down startup.
-pub fn consultar_soporte() -> bool {
+pub fn query_support() -> bool {
     *SUPPORT.get_or_init(|| {
         io::stdout().is_terminal()
             && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false)
     })
 }
 
-/// [`consultar_soporte`]'s answer, without asking. If it was never asked,
+/// [`query_support`]'s answer, without asking. If it was never asked,
 /// "no".
 #[must_use]
-pub fn soportado() -> bool {
+pub fn supported() -> bool {
     SUPPORT.get().copied().unwrap_or(false)
 }
 
@@ -115,19 +115,19 @@ pub fn soportado() -> bool {
 ///
 /// # Errors
 /// Whatever comes from writing to `out`.
-pub fn ceder(out: &mut impl Write) -> io::Result<()> {
+pub fn yield_(out: &mut impl Write) -> io::Result<()> {
     if REQUESTED.load(Ordering::Relaxed) && !YIELDED.swap(true, Ordering::Relaxed) {
         crossterm::execute!(out, PopKeyboardEnhancementFlags)?;
     }
     Ok(())
 }
 
-/// [`ceder`]'s counterpart: on returning from a suspension. Only re-pushes
+/// [`yield_`]'s counterpart: on returning from a suspension. Only re-pushes
 /// what was yielded.
 ///
 /// # Errors
 /// Whatever comes from writing to `out`.
-pub fn recuperar(out: &mut impl Write) -> io::Result<()> {
+pub fn recover(out: &mut impl Write) -> io::Result<()> {
     if REQUESTED.load(Ordering::Relaxed) && YIELDED.swap(false, Ordering::Relaxed) {
         crossterm::execute!(out, PushKeyboardEnhancementFlags(FLAGS))?;
     }
@@ -142,7 +142,7 @@ pub fn recuperar(out: &mut impl Write) -> io::Result<()> {
 ///
 /// # Errors
 /// Whatever comes from writing to `out`.
-pub fn soltar_en_panico(out: &mut impl Write) -> io::Result<()> {
+pub fn drop_on_panic(out: &mut impl Write) -> io::Result<()> {
     let requested = REQUESTED.swap(false, Ordering::Relaxed);
     let yielded = YIELDED.swap(false, Ordering::Relaxed);
     if requested && !yielded {
@@ -155,7 +155,7 @@ pub fn soltar_en_panico(out: &mut impl Write) -> io::Result<()> {
 /// keymap: letting them through would reset a half-done sequence (`g` … `g`)
 /// the moment the reader brushed Alt or Shift.
 #[must_use]
-pub const fn es_modificador(ev: &KeyEvent) -> bool {
+pub const fn es_modifier(ev: &KeyEvent) -> bool {
     matches!(ev.code, KeyCode::Modifier(_))
 }
 
@@ -173,7 +173,7 @@ impl AltSolo {
     /// releasing Alt. Repeating a held Alt does not disarm it. `AltGr` is not
     /// Alt: the terminal sends it as `IsoLevel3Shift`, and on a Spanish
     /// keyboard it types `@` and `#`.
-    pub fn tecla(&mut self, ev: &KeyEvent) -> bool {
+    pub fn key(&mut self, ev: &KeyEvent) -> bool {
         let is_alt = matches!(
             ev.code,
             KeyCode::Modifier(ModifierKeyCode::LeftAlt | ModifierKeyCode::RightAlt)
@@ -200,7 +200,7 @@ impl AltSolo {
 
     /// Something other than a keystroke got in the middle: a click, the
     /// wheel.
-    pub const fn soltar(&mut self) {
+    pub const fn release(&mut self) {
         self.armed = false;
     }
 }
@@ -231,33 +231,33 @@ mod tests {
     #[test]
     fn pressing_and_releasing_alt_is_the_gesture() {
         let mut a = AltSolo::default();
-        assert!(!a.tecla(&alt(KeyEventKind::Press)));
-        assert!(a.tecla(&alt(KeyEventKind::Release)));
+        assert!(!a.key(&alt(KeyEventKind::Press)));
+        assert!(a.key(&alt(KeyEventKind::Release)));
     }
 
     #[test]
     fn a_held_alt_that_repeats_is_still_the_gesture() {
         let mut a = AltSolo::default();
-        a.tecla(&alt(KeyEventKind::Press));
-        a.tecla(&alt(KeyEventKind::Repeat));
-        assert!(a.tecla(&alt(KeyEventKind::Release)));
+        a.key(&alt(KeyEventKind::Press));
+        a.key(&alt(KeyEventKind::Repeat));
+        assert!(a.key(&alt(KeyEventKind::Release)));
     }
 
     #[test]
     fn alt_plus_another_key_is_not_it() {
         let mut a = AltSolo::default();
-        a.tecla(&alt(KeyEventKind::Press));
-        a.tecla(&ev(
+        a.key(&alt(KeyEventKind::Press));
+        a.key(&ev(
             KeyCode::Char('x'),
             KeyEventKind::Press,
             KeyModifiers::ALT,
         ));
-        a.tecla(&ev(
+        a.key(&ev(
             KeyCode::Char('x'),
             KeyEventKind::Release,
             KeyModifiers::ALT,
         ));
-        assert!(!a.tecla(&alt(KeyEventKind::Release)));
+        assert!(!a.key(&alt(KeyEventKind::Release)));
     }
 
     #[test]
@@ -270,46 +270,46 @@ mod tests {
                 KeyModifiers::NONE,
             )
         };
-        a.tecla(&altgr(KeyEventKind::Press));
-        assert!(!a.tecla(&altgr(KeyEventKind::Release)));
+        a.key(&altgr(KeyEventKind::Press));
+        assert!(!a.key(&altgr(KeyEventKind::Release)));
     }
 
     #[test]
     fn with_ctrl_held_it_does_not_arm() {
         let mut a = AltSolo::default();
-        a.tecla(&ev(
+        a.key(&ev(
             KeyCode::Modifier(ModifierKeyCode::LeftAlt),
             KeyEventKind::Press,
             KeyModifiers::ALT | KeyModifiers::CONTROL,
         ));
-        assert!(!a.tecla(&alt(KeyEventKind::Release)));
+        assert!(!a.key(&alt(KeyEventKind::Release)));
     }
 
     #[test]
     fn a_click_in_the_middle_disarms_it() {
         let mut a = AltSolo::default();
-        a.tecla(&alt(KeyEventKind::Press));
-        a.soltar();
-        assert!(!a.tecla(&alt(KeyEventKind::Release)));
+        a.key(&alt(KeyEventKind::Press));
+        a.release();
+        assert!(!a.key(&alt(KeyEventKind::Release)));
     }
 
     #[test]
     fn releasing_a_letter_neither_disarms_nor_fires() {
         // A letter that was held BEFORE Alt and is released afterward.
         let mut a = AltSolo::default();
-        a.tecla(&alt(KeyEventKind::Press));
-        assert!(!a.tecla(&ev(
+        a.key(&alt(KeyEventKind::Press));
+        assert!(!a.key(&ev(
             KeyCode::Char('a'),
             KeyEventKind::Release,
             KeyModifiers::NONE
         )));
-        assert!(a.tecla(&alt(KeyEventKind::Release)));
+        assert!(a.key(&alt(KeyEventKind::Release)));
     }
 
     #[test]
     fn modifier_keys_are_not_keys_for_the_keymap() {
-        assert!(es_modificador(&alt(KeyEventKind::Press)));
-        assert!(!es_modificador(&ev(
+        assert!(es_modifier(&alt(KeyEventKind::Press)));
+        assert!(!es_modifier(&ev(
             KeyCode::Char('a'),
             KeyEventKind::Press,
             KeyModifiers::NONE
@@ -335,10 +335,10 @@ mod tests {
         assert!(out.is_empty(), "idempotent");
 
         // Yielding and recovering come in PAIRS: twice each is one.
-        ceder(&mut out).expect("writes");
-        ceder(&mut out).expect("writes");
-        recuperar(&mut out).expect("writes");
-        recuperar(&mut out).expect("writes");
+        yield_(&mut out).expect("writes");
+        yield_(&mut out).expect("writes");
+        recover(&mut out).expect("writes");
+        recover(&mut out).expect("writes");
         assert_eq!(
             String::from_utf8_lossy(&out),
             "\x1b[<1u\x1b[>15u",
@@ -349,23 +349,23 @@ mod tests {
         set(false, || true, &mut out).expect("writes");
         assert_eq!(String::from_utf8_lossy(&out), "\x1b[<1u");
         out.clear();
-        ceder(&mut out).expect("writes");
+        yield_(&mut out).expect("writes");
         assert!(out.is_empty(), "when off there is nothing to yield");
 
         // Turning off while YIELDED removes nothing: it is already off the
         // stack.
         set(true, || true, &mut out).expect("writes");
-        ceder(&mut out).expect("writes");
+        yield_(&mut out).expect("writes");
         out.clear();
         set(false, || true, &mut out).expect("writes");
         assert!(out.is_empty(), "yielded is not removed twice");
-        recuperar(&mut out).expect("writes");
+        recover(&mut out).expect("writes");
         assert!(out.is_empty(), "off is not recovered");
 
         // After a panic, exiting does not remove it again.
         set(true, || true, &mut out).expect("writes");
         out.clear();
-        soltar_en_panico(&mut out).expect("writes");
+        drop_on_panic(&mut out).expect("writes");
         set(false, || true, &mut out).expect("writes");
         assert_eq!(String::from_utf8_lossy(&out), "\x1b[<1u", "just one pop");
     }

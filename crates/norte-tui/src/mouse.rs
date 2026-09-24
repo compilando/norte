@@ -62,16 +62,16 @@ pub struct ResizeBorder {
     /// Which direction the `Split` containing them lays out.
     pub dir: norte_frontend::layout::Dir,
     /// The border's column (or row).
-    pub linea: u16,
+    pub line: u16,
     /// Where the border starts, on the other axis.
-    pub desde: u16,
+    pub from: u16,
     /// End (exclusive) of the border's span.
-    pub hasta: u16,
+    pub until: u16,
     /// Where the PAIR starts on the layout's axis.
-    pub inicio: u16,
+    pub start: u16,
     /// How much the two together take up. This is what turns a pointer
     /// column into a fraction.
-    pub largo: u16,
+    pub long: u16,
 }
 
 impl ResizeBorder {
@@ -87,7 +87,7 @@ impl ResizeBorder {
             norte_frontend::layout::Dir::Horizontal => (col, row),
             norte_frontend::layout::Dir::Vertical => (row, col),
         };
-        (axis + 1 == self.linea || axis == self.linea) && other >= self.desde && other < self.hasta
+        (axis + 1 == self.line || axis == self.line) && other >= self.from && other < self.until
     }
 }
 
@@ -281,10 +281,10 @@ pub struct MouseState {
     resizing: Option<ResizeBorder>,
     /// The column whose width is being dragged RIGHT NOW, frozen on grab for
     /// the same reason as `resizing`.
-    columna: Option<ColumnDrag>,
+    column: Option<ColumnDrag>,
     /// What the last column drag left on release —`(id, cells)`— for the
     /// run loop to store. [`After`] is `Copy` and cannot carry it inside.
-    ancho_soltado: Option<(String, u16)>,
+    width_released: Option<(String, u16)>,
     /// The shared gesture machine (`norte-frontend`).
     drag: Drag,
     /// `(when, where)` of the last left click, for the double.
@@ -292,7 +292,7 @@ pub struct MouseState {
     /// The previous frame's [`Validity`], to detect the change.
     validity: Validity,
     /// The panel being MOVED by its title (ADR 0138), if there is one.
-    moviendo: Option<MoveDrag>,
+    moving: Option<MoveDrag>,
     /// The LAST mouse event's modifiers, so [`drop_hint`] can ask
     /// [`Drag::pending`] what releasing RIGHT NOW would do.
     ///
@@ -316,10 +316,10 @@ struct MoveDrag {
     /// Where it was grabbed.
     y0: u16,
     /// Past the threshold: no longer a click.
-    activo: bool,
+    active: bool,
     /// Where it would land if released now, and the part that gets
     /// highlighted.
-    destino: Option<(
+    dest: Option<(
         norte_frontend::layout::SlotId,
         norte_frontend::layout::DropZone,
         norte_frontend::layout::Rect,
@@ -331,9 +331,9 @@ impl MouseState {
     /// highlight it; `None` if nothing is moving or it lands nowhere.
     #[must_use]
     pub fn move_target(&self) -> Option<norte_frontend::layout::Rect> {
-        self.moviendo
-            .filter(|m| m.activo)
-            .and_then(|m| m.destino)
+        self.moving
+            .filter(|m| m.active)
+            .and_then(|m| m.dest)
             .map(|(_, _, r)| r)
     }
 
@@ -346,7 +346,7 @@ impl MouseState {
     /// The width the last column drag left, `(id, cells)`, to store it.
     /// Consumed on read: a width is written once.
     pub fn take_column_width(&mut self) -> Option<(String, u16)> {
-        self.ancho_soltado.take()
+        self.width_released.take()
     }
 
     /// The rectangle slot `id` was painted with in the last frame, if it was
@@ -510,7 +510,7 @@ pub fn painted_extension_buttons(app: &App) -> Vec<&'static str> {
 
 /// The command of the status-bar item under `ev` in the last frame
 /// (ADR 0132), if there is a clickable one there.
-fn elemento_de_estado_en(app: &App, ev: MouseEvent) -> Option<&'static str> {
+fn status_item_at(app: &App, ev: MouseEvent) -> Option<&'static str> {
     app.mouse
         .status_item_zones
         .iter()
@@ -520,7 +520,7 @@ fn elemento_de_estado_en(app: &App, ev: MouseEvent) -> Option<&'static str> {
 
 /// Whether `ev` is the left button landing on the last frame's
 /// detached-session indicator.
-fn pulsa_indicador_de_sesion(app: &App, ev: MouseEvent) -> bool {
+fn clicks_session_indicator(app: &App, ev: MouseEvent) -> bool {
     matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
         && app
             .mouse
@@ -798,7 +798,7 @@ fn extensions_mouse(app: &mut App, ev: MouseEvent) -> After {
                         // Choosing a row returns focus to the list, same as
                         // the arrows do: the buttons belong to the chosen
                         // plugin.
-                        mgr.foco = crate::app::ExtFoco::Lista;
+                        mgr.focus = crate::app::ExtFocus::List;
                         let other = mgr.config.as_ref().is_some_and(|c| {
                             mgr.plugins.get(i).is_none_or(|p| p.id != c.plugin_id)
                         });
@@ -887,14 +887,14 @@ fn resize_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
                 norte_frontend::layout::Dir::Horizontal => ev.column,
                 norte_frontend::layout::Dir::Vertical => ev.row,
             };
-            if border.largo == 0 {
+            if border.long == 0 {
                 return Some(After::Nothing);
             }
-            let inside = f32::from(axis.saturating_sub(border.inicio));
-            let frac = inside / f32::from(border.largo);
+            let inside = f32::from(axis.saturating_sub(border.start));
+            let frac = inside / f32::from(border.long);
             app.layout =
                 app.layout
-                    .drag_border_between(border.slot, border.vecino, frac, border.largo);
+                    .drag_border_between(border.slot, border.vecino, frac, border.long);
             Some(After::Nothing)
         }
         MouseEventKind::Up(MouseButton::Left) => {
@@ -912,7 +912,7 @@ fn resize_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
 const UMBRAL_MOVER: u16 = 2;
 
 /// Is `slot` chrome (status bar, tasks)? It neither moves nor receives.
-fn es_cromo(app: &App, slot: norte_frontend::layout::SlotId) -> bool {
+fn es_chrome(app: &App, slot: norte_frontend::layout::SlotId) -> bool {
     app.layout
         .kind_of(slot)
         .is_some_and(|k| matches!(k.as_str(), "status" | "tasks"))
@@ -930,35 +930,35 @@ fn move_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
         MouseEventKind::Down(MouseButton::Left) => {
             // A gesture that never saw its `Up` —released outside the
             // terminal— cannot stay armed for the next click.
-            app.mouse.moviendo = None;
+            app.mouse.moving = None;
             let s = app
                 .mouse
                 .slots
                 .iter()
                 .find(|s| s.y == ev.row && ev.column >= s.x && ev.column < s.x + s.width)?;
-            if es_cromo(app, s.slot) {
+            if es_chrome(app, s.slot) {
                 return None;
             }
-            app.mouse.moviendo = Some(MoveDrag {
+            app.mouse.moving = Some(MoveDrag {
                 slot: s.slot,
                 x0: ev.column,
                 y0: ev.row,
-                activo: false,
-                destino: None,
+                active: false,
+                dest: None,
             });
             None
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            let mut m = app.mouse.moviendo?;
-            if !m.activo {
+            let mut m = app.mouse.moving?;
+            if !m.active {
                 if ev.column.abs_diff(m.x0) < UMBRAL_MOVER && ev.row.abs_diff(m.y0) < UMBRAL_MOVER {
                     return Some(After::Nothing);
                 }
-                m.activo = true;
+                m.active = true;
                 app.mouse.drag.cancel();
                 app.mouse.last_click = None;
             }
-            m.destino = app
+            m.dest = app
                 .mouse
                 .slots
                 .iter()
@@ -968,7 +968,7 @@ fn move_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
                         && ev.row >= s.y
                         && ev.row < s.y + s.height
                 })
-                .filter(|s| s.slot != m.slot && !es_cromo(app, s.slot))
+                .filter(|s| s.slot != m.slot && !es_chrome(app, s.slot))
                 .map(|s| {
                     let r = norte_frontend::layout::Rect {
                         x: s.x,
@@ -979,15 +979,15 @@ fn move_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
                     let zone = norte_frontend::layout::DropZone::at(ev.column, ev.row, r);
                     (s.slot, zone, zone.part_of(r))
                 });
-            app.mouse.moviendo = Some(m);
+            app.mouse.moving = Some(m);
             Some(After::Nothing)
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            let m = app.mouse.moviendo.take()?;
-            if !m.activo {
+            let m = app.mouse.moving.take()?;
+            if !m.active {
                 return None;
             }
-            if let Some((target, zone, _)) = m.destino {
+            if let Some((target, zone, _)) = m.dest {
                 app.layout_move(m.slot, target, zone);
             }
             Some(After::Nothing)
@@ -1003,23 +1003,23 @@ struct ColumnDrag {
     /// window uses (`ColumnId` as text).
     column: String,
     /// The width it was grabbed with.
-    inicio: u16,
+    start: u16,
     /// The cell it was grabbed at. The column's end does not move during the
     /// gesture —the name, which is the part that grows, absorbs the
-    /// difference— so the width is `inicio` plus however far the pointer has
+    /// difference— so the width is `start` plus however far the pointer has
     /// moved left from HERE. Measuring against the border instead of the
     /// grab point made the width jump a cell on the first move for whoever
     /// grabbed the cell before the separator.
     agarre: u16,
     /// There was movement. Without it, releasing is not a new width but a
     /// click.
-    movido: bool,
+    moved: bool,
 }
 
 impl ColumnDrag {
     /// The width with the pointer on cell `col`.
-    const fn ancho_en(&self, col: u16) -> u16 {
-        self.inicio.saturating_add(self.agarre).saturating_sub(col)
+    const fn width_in(&self, col: u16) -> u16 {
+        self.start.saturating_add(self.agarre).saturating_sub(col)
     }
 }
 
@@ -1059,9 +1059,9 @@ fn column_border_at(app: &App, col: u16, row: u16) -> Option<ColumnDrag> {
             if k > 0 && (col == x || col.saturating_add(1) == x) {
                 return Some(ColumnDrag {
                     column: f.id.to_string(),
-                    inicio: f.width,
+                    start: f.width,
                     agarre: col,
-                    movido: false,
+                    moved: false,
                 });
             }
             x = x.saturating_add(f.width);
@@ -1085,27 +1085,27 @@ fn column_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
             app.mouse.last_click = None;
             // Pressing the header used to focus the panel before the border
             // was grabbable; being a border now does not take that away.
-            enfocar_lo_pulsado(app, ev.column, ev.row);
-            app.mouse.columna = Some(grab);
+            focus_the_pressed(app, ev.column, ev.row);
+            app.mouse.column = Some(grab);
             Some(After::Nothing)
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            let grab = app.mouse.columna.as_mut()?;
-            grab.movido = true;
-            let cells = grab.ancho_en(ev.column);
+            let grab = app.mouse.column.as_mut()?;
+            grab.moved = true;
+            let cells = grab.width_in(ev.column);
             let column = grab.column.clone();
             app.columns.apply_width(&column, cells);
             Some(After::Nothing)
         }
         MouseEventKind::Up(MouseButton::Left) => {
-            let grab = app.mouse.columna.take()?;
-            if !grab.movido {
+            let grab = app.mouse.column.take()?;
+            if !grab.moved {
                 return Some(After::Nothing);
             }
             let cells = app
                 .columns
-                .apply_width(&grab.column, grab.ancho_en(ev.column));
-            app.mouse.ancho_soltado = Some((grab.column, cells));
+                .apply_width(&grab.column, grab.width_in(ev.column));
+            app.mouse.width_released = Some((grab.column, cells));
             Some(After::ColumnWidth)
         }
         _ => None,
@@ -1115,7 +1115,7 @@ fn column_gesture(app: &mut App, ev: MouseEvent) -> Option<After> {
 /// What is handled BEFORE the panels: the menu, the viewer, the extension
 /// manager and the lock on the other overlays. `Some` = the event already
 /// has an owner and the listings do not see it.
-fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
+fn above_the_panes(app: &mut App, ev: MouseEvent) -> Option<After> {
     let click = matches!(ev.kind, MouseEventKind::Down(MouseButton::Left));
     // The menu bar is handled BEFORE everything: it is an overlay, so while
     // it is open nothing behind it should receive a click, and its own zones
@@ -1195,10 +1195,10 @@ fn por_encima_de_los_paneles(app: &mut App, ev: MouseEvent) -> Option<After> {
     }
     // Help BEFORE the viewer: it paints over everything, viewer included, so
     // whatever is under the pointer is help.
-    if raton_en_la_ayuda(app, ev) {
+    if mouse_in_help(app, ev) {
         return Some(After::Nothing);
     }
-    if rueda_en_el_visor(app, ev) {
+    if wheel_in_viewer(app, ev) {
         return Some(After::Nothing);
     }
     // The extension manager BEFORE the overlay lock: it is an overlay, and
@@ -1219,7 +1219,7 @@ pub fn handle(app: &mut App, ev: MouseEvent) -> After {
 /// window, and a test that depended on the machine's clock would be a test
 /// that fails in CI on a Tuesday.
 pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
-    if let Some(after) = por_encima_de_los_paneles(app, ev) {
+    if let Some(after) = above_the_panes(app, ev) {
         return after;
     }
     // #324: the panel bar, for the same reason as the menu bar's — that row
@@ -1256,7 +1256,7 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     // indicator is only that if there is an equally discreet way to know
     // what it means. Behind `overlay_open` for the same reason as the panel
     // bar: with help in front, the bar is not clickable.
-    if pulsa_indicador_de_sesion(app, ev) {
+    if clicks_session_indicator(app, ev) {
         app.mouse.drag.cancel();
         app.mouse.last_click = None;
         return After::SessionHelp;
@@ -1265,7 +1265,7 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     // dispatch as its shortcut and as a panel-bar button. The notices badge
     // is one of them (`notices` → `layout.log`).
     if matches!(ev.kind, MouseEventKind::Down(MouseButton::Left))
-        && let Some(cmd) = elemento_de_estado_en(app, ev)
+        && let Some(cmd) = status_item_at(app, ev)
     {
         app.mouse.drag.cancel();
         app.mouse.last_click = None;
@@ -1342,13 +1342,13 @@ pub fn handle_at(app: &mut App, ev: MouseEvent, now: Instant) -> After {
     app.mouse.last_mods = m;
     match ev.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
-            let abajo = matches!(ev.kind, MouseEventKind::ScrollDown);
+            let down = matches!(ev.kind, MouseEventKind::ScrollDown);
             // The DOCKED viewer first: its slot is not a listing, so the
             // hit test returns `None` and the wheel was getting lost. A
             // panel that paints and cannot be scrolled is the same failure
             // as a panel that cannot be clicked (#226, #290).
-            if !rueda_en_preview(app, ev.column, ev.row, abajo) {
-                scroll(app, hit, abajo);
+            if !wheel_in_preview(app, ev.column, ev.row, down) {
+                scroll(app, hit, down);
             }
         }
         MouseEventKind::Down(MouseButton::Left) => return press(app, hit, m, now),
@@ -1393,12 +1393,12 @@ fn pulsar_panel(app: &mut App, ev: MouseEvent) -> Option<After> {
     if !matches!(ev.kind, MouseEventKind::Down(MouseButton::Left)) {
         return None;
     }
-    enfocar_lo_pulsado(app, ev.column, ev.row);
+    focus_the_pressed(app, ev.column, ev.row);
     // The disk map first: its rectangle names a CHILD, not a command, so it
     // cannot go through the plugin zones' path. Pressing one both chooses it
     // AND enters it, which is the whole gesture — in a map, pointing and
     // opening are the same act, like a double click on a listing.
-    if let Some(arg) = hijo_del_mapa_en(app, ev.column, ev.row) {
+    if let Some(arg) = child_of_the_map_at(app, ev.column, ev.row) {
         app.mouse.drag.cancel();
         app.mouse.last_click = None;
         if let Ok(seg) = norte_proto::Segment::parse_wire(&arg) {
@@ -1406,7 +1406,7 @@ fn pulsar_panel(app: &mut App, ev: MouseEvent) -> Option<After> {
             let is_dir = slot
                 .and_then(|s| app.panes.disk_map(s))
                 .and_then(|m| {
-                    m.informe()
+                    m.report()
                         .children
                         .iter()
                         .find(|c| c.name == seg)
@@ -1416,7 +1416,7 @@ fn pulsar_panel(app: &mut App, ev: MouseEvent) -> Option<After> {
             if let Some(s) = slot
                 && let Some(m) = app.panes.disk_map_mut(s)
             {
-                m.elegir(&seg);
+                m.choose(&seg);
             }
             // Enter ONLY a directory: the map shows both kinds, and
             // "entering" a file is not navigating.
@@ -1426,7 +1426,7 @@ fn pulsar_panel(app: &mut App, ev: MouseEvent) -> Option<After> {
         }
         return Some(After::PanelBar);
     }
-    let cmd = zona_de_panel_en(app, ev.column, ev.row)?;
+    let cmd = pane_zone_in(app, ev.column, ev.row)?;
     // And the gesture in flight is released, like the bar: without this, a
     // click on a row and another on the zone inside the double-click window
     // used to read as one.
@@ -1448,7 +1448,7 @@ fn pulsar_panel(app: &mut App, ev: MouseEvent) -> Option<After> {
 /// catalogue takes no parameters, so a zone just runs its command and
 /// nothing more. When a command with an operand exists, it enters through
 /// here.
-fn zona_de_panel_en(app: &App, col: u16, row: u16) -> Option<String> {
+fn pane_zone_in(app: &App, col: u16, row: u16) -> Option<String> {
     let slot = app.panel_slot()?;
     let rect = app.mouse.slots.iter().find(|s| s.slot == slot)?;
     if !rect.contains(col, row) {
@@ -1465,7 +1465,7 @@ fn zona_de_panel_en(app: &App, col: u16, row: u16) -> Option<String> {
     let inside_y = row
         .checked_sub(rect.y.saturating_add(1))
         .filter(|y| *y < rect.height.saturating_sub(2))?;
-    let frame = app.paneles.get(slot)?.frame.as_ref()?;
+    let frame = app.panels.get(slot)?.frame.as_ref()?;
     frame
         .hit_at(inside_y, inside_x)
         .map(|h| h.command.clone())
@@ -1474,12 +1474,12 @@ fn zona_de_panel_en(app: &App, col: u16, row: u16) -> Option<String> {
         // `pane.unpack`. The filter keeps the click within the same scope as
         // a focused panel's key (`ALLOW_PANEL`), which is what this side
         // promises.
-        .filter(|c| norte_frontend::frame::zona_puede(c))
+        .filter(|c| norte_frontend::frame::zone_can(c))
 }
 
 /// The NAME of the child whose rectangle is at `(col, row)` of the disk map.
 ///
-/// Twin of [`zona_de_panel_en`] with two differences that matter, both
+/// Twin of [`pane_zone_in`] with two differences that matter, both
 /// because the frame is OURS and not a third party's:
 ///
 /// 1. **Returns the `arg`, not the command.** In a plugin panel the argument
@@ -1487,12 +1487,12 @@ fn zona_de_panel_en(app: &App, col: u16, row: u16) -> Option<String> {
 ///    zone only runs its command. Here the argument IS the answer: which
 ///    child gets entered. Returned in its WIRE form, which is the reversible
 ///    one; what gets painted is masked and names no file.
-/// 2. **Does not go through `zona_puede`.** That filter exists because in a
+/// 2. **Does not go through `zone_can`.** That filter exists because in a
 ///    plugin panel a third party chooses the label and the command and
 ///    nothing ties them together. The rectangles here are laid out by
 ///    `squarify`, so filtering them would be guarding against ourselves —
 ///    and would leave the map with no gesture at all.
-fn hijo_del_mapa_en(app: &App, col: u16, row: u16) -> Option<String> {
+fn child_of_the_map_at(app: &App, col: u16, row: u16) -> Option<String> {
     let slot = app.disk_map_slot()?;
     let rect = app.mouse.slots.iter().find(|s| s.slot == slot)?;
     if !rect.contains(col, row) {
@@ -1508,7 +1508,7 @@ fn hijo_del_mapa_en(app: &App, col: u16, row: u16) -> Option<String> {
         .filter(|y| *y < rect.height.saturating_sub(2))?;
     let map = app.panes.disk_map(slot)?;
     let frame = norte_frontend::treemap::squarify(
-        &map.informe().children,
+        &map.report().children,
         rect.width.saturating_sub(2),
         rect.height.saturating_sub(2),
     );
@@ -1523,7 +1523,7 @@ fn hijo_del_mapa_en(app: &App, col: u16, row: u16) -> Option<String> {
 ///
 /// A slot that does not take keys changes nothing, and a click outside every
 /// slot —there is none: the layout covers the whole screen— does not either.
-fn enfocar_lo_pulsado(app: &mut App, col: u16, row: u16) {
+fn focus_the_pressed(app: &mut App, col: u16, row: u16) {
     let Some(slot) = app
         .mouse
         .slots
@@ -1549,7 +1549,7 @@ fn enfocar_lo_pulsado(app: &mut App, col: u16, row: u16) {
 ///
 /// `true` also when the viewer is open and the event is not a wheel: with a
 /// file in front, no other mouse gesture has an owner.
-fn rueda_en_el_visor(app: &mut App, ev: MouseEvent) -> bool {
+fn wheel_in_viewer(app: &mut App, ev: MouseEvent) -> bool {
     let shift = mods(ev.modifiers).shift;
     let Some(v) = app.viewer.as_mut() else {
         return false;
@@ -1578,7 +1578,7 @@ fn rueda_en_el_visor(app: &mut App, ev: MouseEvent) -> bool {
 /// Clicking an action SELECTS it rather than running it: running a
 /// file-touching command from a click on text that is being read is too easy
 /// to do by accident. `Enter` runs it, same as with the keyboard.
-fn raton_en_la_ayuda(app: &mut App, ev: MouseEvent) -> bool {
+fn mouse_in_help(app: &mut App, ev: MouseEvent) -> bool {
     if app.help.is_none() {
         return false;
     }
@@ -1627,7 +1627,7 @@ fn raton_en_la_ayuda(app: &mut App, ev: MouseEvent) -> bool {
 ///
 /// `false` when there is none under the pointer, and then the wheel goes on
 /// its normal way to the listing.
-fn rueda_en_preview(app: &mut App, col: u16, row: u16, abajo: bool) -> bool {
+fn wheel_in_preview(app: &mut App, col: u16, row: u16, down: bool) -> bool {
     let Some(slot) = app
         .mouse
         .slots
@@ -1644,7 +1644,7 @@ fn rueda_en_preview(app: &mut App, col: u16, row: u16, abajo: bool) -> bool {
     else {
         return false;
     };
-    if abajo {
+    if down {
         v.scroll_down(WHEEL_ROWS);
     } else {
         v.scroll_up(WHEEL_ROWS);
@@ -1978,7 +1978,7 @@ pub fn restore_after_suspend(
 ///
 /// Sharing the exit path is the fix, not adding the missing line: two arms
 /// that finish off by hand are two places to forget the third.
-async fn despachar_clic(
+async fn despachar_click(
     app: &mut crate::app::App,
     backend: &norte_core::backend::Backend,
     events: &mut crate::console::Console<'_>,
@@ -2025,7 +2025,7 @@ async fn despachar_clic(
 /// profile that also fixes the width would leave it saved and without
 /// effect. Only failure gets reported; a width that saves fine is already
 /// being seen on screen.
-async fn guardar_ancho_de_columna(app: &mut crate::app::App) {
+async fn save_column_width(app: &mut crate::app::App) {
     let Some((column, cells)) = app.mouse.take_column_width() else {
         return;
     };
@@ -2088,7 +2088,7 @@ pub async fn on_mouse(
         // Releasing a column's border: the width is already in memory and
         // painted; only saving it with the SAME function the window uses is
         // left.
-        self::After::ColumnWidth => guardar_ancho_de_columna(app).await,
+        self::After::ColumnWidth => save_column_width(app).await,
         // The detached-session indicator: the explanation is in help, and it
         // opens through the SAME constructor as `F1` over a palette row — a
         // page in hand, not a context to resolve.
@@ -2107,7 +2107,7 @@ pub async fn on_mouse(
         // inside a single frontend.
         self::After::PanelBar => {
             if let Some(id) = app.pending_panel_command.take() {
-                despachar_clic(
+                despachar_click(
                     app,
                     backend,
                     events,
@@ -2131,7 +2131,7 @@ pub async fn on_mouse(
         // being able to diverge.
         self::After::MenuAccept => {
             if let Some(id) = app.take_menu_choice() {
-                despachar_clic(
+                despachar_click(
                     app,
                     backend,
                     events,
@@ -2153,7 +2153,7 @@ pub async fn on_mouse(
         // path to enter a directory would be a
         // second place to fix every cd bug.
         //
-        // And through the same finish as the menu (`despachar_clic`),
+        // And through the same finish as the menu (`despachar_click`),
         // which is what was missing: over a FILE, `nav.enter`
         // resolves the desktop program and leaves it
         // armed, so without launching it a double click on a
@@ -2165,7 +2165,7 @@ pub async fn on_mouse(
             // it armed would make the next key fire a
             // command requested before changing directory.
             app.abandon_pending(resolver);
-            despachar_clic(
+            despachar_click(
                 app,
                 backend,
                 events,

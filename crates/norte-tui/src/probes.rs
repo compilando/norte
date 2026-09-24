@@ -188,7 +188,7 @@ pub const LOG_TAIL_PERIODO: std::time::Duration = std::time::Duration::from_mill
 /// panel.
 pub struct LogTailProbe {
     /// The panel opening it was requested under.
-    pub epoca: u64,
+    pub epoch: u64,
     /// Whatever the daemon answered, whole: the error too, because
     /// [`Error::Unsupported`] is the fact that this daemon has no log to
     /// serve and asking should stop.
@@ -200,17 +200,17 @@ pub struct LogTailProbe {
 /// `cursor: None` the first time — "give me whatever there is" — and the
 /// `next` that arrived afterward; never a zero, which against a ring that
 /// already wrapped around would report a false `lost`.
-pub fn spawn_log_tail(backend: &Backend, cursor: Option<u64>, epoca: u64) -> LogTailProbe {
+pub fn spawn_log_tail(backend: &Backend, cursor: Option<u64>, epoch: u64) -> LogTailProbe {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     tokio::spawn(async move {
-        let _ = tx.send(b.log_tail(cursor, crate::logview::MAX_REMOTO).await);
+        let _ = tx.send(b.log_tail(cursor, crate::logview::MAX_REMOTE).await);
     });
-    LogTailProbe { epoca, rx }
+    LogTailProbe { epoch, rx }
 }
 
 /// What is waited for the plugin catalogue, same as the window.
-pub const PLAZO_PANELES: std::time::Duration = std::time::Duration::from_secs(5);
+pub const DEADLINE_PANELS: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// A plugin panel repaint in flight (phase 3).
 ///
@@ -223,7 +223,7 @@ pub struct PanelRenderProbe {
     pub slot: SlotId,
     /// What was requested: if the slot already wants something else, it is
     /// not applied.
-    pub firma: crate::panelplugin::Firma,
+    pub signature: crate::panelplugin::Signature,
     /// The frame, or `None` if no consented plugin paints that panel.
     pub rx: tokio::sync::oneshot::Receiver<Result<Option<norte_proto::methods::PanelFrame>, Error>>,
 }
@@ -241,7 +241,7 @@ pub struct PanelRenderProbe {
 pub fn spawn_panel_render(
     backend: &Backend,
     slot: SlotId,
-    firma: crate::panelplugin::Firma,
+    signature: crate::panelplugin::Signature,
     params: norte_proto::methods::PluginPanelRenderParams,
 ) -> PanelRenderProbe {
     let (tx, rx) = tokio::sync::oneshot::channel();
@@ -249,7 +249,11 @@ pub fn spawn_panel_render(
     tokio::spawn(async move {
         let _ = tx.send(b.plugin_panel_render(params).await);
     });
-    PanelRenderProbe { slot, firma, rx }
+    PanelRenderProbe {
+        slot,
+        signature,
+        rx,
+    }
 }
 
 /// The plugin catalogue in flight, to know which PANELS they contribute
@@ -276,10 +280,10 @@ pub fn spawn_panels(backend: &Backend) -> PanelsProbe {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
     tokio::spawn(async move {
-        // With the SAME deadline as the window (`PLAZO_PLUGINS`): a daemon
+        // With the SAME deadline as the window (`DEADLINE_PLUGINS`): a daemon
         // that does not answer leaves the session without plugin panels, not
         // a probe hung forever. The same decision had two answers.
-        let res = match tokio::time::timeout(PLAZO_PANELES, b.plugins_list()).await {
+        let res = match tokio::time::timeout(DEADLINE_PANELS, b.plugins_list()).await {
             Ok(r) => r,
             Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
         };
@@ -292,7 +296,7 @@ pub fn spawn_panels(backend: &Backend) -> PanelsProbe {
 /// epoch as [`LogTailProbe`].
 pub struct LogLevelProbe {
     /// The panel opening it was requested under.
-    pub epoca: u64,
+    pub epoch: u64,
     /// The level that actually ended up set, which may not be the one
     /// requested: the daemon's ring is global to its clients and only goes
     /// up.
@@ -303,7 +307,7 @@ pub struct LogLevelProbe {
 pub fn spawn_log_level(
     backend: &Backend,
     level: norte_config::logline::LogLevel,
-    epoca: u64,
+    epoch: u64,
 ) -> LogLevelProbe {
     let (tx, rx) = tokio::sync::oneshot::channel();
     let b = backend.clone();
@@ -311,7 +315,7 @@ pub fn spawn_log_level(
     tokio::spawn(async move {
         let _ = tx.send(b.log_level(&requested).await);
     });
-    LogLevelProbe { epoca, rx }
+    LogLevelProbe { epoch, rx }
 }
 
 /// A preview read in flight, per SLOT.
@@ -339,7 +343,7 @@ pub struct PreviewFetch {
 /// `columns` is the slot's width in cells, for the previewer (0.66.0): `None`
 /// when unknown, and the guest chooses.
 ///
-/// Requests `Modo::Nada` from [`viewer_for_width`] without looking at
+/// Requests `Modo::Nothing` from [`viewer_for_width`] without looking at
 /// `[ui] images`: a slot's DOCKED viewer does not yet know how to place
 /// pixels — that belongs to the full-screen viewer, T3/T4 of phase 5 WOW —
 /// so requesting the thumbnail here would be a plugin-host call nobody uses.
@@ -348,7 +352,7 @@ pub fn spawn_preview_fetch(backend: &Backend, path: VPath, columns: Option<u32>)
     let b = backend.clone();
     let p = path.clone();
     tokio::spawn(async move {
-        let res = viewer_for_width(&b, &p, columns, Modo::Nada).await;
+        let res = viewer_for_width(&b, &p, columns, Modo::Nothing).await;
         let _ = tx.send(res.map(|(viewer, _imagen)| viewer));
     });
     PreviewFetch { path, rx }

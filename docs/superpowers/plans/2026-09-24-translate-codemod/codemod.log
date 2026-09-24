@@ -1,0 +1,21 @@
+SHADOW	crates/norte-gui-tauri/src/startup.rs	tema	theme
+SHADOW	crates/norte-gui-tauri/src/startup.rs	tema_oscuro	theme_dark
+SHADOW	crates/norte-gui-tauri/src/startup.rs	tema_claro	theme_light
+SHADOW	crates/norte-gui-tauri/src/startup.rs	nombre	name
+SHADOW	crates/norte-gui-tauri/src/startup.rs	columnas	columns
+
+# excluded
+EXCLUDED	CertificateDer	CertificateRight	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	DOS_DATE	TWO_DATE	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	DOS_TIME	TWO_TIME	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	EPOCH_DOS	EPOCH_TWO	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_date	two_date	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_dates_pinned	two_dates_pinned	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_datetime	two_datetime	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_pair_to_ms	two_pair_to_ms	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	dos_time	two_time	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	ser	be	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+EXCLUDED	serde_ser_is_wire	serde_be_is_wire	stop list: English/tech meaning (serde::ser, rustls Der, MS-DOS time)
+
+# unmapped
+

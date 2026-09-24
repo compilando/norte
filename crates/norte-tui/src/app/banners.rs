@@ -209,7 +209,7 @@ mod tests {
     /// "which connection degraded?" had no answer. H3d needs it per pane.
     #[test]
     fn degraded_is_stored_per_scheme() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.note_degraded(test_degraded("sftp", "example.org"));
         let d = app.degraded_for("sftp").expect("the degradation was kept");
         assert_eq!(
@@ -228,7 +228,7 @@ mod tests {
     /// turn off.
     #[test]
     fn connection_failure_states_the_reason_in_the_bar() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.note_connection_failed(&norte_proto::methods::ConnectionFailed {
             conn: Some("rosetta".to_owned()),
             scheme: "s3".to_owned(),
@@ -250,7 +250,7 @@ mod tests {
     /// plugin, and lights no persistent indicator.
     #[test]
     fn hook_notice_reaches_the_bar_with_its_plugin_first() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.note_plugin_notice(&norte_proto::methods::PluginNotice {
             plugin_id: "org.norte.rename-log".to_owned(),
             kind: "notify".to_owned(),
@@ -267,7 +267,7 @@ mod tests {
     /// anything having resolved it.
     #[test]
     fn two_degradations_coexist() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.note_degraded(test_degraded("sftp", "a.org"));
         app.note_degraded(test_degraded("ftp", "b.org"));
         assert!(app.degraded_for("sftp").is_some());
@@ -322,7 +322,7 @@ mod tests {
 
     #[test]
     fn session_with_no_journal_has_a_persistent_indicator() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         assert!(app.journal_banner().is_none(), "recorded by default");
 
         app.message = Some("something".to_owned());
@@ -340,7 +340,7 @@ mod tests {
     /// rest of the session.
     #[test]
     fn the_two_persistent_indicators_fit_together() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
         app.note_degraded(test_degraded("sftp", "a.org"));
         let banner = app.persistent_banner().expect("there is a notice");
@@ -360,7 +360,7 @@ mod tests {
     /// the window doesn't save the screen with nothing on screen to say so.
     #[test]
     fn the_detached_window_has_a_persistent_indicator() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         assert!(app.session_banner().is_none(), "the owner warns of nothing");
 
         app.session.detached = true;
@@ -380,7 +380,7 @@ mod tests {
     /// goes last.
     #[test]
     fn the_three_persistent_indicators_fit_together() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.note_no_journal(norte_core::embedded::NoJournal::Busy);
         app.note_degraded(test_degraded("sftp", "a.org"));
         app.session.detached = true;
@@ -405,7 +405,7 @@ mod tests {
     /// does the oldest gets dropped and the one that just arrived is kept.
     #[test]
     fn degradations_have_a_cap() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         for i in 0..(norte_frontend::banners::DEGRADED_MAX + 10) {
             app.note_degraded(test_degraded(&format!("s{i}"), "host"));
         }
@@ -427,7 +427,7 @@ mod tests {
     /// lie.
     #[test]
     fn the_notice_masks_a_hostile_host() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.note_degraded(test_degraded("sftp", "ma\u{202e}gro.org\n"));
         let banner = app.connection_banner().expect("there is a notice");
         assert!(
@@ -445,7 +445,7 @@ mod tests {
     /// value.
     #[test]
     fn a_single_degradation_notice_names_the_connection() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         assert!(app.connection_banner().is_none());
         app.note_degraded(test_degraded("sftp", "remote.example"));
         let banner = app.connection_banner().expect("there is a notice");

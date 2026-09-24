@@ -25,7 +25,7 @@ use norte_vfs::Provider;
 /// checkable number — `12` — and the factory one for `size` is `iec`, i.e.
 /// "12 B": if the style were not applied, the test would say so instead of
 /// exhausting its loop.
-fn columnas_con_tamano_exacto() -> norte_frontend::columns::ColumnsSettings {
+fn columns_with_exact_size() -> norte_frontend::columns::ColumnsSettings {
     let cfg = norte_config::ColumnsConfig {
         specs: [(
             "size".to_owned(),
@@ -45,7 +45,7 @@ fn columnas_con_tamano_exacto() -> norte_frontend::columns::ColumnsSettings {
 
 /// Size and date cells carry a value over real files.
 #[tokio::test]
-async fn el_tamano_y_la_fecha_no_van_en_blanco() {
+async fn the_size_and_the_date_are_not_left_blank() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("a.txt"), b"hello world!").expect("writes");
     // The socket goes in /tmp and not in the tempdir: a `sockaddr_un` does
@@ -86,27 +86,27 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
     )
     .await
     .expect("connects");
-    let inicio = norte_vfs_local::vpath_from_native(dir.path()).expect("vpath");
+    let start = norte_vfs_local::vpath_from_native(dir.path()).expect("vpath");
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
-        initial_dir: inicio,
-        initial_dir_pedido: false,
+        initial_dir: start,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: norte_ui_host::default_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         // No profile: this test looks at a local listing's cells, and an
         // active profile does not change what a `stat` returns.
         profile: None,
-        columns: columnas_con_tamano_exacto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: columns_with_exact_size(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -122,7 +122,7 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
         h.dispatch(norte_ui_host::UiAction::Resync)
             .await
             .expect("host is alive");
-        let foto = loop {
+        let snapshot = loop {
             match sub.recv().await.expect("the host is still alive") {
                 norte_ui_host::Update::Message(m) => {
                     if let norte_ui_host::dto::UiUpdate::Snapshot(s) = m.payload {
@@ -132,13 +132,13 @@ async fn el_tamano_y_la_fecha_no_van_en_blanco() {
                 norte_ui_host::Update::Lagged => {}
             }
         };
-        let SlotView::Browser(b) = &foto.slots[0] else {
+        let SlotView::Browser(b) = &snapshot.slots[0] else {
             panic!("the first slot is a listing");
         };
-        let Some(fila) = b.rows.iter().find(|r| r.display_name == "a.txt") else {
+        let Some(row) = b.rows.iter().find(|r| r.display_name == "a.txt") else {
             continue;
         };
-        let size = fila
+        let size = row
             .cells
             .iter()
             .find(|c| c.column == "size")

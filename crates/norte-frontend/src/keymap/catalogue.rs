@@ -41,7 +41,7 @@ pub struct CommandDef {
 /// // Renames too, but the listing has left the machine first.
 /// assert_eq!(effect("pane.ai-rename"), Some(Effect::SendsOut));
 /// assert!(effect("cursor.down").is_some_and(Effect::is_inert));
-/// assert_eq!(effect("pane.no-existe-jamas"), None);
+/// assert_eq!(effect("pane.no-exists-jamas"), None);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Effect {
@@ -578,7 +578,7 @@ pub const CATALOGUE: &[CommandDef] = &[
 /// assert_eq!(lookup("pane.select-drive").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.compare-dirs").map(|d| d.status), Some(Status::Live));
 /// assert_eq!(lookup("pane.sync-dirs").map(|d| d.status), Some(Status::Live));
-/// assert!(lookup("pane.no-existe-jamas").is_none());
+/// assert!(lookup("pane.no-exists-jamas").is_none());
 /// ```
 #[must_use]
 pub fn lookup(name: &str) -> Option<&'static CommandDef> {
@@ -601,7 +601,7 @@ mod tests {
     /// A duplicated name would make `lookup` order-dependent, and the table is
     /// hand-maintained: pin it.
     #[test]
-    fn no_hay_nombres_duplicados() {
+    fn no_hay_names_duplicados() {
         let mut names: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
         names.sort_unstable();
         let before = names.len();
@@ -612,7 +612,7 @@ mod tests {
     /// A `Planned` entry with an empty reason or a zero issue is a promise
     /// nobody can chase — the exact failure this state exists to prevent.
     #[test]
-    fn todo_planned_tiene_motivo_e_issue() {
+    fn every_planned_one_has_a_reason_and_an_issue() {
         for d in CATALOGUE {
             if let Status::Planned { reason, issue } = d.status {
                 assert!(!reason.is_empty(), "{} has no reason", d.name);

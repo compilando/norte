@@ -95,19 +95,19 @@ async fn host_against(d: &TestDaemon) -> (UiHost, ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend: Arc::new(backend),
         initial_dir: vp("mem:///casa"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         // The `..` row turned off: these tests reason about listing indices,
         // and one more row at the start would shift them all without saying
         // anything about what they test.
         settings: {
-            let mut cfg = norte_ui_host::ajustes_por_defecto();
+            let mut cfg = norte_ui_host::default_settings();
             cfg.common.ui_parent_entry = Some(false);
             cfg
         },
@@ -115,8 +115,8 @@ async fn host_against(d: &TestDaemon) -> (UiHost, ViewSnapshot) {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await

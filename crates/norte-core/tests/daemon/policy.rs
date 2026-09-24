@@ -1478,13 +1478,13 @@ async fn plugin_set_config_by_an_agent_is_invalid_request() {
 pub(super) const BROKEN_MANIFEST: &str = "no es toml [[[";
 
 /// A daemon pointed at a `cfg` seeded with a VALID plugin (`org.norte.demo`)
-/// and a BROKEN one (`rota`, invalid TOML). Also returns the `cfg` path so a
+/// and a BROKEN one (`broken`, invalid TOML). Also returns the `cfg` path so a
 /// fresh `PluginRegistry` can be opened over it to check persistence.
-pub(super) async fn spawn_daemon_plugins_ok_y_roto() -> (TestDaemon, PathBuf) {
+pub(super) async fn spawn_daemon_plugins_ok_and_broken() -> (TestDaemon, PathBuf) {
     spawn_daemon_plugins_con(&[]).await
 }
 
-/// Like [`spawn_daemon_plugins_ok_y_roto`], plus whatever `(id, manifest)`
+/// Like [`spawn_daemon_plugins_ok_and_broken`], plus whatever `(id, manifest)`
 /// pairs are passed, seeded BEFORE starting up: the daemon discovers once, at
 /// startup, and a test on its in-memory registry has to seed beforehand.
 pub(super) async fn spawn_daemon_plugins_con(extra: &[(&str, &str)]) -> (TestDaemon, PathBuf) {
@@ -1536,7 +1536,7 @@ pub(super) async fn spawn_daemon_plugins_con(extra: &[(&str, &str)]) -> (TestDae
 #[tokio::test]
 async fn the_plugin_manager_e2e_lists_governs_and_persists() {
     // `cfg` is the config root, seeded with a valid plugin and a broken one.
-    let (d, cfg) = spawn_daemon_plugins_ok_y_roto().await;
+    let (d, cfg) = spawn_daemon_plugins_ok_and_broken().await;
 
     // 1) plugin.list: a valid one discovered (unapproved/disabled, fs-read
     //    capability visible) and a broken one reported by its BASENAME
@@ -1649,7 +1649,7 @@ async fn the_plugin_manager_e2e_lists_governs_and_persists() {
     reason = "six steps over the SAME daemon: splitting them would lose the in-memory registry being tested"
 )]
 async fn plugin_uninstall_over_the_wire_deletes_forgets_and_withdraws_consent() {
-    // And a broken one with a VALID id, for step 5: `rota` is not an id and
+    // And a broken one with a VALID id, for step 5: `broken` is not an id and
     // cannot be named over the wire.
     let (d, cfg) = spawn_daemon_plugins_con(&[("org.norte.rota", BROKEN_MANIFEST)]).await;
     let human = connected_client(&d).await;
@@ -3097,13 +3097,13 @@ async fn a_human_reads_with_no_scope() {
 
 /// A trivial remote provider: answers ANY path with a directory. It is the
 /// stand-in for the session the fake connector establishes (same criterion
-/// as `connect.rs`'s `EcoProvider`); its only job is for the connect to
+/// as `connect.rs`'s `EchoProvider`); its only job is for the connect to
 /// SUCCEED — the `fs.stat` result does not matter, that the notice was
 /// broadcast before the response does.
-pub(super) struct EcoProvider;
+pub(super) struct EchoProvider;
 
 #[async_trait]
-impl Provider for EcoProvider {
+impl Provider for EchoProvider {
     fn scheme(&self) -> &'static str {
         "ftp"
     }
@@ -3147,7 +3147,7 @@ impl Provider for EcoProvider {
 }
 
 /// A fake connector that ALWAYS degrades: every connect returns a live
-/// provider ([`EcoProvider`]) plus a `TlsAuthRejected` warning for
+/// provider ([`EchoProvider`]) plus a `TlsAuthRejected` warning for
 /// `backup.example`.
 pub(super) struct DegradingConnector {
     mem: Arc<MemProvider>,
@@ -3164,7 +3164,7 @@ impl norte_core::connect::RemoteConnector for DegradingConnector {
         // connector can hold its own if it ever needed to.
         let _ = &self.mem;
         Ok(norte_core::connect::Connected {
-            provider: Arc::new(EcoProvider) as Arc<dyn Provider>,
+            provider: Arc::new(EchoProvider) as Arc<dyn Provider>,
             warnings: vec![norte_core::connect::ConnectionWarning {
                 scheme: scheme.to_owned(),
                 host: "backup.example".to_owned(),
@@ -3289,7 +3289,7 @@ impl norte_core::connect::RemoteConnector for FailingConnector {
     ) -> Result<norte_core::connect::Connected, norte_core::connect::DialError> {
         Err(norte_core::connect::DialError {
             error: Error::PermissionDenied,
-            causa: Some(Box::new(norte_core::connect::Causa {
+            cause: Some(Box::new(norte_core::connect::Cause {
                 conn: Some("rosetta".into()),
                 reason: norte_core::connect::ConnectionFailureReason::SecretEmpty,
                 detail: Some("el secreto de «rosetta» está definido pero VACÍO".into()),

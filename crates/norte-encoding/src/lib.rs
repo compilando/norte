@@ -373,7 +373,7 @@ const DEFAULT_IGNORABLE: &[(char, char)] = &[
 /// get painted blank. Each with its reason, because each is an exception and
 /// an exception with no reason is a list things get added to. Sorted, like
 /// the others: walked by the same binary search.
-const INVISIBLES_OUTSIDE_DI: &[(char, char)] = &[
+const INVISIBLE_OUTSIDE_DI: &[(char, char)] = &[
     // Zl/Zp: line and paragraph separators, which `is_control` does not catch.
     ('\u{2028}', '\u{2029}'),
     // BRAILLE PATTERN BLANK: category So, neither Cf nor ignorable to
@@ -437,7 +437,7 @@ fn in_ranges(table: &[(char, char)], c: char) -> bool {
 ///   bytes fool a human, and through them any "approve what you already
 ///   saw". Decided by the Unicode `Default_Ignorable_Code_Point` property
 ///   (`DEFAULT_IGNORABLE`) plus the ones that get painted blank without
-///   being ignorable (`INVISIBLES_OUTSIDE_DI`).
+///   being ignorable (`INVISIBLE_OUTSIDE_DI`).
 ///
 /// ZWJ (`U+200D`) and the variation selectors are KNOWINGLY ALLOWED
 /// (`ALLOWED_IGNORABLES`): masking them would break compound emoji — emoji
@@ -463,7 +463,7 @@ pub fn is_terminal_hazard(c: char) -> bool {
     if in_ranges(ALLOWED_IGNORABLES, c) {
         return false;
     }
-    c.is_control() || in_ranges(DEFAULT_IGNORABLE, c) || in_ranges(INVISIBLES_OUTSIDE_DI, c)
+    c.is_control() || in_ranges(DEFAULT_IGNORABLE, c) || in_ranges(INVISIBLE_OUTSIDE_DI, c)
 }
 
 /// Replaces every [`is_terminal_hazard`] char with `U+FFFD` (`�`). Sanitizes
@@ -473,7 +473,7 @@ pub fn is_terminal_hazard(c: char) -> bool {
 ///
 /// ```
 /// use norte_encoding::mask_terminal_hazards;
-/// // RLO + isolate sin cerrar + ESC+OSC + C0 → todos a U+FFFD:
+/// // RLO + isolate sin cerrar + ESC+OSC + C0 → all a U+FFFD:
 /// let out = mask_terminal_hazards("ok \u{202E}\u{2066}\u{1B}]0;x\u{07}\u{01}");
 /// assert_eq!(out, "ok \u{FFFD}\u{FFFD}\u{FFFD}]0;x\u{FFFD}\u{FFFD}");
 /// // ZWJ (emoji) se preserva:

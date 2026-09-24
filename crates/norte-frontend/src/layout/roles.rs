@@ -188,7 +188,7 @@ mod tests {
     /// present but invisible: `F5` copies to the other pane and nobody
     /// notices.
     #[test]
-    fn con_dos_browsers_el_destino_es_el_otro() {
+    fn with_two_browsers_the_destination_is_the_other() {
         let (tree, res) = painted(split(vec![browser(1), browser(2)]));
         let mut roles = Roles::default();
         roles.reconcile(&tree, &res, &reg(), SlotId(1));
@@ -199,7 +199,7 @@ mod tests {
     /// With ONE single browser there is no target, and that is NOT a broken
     /// state: the operation that needs it will ask for a path.
     #[test]
-    fn con_un_solo_browser_no_hay_destino() {
+    fn with_a_single_browser_there_is_no_destination() {
         let (tree, res) = painted(browser(1));
         let mut roles = Roles::default();
         roles.reconcile(&tree, &res, &reg(), SlotId(1));
@@ -209,7 +209,7 @@ mod tests {
     /// The target gets HIDDEN (tab switch): the role relocates to the
     /// visible candidate. A target behind a tab is silent data loss.
     #[test]
-    fn un_destino_que_se_oculta_se_reubica() {
+    fn a_destination_that_hides_gets_relocated() {
         let (tree, res) = painted(split(vec![
             browser(1),
             Node::Tabs {
@@ -231,7 +231,7 @@ mod tests {
     /// With THREE visible browsers and none designated, there is no
     /// default: two candidates do not tie-break themselves.
     #[test]
-    fn con_varios_candidatos_no_hay_destino_por_defecto() {
+    fn with_several_candidates_there_is_no_default_destination() {
         let (tree, res) = painted(split(vec![browser(1), browser(2), browser(3)]));
         let mut roles = Roles::default();
         roles.reconcile(&tree, &res, &reg(), SlotId(1));
@@ -243,7 +243,7 @@ mod tests {
     /// and becomes a guess. Uncovered by piloting the TUI in tmux — after
     /// splitting a pane, a target nobody had chosen showed up marked.
     #[test]
-    fn el_destino_por_defecto_no_sobrevive_a_un_tercer_panel() {
+    fn the_default_destination_does_not_survive_a_third_pane() {
         let (tree, res) = painted(split(vec![browser(1), browser(2)]));
         let mut roles = Roles::default();
         roles.reconcile(&tree, &res, &reg(), SlotId(1));
@@ -262,7 +262,7 @@ mod tests {
     /// But a target designated BY HAND is respected even with several: the
     /// engine does not tie-break, the user does.
     #[test]
-    fn un_destino_designado_a_mano_sobrevive_a_la_reconciliacion() {
+    fn a_hand_designated_destination_survives_reconciliation() {
         let (tree, res) = painted(split(vec![browser(1), browser(2), browser(3)]));
         let mut roles = Roles::default();
         roles.set(RoleId::Target, SlotId(3));
@@ -273,7 +273,7 @@ mod tests {
     /// A kind that cannot take the role is not a candidate even if visible:
     /// `tasks` is never a copy's target.
     #[test]
-    fn un_kind_sin_ese_rol_no_es_candidato() {
+    fn a_kind_without_that_role_is_not_a_candidate() {
         let (tree, res) = painted(split(vec![
             browser(1),
             Node::slot(SlotId(2), KindId::new("tasks")),
@@ -286,7 +286,7 @@ mod tests {
     /// A broken `follows` degrades to following the `active` role and
     /// COUNTS it.
     #[test]
-    fn un_follow_a_un_hueco_que_no_existe_degrada_a_active() {
+    fn a_follow_to_a_slot_that_does_not_exist_degrades_to_active() {
         let tree = Node::Slot {
             id: SlotId(1),
             kind: KindId::new("metadata"),
@@ -308,7 +308,7 @@ mod tests {
     /// A `follows: Role(Active)` follows the focus, which is the useful
     /// default for a metadata panel or a docked preview.
     #[test]
-    fn un_follow_al_rol_active_sigue_al_foco() {
+    fn a_follow_to_the_active_role_follows_focus() {
         let tree = Node::Slot {
             id: SlotId(1),
             kind: KindId::new("metadata"),

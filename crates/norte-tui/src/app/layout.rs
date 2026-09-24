@@ -28,7 +28,7 @@ impl App {
             // erase your navigation.
             match tree.kind_of(id).map(norte_frontend::layout::KindId::as_str) {
                 Some("browser") if self.panes.browser(id).is_none() => {
-                    let new_pane = self.nuevo_pane(dir.clone(), Vec::new());
+                    let new_pane = self.new_pane(dir.clone(), Vec::new());
                     self.panes.insert_browser(id, new_pane);
                 }
                 Some("places") if self.panes.places(id).is_none() => {
@@ -923,7 +923,7 @@ impl App {
     /// to a guest that recognizes its own format.
     pub(crate) fn prune_by_tree(&mut self) {
         self.history.retain_tree(&self.layout);
-        self.paneles.retain_tree(&self.layout);
+        self.panels.retain_tree(&self.layout);
         // And the terminal panel's shell goes with its slot (#362).
         //
         // Without this, closing the slot removed the node and left the
@@ -988,7 +988,7 @@ impl App {
     /// are two spots outside it that need it: the terminal's key arm and
     /// the pre-frame sweep, for when the shell leaves with the keyboard
     /// inside.
-    pub fn soltar_teclado(&mut self) {
+    pub fn release_keyboard(&mut self) {
         self.key_owner = KeyOwner::Panes;
     }
 
@@ -1111,7 +1111,7 @@ impl App {
                 // local one: it's global to all its clients, and lowering it
                 // from here would turn off another frontend's capture while
                 // it's watching.
-                self.log_remote.reiniciar();
+                self.log_remote.restart();
             }
             Some(id) => {
                 self.reveal(id);
@@ -1171,7 +1171,7 @@ impl App {
         let row = self
             .processes_slot()
             .and_then(|id| self.panes.processes(id))
-            .and_then(|p| p.fila(&ids))
+            .and_then(|p| p.row(&ids))
             .unwrap_or_else(|| ids.len().saturating_sub(1));
         self.board.task_at(row)
     }
@@ -1183,7 +1183,7 @@ impl App {
             return false;
         };
         let ids = self.board.task_ids();
-        let Some(cursor) = self.panes.processes(id).and_then(|p| p.fila(&ids)) else {
+        let Some(cursor) = self.panes.processes(id).and_then(|p| p.row(&ids)) else {
             return false;
         };
         self.board.cancel_at(cursor)
@@ -1503,7 +1503,7 @@ impl App {
             return;
         }
         let old_layout = std::mem::replace(&mut self.layout, new_layout);
-        if let Some(area) = self.ultimo_frame {
+        if let Some(area) = self.last_frame {
             let after = crate::ui::resolved_for(self, area);
             let current = std::mem::replace(&mut self.layout, old_layout);
             let before = crate::ui::resolved_for(self, area);
@@ -1597,7 +1597,7 @@ mod tests {
 
     /// A screen with plenty of room, for when what's being tested isn't the
     /// lack of room.
-    const PANTALLA: ratatui::layout::Rect = ratatui::layout::Rect {
+    const SCREEN: ratatui::layout::Rect = ratatui::layout::Rect {
         x: 0,
         y: 0,
         width: 110,
@@ -1617,7 +1617,7 @@ mod tests {
     fn a_plugin_panel_is_found_takes_the_keyboard_and_is_named() {
         use norte_frontend::layout::{Dir, KindId, KindRegistry, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.kinds
             .insert_panels(&[plugin_with_panel("git", "status")]);
         let tree = Node::Split {
@@ -1664,7 +1664,7 @@ mod tests {
     /// REBUILT whole.
     #[test]
     fn revoking_a_plugins_consent_removes_its_panel() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.kinds
             .insert_panels(&[plugin_with_panel("git", "status")]);
         assert!(app.kinds.decls().iter().any(is_git_panel));
@@ -1685,7 +1685,7 @@ mod tests {
     /// the key saved in the session both come from.
     #[test]
     fn a_kind_with_hostile_characters_is_not_declared() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.kinds.insert_panels(&[
             plugin_with_panel("git", "sta\ntus"),
             plugin_with_panel("git", "está"),
@@ -1710,7 +1710,7 @@ mod tests {
     fn a_plugin_panel_only_lets_the_chrome_through() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.kinds
             .insert_panels(&[plugin_with_panel("git", "status")]);
         app.set_layout(Node::Split {
@@ -1767,7 +1767,7 @@ mod tests {
     fn app_with_hidden_log() -> App {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(10)],
@@ -1795,7 +1795,7 @@ mod tests {
         use norte_frontend::panelbar::PanelState;
 
         let app = app_with_hidden_log();
-        let button = crate::ui::panel_buttons(&app, PANTALLA)
+        let button = crate::ui::panel_buttons(&app, SCREEN)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
             .expect("the log has a button");
@@ -1813,7 +1813,7 @@ mod tests {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
         use norte_frontend::panelbar::PanelState;
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         // Horizontal, because the case that DROPS a slot is the collapse:
         // two siblings competing for the same axis whose minimums don't
         // fit. A `Fixed` won't do to test this — it gets trimmed, it
@@ -1908,7 +1908,7 @@ mod tests {
     fn revealing_the_viewer_doesnt_take_the_keyboard() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Fixed(30)],
@@ -1944,7 +1944,7 @@ mod tests {
     fn the_hidden_attribute_sheet_shows_instead_of_closing() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(1), Size::Fixed(30)],
@@ -1977,7 +1977,7 @@ mod tests {
     fn hidden_processes_keeps_its_new_mark() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.set_layout(Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(8)],
@@ -1992,13 +1992,13 @@ mod tests {
                 },
             ],
         });
-        let button = crate::ui::panel_buttons(&app, PANTALLA)
+        let button = crate::ui::panel_buttons(&app, SCREEN)
             .into_iter()
             .find(|b| b.kind == crate::processes::KIND)
             .expect("processes has a button");
         assert_eq!(
             button.attention,
-            norte_frontend::panelbar::cifra(app.board.rows().len()),
+            norte_frontend::panelbar::figure(app.board.rows().len()),
             "the mark depends on whether there are tasks, not on the slot existing"
         );
     }
@@ -2037,7 +2037,7 @@ mod tests {
         });
         app.log_ring = Some(ring);
 
-        let button = crate::ui::panel_buttons(&app, PANTALLA)
+        let button = crate::ui::panel_buttons(&app, SCREEN)
             .into_iter()
             .find(|b| b.kind == crate::logview::KIND)
             .expect("the log has a button");
@@ -2051,7 +2051,7 @@ mod tests {
     /// closes as always.
     #[test]
     fn a_visible_panel_still_does_the_three_steps() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.toggle_log();
         assert_eq!(
             app.key_owner(),
@@ -2070,7 +2070,7 @@ mod tests {
     /// thousand branches to reach where you already are.
     #[test]
     fn the_tree_anchors_where_the_listing_is() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let dir = app.focused().dir().clone();
         app.toggle_tree();
         assert_eq!(app.tree().and_then(|t| t.root().cloned()), Some(dir));
@@ -2163,7 +2163,7 @@ mod tests {
     fn a_layout_with_a_tree_brings_its_state() {
         use norte_frontend::layout::{Dir, KindId, Node, Size, SlotId};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Fixed(24), Size::Weight(1)],
@@ -2190,7 +2190,7 @@ mod tests {
     fn the_trees_slot_is_placed() {
         use norte_frontend::layout::{KindRegistry, Rect, resolve};
 
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.toggle_tree();
         let id = app.tree_slot().expect("open");
         let res = resolve(
@@ -2211,7 +2211,7 @@ mod tests {
     /// close the panel.
     #[test]
     fn the_tree_opens_focuses_and_closes() {
-        let mut app = app_dos_panes();
+        let mut app = app_two_panes();
         app.toggle_tree();
         assert!(app.tree_slot().is_some());
         app.return_keys_to_panes();

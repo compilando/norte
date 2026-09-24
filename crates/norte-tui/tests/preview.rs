@@ -20,11 +20,11 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
 }
 
-fn entry(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
+fn entry(dir: &VPath, name: &str, kind: EntryKind) -> Entry {
     Entry {
         attrs: std::collections::BTreeMap::new(),
         path: dir
-            .join(Segment::new(nombre.as_bytes().to_vec()).expect("segment"))
+            .join(Segment::new(name.as_bytes().to_vec()).expect("segment"))
             .clone(),
         kind,
         size: Some(1),
@@ -35,8 +35,8 @@ fn entry(dir: &VPath, nombre: &str, kind: EntryKind) -> Entry {
 /// Two listings, each with a DIFFERENT file and a directory.
 ///
 /// `Pane::new` SORTS, and the order puts directories first: the cursor
-/// starts on `carpeta`, not on the file. The tests place it by hand.
-fn app_de_prueba() -> App {
+/// starts on `folder`, not on the file. The tests place it by hand.
+fn test_app() -> App {
     let left = vp("file:///izq");
     let right = vp("file:///der");
     App::new(
@@ -67,13 +67,13 @@ fn resolver(app: &mut App) -> Resolved {
 /// it travels with its SLOT. It is P6 phase C's lesson: by position, an
 /// answer in flight applies to whoever occupies that spot when it arrives.
 #[test]
-fn el_objetivo_lleva_el_hueco_del_preview() {
-    let mut app = app_de_prueba();
+fn the_target_carries_the_previews_slot() {
+    let mut app = test_app();
     app.toggle_preview();
     app.panes[0].set_cursor(1);
     let res = resolver(&mut app);
-    let (hueco, w) = want(&app, &res).expect("there is a target");
-    assert_eq!(Some(hueco), app.preview_slot());
+    let (slot, w) = want(&app, &res).expect("there is a target");
+    assert_eq!(Some(slot), app.preview_slot());
     assert_eq!(w, Want::File(vp("file:///izq/uno.txt")));
 }
 
@@ -83,8 +83,8 @@ fn el_objetivo_lleva_el_hueco_del_preview() {
 /// so this was the note EVERYONE saw on opening. And it still reads
 /// nothing: `..` leads to a folder, and a folder is not read.
 #[test]
-fn sobre_la_fila_de_subir_el_visor_dice_directorio() {
-    let mut app = app_de_prueba();
+fn over_the_parent_row_the_viewer_says_directory() {
+    let mut app = test_app();
     app.set_parent_row(true);
     app.toggle_preview();
     assert!(
@@ -100,17 +100,17 @@ fn sobre_la_fila_de_subir_el_visor_dice_directorio() {
 /// count. In L1b an identical leak was only ever seen by a test, so here it is.
 #[test]
 fn un_preview_oculto_no_produce_objetivo() {
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     app.toggle_preview();
     app.panes[0].set_cursor(1);
     let res = resolver(&mut app);
     assert!(want(&app, &res).is_some());
 
     // Hidden by putting it in a tab with another panel in front.
-    let hueco = app.preview_slot().expect("open");
-    app.layout = app.layout.wrap_in_tabs(hueco);
+    let slot = app.preview_slot().expect("open");
+    app.layout = app.layout.wrap_in_tabs(slot);
     app.layout = app.layout.add_tab(
-        hueco,
+        slot,
         &norte_frontend::layout::Node::slot(
             norte_frontend::layout::SlotId(900),
             norte_frontend::layout::KindId::new("tasks"),
@@ -118,7 +118,7 @@ fn un_preview_oculto_no_produce_objetivo() {
     );
     let res = resolver(&mut app);
     assert!(
-        !res.placements.iter().any(|(id, _)| *id == hueco),
+        !res.placements.iter().any(|(id, _)| *id == slot),
         "the slot really is hidden"
     );
     assert!(
@@ -129,8 +129,8 @@ fn un_preview_oculto_no_produce_objetivo() {
 
 /// A directory under the cursor is not read: what it is gets said instead.
 #[test]
-fn un_directorio_bajo_el_cursor_no_se_lee() {
-    let mut app = app_de_prueba();
+fn a_directory_under_the_cursor_is_not_read() {
+    let mut app = test_app();
     app.toggle_preview();
     app.panes[0].set_cursor(0);
     let res = resolver(&mut app);
@@ -142,8 +142,8 @@ fn un_directorio_bajo_el_cursor_no_se_lee() {
 /// it shows, without touching the layout. It is the first consumer of
 /// `follows` that exists.
 #[test]
-fn cambiar_de_listado_cambia_el_objetivo() {
-    let mut app = app_de_prueba();
+fn changing_listing_changes_the_target() {
+    let mut app = test_app();
     app.toggle_preview();
     app.panes[0].set_cursor(1);
     let res = resolver(&mut app);
@@ -159,9 +159,9 @@ fn cambiar_de_listado_cambia_el_objetivo() {
 /// and SAYS SO. The diagnostic has existed since L1a and until L3 nobody
 /// exercised it.
 #[test]
-fn si_muere_el_hueco_seguido_se_degrada_al_activo_y_lo_dice() {
+fn if_the_followed_slot_dies_it_degrades_to_active_and_says_so() {
     use norte_frontend::layout::{Bindings, Edge, Follow, KindId, Node, Size, SlotId};
-    let mut app = app_de_prueba();
+    let mut app = test_app();
     app.toggle_preview();
     let slot = app.preview_slot().expect("open");
     // The SAME slot is redocked bound to a SPECIFIC one that does not
@@ -207,8 +207,8 @@ fn si_muere_el_hueco_seguido_se_degrada_al_activo_y_lo_dice() {
 /// following a cursor that can no longer move. tmux exposed it on the
 /// first press.
 #[test]
-fn abrir_el_preview_no_se_lleva_el_teclado() {
-    let mut app = app_de_prueba();
+fn opening_the_preview_does_not_take_the_keyboard() {
+    let mut app = test_app();
     let before = (app.panes.len(), app.focus());
     app.toggle_preview();
     assert_eq!((app.panes.len(), app.focus()), before);
@@ -219,8 +219,8 @@ fn abrir_el_preview_no_se_lleva_el_teclado() {
 /// The second press DOES take it: it is how `viewer.hex` and the encodings
 /// are reached without inventing new keys.
 #[test]
-fn la_segunda_pulsacion_enfoca_el_preview() {
-    let mut app = app_de_prueba();
+fn the_second_press_focuses_the_preview() {
+    let mut app = test_app();
     app.toggle_preview();
     app.toggle_preview();
     assert_eq!(app.key_owner(), KeyOwner::Preview);
@@ -229,8 +229,8 @@ fn la_segunda_pulsacion_enfoca_el_preview() {
 
 /// And the third one closes it, leaving the tree as it was.
 #[test]
-fn la_tercera_pulsacion_cierra_y_devuelve_el_arbol_de_antes() {
-    let mut app = app_de_prueba();
+fn the_third_press_closes_and_returns_the_previous_tree() {
+    let mut app = test_app();
     let before = app.layout.clone();
     app.toggle_preview();
     app.toggle_preview();
@@ -245,8 +245,8 @@ fn la_tercera_pulsacion_cierra_y_devuelve_el_arbol_de_antes() {
 /// The preview follows the cursor: a dialog per keystroke would turn
 /// scrolling down a directory into a burst of modals nobody asked for.
 #[test]
-fn una_lectura_denegada_pinta_el_motivo_y_no_abre_modal() {
-    let mut app = app_de_prueba();
+fn a_denied_read_paints_the_reason_and_does_not_open_a_modal() {
+    let mut app = test_app();
     app.toggle_preview();
     let slot = app.preview_slot().expect("open");
     app.preview_failed(slot, "err-permission-denied");
@@ -272,20 +272,20 @@ fn una_lectura_denegada_pinta_el_motivo_y_no_abre_modal() {
 /// resolves while the keyboard is inside the preview. Same trap `alt+b`
 /// exposed in tmux, closed here before it bites.
 #[test]
-fn layout_preview_esta_atado_en_los_siete_presets_y_en_las_dos_pantallas() {
+fn layout_preview_is_bound_in_all_seven_presets_and_both_screens() {
     use norte_frontend::keymap::{CATALOGUE, Effective, Screen, parse_keymap, presets};
     let conocidos: Vec<&str> = CATALOGUE.iter().map(|d| d.name).collect();
-    for nombre in presets::NAMES {
-        let src = presets::source(nombre).expect("the preset exists");
+    for name in presets::NAMES {
+        let src = presets::source(name).expect("the preset exists");
         let kf = parse_keymap(src).expect("the preset parses");
-        for pantalla in [Screen::Browse, Screen::Viewer] {
+        for screen in [Screen::Browse, Screen::Viewer] {
             let eff =
-                Effective::build_for(&kf, &[], &conocidos, pantalla).expect("the preset merges");
+                Effective::build_for(&kf, &[], &conocidos, screen).expect("the preset merges");
             assert!(
                 eff.bindings()
                     .iter()
                     .any(|(_, cmd)| *cmd == "layout.preview"),
-                "{nombre} does not bind layout.preview in {pantalla:?}"
+                "{name} does not bind layout.preview in {screen:?}"
             );
         }
     }

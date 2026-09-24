@@ -1,9 +1,9 @@
 //! Create, delete, pack, split and change permissions.
 //!
-//! Part of `controller`: these are `Estado` methods, moved here without
+//! Part of `controller`: these are `State` methods, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Enumerating them here would be a
 // forty-line list per file, in 32 files, that goes stale the moment the
 // parent imports something — `super::*` tracks it on its own.
@@ -12,7 +12,7 @@ use super::*;
 
 /// A file being created in order to edit it (#290).
 #[derive(Debug)]
-pub(super) struct Creacion {
+pub(super) struct Creation {
     /// The task creating it. `None` while it is being enqueued: the id does
     /// not exist until the daemon answers, and the gesture has already
     /// returned.
@@ -21,7 +21,7 @@ pub(super) struct Creacion {
     path: VPath,
 }
 
-impl Estado {
+impl State {
     /// Creates the TYPED directory inside this other one.
     ///
     /// The name is validated HERE, with the same rule as any other segment:
@@ -35,34 +35,34 @@ impl Estado {
     /// host paints its own masked projection in the field, and the renderer
     /// re-seeds it with that if it had to rebuild the node — an approval
     /// dialog sneaking in on top is enough.
-    pub(super) fn crear_directorio(
+    pub(super) fn create_directory(
         &mut self,
         dir: &VPath,
-        nombre: &str,
+        name: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let seg = match Self::segmento_tecleado(nombre) {
+        let seg = match Self::segment_typed(name) {
             Ok(seg) => seg,
-            Err(clave) => {
-                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
-                let cambio = ViewChange::Status(self.status.clone());
-                return (Some(clave), vec![self.parche(vec![cambio])]);
+            Err(key) => {
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
+                let change = ViewChange::Status(self.status.clone());
+                return (Some(key), vec![self.parche(vec![change])]);
             }
         };
-        let destino = dir.join(seg);
+        let dest = dir.join(seg);
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         let dir = dir.clone();
         tokio::spawn(async move {
-            match backend.mkdir(destino).await {
+            match backend.mkdir(dest).await {
                 Ok(task) => {
                     let _ = buzon
-                        .send(Mensaje::TaskNueva(Box::new((task, vec![dir], None))))
+                        .send(Message::TaskNew(Box::new((task, vec![dir], None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = buzon.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
@@ -71,20 +71,18 @@ impl Estado {
 
     /// The two pending actions that build files from what was TYPED: split
     /// by size and pack by name (#132, #290).
-    pub(super) fn ejecutar_de_archivo(
+    pub(super) fn run_from_file(
         &mut self,
-        pendiente: Pendiente,
-        tecleado: &str,
+        pending: Pending,
+        typed: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        match pendiente {
-            Pendiente::Partir { path, dest_dir } => {
-                self.partir_fichero(path, dest_dir, tecleado, backend, buzon)
+        match pending {
+            Pending::Split { path, dest_dir } => {
+                self.split_file(path, dest_dir, typed, backend, buzon)
             }
-            Pendiente::Empaquetar { dir, sources } => {
-                self.empaquetar(&dir, sources, tecleado, backend, buzon)
-            }
+            Pending::Pack { dir, sources } => self.pack(&dir, sources, typed, backend, buzon),
             // The caller already filtered; naming them here makes a third
             // one a compile error.
             _ => (None, Vec::new()),
@@ -96,16 +94,16 @@ impl Estado {
     /// The size is read by the same function as the TUI: `10M` is 10 MiB and
     /// not ten million, which is what it means in a file manager. A zero is
     /// refused — zero-byte chunks never finish.
-    pub(super) fn partir_fichero(
+    pub(super) fn split_file(
         &mut self,
         path: VPath,
         dest_dir: VPath,
-        tamano: &str,
+        size: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(part_bytes) = norte_frontend::nav::parse_size(tamano) else {
-            return (Some("msg-split-bad-size"), self.decir("msg-split-bad-size"));
+        let Some(part_bytes) = norte_frontend::nav::parse_size(size) else {
+            return (Some("msg-split-bad-size"), self.say("msg-split-bad-size"));
         };
         let afectados = vec![dest_dir.clone()];
         let params = norte_proto::methods::FileSplitParams {
@@ -116,11 +114,11 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let mensaje = match backend.split_file(params).await {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
-                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            let message = match backend.split_file(params).await {
+                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(mensaje).await;
+            let _ = buzon.send(message).await;
         });
         (None, Vec::new())
     }
@@ -134,22 +132,22 @@ impl Estado {
     ///
     /// The base for the stored names is the pane's directory: whoever
     /// unpacks expects to see what was on screen, not absolute paths.
-    pub(super) fn empaquetar(
+    pub(super) fn pack(
         &mut self,
         dir: &VPath,
         sources: Vec<VPath>,
-        nombre: &str,
+        name: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let seg = match Self::segmento_tecleado(nombre) {
+        let seg = match Self::segment_typed(name) {
             Ok(seg) => seg,
-            Err(clave) => return (Some(clave), self.decir(clave)),
+            Err(key) => return (Some(key), self.say(key)),
         };
         let Some(format) = norte_frontend::nav::format_by_name(seg.as_bytes()) else {
             return (
                 Some("msg-pack-unknown-format"),
-                self.decir("msg-pack-unknown-format"),
+                self.say("msg-pack-unknown-format"),
             );
         };
         let params = norte_proto::methods::ArchivePackParams {
@@ -163,11 +161,11 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let mensaje = match backend.pack(params).await {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
-                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            let message = match backend.pack(params).await {
+                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(mensaje).await;
+            let _ = buzon.send(message).await;
         });
         (None, Vec::new())
     }
@@ -177,17 +175,17 @@ impl Estado {
     /// Every path — key, menu, gesture — goes through here. A destructive
     /// operation with two doors ends up with one that has no lock, and the
     /// forgotten one is always the one not used daily.
-    pub(super) fn pedir_borrado(
+    pub(super) fn request_deleted(
         &mut self,
-        permanente: bool,
+        permanent: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let hueco = self.hueco();
-        let mut paths: Vec<VPath> = hueco.pane.marked_paths();
+        let slot = self.slot();
+        let mut paths: Vec<VPath> = slot.pane.marked_paths();
         if paths.is_empty() {
             // With no marks, whatever is under the cursor. With no cursor,
             // nothing to delete: and that does not open a dialog over an
             // empty batch.
-            match hueco.pane.selected() {
+            match slot.pane.selected() {
                 Some(e) => paths.push(e.path.clone()),
                 None => {
                     return (
@@ -219,26 +217,26 @@ impl Estado {
         // costs an `Unsupported` and a `shift+F8`; assuming there is none
         // where there is one costs the bytes. So only an explicit NO makes
         // the deletion permanent.
-        let dir = self.hueco().pane.dir().clone();
-        let papelera = self
-            .caps_de_ruta(&dir)
+        let dir = self.slot().pane.dir().clone();
+        let trash = self
+            .path_caps(&dir)
             .map(|c| c.flags.contains(norte_proto::CapabilityFlags::TRASH));
-        let permanente = permanente || papelera == Some(false);
+        let permanent = permanent || trash == Some(false);
         // The body's names could come from a potential attacker: they are
         // painted with the canonical sanitizing and clamped, same as in the
         // listing.
         let cuerpo: Vec<crate::dto::DialogLine> = paths
             .iter()
-            .take(Self::MAX_LINEAS_DIALOGO)
-            .map(Self::linea_de_ruta)
+            .take(Self::MAX_LINES_DIALOG)
+            .map(Self::path_line)
             .collect();
-        let nota = self.nota_de_recorte(cuerpo.len(), paths.len());
-        let hostil_fuera = norte_frontend::overflow_hostile(&paths, cuerpo.len());
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let note = self.truncation_note(cuerpo.len(), paths.len());
+        let hostile_outside = norte_frontend::overflow_hostile(&paths, cuerpo.len());
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
-            title_key: if permanente {
+            title_key: if permanent {
                 "modal-delete-permanent-title"
             } else {
                 "modal-delete-title"
@@ -251,8 +249,8 @@ impl Estado {
             deadline: None,
             deadline_at_ms: None,
             body: cuerpo,
-            overflow_note: nota,
-            overflow_hostile: hostil_fuera,
+            overflow_note: note,
+            overflow_hostile: hostile_outside,
             choices: vec![
                 DialogChoice {
                     id: "confirm".to_owned(),
@@ -279,7 +277,7 @@ impl Estado {
             // impersonated by a file name. A destructive button says the
             // answer deletes; this says there is no going back.
             dest_check: crate::dto::DestCheckView::Done {
-                warnings: if permanente {
+                warnings: if permanent {
                     vec![clamp_display(norte_i18n::t_in(
                         self.lang,
                         "modal-delete-permanent-warning",
@@ -289,41 +287,41 @@ impl Estado {
                 },
             },
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista: vista.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::Borrar { paths, permanente }),
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::Delete { paths, permanent }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// The gestures that operate on what is MARKED — or on what is under the
     /// cursor — and launch a task: count, pack, unpack and test (#132, #139,
     /// #290).
     ///
-    /// Together for the same reason as the layout ones: `aplicar_efecto` is
+    /// Together for the same reason as the layout ones: `apply_effect` is
     /// a dispatcher and cannot grow one arm per new gesture.
-    pub(super) fn efecto_sobre_entradas(
+    pub(super) fn effect_over_entries(
         &mut self,
-        efecto: Efecto,
+        effect: Effect,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        match efecto {
-            Efecto::TamanoDeDirectorio => self.contar_tamano(backend, buzon),
-            Efecto::Empaquetar => self.pedir_empaquetado(),
-            Efecto::Desempaquetar => self.desempaquetar(backend, buzon),
-            Efecto::ComprobarArchivo => self.comprobar_archivo(backend, buzon),
-            Efecto::PartirFichero => self.pedir_partido(),
-            Efecto::Juntar => self.juntar_trozos(backend, buzon),
+        match effect {
+            Effect::DirectorySize => self.count_size(backend, buzon),
+            Effect::Pack => self.request_packed(),
+            Effect::Unpack => self.unpack(backend, buzon),
+            Effect::CheckArchive => self.check_archive(backend, buzon),
+            Effect::SplitFile => self.request_partido(),
+            Effect::Join => self.join_chunks(backend, buzon),
             // The caller already filtered: naming them here is what makes
             // adding one more a compile error.
-            _ => (self.aplicada(), Vec::new()),
+            _ => (self.applied(), Vec::new()),
         }
     }
 
@@ -332,22 +330,22 @@ impl Estado {
     /// The name is typed because it is where the format comes from. Nothing
     /// else is validated here besides there being something to pack: the
     /// extension is resolved on confirm, which is when there is a name.
-    pub(super) fn pedir_empaquetado(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn request_packed(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // `marked_paths` falls back to the cursor with no marks, same as in
         // a transfer: a single source for "what this operates on".
-        let sources: Vec<VPath> = self.hueco().pane.marked_paths();
+        let sources: Vec<VPath> = self.slot().pane.marked_paths();
         if sources.is_empty() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-nothing-selected".to_owned(),
                 },
-                self.decir("msg-nothing-selected"),
+                self.say("msg-nothing-selected"),
             );
         }
-        let dir = self.hueco().pane.dir().clone();
-        let location_line = Self::linea_de_ruta(&dir);
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let dir = self.slot().pane.dir().clone();
+        let location_line = Self::path_line(&dir);
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-pack-title".to_owned(),
@@ -377,17 +375,17 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista: vista.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::Empaquetar { dir, sources }),
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::Pack { dir, sources }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// `pane.split-file` (#132, #290): asks for the chunks' SIZE.
@@ -395,29 +393,29 @@ impl Estado {
     /// The chunks go to the destination pane, like a copy and for the same
     /// reason: splitting a gigabyte file in the place it already sits
     /// usually does not fit.
-    pub(super) fn pedir_partido(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+    pub(super) fn request_partido(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-nothing-selected".to_owned(),
                 },
-                self.decir("msg-nothing-selected"),
+                self.say("msg-nothing-selected"),
             );
         };
-        let dest_dir = match self.directorio_destino() {
+        let dest_dir = match self.directory_dest() {
             Ok(d) => d,
             Err(reason_key) => {
                 return (
                     ActionAck::Unavailable {
                         reason_key: reason_key.to_owned(),
                     },
-                    self.decir(reason_key),
+                    self.say(reason_key),
                 );
             }
         };
-        let location_line = Self::linea_de_ruta(&dest_dir);
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let location_line = Self::path_line(&dest_dir);
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-split-title".to_owned(),
@@ -450,20 +448,20 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista: vista.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::Partir {
-                path: entrada.path.clone(),
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::Split {
+                path: entry.path.clone(),
                 dest_dir,
             }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// `pane.combine-files` (#132, #290): joins the chunks starting from the
@@ -472,48 +470,48 @@ impl Estado {
     /// Only from the FIRST one, and the rule lives in the shared crate:
     /// starting from `.007` would join half of a thing, and the core only
     /// looks forward.
-    pub(super) fn juntar_trozos(
+    pub(super) fn join_chunks(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+        let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-nothing-selected".to_owned(),
                 },
-                self.decir("msg-nothing-selected"),
+                self.say("msg-nothing-selected"),
             );
         };
-        let nombre = entrada
+        let name = entry
             .path
             .file_name()
             .map(|s| s.as_bytes().to_vec())
             .unwrap_or_default();
-        let Some(base) = norte_frontend::nav::base_de_trozos(&nombre) else {
+        let Some(base) = norte_frontend::nav::chunk_base(&name) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-combine-needs-first".to_owned(),
                 },
-                self.decir("msg-combine-needs-first"),
+                self.say("msg-combine-needs-first"),
             );
         };
-        let dir = self.hueco().pane.dir().clone();
+        let dir = self.slot().pane.dir().clone();
         let params = norte_proto::methods::FileCombineParams {
-            first: entrada.path.clone(),
+            first: entry.path.clone(),
             dest: dir.join(base),
         };
         let afectados = vec![dir];
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let mensaje = match backend.combine_files(params).await {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, afectados, None))),
-                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            let message = match backend.combine_files(params).await {
+                Ok(task) => Message::TaskNew(Box::new((task, afectados, None))),
+                Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(mensaje).await;
+            let _ = buzon.send(message).await;
         });
-        (self.aplicada(), self.decir("msg-combine-started"))
+        (self.applied(), self.say("msg-combine-started"))
     }
 
     /// `pane.unpack` (#132, #290): copies the INSIDE of the container under
@@ -523,108 +521,108 @@ impl Estado {
     /// accepts an archive's inside as a source, so this is the copy the
     /// reader could have made by hand — with its journal, its undo and its
     /// cancellation.
-    pub(super) fn desempaquetar(
+    pub(super) fn unpack(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+        let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-nothing-selected".to_owned(),
                 },
-                self.decir("msg-nothing-selected"),
+                self.say("msg-nothing-selected"),
             );
         };
         // The SAME function that decides whether `Enter` goes into a
         // container (`norte_frontend::nav`): two extension tables would be
         // two places for one to fall out of sync, and then the same entry
         // navigates on one surface and does not unpack on the other.
-        let Some(raiz) = norte_frontend::nav::archive_root_for(&entrada) else {
+        let Some(root) = norte_frontend::nav::archive_root_for(&entry) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-unpack-not-archive".to_owned(),
                 },
-                self.decir("msg-unpack-not-archive"),
+                self.say("msg-unpack-not-archive"),
             );
         };
-        let destino = match self.directorio_destino() {
+        let dest = match self.directory_dest() {
             Ok(d) => d,
             Err(reason_key) => {
                 return (
                     ActionAck::Unavailable {
                         reason_key: reason_key.to_owned(),
                     },
-                    self.decir(reason_key),
+                    self.say(reason_key),
                 );
             }
         };
         // A copy like any other, with `Fail` and its retry: if the
         // destination already has what is inside, the reader decides the
         // same way as in a transfer (#274).
-        let a_la_cola = self.encolar;
-        Self::lanzar_reintento(
-            Reintento {
-                from: raiz,
-                to: destino,
+        let a_la_cola = self.enqueue;
+        Self::launch_retry(
+            Retry {
+                from: root,
+                to: dest,
                 mover: false,
                 // The one from the slot it is being unpacked from, captured
                 // here: see the field.
-                enc: self.hueco().pane.name_encoding(),
+                enc: self.slot().pane.name_encoding(),
             },
             norte_proto::CollisionPolicy::Fail,
             a_la_cola,
             backend,
             buzon,
         );
-        (self.aplicada(), self.decir("msg-unpack-started"))
+        (self.applied(), self.say("msg-unpack-started"))
     }
 
     /// `pane.test-archive` (#132, #290): tests the container under the
     /// cursor. Writes nothing; its result is the Task's outcome.
-    pub(super) fn comprobar_archivo(
+    pub(super) fn check_archive(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(entrada) = self.hueco().pane.selected().cloned() else {
+        let Some(entry) = self.slot().pane.selected().cloned() else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-nothing-selected".to_owned(),
                 },
-                self.decir("msg-nothing-selected"),
+                self.say("msg-nothing-selected"),
             );
         };
-        if norte_frontend::nav::archive_root_for(&entrada).is_none() {
+        if norte_frontend::nav::archive_root_for(&entry).is_none() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-unpack-not-archive".to_owned(),
                 },
-                self.decir("msg-unpack-not-archive"),
+                self.say("msg-unpack-not-archive"),
             );
         }
         let params = norte_proto::methods::ArchiveTestParams {
-            path: entrada.path.clone(),
+            path: entry.path.clone(),
         };
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let mensaje = match backend.test_archive(params).await {
+            let message = match backend.test_archive(params).await {
                 // Testing changes nothing: there are no directories to
                 // refresh.
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, Vec::new(), None))),
-                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+                Ok(task) => Message::TaskNew(Box::new((task, Vec::new(), None))),
+                Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(mensaje).await;
+            let _ = buzon.send(message).await;
         });
-        (self.aplicada(), self.decir("msg-test-archive-started"))
+        (self.applied(), self.say("msg-test-archive-started"))
     }
 
-    pub(super) fn pedir_mkdir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let dir = self.hueco().pane.dir().clone();
-        let location_line = Self::linea_de_ruta(&dir);
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+    pub(super) fn request_mkdir(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.slot().pane.dir().clone();
+        let location_line = Self::path_line(&dir);
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-mkdir-title".to_owned(),
@@ -659,17 +657,17 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista: vista.clone(),
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::CrearDirectorio { dir }),
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::CreateDirectory { dir }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Asks for the octal MODE for what is marked (#314, ADR 0081).
@@ -684,31 +682,31 @@ impl Estado {
     /// The body says how MANY entries this is about, for the same reason as
     /// the terminal: typing a mode believing it applies to one and having it
     /// apply to fifty is what this dialog has to make hard.
-    pub(super) fn pedir_permisos(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let targets = self.hueco().pane.marked_paths();
+    pub(super) fn request_permissions(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let targets = self.slot().pane.marked_paths();
         if targets.is_empty() {
-            let fuera = self.decir("host-nothing-selected");
+            let outside = self.say("host-nothing-selected");
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-nothing-selected".to_owned(),
                 },
-                fuera,
+                outside,
             );
         }
         let modo = self
-            .hueco()
+            .slot()
             .pane
             .selected()
             .and_then(norte_frontend::chmod::mode_of)
             .map(norte_frontend::chmod::format_mode)
             .unwrap_or_default();
-        let cuantas = norte_i18n::ta_in(
+        let how_many = norte_i18n::ta_in(
             self.lang,
             "modal-chmod-count",
             &[("n", &targets.len().to_string())],
         );
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-chmod-title".to_owned(),
@@ -718,7 +716,7 @@ impl Estado {
             deadline: None,
             deadline_at_ms: None,
             body: vec![crate::dto::DialogLine {
-                text: clamp_display(cuantas),
+                text: clamp_display(how_many),
                 hostile: false,
             }],
             overflow_note: String::new(),
@@ -741,17 +739,17 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista: vista.clone(),
-            tecleado: Tecleado::Texto(modo),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::Permisos { targets }),
+            typed: Typed::Text(modo),
+            recognized: true,
+            on_confirm: Some(Pending::Permissions { targets }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Sends the permission change the dialog confirmed (#314).
@@ -760,26 +758,26 @@ impl Estado {
     /// ([`norte_frontend::chmod::parse_mode`]): an invalid mode is reported
     /// and the dialog stays open with what was written, which is what every
     /// prompt here does.
-    pub(super) fn cambiar_permisos(
+    pub(super) fn change_permissions(
         &mut self,
         targets: Vec<VPath>,
-        tecleado: &str,
+        typed: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let mode = match norte_frontend::chmod::parse_mode(tecleado) {
+        let mode = match norte_frontend::chmod::parse_mode(typed) {
             Ok(m) => m,
             Err(e) => {
-                let clave = e.message_key();
-                return (Some(clave), self.decir(clave));
+                let key = e.message_key();
+                return (Some(key), self.say(key));
             }
         };
         // The directories to refresh: the PARENTS of what changes, because
         // what looks different after a chmod is their rows' permissions
         // column.
-        let mut refrescar: Vec<VPath> = targets.iter().filter_map(VPath::parent).collect();
-        refrescar.sort();
-        refrescar.dedup();
+        let mut refresh: Vec<VPath> = targets.iter().filter_map(VPath::parent).collect();
+        refresh.sort();
+        refresh.dedup();
         let params = norte_proto::methods::FsSetModeParams {
             paths: targets,
             mode,
@@ -796,11 +794,11 @@ impl Estado {
             match backend.set_mode(params).await {
                 Ok(task) => {
                     let _ = buzon
-                        .send(Mensaje::TaskNueva(Box::new((task, refrescar, None))))
+                        .send(Message::TaskNew(Box::new((task, refresh, None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = buzon.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
@@ -813,20 +811,20 @@ impl Estado {
     /// application, and `xdg-open` cannot be given an `sftp://`. It is
     /// stated BEFORE typing the name, which is when it still does some
     /// good.
-    pub(super) fn pedir_fichero_nuevo(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let dir = self.hueco().pane.dir().clone();
+    pub(super) fn request_file_new(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let dir = self.slot().pane.dir().clone();
         if !norte_frontend::shell::is_local(&dir) {
-            let fuera = self.decir("host-not-local");
+            let outside = self.say("host-not-local");
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-not-local".to_owned(),
                 },
-                fuera,
+                outside,
             );
         }
-        let location_line = Self::linea_de_ruta(&dir);
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let location_line = Self::path_line(&dir);
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let vista = DialogView {
             id,
             title_key: "modal-new-file-title".to_owned(),
@@ -856,17 +854,17 @@ impl Estado {
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        self.dialogos.push(Dialogo {
+        self.dialogs.push(Dialog {
             id,
             vista,
-            tecleado: Tecleado::Texto(String::new()),
-            reconocido: true,
-            al_confirmar: Some(Pendiente::CrearFichero { dir }),
+            typed: Typed::Text(String::new()),
+            recognized: true,
+            on_confirm: Some(Pending::CreateFile { dir }),
         });
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Creates the empty file and NOTES that it has to be opened once it
@@ -875,41 +873,41 @@ impl Estado {
     /// Opening it here would be opening something not yet on disk: creation
     /// is a Task, and until its outcome there is no file to hand the
     /// desktop.
-    pub(super) fn crear_fichero(
+    pub(super) fn create_file(
         &mut self,
         dir: &VPath,
-        nombre: &str,
+        name: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (Option<&'static str>, Vec<BridgeEnvelope<UiUpdate>>) {
-        let seg = match Self::segmento_tecleado(nombre) {
+        let seg = match Self::segment_typed(name) {
             Ok(seg) => seg,
-            Err(clave) => {
-                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, clave)));
-                let cambio = ViewChange::Status(self.status.clone());
-                return (Some(clave), vec![self.parche(vec![cambio])]);
+            Err(key) => {
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, key)));
+                let change = ViewChange::Status(self.status.clone());
+                return (Some(key), vec![self.parche(vec![change])]);
             }
         };
-        let destino = dir.join(seg);
+        let dest = dir.join(seg);
         let backend_c = Arc::clone(backend);
         let buzon_c = buzon.clone();
         let dir_c = dir.clone();
-        let abrir = destino.clone();
+        let open = dest.clone();
         tokio::spawn(async move {
-            match backend_c.create_file(destino).await {
+            match backend_c.create_file(dest).await {
                 Ok(task) => {
                     let _ = buzon_c
-                        .send(Mensaje::TaskNueva(Box::new((task, vec![dir_c], None))))
+                        .send(Message::TaskNew(Box::new((task, vec![dir_c], None))))
                         .await;
                 }
                 Err(e) => {
-                    let _ = buzon_c.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = buzon_c.send(Message::TaskFailed(Box::new(e))).await;
                 }
             }
         });
-        self.abrir_al_crear = Some(Creacion {
+        self.open_on_create = Some(Creation {
             task: None,
-            path: abrir,
+            path: open,
         });
         (None, Vec::new())
     }
@@ -941,14 +939,14 @@ impl Estado {
     /// 0077).
     ///
     /// The answer comes back through the mailbox as just another message
-    /// ([`Mensaje::CreadoComprobado`]): the state is touched by a single
+    /// ([`Message::CreadoChecked`]): the state is touched by a single
     /// writer, and waiting here would block the whole actor for a round trip
     /// to the daemon.
-    pub(super) fn abrir_lo_creado(
+    pub(super) fn open_the_created(
         &mut self,
         p: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
         // By ID, not by kind. `task.progress` is broadcast to EVERY human
         // connection, so an `fs.create` from the TUI — or from another
@@ -957,13 +955,13 @@ impl Estado {
         // this order exists to prevent. And the other way around, the one
         // that really was created never opened.
         if self
-            .abrir_al_crear
+            .open_on_create
             .as_ref()
             .is_none_or(|c| c.task != Some(p.task_id.get()))
         {
             return;
         }
-        let Some(c) = self.abrir_al_crear.take() else {
+        let Some(c) = self.open_on_create.take() else {
             return;
         };
         let path = c.path;
@@ -976,54 +974,54 @@ impl Estado {
             // With no attributes: the only thing being asked is WHAT it is,
             // and requesting attributes would be provider work nobody is
             // going to read.
-            let veredicto = match backend.stat(path.clone(), Vec::new()).await {
-                Ok(e) => Veredicto::from(e.kind == norte_proto::EntryKind::File),
+            let verdict = match backend.stat(path.clone(), Vec::new()).await {
+                Ok(e) => Verdict::from(e.kind == norte_proto::EntryKind::File),
                 // `NotFound` is an ANSWER — there is nothing there — and also
                 // the most likely outcome of an attack: unlink and do not
                 // replace. Anything else is not the same as tampering: a
                 // handed-off daemon or a timeout are not manipulation, and
                 // saying yes is a false accusation that teaches ignoring the
                 // real warning.
-                Err(Error::NotFound) => Veredicto::YaNoEsElFichero,
-                Err(_) => Veredicto::NoSeSabe,
+                Err(Error::NotFound) => Verdict::NoLongerTheFile,
+                Err(_) => Verdict::Unknown,
             };
             let _ = buzon
-                .send(Mensaje::CreadoComprobado(Box::new((path, veredicto))))
+                .send(Message::CreadoChecked(Box::new((path, verdict))))
                 .await;
         });
     }
 
-    /// The `fs.stat` answer for [`Self::abrir_lo_creado`]: opens, or says why
+    /// The `fs.stat` answer for [`Self::open_the_created`]: opens, or says why
     /// not.
     ///
     /// A single message for the three causes that are the SAME (a link, a
     /// folder, no longer there): saying which one would confirm to whoever
     /// planted the link that their link is in place. Not being able to ask
     /// is something else and it is stated separately.
-    pub(super) fn abrir_lo_comprobado(
+    pub(super) fn open_the_checked(
         &mut self,
         path: norte_proto::VPath,
-        veredicto: Veredicto,
+        verdict: Verdict,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        match veredicto {
-            Veredicto::EsElFichero => {}
-            Veredicto::YaNoEsElFichero => return self.decir("host-created-changed"),
-            Veredicto::NoSeSabe => return self.decir("host-created-unchecked"),
+        match verdict {
+            Verdict::IsTheFile => {}
+            Verdict::NoLongerTheFile => return self.say("host-created-changed"),
+            Verdict::Unknown => return self.say("host-created-unchecked"),
         }
         if self.nativo(crate::dto::NativeEffect::OpenPath { path }) {
             return Vec::new();
         }
-        self.decir("host-no-desktop")
+        self.say("host-no-desktop")
     }
 
     /// Enqueues one Task per entry and hooks its progress to the actor.
-    pub(super) fn lanzar_borrado(
+    pub(super) fn launch_deleted(
         paths: Vec<VPath>,
-        permanente: bool,
+        permanent: bool,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
-        let mode = if permanente {
+        let mode = if permanent {
             norte_proto::DeleteMode::Permanent
         } else {
             norte_proto::DeleteMode::Trash
@@ -1036,11 +1034,11 @@ impl Estado {
                 match backend.delete(path, mode).await {
                     Ok(task) => {
                         let _ = buzon
-                            .send(Mensaje::TaskNueva(Box::new((task, afectados, None))))
+                            .send(Message::TaskNew(Box::new((task, afectados, None))))
                             .await;
                     }
                     Err(e) => {
-                        let _ = buzon.send(Mensaje::TaskFallida(Box::new(e))).await;
+                        let _ = buzon.send(Message::TaskFailed(Box::new(e))).await;
                     }
                 }
             });
@@ -1050,81 +1048,76 @@ impl Estado {
     /// The SECOND lock for read-only mode, over the SINGLE point where every
     /// mutation is launched.
     ///
-    /// Cheap, and unreachable today: in read-only, no mutating `Pendiente`
+    /// Cheap, and unreachable today: in read-only, no mutating `Pending`
     /// is ever born and the approval channel is not even taken. "Unreachable
     /// today" is exactly what stops being true the day someone adds the next
     /// dialog, and this is the door it would come through.
     ///
     /// Closes the dialog on rejecting it: leaving it open would invite
     /// pressing again what is not going to happen.
-    pub(super) fn rechaza_por_solo_lectura(
+    pub(super) fn rejects_for_read_only(
         &mut self,
         pos: usize,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
-        if self.efectos != crate::commands::Efectos::SoloLectura {
+        if self.effects != crate::commands::Effects::SoloRead {
             return None;
         }
-        let muta = self
-            .dialogos
-            .get(pos)?
-            .al_confirmar
-            .as_ref()
-            .is_some_and(|p| {
-                matches!(
-                    p,
-                    Pendiente::Borrar { .. }
-                        | Pendiente::Transferir { .. }
-                        | Pendiente::Soltar { .. }
-                        | Pendiente::CrearDirectorio { .. }
-                        | Pendiente::CrearFichero { .. }
-                        | Pendiente::Decidir { .. }
-                        | Pendiente::Renombrar { .. }
+        let mutates = self.dialogs.get(pos)?.on_confirm.as_ref().is_some_and(|p| {
+            matches!(
+                p,
+                Pending::Delete { .. }
+                        | Pending::Transferir { .. }
+                        | Pending::Release { .. }
+                        | Pending::CreateDirectory { .. }
+                        | Pending::CreateFile { .. }
+                        | Pending::Decide { .. }
+                        | Pending::Rename { .. }
                         // Granting capabilities is the security decision of
                         // the extensions system: a window declaring itself
                         // read-only does not make it.
-                        | Pendiente::AprobarExtension { .. }
+                        | Pending::ApproveExtension { .. }
                         // Uninstalling DELETES configuration files.
-                        | Pendiente::DesinstalarExtension { .. }
+                        | Pending::UninstallExtension { .. }
                         // Undoing a session WRITES: it moves files back and
                         // deletes what the agent created.
-                        | Pendiente::DeshacerSesion { .. }
+                        | Pending::UndoSession { .. }
                         // And undoing up to a point, for the same reason.
-                        | Pendiente::DeshacerHasta { .. }
+                        | Pending::UndoUntil { .. }
                         // Requesting a plan writes nothing to disk, and it
                         // still counts: it sends a directory's contents to a
                         // model, which is not something a window declaring
                         // itself read-only should do.
-                        | Pendiente::InstruccionIa { .. }
+                        | Pending::InstructionIa { .. }
                         // And the template batch (#310) ends in a rename.
-                        | Pendiente::PlantillaLote { .. }
+                        | Pending::TemplateBatch { .. }
                         // Neither does this: the query leaves the process.
-                        | Pendiente::ConsultaSemantica // `EntregarSecreto` is NOT here, and it is deliberate
-                                                       // (#327): delivering the password enables READING a
-                                                       // place that could not be entered, which is exactly
-                                                       // what a read-only window does. Vetoing it would
-                                                       // leave the `prompt` connection unusable in read-only
-                                                       // for no gain — the secret goes to the daemon's
-                                                       // memory, not to disk, and whatever gets authorized
-                                                       // afterward is still governed by policy.
-                                                       //
-                                                       // Stated here because this function's rustdoc warns
-                                                       // that this is the door the next dialog would come
-                                                       // through, and silence is indistinguishable from an
-                                                       // oversight.
-                )
-            });
-        if !muta {
+                        | Pending::QuerySemantic // `DeliverSecret` is NOT here, and it is deliberate
+                                                 // (#327): delivering the password enables READING a
+                                                 // place that could not be entered, which is exactly
+                                                 // what a read-only window does. Vetoing it would
+                                                 // leave the `prompt` connection unusable in read-only
+                                                 // for no gain — the secret goes to the daemon's
+                                                 // memory, not to disk, and whatever gets authorized
+                                                 // afterward is still governed by policy.
+                                                 //
+                                                 // Stated here because this function's rustdoc warns
+                                                 // that this is the door the next dialog would come
+                                                 // through, and silence is indistinguishable from an
+                                                 // oversight.
+            )
+        });
+        if !mutates {
             return None;
         }
-        self.dialogos.remove(pos);
-        let cambio = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+        self.dialogs.remove(pos);
+        let change = ViewChange::Dialogs {
+            dialogs: self.dialog_views(),
         };
         Some((
             ActionAck::Unavailable {
                 reason_key: "host-read-only".to_owned(),
             },
-            vec![self.parche(vec![cambio])],
+            vec![self.parche(vec![change])],
         ))
     }
 }

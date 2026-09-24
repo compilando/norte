@@ -808,7 +808,7 @@ impl<'de> Deserialize<'de> for TagKey {
 /// The ONE visitor behind [`AttrValue`]'s deserialisation, in two roles:
 ///
 /// - `expected: None` — the cell ENVELOPE. A map is scanned for its tag; any
-///   other JSON shape (`42`, `null`, `"texto"`, `[…]`) degrades.
+///   other JSON shape (`42`, `null`, `"text"`, `[…]`) degrades.
 /// - `expected: Some(tag)` — the PAYLOAD under an already-known tag. Each
 ///   `visit_*` decodes straight into the variant that tag needs and returns
 ///   [`AttrValue::Unknown`] for everything else, which is how "the payload has
@@ -1016,7 +1016,7 @@ impl<'de> Deserialize<'de> for AttrValue {
     /// [`serde_json::Value`]. `deserialize_any` is what turns "the payload has
     /// the wrong JSON type" into a match arm instead of a deserialiser error,
     /// and it is also the entry point for a non-map input (`42`, `null`,
-    /// `"texto"`), which degrades where `deserialize_map` would have raised.
+    /// `"text"`), which degrades where `deserialize_map` would have raised.
     /// JSON is the protocol's only encoding (ADR 0011), so requiring a
     /// self-describing format costs nothing.
     ///

@@ -2075,14 +2075,14 @@ impl SqliteJournal {
 /// investigation shows `12:34567` and not four opaque bytes. It does not go
 /// out over the wire nor through the audit export, so nobody else reads it.
 ///
-/// Lives here, paired with [`huella_a_nodo`], so that whoever writes it and
+/// Lives here, paired with [`footprint_to_node`], so that whoever writes it and
 /// whoever compares it cannot diverge: the day this changes shape, it changes
 /// in one place and the parser right next to it comes along.
-pub(crate) fn huella_de_nodo(n: &norte_vfs::NodeId) -> String {
+pub(crate) fn node_footprint(n: &norte_vfs::NodeId) -> String {
     format!("{}:{}", n.volume, n.index)
 }
 
-/// The inverse of [`huella_de_nodo`]. `None` = those bytes are not a
+/// The inverse of [`node_footprint`]. `None` = those bytes are not a
 /// fingerprint.
 ///
 /// Undo's comparison goes through [`norte_vfs::NodeId`] and not through bytes
@@ -2094,7 +2094,7 @@ pub(crate) fn huella_de_nodo(n: &norte_vfs::NodeId) -> String {
 /// parsing, a value that is not a fingerprint falls into "nothing to
 /// compare" and the undo behaves as it did before ADR 0152, which is the
 /// direction this has to fail in.
-pub(crate) fn huella_a_nodo(bytes: &[u8]) -> Option<norte_vfs::NodeId> {
+pub(crate) fn footprint_to_node(bytes: &[u8]) -> Option<norte_vfs::NodeId> {
     let text = std::str::from_utf8(bytes).ok()?;
     let (vol, idx) = text.split_once(':')?;
     Some(norte_vfs::NodeId {
@@ -2129,7 +2129,7 @@ impl crate::observer::MutationObserver for SqliteJournal {
                 path.to_wire().into_bytes(),
                 None,
                 Reversal::Delete,
-                node.map(|n| huella_de_nodo(&n).into_bytes()),
+                node.map(|n| node_footprint(&n).into_bytes()),
                 None,
             ),
             Mutation::Removed(p) => (

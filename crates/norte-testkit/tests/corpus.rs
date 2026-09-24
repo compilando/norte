@@ -56,7 +56,7 @@ fn names_are_valid_segments_and_unique() {
 /// three deferrals, pinning the specific property each one claims to have
 /// and not just that it exists.
 #[test]
-fn fixtures_nuevas_de_169_cumplen_lo_que_prometen() {
+fn new_fixtures_from_169_deliver_what_they_promise() {
     let names = hostile_names();
     let find = |id: &str| {
         names
@@ -93,7 +93,7 @@ fn fixtures_nuevas_de_169_cumplen_lo_que_prometen() {
 /// #169: `spelling_twins()` references corpus `id`s, not its own bytes —
 /// both sides of each pair have to really exist and be different.
 #[test]
-fn spelling_twins_referencian_ids_reales_y_distintos() {
+fn spelling_twins_reference_real_and_distinct_ids() {
     let names = hostile_names();
     let ids: std::collections::HashSet<&str> = names.iter().map(|n| n.id.as_str()).collect();
     for twin in spelling_twins() {

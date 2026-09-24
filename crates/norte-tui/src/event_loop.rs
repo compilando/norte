@@ -411,7 +411,7 @@ pub async fn run(
             // the session is RECLAIMED, having been released for the window
             // that never arrived.
             let outcome = match crate::handoff::spawn_window(&crate::handoff::window_argv()) {
-                Ok(child) => crate::handoff::esperar_arranque(child, crate::handoff::GRACIA)
+                Ok(child) => crate::handoff::wait_startup(child, crate::handoff::GRACIA)
                     .await
                     .map_err(|code| code.map_or_else(|| "?".to_owned(), |c| c.to_string())),
                 Err(e) => {
@@ -447,10 +447,10 @@ pub async fn run(
         // viewer, moving it to another file): both change `app.viewer_imagen`
         // BEFORE this point in the same loop turn, so the comparison below
         // against what is really on the terminal
-        // (`kitty_graphics::borrar_colocada`/`ya_colocada`, PROCESS state)
+        // (`kitty_graphics::delete_placed`/`ya_placed`, PROCESS state)
         // already resolves it with no extra code. The other two —handing
         // over the terminal and quitting— have no guaranteed next frame to
-        // do this count, and that is why they call `borrar_colocada`
+        // do this count, and that is why they call `delete_placed`
         // directly (`suspend::suspend_terminal`, `tty::restore`).
         //
         // A painting failure NEVER brings the TUI down (the painting rule):
@@ -488,19 +488,19 @@ pub async fn run(
                     // to retransmit the whole PNG (up to 1920 px per side, in
                     // base64) on every frame — and the loop turns even when
                     // nobody types, `session_tick` wakes it once a second.
-                    // `puesta_en` exists for exactly this: if the id is
+                    // `placed_in` exists for exactly this: if the id is
                     // already the placed one AND the rect did not change,
                     // there is nothing to redo.
-                    let already_placed = crate::kitty_graphics::ya_colocada(image.id)
-                        && image.puesta_en == Some(placement);
+                    let already_placed = crate::kitty_graphics::ya_placed(image.id)
+                        && image.placed_in == Some(placement);
                     if !already_placed {
                         let out = terminal.backend_mut();
-                        crate::kitty_graphics::borrar_colocada(out);
+                        crate::kitty_graphics::delete_placed(out);
                         let esc = crate::kitty_graphics::escape_colocar(
                             image.id,
                             &image.bytes,
                             rect,
-                            placement.recorte,
+                            placement.crop,
                         );
                         // CRITICAL 1: `a=T` places at the CURSOR's position,
                         // and after `terminal.draw` the cursor is left
@@ -516,8 +516,8 @@ pub async fn run(
                                 .and_then(|()| out.flush());
                         match written {
                             Ok(()) => {
-                                crate::kitty_graphics::marcar_colocada(image.id);
-                                image.puesta_en = Some(placement);
+                                crate::kitty_graphics::mark_placed(image.id);
+                                image.placed_in = Some(placement);
                             }
                             Err(e) => {
                                 // MINOR 7: a failure midway through writing
@@ -535,7 +535,7 @@ pub async fn run(
                         }
                     }
                 }
-                _ => crate::kitty_graphics::borrar_colocada(terminal.backend_mut()),
+                _ => crate::kitty_graphics::delete_placed(terminal.backend_mut()),
             }
         }
         if app.quit {
@@ -853,7 +853,7 @@ pub async fn run(
                 }
             } => {
                 // A plugin panel's frame (phase 3). The slot is ALWAYS
-                // cleared, and `aterrizar` is the one that decides whether
+                // cleared, and `land` is the one that decides whether
                 // the response still counts, by comparing the signature:
                 // while it was in flight, the cursor may have moved and that
                 // frame describes a different screen.
@@ -861,12 +861,12 @@ pub async fn run(
                 // `select!` turn, so cloning the signature there was cloning
                 // it per poll rather than per response.
                 if let Some(pr) = work.panel_render.take() {
-                    crate::panelplugin::aterrizar(app, pr.slot, &pr.firma, res);
+                    crate::panelplugin::land(app, pr.slot, &pr.signature, res);
                 }
             }
-            (epoca, res) = async {
+            (epoch, res) = async {
                 match &mut work.log_tail {
-                    Some(pr) => (pr.epoca, (&mut pr.rx).await.ok()),
+                    Some(pr) => (pr.epoch, (&mut pr.rx).await.ok()),
                     None => std::future::pending().await,
                 }
             } => {
@@ -876,12 +876,12 @@ pub async fn run(
                 // cannot leave the probe switched off forever.
                 work.log_tail = None;
                 if let Some(res) = res {
-                    crate::logview::aterrizar_tail(app, epoca, res);
+                    crate::logview::land_tail(app, epoch, res);
                 }
             }
-            (epoca, res) = async {
+            (epoch, res) = async {
                 match &mut work.log_level {
-                    Some(pr) => (pr.epoca, (&mut pr.rx).await.ok()),
+                    Some(pr) => (pr.epoch, (&mut pr.rx).await.ok()),
                     None => std::future::pending().await,
                 }
             } => {
@@ -890,7 +890,7 @@ pub async fn run(
                 // and only ever goes up.
                 work.log_level = None;
                 if let Some(res) = res {
-                    crate::logview::aterrizar_nivel(app, epoca, res);
+                    crate::logview::land_level(app, epoch, res);
                 }
             }
             (generation, res) = async {
@@ -1237,12 +1237,12 @@ pub async fn run(
                 }
                 // `[ui] alt_menu` hot, with the same exemption. The terminal
                 // is NOT asked: what it answered at startup is read
-                // (`alt_menu::consultar_soporte`), because with the event
+                // (`alt_menu::query_support`), because with the event
                 // reader alive the question blocks for two seconds and says
                 // "no".
                 if let Err(e) = crate::alt_menu::set(
                     cfg.common.ui_alt_menu.unwrap_or(false),
-                    crate::alt_menu::soportado,
+                    crate::alt_menu::supported,
                     terminal.backend_mut(),
                 ) {
                     tracing::warn!(error = %e, "could not change the keyboard protocol");
@@ -1281,7 +1281,7 @@ pub async fn run(
                 // sweeping, transferring) live in `norte-frontend` (rule 7);
                 // here only the cell is resolved and applied.
                 if let Event::Mouse(me) = event {
-                    alt_solo.soltar();
+                    alt_solo.release();
                     mouse::on_mouse(
                         app,
                         backend,
@@ -1323,13 +1323,13 @@ pub async fn run(
                         .await;
                     }
                 } else if let Event::Key(key) = event
-                    && crate::alt_menu::es_modificador(&key)
+                    && crate::alt_menu::es_modifier(&key)
                 {
                     // A modifier alone is not a key for the keymap: it only
                     // feeds the gesture. With the menu open it folds it; with
                     // another overlay in front it does nothing, like F9
                     // there.
-                    if alt_solo.tecla(&key) && (app.menu.is_some() || !mouse::overlay_open(app)) {
+                    if alt_solo.key(&key) && (app.menu.is_some() || !mouse::overlay_open(app)) {
                         // Like F9 through `on_key`: a half-typed sequence
                         // (`g`…) is abandoned, or the next key after closing
                         // the menu would complete it.
@@ -1343,7 +1343,7 @@ pub async fn run(
                     // crossterm sends everything as `Press`.
                     && key.kind != crossterm::event::KeyEventKind::Release
                 {
-                    alt_solo.tecla(&key);
+                    alt_solo.key(&key);
                     on_key(
                         app,
                         backend,
@@ -1382,9 +1382,9 @@ pub async fn run(
         // layers, the three resolvers and the whole config, which are only
         // here. Five sites passing around twelve parameters to serve three
         // commands would be the worse wiring.
-        if let Some(nombre) = app.pending_profile.take() {
-            cambia_de_perfil(
-                &nombre,
+        if let Some(name) = app.pending_profile.take() {
+            switches_profile(
+                &name,
                 app,
                 backend,
                 &mut Console::new(&mut events, terminal),
@@ -1431,8 +1431,8 @@ pub async fn run(
 /// `apply_session`, which already knows how to read the layout under the
 /// profile's key.
 #[expect(clippy::too_many_arguments, reason = "loop wiring, not an API")]
-async fn cambia_de_perfil(
-    nombre: &std::ffi::OsStr,
+async fn switches_profile(
+    name: &std::ffi::OsStr,
     app: &mut App,
     backend: &Backend,
     events: &mut crate::console::Console<'_>,
@@ -1454,7 +1454,7 @@ async fn cambia_de_perfil(
     // 2 — the new layers. A name the resolver cannot hang leaves the layers
     // as they were, and then the reload would change nothing: the switch is
     // refused instead of pretending something happened.
-    let new_layers = norte_config::standard_layers_with_profile(Some(nombre));
+    let new_layers = norte_config::standard_layers_with_profile(Some(name));
     if !new_layers
         .dirs
         .iter()
@@ -1462,7 +1462,7 @@ async fn cambia_de_perfil(
     {
         app.message = Some(ta(
             "msg-profile-not-applied",
-            &[("profile", &nombre.to_string_lossy())],
+            &[("profile", &name.to_string_lossy())],
         ));
         return;
     }
@@ -1494,7 +1494,7 @@ async fn cambia_de_perfil(
     // 3 — the new profile is the active one, and its screen is mounted from
     // the same body: `apply_session` reads the layout under the profile's
     // key and stores the others'.
-    app.active_profile = Some(nombre.to_os_string());
+    app.active_profile = Some(name.to_os_string());
     // The vector it returns is discarded on purpose, same as
     // `apply_session_value` does at startup: whoever needs a listing is
     // resolved by `refresh_panes` right after, which is the same path the
@@ -1512,7 +1512,7 @@ async fn cambia_de_perfil(
     // from disk and what has already been seeded.
     let _ = app.seed_profile_start(&cfg.common.profile_start);
     let _ = crate::refresh::refresh_panes(app, backend, events).await;
-    let outside = crate::app::profile::no_aplicable_en_caliente(&before, &cfg.common);
+    let outside = crate::app::profile::not_hot_reloadable(&before, &cfg.common);
     // What the profile FILE carries and is not understood outranks the other
     // two messages: "could not apply hot" describes a limit of this process,
     // and this describes lines that are never going to do anything. Staying
@@ -1524,20 +1524,20 @@ async fn cambia_de_perfil(
         ta(
             "msg-profile-config-ignored",
             &[
-                ("profile", &nombre.to_string_lossy()),
+                ("profile", &name.to_string_lossy()),
                 ("n", &cfg.common.profile_warnings.len().to_string()),
             ],
         )
     } else if outside.is_empty() {
         ta(
             "msg-profile-switched",
-            &[("profile", &nombre.to_string_lossy())],
+            &[("profile", &name.to_string_lossy())],
         )
     } else {
         ta(
             "msg-profile-switched-partial",
             &[
-                ("profile", &nombre.to_string_lossy()),
+                ("profile", &name.to_string_lossy()),
                 ("keys", &outside.join(", ")),
             ],
         )

@@ -64,7 +64,7 @@ async fn fresh_with_trash() -> SftpProvider {
 // READ. Object's were in that same state when the bug #168 documents was
 // written.
 norte_vfs::provider_contract! {
-    mod sftp_inproc_papelera,
+    mod sftp_inproc_trash,
     factory: fresh_with_trash().await,
     root: SftpProvider::root(Authority::new("test:22").expect("valid authority")),
     hostile_names: hostile_names(),

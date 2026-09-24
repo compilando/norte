@@ -37,7 +37,7 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
     // it would take the chrome with it). With `full` at 40x10 that is 16
     // for the sidebar plus 30 for the right column out of 40 columns: both
     // browsers at zero.
-    if listado_usable(&out, tree, decls) || !tiene_listado(tree, decls) {
+    if listing_usable(&out, tree, decls) || !has_listing(tree, decls) {
         return out;
     }
     // The chrome is set aside FROM LARGEST TO SMALLEST and one at a time,
@@ -47,13 +47,13 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
     // frame, like the collapse (ADR 0058 D5).
     let mut pruned = tree.clone();
     let mut set_aside: Vec<SlotId> = Vec::new();
-    let mut short = ejes_cortos(&out, tree, decls);
+    let mut short = ejes_short(&out, tree, decls);
     // The largest ONE OF A SHORT AXIS, one per round. Candidates are
     // recomputed over the already-pruned tree — setting a child aside
     // moves its siblings' indices — and so are the axes: setting aside a
     // wide panel can leave the width resolved and the height not. Each
     // round removes one, so it terminates.
-    while let Some(chosen) = cromo_de_mayor_a_menor(&pruned, decls)
+    while let Some(chosen) = chrome_high_to_low(&pruned, decls)
         .into_iter()
         .find(|c| match c.eje {
             Dir::Horizontal => short.0,
@@ -67,7 +67,7 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
         set_aside.extend(chosen.slots.iter().copied());
         let mut attempt = Resolved::default();
         place(&pruned, area, decls, &mut attempt);
-        if listado_usable(&attempt, tree, decls) {
+        if listing_usable(&attempt, tree, decls) {
             for id in &set_aside {
                 attempt
                     .diagnostics
@@ -79,7 +79,7 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
             attempt.hidden.extend(set_aside);
             return attempt;
         }
-        short = ejes_cortos(&attempt, tree, decls);
+        short = ejes_short(&attempt, tree, decls);
     }
     // Setting aside all the chrome does not fix it either: the real layout
     // is kept, which at least respects what the user set. Swapping it for
@@ -102,26 +102,26 @@ pub fn resolve(area: Rect, tree: &Node, decls: &KindRegistry) -> Resolved {
 /// its size" — this says when the panel paints NOTHING.
 ///
 /// It is a CEILING and not the final number: the real floor comes from
-/// [`minimo_visible`], which starts from the kind's minimum. That way a
+/// [`min_visible`], which starts from the kind's minimum. That way a
 /// modest kind does not have to pretend it needs twelve columns, and a
 /// demanding one — the registry is open — does not drag the rescue into
 /// setting chrome aside chasing an impossible size.
-const CONTENIDO: (u16, u16) = (12, 4);
+const CONTENT: (u16, u16) = (12, 4);
 
-/// A kind's floor: its own minimum, CAPPED by [`CONTENIDO`].
+/// A kind's floor: its own minimum, CAPPED by [`CONTENT`].
 ///
 /// The cap is what stops a demanding kind — the registry is open and
 /// `insert` is public, so a plugin can declare `min = (40, 8)` — from
 /// making the rescue set chrome aside forever chasing a size the screen
 /// does not have. The kind's own minimum is what stops the opposite: calling
 /// something "usable" at 4 columns when it declared needing forty.
-fn minimo_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
+fn min_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
     let (mw, mh) = decls.min_of(kind);
-    (mw.min(CONTENIDO.0), mh.min(CONTENIDO.1))
+    (mw.min(CONTENT.0), mh.min(CONTENT.1))
 }
 
 /// Where a border pair starts and how long it is, on `dir`'s axis: from the
-/// start of what `izq` placed to the end of what `der` placed (the two
+/// start of what `left` placed to the end of what `right` placed (the two
 /// sides of [`Node::border_pair`]). `None` if either side has nothing
 /// placed.
 ///
@@ -130,7 +130,12 @@ fn minimo_visible(decls: &KindRegistry, kind: &super::KindId) -> (u16, u16) {
 /// fraction, and the border between a listing and the details did not
 /// follow the pointer.
 #[must_use]
-pub fn border_span(res: &Resolved, izq: &[SlotId], der: &[SlotId], dir: Dir) -> Option<(u16, u16)> {
+pub fn border_span(
+    res: &Resolved,
+    left: &[SlotId],
+    der: &[SlotId],
+    dir: Dir,
+) -> Option<(u16, u16)> {
     let span = |ids: &[SlotId]| {
         res.placements
             .iter()
@@ -141,12 +146,12 @@ pub fn border_span(res: &Resolved, izq: &[SlotId], der: &[SlotId], dir: Dir) -> 
             })
             .reduce(|(a0, a1), (b0, b1)| (a0.min(b0), a1.max(b1)))
     };
-    let (start, _) = span(izq)?;
+    let (start, _) = span(left)?;
     let (_, end) = span(der)?;
     Some((start, end.saturating_sub(start)))
 }
 
-/// Does `despues`'s layout still show everything `antes` showed? (ADR 0138)
+/// Does `after`'s layout still show everything `before` showed? (ADR 0138)
 ///
 /// Asked by whoever MOVES or FLIPS a panel before committing to the new
 /// tree: dropping a listing below another on a short terminal leaves it
@@ -157,23 +162,23 @@ pub fn border_span(res: &Resolved, izq: &[SlotId], der: &[SlotId], dir: Dir) -> 
 /// target, and with only one visible there is no other.
 #[must_use]
 pub fn keeps_on_screen(
-    antes: &Resolved,
-    despues: &Resolved,
-    arbol: &Node,
+    before: &Resolved,
+    after: &Resolved,
+    tree: &Node,
     tolerado: Option<SlotId>,
 ) -> bool {
     let placed = |r: &Resolved, id: SlotId| r.placements.iter().any(|(s, _)| *s == id);
-    let lost = antes
+    let lost = before
         .placements
         .iter()
-        .any(|(id, _)| Some(*id) != tolerado && !placed(despues, *id));
+        .any(|(id, _)| Some(*id) != tolerado && !placed(after, *id));
     let listings = |r: &Resolved| {
         r.placements
             .iter()
-            .filter(|(id, _)| arbol.kind_of(*id).is_some_and(|k| k.as_str() == "browser"))
+            .filter(|(id, _)| tree.kind_of(*id).is_some_and(|k| k.as_str() == "browser"))
             .count()
     };
-    !lost && listings(despues) >= listings(antes).min(2)
+    !lost && listings(after) >= listings(before).min(2)
 }
 
 /// Would TWO slots of `kind` fit if `rect` were split along `dir`?
@@ -200,10 +205,10 @@ pub fn has_room_to_split(rect: Rect, dir: Dir, kind: &super::KindId, decls: &Kin
 
 /// Is there a slot in `out` that can hold role `active` and has room to
 /// show something?
-fn listado_usable(out: &Resolved, tree: &Node, decls: &KindRegistry) -> bool {
+fn listing_usable(out: &Resolved, tree: &Node, decls: &KindRegistry) -> bool {
     out.placements.iter().any(|(id, re)| {
         tree.kind_of(*id).is_some_and(|k| {
-            let (mw, mh) = minimo_visible(decls, k);
+            let (mw, mh) = min_visible(decls, k);
             decls.holds_role(k, RoleId::Active) && re.width >= mw && re.height >= mh
         })
     })
@@ -216,7 +221,7 @@ fn listado_usable(out: &Resolved, tree: &Node, decls: &KindRegistry) -> bool {
 /// setting it aside does not fix a short width. Without this, a `full` at
 /// 80x10 — where only HEIGHT is missing — also lost the sidebar and the
 /// right column, which were not in the way.
-fn ejes_cortos(out: &Resolved, tree: &Node, decls: &KindRegistry) -> (bool, bool) {
+fn ejes_short(out: &Resolved, tree: &Node, decls: &KindRegistry) -> (bool, bool) {
     // An axis is attacked if it is short for ANY listing, not if it is
     // short for all of them.
     //
@@ -232,7 +237,7 @@ fn ejes_cortos(out: &Resolved, tree: &Node, decls: &KindRegistry) -> (bool, bool
             let k = tree.kind_of(*id)?;
             decls
                 .holds_role(k, RoleId::Active)
-                .then(|| (minimo_visible(decls, k), re))
+                .then(|| (min_visible(decls, k), re))
         })
     };
     let mut missing = (false, false);
@@ -251,11 +256,11 @@ fn ejes_cortos(out: &Resolved, tree: &Node, decls: &KindRegistry) -> (bool, bool
 ///
 /// A layout that does not — a chrome-only screen — is legal, and for it
 /// there is nothing to rescue: it is laid out and painted.
-fn tiene_listado(node: &Node, decls: &KindRegistry) -> bool {
+fn has_listing(node: &Node, decls: &KindRegistry) -> bool {
     match node {
         Node::Slot { kind, .. } => decls.holds_role(kind, RoleId::Active),
         Node::Split { children, .. } | Node::Tabs { children, .. } => {
-            children.iter().any(|c| tiene_listado(c, decls))
+            children.iter().any(|c| has_listing(c, decls))
         }
     }
 }
@@ -270,14 +275,14 @@ fn tiene_listado(node: &Node, decls: &KindRegistry) -> bool {
 ///
 /// A child that is already chrome is not entered: it is set aside whole,
 /// and its inner fixed ones are not separate decisions.
-fn cromo_de_mayor_a_menor(node: &Node, decls: &KindRegistry) -> Vec<Cromo> {
+fn chrome_high_to_low(node: &Node, decls: &KindRegistry) -> Vec<Chrome> {
     let mut found = Vec::new();
-    recoge_cromo(node, decls, &[], &mut found);
+    collects_chrome(node, decls, &[], &mut found);
     // Ties resolved by id: a frame's layout cannot depend on the order a
     // `sort_unstable` leaves two panes of the same size in.
     found.sort_by(|a, b| {
-        b.declarado
-            .cmp(&a.declarado)
+        b.declared
+            .cmp(&a.declared)
             .then_with(|| a.slots.cmp(&b.slots))
     });
     found
@@ -285,9 +290,9 @@ fn cromo_de_mayor_a_menor(node: &Node, decls: &KindRegistry) -> Vec<Cromo> {
 
 /// A docked panel that can be set aside, and which axis it eats room on.
 #[derive(Debug, Clone)]
-struct Cromo {
+struct Chrome {
     /// The cells it declares on its parent's axis.
-    declarado: u16,
+    declared: u16,
     /// The axis of the `Split` that contains it: the room it gives back
     /// when set aside.
     eje: Dir,
@@ -306,7 +311,7 @@ struct Cromo {
 
 /// Accumulates `node`'s chrome into `found`, carrying the path from the
 /// root.
-fn recoge_cromo(node: &Node, decls: &KindRegistry, aqui: &[usize], found: &mut Vec<Cromo>) {
+fn collects_chrome(node: &Node, decls: &KindRegistry, here: &[usize], found: &mut Vec<Chrome>) {
     let (Node::Split { children, .. } | Node::Tabs { children, .. }) = node else {
         return;
     };
@@ -318,16 +323,16 @@ fn recoge_cromo(node: &Node, decls: &KindRegistry, aqui: &[usize], found: &mut V
         Dir::Horizontal
     };
     for (i, c) in children.iter().enumerate() {
-        let mut camino = aqui.to_vec();
+        let mut camino = here.to_vec();
         camino.push(i);
-        match (sizes_get(node, i), tiene_listado(c, decls)) {
-            (Some(Size::Fixed(n)), false) => found.push(Cromo {
-                declarado: n,
+        match (sizes_get(node, i), has_listing(c, decls)) {
+            (Some(Size::Fixed(n)), false) => found.push(Chrome {
+                declared: n,
                 eje,
                 camino,
                 slots: c.slot_ids(),
             }),
-            _ => recoge_cromo(c, decls, &camino, found),
+            _ => collects_chrome(c, decls, &camino, found),
         }
     }
 }
@@ -575,7 +580,7 @@ fn place(node: &Node, area: Rect, decls: &KindRegistry, out: &mut Resolved) {
                 });
                 0
             };
-            solo_uno(children, idx, area, decls, out);
+            solo_one(children, idx, area, decls, out);
         }
         Node::Split {
             dir,
@@ -627,7 +632,7 @@ fn place(node: &Node, area: Rect, decls: &KindRegistry, out: &mut Resolved) {
                 // does not fit either, it will collapse in turn: that is
                 // how it propagates upward without anyone having to count
                 // levels.
-                solo_uno(children, 0, area, decls, out);
+                solo_one(children, 0, area, decls, out);
             }
         }
     }
@@ -635,7 +640,7 @@ fn place(node: &Node, area: Rect, decls: &KindRegistry, out: &mut Resolved) {
 
 /// Places child `idx` over the whole area and sends the rest's slots to
 /// `hidden` — which is the suspension signal, not a painting detail.
-fn solo_uno(children: &[Node], idx: usize, area: Rect, decls: &KindRegistry, out: &mut Resolved) {
+fn solo_one(children: &[Node], idx: usize, area: Rect, decls: &KindRegistry, out: &mut Resolved) {
     for (i, c) in children.iter().enumerate() {
         if i == idx {
             place(c, area, decls, out);
@@ -657,7 +662,7 @@ mod tests {
     fn r(x: u16, y: u16, w: u16, h: u16) -> Rect {
         Rect::new(x, y, w, h)
     }
-    fn dos(a: Node, b: Node, dir: Dir) -> Node {
+    fn two(a: Node, b: Node, dir: Dir) -> Node {
         Node::Split {
             dir,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
@@ -672,9 +677,9 @@ mod tests {
     /// expressed in the new model, and being expressible is the proof that
     /// the model is well built.
     #[test]
-    fn dos_browsers_al_cincuenta_por_ciento() {
-        let arbol = dos(browser(1), browser(2), Dir::Horizontal);
-        let out = resolve(r(0, 0, 100, 30), &arbol, &reg());
+    fn two_browsers_at_fifty_percent() {
+        let tree = two(browser(1), browser(2), Dir::Horizontal);
+        let out = resolve(r(0, 0, 100, 30), &tree, &reg());
         assert_eq!(
             out.placements,
             vec![(SlotId(1), r(0, 0, 50, 30)), (SlotId(2), r(50, 0, 50, 30))]
@@ -690,8 +695,8 @@ mod tests {
     /// fixed ones does not collapse. Now it takes its minimum (20) and the
     /// other weights give up the difference in proportion.
     #[test]
-    fn un_peso_no_baja_de_su_minimo_si_hay_sitio() {
-        let arbol = Node::Split {
+    fn a_weight_does_not_go_below_its_minimum_if_there_is_room() {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             children: vec![
                 Node::slot(SlotId(5), KindId::new("places")),
@@ -706,37 +711,37 @@ mod tests {
                 Size::Weight(1),
             ],
         };
-        let out = resolve(r(0, 0, 200, 30), &arbol, &reg());
-        let ancho = |id: u32| {
+        let out = resolve(r(0, 0, 200, 30), &tree, &reg());
+        let width = |id: u32| {
             out.placements
                 .iter()
                 .find(|(s, _)| *s == SlotId(id))
                 .map(|(_, re)| re.width)
                 .expect("placed")
         };
-        assert_eq!(ancho(9), 20, "the viewer, at its minimum");
-        assert_eq!(ancho(5), 16, "the fixed one does not give way");
-        assert_eq!(ancho(1) + ancho(2) + 20 + 16, 200, "nothing is lost");
-        assert!(ancho(2) > ancho(1), "the others keep their proportion");
+        assert_eq!(width(9), 20, "the viewer, at its minimum");
+        assert_eq!(width(5), 16, "the fixed one does not give way");
+        assert_eq!(width(1) + width(2) + 20 + 16, 200, "nothing is lost");
+        assert!(width(2) > width(1), "the others keep their proportion");
         // With no room for all the minimums, layout is as usual.
-        let out = resolve(r(0, 0, 60, 30), &arbol, &reg());
+        let out = resolve(r(0, 0, 60, 30), &tree, &reg());
         assert!(out.placements.len() + out.hidden.len() >= 4);
     }
 
     /// An odd width cannot lose a column: the remainder goes to the last one.
     #[test]
-    fn un_ancho_impar_no_pierde_una_columna() {
-        let arbol = dos(browser(1), browser(2), Dir::Horizontal);
-        let out = resolve(r(0, 0, 101, 30), &arbol, &reg());
-        let ancho: u16 = out.placements.iter().map(|(_, re)| re.width).sum();
-        assert_eq!(ancho, 101, "a column was lost in the layout");
+    fn an_odd_width_does_not_lose_a_column() {
+        let tree = two(browser(1), browser(2), Dir::Horizontal);
+        let out = resolve(r(0, 0, 101, 30), &tree, &reg());
+        let width: u16 = out.placements.iter().map(|(_, re)| re.width).sum();
+        assert_eq!(width, 101, "a column was lost in the layout");
     }
 
     /// A VERTICAL cut lays out the height, and the `y`s chain up.
     #[test]
-    fn un_corte_vertical_reparte_el_alto() {
-        let arbol = dos(browser(1), browser(2), Dir::Vertical);
-        let out = resolve(r(0, 0, 40, 20), &arbol, &reg());
+    fn a_vertical_cut_divides_the_height() {
+        let tree = two(browser(1), browser(2), Dir::Vertical);
+        let out = resolve(r(0, 0, 40, 20), &tree, &reg());
         assert_eq!(
             out.placements,
             vec![(SlotId(1), r(0, 0, 40, 10)), (SlotId(2), r(0, 10, 40, 10))]
@@ -746,12 +751,12 @@ mod tests {
     /// Only the ACTIVE tab is placed; the others go to `hidden`, which is
     /// the suspension signal (out go watches, probes and plugin columns).
     #[test]
-    fn una_pestana_inactiva_va_a_hidden_no_a_placements() {
-        let arbol = Node::Tabs {
+    fn an_inactive_tab_goes_to_hidden_not_to_placements() {
+        let tree = Node::Tabs {
             active: 1,
             children: vec![browser(1), browser(2)],
         };
-        let out = resolve(r(0, 0, 100, 30), &arbol, &reg());
+        let out = resolve(r(0, 0, 100, 30), &tree, &reg());
         assert_eq!(out.placements, vec![(SlotId(2), r(0, 0, 100, 30))]);
         assert_eq!(out.hidden, vec![SlotId(1)]);
         assert_eq!(
@@ -768,7 +773,7 @@ mod tests {
     /// The same count the collapse does — the KIND's minimum, not the
     /// content one — so the two answers cannot drift apart.
     #[test]
-    fn has_room_to_split_dice_que_no_cuando_el_reparto_colapsaria() {
+    fn has_room_to_split_says_no_when_the_split_would_collapse() {
         let k = KindId::browser();
         assert!(has_room_to_split(
             r(0, 0, 40, 30),
@@ -804,31 +809,31 @@ mod tests {
     /// leaves one visible, and with two visible before, that is also
     /// refused.
     #[test]
-    fn mover_no_puede_dejar_nada_fuera_de_la_vista() {
+    fn moving_cannot_leave_anything_outside_the_view() {
         use crate::layout::DropZone;
         let b = |id| Node::slot(SlotId(id), KindId::browser());
-        let arbol = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
-        let apilado = arbol.move_slot(SlotId(1), SlotId(2), DropZone::Bottom);
-        let juntos = arbol.move_slot(SlotId(1), SlotId(2), DropZone::Center);
-        let bajo = r(0, 0, 100, 8);
+        let tree = Node::split(Dir::Horizontal, vec![b(1), b(2)]);
+        let apilado = tree.move_slot(SlotId(1), SlotId(2), DropZone::Bottom);
+        let together = tree.move_slot(SlotId(1), SlotId(2), DropZone::Center);
+        let below = r(0, 0, 100, 8);
         let alto = r(0, 0, 100, 40);
-        let ok = |area, nuevo: &Node, tolerado| {
+        let ok = |area, new: &Node, tolerado| {
             keeps_on_screen(
-                &resolve(area, &arbol, &reg()),
-                &resolve(area, nuevo, &reg()),
-                nuevo,
+                &resolve(area, &tree, &reg()),
+                &resolve(area, new, &reg()),
+                new,
                 tolerado,
             )
         };
-        assert!(!ok(bajo, &apilado, None), "at 8 rows one gets hidden");
+        assert!(!ok(below, &apilado, None), "at 8 rows one gets hidden");
         assert!(ok(alto, &apilado, None));
-        assert!(!ok(alto, &juntos, Some(SlotId(2))), "only one visible");
+        assert!(!ok(alto, &together, Some(SlotId(2))), "only one visible");
     }
 
     /// And what it says matches what layout does: if it says yes, both
     /// slots are placed; if it says no, the `Split` collapses.
     #[test]
-    fn has_room_to_split_cuadra_con_el_colapso() {
+    fn has_room_to_split_matches_the_collapse() {
         let k = KindId::browser();
         for (w, h, dir) in [
             (40, 30, Dir::Horizontal),
@@ -837,8 +842,8 @@ mod tests {
             (30, 9, Dir::Vertical),
         ] {
             let area = r(0, 0, w, h);
-            let arbol = dos(browser(1), browser(2), dir);
-            let placed = resolve(area, &arbol, &reg()).placements.len();
+            let tree = two(browser(1), browser(2), dir);
+            let placed = resolve(area, &tree, &reg()).placements.len();
             assert_eq!(
                 has_room_to_split(area, dir, &k, &reg()),
                 placed == 2,
@@ -850,26 +855,26 @@ mod tests {
     /// The collapse: two browsers of minimum 20 do not fit in 30 columns, so
     /// the `Split` degrades to `Tabs` FOR THIS FRAME. The tree is not touched.
     #[test]
-    fn un_split_que_no_cabe_colapsa_a_pestanas_sin_tocar_el_arbol() {
-        let arbol = dos(browser(1), browser(2), Dir::Horizontal);
-        let antes = arbol.clone();
-        let out = resolve(r(0, 0, 30, 30), &arbol, &reg());
+    fn a_split_that_does_not_fit_collapses_to_tabs_without_touching_the_tree() {
+        let tree = two(browser(1), browser(2), Dir::Horizontal);
+        let before = tree.clone();
+        let out = resolve(r(0, 0, 30, 30), &tree, &reg());
         assert_eq!(out.placements.len(), 1, "only one fits");
         assert_eq!(out.hidden, vec![SlotId(2)]);
-        assert_eq!(arbol, antes, "resolve CANNOT mutate the tree");
+        assert_eq!(tree, before, "resolve CANNOT mutate the tree");
     }
 
     /// The collapse PROPAGATES: if after degrading one level it still does
     /// not fit, it degrades the one above. Without this, a very narrow
     /// window paints two-column boxes instead of a usable screen.
     #[test]
-    fn el_colapso_propaga_hacia_arriba() {
-        let arbol = dos(
-            dos(browser(1), browser(2), Dir::Horizontal),
+    fn the_collapse_propagates_upward() {
+        let tree = two(
+            two(browser(1), browser(2), Dir::Horizontal),
             browser(3),
             Dir::Horizontal,
         );
-        let out = resolve(r(0, 0, 30, 30), &arbol, &reg());
+        let out = resolve(r(0, 0, 30, 30), &tree, &reg());
         assert_eq!(out.placements.len(), 1);
         assert_eq!(out.placements[0].1, r(0, 0, 30, 30), "takes up everything");
     }
@@ -878,9 +883,9 @@ mod tests {
     /// blank screen — a user with a tiny terminal sees something and a
     /// message, not an emptiness that looks like a hang.
     #[test]
-    fn cuando_no_cabe_nada_se_pinta_uno_igualmente() {
-        let arbol = browser(1);
-        let out = resolve(r(0, 0, 6, 2), &arbol, &reg());
+    fn when_nothing_fits_one_is_painted_anyway() {
+        let tree = browser(1);
+        let out = resolve(r(0, 0, 6, 2), &tree, &reg());
         assert_eq!(out.placements, vec![(SlotId(1), r(0, 0, 6, 2))]);
         assert!(out.hidden.is_empty());
     }
@@ -889,38 +894,38 @@ mod tests {
     /// name) but does not enter the focus order: tabbing does not go to
     /// something nobody knows how to paint.
     #[test]
-    fn un_kind_desconocido_se_coloca_pero_no_toma_foco() {
+    fn an_unknown_kind_is_placed_but_does_not_take_focus() {
         // A name that will NEVER be registered: this used to say
         // `terminal`, and the day the terminal panel entered the registry
         // this test would have stopped testing an unknown kind without
         // saying so.
-        let arbol = Node::slot(SlotId(9), KindId::new("un-kind-que-no-existe"));
-        let out = resolve(r(0, 0, 100, 30), &arbol, &reg());
+        let tree = Node::slot(SlotId(9), KindId::new("un-kind-que-no-existe"));
+        let out = resolve(r(0, 0, 100, 30), &tree, &reg());
         assert_eq!(out.placements.len(), 1);
         assert!(out.focus_order.is_empty());
     }
 
     /// `tasks` se coloca pero no toma foco: se mira, no se enfoca.
     #[test]
-    fn tasks_se_pinta_pero_no_se_tabula() {
-        let arbol = dos(
+    fn tasks_is_painted_but_not_tabbed_to() {
+        let tree = two(
             browser(1),
             Node::slot(SlotId(2), KindId::new("tasks")),
             Dir::Vertical,
         );
-        let out = resolve(r(0, 0, 100, 30), &arbol, &reg());
+        let out = resolve(r(0, 0, 100, 30), &tree, &reg());
         assert_eq!(out.placements.len(), 2);
         assert_eq!(out.focus_order, vec![SlotId(1)]);
     }
 
     /// `active` fuera de rango se clampa y se CUENTA; no es un error duro.
     #[test]
-    fn un_active_fuera_de_rango_se_clampa_con_diagnostico() {
-        let arbol = Node::Tabs {
+    fn an_out_of_range_active_is_clamped_with_a_diagnostic() {
+        let tree = Node::Tabs {
             active: 7,
             children: vec![browser(1)],
         };
-        let out = resolve(r(0, 0, 100, 30), &arbol, &reg());
+        let out = resolve(r(0, 0, 100, 30), &tree, &reg());
         assert_eq!(out.placements.len(), 1);
         assert!(
             out.diagnostics
@@ -931,13 +936,13 @@ mod tests {
 
     /// Un peso de cero no reparte nada: se sube a uno y se cuenta.
     #[test]
-    fn un_peso_de_cero_se_sube_a_uno_con_diagnostico() {
-        let arbol = Node::Split {
+    fn a_weight_of_zero_is_raised_to_one_with_a_diagnostic() {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Weight(0), Size::Weight(1)],
             children: vec![browser(1), browser(2)],
         };
-        let out = resolve(r(0, 0, 100, 30), &arbol, &reg());
+        let out = resolve(r(0, 0, 100, 30), &tree, &reg());
         assert_eq!(
             out.placements.len(),
             2,
@@ -952,13 +957,13 @@ mod tests {
 
     /// A `Fixed` child charges what is its and `Weight`s share the rest.
     #[test]
-    fn un_fijo_se_lleva_lo_suyo_y_los_pesos_el_resto() {
-        let arbol = Node::Split {
+    fn a_fixed_one_takes_its_share_and_the_weighted_ones_take_the_rest() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(4), Size::Weight(1)],
             children: vec![browser(1), browser(2), browser(3)],
         };
-        let out = resolve(r(0, 0, 40, 24), &arbol, &reg());
+        let out = resolve(r(0, 0, 40, 24), &tree, &reg());
         let heights: Vec<u16> = out.placements.iter().map(|(_, re)| re.height).collect();
         assert_eq!(
             heights,
@@ -971,13 +976,13 @@ mod tests {
     /// when a proportional layout collapses, it does not override an
     /// explicit order.
     #[test]
-    fn un_fijo_por_debajo_del_minimo_de_su_kind_se_respeta() {
-        let arbol = Node::Split {
+    fn a_fixed_size_below_its_kinds_minimum_is_respected() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
             children: vec![browser(1), browser(2)],
         };
-        let out = resolve(r(0, 0, 40, 24), &arbol, &reg());
+        let out = resolve(r(0, 0, 40, 24), &tree, &reg());
         assert_eq!(
             out.placements.len(),
             2,
@@ -993,13 +998,13 @@ mod tests {
     /// weighted ones are left with nothing. It is what makes a tiny
     /// terminal keep painting the status bar instead of nothing.
     #[test]
-    fn si_los_fijos_no_caben_se_recortan_y_los_pesos_se_quedan_sin_nada() {
-        let arbol = Node::Split {
+    fn if_the_fixed_ones_do_not_fit_they_are_trimmed_and_the_weighted_ones_get_nothing() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Fixed(3), Size::Fixed(9), Size::Weight(1)],
             children: vec![browser(1), browser(2), browser(3)],
         };
-        let out = resolve(r(0, 0, 40, 5), &arbol, &reg());
+        let out = resolve(r(0, 0, 40, 5), &tree, &reg());
         let heights: Vec<u16> = out.placements.iter().map(|(_, re)| re.height).collect();
         assert_eq!(
             heights,
@@ -1013,13 +1018,13 @@ mod tests {
     /// with it. With `orthodox` that would mean losing the status bar on a
     /// short terminal.
     #[test]
-    fn un_split_con_un_hijo_fijo_no_colapsa() {
-        let arbol = Node::Split {
+    fn a_split_with_a_fixed_child_does_not_collapse() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
             children: vec![browser(1), Node::slot(SlotId(2), KindId::new("status"))],
         };
-        let out = resolve(r(0, 0, 40, 2), &arbol, &reg());
+        let out = resolve(r(0, 0, 40, 2), &tree, &reg());
         assert_eq!(out.placements.len(), 2, "the status bar survives");
         assert_eq!(out.placements[1].1.height, 1);
     }
@@ -1033,7 +1038,7 @@ mod tests {
     /// the bar (1) left the main row at a single line. What remained on
     /// screen was three chrome headers and not one file name.
     #[test]
-    fn el_cromo_se_aparta_antes_de_dejar_la_pantalla_sin_listado() {
+    fn the_chrome_is_removed_before_leaving_the_screen_without_a_listing() {
         let derecha = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
@@ -1042,7 +1047,7 @@ mod tests {
                 Node::slot(SlotId(8), KindId::new("metadata")),
             ],
         };
-        let fila = Node::Split {
+        let row = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![
                 Size::Fixed(16),
@@ -1057,16 +1062,16 @@ mod tests {
                 derecha,
             ],
         };
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(8), Size::Fixed(1)],
             children: vec![
-                fila,
+                row,
                 Node::slot(SlotId(7), KindId::new("processes")),
                 Node::slot(SlotId(4), KindId::new("status")),
             ],
         };
-        let out = resolve(r(0, 0, 40, 10), &arbol, &reg());
+        let out = resolve(r(0, 0, 40, 10), &tree, &reg());
 
         let listings: Vec<&(SlotId, Rect)> = out
             .placements
@@ -1115,8 +1120,8 @@ mod tests {
     /// and the rescue was never attempted. It is measured over the BEST
     /// candidate, which is what the screen being usable depends on.
     #[test]
-    fn dos_listados_cojos_de_ejes_distintos_no_hacen_una_pantalla_buena() {
-        let arbol = Node::Split {
+    fn two_lame_listings_of_different_axes_do_not_make_a_good_screen() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(9)],
             children: vec![
@@ -1128,7 +1133,7 @@ mod tests {
                 },
             ],
         };
-        let out = resolve(r(0, 0, 32, 10), &arbol, &reg());
+        let out = resolve(r(0, 0, 32, 10), &tree, &reg());
         assert!(
             out.placements
                 .iter()
@@ -1147,8 +1152,8 @@ mod tests {
     /// shifted all the ones after: the next one was painted and the one
     /// the user had open was suspended.
     #[test]
-    fn apartar_una_pestana_no_cambia_la_que_se_esta_mirando() {
-        let arbol = Node::Split {
+    fn detaching_a_tab_does_not_change_the_one_being_viewed() {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Fixed(30), Size::Weight(1)],
             children: vec![
@@ -1159,7 +1164,7 @@ mod tests {
                 },
             ],
         };
-        let out = resolve(r(0, 0, 34, 10), &arbol, &reg());
+        let out = resolve(r(0, 0, 34, 10), &tree, &reg());
         assert!(
             out.placements.iter().any(|(id, _)| *id == SlotId(2)),
             "tab 2 is being looked at, and it is the one that has to remain: {:?}",
@@ -1172,7 +1177,7 @@ mod tests {
     /// chasing a size the screen does not have: the floor is its CAPPED
     /// minimum.
     #[test]
-    fn un_kind_exigente_no_vacia_la_pantalla_de_cromo() {
+    fn a_demanding_kind_does_not_empty_the_screen_of_chrome() {
         let mut reg = reg();
         reg.insert(crate::layout::KindDecl {
             id: KindId::new("exigente"),
@@ -1182,7 +1187,7 @@ mod tests {
             multi: false,
             roles: &[RoleId::Active],
         });
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![Size::Fixed(10), Size::Weight(1)],
             children: vec![
@@ -1190,7 +1195,7 @@ mod tests {
                 Node::slot(SlotId(1), KindId::new("exigente")),
             ],
         };
-        let out = resolve(r(0, 0, 40, 10), &arbol, &reg);
+        let out = resolve(r(0, 0, 40, 10), &tree, &reg);
         assert!(
             out.placements.iter().any(|(id, _)| *id == SlotId(5)),
             "the sidebar fit: 30 columns are enough to show something"
@@ -1207,8 +1212,8 @@ mod tests {
     /// partition property caught it; the minimal case is pinned in
     /// `proptest-regressions/layout/resolve.txt` and this names it.
     #[test]
-    fn con_ids_repetidos_apartar_cromo_no_pierde_un_hueco() {
-        let arbol = Node::Split {
+    fn with_repeated_ids_detaching_chrome_does_not_lose_a_slot() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
             children: vec![
@@ -1223,11 +1228,11 @@ mod tests {
                 },
             ],
         };
-        let out = resolve(r(0, 0, 4, 4), &arbol, &reg());
+        let out = resolve(r(0, 0, 4, 4), &tree, &reg());
         let mut seen: Vec<SlotId> = out.placements.iter().map(|(id, _)| *id).collect();
         seen.extend(out.hidden.iter().copied());
         seen.sort_unstable();
-        let mut all = arbol.slot_ids();
+        let mut all = tree.slot_ids();
         all.sort_unstable();
         assert_eq!(seen, all, "a slot was left unpainted and unsuspended");
     }
@@ -1237,7 +1242,7 @@ mod tests {
     /// and the right column, and the only thing in the way is the
     /// processes panel's eight rows.
     #[test]
-    fn solo_se_aparta_el_cromo_del_eje_que_falta() {
+    fn only_the_chrome_of_the_missing_axis_is_set_aside() {
         let derecha = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Weight(1)],
@@ -1246,7 +1251,7 @@ mod tests {
                 Node::slot(SlotId(8), KindId::new("metadata")),
             ],
         };
-        let fila = Node::Split {
+        let row = Node::Split {
             dir: Dir::Horizontal,
             sizes: vec![
                 Size::Fixed(16),
@@ -1261,16 +1266,16 @@ mod tests {
                 derecha,
             ],
         };
-        let arbol = Node::Split {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(8), Size::Fixed(1)],
             children: vec![
-                fila,
+                row,
                 Node::slot(SlotId(7), KindId::new("processes")),
                 Node::slot(SlotId(4), KindId::new("status")),
             ],
         };
-        let out = resolve(r(0, 0, 80, 10), &arbol, &reg());
+        let out = resolve(r(0, 0, 80, 10), &tree, &reg());
         // Set aside: ONLY the processes panel, which is the only chrome on
         // the missing axis. The sidebar and the right column are WIDTH
         // chrome and there is room to spare there, so they are not touched.
@@ -1308,13 +1313,13 @@ mod tests {
     /// stays. It is the other half of #229, and what stops a tiny terminal
     /// from losing chrome for nothing in return.
     #[test]
-    fn el_cromo_no_se_aparta_si_apartarlo_no_arregla_nada() {
-        let arbol = Node::Split {
+    fn the_chrome_is_not_removed_if_removing_it_fixes_nothing() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Fixed(1)],
             children: vec![browser(1), Node::slot(SlotId(2), KindId::new("status"))],
         };
-        let out = resolve(r(0, 0, 40, 2), &arbol, &reg());
+        let out = resolve(r(0, 0, 40, 2), &tree, &reg());
         assert_eq!(out.placements.len(), 2, "the status bar survives");
         assert!(out.hidden.is_empty());
     }
@@ -1322,16 +1327,16 @@ mod tests {
     /// A FIXED child that is itself a listing is not chrome: setting it
     /// aside would be taking away one screen to give it to another. The
     /// table in
-    /// [`si_los_fijos_no_caben_se_recortan_y_los_pesos_se_quedan_sin_nada`]
+    /// [`if_the_fixed_ones_do_not_fit_they_are_trimmed_and_the_weighted_ones_get_nothing`]
     /// still holds as is, and this names it.
     #[test]
-    fn un_fijo_que_es_un_listado_no_es_cromo() {
-        let arbol = Node::Split {
+    fn a_fixed_slot_that_is_a_listing_is_not_chrome() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Fixed(3), Size::Fixed(9), Size::Weight(1)],
             children: vec![browser(1), browser(2), browser(3)],
         };
-        let out = resolve(r(0, 0, 40, 5), &arbol, &reg());
+        let out = resolve(r(0, 0, 40, 5), &tree, &reg());
         let heights: Vec<u16> = out.placements.iter().map(|(_, re)| re.height).collect();
         assert_eq!(
             heights,
@@ -1345,20 +1350,20 @@ mod tests {
     /// `substitute_auto` replaces it — but a layout pass is no place to
     /// blow up.
     #[test]
-    fn un_auto_sin_sustituir_cuenta_como_cero() {
-        let arbol = Node::Split {
+    fn an_unsubstituted_auto_counts_as_zero() {
+        let tree = Node::Split {
             dir: Dir::Vertical,
             sizes: vec![Size::Weight(1), Size::Auto],
             children: vec![browser(1), browser(2)],
         };
-        let out = resolve(r(0, 0, 40, 24), &arbol, &reg());
+        let out = resolve(r(0, 0, 40, 24), &tree, &reg());
         let heights: Vec<u16> = out.placements.iter().map(|(_, re)| re.height).collect();
         assert_eq!(heights, vec![24, 0]);
     }
 
     // --- properties ---
 
-    fn se_solapan(a: Rect, b: Rect) -> bool {
+    fn they_overlap(a: Rect, b: Rect) -> bool {
         a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
     }
 
@@ -1373,13 +1378,13 @@ mod tests {
         ]
     }
 
-    /// Like [`arbol_arbitrario`] but with no `Fixed` or `Auto`.
-    fn arbol_ponderado() -> impl Strategy<Value = Node> {
+    /// Like [`tree_arbitrario`] but with no `Fixed` or `Auto`.
+    fn tree_ponderado() -> impl Strategy<Value = Node> {
         let kinds = prop::sample::select(vec![
             "browser", "tasks", "viewer", "compare", "sync", "terminal",
         ]);
-        let hoja = (0u32..64, kinds).prop_map(|(id, k)| Node::slot(SlotId(id), KindId::new(k)));
-        hoja.prop_recursive(3, 24, 4, |inner| {
+        let sheet = (0u32..64, kinds).prop_map(|(id, k)| Node::slot(SlotId(id), KindId::new(k)));
+        sheet.prop_recursive(3, 24, 4, |inner| {
             prop_oneof![
                 (prop::collection::vec(inner.clone(), 1..4), any::<bool>()).prop_map(
                     |(children, horiz)| Node::split(
@@ -1397,12 +1402,12 @@ mod tests {
         })
     }
 
-    fn arbol_arbitrario() -> impl Strategy<Value = Node> {
+    fn tree_arbitrario() -> impl Strategy<Value = Node> {
         let kinds = prop::sample::select(vec![
             "browser", "tasks", "viewer", "compare", "sync", "terminal",
         ]);
-        let hoja = (0u32..64, kinds).prop_map(|(id, k)| Node::slot(SlotId(id), KindId::new(k)));
-        hoja.prop_recursive(3, 24, 4, |inner| {
+        let sheet = (0u32..64, kinds).prop_map(|(id, k)| Node::slot(SlotId(id), KindId::new(k)));
+        sheet.prop_recursive(3, 24, 4, |inner| {
             prop_oneof![
                 (
                     prop::collection::vec(inner.clone(), 1..4),
@@ -1432,14 +1437,14 @@ mod tests {
         /// TUI an overlap does not look like a layout bug: it looks like
         /// corrupted text, and gets chased in the wrong place.
         #[test]
-        fn las_colocaciones_ni_se_solapan_ni_se_salen(
-            arbol in arbol_arbitrario(), w in 1u16..200, h in 1u16..80
+        fn placements_neither_overlap_nor_spill_out(
+            tree in tree_arbitrario(), w in 1u16..200, h in 1u16..80
         ) {
-            let out = resolve(Rect::new(0, 0, w, h), &arbol, &reg());
+            let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
             for (i, (_, a)) in out.placements.iter().enumerate() {
                 prop_assert!(a.x + a.width <= w && a.y + a.height <= h);
                 for (_, b) in out.placements.iter().skip(i + 1) {
-                    prop_assert!(!se_solapan(*a, *b), "{a:?} overlaps {b:?}");
+                    prop_assert!(!they_overlap(*a, *b), "{a:?} overlaps {b:?}");
                 }
             }
         }
@@ -1452,16 +1457,16 @@ mod tests {
         /// minimum on purpose — the user asked for it — and that has its
         /// own table tests.
         #[test]
-        fn todo_lo_colocado_cumple_su_minimo(
-            arbol in arbol_ponderado(), w in 1u16..200, h in 1u16..80
+        fn everything_placed_meets_its_minimum(
+            tree in tree_ponderado(), w in 1u16..200, h in 1u16..80
         ) {
             // With repeated ids `kind_of` returns the FIRST one's, so the
             // minimum we would compare against might not be this slot's.
-            prop_assume!(arbol.duplicate_slot_ids().is_empty());
-            let out = resolve(Rect::new(0, 0, w, h), &arbol, &reg());
+            prop_assume!(tree.duplicate_slot_ids().is_empty());
+            let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
             if out.placements.len() > 1 {
                 for (id, a) in &out.placements {
-                    let kind = arbol.kind_of(*id).expect("placed so it is there");
+                    let kind = tree.kind_of(*id).expect("placed so it is there");
                     let (mw, mh) = reg().min_of(kind);
                     prop_assert!(a.width >= mw && a.height >= mh, "{id:?} {a:?} < ({mw},{mh})");
                 }
@@ -1472,39 +1477,39 @@ mod tests {
         /// fails, a live slot is left unpainted AND unsuspended — with its
         /// watch open and nobody watching it.
         #[test]
-        fn placements_y_hidden_particionan_el_arbol(
-            arbol in arbol_arbitrario(), w in 1u16..200, h in 1u16..80
+        fn placements_and_hidden_partition_the_tree(
+            tree in tree_arbitrario(), w in 1u16..200, h in 1u16..80
         ) {
-            let out = resolve(Rect::new(0, 0, w, h), &arbol, &reg());
+            let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
             let mut seen: Vec<SlotId> = out.placements.iter().map(|(id, _)| *id).collect();
             seen.extend(out.hidden.iter().copied());
             seen.sort_unstable();
-            let mut all = arbol.slot_ids();
+            let mut all = tree.slot_ids();
             all.sort_unstable();
             prop_assert_eq!(seen, all);
         }
 
         /// `focus_order` only carries placed, focusable ones, with no repeats.
         #[test]
-        fn el_orden_de_foco_solo_lleva_visibles_enfocables(
-            arbol in arbol_arbitrario(), w in 1u16..200, h in 1u16..80
+        fn the_focus_order_only_carries_visible_focusable_ones(
+            tree in tree_arbitrario(), w in 1u16..200, h in 1u16..80
         ) {
-            prop_assume!(arbol.duplicate_slot_ids().is_empty());
-            let out = resolve(Rect::new(0, 0, w, h), &arbol, &reg());
+            prop_assume!(tree.duplicate_slot_ids().is_empty());
+            let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
             let placed: Vec<SlotId> = out.placements.iter().map(|(id, _)| *id).collect();
             for id in &out.focus_order {
                 prop_assert!(placed.contains(id));
-                let kind = arbol.kind_of(*id).expect("focusable so it is there");
+                let kind = tree.kind_of(*id).expect("focusable so it is there");
                 prop_assert!(reg().get(kind).is_some_and(|d| d.focusable));
             }
         }
 
         /// Never an empty screen: if there is a slot, one is painted.
         #[test]
-        fn siempre_se_pinta_algo(
-            arbol in arbol_arbitrario(), w in 1u16..200, h in 1u16..80
+        fn something_is_always_painted(
+            tree in tree_arbitrario(), w in 1u16..200, h in 1u16..80
         ) {
-            let out = resolve(Rect::new(0, 0, w, h), &arbol, &reg());
+            let out = resolve(Rect::new(0, 0, w, h), &tree, &reg());
             prop_assert!(!out.placements.is_empty());
         }
     }

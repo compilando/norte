@@ -35,9 +35,9 @@ use crate::dto::{
 };
 
 /// Help, open.
-pub(crate) struct Ayuda {
+pub(crate) struct Help {
     /// The shared model: which page, which cursor, which filter.
-    pub(crate) estado: HelpState,
+    pub(crate) state: HelpState,
     /// The resolver THIS opening is painted with, with its facts already
     /// frozen.
     chords: Chords,
@@ -66,10 +66,10 @@ pub(crate) struct Ayuda {
     scroll: Option<crate::dto::HelpScrollView>,
 }
 
-impl Ayuda {
+impl Help {
     /// Asks the renderer to scroll the body. Each request carries a number
     /// higher than the last, so a repaint does not apply it twice.
-    pub(crate) fn desplazar(&mut self, to: crate::dto::HelpScrollTo) {
+    pub(crate) fn scroll(&mut self, to: crate::dto::HelpScrollTo) {
         let seq = self.scroll.map_or(1, |d| d.seq + 1);
         self.scroll = Some(crate::dto::HelpScrollView { to, seq });
     }
@@ -85,19 +85,19 @@ impl Ayuda {
     /// did not navigate to it, help put them there, so "back" cannot take
     /// them to an index they were never in — and a single `Esc` press has
     /// to leave behind a page nobody asked for.
-    pub(crate) fn abrir(
+    pub(crate) fn open(
         lang: Lang,
-        contexto: &str,
-        listado: &Effective,
+        context: &str,
+        listing: &Effective,
         visor: &Effective,
         facts: norte_frontend::availability::Facts,
     ) -> Self {
-        let mut estado = HelpState::new(lang, norte_i18n::t_in(lang, "help-topic-keys"));
-        if let Some(t) = norte_help::topic_for_context(lang, contexto) {
-            estado.open_as_root(&t.id);
+        let mut state = HelpState::new(lang, norte_i18n::t_in(lang, "help-topic-keys"));
+        if let Some(t) = norte_help::topic_for_context(lang, context) {
+            state.open_as_root(&t.id);
         }
         Self {
-            estado,
+            state,
             publishers: HashMap::new(),
             requested: HashSet::new(),
             scroll: None,
@@ -105,9 +105,9 @@ impl Ayuda {
             // by the renderer with its own buttons, so there is no
             // `dialog` map to resolve one of its verbs in, and giving it a
             // key would put it on a page nobody is going to press.
-            chords: Chords::over(&[listado, visor], lang).with_facts(facts),
+            chords: Chords::over(&[listing, visor], lang).with_facts(facts),
             facts,
-            keys: keyboard_sheet(listado, visor, lang),
+            keys: keyboard_sheet(listing, visor, lang),
         }
     }
 
@@ -137,62 +137,62 @@ impl Ayuda {
 
     /// The whole projection.
     ///
-    /// `efectos` and `visor_abierto` are the two halves of the question
+    /// `effects` and `visor_open` are the two halves of the question
     /// "can THIS window run this row?", which is not the same as "can it
     /// be run right now?" — see [`motivo_de`].
     pub(crate) fn vista(
         &self,
         lang: Lang,
-        efectos: crate::commands::Efectos,
-        visor_abierto: bool,
+        effects: crate::commands::Effects,
+        visor_open: bool,
     ) -> HelpView {
-        let topic = self.estado.current_topic();
-        let en_teclas = self.estado.current().as_str() == KEYS_ID;
+        let topic = self.state.current_topic();
+        let in_keys = self.state.current().as_str() == KEYS_ID;
         // An extension page that has not arrived yet has no `Topic`, and
         // that is where the hole was: no title and NO PROVENANCE LINE, that
         // is, with the exact shape of a page from the binary itself. The
         // sidebar node does know its name, and that it is from a third
         // party, so the in-flight page is painted with both.
-        let en_vuelo = topic
+        let in_flight = topic
             .is_none()
-            .then(|| self.estado.plugin_needs_fetch())
+            .then(|| self.state.plugin_needs_fetch())
             .flatten();
-        let titulo = if en_teclas {
+        let titulo = if in_keys {
             norte_i18n::t_in(lang, "help-topic-keys")
-        } else if let Some(id) = en_vuelo {
+        } else if let Some(id) = in_flight {
             self.title_of_node(id)
         } else {
             topic.map_or_else(String::new, |t| t.title.clone())
         };
-        let filas = self.filas(lang, efectos, visor_abierto);
+        let filas = self.rows(lang, effects, visor_open);
         HelpView {
             title: clamp_display(titulo),
             // Does NOT go through `clamp_display`: it is a KEY, and
             // clamping is not injective. Whole or empty.
-            topic_id: identidad(self.estado.current().as_str()),
-            badge: self.insignia(lang, topic, en_vuelo),
+            topic_id: identity(self.state.current().as_str()),
+            badge: self.insignia(lang, topic, in_flight),
             sidebar: self.lateral(lang),
-            cursor: self.estado.cursor() as u64,
-            focus: match self.estado.focus() {
+            cursor: self.state.cursor() as u64,
+            focus: match self.state.focus() {
                 Focus::Topics => HelpFocusView::Topics,
                 Focus::Body => HelpFocusView::Body,
             },
-            blocks: if en_teclas {
+            blocks: if in_keys {
                 self.keys.clone()
             } else {
                 topic.map_or_else(Vec::new, |t| {
                     t.blocks
                         .iter()
-                        .map(|b| bloque(b, &self.chords, self.estado.actions()))
+                        .map(|b| block(b, &self.chords, self.state.actions()))
                         .collect()
                 })
             },
             actions: filas.into_iter().map(|(_, v, _)| v).collect(),
-            action_cursor: (!self.estado.actions().is_empty())
-                .then_some(self.estado.action_cursor() as u64),
-            filter: clamp_display(self.estado.filter_display()),
-            filtering: self.estado.filtering(),
-            can_back: self.estado.can_back(),
+            action_cursor: (!self.state.actions().is_empty())
+                .then_some(self.state.action_cursor() as u64),
+            filter: clamp_display(self.state.filter_display()),
+            filtering: self.state.filtering(),
+            can_back: self.state.can_back(),
             scroll: self.scroll,
         }
     }
@@ -203,7 +203,7 @@ impl Ayuda {
     /// what has not arrived. Already masked and clamped at the point of
     /// entry.
     fn title_of_node(&self, id: &str) -> String {
-        self.estado
+        self.state
             .rows()
             .iter()
             .find_map(|r| match r {
@@ -226,9 +226,9 @@ impl Ayuda {
         &self,
         lang: Lang,
         topic: Option<&norte_help::Topic>,
-        en_vuelo: Option<&str>,
+        in_flight: Option<&str>,
     ) -> Option<String> {
-        if let Some(id) = en_vuelo {
+        if let Some(id) = in_flight {
             return norte_frontend::help_badge::plugin_badge(
                 self.publishers.get(id).map(String::as_str),
                 false,
@@ -256,8 +256,8 @@ impl Ayuda {
 
     /// The sidebar, with group headers already translated.
     fn lateral(&self, lang: Lang) -> Vec<HelpSidebarRowView> {
-        let actual = self.estado.current();
-        self.estado
+        let actual = self.state.current();
+        self.state
             .rows()
             .iter()
             .map(|r| match r {
@@ -280,20 +280,20 @@ impl Ayuda {
     /// anything saying so — and then a click on "copy" runs something else.
     /// The order is [`HelpState::actions`]'s: first the commands the page
     /// documents, then its "see also" links.
-    fn filas(
+    fn rows(
         &self,
         lang: Lang,
-        efectos: crate::commands::Efectos,
-        visor_abierto: bool,
+        effects: crate::commands::Effects,
+        visor_open: bool,
     ) -> Vec<(Action, HelpActionView, Option<&'static str>)> {
-        let Some(topic) = self.estado.current_topic() else {
+        let Some(topic) = self.state.current_topic() else {
             return Vec::new();
         };
         let mut out: Vec<(Action, HelpActionView, Option<&'static str>)> =
             rows_of(topic, &self.chords)
                 .into_iter()
                 .map(|r| {
-                    let motivo = motivo_de(&r.row, efectos, visor_abierto);
+                    let motivo = motivo_de(&r.row, effects, visor_open);
                     let vista = HelpActionView {
                         // A command's name can come from a user keymap layer
                         // or from the project, which carries no trust, and
@@ -313,7 +313,7 @@ impl Ayuda {
         // `links()` and not `see_also`: the prose's links are followed too.
         out.extend(topic.links().iter().map(|id| {
             let vista = HelpActionView {
-                label: clamp_display(titulo_de(id, self.estado.lang())),
+                label: clamp_display(title_of(id, self.state.lang())),
                 chord: String::new(),
                 // A link can always be followed: all it does is change the
                 // page, and if this language's corpus does not have it, the
@@ -332,17 +332,17 @@ impl Ayuda {
     /// `Err` is the Fluent key for the reason. The HOST checks it, not the
     /// renderer: if the check lived only in whoever paints, the keyboard
     /// path —which does not go through there— would run a dimmed row.
-    pub(crate) fn accion_ejecutable(
+    pub(crate) fn action_executable(
         &self,
         i: usize,
         lang: Lang,
-        efectos: crate::commands::Efectos,
-        visor_abierto: bool,
+        effects: crate::commands::Effects,
+        visor_open: bool,
     ) -> Result<Action, String> {
-        let filas = self.filas(lang, efectos, visor_abierto);
-        let (accion, _, motivo) = filas.get(i).ok_or_else(String::new)?;
+        let filas = self.rows(lang, effects, visor_open);
+        let (action, _, motivo) = filas.get(i).ok_or_else(String::new)?;
         match motivo {
-            None => Ok(accion.clone()),
+            None => Ok(action.clone()),
             Some(k) => Err((*k).to_owned()),
         }
     }
@@ -380,21 +380,21 @@ impl Ayuda {
         self.publishers = validos
             .iter()
             .filter_map(|p| {
-                let quien = plugin_label(&p.publisher);
-                (!norte_help::is_blank_id(&quien)).then(|| (p.id.clone(), quien))
+                let who = plugin_label(&p.publisher);
+                (!norte_help::is_blank_id(&who)).then(|| (p.id.clone(), who))
             })
             .collect();
-        self.estado.set_plugins(
+        self.state.set_plugins(
             validos
                 .iter()
                 .map(|p| {
-                    let nombre = plugin_label(&p.name);
+                    let name = plugin_label(&p.name);
                     PluginNode {
                         id: p.id.clone(),
-                        title: if norte_help::is_blank_id(&nombre) {
+                        title: if norte_help::is_blank_id(&name) {
                             plugin_label(&p.id)
                         } else {
-                            nombre
+                            name
                         },
                         has_help: p.has_help,
                         active: p.approved && p.enabled,
@@ -407,8 +407,8 @@ impl Ayuda {
     /// The plugin page that must be requested, if there is one and it has
     /// not been requested yet in this opening. Claiming it marks it as
     /// requested.
-    pub(crate) fn reclamar_pagina(&mut self) -> Option<String> {
-        let id = self.estado.plugin_needs_fetch()?.to_owned();
+    pub(crate) fn claim_page(&mut self) -> Option<String> {
+        let id = self.state.plugin_needs_fetch()?.to_owned();
         self.requested.insert(id.clone()).then_some(id)
     }
 
@@ -419,18 +419,14 @@ impl Ayuda {
     /// ALREADY decoded by the daemon, so this parse comes out clean and the
     /// badge —which is all the visible mitigation against a hostile
     /// `help.md`— would go dark.
-    pub(crate) fn instalar_pagina(
-        &mut self,
-        id: &str,
-        res: &norte_proto::methods::PluginHelpResult,
-    ) {
+    pub(crate) fn install_page(&mut self, id: &str, res: &norte_proto::methods::PluginHelpResult) {
         // The publisher comes from the SNAPSHOT, never from the page: a
         // plugin does not say who publishes it. `parse_untrusted` masks it
         // again anyway, which is harmless.
-        let publicador = self.publishers.get(id).cloned();
-        let parsed = norte_help::parse_untrusted(res.markdown.as_bytes(), id, publicador)
+        let publisher = self.publishers.get(id).cloned();
+        let parsed = norte_help::parse_untrusted(res.markdown.as_bytes(), id, publisher)
             .fold_flags(res.truncated, res.lossy);
-        self.estado.install_plugin_topic(parsed.topic);
+        self.state.install_plugin_topic(parsed.topic);
     }
 
     /// Moves the body cursor to row `i` — what a click on it means, the
@@ -439,8 +435,8 @@ impl Ayuda {
     /// Done in addition to executing, not instead of: after following a
     /// link, the next arrow key has to move from where the reader just
     /// pointed, not from the sidebar.
-    pub(crate) fn senalar(&mut self, i: usize) {
-        self.estado.click_action(i);
+    pub(crate) fn point_at(&mut self, i: usize) {
+        self.state.click_action(i);
     }
 }
 
@@ -461,8 +457,8 @@ impl Ayuda {
 ///   only to refuse when pressed.
 fn motivo_de(
     row: &norte_help::CommandRow,
-    efectos: crate::commands::Efectos,
-    visor_abierto: bool,
+    effects: crate::commands::Effects,
+    visor_open: bool,
 ) -> Option<&'static str> {
     let cmd = row.command.as_str();
     if cmd.starts_with("dialog.") {
@@ -471,9 +467,9 @@ fn motivo_de(
         ));
     }
     if crate::commands::IMPLEMENTADOS_VISOR.contains(&cmd) {
-        return (!visor_abierto).then_some("reason-viewer-only");
+        return (!visor_open).then_some("reason-viewer-only");
     }
-    if !crate::commands::implementados(efectos).contains(&cmd) {
+    if !crate::commands::implementados(effects).contains(&cmd) {
         return Some("keymap-short-not-here");
     }
     row.avail
@@ -488,7 +484,7 @@ fn motivo_de(
 /// the same, which is the trap ADR 0061 decided never to set again. A key
 /// that does not fit becomes one that matches nothing, which is a visible
 /// failure, instead of one that matches the wrong thing.
-fn identidad(id: &str) -> String {
+fn identity(id: &str) -> String {
     if id.len() > crate::bridge::MAX_STRING_BYTES {
         return String::new();
     }
@@ -501,14 +497,14 @@ fn identidad(id: &str) -> String {
 /// Generated, never a hand-maintained list: a rebind changes it. It is not
 /// a corpus table because its rows carry availability and a reason, which a
 /// table cell has nowhere to put.
-fn keyboard_sheet(listado: &Effective, visor: &Effective, lang: Lang) -> Vec<HelpBlockView> {
+fn keyboard_sheet(listing: &Effective, visor: &Effective, lang: Lang) -> Vec<HelpBlockView> {
     let mut out = vec![HelpBlockView::Paragraph {
         spans: vec![HelpSpanView::Text {
             text: clamp_display(norte_i18n::t_in(lang, "keys-page-note")),
         }],
     }];
     for (titulo, screen, eff) in [
-        ("help-section-browse", Screen::Browse, listado),
+        ("help-section-browse", Screen::Browse, listing),
         ("help-section-viewer", Screen::Viewer, visor),
     ] {
         let filas: Vec<HelpKeyRowView> = sheet(&[(screen, eff.clone())])
@@ -517,11 +513,11 @@ fn keyboard_sheet(listado: &Effective, visor: &Effective, lang: Lang) -> Vec<Hel
                 // The label can come from a user's `keymap.toml`: it is
                 // masked, and it says that it was masked (#266).
                 let etiqueta = norte_frontend::whichkey::command_label(&row.command, lang);
-                let (pintable, hostil) = norte_frontend::display_name(etiqueta.as_bytes());
+                let (pintable, hostile) = norte_frontend::display_name(etiqueta.as_bytes());
                 HelpKeyRowView {
                     chord: clamp_display(row.chord),
                     label: clamp_display(pintable),
-                    label_hostile: hostil,
+                    label_hostile: hostile,
                     enabled: row.avail == Availability::Here,
                     reason: clamp_display(short_unavailable_message(row.avail, lang)),
                 }
@@ -552,12 +548,12 @@ fn group_label(tag: &str, lang: Lang) -> String {
 }
 
 /// A page's title, or its id if this language's corpus does not have it.
-fn titulo_de(id: &TopicId, lang: Lang) -> String {
+fn title_of(id: &TopicId, lang: Lang) -> String {
     norte_help::topic(lang, id.as_str()).map_or_else(|| id.as_str().to_owned(), |t| t.title.clone())
 }
 
 /// A corpus block, projected.
-fn bloque(b: &Block, chords: &Chords, acciones: &[Action]) -> HelpBlockView {
+fn block(b: &Block, chords: &Chords, actions: &[Action]) -> HelpBlockView {
     match b {
         Block::Heading { level, text } => HelpBlockView::Heading {
             level: (*level).clamp(1, 3),
@@ -566,7 +562,7 @@ fn bloque(b: &Block, chords: &Chords, acciones: &[Action]) -> HelpBlockView {
         Block::Paragraph(spans) => HelpBlockView::Paragraph {
             spans: spans
                 .iter()
-                .map(|s| fragmento(s, chords, acciones))
+                .map(|s| fragmento(s, chords, actions))
                 .collect(),
         },
         Block::Bullets(items) => HelpBlockView::Bullets {
@@ -575,7 +571,7 @@ fn bloque(b: &Block, chords: &Chords, acciones: &[Action]) -> HelpBlockView {
                 .map(|spans| {
                     spans
                         .iter()
-                        .map(|s| fragmento(s, chords, acciones))
+                        .map(|s| fragmento(s, chords, actions))
                         .collect()
                 })
                 .collect(),
@@ -599,7 +595,7 @@ fn bloque(b: &Block, chords: &Chords, acciones: &[Action]) -> HelpBlockView {
             },
             spans: spans
                 .iter()
-                .map(|s| fragmento(s, chords, acciones))
+                .map(|s| fragmento(s, chords, actions))
                 .collect(),
         },
     }
@@ -607,7 +603,7 @@ fn bloque(b: &Block, chords: &Chords, acciones: &[Action]) -> HelpBlockView {
 
 /// A fragment, with both LIVE marks already resolved against this reader's
 /// keymap and language.
-fn fragmento(s: &Span, chords: &Chords, acciones: &[Action]) -> HelpSpanView {
+fn fragmento(s: &Span, chords: &Chords, actions: &[Action]) -> HelpSpanView {
     match s {
         Span::Text(t) => HelpSpanView::Text {
             text: clamp_display(t.clone()),
@@ -637,12 +633,12 @@ fn fragmento(s: &Span, chords: &Chords, acciones: &[Action]) -> HelpSpanView {
             }
         }
         Span::TopicLink(id) => HelpSpanView::Link {
-            text: clamp_display(titulo_de(id, chords_lang(chords))),
+            text: clamp_display(title_of(id, chords_lang(chords))),
             // The row that follows it: `Topic::links()` puts every prose
             // link into the actions, so pressing it activates that row.
-            action: acciones
+            action: actions
                 .iter()
-                .position(|a| matches!(a, Action::Open(destino) if destino == id))
+                .position(|a| matches!(a, Action::Open(dest) if dest == id))
                 .map(|i| i as u64),
         },
     }

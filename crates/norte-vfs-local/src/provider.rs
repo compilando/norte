@@ -375,7 +375,7 @@ pub(crate) fn reponer_modo_publicado(_file: &std::fs::File, _stable: bool) {}
 /// compute the staging name (#298).
 #[cfg(unix)]
 fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), Error> {
-    crate::confined::abre_staging_estable(path)
+    crate::confined::opens_staging_estable(path)
 }
 
 /// Windows: without #298's checks yet. A reparse point planted with the
@@ -398,7 +398,7 @@ fn open_stable_staging(path: &std::path::Path) -> Result<(std::fs::File, u64), E
 /// [`open_stable_staging`].
 #[cfg(unix)]
 fn open_partial_for_digest(path: &std::path::Path) -> Result<Option<std::fs::File>, Error> {
-    crate::confined::abre_parcial_verificado(path)
+    crate::confined::opens_partial_verificado(path)
 }
 
 #[cfg(windows)]
@@ -648,12 +648,12 @@ fn attrs_from_md(
         // inventing the number instead would say something else, and
         // that's what `posix.uid` and `posix.gid` are already for.
         if req.wants("posix.owner")
-            && let Some(n) = crate::identidad::usuario(md.uid())
+            && let Some(n) = crate::identity::user(md.uid())
         {
             out.insert("posix.owner".to_owned(), AttrValue::Bytes(n));
         }
         if req.wants("posix.group")
-            && let Some(n) = crate::identidad::grupo(md.gid())
+            && let Some(n) = crate::identity::group(md.gid())
         {
             out.insert("posix.group".to_owned(), AttrValue::Bytes(n));
         }

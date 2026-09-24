@@ -28,7 +28,7 @@ fn pane(names: &[&str]) -> PaneState {
 fn point_at_moves_the_filters_selection_and_the_cursor_when_there_is_none() {
     // No filter: pointing moves the real cursor.
     let mut p = pane(&["a.png", "b.png", "c.png"]);
-    p.senalar(2);
+    p.point_at(2);
     assert_eq!(p.cursor(), 2);
     assert_eq!(
         p.selected().map(|e| e.path.to_wire()),
@@ -52,7 +52,7 @@ fn point_at_moves_the_filters_selection_and_the_cursor_when_there_is_none() {
         Some("mem:///alfa.png".to_owned()),
         "the filter starts on its first match"
     );
-    p.senalar(1);
+    p.point_at(1);
     assert_eq!(
         p.selected().map(|e| e.path.to_wire()),
         Some("mem:///alto.png".to_owned()),
@@ -62,7 +62,7 @@ fn point_at_moves_the_filters_selection_and_the_cursor_when_there_is_none() {
 
     // A row the filter does not show cannot be pointed at: nothing is
     // touched.
-    p.senalar(2);
+    p.point_at(2);
     assert_eq!(
         p.selected().map(|e| e.path.to_wire()),
         Some("mem:///alto.png".to_owned()),
@@ -307,9 +307,9 @@ fn real_entries_leaves_out_the_go_up_row() {
 /// otherwise. Over `..`, this directory — never the parent.
 #[test]
 fn target_dir_is_the_folder_under_the_cursor_and_otherwise_its_own() {
-    let casa = VPath::parse("mem:///casa").unwrap();
+    let home = VPath::parse("mem:///casa").unwrap();
     let mut p = PaneState::new(
-        casa.clone(),
+        home.clone(),
         vec![
             e("mem:///casa/dir", EntryKind::Dir),
             e("mem:///casa/f.txt", EntryKind::File),
@@ -321,7 +321,7 @@ fn target_dir_is_the_folder_under_the_cursor_and_otherwise_its_own() {
     assert!(p.is_parent_row(p.cursor()), "the cursor is born over `..`");
     assert_eq!(
         p.target_dir(),
-        &casa,
+        &home,
         "over `..`, this path, not the parent"
     );
 
@@ -333,12 +333,12 @@ fn target_dir_is_the_folder_under_the_cursor_and_otherwise_its_own() {
     );
 
     p.cursor_down();
-    assert_eq!(p.target_dir(), &casa, "over a file, this path");
+    assert_eq!(p.target_dir(), &home, "over a file, this path");
 
     p.cursor_down();
     assert_eq!(
         p.target_dir(),
-        &casa,
+        &home,
         "a link is not followed (M0): this path"
     );
 }

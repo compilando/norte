@@ -176,7 +176,7 @@ mod tests {
     /// reopening the same layout recovers the history instead of starting
     /// blank.
     #[test]
-    fn cerrar_un_hueco_deja_su_estado_huerfano() {
+    fn closing_a_slot_leaves_its_state_orphaned() {
         let mut s: SlotStore<u32> = SlotStore::default();
         s.insert(SlotId(1), 10);
         s.insert(SlotId(2), 20);
@@ -192,7 +192,7 @@ mod tests {
     /// Orphans have a ceiling: without it, opening and closing panes for a
     /// whole session grows without end. The OLDEST is purged.
     #[test]
-    fn los_huerfanos_tienen_tope_y_se_purga_el_mas_antiguo() {
+    fn orphans_have_a_cap_and_the_oldest_is_purged() {
         let mut s: SlotStore<u32> = SlotStore::with_orphan_cap(2);
         for i in 1..=4 {
             s.insert(SlotId(i), i);
@@ -205,7 +205,7 @@ mod tests {
 
     /// Reopening an orphaned id revives it with its state.
     #[test]
-    fn reabrir_un_id_huerfano_recupera_su_estado() {
+    fn reopening_an_orphan_id_recovers_its_state() {
         let mut s: SlotStore<u32> = SlotStore::default();
         s.insert(SlotId(1), 10);
         s.insert(SlotId(2), 20);
@@ -218,7 +218,7 @@ mod tests {
     /// Swapping moves the CONTENT and leaves the ids in place: if the ids
     /// moved, any `SlotId` stored earlier would name the other slot.
     #[test]
-    fn intercambiar_mueve_el_contenido_no_los_ids() {
+    fn swapping_moves_the_content_not_the_ids() {
         let mut s: SlotStore<u32> = SlotStore::default();
         s.insert(SlotId(1), 10);
         s.insert(SlotId(2), 20);
@@ -232,7 +232,7 @@ mod tests {
     /// orphan: if they did, the ceiling would run out with a single closed
     /// slot, and one repeated frame would be enough to drop live state.
     #[test]
-    fn sincronizar_dos_veces_no_duplica_al_huerfano() {
+    fn syncing_twice_does_not_duplicate_the_orphan() {
         let mut s: SlotStore<u32> = SlotStore::default();
         s.insert(SlotId(1), 10);
         s.insert(SlotId(2), 20);

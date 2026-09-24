@@ -195,7 +195,7 @@ pub async fn dispatch(
             // showing an earlier snapshot is worse than an empty one: the
             // empty one is noticeable.
             if app.timeline_slot().is_some() {
-                cargar_timeline(app, backend, None).await;
+                load_timeline(app, backend, None).await;
             }
         }
         // #362: the terminal panel. The key opens, gives the keyboard and
@@ -226,7 +226,7 @@ pub async fn dispatch(
                         // knows which rectangle it got; this one is the
                         // startup size and lasts as long as the first turn
                         // takes.
-                        match crate::termpanel::abrir(&dir, (80, 24)) {
+                        match crate::termpanel::open(&dir, (80, 24)) {
                             Ok(t) => {
                                 // Recorded, like its two siblings and with
                                 // the same "not journalled" written: a shell
@@ -293,7 +293,7 @@ pub async fn dispatch(
         // profiles: empty list, and never `PathBuf::default()`, which reads
         // `./profiles/` of the current directory (#244 m3).
         Command::ProfilePick => {
-            let perfiles = match config::user_config_dir() {
+            let profiles = match config::user_config_dir() {
                 Some(dir) => {
                     tokio::task::spawn_blocking(move || norte_frontend::config::read_profiles(&dir))
                         .await
@@ -301,7 +301,7 @@ pub async fn dispatch(
                 }
                 None => Vec::new(),
             };
-            app.open_profile_picker(perfiles);
+            app.open_profile_picker(profiles);
         }
         // #306: saving what is on screen as a profile. Only the prompt opens
         // here; disk is touched by Enter, in the run loop.
@@ -311,7 +311,7 @@ pub async fn dispatch(
         // alternates wants. The switch itself is done by the run loop
         // (task 4): here only which one is next gets decided.
         Command::ProfileNext | Command::ProfilePrev => {
-            let perfiles = match config::user_config_dir() {
+            let profiles = match config::user_config_dir() {
                 Some(dir) => {
                     tokio::task::spawn_blocking(move || norte_frontend::config::read_profiles(&dir))
                         .await
@@ -320,7 +320,7 @@ pub async fn dispatch(
                 None => Vec::new(),
             };
             app.pending_profile = norte_frontend::profile_picker::next_profile(
-                &perfiles,
+                &profiles,
                 app.active_profile.as_deref(),
                 matches!(cmd, Command::ProfileNext),
             );
@@ -707,7 +707,7 @@ pub async fn dispatch(
                             norte_frontend::connections_picker::Row::buena(name, url)
                         })
                         .chain(unusable.into_iter().map(|(name, reason)| {
-                            norte_frontend::connections_picker::Row::inservible(name, reason)
+                            norte_frontend::connections_picker::Row::unusable(name, reason)
                         }))
                         .collect(),
                 ),
@@ -1006,7 +1006,7 @@ pub async fn dispatch(
                     plugins,
                     errors: list.errors,
                     cursor: 0,
-                    foco: crate::app::ExtFoco::Lista,
+                    focus: crate::app::ExtFocus::List,
                     config: None,
                 });
             }
@@ -1064,7 +1064,7 @@ pub async fn dispatch(
             let (connections, _unusable) = norte_core::connect::named_connections(&dir)
                 .await
                 .unwrap_or_default();
-            crate::goto::abrir(app, &connections);
+            crate::goto::open(app, &connections);
         }
         // `F11` (S3): settings overlay — the rows are born from the CURRENT
         // `cfg` (same criterion as `help_lines`/`app.palette_rows`: rebuilt
@@ -1090,8 +1090,8 @@ pub async fn dispatch(
         // The serial queue (ADR 0149): the session's switch, and moving the
         // process panel's flagged task within the queue.
         Command::TaskQueue => {
-            app.encolar = !app.encolar;
-            app.message = Some(t(if app.encolar {
+            app.enqueue = !app.enqueue;
+            app.message = Some(t(if app.enqueue {
                 "msg-queue-on"
             } else {
                 "msg-queue-off"
@@ -1151,7 +1151,7 @@ pub async fn dispatch(
 
 /// Fetches a page of the timeline and puts it in its slot (phase 7).
 ///
-/// `desde` is the cursor: `None` for the first —the newest— and the previous
+/// `from` is the cursor: `None` for the first —the newest— and the previous
 /// one's `next_before_seq` to keep going backward.
 ///
 /// A failure is REPORTED in the bar and leaves the panel as it was. The two
@@ -1159,17 +1159,17 @@ pub async fn dispatch(
 /// one that does not know the method, and both mean the same thing to the
 /// reader: there is no history to show here. An empty panel with no
 /// explanation reads as "you have done nothing", which is a different thing.
-pub async fn cargar_timeline(app: &mut App, backend: &Backend, desde: Option<i64>) {
+pub async fn load_timeline(app: &mut App, backend: &Backend, from: Option<i64>) {
     let Some(id) = app.timeline_slot() else {
         return;
     };
     match backend
-        .journal_list(desde, crate::timeline::POR_PAGINA, None)
+        .journal_list(from, crate::timeline::PER_PAGE, None)
         .await
     {
         Ok(page) => {
             if let Some(t) = app.panes.timeline_mut(id) {
-                if desde.is_none() {
+                if from.is_none() {
                     // A REREAD returns to the row the cursor had, if it
                     // still exists: rereading with the panel open must not
                     // move the reader from where they were.

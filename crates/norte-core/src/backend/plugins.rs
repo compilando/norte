@@ -896,9 +896,9 @@ impl Backend {
                                 dir: &params.dir,
                                 climb: true,
                                 kind: &params.kind,
-                                contexto: &context,
+                                context: &context,
                                 state: &state,
-                                evento: &event,
+                                event: &event,
                             },
                         ) {
                             Ok((id, frame)) => {

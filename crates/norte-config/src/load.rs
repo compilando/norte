@@ -2813,20 +2813,20 @@ fn carve_out_warnings(parsed: &NorteToml, path: &std::path::Path, kind: Layer) -
             );
         }
     }
-    // `declara` destructures each section with no `..`: a new key that
+    // `declares` destructures each section with no `..`: a new key that
     // neither one looks at does not compile. The field-by-field list that
     // used to be here left out `[log] format`, and the four-section test did
     // not catch it because its profile carried `dir`.
-    if crate::DaemonSettings::declara(&parsed.daemon) {
+    if crate::DaemonSettings::declares(&parsed.daemon) {
         say("daemon", "does not redirect the core's transport");
     }
     if parsed.ai != crate::schema::AiSection::default() {
         say("ai", "does not enable AI or redirect its providers");
     }
-    if crate::LogSettings::declara(&parsed.log) {
+    if crate::LogSettings::declares(&parsed.log) {
         say("log", "does not decide where or how this process writes");
     }
-    if crate::ArchiveSettings::declara(&parsed.archive) {
+    if crate::ArchiveSettings::declares(&parsed.archive) {
         say("archive", "does not raise the anti-bomb limits");
     }
     out

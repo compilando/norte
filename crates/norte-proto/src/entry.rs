@@ -243,7 +243,7 @@ impl DirAnchor {
     /// use norte_proto::entry::DirAnchor;
     /// assert!(DirAnchor::new("0123456789abcdef0123456789abcdef".to_owned()).is_well_formed());
     /// assert!(!DirAnchor::new("0123456789ABCDEF0123456789ABCDEF".to_owned()).is_well_formed());
-    /// assert!(!DirAnchor::new("corto".to_owned()).is_well_formed());
+    /// assert!(!DirAnchor::new("short".to_owned()).is_well_formed());
     /// ```
     #[must_use]
     pub fn is_well_formed(&self) -> bool {

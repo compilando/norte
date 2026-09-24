@@ -350,7 +350,7 @@ async fn a_failing_step_rolls_the_whole_batch_back() {
     assert_eq!(r.rolled_back, 2);
     assert_eq!(r.compensations_lost, 0);
     assert!(r.uncertain.is_none());
-    assert_eq!(r.failed_pair, Some(2), "the `c → d` row the user wrote",);
+    assert_eq!(r.failed_pair, Some(2), "the `c → d` row the user wrote");
     assert!(r.stuck.is_none());
 
     // The journal tells the truth: every applied step and every compensation.

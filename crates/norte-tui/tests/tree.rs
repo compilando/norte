@@ -14,7 +14,7 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
 }
 
-fn entradas(dir: &VPath) -> Vec<Entry> {
+fn entries(dir: &VPath) -> Vec<Entry> {
     (0..3)
         .map(|i| Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -28,13 +28,13 @@ fn entradas(dir: &VPath) -> Vec<Entry> {
         .collect()
 }
 
-/// `App` with the tree open over `file:///casa` and two branches already
+/// `App` with the tree open over `file:///home` and two branches already
 /// read, one of them with a child.
-fn app_con_arbol() -> App {
+fn app_with_tree() -> App {
     let dir = vp("file:///casa");
     let mut app = App::new(
-        Pane::new(dir.clone(), entradas(&dir)),
-        Pane::new(dir.clone(), entradas(&dir)),
+        Pane::new(dir.clone(), entries(&dir)),
+        Pane::new(dir.clone(), entries(&dir)),
     );
     app.toggle_tree();
     let t = app.tree_mut().expect("tree open");
@@ -65,12 +65,12 @@ fn pulsar_en(app: &mut App, col: u16, row: u16) -> norte_tui::mouse::After {
 
 /// Paints a frame and returns that frame's geometry to the model, which is
 /// what the mouse resolves against.
-fn tras_pintar(app: &mut App, area: ratatui::layout::Rect) -> Vec<norte_tui::ui::TreeZone> {
+fn after_paint(app: &mut App, area: ratatui::layout::Rect) -> Vec<norte_tui::ui::TreeZone> {
     let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal");
     terminal
         .draw(|f| norte_tui::ui::draw(f, app))
         .expect("draw");
-    let (geo, tabs, menus, sitios, ramas) = (
+    let (geo, tabs, menus, sitios, branches) = (
         norte_tui::ui::pane_geometry(app, area),
         norte_tui::ui::tab_zones(app, area),
         norte_tui::ui::menu_zones(app, area),
@@ -85,13 +85,13 @@ fn tras_pintar(app: &mut App, area: ratatui::layout::Rect) -> Vec<norte_tui::ui:
             tabs,
             menus,
             places: sitios,
-            tree: ramas.clone(),
+            tree: branches.clone(),
             session: None,
             slots: huecos,
             ..Default::default()
         },
     );
-    ramas
+    branches
 }
 
 /// The mouse over the tree: clicking a row selects it and brings the
@@ -101,19 +101,19 @@ fn tras_pintar(app: &mut App, area: ratatui::layout::Rect) -> Vec<norte_tui::ui:
 /// belong to no listing, so a click there landed on "outside the panes" and
 /// did nothing — a panel that paints and cannot be touched.
 #[test]
-fn pulsar_una_fila_del_arbol_la_selecciona_y_repulsarla_la_activa() {
-    let mut app = app_con_arbol();
+fn pressing_a_tree_row_selects_it_and_pressing_again_activates_it() {
+    let mut app = app_with_tree();
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
-    let zonas = tras_pintar(&mut app, area);
-    assert!(!zonas.is_empty(), "the tree has clickable rows");
-    let rama = zonas
+    let zones = after_paint(&mut app, area);
+    assert!(!zones.is_empty(), "the tree has clickable rows");
+    let branch = zones
         .iter()
         .find(|z| z.index == 1)
         .copied()
         .expect("the first branch is visible");
 
     app.return_keys_to_panes();
-    let after = pulsar_en(&mut app, rama.x1, rama.row);
+    let after = pulsar_en(&mut app, branch.x1, branch.row);
     assert_eq!(
         after,
         norte_tui::mouse::After::Nothing,
@@ -122,7 +122,7 @@ fn pulsar_una_fila_del_arbol_la_selecciona_y_repulsarla_la_activa() {
     assert_eq!(app.key_owner(), KeyOwner::Tree, "and brings the keyboard");
     assert_eq!(app.tree().map(norte_frontend::tree::Tree::cursor), Some(1));
 
-    let after = pulsar_en(&mut app, rama.x1, rama.row);
+    let after = pulsar_en(&mut app, branch.x1, branch.row);
     assert_eq!(after, norte_tui::mouse::After::TreeActivate);
     assert_eq!(
         app.tree_activate(),
@@ -136,26 +136,26 @@ fn pulsar_una_fila_del_arbol_la_selecciona_y_repulsarla_la_activa() {
 /// reader who only uses the mouse cannot close what they opened — `Enter`
 /// unfolds and navigates, never folds.
 #[test]
-fn pulsar_la_marca_de_una_rama_la_pliega_y_la_despliega() {
-    let mut app = app_con_arbol();
+fn pressing_a_branchs_mark_folds_and_unfolds_it() {
+    let mut app = app_with_tree();
     let area = ratatui::layout::Rect::new(0, 0, 100, 30);
-    let zonas = tras_pintar(&mut app, area);
-    let rama = zonas
+    let zones = after_paint(&mut app, area);
+    let branch = zones
         .iter()
         .find(|z| z.index == 1)
         .copied()
         .expect("the first branch is visible");
-    let filas = |app: &App| app.tree().map_or(0, |t| t.rows().len());
-    let antes = filas(&app);
+    let rows = |app: &App| app.tree().map_or(0, |t| t.rows().len());
+    let before = rows(&app);
 
-    let after = pulsar_en(&mut app, rama.mark_x, rama.row);
+    let after = pulsar_en(&mut app, branch.mark_x, branch.row);
     assert_eq!(after, norte_tui::mouse::After::Nothing, "navigates nowhere");
-    assert_eq!(filas(&app), antes + 1, "unfolding shows its child");
+    assert_eq!(rows(&app), before + 1, "unfolding shows its child");
 
-    let _ = tras_pintar(&mut app, area);
-    let after = pulsar_en(&mut app, rama.mark_x, rama.row);
+    let _ = after_paint(&mut app, area);
+    let after = pulsar_en(&mut app, branch.mark_x, branch.row);
     assert_eq!(after, norte_tui::mouse::After::Nothing);
-    assert_eq!(filas(&app), antes, "and the same mark folds it back");
+    assert_eq!(rows(&app), before, "and the same mark folds it back");
 }
 
 /// The menu bar is APPLICATION chrome, not the listings': with the
@@ -172,19 +172,19 @@ fn pulsar_la_marca_de_una_rama_la_pliega_y_la_despliega() {
 /// `ntc` started up detached and "saved nothing." Only `Ctrl+C` actually
 /// quit.
 #[test]
-fn salir_funciona_con_el_teclado_dentro_de_un_panel_lateral() {
-    for lista in [
+fn exiting_works_with_the_keyboard_inside_a_side_panel() {
+    for list in [
         norte_tui::app::ALLOW_PLACES,
         norte_tui::app::ALLOW_PROCESSES,
         norte_tui::app::ALLOW_LOG,
     ] {
         assert!(
-            lista.contains(&"app.quit"),
+            list.contains(&"app.quit"),
             "a side panel cannot eat the quit key"
         );
     }
 
-    let mut app = app_con_arbol();
+    let mut app = app_with_tree();
     assert_eq!(app.key_owner(), KeyOwner::Tree);
     assert!(
         app.panel_chrome_command("app.quit"),
@@ -196,7 +196,7 @@ fn salir_funciona_con_el_teclado_dentro_de_un_panel_lateral() {
     );
 
     // With `[ui] confirm_quit = always` it asks, same as from a listing.
-    let mut app = app_con_arbol();
+    let mut app = app_with_tree();
     app.confirm_quit = norte_config::ConfirmQuit::Always;
     assert!(app.panel_chrome_command("app.quit"));
     assert!(!app.quit, "it does not quit on the first try");
@@ -211,18 +211,18 @@ fn salir_funciona_con_el_teclado_dentro_de_un_panel_lateral() {
 /// not in their allowlists, so the panel ate it and the screen stayed the
 /// same. It is the same lesson `layout.places` already brought here.
 #[test]
-fn el_menu_se_abre_con_el_teclado_dentro_de_un_panel_lateral() {
-    for lista in [
+fn the_menu_opens_with_the_keyboard_inside_a_side_panel() {
+    for list in [
         norte_tui::app::ALLOW_PLACES,
         norte_tui::app::ALLOW_PROCESSES,
     ] {
         assert!(
-            lista.contains(&"app.menu"),
+            list.contains(&"app.menu"),
             "a side panel cannot eat the menu key"
         );
     }
 
-    let mut app = app_con_arbol();
+    let mut app = app_with_tree();
     assert_eq!(
         app.key_owner(),
         KeyOwner::Tree,

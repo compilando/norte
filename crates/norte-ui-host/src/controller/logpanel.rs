@@ -1,6 +1,6 @@
 //! The window's log panel (#326): its projection and its controls.
 //!
-//! Part of `controller`: these are `Estado` methods, moved here without
+//! Part of `controller`: these are `State` methods, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 //!
 //! The STATE — level, filter, following the tail, the two-levels rule —
@@ -8,7 +8,7 @@
 //! lines come from `norte_config::logring`'s ring. What is this window's own
 //! stays here: how it projects to the bridge and what each control does.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Enumerating them here would be a
 // forty-line list per file, in 32 files, that goes stale the moment the
 // parent imports something — `super::*` tracks it on its own.
@@ -29,7 +29,7 @@ pub(super) const KIND: &str = "log";
 /// later — and because the panel shows at most one screen: requesting the
 /// whole ring every time would mean paying for two thousand lines for every
 /// one that gets painted.
-const MAX_REMOTO: u32 = 500;
+const MAX_REMOTE: u32 = 500;
 
 /// Cap on daemon lines kept in memory.
 ///
@@ -37,10 +37,10 @@ const MAX_REMOTO: u32 = 500;
 /// one, because here lines ACCUMULATE round after round and with no cap a
 /// panel left open all afternoon would grow without end. Same order of
 /// magnitude as the default ring: what can be scrolled back through.
-const MAX_LINEAS_REMOTAS: usize = 2000;
+const MAX_LINES_REMOTAS: usize = 2000;
 
 /// How many lines a page jumps when the renderer does not say its height.
-const PAGINA: isize = 10;
+const PAGE: isize = 10;
 
 /// How often it is checked whether the log has changed.
 ///
@@ -53,14 +53,14 @@ const PAGINA: isize = 10;
 /// is CHEAP — an `AtomicU64`, without touching the ring's lock — so what
 /// actually costs something is the snapshot, and that is only sent when
 /// there is something new.
-const SONDEO: std::time::Duration = std::time::Duration::from_millis(500);
+const PROBE: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// Cap on rows a renderer can declare visible.
 ///
 /// Generous for a real screen — a 4K monitor with small type does not reach
 /// it — and capped because this number comes from the webview: with no cap,
 /// a huge `rows` would turn every snapshot into the whole ring.
-const MAX_FILAS_REGISTRO: usize = 512;
+const MAX_ROWS_LOG: usize = 512;
 
 /// What is known about the DAEMON's log.
 ///
@@ -73,23 +73,23 @@ const MAX_FILAS_REGISTRO: usize = 512;
 pub(super) enum Servicio {
     /// Has never answered: unknown.
     #[default]
-    SinRespuesta,
+    NoResponse,
     /// Serves its log: there is a second source of truth.
-    Sirve,
+    Serves,
     /// Said it has no log to serve.
-    SinAnillo,
+    NoRing,
 }
 
 /// The log panel's remote half (#328).
 #[derive(Debug, Default)]
-pub(super) struct RegistroRemoto {
+pub(super) struct LogRemote {
     /// What the daemon has delivered so far, already in presentation form
     /// and from oldest to newest.
     ///
     /// It accumulates and is not re-fetched whole every round: polling pulls
     /// from the remote ring with a cursor, so each answer brings only what
     /// is new.
-    pub(super) lineas: Vec<LogLine>,
+    pub(super) lines: Vec<LogLine>,
     /// Where it was up to. `None` = has not been asked yet, which is "give
     /// me whatever there is" and is NOT the same as zero: against a ring
     /// that has already wrapped around, a zero would report a false `lost`
@@ -99,31 +99,31 @@ pub(super) struct RegistroRemoto {
     ///
     /// Without this, a daemon slower than half a second to answer would
     /// pile up one request per tick forever.
-    pub(super) en_vuelo: bool,
+    pub(super) in_flight: bool,
     /// What is known about whether it serves its log.
     pub(super) servicio: Servicio,
     /// The level it answered it has set, in wire form.
     ///
     /// Its own, not ours: it is global to all its clients and only goes up,
     /// so what was requested and what is set need not match.
-    pub(super) nivel: Option<String>,
+    pub(super) level: Option<String>,
     /// How many lines were dropped past this cursor. They accumulate: a
     /// silent gap lies about what happened.
-    pub(super) perdidas: u64,
+    pub(super) lost: u64,
 }
 
-impl RegistroRemoto {
+impl LogRemote {
     /// Starts from zero, keeping what is known about the daemon.
     ///
     /// The lines and the cursor belong to THIS opening; whether the daemon
     /// serves its log or not is a fact about the daemon, and forgetting it
     /// would hide the selector for half a second every time the panel
     /// reopens.
-    pub(super) fn reiniciar(&mut self) {
-        self.lineas.clear();
+    pub(super) fn restart(&mut self) {
+        self.lines.clear();
         self.cursor = None;
-        self.en_vuelo = false;
-        self.perdidas = 0;
+        self.in_flight = false;
+        self.lost = 0;
     }
 
     /// Does it make sense to ask this daemon anything again?
@@ -139,13 +139,13 @@ impl RegistroRemoto {
     /// the fix for an asymmetry: the level used to be requested only by the
     /// source, so against a daemon that had already answered `Unsupported`
     /// the window sent a dead RPC on every level press. The TUI already got
-    /// this right (`RegistroRemoto::debe_pedir`); now it is the same rule in
+    /// this right (`LogRemote::must_request`); now it is the same rule in
     /// both.
     ///
     /// There is no version comparison here or anywhere: an older daemon does
     /// not even complete `initialize`.
-    pub(super) const fn debe_pedir(&self) -> bool {
-        !matches!(self.servicio, Servicio::SinAnillo)
+    pub(super) const fn must_request(&self) -> bool {
+        !matches!(self.servicio, Servicio::NoRing)
     }
 }
 
@@ -161,7 +161,7 @@ impl RegistroRemoto {
 /// the whole message for not understanding its label is worse than showing
 /// it with the ordinary label. With today's closed vocabulary it does not
 /// happen.
-fn linea_de_wire(l: norte_proto::methods::LogLine) -> LogLine {
+fn wire_line(l: norte_proto::methods::LogLine) -> LogLine {
     LogLine {
         epoch_ms: l.epoch_ms,
         level: LogLevel::from_wire(&l.level).unwrap_or(LogLevel::Info),
@@ -170,41 +170,41 @@ fn linea_de_wire(l: norte_proto::methods::LogLine) -> LogLine {
     }
 }
 
-impl Estado {
+impl State {
     /// The panel's projection: only the visible WINDOW.
     ///
     /// Like the listing, and for the same reason: a ring of two thousand
     /// lines sent whole on every patch is the waste decision D7 exists to
     /// prevent, and a log moves more than a directory does.
-    pub(super) fn panel_de_registro(&self, slot: u32) -> crate::dto::LogSlotView {
+    pub(super) fn log_panel(&self, slot: u32) -> crate::dto::LogSlotView {
         let lineas = self
             .log_ring
             .as_ref()
             .map(norte_config::logring::LogRing::snapshot)
             .unwrap_or_default();
-        let fuente = self.fuente_efectiva();
+        let fuente = self.source_efectiva();
         // Borrowed, not cloned: `merge` returns references on purpose — the
         // ring already cloned once in its `snapshot` — and the panel paints
         // at most one screen.
-        let mezcla = norte_frontend::logpanel::merge(&lineas, &self.log_remoto.lineas, fuente);
-        let visibles: Vec<_> = mezcla
+        let mezcla = norte_frontend::logpanel::merge(&lineas, &self.log_remote.lines, fuente);
+        let visible: Vec<_> = mezcla
             .into_iter()
             .filter(|(l, _)| self.log_panel.matches(l))
             .collect();
-        let start = self.log_panel.window_start(visibles.len(), self.log_filas);
-        let ventana = visibles
+        let start = self.log_panel.window_start(visible.len(), self.log_rows);
+        let window = visible
             .iter()
             .skip(start)
-            .take(self.log_filas)
-            .map(|(l, s)| Self::linea_de_registro(l, *s));
+            .take(self.log_rows)
+            .map(|(l, s)| Self::log_line(l, *s));
         crate::dto::LogSlotView {
             slot_id: slot,
-            lines: ventana.collect(),
+            lines: window.collect(),
             // The one that is SHOWN, always, across all sources — and
             // therefore the one the buttons control.
             //
             // Showing here the one the daemon answered was a two-headed bug:
-            // the `visibles` filter is still the panel's, so with the daemon
+            // the `visible` filter is still the panel's, so with the daemon
             // at `trace` and the panel at `info` the header marked `trace`
             // while every `debug` line from the daemon arrived over the wire
             // and was silently dropped — exactly the "no DEBUG lines is
@@ -226,10 +226,10 @@ impl Estado {
                 norte_frontend::display_name(self.log_panel.filter().as_bytes()).0,
             ),
             following: self.log_panel.following(),
-            total: visibles.len() as u64,
+            total: visible.len() as u64,
             first_visible: start as u64,
-            dropped_note: self.nota_de_descartes(fuente),
-            capturing: self.nota_de_captura(fuente),
+            dropped_note: self.discard_note(fuente),
+            capturing: self.capture_note(fuente),
             source: clamp_display(norte_i18n::t_in(
                 self.lang,
                 match fuente {
@@ -258,8 +258,8 @@ impl Estado {
                 LogSource::Both => "both",
             }
             .to_owned(),
-            sources_available: self.log_remoto.servicio == Servicio::Sirve,
-            source_note: self.nota_de_fuente(fuente),
+            sources_available: self.log_remote.servicio == Servicio::Serves,
+            source_note: self.source_note(fuente),
         }
     }
 
@@ -280,9 +280,9 @@ impl Estado {
     /// With both rings absent it stays `Window`, which is where #326's
     /// phrase lives: there is no log IN MEMORY to read, and that is not the
     /// same as "nothing is being logged".
-    fn fuente_efectiva(&self) -> LogSource {
+    fn source_efectiva(&self) -> LogSource {
         match (
-            self.log_remoto.servicio == Servicio::Sirve,
+            self.log_remote.servicio == Servicio::Serves,
             self.log_ring.is_some(),
         ) {
             (true, true) => self.log_panel.source(),
@@ -302,15 +302,15 @@ impl Estado {
     /// shared with all its clients, that never comes back down and that
     /// closing this panel does not lower. Staying quiet about it on the
     /// common path left that decision unannounced.
-    fn nota_de_fuente(&self, fuente: LogSource) -> String {
-        let clave = if self.log_remoto.servicio == Servicio::SinAnillo {
+    fn source_note(&self, fuente: LogSource) -> String {
+        let key = if self.log_remote.servicio == Servicio::NoRing {
             "log-source-unsupported"
         } else if fuente == LogSource::Window {
             return String::new();
         } else {
             "log-source-daemon-level"
         };
-        clamp_display(norte_i18n::t_in(self.lang, clave))
+        clamp_display(norte_i18n::t_in(self.lang, key))
     }
 
     /// Which ring is holding MORE than is shown, and which.
@@ -325,37 +325,37 @@ impl Estado {
     /// legible: its own is global to its clients and only goes up, so it can
     /// sit well above what this panel shows, and that gap is exactly what
     /// this phrase exists to not keep quiet about.
-    fn nota_de_captura(&self, fuente: LogSource) -> String {
-        let ensena = self.log_panel.level();
+    fn capture_note(&self, fuente: LogSource) -> String {
+        let shows = self.log_panel.level();
         let local = self
             .log_ring
             .as_ref()
             .map(norte_config::logring::LogRing::level)
-            .filter(|cap| *cap > ensena);
-        let remoto = self
-            .log_remoto
-            .nivel
+            .filter(|cap| *cap > shows);
+        let remote = self
+            .log_remote
+            .level
             .as_deref()
             .and_then(LogLevel::from_wire)
-            .filter(|cap| *cap > ensena);
-        let frase =
-            |clave, cap: LogLevel| norte_i18n::ta_in(self.lang, clave, &[("level", cap.wire())]);
-        let partes: Vec<String> = match fuente {
+            .filter(|cap| *cap > shows);
+        let phrase =
+            |key, cap: LogLevel| norte_i18n::ta_in(self.lang, key, &[("level", cap.wire())]);
+        let parts: Vec<String> = match fuente {
             LogSource::Window => local
-                .map(|c| frase("log-capturing", c))
+                .map(|c| phrase("log-capturing", c))
                 .into_iter()
                 .collect(),
-            LogSource::Daemon => remoto
-                .map(|c| frase("log-capturing-daemon", c))
+            LogSource::Daemon => remote
+                .map(|c| phrase("log-capturing-daemon", c))
                 .into_iter()
                 .collect(),
             LogSource::Both => local
-                .map(|c| frase("log-capturing-window", c))
+                .map(|c| phrase("log-capturing-window", c))
                 .into_iter()
-                .chain(remoto.map(|c| frase("log-capturing-daemon", c)))
+                .chain(remote.map(|c| phrase("log-capturing-daemon", c)))
                 .collect(),
         };
-        clamp_display(partes.join(" · "))
+        clamp_display(parts.join(" · "))
     }
 
     /// The lines that were lost, per ring and SAYING which one.
@@ -369,19 +369,19 @@ impl Estado {
     ///
     /// Each ring is only mentioned if it is being read: warning about a gap
     /// in a log that is not on screen is an alarm about nothing.
-    fn nota_de_descartes(&self, fuente: LogSource) -> String {
-        let mut partes: Vec<String> = Vec::new();
+    fn discard_note(&self, source: LogSource) -> String {
+        let mut parts: Vec<String> = Vec::new();
         let locales = self
             .log_ring
             .as_ref()
             .map_or(0, norte_config::logring::LogRing::dropped);
-        if locales > 0 && fuente != LogSource::Daemon {
-            partes.push(norte_i18n::ta_in(
+        if locales > 0 && source != LogSource::Daemon {
+            parts.push(norte_i18n::ta_in(
                 self.lang,
                 // Without naming the ring when it is the only one being
                 // read: it is the same phrase the TUI uses, which never has
                 // two.
-                if fuente == LogSource::Window {
+                if source == LogSource::Window {
                     "log-dropped"
                 } else {
                     "log-dropped-window"
@@ -389,14 +389,14 @@ impl Estado {
                 &[("n", &locales.to_string())],
             ));
         }
-        if self.log_remoto.perdidas > 0 && fuente != LogSource::Window {
-            partes.push(norte_i18n::ta_in(
+        if self.log_remote.lost > 0 && source != LogSource::Window {
+            parts.push(norte_i18n::ta_in(
                 self.lang,
                 "log-missed-daemon",
-                &[("n", &self.log_remoto.perdidas.to_string())],
+                &[("n", &self.log_remote.lost.to_string())],
             ));
         }
-        clamp_display(partes.join(" · "))
+        clamp_display(parts.join(" · "))
     }
 
     /// One line, sanitized.
@@ -405,11 +405,11 @@ impl Estado {
     /// here for a reason of its own: a log message can carry inside it a
     /// file name someone chose, and a `U+202E` there reorders the panel's
     /// whole line.
-    fn linea_de_registro(l: &LogLine, origen: LogSource) -> crate::dto::LogLineView {
-        let (target, t_hostil) = norte_frontend::display_name(l.target.as_bytes());
-        let (mensaje, m_hostil) = norte_frontend::display_name(l.message.as_bytes());
+    fn log_line(l: &LogLine, origen: LogSource) -> crate::dto::LogLineView {
+        let (target, t_hostile) = norte_frontend::display_name(l.target.as_bytes());
+        let (mensaje, m_hostile) = norte_frontend::display_name(l.message.as_bytes());
         crate::dto::LogLineView {
-            time: norte_frontend::format::hora_utc(l.epoch_ms),
+            time: norte_frontend::format::time_utc(l.epoch_ms),
             level: l.level.wire().to_owned(),
             // What is PAINTED, which is not the wire id. The renderer used
             // to paint `trace` while the terminal paints `TRACE` and its own
@@ -421,7 +421,7 @@ impl Estado {
             level_label: l.level.label().trim().to_owned(),
             target: clamp_display(target),
             message: clamp_display(mensaje),
-            hostile: t_hostil || m_hostil,
+            hostile: t_hostile || m_hostile,
             // `Both` is never passed to a line: `merge` marks each one with
             // the process it came from, which is the only thing that means
             // anything here.
@@ -454,13 +454,13 @@ impl Estado {
     /// even if right now it has not answered yet, and the answer to this
     /// call is precisely one of the two ways to find out whether it knows
     /// about logging.
-    pub(super) fn nivel_de_registro(
+    pub(super) fn log_level(
         &mut self,
-        nivel: &str,
+        level: &str,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(nivel) = LogLevel::from_wire(nivel) else {
+        let Some(level) = LogLevel::from_wire(level) else {
             // CLOSED vocabulary: an unrecognized one does not fall back to
             // `Info`, which would leave the panel showing something other
             // than what was requested.
@@ -471,26 +471,26 @@ impl Estado {
                 Vec::new(),
             );
         };
-        self.log_panel.show_level(nivel);
-        if let Some(anillo) = &self.log_ring {
-            anillo.raise_to(nivel);
+        self.log_panel.show_level(level);
+        if let Some(ring) = &self.log_ring {
+            ring.raise_to(level);
         }
         // And only if there is someone to ask: for a daemon that already
         // said it has no ring, raising its level is an RPC per keystroke
         // whose answer is already known. It is the same condition that cuts
-        // off polling (see `RegistroRemoto::debe_pedir`), and the TUI already
+        // off polling (see `LogRemote::must_request`), and the TUI already
         // applied it here.
-        if self.log_panel.source() != LogSource::Window && self.log_remoto.debe_pedir() {
+        if self.log_panel.source() != LogSource::Window && self.log_remote.must_request() {
             let backend = Arc::clone(backend);
             let buzon = buzon.clone();
-            let epoca = self.log_epoca;
-            let pedido = nivel.wire().to_owned();
+            let epoch = self.log_epoch;
+            let requested = level.wire().to_owned();
             tokio::spawn(async move {
-                let r = backend.log_level(pedido).await;
-                let _ = buzon.send(Mensaje::RegistroNivel(epoca, Box::new(r))).await;
+                let r = backend.log_level(requested).await;
+                let _ = buzon.send(Message::LogLevel(epoch, Box::new(r))).await;
             });
         }
-        self.repintar_registro()
+        self.repintar_log()
     }
 
     /// Cycles the log's source (#328).
@@ -509,19 +509,16 @@ impl Estado {
     /// set to something else the day there really was a daemon. It is the
     /// same thing the TUI does, which also does not cycle without a serving
     /// daemon.
-    pub(super) fn fuente_de_registro(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.log_remoto.servicio == Servicio::Sirve {
+    pub(super) fn log_source(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.log_remote.servicio == Servicio::Serves {
             self.log_panel.cycle_source();
         }
-        self.repintar_registro()
+        self.repintar_log()
     }
 
     /// The text filter over module and message.
-    pub(super) fn filtro_de_registro(
-        &mut self,
-        texto: &str,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if texto.len() > MAX_NOMBRE {
+    pub(super) fn log_filter(&mut self, text: &str) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if text.len() > MAX_NAME {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-name-too-long".to_owned(),
@@ -529,8 +526,8 @@ impl Estado {
                 Vec::new(),
             );
         }
-        self.log_panel.set_filter(texto);
-        self.repintar_registro()
+        self.log_panel.set_filter(text);
+        self.repintar_log()
     }
 
     /// Scrolls up or down through the log, detaching from the tail.
@@ -538,10 +535,7 @@ impl Estado {
     /// Detaching is half the panel: one that always jumps to the end cannot
     /// be read while something is writing, which is exactly when it is
     /// needed.
-    pub(super) fn desplazar_registro(
-        &mut self,
-        delta: i64,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn scroll_log(&mut self, delta: i64) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let lineas = self
             .log_ring
             .as_ref()
@@ -550,27 +544,27 @@ impl Estado {
         // Over the MERGED list, which is what is seen: counting only the
         // local ones would leave the cap short and a page would not reach
         // the end.
-        let visibles = norte_frontend::logpanel::merge(
+        let visible = norte_frontend::logpanel::merge(
             &lineas,
-            &self.log_remoto.lineas,
-            self.fuente_efectiva(),
+            &self.log_remote.lines,
+            self.source_efectiva(),
         )
         .into_iter()
         .filter(|(l, _)| self.log_panel.matches(l))
         .count();
-        let delta = isize::try_from(delta).unwrap_or(PAGINA);
+        let delta = isize::try_from(delta).unwrap_or(PAGE);
         if delta < 0 {
-            self.log_panel.scroll_up(delta.unsigned_abs(), visibles);
+            self.log_panel.scroll_up(delta.unsigned_abs(), visible);
         } else {
-            self.log_panel.scroll_down(delta.unsigned_abs(), visibles);
+            self.log_panel.scroll_down(delta.unsigned_abs(), visible);
         }
-        self.repintar_registro()
+        self.repintar_log()
     }
 
     /// Sticks back to the end.
-    pub(super) fn seguir_registro(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn follow_log(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         self.log_panel.follow();
-        self.repintar_registro()
+        self.repintar_log()
     }
 
     /// How many rows fit, from the frame the renderer just painted.
@@ -578,26 +572,23 @@ impl Estado {
     /// It sets this, it is not guessed here: in the TUI, guessing the height
     /// made every page skip two lines and the first one four, and what
     /// neither window showed could not be read at all.
-    pub(super) fn filas_de_registro(
-        &mut self,
-        filas: u32,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn log_rows(&mut self, rows: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // With a floor and a CEILING. The floor, so a page moves something;
         // the ceiling, because this number is sent by the webview and
         // without it a `rows` of four billion would make every snapshot
         // carry the whole ring — two thousand lines per action, exactly what
         // decision D7 and `LogSlotView`'s rustdoc exist to prevent. The
         // listing's path is already capped the same way.
-        let filas = (filas as usize).clamp(1, MAX_FILAS_REGISTRO);
-        if filas == self.log_filas {
+        let rows = (rows as usize).clamp(1, MAX_ROWS_LOG);
+        if rows == self.log_rows {
             // With no change there is no patch: the renderer sends this
             // every frame, and answering all of them would spend a sequence
             // number per frame.
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         }
-        self.log_filas = filas;
-        self.log_panel.set_viewport_rows(filas);
-        self.repintar_registro()
+        self.log_rows = rows;
+        self.log_panel.set_viewport_rows(rows);
+        self.repintar_log()
     }
 
     /// Repaints the log, if some slot is showing it.
@@ -610,14 +601,14 @@ impl Estado {
     /// With no log slot at all, nothing is sent — the panel closes and an
     /// action in flight lands afterward — an extra snapshot spends a
     /// sequence number to paint the same thing.
-    fn repintar_registro(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.huecos_de_registro().is_empty() {
-            return (self.aplicada(), Vec::new());
+    fn repintar_log(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        if self.log_slots().is_empty() {
+            return (self.applied(), Vec::new());
         }
         let snap = self.snapshot();
         (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
     }
 
@@ -627,18 +618,18 @@ impl Estado {
     /// closes: a timer that outlived the panel would be waking up the actor
     /// every half second to paint nothing.
     ///
-    /// `epoca` tells one opening from the next: opening, closing and
+    /// `epoch` tells one opening from the next: opening, closing and
     /// reopening would leave two timers alive over the same panel, and the
     /// old one would keep rearming forever.
-    pub(super) fn sondear_registro(&self, buzon: &mpsc::Sender<Mensaje>) {
-        if self.huecos_de_registro().is_empty() {
+    pub(super) fn sondear_log(&self, buzon: &mpsc::Sender<Message>) {
+        if self.log_slots().is_empty() {
             return;
         }
         let buzon = buzon.clone();
-        let epoca = self.log_epoca;
+        let epoch = self.log_epoch;
         tokio::spawn(async move {
-            tokio::time::sleep(SONDEO).await;
-            let _ = buzon.send(Mensaje::RegistroTic(epoca)).await;
+            tokio::time::sleep(PROBE).await;
+            let _ = buzon.send(Message::LogTic(epoch)).await;
         });
     }
 
@@ -647,31 +638,31 @@ impl Estado {
     /// The entry counter is an `AtomicU64` that only goes up, so the check
     /// touches neither the lock nor clones anything. Without it, this would
     /// be a full screen snapshot twice a second to paint the same thing.
-    pub(super) fn tic_de_registro(
+    pub(super) fn log_tick(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if epoca != self.log_epoca {
+        if epoch != self.log_epoch {
             // From a previous opening: let it die without rearming.
             return Vec::new();
         }
-        self.sondear_registro(buzon);
+        self.sondear_log(buzon);
         // And along the way the daemon's log is pulled (#328), hung off
         // THIS timer and not one of its own: two clocks over the same panel
         // are two things to turn off on close, and the second one is the
         // one that gets forgotten. The answer comes back through the
         // mailbox, so the actor is still the only one writing.
-        self.pedir_registro_remoto(backend, buzon);
-        let ahora = self
+        self.request_log_remote(backend, buzon);
+        let now = self
             .log_ring
             .as_ref()
             .map_or(0, norte_config::logring::LogRing::pushed);
-        if ahora == self.log_visto {
+        if now == self.log_seen {
             return Vec::new();
         }
-        self.log_visto = ahora;
+        self.log_seen = now;
         // Only whatever FOLLOWS the tail refreshes on its own. Whoever has
         // detached is reading something specific, and moving the list
         // underneath them is worse than not showing the new stuff — which
@@ -679,8 +670,8 @@ impl Estado {
         if !self.log_panel.following() {
             return Vec::new();
         }
-        let (_, salidas) = self.repintar_registro();
-        salidas
+        let (_, outputs) = self.repintar_log();
+        outputs
     }
 
     /// Pulls the DAEMON's log from where it left off (#328).
@@ -695,16 +686,16 @@ impl Estado {
     /// The epoch travels with the request: a close and an open fit between
     /// asking and answering, and the previous session's answer has to die
     /// instead of landing on the new panel.
-    pub(super) fn pedir_registro_remoto(
+    pub(super) fn request_log_remote(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
-        if self.huecos_de_registro().is_empty()
+        if self.log_slots().is_empty()
             // With one in flight another is not enqueued: a daemon slower
             // than half a second to answer would pile up one request per
             // tick forever.
-            || self.log_remoto.en_vuelo
+            || self.log_remote.in_flight
             // And a daemon that has already said it has no log is not asked
             // again. The negative CANNOT change while that daemon lives: it
             // comes from a compile-time feature or from a mount that failed
@@ -712,64 +703,62 @@ impl Estado {
             // forever, for an answer that cannot be any other.
             //
             // It is asymmetric on purpose. The POSITIVE case does need to
-            // keep being asked — the log grows — and that is why `Sirve`
+            // keep being asked — the log grows — and that is why `Serves`
             // cuts off nothing.
-            || !self.log_remoto.debe_pedir()
+            || !self.log_remote.must_request()
         {
             return;
         }
-        self.log_remoto.en_vuelo = true;
+        self.log_remote.in_flight = true;
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
-        let epoca = self.log_epoca;
-        let cursor = self.log_remoto.cursor;
+        let epoch = self.log_epoch;
+        let cursor = self.log_remote.cursor;
         tokio::spawn(async move {
-            let r = backend.log_tail(cursor, MAX_REMOTO).await;
-            let _ = buzon
-                .send(Mensaje::RegistroRemoto(epoca, Box::new(r)))
-                .await;
+            let r = backend.log_tail(cursor, MAX_REMOTE).await;
+            let _ = buzon.send(Message::LogRemote(epoch, Box::new(r))).await;
         });
     }
 
     /// Lands what the daemon answered to `log.tail`.
-    pub(super) fn aterrizar_registro_remoto(
+    pub(super) fn land_log_remote(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         res: Result<norte_proto::methods::LogTailResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if epoca != self.log_epoca {
+        if epoch != self.log_epoch {
             // From a previous opening. Neither its lines nor its cursor are
-            // valid anymore, and `en_vuelo` belongs to the CURRENT opening:
+            // valid anymore, and `in_flight` belongs to the CURRENT opening:
             // touching it from here would disarm the guard of a request that
             // is still alive.
             return Vec::new();
         }
-        self.log_remoto.en_vuelo = false;
-        let antes = (self.log_remoto.servicio, self.log_remoto.nivel.clone());
+        self.log_remote.in_flight = false;
+        let before = (self.log_remote.servicio, self.log_remote.level.clone());
         let nuevas = match res {
             Ok(r) => {
-                self.log_remoto.servicio = Servicio::Sirve;
-                self.log_remoto.nivel = Some(r.level);
-                self.log_remoto.cursor = Some(r.next);
-                self.log_remoto.perdidas = self.log_remoto.perdidas.saturating_add(r.lost);
+                self.log_remote.servicio = Servicio::Serves;
+                self.log_remote.level = Some(r.level);
+                self.log_remote.cursor = Some(r.next);
+                self.log_remote.lost = self.log_remote.lost.saturating_add(r.lost);
                 let n = r.lines.len();
-                self.log_remoto
-                    .lineas
-                    .extend(r.lines.into_iter().map(linea_de_wire));
+                self.log_remote
+                    .lines
+                    .extend(r.lines.into_iter().map(wire_line));
                 // The cap applies from the front: the old stuff is what gets
                 // dropped, same as in the ring, and it counts as lost — that
                 // is what keeps the trim from leaving a silent gap.
-                let sobra = self
-                    .log_remoto
-                    .lineas
+                let extra = self
+                    .log_remote
+                    .lines
                     .len()
-                    .saturating_sub(MAX_LINEAS_REMOTAS);
-                if sobra > 0 {
-                    self.log_remoto.lineas.drain(..sobra);
-                    self.log_remoto.perdidas = self
-                        .log_remoto
-                        .perdidas
-                        .saturating_add(sobra.try_into().unwrap_or(u64::MAX));
+                    .saturating_sub(MAX_LINES_REMOTAS);
+                if extra > 0 {
+                    self.log_remote.lines.drain(..extra);
+                    self.log_remote.lost = self
+                        .log_remote
+                        .lost
+                        .saturating_add(extra.try_into().unwrap_or(u64::MAX));
                 }
                 n
             }
@@ -778,7 +767,7 @@ impl Estado {
             // comparison anywhere — an older one does not even complete
             // `initialize`, so it never gets this far.
             Err(Error::Unsupported) => {
-                self.log_remoto.servicio = Servicio::SinAnillo;
+                self.log_remote.servicio = Servicio::NoRing;
                 0
             }
             // Any failure — the connection dropped, the daemon is busy — is
@@ -787,30 +776,30 @@ impl Estado {
             // It is kept quiet and retried in half a second.
             Err(_) => 0,
         };
-        let cambia_el_estado = antes != (self.log_remoto.servicio, self.log_remoto.nivel.clone());
-        self.repintar_si_hace_falta(nuevas > 0, cambia_el_estado)
+        let changes_the_state = before != (self.log_remote.servicio, self.log_remote.level.clone());
+        self.repaint_if_needed(nuevas > 0, changes_the_state)
     }
 
     /// Lands the level the daemon really left set.
-    pub(super) fn aterrizar_nivel_remoto(
+    pub(super) fn land_level_remote(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         res: Result<String, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if epoca != self.log_epoca {
+        if epoch != self.log_epoch {
             return Vec::new();
         }
-        let antes = (self.log_remoto.servicio, self.log_remoto.nivel.clone());
+        let before = (self.log_remote.servicio, self.log_remote.level.clone());
         match res {
-            Ok(nivel) => {
-                self.log_remoto.servicio = Servicio::Sirve;
-                self.log_remoto.nivel = Some(nivel);
+            Ok(level) => {
+                self.log_remote.servicio = Servicio::Serves;
+                self.log_remote.level = Some(level);
             }
-            Err(Error::Unsupported) => self.log_remoto.servicio = Servicio::SinAnillo,
+            Err(Error::Unsupported) => self.log_remote.servicio = Servicio::NoRing,
             Err(_) => {}
         }
-        let cambia = antes != (self.log_remoto.servicio, self.log_remoto.nivel.clone());
-        self.repintar_si_hace_falta(false, cambia)
+        let changes = before != (self.log_remote.servicio, self.log_remote.level.clone());
+        self.repaint_if_needed(false, changes)
     }
 
     /// The repaint rule shared by both of the daemon's answers.
@@ -820,25 +809,25 @@ impl Estado {
     /// the new stuff — but a STATE change (a second source appeared, the
     /// daemon said it has no log, its level changed) always paints: it does
     /// not move the list and it is exactly what needs to be said.
-    fn repintar_si_hace_falta(
+    fn repaint_if_needed(
         &mut self,
-        hay_lineas: bool,
-        cambia_el_estado: bool,
+        hay_lines: bool,
+        changes_the_state: bool,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        if cambia_el_estado || (hay_lineas && self.log_panel.following()) {
-            let (_, salidas) = self.repintar_registro();
-            return salidas;
+        if changes_the_state || (hay_lines && self.log_panel.following()) {
+            let (_, outputs) = self.repintar_log();
+            return outputs;
         }
         Vec::new()
     }
 
     /// The slots that are painting the log right now.
-    pub(super) fn huecos_de_registro(&self) -> Vec<u32> {
-        self.reparto
+    pub(super) fn log_slots(&self) -> Vec<u32> {
+        self.split
             .placements
             .iter()
-            .filter(|(s, _)| !self.huecos.contains_key(&s.0))
-            .filter(|(s, _)| kind_de(&self.arbol, *s).is_some_and(|k| k.as_str() == KIND))
+            .filter(|(s, _)| !self.slots.contains_key(&s.0))
+            .filter(|(s, _)| kind_de(&self.tree, *s).is_some_and(|k| k.as_str() == KIND))
             .map(|(s, _)| s.0)
             .collect()
     }

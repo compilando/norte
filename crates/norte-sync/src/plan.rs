@@ -90,9 +90,9 @@ pub enum PlanItem {
 ///     mtime_ms: Some(1_726_000_000_000),
 ///     attrs: Default::default(),
 /// };
-/// let foto = DestWitness::of(&entry);
-/// assert_eq!(foto.kind, EntryKind::File);
-/// assert_eq!(foto.size, Some(1234));
+/// let snapshot = DestWitness::of(&entry);
+/// assert_eq!(snapshot.kind, EntryKind::File);
+/// assert_eq!(snapshot.size, Some(1234));
 ///
 /// // A provider that does not measure leaves both at `None`, never a faked
 /// // zero: revalidation is then left with "exists and is the same class".
@@ -223,8 +223,8 @@ impl DestWitness {
 /// but there is one to REMEMBER: the row of the directory pair, which is
 /// `Same` and produces no step, is the one that knows it. The transducer
 /// records `(source → destination)` for every directory pair whose two paths
-/// differ and resolves each row by its deepest ancestor, so `café/nuevo.txt`
-/// comes out with `dest_rel = café(NFD)/nuevo.txt` and the executor writes
+/// differ and resolves each row by its deepest ancestor, so `café/new.txt`
+/// comes out with `dest_rel = café(NFD)/new.txt` and the executor writes
 /// INSIDE the directory that exists instead of creating a second `café`
 /// alongside it (the other half of issue #152).
 ///
@@ -238,7 +238,7 @@ impl DestWitness {
 /// step — and it must arrive in walk order, which is pre-order. A caller that
 /// wants to plan only a selection (`sync.plan`'s `include`) has to filter the
 /// OUTPUT flow, never the input one: dropping `café`'s `Same` row leaves
-/// `café/nuevo.txt` without a `dest_rel` and reopens #152 right where it was
+/// `café/new.txt` without a `dest_rel` and reopens #152 right where it was
 /// closed.
 ///
 /// ```
@@ -381,7 +381,7 @@ struct Transducer<S> {
     ///
     /// A MAP and not a stack, and that is the only shape that works: the walk
     /// emits rows by DIRECTORY — all of one level, then, one by one, its
-    /// subdirectories' — so between the `café` pair and its `café/nuevo.txt`
+    /// subdirectories' — so between the `café` pair and its `café/new.txt`
     /// child, all of `café`'s siblings slip in. A stack that got popped at
     /// the first sibling would lose the translation right before needing it
     /// (or worse, with two levels: it would be left with the grandparent's
@@ -2012,7 +2012,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_root_whose_name_is_a_prefix_of_another_is_not_a_root() {
-        // `…/origen2/x` does NOT hang off `…/origen`: compared by SEGMENTS,
+        // `…/origen2/x` does NOT hang off `…/source`: compared by SEGMENTS,
         // not by string prefix.
         let intruder = entry_at(
             &vpath("file:///origen2"),
@@ -2664,7 +2664,7 @@ mod tests {
         // tests built by hand in the one order the walk does not produce.
         //
         // And the other way around: what is OUTSIDE the folder cannot inherit
-        // it, or `otro.txt` would end up inside `café` at the destination.
+        // it, or `other.txt` would end up inside `café` at the destination.
         let items = run(
             vec![
                 dir_pair("café".as_bytes(), b"cafe\xcc\x81"),
@@ -2710,8 +2710,8 @@ mod tests {
         // The case where a stack would not just lose it but LIE: with `café`
         // and `café/RESUMÉ` both spelled differently, `café/zz.txt`'s row
         // slips in between `RESUMÉ` and its children. Popping the stack,
-        // `RESUMÉ` is lost and `café/RESUMÉ/nuevo.txt` comes out translated
-        // to `café(NFD)/RESUMÉ/nuevo.txt` — a path that exists on neither
+        // `RESUMÉ` is lost and `café/RESUMÉ/new.txt` comes out translated
+        // to `café(NFD)/RESUMÉ/new.txt` — a path that exists on neither
         // side.
         let inner_pair = row(
             CompareVerdict::Same,
@@ -4079,7 +4079,7 @@ mod tests {
         // subdirectory's — so between `café` and its child its siblings slip
         // in, and between `café/RESUMÉ` and its own too. This test's first
         // version was a stack, passed the five hand-built tests and failed
-        // here: `nuevo.txt` came out with no `dest_rel` or, worse, with one
+        // here: `new.txt` came out with no `dest_rel` or, worse, with one
         // naming a folder that exists on neither side.
         use norte_compare::{CompareOptions, Sides, compare};
         use norte_vfs::Provider as _;
@@ -4196,7 +4196,7 @@ mod tests {
             .collect();
 
         // The walk is pre-order and the merge is sorted by key, so the order
-        // is a given fact and needs no sorting: `raiz.txt` before `sub`, and
+        // is a given fact and needs no sorting: `root.txt` before `sub`, and
         // `sub` before what is inside it.
         let output: Vec<(SyncStepKind, String)> = steps_of(&items)
             .iter()

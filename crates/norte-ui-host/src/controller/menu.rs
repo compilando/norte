@@ -1,16 +1,16 @@
 //! The window's menu.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// Closes the open menu, noting where it was.
     ///
     /// ONE door: the menu closes from four places — the key, `Escape`,
@@ -19,7 +19,7 @@ impl Estado {
     /// first item for no apparent reason.
     pub(super) fn olvidar_menu(&mut self) {
         if let Some(m) = &self.menu {
-            self.menu_ultimo = m.menu();
+            self.menu_last = m.menu();
         }
         self.menu = None;
     }
@@ -30,16 +30,16 @@ impl Estado {
     /// The same key opens and closes, as in the TUI: `alt+m` is "the menu",
     /// and pressing it twice cannot leave two dropdowns open nor require
     /// `Esc`.
-    pub(super) fn abrir_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn open_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.menu.is_some() {
             self.olvidar_menu();
         } else {
-            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_ultimo));
+            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_last));
         }
         let change = ViewChange::Menu {
             menu: self.vista_menu(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Answers with the WHOLE screen.
@@ -47,11 +47,11 @@ impl Estado {
     /// Two actions trigger it — a `Resync` and a resize — and both for the
     /// same reason: what changes does not fit in a patch, because everything
     /// changes. A single copy so the two do not diverge.
-    pub(super) fn responde_con_foto(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn responds_with_snapshot(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let snap = self.snapshot();
         (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
     }
 
@@ -60,13 +60,10 @@ impl Estado {
     ///
     /// An index outside the bar is rejected as stale and closes nothing: it
     /// is a race with an earlier catalogue, not an order.
-    pub(super) fn desplegar_menu(
-        &mut self,
-        menu: u32,
-    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn expand_menu(&mut self, menu: u32) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let i = menu as usize;
         if i >= norte_frontend::menu::MENUS.len() {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let same = self.menu.as_ref().is_some_and(|m| m.menu() == i);
         if same {
@@ -77,7 +74,7 @@ impl Estado {
         let change = ViewChange::Menu {
             menu: self.vista_menu(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// The mouse hovering over an entry: moves the cursor and nothing else.
@@ -86,13 +83,13 @@ impl Estado {
         row: u32,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(m) = self.menu.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         m.point_at(row as usize);
         let change = ViewChange::Menu {
             menu: self.vista_menu(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// A click on an entry: runs it.
@@ -100,21 +97,21 @@ impl Estado {
     /// It is resolved against the menu the HOST has open, not against
     /// whatever the renderer says: a row that no longer exists — the menu
     /// changed between painting and the click — runs nothing.
-    pub(super) fn activar_del_menu(
+    pub(super) fn activate_from_menu(
         &mut self,
         row: u32,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(m) = self.menu.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         m.point_at(row as usize);
         if m.item() != row as usize {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let chosen = m.selected();
-        self.ejecutar_del_menu(chosen, backend, mailbox)
+        self.run_from_menu(chosen, backend, mailbox)
     }
 
     /// A click on the panel bar (#324): the `button` on the bar that this
@@ -122,21 +119,21 @@ impl Estado {
     /// open the same panel diverge the moment one of them grows a detail —
     /// the lesson from ADR 0077 applied inside a single frontend, same as in
     /// the TUI.
-    pub(super) fn pulsar_barra_de_paneles(
+    pub(super) fn click_pane_bar(
         &mut self,
         button: u32,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let buttons = self.botones_de_paneles();
+        let buttons = self.pane_buttons();
         let Some(button_def) = buttons.get(button as usize) else {
             // The bar the renderer painted is no longer this one: a plugin
             // contributed a kind, or was removed. Let it request a snapshot.
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         let command = button_def.command.clone();
-        match crate::commands::efecto_de(&command, 1) {
-            Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
+        match crate::commands::effect_of(&command, 1) {
+            Some(effect) => self.apply_effect(effect, backend, mailbox),
             // A contributed kind whose `layout.<kind>` is not in the
             // catalogue: the button exists to SHOW the panel, and saying it
             // cannot be opened from here is better than a mute click.
@@ -150,22 +147,22 @@ impl Estado {
     /// It is looked up by id in the CURRENT list: an item that is no longer
     /// there (the tasks finished, the list changed) is a normal race, and the
     /// renderer requests a snapshot.
-    pub(super) fn pulsar_elemento_de_estado(
+    pub(super) fn click_status_item(
         &mut self,
         id: &str,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(command) = self
-            .elementos_de_estado()
+            .state_items()
             .into_iter()
             .find(|v| v.id == id)
             .and_then(|v| v.command)
         else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        match crate::commands::efecto_de(command, 1) {
-            Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
+        match crate::commands::effect_of(command, 1) {
+            Some(effect) => self.apply_effect(effect, backend, mailbox),
             None => self.no_implementado(command),
         }
     }
@@ -173,17 +170,17 @@ impl Estado {
     /// A click on a layout button (ADR 0133): its order, through its
     /// shortcut's dispatch. An id not in the shared table is a renderer from
     /// another version: let it request a snapshot.
-    pub(super) fn pulsar_boton_de_disposicion(
+    pub(super) fn click_layout_button(
         &mut self,
         id: &str,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let Some(button_def) = norte_frontend::layoutbar::by_id(id) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        match crate::commands::efecto_de(button_def.command, 1) {
-            Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
+        match crate::commands::effect_of(button_def.command, 1) {
+            Some(effect) => self.apply_effect(effect, backend, mailbox),
             None => self.no_implementado(button_def.command),
         }
     }
@@ -191,14 +188,14 @@ impl Estado {
     /// A tab bar button (ADR 0133): first it selects the tab — the clicked
     /// group gets focus — and then it runs the order through its shortcut's
     /// dispatch. A tab that is no longer there is a normal race.
-    pub(super) fn boton_de_pestana(
+    pub(super) fn tab_button(
         &mut self,
         slot_id: u32,
         verb: crate::action::TabVerb,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let (ack, mut outputs) = self.elegir_pestana(slot_id, backend, mailbox);
+        let (ack, mut outputs) = self.choose_tab(slot_id, backend, mailbox);
         if matches!(ack, ActionAck::Stale { .. }) {
             return (ack, outputs);
         }
@@ -206,8 +203,8 @@ impl Estado {
             crate::action::TabVerb::New => "pane.tab-new",
             crate::action::TabVerb::Close => "pane.tab-close",
         };
-        let (ack, more) = match crate::commands::efecto_de(command, 1) {
-            Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
+        let (ack, more) = match crate::commands::effect_of(command, 1) {
+            Some(effect) => self.apply_effect(effect, backend, mailbox),
             None => self.no_implementado(command),
         };
         outputs.extend(more);
@@ -215,15 +212,15 @@ impl Estado {
     }
 
     /// A click OUTSIDE the dropdown closes it without running anything.
-    pub(super) fn cerrar_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn close_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.menu.is_none() {
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         }
         self.olvidar_menu();
         let change = ViewChange::Menu {
             menu: self.vista_menu(),
         };
-        (self.aplicada(), vec![self.parche(vec![change])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Alt pressed and released alone (bridge 68): collapses the open menu or
@@ -233,13 +230,13 @@ impl Estado {
     /// the `app.menu` key would do there anyway: the dialog or the help
     /// screen eats it. Opening the menu on top of a pending question would
     /// leave two surfaces fighting over the keyboard.
-    pub(super) fn alternar_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+    pub(super) fn toggle_menu(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.menu.is_some() {
-            return self.cerrar_menu();
+            return self.close_menu();
         }
-        if self.algo_se_queda_las_teclas() {
-            return (self.aplicada(), Vec::new());
+        if self.something_keeps_the_keys() {
+            return (self.applied(), Vec::new());
         }
-        self.abrir_menu()
+        self.open_menu()
     }
 }

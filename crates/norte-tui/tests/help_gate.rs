@@ -56,7 +56,7 @@ use norte_tui::keymap::{COMMANDS, DIALOG_COMMANDS};
 ///
 /// It is computed (both lists are already hand-written in `keymap.rs`, and
 /// duplicating them here would be a third copy that goes out of sync).
-fn vocabulario() -> Vec<&'static str> {
+fn vocabulary() -> Vec<&'static str> {
     COMMANDS
         .iter()
         .copied()
@@ -71,14 +71,14 @@ fn vocabulario() -> Vec<&'static str> {
 ///
 /// Duplicating the list here would be the third copy that goes out of sync
 /// (and the second already did: until H3c this gate asked for a `dialog`
-/// context no modal produces). It is computed, like [`vocabulario`], and
+/// context no modal produces). It is computed, like [`vocabulary`], and
 /// for the same reason.
 fn contextos() -> Vec<&'static str> {
     norte_tui::help_context::CONTEXTS.to_vec()
 }
 
 #[test]
-fn el_corpus_que_enviamos_esta_integro() {
+fn the_corpus_we_send_is_intact() {
     // Locale parity, unique ids, links that resolve, and no live markup
     // written where it paints literal. Needs no vocabulary: it is the only
     // thing `norte-help` itself already checks on its own.
@@ -91,13 +91,13 @@ fn el_corpus_que_enviamos_esta_integro() {
 }
 
 #[test]
-fn el_corpus_no_nombra_comandos_que_no_existen() {
+fn the_corpus_does_not_name_commands_that_do_not_exist() {
     // WITHOUT an allowlist (`&[]`, literally), and it is not an omission: a
     // topic that names a nonexistent command is always a bug — prose that
     // promises a key that does nothing, or a misspelled id. There is no
     // debt to paper over here, only typos to fix — and since H3h there is
     // no allowlist left to pass in the other direction either.
-    let desconocidos: Vec<Issue> = check_commands(&vocabulario(), &[])
+    let desconocidos: Vec<Issue> = check_commands(&vocabulary(), &[])
         .into_iter()
         .filter(|i| matches!(i, Issue::UnknownCommand { .. }))
         .collect();
@@ -109,11 +109,11 @@ fn el_corpus_no_nombra_comandos_que_no_existen() {
 }
 
 #[test]
-fn todo_comando_del_vocabulario_esta_documentado() {
+fn every_command_in_the_vocabulary_is_documented() {
     // `&[]` and not an allowlist: since H3h there is no debt to paper over.
     // A command with no page is a failure with a single fix — write the
     // paragraph — and there is no line left to postpone it with.
-    let issues = check_commands(&vocabulario(), &[]);
+    let issues = check_commands(&vocabulary(), &[]);
 
     let sin_documentar: Vec<&Issue> = issues
         .iter()
@@ -141,7 +141,7 @@ fn todo_comando_del_vocabulario_esta_documentado() {
 }
 
 #[test]
-fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
+fn the_corpus_contexts_are_screens_the_tui_has() {
     let contextos = contextos();
     let issues = check_contexts(&contextos);
 
@@ -171,7 +171,7 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
     // The other one: every context the TUI knows how to open has a page.
     // Without this, F1 on a page-less screen opens the index and nobody
     // complains.
-    let sin_pagina: Vec<&str> = issues
+    let no_page: Vec<&str> = issues
         .iter()
         .filter_map(|i| match i {
             Issue::ContextWithoutTopic { context, .. } => Some(context.as_str()),
@@ -179,10 +179,10 @@ fn los_contextos_del_corpus_son_pantallas_que_la_tui_tiene() {
         })
         .collect();
     assert!(
-        sin_pagina.is_empty(),
+        no_page.is_empty(),
         "contexts with no page. Claim them from the `context` of the page \
          that explains them, or write that page: the allowlist that \
-         postponed them ran out in H3h. {sin_pagina:?}"
+         postponed them ran out in H3h. {no_page:?}"
     );
 
     // And nothing else, for the same reason as the commands gate: a new

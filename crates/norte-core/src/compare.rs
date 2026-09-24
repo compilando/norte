@@ -108,8 +108,8 @@ pub(crate) async fn probed_sides(
         right.capabilities_at(right_root)
     );
     norte_compare::Sides::from_capabilities(
-        degradada(left_caps, left, left_root),
-        degradada(right_caps, right, right_root),
+        degraded(left_caps, left, left_root),
+        degraded(right_caps, right, right_root),
     )
 }
 
@@ -122,12 +122,12 @@ pub(crate) async fn probed_sides(
 /// to report case collisions. ADR 0054 says that where the guarantee isn't
 /// there, it must be SAID, and a TRACE line doesn't say it: it's invisible
 /// in production.
-pub(crate) fn degradada(
-    resultado: Result<norte_proto::Capabilities, Error>,
+pub(crate) fn degraded(
+    result: Result<norte_proto::Capabilities, Error>,
     provider: &dyn Provider,
     root: &VPath,
 ) -> norte_proto::Capabilities {
-    match resultado {
+    match result {
         Ok(caps) => caps,
         Err(e) => {
             tracing::warn!(

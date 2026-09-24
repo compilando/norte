@@ -35,11 +35,11 @@ use norte_frontend::busy::{Busy, BusyKind};
 ///
 /// ```
 /// use norte_proto::TaskKind;
-/// assert!(norte_tui::refresh::habla_por_su_informe(TaskKind::Checksum));
-/// assert!(!norte_tui::refresh::habla_por_su_informe(TaskKind::Copy));
+/// assert!(norte_tui::refresh::speaks_through_its_report(TaskKind::Checksum));
+/// assert!(!norte_tui::refresh::speaks_through_its_report(TaskKind::Copy));
 /// ```
 #[must_use]
-pub fn habla_por_su_informe(kind: norte_proto::TaskKind) -> bool {
+pub fn speaks_through_its_report(kind: norte_proto::TaskKind) -> bool {
     matches!(kind, norte_proto::TaskKind::Checksum)
 }
 
@@ -115,7 +115,7 @@ pub async fn on_tick(
             // piece, and did not mutate anything that needs re-listing. A
             // generic `done` here would step on the verdict, which is the
             // only answer the gesture had to give.
-            TaskState::Completed if habla_por_su_informe(fin.progress.kind) => {}
+            TaskState::Completed if speaks_through_its_report(fin.progress.kind) => {}
             TaskState::Completed => {
                 refresh = true;
                 // #314: a permissions batch that finishes "fine" may not
@@ -161,7 +161,7 @@ pub async fn on_tick(
             TaskState::Cancelled => {
                 // One that does not mutate has no panes to re-list, not even
                 // cancelled.
-                refresh = refresh || !habla_por_su_informe(fin.progress.kind);
+                refresh = refresh || !speaks_through_its_report(fin.progress.kind);
                 app.message = Some(t("msg-cancelled"));
                 // With no file there is nothing to edit: the intent is
                 // released so the NEXT `edit-new` does not open this one's
@@ -201,7 +201,7 @@ pub async fn on_tick(
                     // Localized render by CATEGORY (spec §17.7, #20): never
                     // the English Display nor OS strings.
                     app.message = Some(error_message(&error));
-                    refresh = refresh || !habla_por_su_informe(fin.progress.kind);
+                    refresh = refresh || !speaks_through_its_report(fin.progress.kind);
                 }
             }
             _ => {}
@@ -218,7 +218,7 @@ pub async fn on_tick(
     // seen. The undo cap already stops going past what was counted; this is
     // so what was counted is what is current now.
     if app.timeline_slot().is_some() {
-        crate::dispatch::cargar_timeline(app, backend, None).await;
+        crate::dispatch::load_timeline(app, backend, None).await;
     }
     if refresh {
         refresh_panes(app, backend, events).await
@@ -230,7 +230,7 @@ pub async fn on_tick(
 /// What has to be shown from a rename batch's report right after it
 /// finishes, or `None` if there is nothing to look for.
 ///
-/// The same criterion as the window (`Controller::informe_de_lote`): a clean
+/// The same criterion as the window (`Controller::batch_report`): a clean
 /// batch opens nothing; one that left something half-done, does. A report
 /// that could not be requested is only mentioned if the Task also failed or
 /// was cancelled — if it finished fine, the board row is enough, and if not,
@@ -242,20 +242,20 @@ pub async fn on_tick(
 ///     applied: 2, rolled_back: 0, failed_pair: None, stuck: None,
 ///     uncertain: None, compensations_lost: 0,
 /// };
-/// assert!(norte_tui::refresh::informe_de_lote(&Ok(clean), false).is_none());
+/// assert!(norte_tui::refresh::batch_report(&Ok(clean), false).is_none());
 /// let no_report = Err(norte_proto::Error::Unsupported);
-/// assert!(norte_tui::refresh::informe_de_lote(&no_report, false).is_none());
-/// assert!(norte_tui::refresh::informe_de_lote(&no_report, true).is_some());
+/// assert!(norte_tui::refresh::batch_report(&no_report, false).is_none());
+/// assert!(norte_tui::refresh::batch_report(&no_report, true).is_some());
 /// ```
 #[must_use]
-pub fn informe_de_lote(
-    resultado: &Result<norte_proto::methods::FsRenameBatchReportResult, Error>,
-    fallo_la_task: bool,
+pub fn batch_report(
+    result: &Result<norte_proto::methods::FsRenameBatchReportResult, Error>,
+    task_failed: bool,
 ) -> Option<Vec<norte_frontend::ReportLine>> {
-    match resultado {
+    match result {
         Ok(r) if norte_frontend::batch_report_is_clean(r) => None,
         Ok(r) => Some(norte_frontend::batch_report_lines(r, norte_i18n::active())),
-        Err(_) if !fallo_la_task => None,
+        Err(_) if !task_failed => None,
         Err(e) => Some(vec![norte_frontend::ReportLine::Phrase(t(
             if matches!(e, Error::Unsupported) {
                 "modal-batch-unsupported"
@@ -298,10 +298,10 @@ async fn request_report(
     failure: bool,
 ) -> Option<(crate::app::ReportKind, Vec<norte_frontend::ReportLine>)> {
     if kind == norte_proto::TaskKind::Undo {
-        informe_de_undo(&backend.undo_report(id).await, failure)
+        undo_report(&backend.undo_report(id).await, failure)
             .map(|l| (crate::app::ReportKind::Undo, l))
     } else {
-        informe_de_lote(&backend.rename_batch_report(id).await, failure)
+        batch_report(&backend.rename_batch_report(id).await, failure)
             .map(|l| (crate::app::ReportKind::Batch, l))
     }
 }
@@ -309,8 +309,8 @@ async fn request_report(
 /// What has to be shown from an undo's report right after it finishes, or
 /// `None` if it returned everything.
 ///
-/// The same criterion as the window (`Controller::informe_de_undo`) and as
-/// [`informe_de_lote`]: what was skipped — irreversible, or a creation left
+/// The same criterion as the window (`Controller::undo_report`) and as
+/// [`batch_report`]: what was skipped — irreversible, or a creation left
 /// in place because the destination has no trash — counts as not returned,
 /// and is said.
 ///
@@ -322,18 +322,18 @@ async fn request_report(
 ///     blocked: None, batch_stuck: None, compensations_lost: 0,
 ///     denied: Vec::new(), denied_total: 0,
 /// };
-/// assert!(norte_tui::refresh::informe_de_undo(&Ok(report(0)), false).is_none());
-/// assert!(norte_tui::refresh::informe_de_undo(&Ok(report(1)), false).is_some());
+/// assert!(norte_tui::refresh::undo_report(&Ok(report(0)), false).is_none());
+/// assert!(norte_tui::refresh::undo_report(&Ok(report(1)), false).is_some());
 /// ```
 #[must_use]
-pub fn informe_de_undo(
-    resultado: &Result<norte_proto::methods::PolicyUndoReportResult, Error>,
-    fallo_la_task: bool,
+pub fn undo_report(
+    result: &Result<norte_proto::methods::PolicyUndoReportResult, Error>,
+    task_failed: bool,
 ) -> Option<Vec<norte_frontend::ReportLine>> {
-    match resultado {
+    match result {
         Ok(r) if norte_frontend::undo_report_is_clean(r) => None,
         Ok(r) => Some(norte_frontend::undo_report_lines(r, norte_i18n::active())),
-        Err(_) if !fallo_la_task => None,
+        Err(_) if !task_failed => None,
         Err(e) => Some(vec![norte_frontend::ReportLine::Phrase(t(
             if matches!(e, Error::Unsupported) {
                 "modal-undo-unsupported"
@@ -385,7 +385,7 @@ async fn pack_notice(backend: &Backend, task_id: norte_proto::TaskId) -> Option<
 ///
 /// **Only the id, with no connection epoch, and that rests on an SDK
 /// invariant**: after a daemon handover ids start over again (the window
-/// does carry an epoch for this reason — `Controller::epoca_conexion`). Here
+/// does carry an epoch for this reason — `Controller::epoch_connection`). Here
 /// it is correct because `norte-client` synthesizes a `Failed` outcome for
 /// every orphaned task BEFORE the new connection hands out ids, keeping the
 /// `task_id`: the intent is consumed on the old connection. If that
@@ -574,7 +574,7 @@ mod tests {
     #[test]
     fn a_stuck_batch_opens_its_report_without_stepping_on_another_modal() {
         let mut app = app_with_entries(&["a"]);
-        let lines = informe_de_lote(&Ok(stuck()), true).expect("it must be said");
+        let lines = batch_report(&Ok(stuck()), true).expect("it must be said");
         assert!(
             lines
                 .iter()
@@ -614,7 +614,7 @@ mod tests {
             denied_total: 0,
         };
         let mut app = app_with_entries(&["a"]);
-        let lines = informe_de_undo(&Ok(report(1)), false).expect("it must be said");
+        let lines = undo_report(&Ok(report(1)), false).expect("it must be said");
         app.pending_reports
             .push_back((crate::app::ReportKind::Undo, lines));
         app.open_next_pending();
@@ -626,7 +626,7 @@ mod tests {
             })
         ));
         assert!(
-            informe_de_undo(&Ok(report(0)), true).is_none(),
+            undo_report(&Ok(report(0)), true).is_none(),
             "an undo that returned everything opens nothing"
         );
     }
@@ -635,7 +635,7 @@ mod tests {
     /// cannot fake a report sentence it does not share.
     #[test]
     fn the_reports_path_stands_alone_on_its_line() {
-        let lines = informe_de_lote(&Ok(stuck()), false).expect("report");
+        let lines = batch_report(&Ok(stuck()), false).expect("report");
         let text = crate::ui::report_text(&lines);
         assert!(
             text.lines().any(|l| l.trim() == "⟨mem⟩/d/b"),

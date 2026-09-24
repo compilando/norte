@@ -40,7 +40,7 @@ pub fn pane_con(names: &[&str]) -> Pane {
     Pane::new(root(), names.iter().map(|n| file(n)).collect())
 }
 
-pub fn app_dos_panes() -> App {
+pub fn app_two_panes() -> App {
     App::new(pane_con(&["a"]), pane_con(&["b"]))
 }
 
@@ -53,7 +53,7 @@ pub fn test_caps() -> norte_proto::Capabilities {
     }
 }
 
-/// `App` with each pane on ITS OWN dir (the `app_dos_panes` above puts both
+/// `App` with each pane on ITS OWN dir (the `app_two_panes` above puts both
 /// on `root()`, which doesn't distinguish sides).
 pub fn app_en(left: &str, right: &str) -> App {
     App::new(

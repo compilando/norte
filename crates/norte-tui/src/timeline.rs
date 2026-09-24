@@ -15,4 +15,4 @@ pub const KIND: &str = "timeline";
 /// Well under the protocol's cap (200): this is a screen meant to be read,
 /// and whatever does not fit is requested on reaching the bottom. Requesting
 /// the maximum page on entry would fetch two hundred rows to show ten.
-pub const POR_PAGINA: u32 = 50;
+pub const PER_PAGE: u32 = 50;

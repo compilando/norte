@@ -136,7 +136,7 @@ pub trait MutationObserver: Send + Sync {
     /// That's why the default is `true`: an observer that stores but does
     /// not answer this loses the protection silently, which is the
     /// expensive direction for the mistake to go.
-    fn quiere_identidad(&self) -> bool {
+    fn wants_identity(&self) -> bool {
         true
     }
 
@@ -219,7 +219,7 @@ impl MutationObserver for NoopObserver {
         Ok(())
     }
 
-    fn quiere_identidad(&self) -> bool {
+    fn wants_identity(&self) -> bool {
         false
     }
 }

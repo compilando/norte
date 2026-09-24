@@ -729,14 +729,14 @@ pub fn directory_picker_candidates(from: &std::path::Path) -> Vec<Vec<std::ffi::
 /// and a path decoded lossily along the way opens a different file.
 ///
 /// ```
-/// use norte_frontend::shell::vpath_de_ruta_nativa;
-/// assert!(vpath_de_ruta_nativa("/tmp").is_some());
+/// use norte_frontend::shell::vpath_from_native_path;
+/// assert!(vpath_from_native_path("/tmp").is_some());
 /// // A relative path names nothing without a "from", so it is refused.
-/// assert!(vpath_de_ruta_nativa("tmp").is_none());
+/// assert!(vpath_from_native_path("tmp").is_none());
 /// ```
 #[must_use]
-pub fn vpath_de_ruta_nativa(nativa: &str) -> Option<norte_proto::VPath> {
-    let p = std::path::Path::new(nativa);
+pub fn vpath_from_native_path(native: &str) -> Option<norte_proto::VPath> {
+    let p = std::path::Path::new(native);
     if !p.is_absolute() {
         return None;
     }
@@ -746,7 +746,7 @@ pub fn vpath_de_ruta_nativa(nativa: &str) -> Option<norte_proto::VPath> {
 /// The user's home directory as a `VPath`, or the local root if the
 /// environment does not say: the last-resort destination for a pane left
 /// with nowhere to go (`pane.disconnect`,
-/// [`crate::nav::regreso_tras_desconectar`]).
+/// [`crate::nav::regreso_after_disconnect`]).
 ///
 /// The root and not an error: a destination that does not exist would leave
 /// the pane staring at a closed connection, which is the one thing

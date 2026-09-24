@@ -52,17 +52,17 @@ impl TarWriter {
     ///
     /// # Errors
     ///
-    /// [`PackError::Estado`] if an entry is already open or the archive is closed.
+    /// [`PackError::State`] if an entry is already open or the archive is closed.
     pub fn begin(&mut self, entry: &PackEntry) -> Result<(), PackError> {
         if self.current_size.is_some() || self.closed {
-            return Err(PackError::Estado);
+            return Err(PackError::State);
         }
         // The size has to FIT in ustar's eleven octal digits: past that,
         // the header would lie and the archive would be unreadable from
         // that entry onward. It's reported, not written (see
         // [`TAR_SIZE_MAX`]).
         if !entry.dir && entry.size > TAR_SIZE_MAX {
-            return Err(PackError::Tamano);
+            return Err(PackError::Size);
         }
         let mut name = entry.name.clone();
         if entry.dir && !name.ends_with(b"/") {
@@ -107,14 +107,14 @@ impl TarWriter {
     ///
     /// # Errors
     ///
-    /// [`PackError::Estado`] with no entry open, or if the chunk exceeds
+    /// [`PackError::State`] with no entry open, or if the chunk exceeds
     /// the size announced in the header — a tar whose header lies is a
     /// tar nobody can read past that entry.
     pub fn data(&mut self, chunk: &[u8]) -> Result<(), PackError> {
-        let size = self.current_size.ok_or(PackError::Estado)?;
+        let size = self.current_size.ok_or(PackError::State)?;
         let new_total = self.written.saturating_add(chunk.len() as u64);
         if new_total > size {
-            return Err(PackError::Tamano);
+            return Err(PackError::Size);
         }
         self.written = new_total;
         self.out.extend_from_slice(chunk);
@@ -125,12 +125,12 @@ impl TarWriter {
     ///
     /// # Errors
     ///
-    /// [`PackError::Estado`] with no entry open, [`PackError::Tamano`] if
+    /// [`PackError::State`] with no entry open, [`PackError::Size`] if
     /// fewer bytes than announced were written.
     pub fn end(&mut self) -> Result<(), PackError> {
-        let size = self.current_size.take().ok_or(PackError::Estado)?;
+        let size = self.current_size.take().ok_or(PackError::State)?;
         if self.written != size {
-            return Err(PackError::Tamano);
+            return Err(PackError::Size);
         }
         self.pad(size);
         Ok(())
@@ -140,10 +140,10 @@ impl TarWriter {
     ///
     /// # Errors
     ///
-    /// [`PackError::Estado`] if an entry is still open.
+    /// [`PackError::State`] if an entry is still open.
     pub fn finish(&mut self) -> Result<(), PackError> {
         if self.current_size.is_some() {
-            return Err(PackError::Estado);
+            return Err(PackError::State);
         }
         self.out.extend_from_slice(&[0_u8; BLOCK * 2]);
         self.closed = true;
@@ -243,7 +243,7 @@ mod tests {
         let mut w = TarWriter::new();
         assert_eq!(
             w.begin(&PackEntry::file(b"vm.img".to_vec(), TAR_SIZE_MAX + 1)),
-            Err(PackError::Tamano)
+            Err(PackError::Size)
         );
         // And right below the ceiling it does fit.
         assert!(

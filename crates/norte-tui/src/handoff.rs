@@ -63,7 +63,7 @@ fn program() -> &'static str {
 /// it to the shell would litter the reader's prompt with traces they never
 /// asked for.
 ///
-/// Returns the `Child` so the caller can check with [`esperar_arranque`] that
+/// Returns the `Child` so the caller can check with [`wait_startup`] that
 /// the window is STILL alive: a successful `spawn` only says the process
 /// started.
 ///
@@ -106,7 +106,7 @@ pub const GRACIA: std::time::Duration = std::time::Duration::from_millis(1_500);
 ///
 /// # Errors
 /// The exit code of a window that died within `grace`.
-pub async fn esperar_arranque(
+pub async fn wait_startup(
     mut child: std::process::Child,
     grace: std::time::Duration,
 ) -> Result<(), Option<i32>> {
@@ -165,7 +165,7 @@ mod tests {
             .spawn()
             .expect("sh exists");
         assert_eq!(
-            esperar_arranque(child, std::time::Duration::from_millis(1_500)).await,
+            wait_startup(child, std::time::Duration::from_millis(1_500)).await,
             Err(Some(2)),
             "and it says which code it exited with"
         );
@@ -183,7 +183,7 @@ mod tests {
         // killed afterwards by its pid.
         let _ = &mut child;
         assert_eq!(
-            esperar_arranque(child, std::time::Duration::from_millis(300)).await,
+            wait_startup(child, std::time::Duration::from_millis(300)).await,
             Ok(())
         );
         let _ = std::process::Command::new("kill")

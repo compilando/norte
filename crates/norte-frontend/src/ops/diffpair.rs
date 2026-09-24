@@ -130,14 +130,14 @@ mod tests {
     }
 
     #[test]
-    fn dos_marcados_son_la_pareja() {
+    fn two_marked_ones_are_the_pair() {
         let (a, b) = (entry("a", EntryKind::File), entry("b", EntryKind::File));
         let (x, y) = pair(&[&a, &b], None, None).expect("two marked files");
         assert_eq!((x, y), (a.path, b.path));
     }
 
     #[test]
-    fn sin_marcas_es_uno_de_cada_panel() {
+    fn with_no_marks_it_is_one_from_each_pane() {
         let (a, b) = (entry("a", EntryKind::File), entry("b", EntryKind::File));
         assert!(pair(&[], Some(&a), Some(&b)).is_ok());
     }
@@ -145,7 +145,7 @@ mod tests {
     /// Three marked are not a pair, and guessing which two would be
     /// showing the diff between two files nobody chose.
     #[test]
-    fn ni_uno_ni_tres() {
+    fn neither_one_nor_three() {
         let (a, b, c) = (
             entry("a", EntryKind::File),
             entry("b", EntryKind::File),
@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn una_carpeta_manda_a_comparar_directorios() {
+    fn a_folder_sends_to_compare_directories() {
         let (a, d) = (entry("a", EntryKind::File), entry("d", EntryKind::Dir));
         assert_eq!(pair(&[&a, &d], None, None), Err(PairError::NotFiles));
     }
@@ -166,7 +166,7 @@ mod tests {
     /// read as "they're the same", which is a wrong answer to a question
     /// nobody asked.
     #[test]
-    fn el_mismo_fichero_dos_veces_no_es_una_comparacion() {
+    fn the_same_file_twice_is_not_a_comparison() {
         let a = entry("a", EntryKind::File);
         assert_eq!(pair(&[], Some(&a), Some(&a)), Err(PairError::NotTwo));
     }

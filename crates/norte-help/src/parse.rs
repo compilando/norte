@@ -994,7 +994,7 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
     let mut out = Vec::new();
     let mut truncated = false;
     let mut lines = body.lines().peekable();
-    let mut para: Vec<String> = Vec::new();
+    let mut for_: Vec<String> = Vec::new();
     let mut cells_left = limits.max_cells;
 
     while let Some(raw) = lines.next() {
@@ -1010,9 +1010,9 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
         truncated |= cut;
 
         if line.trim().is_empty() {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
         } else if let Some(rest) = line.strip_prefix("```") {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             let lang =
                 (!rest.trim().is_empty()).then(|| mask_if(rest.trim().to_owned(), mode.masks()));
             let mut text = String::new();
@@ -1036,7 +1036,7 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
             }
             out.push(Block::Code { lang, text });
         } else if let Some(rest) = line.strip_prefix('#') {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             // One `#` is already stripped, so the hashes left here are the
             // ones ABOVE level 1. Clamped to 3 — the model documents 1..=3 —
             // by counting, never by arithmetic that could overflow `u8`:
@@ -1052,14 +1052,14 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
                 text: mask_if(text.to_owned(), mode.masks()),
             });
         } else if let Some(rest) = line.strip_prefix("> ") {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             let (kind, body) = callout_kind(rest);
             out.push(Block::Callout {
                 kind,
                 spans: spans_masked(body, mode),
             });
         } else if let Some(rest) = line.strip_prefix("- ") {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             let mut items = vec![spans_masked(rest, mode)];
             // `to_owned` on purpose: `peek` borrows `lines` for the WHOLE body
             // of the `while let`, so the inner `next()` would not compile with
@@ -1078,7 +1078,7 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
             }
             out.push(Block::Bullets(items));
         } else if line.starts_with('|') {
-            flush(&mut para, &mut out, mode);
+            flush(&mut for_, &mut out, mode);
             let mut header = cells(line, mode);
             // Every cell of this body, header cells included, comes out of one
             // budget. Rows are padded to the header width, so it is the
@@ -1119,10 +1119,10 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
             }
             out.push(Block::Table { header, rows });
         } else {
-            para.push(line.to_owned());
+            for_.push(line.to_owned());
         }
     }
-    flush(&mut para, &mut out, mode);
+    flush(&mut for_, &mut out, mode);
     // One iteration can push the pending paragraph AND its own block, so the
     // cap may be overshot by one. Clamping here makes `blocks.len() <=
     // max_blocks` hold unconditionally. It bounds the block COUNT only —
@@ -1137,12 +1137,12 @@ fn blocks_of(body: &str, limits: Limits, mode: Mode<'_>) -> (Vec<Block>, bool) {
 /// Emits the paragraph built up so far, if there is one, and empties the
 /// buffer. Lines are joined with a single space: a hard-wrapped corpus must
 /// reflow to the reader's width, not show ours.
-fn flush(para: &mut Vec<String>, out: &mut Vec<Block>, mode: Mode<'_>) {
-    if para.is_empty() {
+fn flush(for_: &mut Vec<String>, out: &mut Vec<Block>, mode: Mode<'_>) {
+    if for_.is_empty() {
         return;
     }
     let mut spans = Vec::new();
-    for (i, line) in para.iter().enumerate() {
+    for (i, line) in for_.iter().enumerate() {
         if i > 0 {
             // The joiner is OUR structure, not the author's bytes, so it is
             // written after the line was parsed on its own. That ordering is
@@ -1152,7 +1152,7 @@ fn flush(para: &mut Vec<String>, out: &mut Vec<Block>, mode: Mode<'_>) {
         spans.extend(spans_masked(line, mode));
     }
     out.push(Block::Paragraph(merge_text(spans)));
-    para.clear();
+    for_.clear();
 }
 
 /// Cuts a line to `max_line_bytes`, always on a `char` boundary. Returns the

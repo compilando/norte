@@ -5,11 +5,11 @@ use super::*;
 // ---------------------------------------------------------------------------
 
 /// Waits for the next update carrying the sync panel.
-pub(super) async fn siguiente_sync(
+pub(super) async fn next_sync(
     sub: &mut norte_ui_host::controller::UiSubscription,
 ) -> Option<norte_ui_host::dto::SyncView> {
     for _ in 0..40 {
-        let Ok(Some(u)) = tokio::time::timeout(ESPERA_MAX, sub.recv()).await else {
+        let Ok(Some(u)) = tokio::time::timeout(WAIT_MAX, sub.recv()).await else {
             continue;
         };
         match u {
@@ -57,13 +57,13 @@ pub(super) fn paso_de_plan(
 }
 
 /// A plan's closing, with no blockers.
-pub(super) fn plan_cerrado(pasos: u64) -> norte_proto::methods::SyncPlanDone {
+pub(super) fn plan_closed(steps: u64) -> norte_proto::methods::SyncPlanDone {
     // The counts, as the daemon would count them: the model compares them
     // class by class against its own, and a plan that does not add up is
     // NOT approved. The bytes too: every step in this test measures ten.
     let counts = norte_proto::methods::SyncCounts {
-        copy: pasos,
-        bytes: pasos * 10,
+        copy: steps,
+        bytes: steps * 10,
         ..Default::default()
     };
     norte_proto::methods::SyncPlanDone {
@@ -86,9 +86,9 @@ pub(super) fn plan_cerrado(pasos: u64) -> norte_proto::methods::SyncPlanDone {
 /// Requesting a sync opens the panel with the plan the core answered, and
 /// the plan says for each step whether undo brings it back.
 #[tokio::test]
-async fn pedir_sincronizar_abre_el_plan() {
-    let falso = arbol_como_falso();
-    *falso.plan_de_sync.lock().expect("plan") = Some((
+async fn requesting_sync_opens_the_plan() {
+    let fake = tree_as_fake();
+    *fake.plan_de_sync.lock().expect("plan") = Some((
         vec![
             // Both of the SAME class: the model compares the counts class
             // by class against the daemon's, and a plan that does not add
@@ -96,22 +96,22 @@ async fn pedir_sincronizar_abre_el_plan() {
             paso_de_plan(1, "a.md", norte_proto::methods::SyncStepKind::Copy),
             paso_de_plan(2, "b.md", norte_proto::methods::SyncStepKind::Copy),
         ],
-        plan_cerrado(2),
+        plan_closed(2),
     ));
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    separar_los_paneles(&h, &mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    separate_the_panes(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
 
     // Until the plan CLOSES: the steps arrive in one patch and the closing
     // in another, and what can be approved is a closed plan.
-    let mut vista = siguiente_sync(&mut sub).await.expect("opens");
+    let mut vista = next_sync(&mut sub).await.expect("opens");
     for _ in 0..20 {
         if vista.can_approve {
             break;
         }
-        vista = siguiente_sync(&mut sub).await.expect("still open");
+        vista = next_sync(&mut sub).await.expect("still open");
     }
     assert_eq!(vista.steps.len(), 2, "{vista:?}");
     assert_eq!(vista.total, 2);
@@ -146,8 +146,8 @@ async fn pedir_sincronizar_abre_el_plan() {
 
 /// A plan with BLOCKERS cannot be approved, and it says which ones they are.
 #[tokio::test]
-async fn un_plan_con_bloqueos_no_se_aprueba() {
-    let mut done = plan_cerrado(1);
+async fn a_plan_with_blockers_is_not_approved() {
+    let mut done = plan_closed(1);
     done.blockers = vec![norte_proto::methods::SyncBlocker {
         kind: norte_proto::methods::SyncBlockerKind::DestReadOnly,
         // The root: a lock on the whole tree hangs off no step.
@@ -156,8 +156,8 @@ async fn un_plan_con_bloqueos_no_se_aprueba() {
     }];
     done.executable = false;
     done.blockers_total = 1;
-    let falso = arbol_como_falso();
-    *falso.plan_de_sync.lock().expect("plan") = Some((
+    let fake = tree_as_fake();
+    *fake.plan_de_sync.lock().expect("plan") = Some((
         vec![paso_de_plan(
             1,
             "a.md",
@@ -165,17 +165,17 @@ async fn un_plan_con_bloqueos_no_se_aprueba() {
         )],
         done,
     ));
-    let (h, _snap) = host_con_layout(Arc::new(falso), "orthodox", (200, 60)).await;
+    let (h, _snap) = host_con_layout(Arc::new(fake), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    separar_los_paneles(&h, &mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    separate_the_panes(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
 
-    let mut vista = siguiente_sync(&mut sub).await.expect("opens");
+    let mut vista = next_sync(&mut sub).await.expect("opens");
     for _ in 0..20 {
         if !vista.blockers.is_empty() {
             break;
         }
-        vista = siguiente_sync(&mut sub).await.expect("still open");
+        vista = next_sync(&mut sub).await.expect("still open");
     }
     assert!(
         !vista.blockers.is_empty(),
@@ -189,17 +189,17 @@ async fn un_plan_con_bloqueos_no_se_aprueba() {
 
 /// Syncing both panes when they are in the SAME place queues nothing.
 #[tokio::test]
-async fn sincronizar_el_mismo_directorio_no_encola_nada() {
-    let falso = arbol_como_falso();
-    *falso.plan_de_sync.lock().expect("plan") = Some((Vec::new(), plan_cerrado(0)));
-    let backend = Arc::new(falso);
+async fn syncing_the_same_directory_queues_nothing() {
+    let fake = tree_as_fake();
+    *fake.plan_de_sync.lock().expect("plan") = Some((Vec::new(), plan_closed(0)));
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    // Without separating the panes: both look at `casa`. And the command
+    // Without separating the panes: both look at `home`. And the command
     // really RUNS — the previous version of this test pressed `Escape` on
     // the palette and asserted that nothing had been requested, which is
     // true whether the guard exists or not.
-    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.sync-dirs").await;
+    let ack = execute_via_palette_ack(&h, &mut sub, "pane.sync-dirs").await;
     assert_eq!(
         ack,
         ActionAck::Unavailable {
@@ -221,27 +221,27 @@ async fn sincronizar_el_mismo_directorio_no_encola_nada() {
 /// "failed", and — what matters for the next phase — kept saying the plan
 /// can be approved after someone told it to stop.
 #[tokio::test]
-async fn cancelar_el_plan_desde_el_tablero_lo_dice_en_el_panel() {
-    let falso = arbol_como_falso();
-    *falso.plan_de_sync.lock().expect("plan") = Some((
+async fn cancelling_the_plan_from_the_dashboard_says_so_in_the_pane() {
+    let fake = tree_as_fake();
+    *fake.plan_de_sync.lock().expect("plan") = Some((
         vec![paso_de_plan(
             1,
             "a.md",
             norte_proto::methods::SyncStepKind::Copy,
         )],
-        plan_cerrado(1),
+        plan_closed(1),
     ));
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    separar_los_paneles(&h, &mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
-    let vista = siguiente_sync(&mut sub).await.expect("opens");
+    separate_the_panes(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
+    let vista = next_sync(&mut sub).await.expect("opens");
     assert!(vista.running);
 
     // The daemon says the Task was cancelled.
     let tx = backend
-        .progreso
+        .progress
         .lock()
         .expect("progreso")
         .clone()
@@ -249,7 +249,7 @@ async fn cancelar_el_plan_desde_el_tablero_lo_dice_en_el_panel() {
     tx.send_modify(|p| p.state = norte_proto::TaskState::Cancelled);
 
     for _ in 0..40 {
-        let v = siguiente_sync(&mut sub).await.expect("still open");
+        let v = next_sync(&mut sub).await.expect("still open");
         if !v.running {
             assert!(
                 !v.can_approve,
@@ -268,36 +268,36 @@ async fn cancelar_el_plan_desde_el_tablero_lo_dice_en_el_panel() {
 /// anymore — and, with a request in flight, the second keystroke was
 /// killing both panels.
 #[tokio::test]
-async fn con_el_panel_del_plan_delante_no_se_pide_otro() {
-    let falso = arbol_como_falso();
-    *falso.plan_de_sync.lock().expect("plan") = Some((
+async fn with_the_plan_pane_in_front_no_other_is_requested() {
+    let fake = tree_as_fake();
+    *fake.plan_de_sync.lock().expect("plan") = Some((
         vec![paso_de_plan(
             1,
             "a.md",
             norte_proto::methods::SyncStepKind::Copy,
         )],
-        plan_cerrado(1),
+        plan_closed(1),
     ));
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    separar_los_paneles(&h, &mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
-    let _ = siguiente_sync(&mut sub).await.expect("opens");
+    separate_the_panes(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
+    let _ = next_sync(&mut sub).await.expect("opens");
 
     // With the panel up front, the keys are ITS OWN: `ctrl+p` does not open
     // the palette, which is the path through which the command would be
     // repeated. It is the first of the two locks.
-    h.dispatch(tecla_mod("p", true, false))
+    h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
+    let snapshot = next_snapshot(&mut sub).await;
     assert!(
-        foto.palette.is_none(),
+        snapshot.palette.is_none(),
         "the plan panel cannot let the palette's key through"
     );
-    assert!(foto.sync.is_some(), "and the panel is still up front");
+    assert!(snapshot.sync.is_some(), "and the panel is still up front");
     assert_eq!(
         backend.planes_pedidos.lock().expect("planes").len(),
         1,
@@ -308,22 +308,22 @@ async fn con_el_panel_del_plan_delante_no_se_pide_otro() {
 /// A daemon that does not know how to plan does not leave the request
 /// hanging.
 #[tokio::test]
-async fn un_plan_que_el_daemon_rechaza_no_deja_nada_pendiente() {
-    let falso = arbol_como_falso();
+async fn a_plan_the_daemon_rejects_leaves_nothing_pending() {
+    let fake = tree_as_fake();
     // No plan: the fake answers `Unsupported`.
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    separar_los_paneles(&h, &mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
+    separate_the_panes(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
     // The failure is SAID.
     for _ in 0..40 {
-        if siguiente_aviso(&mut sub).await.starts_with("err-") {
+        if next_notice(&mut sub).await.starts_with("err-") {
             break;
         }
     }
     // And the next attempt can be made: the request did not get stuck.
-    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.sync-dirs").await;
+    let ack = execute_via_palette_ack(&h, &mut sub, "pane.sync-dirs").await;
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
         "the previous request left the host stuck: {ack:?}"
@@ -337,65 +337,65 @@ async fn un_plan_que_el_daemon_rechaza_no_deja_nada_pendiente() {
 /// and only appears when the plan deletes or leaves something with no way
 /// back. Always asking is what teaches people to answer without reading.
 #[tokio::test]
-async fn un_plan_que_borra_pregunta_dos_veces() {
-    let mut done = plan_cerrado(1);
+async fn a_plan_that_deletes_asks_twice() {
+    let mut done = plan_closed(1);
     done.counts = norte_proto::methods::SyncCounts {
         delete_tree: 1,
         ..Default::default()
     };
-    let falso = arbol_como_falso();
-    *falso.plan_de_sync.lock().expect("plan") = Some((
+    let fake = tree_as_fake();
+    *fake.plan_de_sync.lock().expect("plan") = Some((
         vec![norte_proto::methods::SyncStep {
             reversal: Some(norte_proto::methods::StepReversal::RestoreTrash),
             ..paso_de_plan(1, "viejo", norte_proto::methods::SyncStepKind::DeleteTree)
         }],
         done,
     ));
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    separar_los_paneles(&h, &mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
-    let mut vista = siguiente_sync(&mut sub).await.expect("opens");
+    separate_the_panes(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
+    let mut vista = next_sync(&mut sub).await.expect("opens");
     for _ in 0..20 {
         if vista.can_approve {
             break;
         }
-        vista = siguiente_sync(&mut sub).await.expect("still open");
+        vista = next_sync(&mut sub).await.expect("still open");
     }
     assert!(vista.can_approve, "{}", vista.status);
 
     // The first `a` only ASKS.
     // TODO(translation): review — the comment says `a`, but the dispatched
     // key below is "y"; kept as in the source.
-    h.dispatch(tecla("y")).await.expect("host alive");
-    let preguntando = siguiente_sync(&mut sub).await.expect("still open");
+    h.dispatch(press("y")).await.expect("host alive");
+    let asking = next_sync(&mut sub).await.expect("still open");
     assert!(
-        preguntando.confirming.is_some(),
-        "a plan that deletes trees asks again: {preguntando:?}"
+        asking.confirming.is_some(),
+        "a plan that deletes trees asks again: {asking:?}"
     );
     asentar().await;
     assert!(
-        backend.aplicados.lock().expect("aplicados").is_empty(),
+        backend.applied.lock().expect("aplicados").is_empty(),
         "and it has still applied nothing"
     );
 
     // A key that is not `y` WITHDRAWS the question and applies nothing.
-    h.dispatch(tecla("n")).await.expect("host alive");
-    let retirada = siguiente_sync(&mut sub).await.expect("still open");
+    h.dispatch(press("n")).await.expect("host alive");
+    let retirada = next_sync(&mut sub).await.expect("still open");
     assert!(retirada.confirming.is_none());
     asentar().await;
-    assert!(backend.aplicados.lock().expect("aplicados").is_empty());
+    assert!(backend.applied.lock().expect("aplicados").is_empty());
 
     // `a` and then `y`: now it does, and with the hash the CORE returned.
-    h.dispatch(tecla("y")).await.expect("host alive");
-    let _ = siguiente_sync(&mut sub).await;
-    h.dispatch(tecla("y")).await.expect("host alive");
-    let aplicados = anotados(&backend, "the plan applied", 1, |f| {
-        f.aplicados.lock().expect("aplicados").clone()
+    h.dispatch(press("y")).await.expect("host alive");
+    let _ = next_sync(&mut sub).await;
+    h.dispatch(press("y")).await.expect("host alive");
+    let applied = anotados(&backend, "the plan applied", 1, |f| {
+        f.applied.lock().expect("aplicados").clone()
     })
     .await;
-    assert_eq!(aplicados.len(), 1, "only once");
+    assert_eq!(applied.len(), 1, "only once");
 }
 
 /// A REJECTED apply releases the latch; one with an UNKNOWN outcome does
@@ -407,7 +407,7 @@ async fn un_plan_que_borra_pregunta_dos_veces() {
 /// arrived, and offering `y` again is offering to apply the same plan twice
 /// over the same destination.
 #[tokio::test]
-async fn un_apply_de_resultado_desconocido_no_se_reofrece() {
+async fn an_apply_of_an_unknown_result_is_not_reoffered() {
     for (error, se_reofrece) in [
         (
             norte_proto::Error::PolicyDenied {
@@ -417,40 +417,40 @@ async fn un_apply_de_resultado_desconocido_no_se_reofrece() {
         ),
         (norte_proto::Error::Io { retryable: true }, false),
     ] {
-        let falso = arbol_como_falso();
-        *falso.plan_de_sync.lock().expect("plan") = Some((
+        let fake = tree_as_fake();
+        *fake.plan_de_sync.lock().expect("plan") = Some((
             vec![paso_de_plan(
                 1,
                 "a.md",
                 norte_proto::methods::SyncStepKind::Copy,
             )],
-            plan_cerrado(1),
+            plan_closed(1),
         ));
-        *falso.error_al_aplicar.lock().expect("error") = Some(error.clone());
-        let backend = Arc::new(falso);
+        *fake.error_on_apply.lock().expect("error") = Some(error.clone());
+        let backend = Arc::new(fake);
         let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
         let mut sub = h.subscribe();
-        separar_los_paneles(&h, &mut sub).await;
-        ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
-        let mut vista = siguiente_sync(&mut sub).await.expect("opens");
+        separate_the_panes(&h, &mut sub).await;
+        run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
+        let mut vista = next_sync(&mut sub).await.expect("opens");
         for _ in 0..20 {
             if vista.can_approve {
                 break;
             }
-            vista = siguiente_sync(&mut sub).await.expect("still open");
+            vista = next_sync(&mut sub).await.expect("still open");
         }
         assert!(vista.can_approve, "{}", vista.status);
 
-        h.dispatch(tecla("y")).await.expect("host alive");
+        h.dispatch(press("y")).await.expect("host alive");
         anotados(&backend, "the apply requested", 1, |f| {
-            f.aplicados.lock().expect("aplicados").clone()
+            f.applied.lock().expect("aplicados").clone()
         })
         .await;
         // The apply's outcome comes back through the mailbox: it is let run
         // before asking what the screen shows.
         asentar().await;
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let tras = siguiente_foto(&mut sub).await.sync.expect("still open");
+        let tras = next_snapshot(&mut sub).await.sync.expect("still open");
         assert_eq!(
             tras.can_approve, se_reofrece,
             "{error:?} left the screen offering approve = {}",
@@ -465,50 +465,50 @@ async fn un_apply_de_resultado_desconocido_no_se_reofrece() {
 /// Closing it loses the report — and with it the count, the failures and
 /// the undo handle — over a destination that is being rewritten.
 #[tokio::test]
-async fn con_el_apply_en_vuelo_escape_no_cierra() {
-    let falso = arbol_como_falso();
-    *falso.plan_de_sync.lock().expect("plan") = Some((
+async fn with_apply_in_flight_escape_does_not_close() {
+    let fake = tree_as_fake();
+    *fake.plan_de_sync.lock().expect("plan") = Some((
         vec![paso_de_plan(
             1,
             "a.md",
             norte_proto::methods::SyncStepKind::Copy,
         )],
-        plan_cerrado(1),
+        plan_closed(1),
     ));
-    let backend = Arc::new(falso);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    separar_los_paneles(&h, &mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
-    let mut vista = siguiente_sync(&mut sub).await.expect("opens");
+    separate_the_panes(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
+    let mut vista = next_sync(&mut sub).await.expect("opens");
     for _ in 0..20 {
         if vista.can_approve {
             break;
         }
-        vista = siguiente_sync(&mut sub).await.expect("still open");
+        vista = next_sync(&mut sub).await.expect("still open");
     }
     // This plan deletes nothing and undoes entirely: there is no second
     // question. `y` is `dialog.approve` in the preset (#287): approving a
     // plan is saying yes to what is already up front, not a bare "confirm".
-    h.dispatch(tecla("y")).await.expect("host alive");
+    h.dispatch(press("y")).await.expect("host alive");
     anotados(&backend, "the plan applied", 1, |f| {
-        f.aplicados.lock().expect("aplicados").clone()
+        f.applied.lock().expect("aplicados").clone()
     })
     .await;
-    assert_eq!(backend.aplicados.lock().expect("aplicados").len(), 1);
+    assert_eq!(backend.applied.lock().expect("aplicados").len(), 1);
 
     // The FIRST `Escape` asks to stop and does NOT close: closing loses the
     // report on a destination half rewritten. And it asks to stop the
     // APPLY's task, not the plan's, which finished a while ago.
-    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(press("Escape")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    let panel = foto.sync.expect("the panel stays");
+    let snapshot = next_snapshot(&mut sub).await;
+    let panel = snapshot.sync.expect("the panel stays");
     assert!(
         panel.cancel_requested,
         "and the screen acknowledges it was heard"
     );
-    hasta(&backend, "the stop requested from the daemon", |f| {
+    until(&backend, "the stop requested from the daemon", |f| {
         (!f.canceladas_por_id.lock().expect("canceladas").is_empty()).then_some(())
     })
     .await;
@@ -524,10 +524,10 @@ async fn con_el_apply_en_vuelo_escape_no_cierra() {
 
     // The SECOND one closes, whatever happens with the report: without this
     // exit, the writing screen was the only one in norte with no exit.
-    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(press("Escape")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
     for _ in 0..20 {
-        if siguiente_foto(&mut sub).await.sync.is_none() {
+        if next_snapshot(&mut sub).await.sync.is_none() {
             return;
         }
     }
@@ -536,55 +536,54 @@ async fn con_el_apply_en_vuelo_escape_no_cierra() {
 
 /// The report arrives and the panel says so, with the failures one by one.
 #[tokio::test]
-async fn el_informe_de_la_sincronizacion_dice_lo_que_fallo() {
-    let falso = arbol_como_falso();
-    *falso.plan_de_sync.lock().expect("plan") = Some((
+async fn the_sync_report_says_what_failed() {
+    let fake = tree_as_fake();
+    *fake.plan_de_sync.lock().expect("plan") = Some((
         vec![paso_de_plan(
             1,
             "a.md",
             norte_proto::methods::SyncStepKind::Copy,
         )],
-        plan_cerrado(1),
+        plan_closed(1),
     ));
-    *falso.informe_de_sync.lock().expect("informe") =
-        Some(norte_proto::methods::SyncReportResult {
-            done: 0,
-            failed: 1,
-            skipped: 0,
-            bytes: 0,
-            failures: vec![norte_proto::methods::SyncFailure {
-                rel: norte_proto::methods::RelPath::new(vec![
-                    norte_proto::Segment::new(b"a.md".to_vec()).expect("segmento"),
-                ]),
-                dest_rel: None,
-                cause: norte_proto::methods::SyncFailureCause::Denied,
-                kind: norte_proto::methods::SyncStepKind::Copy,
-            }],
-            // With no journal batch: nothing to undo, and the panel will
-            // say so.
-            batch_id: None,
-            dest_trash: norte_proto::methods::DestTrash::Restorable,
-        });
-    let backend = Arc::new(falso);
+    *fake.sync_report.lock().expect("informe") = Some(norte_proto::methods::SyncReportResult {
+        done: 0,
+        failed: 1,
+        skipped: 0,
+        bytes: 0,
+        failures: vec![norte_proto::methods::SyncFailure {
+            rel: norte_proto::methods::RelPath::new(vec![
+                norte_proto::Segment::new(b"a.md".to_vec()).expect("segmento"),
+            ]),
+            dest_rel: None,
+            cause: norte_proto::methods::SyncFailureCause::Denied,
+            kind: norte_proto::methods::SyncStepKind::Copy,
+        }],
+        // With no journal batch: nothing to undo, and the panel will
+        // say so.
+        batch_id: None,
+        dest_trash: norte_proto::methods::DestTrash::Restorable,
+    });
+    let backend = Arc::new(fake);
     let (h, _snap) = host_con_layout(Arc::clone(&backend), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
-    separar_los_paneles(&h, &mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.sync-dirs").await;
-    let mut vista = siguiente_sync(&mut sub).await.expect("opens");
+    separate_the_panes(&h, &mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.sync-dirs").await;
+    let mut vista = next_sync(&mut sub).await.expect("opens");
     for _ in 0..20 {
         if vista.can_approve {
             break;
         }
-        vista = siguiente_sync(&mut sub).await.expect("still open");
+        vista = next_sync(&mut sub).await.expect("still open");
     }
-    h.dispatch(tecla("y")).await.expect("host alive");
+    h.dispatch(press("y")).await.expect("host alive");
     anotados(&backend, "the plan applied", 1, |f| {
-        f.aplicados.lock().expect("aplicados").clone()
+        f.applied.lock().expect("aplicados").clone()
     })
     .await;
     // The daemon finishes the apply's Task.
     let tx = backend
-        .progreso
+        .progress
         .lock()
         .expect("progreso")
         .clone()
@@ -592,7 +591,7 @@ async fn el_informe_de_la_sincronizacion_dice_lo_que_fallo() {
     tx.send_modify(|p| p.state = norte_proto::TaskState::Completed);
 
     for _ in 0..40 {
-        let v = siguiente_sync(&mut sub).await.expect("still open");
+        let v = next_sync(&mut sub).await.expect("still open");
         if !v.failures.is_empty() {
             assert_eq!(v.failures[0].path, "a.md");
             assert!(!v.failures[0].cause.is_empty());
@@ -611,20 +610,20 @@ async fn el_informe_de_la_sincronizacion_dice_lo_que_fallo() {
 /// exactly the one a hostile manifest writes to sneak in among the real
 /// ones.
 #[tokio::test]
-async fn aprobar_pregunta_y_enumera_las_capabilities() {
+async fn approving_asks_and_lists_the_capabilities() {
     let mut ext = extension("acme.ftp", "FTP de ACME", false);
     ext.approved = false;
     ext.enabled = false;
     ext.capabilities = vec!["fs-read".to_owned(), "net\u{202e}".to_owned()];
-    let backend = arbol_con_plugins(vec![ext], &[]);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = tree_with_plugins(vec![ext], &[]);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host alive");
-    let _ = extensiones_cargadas(&mut sub).await;
+    h.dispatch(press("F12")).await.expect("host alive");
+    let _ = extensions_cargadas(&mut sub).await;
 
-    h.dispatch(tecla("a")).await.expect("host alive");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = dialogos.last().expect("the question");
+    h.dispatch(press("a")).await.expect("host alive");
+    let dialogs = next_dialogs(&mut sub).await;
+    let d = dialogs.last().expect("the question");
     assert_eq!(d.title_key, "modal-extension-approve-title");
     assert_eq!(d.body.len(), 3, "the name and the TWO capabilities: {d:?}");
     assert!(!d.body[1].hostile, "the clean capability is not marked");
@@ -640,7 +639,7 @@ async fn aprobar_pregunta_y_enumera_las_capabilities() {
     );
     asentar().await;
     assert!(
-        backend.gobierno.lock().expect("gobierno").is_empty(),
+        backend.governance.lock().expect("gobierno").is_empty(),
         "and nothing has been granted yet"
     );
 
@@ -655,12 +654,12 @@ async fn aprobar_pregunta_y_enumera_las_capabilities() {
     .await
     .expect("host alive");
     for _ in 0..20 {
-        let Some(v) = siguiente_extensiones(&mut sub).await else {
+        let Some(v) = next_extensions(&mut sub).await else {
             continue;
         };
         if v.rows.first().is_some_and(|r| r.approved) {
             assert_eq!(
-                backend.gobierno.lock().expect("gobierno").as_slice(),
+                backend.governance.lock().expect("gobierno").as_slice(),
                 // With the ANCHOR that was shown (#282): what gets granted
                 // has to be what the human read, and the core refuses if
                 // the manifest changed between the question and the yes.
@@ -678,19 +677,19 @@ async fn aprobar_pregunta_y_enumera_las_capabilities() {
 /// capabilities is the extension system's security decision, and a window
 /// mounted with no effects does not make it.
 #[tokio::test]
-async fn en_solo_lectura_no_se_gobierna_ninguna_extension() {
+async fn in_read_only_no_extension_is_governed() {
     let mut ext = extension("acme.ftp", "FTP de ACME", false);
     ext.approved = false;
-    let backend = arbol_con_plugins(vec![ext], &[]);
-    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let backend = tree_with_plugins(vec![ext], &[]);
+    let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host alive");
-    let _ = extensiones_cargadas(&mut sub).await;
-    for tecla_de in ["a", "e", "d"] {
-        let ack = h.dispatch(tecla(tecla_de)).await.expect("host alive");
+    h.dispatch(press("F12")).await.expect("host alive");
+    let _ = extensions_cargadas(&mut sub).await;
+    for key_for in ["a", "e", "d"] {
+        let ack = h.dispatch(press(key_for)).await.expect("host alive");
         assert!(
             matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
-            "`{tecla_de}` in read-only: {ack:?}"
+            "`{key_for}` in read-only: {ack:?}"
         );
     }
     // And the button (bridge 61) goes through the same door as the key.
@@ -707,7 +706,7 @@ async fn en_solo_lectura_no_se_gobierna_ninguna_extension() {
         "uninstalling by button in read-only: {ack:?}"
     );
     asentar().await;
-    assert!(backend.gobierno.lock().expect("gobierno").is_empty());
+    assert!(backend.governance.lock().expect("gobierno").is_empty());
 }
 
 /// Enabling an extension WITHOUT approving it is refused, and it says why.
@@ -715,56 +714,56 @@ async fn en_solo_lectura_no_se_gobierna_ninguna_extension() {
 /// Without approved capabilities the core does not load it: saying
 /// "enabled" about something that is not running is the screen lying.
 #[tokio::test]
-async fn encender_sin_aprobar_se_rehusa() {
+async fn turning_on_without_approving_is_refused() {
     let mut ext = extension("acme.ftp", "FTP de ACME", false);
     ext.approved = false;
     ext.enabled = false;
-    let backend = arbol_con_plugins(vec![ext], &[]);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = tree_with_plugins(vec![ext], &[]);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host alive");
-    let _ = extensiones_cargadas(&mut sub).await;
-    let ack = h.dispatch(tecla("e")).await.expect("host alive");
+    h.dispatch(press("F12")).await.expect("host alive");
+    let _ = extensions_cargadas(&mut sub).await;
+    let ack = h.dispatch(press("e")).await.expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key }
             if reason_key == "host-extension-not-approved"),
         "{ack:?}"
     );
     asentar().await;
-    assert!(backend.gobierno.lock().expect("gobierno").is_empty());
+    assert!(backend.governance.lock().expect("gobierno").is_empty());
 }
 
 /// A `bool` CYCLES with `Enter` and gets written; an `int` opens the buffer,
 /// and what is typed is validated against the SCHEMA's bounds before
 /// leaving.
 #[tokio::test]
-async fn el_editor_de_config_cicla_teclea_y_valida() {
+async fn the_config_editor_cycles_types_and_validates() {
     let ext = extension("acme.ftp", "FTP de ACME", false);
-    let backend = arbol_con_esquema(vec![ext], &[("acme.ftp", esquema_de_prueba())]);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = tree_with_scheme(vec![ext], &[("acme.ftp", test_scheme())]);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host alive");
-    let _ = extensiones_cargadas(&mut sub).await;
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    let ficha = ficha_abierta(&mut sub).await;
-    assert_eq!(ficha.config.len(), 4);
+    h.dispatch(press("F12")).await.expect("host alive");
+    let _ = extensions_cargadas(&mut sub).await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let detail = detail_open(&mut sub).await;
+    assert_eq!(detail.config.len(), 4);
     assert!(
-        !ficha.config[3].editable,
+        !detail.config[3].editable,
         "a `kind` this build does not know is read-only: {:?}",
-        ficha.config[3]
+        detail.config[3]
     );
 
     // The first key is the `bool`: `Enter` cycles it and sends it. It WAITS
     // for it to arrive instead of sleeping a fixed span: under load, forty
     // milliseconds are no guarantee, and a test that asserts presence
     // against the clock is intermittently red.
-    h.dispatch(tecla("Enter")).await.expect("host alive");
+    h.dispatch(press("Enter")).await.expect("host alive");
     anotados(&backend, "the `bool`'s write", 1, |f| {
-        f.escrituras.lock().expect("escrituras").clone()
+        f.writes.lock().expect("escrituras").clone()
     })
     .await;
     assert_eq!(
-        backend.escrituras.lock().expect("escrituras").as_slice(),
+        backend.writes.lock().expect("escrituras").as_slice(),
         [(
             "acme.ftp".to_owned(),
             "verbose".to_owned(),
@@ -775,26 +774,26 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
     // halves of the same row, and updating only one left the cell with the
     // old value — the next `Enter` would send it back to where it was.
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let ficha = siguiente_foto(&mut sub)
+    let detail = next_snapshot(&mut sub)
         .await
         .extensions
         .expect("still open")
         .detail
         .expect("with a card");
-    assert_eq!(ficha.config[0].value, "true");
+    assert_eq!(detail.config[0].value, "true");
 
     // The second one is the `int`: `Enter` opens the buffer and writes
     // NOTHING.
-    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    esperar_buffer(&h, &mut sub).await;
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
+    h.dispatch(press("Enter")).await.expect("host alive");
+    wait_buffer(&h, &mut sub).await;
     // A value outside the bounds is refused HERE and does not travel: the
     // daemon validates again, but saying it beforehand saves the trip and
     // states the bound.
     for c in ["Backspace", "Backspace", "9", "9", "9"] {
-        h.dispatch(tecla(c)).await.expect("host alive");
+        h.dispatch(press(c)).await.expect("host alive");
     }
-    let ack = h.dispatch(tecla("Enter")).await.expect("host alive");
+    let ack = h.dispatch(press("Enter")).await.expect("host alive");
     // The ACK carries a key with no variables — nobody substitutes
     // `{ $min }` on that path — the bounds go in the notice, which does
     // get translated with them.
@@ -805,7 +804,7 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
     );
     asentar().await;
     assert_eq!(
-        backend.escrituras.lock().expect("escrituras").len(),
+        backend.writes.lock().expect("escrituras").len(),
         1,
         "the out-of-range value was not sent"
     );
@@ -814,7 +813,7 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
     // whole.
     h.dispatch(UiAction::Resync).await.expect("host alive");
     assert!(
-        siguiente_foto(&mut sub)
+        next_snapshot(&mut sub)
             .await
             .extensions
             .expect("still open")
@@ -825,18 +824,18 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
     );
 
     // And one inside the bounds does.
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    esperar_buffer(&h, &mut sub).await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    wait_buffer(&h, &mut sub).await;
     for c in ["Backspace", "Backspace", "Backspace", "4", "2"] {
-        h.dispatch(tecla(c)).await.expect("host alive");
+        h.dispatch(press(c)).await.expect("host alive");
     }
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    let escrituras = anotados(&backend, "the typed key, sent", 2, |f| {
-        f.escrituras.lock().expect("escrituras").clone()
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let writes = anotados(&backend, "the typed key, sent", 2, |f| {
+        f.writes.lock().expect("escrituras").clone()
     })
     .await;
-    assert_eq!(escrituras[1].1, "timeout");
-    assert_eq!(escrituras[1].2, "42");
+    assert_eq!(writes[1].1, "timeout");
+    assert_eq!(writes[1].2, "42");
 }
 
 /// While a value is being TYPED, `a` is a letter, not a grant.
@@ -844,31 +843,31 @@ async fn el_editor_de_config_cicla_teclea_y_valida() {
 /// It is the same fixed regime as any field in this host: resolving letters
 /// as gestures there would turn typing "casa" into two capability grants.
 #[tokio::test]
-async fn tecleando_un_valor_las_letras_son_letras() {
+async fn while_typing_a_value_letters_are_letters() {
     let ext = extension("acme.ftp", "FTP de ACME", false);
-    let backend = arbol_con_esquema(vec![ext], &[("acme.ftp", esquema_de_prueba())]);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = tree_with_scheme(vec![ext], &[("acme.ftp", test_scheme())]);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host alive");
-    let _ = extensiones_cargadas(&mut sub).await;
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    let _ = ficha_abierta(&mut sub).await;
+    h.dispatch(press("F12")).await.expect("host alive");
+    let _ = extensions_cargadas(&mut sub).await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let _ = detail_open(&mut sub).await;
     // To the `string` key, which is the THIRD one (`verbose`, `timeout`,
     // `greeting`, and the fourth is the unknown `kind`'s).
     for _ in 0..2 {
-        h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+        h.dispatch(press("ArrowDown")).await.expect("host alive");
     }
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    esperar_buffer(&h, &mut sub).await;
-    h.dispatch(tecla("a")).await.expect("host alive");
+    h.dispatch(press("Enter")).await.expect("host alive");
+    wait_buffer(&h, &mut sub).await;
+    h.dispatch(press("a")).await.expect("host alive");
     asentar().await;
     assert!(
-        backend.gobierno.lock().expect("gobierno").is_empty(),
+        backend.governance.lock().expect("gobierno").is_empty(),
         "the typed `a` granted no capabilities"
     );
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    let editando = foto
+    let snapshot = next_snapshot(&mut sub).await;
+    let editando = snapshot
         .extensions
         .expect("still open")
         .detail
@@ -879,26 +878,26 @@ async fn tecleando_un_valor_las_letras_son_letras() {
 }
 
 /// A tree with a catalogue AND `[config]` schemas.
-pub(super) fn arbol_con_esquema(
+pub(super) fn tree_with_scheme(
     plugins: Vec<norte_proto::methods::PluginInfo>,
-    esquemas: &[(&str, Vec<norte_proto::methods::PluginConfigKeyWire>)],
-) -> Arc<Falso> {
-    let base = arbol();
-    let mut f = Falso {
+    schemes: &[(&str, Vec<norte_proto::methods::PluginConfigKeyWire>)],
+) -> Arc<Fake> {
+    let base = fake_tree();
+    let mut f = Fake {
         plugins: plugins.into(),
-        esquemas: esquemas
+        schemes: schemes
             .iter()
             .map(|(id, keys)| ((*id).to_owned(), keys.clone()))
             .collect(),
-        ..Falso::default()
+        ..Fake::default()
     };
-    f.arbol.clone_from(&base.arbol);
+    f.tree.clone_from(&base.tree);
     Arc::new(f)
 }
 
 /// The test schema: a `bool`, a bounded `int` and a `kind` this build does
 /// not know.
-pub(super) fn esquema_de_prueba() -> Vec<norte_proto::methods::PluginConfigKeyWire> {
+pub(super) fn test_scheme() -> Vec<norte_proto::methods::PluginConfigKeyWire> {
     vec![
         norte_proto::methods::PluginConfigKeyWire {
             key: "verbose".to_owned(),
@@ -944,11 +943,11 @@ pub(super) fn esquema_de_prueba() -> Vec<norte_proto::methods::PluginConfigKeyWi
 }
 
 /// Waits for the chosen extension's card to be open.
-pub(super) async fn ficha_abierta(
+pub(super) async fn detail_open(
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::dto::ExtensionDetailView {
     for _ in 0..20 {
-        let Some(v) = siguiente_extensiones(sub).await else {
+        let Some(v) = next_extensions(sub).await else {
             continue;
         };
         if let Some(d) = v.detail {
@@ -967,20 +966,20 @@ pub(super) async fn ficha_abierta(
 /// one of the host's own. The output is third-party text: it gets masked,
 /// capped, and it says when it was cut off.
 #[tokio::test]
-async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
+async fn the_palette_runs_an_extension_command_and_shows_its_output() {
     let mut ext = extension("acme.ftp", "FTP de ACME", false);
     ext.commands = vec![norte_proto::methods::PluginCommandInfo {
         id: "greet".to_owned(),
         title: "Saludar".to_owned(),
         kind: norte_proto::methods::PluginCommandKind::Command,
     }];
-    let backend = arbol_con_plugins(vec![ext], &[]);
-    *backend.salida_de_comando.lock().expect("salida") =
+    let backend = tree_with_plugins(vec![ext], &[]);
+    *backend.command_output.lock().expect("salida") =
         Some(Ok(format!("hola\u{202e}{}", "x".repeat(5_000))));
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    h.dispatch(tecla_mod("p", true, false))
+    h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
     // Plugin rows are MERGED IN when the daemon answers: the palette is
@@ -988,7 +987,7 @@ async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
     let mut llegaron = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = siguiente_foto(&mut sub).await.palette.expect("open");
+        let p = next_snapshot(&mut sub).await.palette.expect("open");
         if p.rows.iter().any(|r| r.text.contains("Saludar")) {
             llegaron = true;
             break;
@@ -999,36 +998,36 @@ async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
     // command's title is folded by the shared model together with its
     // description.
     for c in "Saludar".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
+        h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let p = siguiente_foto(&mut sub).await.palette.expect("open");
+    let p = next_snapshot(&mut sub).await.palette.expect("open");
     assert_eq!(p.rows.len(), 1, "the filter leaves a single row: {p:?}");
-    h.dispatch(tecla("Enter")).await.expect("host alive");
+    h.dispatch(press("Enter")).await.expect("host alive");
 
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let foto = siguiente_foto(&mut sub).await;
-        let Some(salida) = foto.plugin_output else {
+        let snapshot = next_snapshot(&mut sub).await;
+        let Some(output) = snapshot.plugin_output else {
             continue;
         };
         assert_eq!(
             backend.ejecutados.lock().expect("ejecutados").as_slice(),
             [("acme.ftp".to_owned(), "greet".to_owned())]
         );
-        assert!(salida.text_hostile, "the bidi override is said: {salida:?}");
+        assert!(output.text_hostile, "the bidi override is said: {output:?}");
         assert!(
-            !salida.lines.iter().any(|l| l.contains('\u{202e}')),
+            !output.lines.iter().any(|l| l.contains('\u{202e}')),
             "and it is masked"
         );
-        assert!(salida.truncated, "and that it was cut off, too: {salida:?}");
-        assert_eq!(salida.command.text, "Saludar");
-        assert_eq!(salida.plugin_id, "acme.ftp", "and who printed it, by id");
+        assert!(output.truncated, "and that it was cut off, too: {output:?}");
+        assert_eq!(output.command.text, "Saludar");
+        assert_eq!(output.plugin_id, "acme.ftp", "and who printed it, by id");
 
         // And `Escape` closes it without touching anything underneath.
-        h.dispatch(tecla("Escape")).await.expect("host alive");
+        h.dispatch(press("Escape")).await.expect("host alive");
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        assert!(siguiente_foto(&mut sub).await.plugin_output.is_none());
+        assert!(next_snapshot(&mut sub).await.plugin_output.is_none());
         return;
     }
     panic!(
@@ -1041,7 +1040,7 @@ async fn la_paleta_ejecuta_un_comando_de_extension_y_ensena_su_salida() {
 /// over what is marked and puts it into the SAME review as the AI's plan —
 /// with the core's verdict along for the ride — with no model involved.
 #[tokio::test]
-async fn la_paleta_pide_el_plan_a_un_renamer_y_lo_revisa_como_el_de_la_ia() {
+async fn the_palette_requests_the_plan_from_a_renamer_and_reviews_it_like_the_ais() {
     let pares = [("ep1.mkv", "2026-09-03_ep1.mkv")];
     let mut ext = extension("org.norte.date-prefix", "Date prefix", false);
     ext.commands = vec![norte_proto::methods::PluginCommandInfo {
@@ -1049,8 +1048,8 @@ async fn la_paleta_pide_el_plan_a_un_renamer_y_lo_revisa_como_el_de_la_ia() {
         title: "Rename by date".to_owned(),
         kind: norte_proto::methods::PluginCommandKind::Renamer,
     }];
-    let mut f = Falso::default();
-    f.pon(
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         pares
             .iter()
@@ -1063,21 +1062,21 @@ async fn la_paleta_pide_el_plan_a_un_renamer_y_lo_revisa_como_el_de_la_ia() {
             .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
             .collect(),
     );
-    f.veredicto = Some(veredicto_ok(&pares));
+    f.verdict = Some(verdict_ok(&pares));
     *f.plugins.lock().expect("plugins") = vec![ext];
     let backend = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     // Marks the file: the renamer acts on what is marked.
-    por_la_paleta(&h, &mut sub, "mark.all").await;
-    h.dispatch(tecla_mod("p", true, false))
+    by_palette(&h, &mut sub, "mark.all").await;
+    h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
     let mut llego = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = siguiente_foto(&mut sub).await.palette.expect("open");
+        let p = next_snapshot(&mut sub).await.palette.expect("open");
         if p.rows.iter().any(|r| r.text.contains("Rename by date")) {
             llego = true;
             break;
@@ -1085,10 +1084,10 @@ async fn la_paleta_pide_el_plan_a_un_renamer_y_lo_revisa_como_el_de_la_ia() {
     }
     assert!(llego, "the renamer's row never arrived");
     for c in "Rename by date".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
+        h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let p = siguiente_foto(&mut sub).await.palette.expect("open");
+    let p = next_snapshot(&mut sub).await.palette.expect("open");
     assert_eq!(p.rows.len(), 1, "{p:?}");
     // The label comes from the process's GLOBAL catalogue (like the
     // extension commands' does), so either one is valid here.
@@ -1097,18 +1096,16 @@ async fn la_paleta_pide_el_plan_a_un_renamer_y_lo_revisa_como_el_de_la_ia() {
         "a different label than a command's: {}",
         p.rows[0].text
     );
-    h.dispatch(tecla("Enter")).await.expect("host alive");
+    h.dispatch(press("Enter")).await.expect("host alive");
 
-    let mut v = siguiente_revision(&mut sub)
-        .await
-        .expect("the review opens");
+    let mut v = next_revision(&mut sub).await.expect("the review opens");
     assert_eq!(v.pairs[0].from.text, "ep1.mkv");
     assert_eq!(v.pairs[0].to.text, "2026-09-03_ep1.mkv");
     for _ in 0..40 {
         if v.confirmable {
             break;
         }
-        v = siguiente_revision(&mut sub).await.expect("still open");
+        v = next_revision(&mut sub).await.expect("still open");
     }
     assert!(v.confirmable, "the core gave its verdict");
     let pedidos = backend.renamers_pedidos.lock().expect("mutex").clone();
@@ -1130,29 +1127,29 @@ async fn la_paleta_pide_el_plan_a_un_renamer_y_lo_revisa_como_el_de_la_ia() {
 /// bar exactly as the daemon capped it, no review opens, and it is not a
 /// generic error — "approve my capability" has to be readable.
 #[tokio::test]
-async fn un_renamer_que_rehusa_dice_por_que_en_la_barra() {
+async fn a_renamer_that_refuses_says_why_in_the_bar() {
     let mut ext = extension("org.norte.date-prefix", "Date prefix", false);
     ext.commands = vec![norte_proto::methods::PluginCommandInfo {
         id: "by-date".to_owned(),
         title: "Rename by date".to_owned(),
         kind: norte_proto::methods::PluginCommandKind::Renamer,
     }];
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
-    f.renamer_rehusa = Some("needs the location capability".to_owned());
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
+    f.renamer_refuses = Some("needs the location capability".to_owned());
     *f.plugins.lock().expect("plugins") = vec![ext];
     let backend = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    por_la_paleta(&h, &mut sub, "mark.all").await;
-    h.dispatch(tecla_mod("p", true, false))
+    by_palette(&h, &mut sub, "mark.all").await;
+    h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
     let mut llego = false;
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = siguiente_foto(&mut sub).await.palette.expect("open");
+        let p = next_snapshot(&mut sub).await.palette.expect("open");
         if p.rows.iter().any(|r| r.text.contains("Rename by date")) {
             llego = true;
             break;
@@ -1160,14 +1157,14 @@ async fn un_renamer_que_rehusa_dice_por_que_en_la_barra() {
     }
     assert!(llego, "the renamer's row never arrived");
     for c in "Rename by date".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
+        h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(tecla("Enter")).await.expect("host alive");
+    h.dispatch(press("Enter")).await.expect("host alive");
 
     // The same snapshot carries the phrase and the absence of a review:
     // waiting for ANOTHER snapshot afterward would hang, because nothing
     // else changes.
-    let (msg, revision) = foto_hasta(&h, &mut sub, "the renamer's phrase in the bar", |s| {
+    let (msg, revision) = snapshot_until(&h, &mut sub, "the renamer's phrase in the bar", |s| {
         s.status
             .message
             .clone()
@@ -1196,22 +1193,22 @@ async fn un_renamer_que_rehusa_dice_por_que_en_la_barra() {
 /// is not offering it — what this test pins down is that it is neither
 /// offered nor launched.
 #[tokio::test]
-async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
+async fn in_read_only_an_extension_command_does_not_run() {
     let mut ext = extension("acme.ftp", "FTP de ACME", false);
     ext.commands = vec![norte_proto::methods::PluginCommandInfo {
         id: "greet".to_owned(),
         title: "Saludar".to_owned(),
         kind: norte_proto::methods::PluginCommandKind::Command,
     }];
-    let backend = arbol_con_plugins(vec![ext], &[]);
-    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let backend = tree_with_plugins(vec![ext], &[]);
+    let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla_mod("p", true, false))
+    h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
     for _ in 0..10 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = siguiente_foto(&mut sub).await.palette.expect("open");
+        let p = next_snapshot(&mut sub).await.palette.expect("open");
         assert!(
             !p.rows.iter().any(|r| r.text.contains("Saludar")),
             "a window with no effects does not offer to run third-party code"
@@ -1219,7 +1216,7 @@ async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
         asentar().await;
     }
     // And nothing ran, which is what the rule protects. The catalogue does
-    // travel — `pedir_paneles` requests it to declare kinds, even with no
+    // travel — `request_panels` requests it to declare kinds, even with no
     // effects — so counting round trips stopped saying anything about what
     // is offered.
     assert!(backend.ejecutados.lock().expect("ejecutados").is_empty());
@@ -1231,10 +1228,10 @@ async fn en_solo_lectura_no_se_ejecuta_un_comando_de_extension() {
 /// updates runs out of them as soon as the test sends a snapshot for
 /// another reason, and then fails on a deadline saying something that is
 /// not true.
-pub(super) async fn esperar_buffer(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
+pub(super) async fn wait_buffer(h: &UiHost, sub: &mut norte_ui_host::UiSubscription) {
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let abierto = siguiente_foto(sub)
+        let abierto = next_snapshot(sub)
             .await
             .extensions
             .and_then(|e| e.detail)
@@ -1254,25 +1251,25 @@ pub(super) async fn esperar_buffer(h: &UiHost, sub: &mut norte_ui_host::UiSubscr
 /// approved" is the same lie as local optimism, in pessimistic form — and
 /// the only thing that resolves an unknown is asking.
 #[tokio::test]
-async fn un_gobierno_fallido_vuelve_a_preguntar_al_core() {
+async fn a_failed_governance_check_asks_the_core_again() {
     let mut ext = extension("acme.ftp", "FTP de ACME", false);
     ext.approved = false;
     ext.enabled = false;
     ext.capabilities = vec!["fs-read".to_owned()];
-    let backend = arbol_con_plugins(vec![ext], &[]);
+    let backend = tree_with_plugins(vec![ext], &[]);
     *backend.error_al_gobernar.lock().expect("gobierno") =
         Some(norte_proto::Error::ProviderUnavailable { retryable: true });
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F12")).await.expect("host alive");
-    let _ = extensiones_cargadas(&mut sub).await;
+    h.dispatch(press("F12")).await.expect("host alive");
+    let _ = extensions_cargadas(&mut sub).await;
     let pedidos = backend
         .catalogos_pedidos
         .load(std::sync::atomic::Ordering::SeqCst);
 
-    h.dispatch(tecla("a")).await.expect("host alive");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = dialogos.last().expect("the question");
+    h.dispatch(press("a")).await.expect("host alive");
+    let dialogs = next_dialogs(&mut sub).await;
+    let d = dialogs.last().expect("the question");
     h.dispatch(UiAction::Dialog {
         id: d.id,
         choice: "approve".to_owned(),
@@ -1281,14 +1278,14 @@ async fn un_gobierno_fallido_vuelve_a_preguntar_al_core() {
     .await
     .expect("host alive");
 
-    hasta(
+    until(
         &backend,
         "the catalogue re-requested after governance",
         |f| {
-            let ahora = f
+            let now = f
                 .catalogos_pedidos
                 .load(std::sync::atomic::Ordering::SeqCst);
-            (ahora > pedidos).then_some(())
+            (now > pedidos).then_some(())
         },
     )
     .await;
@@ -1302,67 +1299,67 @@ async fn un_gobierno_fallido_vuelve_a_preguntar_al_core() {
 /// does not see — and the moment is chosen by the PLUGIN, which decides
 /// when it answers.
 #[tokio::test]
-async fn la_salida_de_un_comando_no_deja_pasar_teclas() {
+async fn a_commands_output_does_not_let_keys_through() {
     let mut ext = extension("acme.ftp", "FTP de ACME", false);
     ext.commands = vec![norte_proto::methods::PluginCommandInfo {
         id: "greet".to_owned(),
         title: "Saludar".to_owned(),
         kind: norte_proto::methods::PluginCommandKind::Command,
     }];
-    let backend = arbol_con_plugins(vec![ext], &[]);
-    *backend.salida_de_comando.lock().expect("salida") = Some(Ok("hola".to_owned()));
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = tree_with_plugins(vec![ext], &[]);
+    *backend.command_output.lock().expect("salida") = Some(Ok("hola".to_owned()));
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let antes = siguiente_foto_tras_resync(&h, &mut sub).await;
-    let cursor_antes = listado(&antes).cursor;
+    let before = next_snapshot_after_resync(&h, &mut sub).await;
+    let cursor_before = listing(&before).cursor;
 
-    h.dispatch(tecla_mod("p", true, false))
+    h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let p = siguiente_foto(&mut sub).await.palette.expect("open");
+        let p = next_snapshot(&mut sub).await.palette.expect("open");
         if p.rows.iter().any(|r| r.text.contains("Saludar")) {
             break;
         }
     }
     for c in "Saludar".chars() {
-        h.dispatch(tecla(&c.to_string())).await.expect("host alive");
+        h.dispatch(press(&c.to_string())).await.expect("host alive");
     }
-    h.dispatch(tecla("Enter")).await.expect("host alive");
+    h.dispatch(press("Enter")).await.expect("host alive");
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if siguiente_foto(&mut sub).await.plugin_output.is_some() {
+        if next_snapshot(&mut sub).await.plugin_output.is_some() {
             break;
         }
     }
 
     // A navigation key with the panel open does NOT move what is
     // underneath.
-    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
-    let durante = siguiente_foto_tras_resync(&h, &mut sub).await;
-    assert!(durante.plugin_output.is_some(), "the panel stays");
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
+    let during = next_snapshot_after_resync(&h, &mut sub).await;
+    assert!(during.plugin_output.is_some(), "the panel stays");
     assert_eq!(
-        listado(&durante).cursor,
-        cursor_antes,
+        listing(&during).cursor,
+        cursor_before,
         "the listing's cursor did not move underneath the panel"
     );
 
     // And `Enter` CLOSES it, which is the reflex of someone who just read
     // it.
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    let despues = siguiente_foto_tras_resync(&h, &mut sub).await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let despues = next_snapshot_after_resync(&h, &mut sub).await;
     assert!(despues.plugin_output.is_none());
-    assert_eq!(listado(&despues).cursor, cursor_antes);
+    assert_eq!(listing(&despues).cursor, cursor_before);
 }
 
 /// Requests a snapshot and waits for it.
-pub(super) async fn siguiente_foto_tras_resync(
+pub(super) async fn next_snapshot_after_resync(
     h: &UiHost,
     sub: &mut norte_ui_host::UiSubscription,
 ) -> norte_ui_host::ViewSnapshot {
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    siguiente_foto(sub).await
+    next_snapshot(sub).await
 }
 
 /// The agents panel lists the sessions THIS window saw ask for permission,
@@ -1374,12 +1371,12 @@ pub(super) async fn siguiente_foto_tras_resync(
 /// is — what this window has seen, not the system's census — because there
 /// is no protocol method that enumerates live sessions.
 #[tokio::test]
-async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
-    let falso = arbol_como_falso();
+async fn the_agents_pane_undoes_the_chosen_session() {
+    let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
-    let backend = Arc::new(falso);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    *fake.approvals.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(fake);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     // Two sessions, and the one with the hostile id is the LAST seen: the
@@ -1398,12 +1395,12 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
             detail: norte_proto::methods::ApprovalDetail::default(),
         })
         .expect("the host is listening");
-        let dialogos = siguientes_dialogos(&mut sub).await;
+        let dialogs = next_dialogs(&mut sub).await;
         // It is DENIED to get it out of the way: an open dialog keeps the
         // keys, and what is checked here is the panel. Denying does not
         // erase the record — what the session asked for has already been
         // seen — which is exactly the interesting property.
-        let d = dialogos.last().expect("the approval");
+        let d = dialogs.last().expect("the approval");
         h.dispatch(UiAction::Dialog {
             id: d.id,
             choice: "deny".to_owned(),
@@ -1411,12 +1408,12 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
         })
         .await
         .expect("host alive");
-        let _ = siguientes_dialogos(&mut sub).await;
+        let _ = next_dialogs(&mut sub).await;
     }
 
-    ejecutar_por_paleta(&h, &mut sub, "app.agents").await;
+    run_by_palette(&h, &mut sub, "app.agents").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let panel = siguiente_foto(&mut sub)
+    let panel = next_snapshot(&mut sub)
         .await
         .agents
         .expect("the panel is open");
@@ -1433,9 +1430,9 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
     assert!(!panel.note.is_empty(), "and the list says what it is");
 
     // `u` ASKS: undoing a session reverts everything it did.
-    h.dispatch(tecla("u")).await.expect("host alive");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = dialogos.last().expect("the question");
+    h.dispatch(press("u")).await.expect("host alive");
+    let dialogs = next_dialogs(&mut sub).await;
+    let d = dialogs.last().expect("the question");
     assert_eq!(d.title_key, "modal-undo-session-title");
     assert!(
         d.choices.iter().any(|c| c.id == "confirm" && c.destructive),
@@ -1461,17 +1458,17 @@ async fn el_panel_de_agentes_deshace_la_sesion_elegida() {
 
 /// In read-only nothing is undone: it is SAID.
 #[tokio::test]
-async fn en_solo_lectura_no_se_deshace_una_sesion() {
+async fn in_read_only_a_session_cannot_be_undone() {
     // With no approvals: a read-only window also cannot ANSWER them, so an
     // open dialog would keep the keys and this test would be checking
     // something else. The empty list holds just the same: rejection over
     // effects is checked BEFORE whether anything is selected.
-    let backend = arbol_como_falso();
+    let backend = tree_as_fake();
     let backend = Arc::new(backend);
-    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+    let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "app.agents").await;
-    let ack = h.dispatch(tecla("u")).await.expect("host alive");
+    run_by_palette(&h, &mut sub, "app.agents").await;
+    let ack = h.dispatch(press("u")).await.expect("host alive");
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-read-only"),
         "{ack:?}"
@@ -1489,14 +1486,14 @@ async fn en_solo_lectura_no_se_deshace_una_sesion() {
 /// and `u` undoes another session's work. And the selection goes by ID, not
 /// by position, which is the rule 6.2 already put in writing.
 #[tokio::test]
-async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
-    let falso = arbol_como_falso();
+async fn a_new_request_repaints_the_panel_and_does_not_move_the_selection() {
+    let fake = tree_as_fake();
     let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-    *falso.aprobaciones.lock().expect("aprobaciones") = Some(rx);
-    let backend = Arc::new(falso);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    *fake.approvals.lock().expect("aprobaciones") = Some(rx);
+    let backend = Arc::new(fake);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let pedir = |id: &str, aid: u64| norte_proto::methods::PolicyApprovalRequired {
+    let request = |id: &str, aid: u64| norte_proto::methods::PolicyApprovalRequired {
         approval_id: aid,
         session: Some(id.to_owned()),
         op: "copy".to_owned(),
@@ -1506,9 +1503,9 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
         detail: norte_proto::methods::ApprovalDetail::default(),
     };
     for (id, aid) in [("agente-A", 21_u64), ("agente-B", 22)] {
-        tx.send(pedir(id, aid)).expect("the host is listening");
-        let dialogos = siguientes_dialogos(&mut sub).await;
-        let d = dialogos.last().expect("the approval");
+        tx.send(request(id, aid)).expect("the host is listening");
+        let dialogs = next_dialogs(&mut sub).await;
+        let d = dialogs.last().expect("the approval");
         h.dispatch(UiAction::Dialog {
             id: d.id,
             choice: "deny".to_owned(),
@@ -1516,32 +1513,32 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
         })
         .await
         .expect("host alive");
-        let _ = siguientes_dialogos(&mut sub).await;
+        let _ = next_dialogs(&mut sub).await;
     }
-    ejecutar_por_paleta(&h, &mut sub, "app.agents").await;
+    run_by_palette(&h, &mut sub, "app.agents").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let antes = siguiente_foto(&mut sub).await.agents.expect("open");
-    assert_eq!(antes.rows[0].session, "agente-B", "the most recent first");
+    let before = next_snapshot(&mut sub).await.agents.expect("open");
+    assert_eq!(before.rows[0].session, "agente-B", "the most recent first");
     // The selection is set on the SECOND one, `agente-A`.
-    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let elegida = siguiente_foto(&mut sub).await.agents.expect("open");
-    assert_eq!(elegida.cursor, 1);
+    let chosen = next_snapshot(&mut sub).await.agents.expect("open");
+    assert_eq!(chosen.cursor, 1);
 
     // And another request for `agente-B` arrives, which was already first:
     // what changes is its count, and the list has to say it changed.
-    tx.send(pedir("agente-B", 23))
+    tx.send(request("agente-B", 23))
         .expect("the host is listening");
-    let mut panel = elegida.clone();
+    let mut panel = chosen.clone();
     for _ in 0..2_000 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        panel = siguiente_foto(&mut sub).await.agents.expect("open");
-        if panel.generation > elegida.generation {
+        panel = next_snapshot(&mut sub).await.agents.expect("open");
+        if panel.generation > chosen.generation {
             break;
         }
     }
     assert!(
-        panel.generation > elegida.generation,
+        panel.generation > chosen.generation,
         "a list that changes on its own has to say it changed: {panel:?}"
     );
     assert_eq!(
@@ -1553,8 +1550,8 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
     // The third request left its dialog up front: it is answered before
     // continuing, because the panel is modal for the mouse too.
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    if let Some(d) = foto.dialogs.last() {
+    let snapshot = next_snapshot(&mut sub).await;
+    if let Some(d) = snapshot.dialogs.last() {
         h.dispatch(UiAction::Dialog {
             id: d.id,
             choice: "deny".to_owned(),
@@ -1569,7 +1566,7 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
     let ack = h
         .dispatch(UiAction::AgentSelectRow {
             row: 0,
-            generation: elegida.generation,
+            generation: chosen.generation,
         })
         .await
         .expect("host alive");
@@ -1591,17 +1588,17 @@ async fn una_peticion_nueva_repinta_el_panel_y_no_mueve_la_seleccion() {
 /// is empty for that reason, and asserting the other thing is asserting
 /// what it cannot know.
 #[tokio::test]
-async fn en_solo_lectura_el_panel_dice_que_no_escucha() {
-    let backend = Arc::new(arbol_como_falso());
-    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+async fn in_read_only_the_pane_says_it_does_not_listen() {
+    let backend = Arc::new(tree_as_fake());
+    let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "app.agents").await;
+    run_by_palette(&h, &mut sub, "app.agents").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let panel = siguiente_foto(&mut sub).await.agents.expect("open");
+    let panel = next_snapshot(&mut sub).await.agents.expect("open");
     assert!(panel.rows.is_empty());
-    let escuchando = norte_i18n::t_in(norte_i18n::Lang::Es, "agents-empty");
+    let listening = norte_i18n::t_in(norte_i18n::Lang::Es, "agents-empty");
     assert_ne!(
-        panel.empty, escuchando,
+        panel.empty, listening,
         "a window that is not listening cannot say nobody has requested anything"
     );
 }
@@ -1614,22 +1611,22 @@ async fn en_solo_lectura_el_panel_dice_que_no_escucha() {
 /// nothing, so a read-only window also copies — it is as much a look-only
 /// action as reading a name.
 #[tokio::test]
-async fn copiar_la_ruta_manda_bytes_al_escritorio() {
-    for solo_lectura in [false, true] {
-        let backend = arbol();
-        let (h, _snap) = if solo_lectura {
-            host_solo_lectura(Arc::clone(&backend)).await
+async fn copying_the_path_sends_bytes_to_the_desktop() {
+    for solo_read in [false, true] {
+        let backend = fake_tree();
+        let (h, _snap) = if solo_read {
+            host_solo_read(Arc::clone(&backend)).await
         } else {
-            host_arbol(Arc::clone(&backend)).await
+            host_tree(Arc::clone(&backend)).await
         };
         let mut nativos = h.native_effects();
         let mut sub = h.subscribe();
-        ejecutar_por_paleta(&h, &mut sub, "pane.copy-path").await;
-        let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+        run_by_palette(&h, &mut sub, "pane.copy-path").await;
+        let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
             .await
             .expect("an effect before the deadline")
             .expect("the channel is still alive");
-        match efecto {
+        match effect {
             norte_ui_host::dto::NativeEffect::CopyBytes { bytes, count } => {
                 assert_eq!(count, 1);
                 assert!(
@@ -1637,7 +1634,7 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
                     "the path, in its native form or the wire's: {bytes:?}"
                 );
             }
-            otro => panic!("copying the path asks to copy, not {otro:?}"),
+            other => panic!("copying the path asks to copy, not {other:?}"),
         }
     }
 }
@@ -1651,34 +1648,34 @@ async fn copiar_la_ruta_manda_bytes_al_escritorio() {
 /// `dialog.down` changed the TUI and not the window. Here it is checked
 /// against a REAL preset whose dialog keys are different.
 #[tokio::test]
-async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
+async fn a_dialogs_keys_are_set_by_the_preset() {
     let (h, _snap) = UiHost::start(UiHostOptions {
-        backend: arbol(),
+        backend: fake_tree(),
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("vim").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("vim").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("vim").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("vim").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts");
     let mut sub = h.subscribe();
-    let antes = selector_columnas(&h, &mut sub).await;
+    let before = selector_columns(&h, &mut sub).await;
 
     // The chord THIS preset binds to `dialog.down`, whatever it is.
-    let atado = norte_ui_host::keys::keymap_dialogo_de_preset("vim")
+    let bound = norte_ui_host::keys::preset_dialog_keymap("vim")
         .expect("preset")
         .bindings()
         .into_iter()
@@ -1686,13 +1683,13 @@ async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
         .map(|(seq, _)| seq)
         .expect("the preset binds down");
 
-    h.dispatch(UiAction::Key(tecla_de_acorde(&atado)))
+    h.dispatch(UiAction::Key(chord_key(&bound)))
         .await
         .expect("host alive");
-    let despues = siguiente_columnas(&h, &mut sub).await;
+    let despues = next_columns(&h, &mut sub).await;
     assert_ne!(
-        despues.cursor, antes.cursor,
-        "the preset's chord moves the cursor: {atado:?}"
+        despues.cursor, before.cursor,
+        "the preset's chord moves the cursor: {bound:?}"
     );
 }
 
@@ -1701,16 +1698,16 @@ async fn las_teclas_de_un_dialogo_las_pone_el_preset() {
 /// Only what is needed here: one key with its modifiers, no sequences. A
 /// preset that bound `dialog.down` to two chords would fall outside this,
 /// and then the test would say so instead of passing by coincidence.
-pub(super) fn tecla_de_acorde(acorde: &str) -> norte_ui_host::keys::KeyInput {
-    let partes: Vec<&str> = acorde.split('+').collect();
-    let (tecla, mods) = partes.split_last().expect("at least one part");
-    let tiene = |m: &str| mods.iter().any(|p| p.eq_ignore_ascii_case(m));
+pub(super) fn chord_key(chord: &str) -> norte_ui_host::keys::KeyInput {
+    let parts: Vec<&str> = chord.split('+').collect();
+    let (tecla, mods) = parts.split_last().expect("at least one part");
+    let has = |m: &str| mods.iter().any(|p| p.eq_ignore_ascii_case(m));
     norte_ui_host::keys::KeyInput {
         key: (*tecla).to_owned(),
-        ctrl: tiene("ctrl"),
-        alt: tiene("alt"),
-        shift: tiene("shift"),
-        meta: tiene("meta") || tiene("cmd") || tiene("super"),
+        ctrl: has("ctrl"),
+        alt: has("alt"),
+        shift: has("shift"),
+        meta: has("meta") || has("cmd") || has("super"),
     }
 }
 
@@ -1720,16 +1717,16 @@ pub(super) fn tecla_de_acorde(acorde: &str) -> norte_ui_host::keys::KeyInput {
 /// on disk and hand it to the desktop. And in that order — opening before
 /// the outcome would launch an editor over something not there yet.
 #[tokio::test]
-async fn editar_uno_nuevo_crea_el_fichero_y_lo_abre() {
-    let mut falso = Falso::default();
-    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
-    let backend = Arc::new(falso);
+async fn editing_a_new_one_creates_the_file_and_opens_it() {
+    let mut fake = Fake::default();
+    fake.put("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_en(Arc::clone(&backend), "file:///casa").await;
     let mut sub = h.subscribe();
-    let mut efectos = h.native_effects();
+    let mut effects = h.native_effects();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.edit-new").await;
-    let d = siguientes_dialogos(&mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.edit-new").await;
+    let d = next_dialogs(&mut sub).await;
     assert_eq!(d[0].title_key, "modal-new-file-title");
     assert!(d[0].input.is_some(), "a name gets typed here");
     let id = d[0].id;
@@ -1755,15 +1752,15 @@ async fn editar_uno_nuevo_crea_el_fichero_y_lo_abre() {
         assert_eq!(creados[0].to_wire(), "file:///casa/borrador.md");
     }
 
-    let efecto = tokio::time::timeout(ESPERA_MAX, efectos.recv())
+    let effect = tokio::time::timeout(WAIT_MAX, effects.recv())
         .await
         .expect("the native effect arrives")
         .expect("channel alive");
-    match efecto {
+    match effect {
         norte_ui_host::dto::NativeEffect::OpenPath { path } => {
             assert_eq!(path.to_wire(), "file:///casa/borrador.md");
         }
-        otro => panic!("expected to open the freshly created file: {otro:?}"),
+        other => panic!("expected to open the freshly created file: {other:?}"),
     }
 }
 
@@ -1780,19 +1777,19 @@ async fn editar_uno_nuevo_crea_el_fichero_y_lo_abre() {
 /// `open` there is a gap — and it is the same decision the TUI makes. The
 /// file WAS CREATED: that is not undone here, it is just not opened.
 #[tokio::test]
-async fn lo_creado_que_dejo_de_ser_un_fichero_no_se_abre() {
-    let mut falso = Falso {
-        creado_aparece_como: Some(norte_proto::EntryKind::Symlink),
-        ..Falso::default()
+async fn a_created_item_that_stopped_being_a_file_does_not_open() {
+    let mut fake = Fake {
+        creado_appears_as: Some(norte_proto::EntryKind::Symlink),
+        ..Fake::default()
     };
-    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
-    let backend = Arc::new(falso);
+    fake.put("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_en(Arc::clone(&backend), "file:///casa").await;
     let mut sub = h.subscribe();
-    let mut efectos = h.native_effects();
+    let mut effects = h.native_effects();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.edit-new").await;
-    let d = siguientes_dialogos(&mut sub).await;
+    run_by_palette(&h, &mut sub, "pane.edit-new").await;
+    let d = next_dialogs(&mut sub).await;
     let id = d[0].id;
     h.dispatch(UiAction::DialogInput {
         id,
@@ -1815,7 +1812,7 @@ async fn lo_creado_que_dejo_de_ser_un_fichero_no_se_abre() {
         assert_eq!(creados.len(), 1, "the file WAS created: {creados:?}");
     }
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(300), efectos.recv())
+        tokio::time::timeout(std::time::Duration::from_millis(300), effects.recv())
             .await
             .is_err(),
         "the desktop is not handed what is no longer the created file"
@@ -1829,14 +1826,14 @@ async fn lo_creado_que_dejo_de_ser_un_fichero_no_se_abre() {
 /// be given an `sftp://`. Saying it once the name is already typed arrives
 /// too late.
 #[tokio::test]
-async fn editar_uno_nuevo_no_se_ofrece_en_un_panel_remoto() {
-    let mut falso = Falso::default();
-    falso.pon("sftp://server/datos", vec![(b"a.txt".to_vec(), false)]);
-    let backend = Arc::new(falso);
+async fn editing_a_new_one_is_not_offered_in_a_remote_pane() {
+    let mut fake = Fake::default();
+    fake.put("sftp://server/datos", vec![(b"a.txt".to_vec(), false)]);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_en(Arc::clone(&backend), "sftp://server/datos").await;
     let mut sub = h.subscribe();
 
-    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.edit-new").await;
+    let ack = execute_via_palette_ack(&h, &mut sub, "pane.edit-new").await;
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-not-local"),
         "{ack:?}"
@@ -1848,19 +1845,19 @@ async fn editar_uno_nuevo_no_se_ofrece_en_un_panel_remoto() {
 /// Like [`host_en`], but with a custom configuration: openers and the
 /// editor are keys the window used to ignore, so the tests bring them in.
 pub(super) async fn host_en_con(
-    backend: Arc<Falso>,
-    inicio: &str,
+    backend: Arc<Fake>,
+    start: &str,
     cfg: norte_frontend::config::FrontendConfig,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend,
-        initial_dir: VPath::parse(inicio).expect("vpath"),
-        initial_dir_pedido: false,
+        initial_dir: VPath::parse(start).expect("vpath"),
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: cfg,
@@ -1868,8 +1865,8 @@ pub(super) async fn host_en_con(
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -1877,45 +1874,45 @@ pub(super) async fn host_en_con(
 }
 
 pub(super) async fn host_en(
-    backend: Arc<Falso>,
-    inicio: &str,
+    backend: Arc<Fake>,
+    start: &str,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend,
-        initial_dir: VPath::parse(inicio).expect("vpath"),
-        initial_dir_pedido: false,
+        initial_dir: VPath::parse(start).expect("vpath"),
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("arranca")
 }
 
-/// Waits for a snapshot whose first listing ends in `sufijo`.
-pub(super) async fn listado_en(
+/// Waits for a snapshot whose first listing ends in `suffix`.
+pub(super) async fn listing_in(
     sub: &mut norte_ui_host::UiSubscription,
-    sufijo: &str,
+    suffix: &str,
 ) -> norte_ui_host::ViewSnapshot {
     for _ in 0..30 {
-        let foto = siguiente_foto(sub).await;
-        if primer_listado(&foto).path_display.ends_with(sufijo) {
-            return foto;
+        let snapshot = next_snapshot(sub).await;
+        if primer_listing(&snapshot).path_display.ends_with(suffix) {
+            return snapshot;
         }
     }
-    panic!("the listing never reached `{sufijo}`");
+    panic!("the listing never reached `{suffix}`");
 }
 
 /// **Disconnecting sends the pane back to where it was BEFORE connecting**
@@ -1924,10 +1921,10 @@ pub(super) async fn listado_en(
 /// The trail backward, not "home": the pane was somewhere before jumping to
 /// the machine, and that place is the answer the reader expects.
 #[tokio::test]
-async fn desconectar_vuelve_a_donde_estaba_antes() {
-    let mut falso = arbol_como_falso();
-    falso.pon("sftp://server/datos", vec![(b"a.txt".to_vec(), false)]);
-    *falso.conexiones.lock().expect("conexiones") =
+async fn disconnecting_returns_to_where_it_was_before() {
+    let mut fake = tree_as_fake();
+    fake.put("sftp://server/datos", vec![(b"a.txt".to_vec(), false)]);
+    *fake.connections.lock().expect("conexiones") =
         Some(Ok(norte_proto::methods::ConnectionListResult {
             connections: vec![norte_proto::methods::ConnectionEntry {
                 name: "trabajo".to_owned(),
@@ -1935,26 +1932,26 @@ async fn desconectar_vuelve_a_donde_estaba_antes() {
             }],
             unusable: Vec::new(),
         }));
-    let backend = Arc::new(falso);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = Arc::new(fake);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     // Connecting for real, through the picker: it is the path a reader
     // walks, and it is what leaves the trail that gets undone afterward.
-    ejecutar_por_paleta(&h, &mut sub, "pane.connect").await;
+    run_by_palette(&h, &mut sub, "pane.connect").await;
     for _ in 0..20 {
-        let Some(v) = siguiente_selector(&mut sub).await else {
+        let Some(v) = next_selector(&mut sub).await else {
             continue;
         };
         if !v.rows.is_empty() {
             break;
         }
     }
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    let _ = listado_en(&mut sub, "/datos").await;
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let _ = listing_in(&mut sub, "/datos").await;
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.disconnect").await;
-    let _ = listado_en(&mut sub, "/casa").await;
+    run_by_palette(&h, &mut sub, "pane.disconnect").await;
+    let _ = listing_in(&mut sub, "/casa").await;
 
     let cerradas = backend.cerradas.lock().expect("cerradas");
     assert_eq!(cerradas.len(), 1, "{cerradas:?}");
@@ -1965,15 +1962,15 @@ async fn desconectar_vuelve_a_donde_estaba_antes() {
 /// session that just closed, which is exactly what the gesture asked not to
 /// have.
 #[tokio::test]
-async fn desconectar_no_vuelve_a_la_misma_maquina() {
-    let mut falso = Falso::default();
-    falso.pon("sftp://server/uno", vec![(b"dos".to_vec(), true)]);
-    falso.pon("sftp://server/uno/dos", vec![(b"b.txt".to_vec(), false)]);
-    let backend = Arc::new(falso);
+async fn disconnecting_does_not_return_to_the_same_machine() {
+    let mut fake = Fake::default();
+    fake.put("sftp://server/uno", vec![(b"dos".to_vec(), true)]);
+    fake.put("sftp://server/uno/dos", vec![(b"b.txt".to_vec(), false)]);
+    let backend = Arc::new(fake);
     let (h, snap) = host_en(Arc::clone(&backend), "sftp://server/uno").await;
     let mut sub = h.subscribe();
 
-    let b = listado(&snap);
+    let b = listing(&snap);
     h.dispatch(UiAction::Activate {
         slot_id: b.slot_id,
         key: b.rows[0].key,
@@ -1981,20 +1978,20 @@ async fn desconectar_no_vuelve_a_la_misma_maquina() {
     })
     .await
     .expect("host alive");
-    let _ = listado_en(&mut sub, "/uno/dos").await;
+    let _ = listing_in(&mut sub, "/uno/dos").await;
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.disconnect").await;
+    run_by_palette(&h, &mut sub, "pane.disconnect").await;
 
-    let mut visto = None;
+    let mut seen = None;
     for _ in 0..30 {
-        let foto = siguiente_foto(&mut sub).await;
-        let p = primer_listado(&foto).path_display.clone();
+        let snapshot = next_snapshot(&mut sub).await;
+        let p = primer_listing(&snapshot).path_display.clone();
         if !p.contains("server") {
-            visto = Some(p);
+            seen = Some(p);
             break;
         }
     }
-    let after = visto.expect("the pane leaves the closed machine");
+    let after = seen.expect("the pane leaves the closed machine");
     assert!(
         !after.contains("server"),
         "its whole trail was on that machine, so it falls back home: {after}"
@@ -2006,14 +2003,14 @@ async fn desconectar_no_vuelve_a_la_misma_maquina() {
 /// A key that answers "done" about something that did nothing teaches
 /// people not to trust the message.
 #[tokio::test]
-async fn en_un_panel_local_no_hay_conexion_que_cerrar() {
-    let mut falso = Falso::default();
-    falso.pon("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
-    let backend = Arc::new(falso);
+async fn in_a_local_pane_there_is_no_connection_to_close() {
+    let mut fake = Fake::default();
+    fake.put("file:///casa", vec![(b"notas.txt".to_vec(), false)]);
+    let backend = Arc::new(fake);
     let (h, _snap) = host_en(Arc::clone(&backend), "file:///casa").await;
     let mut sub = h.subscribe();
 
-    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.disconnect").await;
+    let ack = execute_via_palette_ack(&h, &mut sub, "pane.disconnect").await;
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "msg-disconnect-local"),
         "{ack:?}"
@@ -2025,7 +2022,7 @@ async fn en_un_panel_local_no_hay_conexion_que_cerrar() {
 }
 
 /// Finds the TREE slot in a snapshot.
-pub(super) fn arbol_de(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::TreeSlotView {
+pub(super) fn tree_of(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::TreeSlotView {
     snap.slots
         .iter()
         .find_map(|s| match s {
@@ -2036,21 +2033,21 @@ pub(super) fn arbol_de(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dt
 }
 
 /// Waits for a snapshot where the tree already has its branches.
-pub(super) async fn arbol_con_ramas(
+pub(super) async fn tree_with_branches(
     sub: &mut norte_ui_host::UiSubscription,
-    cuantas: usize,
+    how_many: usize,
 ) -> norte_ui_host::ViewSnapshot {
     for _ in 0..20 {
-        let foto = siguiente_foto(sub).await;
-        if foto
+        let snapshot = next_snapshot(sub).await;
+        if snapshot
             .slots
             .iter()
-            .any(|s| matches!(s, SlotView::Tree(t) if t.rows.len() >= cuantas))
+            .any(|s| matches!(s, SlotView::Tree(t) if t.rows.len() >= how_many))
         {
-            return foto;
+            return snapshot;
         }
     }
-    panic!("the tree never brought {cuantas} branches");
+    panic!("the tree never brought {how_many} branches");
 }
 
 /// **The tree lists ONE branch, and only when it opens** (`pane.tree`).
@@ -2060,16 +2057,16 @@ pub(super) async fn arbol_con_ramas(
 /// and hours against a remote. Opening it requests the ROOT and nothing
 /// else — `docs`'s children are not requested until someone expands `docs`.
 #[tokio::test]
-async fn el_arbol_pide_una_rama_y_solo_al_abrirla() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn the_tree_requests_a_branch_and_only_when_opening_it() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
-    // The root and its DIRECTORY children: `docs` is there, `notas.txt` is
+    run_by_palette(&h, &mut sub, "pane.tree").await;
+    // The root and its DIRECTORY children: `docs` is there, `notes.txt` is
     // not.
-    let foto = arbol_con_ramas(&mut sub, 2).await;
-    let t = arbol_de(&foto);
+    let snapshot = tree_with_branches(&mut sub, 2).await;
+    let t = tree_of(&snapshot);
     assert_eq!(t.rows.len(), 2, "root + `docs`, no files: {:?}", t.rows);
     assert_eq!(t.rows[0].depth, 0);
     assert!(
@@ -2093,29 +2090,32 @@ async fn el_arbol_pide_una_rama_y_solo_al_abrirla() {
 /// ancestors and moves the cursor — not re-anchoring: the root does not
 /// change and what is open does not close.
 #[tokio::test]
-async fn el_arbol_sigue_al_listado_que_navega() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn the_tree_follows_the_listing_that_navigates() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
-    let foto = arbol_con_ramas(&mut sub, 2).await;
-    assert_eq!(arbol_de(&foto).cursor, 0, "it starts at the root");
+    run_by_palette(&h, &mut sub, "pane.tree").await;
+    let snapshot = tree_with_branches(&mut sub, 2).await;
+    assert_eq!(tree_of(&snapshot).cursor, 0, "it starts at the root");
 
     // `docs` is the listing's first row (directories go first), so Enter
     // goes into it.
-    ejecutar_por_paleta(&h, &mut sub, "nav.enter").await;
+    run_by_palette(&h, &mut sub, "nav.enter").await;
 
-    let mut visto = None;
+    let mut seen = None;
     for _ in 0..20 {
-        let foto = siguiente_foto(&mut sub).await;
-        if primer_listado(&foto).path_display.ends_with("/casa/docs") && arbol_de(&foto).cursor == 1
+        let snapshot = next_snapshot(&mut sub).await;
+        if primer_listing(&snapshot)
+            .path_display
+            .ends_with("/casa/docs")
+            && tree_of(&snapshot).cursor == 1
         {
-            visto = Some(foto);
+            seen = Some(snapshot);
             break;
         }
     }
-    let foto = visto.expect("the tree ends up pointing at the branch the listing is in");
-    let t = arbol_de(&foto);
+    let snapshot = seen.expect("the tree ends up pointing at the branch the listing is in");
+    let t = tree_of(&snapshot);
     assert_eq!(t.rows[1].label, "docs");
     assert!(
         t.rows[0].label.ends_with("/casa"),
@@ -2136,60 +2136,66 @@ async fn el_arbol_sigue_al_listado_que_navega() {
 /// `layout.focus-next` remains the whole screen's traversal, and that half
 /// is checked right here: they are two rings, not one with two names.
 #[tokio::test]
-async fn el_tabulador_cicla_los_listados_y_se_salta_los_laterales() {
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (200, 60)).await;
+async fn tab_cycles_the_listings_and_skips_the_sides() {
+    let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (200, 60)).await;
     let mut sub = h.subscribe();
     // The tree next to it, and a third listing: the split pane and the one
     // that is not.
-    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
+    run_by_palette(&h, &mut sub, "pane.tree").await;
     // Drained before going back to the palette: the queue carries the
     // previous opening's envelopes, and the helper would read them as a
     // response to the new one.
-    foto_hasta(&h, &mut sub, "the tree is on screen", |foto| {
-        foto.palette
+    snapshot_until(&h, &mut sub, "the tree is on screen", |snapshot| {
+        snapshot
+            .palette
             .is_none()
-            .then(|| foto.slots.iter().any(|v| matches!(v, SlotView::Tree(_))))
+            .then(|| {
+                snapshot
+                    .slots
+                    .iter()
+                    .any(|v| matches!(v, SlotView::Tree(_)))
+            })
             .filter(|hay| *hay)
     })
     .await;
-    ejecutar_por_paleta(&h, &mut sub, "layout.split-v").await;
-    let (hueco_del_arbol, partida) =
-        foto_hasta(&h, &mut sub, "three listings and a tree", |foto| {
-            let listados = foto
+    run_by_palette(&h, &mut sub, "layout.split-v").await;
+    let (tree_slot, partida) =
+        snapshot_until(&h, &mut sub, "three listings and a tree", |snapshot| {
+            let listings = snapshot
                 .slots
                 .iter()
                 .filter(|v| matches!(v, SlotView::Browser(_)))
                 .count();
-            let arbol = foto.slots.iter().find_map(|v| match v {
+            let arbol = snapshot.slots.iter().find_map(|v| match v {
                 SlotView::Tree(t) => Some(t.slot_id),
                 _ => None,
             })?;
-            let foco = foto.focus?;
-            (listados == 3).then_some((arbol, foco))
+            let focus = snapshot.focus?;
+            (listings == 3).then_some((arbol, focus))
         })
         .await;
 
     let mut vistos = Vec::new();
     let mut anterior = partida;
     for _ in 0..3 {
-        h.dispatch(tecla("Tab")).await.expect("host alive");
+        h.dispatch(press("Tab")).await.expect("host alive");
         // Until focus MOVES: the previous envelope may still be in the
         // queue, and reading it as a response to this key is reading a
         // stale snapshot.
-        let ahora = foto_hasta(&h, &mut sub, "focus moved", |foto| {
-            foto.focus.filter(|f| *f != anterior)
+        let now = snapshot_until(&h, &mut sub, "focus moved", |snapshot| {
+            snapshot.focus.filter(|f| *f != anterior)
         })
         .await;
-        vistos.push(ahora);
-        anterior = ahora;
+        vistos.push(now);
+        anterior = now;
     }
     assert!(
-        !vistos.contains(&hueco_del_arbol),
+        !vistos.contains(&tree_slot),
         "tab does not stop on the tree: {vistos:?}"
     );
-    let distintos: std::collections::BTreeSet<u32> = vistos.iter().copied().collect();
+    let different: std::collections::BTreeSet<u32> = vistos.iter().copied().collect();
     assert_eq!(
-        distintos.len(),
+        different.len(),
         3,
         "all THREE listings are reachable: {vistos:?}"
     );
@@ -2201,16 +2207,16 @@ async fn el_tabulador_cicla_los_listados_y_se_salta_los_laterales() {
     // The other half: the screen's traversal DOES stop on the tree.
     let mut paradas = Vec::new();
     for _ in 0..4 {
-        h.dispatch(tecla_alt("o")).await.expect("host alive");
-        let ahora = foto_hasta(&h, &mut sub, "focus moved", |foto| {
-            foto.focus.filter(|f| *f != anterior)
+        h.dispatch(key_alt("o")).await.expect("host alive");
+        let now = snapshot_until(&h, &mut sub, "focus moved", |snapshot| {
+            snapshot.focus.filter(|f| *f != anterior)
         })
         .await;
-        paradas.push(ahora);
-        anterior = ahora;
+        paradas.push(now);
+        anterior = now;
     }
     assert!(
-        paradas.contains(&hueco_del_arbol),
+        paradas.contains(&tree_slot),
         "`layout.focus-next` traverses the whole screen: {paradas:?}"
     );
 }
@@ -2221,13 +2227,13 @@ async fn el_tabulador_cicla_los_listados_y_se_salta_los_laterales() {
 /// It is what makes keeping it open useful: if the tree re-anchored on
 /// every navigation, entering a folder would collapse every open branch.
 #[tokio::test]
-async fn elegir_una_rama_navega_el_listado_y_el_arbol_no_se_mueve() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn choosing_a_branch_navigates_the_listing_and_the_tree_does_not_move() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
-    let foto = arbol_con_ramas(&mut sub, 2).await;
-    let generacion = arbol_de(&foto).generation;
+    run_by_palette(&h, &mut sub, "pane.tree").await;
+    let snapshot = tree_with_branches(&mut sub, 2).await;
+    let generacion = tree_of(&snapshot).generation;
 
     h.dispatch(UiAction::TreeActivateRow {
         row: 1,
@@ -2236,16 +2242,19 @@ async fn elegir_una_rama_navega_el_listado_y_el_arbol_no_se_mueve() {
     .await
     .expect("host alive");
 
-    let mut visto = None;
+    let mut seen = None;
     for _ in 0..20 {
-        let foto = siguiente_foto(&mut sub).await;
-        if primer_listado(&foto).path_display.ends_with("/casa/docs") {
-            visto = Some(foto);
+        let snapshot = next_snapshot(&mut sub).await;
+        if primer_listing(&snapshot)
+            .path_display
+            .ends_with("/casa/docs")
+        {
+            seen = Some(snapshot);
             break;
         }
     }
-    let foto = visto.expect("the listing goes to the chosen branch");
-    let t = arbol_de(&foto);
+    let snapshot = seen.expect("the listing goes to the chosen branch");
+    let t = tree_of(&snapshot);
     assert!(
         t.rows[0].label.ends_with("/casa"),
         "the tree stays anchored where it was: {:?}",
@@ -2256,27 +2265,27 @@ async fn elegir_una_rama_navega_el_listado_y_el_arbol_no_se_mueve() {
 /// Regression (2026-09-21): with focus on the LEFT listing, clicking the
 /// tree and choosing a branch navigates THAT listing, not the right one.
 ///
-/// Clicking the tree gives the tree slot the active role; `activo()` has to
+/// Clicking the tree gives the tree slot the active role; `active()` has to
 /// answer with a listing, and it was falling back to the lowest id — which
 /// in this layout, a real session's, is the one on the right.
 #[tokio::test]
-async fn la_rama_del_arbol_va_al_ultimo_listado_enfocado() {
-    let disposicion = r#"{"split": {"children": [{"split": {"children": [
+async fn the_tree_branch_goes_to_the_last_focused_listing() {
+    let layout = r#"{"split": {"children": [{"split": {"children": [
         {"slot": {"id": 2, "kind": "browser"}}, {"slot": {"id": 1, "kind": "browser"}}],
         "dir": "horizontal", "sizes": [{"weight": 1}, {"weight": 1}]}},
         {"slot": {"id": 4, "kind": "status"}}], "dir": "vertical",
         "sizes": [{"weight": 1}, {"fixed": 1}]}}"#;
-    let tree: norte_frontend::layout::Node = serde_json::from_str(disposicion).expect("tree");
-    let (h, _) = super::base::host_con_arbol(arbol(), tree, (160, 50)).await;
+    let tree: norte_frontend::layout::Node = serde_json::from_str(layout).expect("tree");
+    let (h, _) = super::base::host_with_tree(fake_tree(), tree, (160, 50)).await;
     let mut sub = h.subscribe();
     // The one on the left, 2, with focus.
     let _ = h
         .dispatch(UiAction::FocusSlot { slot_id: 2 })
         .await
         .expect("host alive");
-    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
-    let foto = arbol_con_ramas(&mut sub, 2).await;
-    let t = arbol_de(&foto);
+    run_by_palette(&h, &mut sub, "pane.tree").await;
+    let snapshot = tree_with_branches(&mut sub, 2).await;
+    let t = tree_of(&snapshot);
     // And the click on the tree, which focuses it, before choosing the
     // branch.
     let _ = h
@@ -2289,24 +2298,24 @@ async fn la_rama_del_arbol_va_al_ultimo_listado_enfocado() {
     })
     .await
     .expect("host alive");
-    let ruta = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+    let path = |s: &norte_ui_host::ViewSnapshot, id: u32| {
         s.slots.iter().find_map(|v| match v {
             SlotView::Browser(b) if b.slot_id == id => Some(b.path_display.clone()),
             _ => None,
         })
     };
-    let foto = foto_hasta(&h, &mut sub, "some listing in docs", |s| {
-        (ruta(s, 1)?.ends_with("/casa/docs") || ruta(s, 2)?.ends_with("/casa/docs"))
+    let snapshot = snapshot_until(&h, &mut sub, "some listing in docs", |s| {
+        (path(s, 1)?.ends_with("/casa/docs") || path(s, 2)?.ends_with("/casa/docs"))
             .then(|| s.clone())
     })
     .await;
     assert!(
-        ruta(&foto, 2).is_some_and(|r| r.ends_with("/casa/docs")),
+        path(&snapshot, 2).is_some_and(|r| r.ends_with("/casa/docs")),
         "it navigates the one on the left, which had focus: {:?}",
-        ruta(&foto, 2)
+        path(&snapshot, 2)
     );
     assert!(
-        ruta(&foto, 1).is_some_and(|r| !r.ends_with("/casa/docs")),
+        path(&snapshot, 1).is_some_and(|r| !r.ends_with("/casa/docs")),
         "and the one on the right is not touched"
     );
 }
@@ -2318,13 +2327,13 @@ async fn la_rama_del_arbol_va_al_ultimo_listado_enfocado() {
 /// reader releasing the button and the host attending to it, that row can
 /// be a different folder (ADR 0068).
 #[tokio::test]
-async fn una_rama_de_otra_pintada_no_navega() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn a_branch_from_another_painted_one_does_not_navigate() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "pane.tree").await;
-    let foto = arbol_con_ramas(&mut sub, 2).await;
-    let generacion = arbol_de(&foto).generation;
+    run_by_palette(&h, &mut sub, "pane.tree").await;
+    let snapshot = tree_with_branches(&mut sub, 2).await;
+    let generacion = tree_of(&snapshot).generation;
 
     let ack = h
         .dispatch(UiAction::TreeActivateRow {
@@ -2337,11 +2346,11 @@ async fn una_rama_de_otra_pintada_no_navega() {
         matches!(ack, ActionAck::Stale { .. }),
         "a generation that does not match is rejected: {ack:?}"
     );
-    let foto = siguiente_foto_tras_resync(&h, &mut sub).await;
+    let snapshot = next_snapshot_after_resync(&h, &mut sub).await;
     assert!(
-        primer_listado(&foto).path_display.ends_with("/casa"),
+        primer_listing(&snapshot).path_display.ends_with("/casa"),
         "and the listing did not move: {:?}",
-        primer_listado(&foto).path_display
+        primer_listing(&snapshot).path_display
     );
 }
 
@@ -2351,9 +2360,9 @@ async fn una_rama_de_otra_pintada_no_navega() {
 /// composed by another process. Showing it before writing is the reader's
 /// only chance to see that what arrived is not what they dragged.
 #[tokio::test]
-async fn soltar_pregunta_antes_de_copiar() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn dropping_asks_before_copying() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     h.dispatch(UiAction::FilesDropped {
@@ -2362,25 +2371,21 @@ async fn soltar_pregunta_antes_de_copiar() {
     .await
     .expect("host alive");
 
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    assert_eq!(dialogos.len(), 1);
-    assert_eq!(dialogos[0].title_key, "modal-drop-title");
-    let cuerpo = &dialogos[0].body;
-    assert_eq!(cuerpo.len(), 2, "what arrived, line by line: {cuerpo:?}");
-    let destino = dialogos[0]
+    let dialogs = next_dialogs(&mut sub).await;
+    assert_eq!(dialogs.len(), 1);
+    assert_eq!(dialogs[0].title_key, "modal-drop-title");
+    let body = &dialogs[0].body;
+    assert_eq!(body.len(), 2, "what arrived, line by line: {body:?}");
+    let dest = dialogs[0]
         .destination
         .as_ref()
         .expect("says where it lands");
     assert!(
-        destino.text.ends_with("/casa"),
-        "the active pane, in ITS OWN field: {destino:?}"
+        dest.text.ends_with("/casa"),
+        "the active pane, in ITS OWN field: {dest:?}"
     );
     assert!(
-        backend
-            .transferencias
-            .lock()
-            .expect("transferencias")
-            .is_empty(),
+        backend.transfers.lock().expect("transferencias").is_empty(),
         "opening the dialog copies nothing"
     );
 }
@@ -2393,16 +2398,16 @@ async fn soltar_pregunta_antes_de_copiar() {
 /// pane's marks were put there by the reader for something else: what gets
 /// copied did not come from there.
 #[tokio::test]
-async fn soltar_confirmado_copia_y_respeta_las_marcas() {
-    let backend = arbol();
-    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+async fn a_confirmed_drop_copies_and_respects_the_marks() {
+    let backend = fake_tree();
+    let (h, snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let b = listado(&snap);
-    let hueco = b.slot_id;
-    let fila = b.rows.first().expect("there are rows");
+    let b = listing(&snap);
+    let slot = b.slot_id;
+    let row = b.rows.first().expect("there are rows");
     h.dispatch(UiAction::ToggleMark {
-        slot_id: hueco,
-        key: fila.key,
+        slot_id: slot,
+        key: row.key,
         generation: b.generation,
     })
     .await
@@ -2413,8 +2418,8 @@ async fn soltar_confirmado_copia_y_respeta_las_marcas() {
     })
     .await
     .expect("host alive");
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let id = dialogos[0].id;
+    let dialogs = next_dialogs(&mut sub).await;
+    let id = dialogs[0].id;
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
@@ -2424,7 +2429,7 @@ async fn soltar_confirmado_copia_y_respeta_las_marcas() {
     .expect("host alive");
     {
         let ts = anotados(&backend, "the drop's copy", 1, |f| {
-            f.transferencias.lock().expect("transferencias").clone()
+            f.transfers.lock().expect("transferencias").clone()
         })
         .await;
         assert_eq!(ts.len(), 1, "{ts:?}");
@@ -2438,8 +2443,8 @@ async fn soltar_confirmado_copia_y_respeta_las_marcas() {
         );
     }
 
-    let foto = siguiente_foto_tras_resync(&h, &mut sub).await;
-    let b = listado(&foto);
+    let snapshot = next_snapshot_after_resync(&h, &mut sub).await;
+    let b = listing(&snapshot);
     assert!(
         b.rows.iter().any(|r| r.marked),
         "the reader's mark is still where it was: {:?}",
@@ -2453,9 +2458,9 @@ async fn soltar_confirmado_copia_y_respeta_las_marcas() {
 /// it in silence would leave the reader looking at a pane that did not
 /// change with no idea why.
 #[tokio::test]
-async fn soltar_lo_que_no_es_ruta_se_dice() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn dropping_something_that_is_not_a_path_is_reported() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
     let ack = h
@@ -2469,25 +2474,20 @@ async fn soltar_lo_que_no_es_ruta_se_dice() {
         "{ack:?}"
     );
     // By `Resync` and not waiting for the next snapshot: refusing does not
-    // send one, only the bar's patch, and a `siguiente_foto` here would
+    // send one, only the bar's patch, and a `next_snapshot` here would
     // hang instead of turning red.
-    let foto = siguiente_foto_tras_resync(&h, &mut sub).await;
-    assert!(foto.dialogs.is_empty(), "and no dialog opens");
+    let snapshot = next_snapshot_after_resync(&h, &mut sub).await;
+    assert!(snapshot.dialogs.is_empty(), "and no dialog opens");
     assert!(
-        foto.status
+        snapshot
+            .status
             .message
             .as_deref()
             .is_some_and(|m| m == norte_i18n::t_in(norte_i18n::Lang::Es, "host-drop-unusable")),
         "and it SAYS so in the bar: {:?}",
-        foto.status.message
+        snapshot.status.message
     );
-    assert!(
-        backend
-            .transferencias
-            .lock()
-            .expect("transferencias")
-            .is_empty()
-    );
+    assert!(backend.transfers.lock().expect("transferencias").is_empty());
 }
 
 /// **The connections picker is filled by the DAEMON** (#264): the window
@@ -2497,9 +2497,9 @@ async fn soltar_lo_que_no_es_ruta_se_dice() {
 /// And the URL is masked as an AUTHORITY, not as a path: here "which
 /// machine am I connecting to?" is the only question the picker answers.
 #[tokio::test]
-async fn el_selector_de_conexiones_lo_llena_el_daemon() {
-    let falso = arbol_como_falso();
-    *falso.conexiones.lock().expect("conexiones") =
+async fn the_connections_selector_is_filled_by_the_daemon() {
+    let fake = tree_as_fake();
+    *fake.connections.lock().expect("conexiones") =
         Some(Ok(norte_proto::methods::ConnectionListResult {
             connections: vec![
                 norte_proto::methods::ConnectionEntry {
@@ -2513,23 +2513,23 @@ async fn el_selector_de_conexiones_lo_llena_el_daemon() {
             ],
             unusable: Vec::new(),
         }));
-    let backend = Arc::new(falso);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = Arc::new(fake);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.connect").await;
+    run_by_palette(&h, &mut sub, "pane.connect").await;
 
-    let mut con_filas = None;
+    let mut with_rows = None;
     for _ in 0..20 {
-        let Some(v) = siguiente_selector(&mut sub).await else {
+        let Some(v) = next_selector(&mut sub).await else {
             continue;
         };
         if !v.rows.is_empty() {
-            con_filas = Some(v);
+            with_rows = Some(v);
             break;
         }
     }
-    let v = con_filas.expect("the daemon's list arrives");
+    let v = with_rows.expect("the daemon's list arrives");
     assert_eq!(v.rows.len(), 2);
     assert_eq!(v.rows[0].label, "trabajo");
     assert!(
@@ -2549,9 +2549,9 @@ async fn el_selector_de_conexiones_lo_llena_el_daemon() {
 /// no destination and saying what is wrong with it — which is the only
 /// thing the reader can act on.
 #[tokio::test]
-async fn una_conexion_ilegible_no_esconde_a_las_demas_en_la_ventana() {
-    let falso = arbol_como_falso();
-    *falso.conexiones.lock().expect("conexiones") =
+async fn an_unreadable_connection_does_not_hide_the_others_in_the_window() {
+    let fake = tree_as_fake();
+    *fake.connections.lock().expect("conexiones") =
         Some(Ok(norte_proto::methods::ConnectionListResult {
             connections: vec![norte_proto::methods::ConnectionEntry {
                 name: "buena".to_owned(),
@@ -2562,23 +2562,23 @@ async fn una_conexion_ilegible_no_esconde_a_las_demas_en_la_ventana() {
                 reason: "unknown field `password`".to_owned(),
             }],
         }));
-    let backend = Arc::new(falso);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = Arc::new(fake);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.connect").await;
+    run_by_palette(&h, &mut sub, "pane.connect").await;
 
-    let mut con_filas = None;
+    let mut with_rows = None;
     for _ in 0..20 {
-        let Some(v) = siguiente_selector(&mut sub).await else {
+        let Some(v) = next_selector(&mut sub).await else {
             continue;
         };
         if !v.rows.is_empty() {
-            con_filas = Some(v);
+            with_rows = Some(v);
             break;
         }
     }
-    let v = con_filas.expect("the daemon's list arrives");
+    let v = with_rows.expect("the daemon's list arrives");
     assert_eq!(v.rows.len(), 2, "both are visible: {:?}", v.rows);
     assert_eq!(v.rows[0].label, "buena", "and the usable one goes first");
     assert_eq!(v.rows[1].label, "rota");
@@ -2593,43 +2593,43 @@ async fn una_conexion_ilegible_no_esconde_a_las_demas_en_la_ventana() {
 /// answered yet" are not the same, and an empty list with no phrase always
 /// reads as the first one.
 #[tokio::test]
-async fn sin_conexiones_configuradas_el_selector_lo_dice() {
-    let falso = arbol_como_falso();
-    *falso.conexiones.lock().expect("conexiones") =
+async fn with_no_connections_configured_the_selector_says_so() {
+    let fake = tree_as_fake();
+    *fake.connections.lock().expect("conexiones") =
         Some(Ok(norte_proto::methods::ConnectionListResult {
             connections: Vec::new(),
             unusable: Vec::new(),
         }));
-    let backend = Arc::new(falso);
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+    let backend = Arc::new(fake);
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.connect").await;
+    run_by_palette(&h, &mut sub, "pane.connect").await;
 
-    let mut visto = None;
+    let mut seen = None;
     for _ in 0..20 {
-        let Some(v) = siguiente_selector(&mut sub).await else {
+        let Some(v) = next_selector(&mut sub).await else {
             continue;
         };
         if v.empty == norte_i18n::t_in(norte_i18n::Lang::Es, "picker-connections-empty") {
-            visto = Some(v);
+            seen = Some(v);
             break;
         }
     }
-    let v = visto.expect("the empty-list phrase arrives");
+    let v = seen.expect("the empty-list phrase arrives");
     assert!(v.rows.is_empty());
 }
 
 /// **With the window up front, no desktop notice fires** (#285): the bar and
 /// the board already say the same thing, and repeating it outside is noise.
 #[tokio::test]
-async fn con_la_ventana_delante_no_se_avisa_fuera() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn with_the_window_in_front_no_outside_warning_is_shown() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut nativos = h.native_effects();
     let mut sub = h.subscribe();
-    h.dispatch(tecla("F8")).await.expect("host alive");
-    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(press("F8")).await.expect("host alive");
+    let id = next_dialogs(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
@@ -2637,10 +2637,10 @@ async fn con_la_ventana_delante_no_se_avisa_fuera() {
     })
     .await
     .expect("host alive");
-    let _ = siguientes_tasks(&mut sub).await;
+    let _ = next_tasks(&mut sub).await;
 
     let tx = backend
-        .progreso
+        .progress
         .lock()
         .expect("progreso")
         .clone()
@@ -2660,16 +2660,16 @@ async fn con_la_ventana_delante_no_se_avisa_fuera() {
 /// desktop's history and can show on the lock screen, so what cannot
 /// pretend here cannot pretend there either.
 #[tokio::test]
-async fn sin_foco_el_aviso_sale_y_lleva_el_nombre() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn without_focus_the_notice_appears_and_carries_the_name() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut nativos = h.native_effects();
     let mut sub = h.subscribe();
     h.dispatch(UiAction::WindowFocus { focused: false })
         .await
         .expect("host alive");
-    h.dispatch(tecla("F8")).await.expect("host alive");
-    let id = siguientes_dialogos(&mut sub).await[0].id;
+    h.dispatch(press("F8")).await.expect("host alive");
+    let id = next_dialogs(&mut sub).await[0].id;
     h.dispatch(UiAction::Dialog {
         id,
         choice: "confirm".to_owned(),
@@ -2677,10 +2677,10 @@ async fn sin_foco_el_aviso_sale_y_lleva_el_nombre() {
     })
     .await
     .expect("host alive");
-    let _ = siguientes_tasks(&mut sub).await;
+    let _ = next_tasks(&mut sub).await;
 
     let tx = backend
-        .progreso
+        .progress
         .lock()
         .expect("progreso")
         .clone()
@@ -2690,21 +2690,17 @@ async fn sin_foco_el_aviso_sale_y_lleva_el_nombre() {
         p.current = Some(VPath::parse("mem:///casa/notas.txt").expect("vpath"));
     });
 
-    let mut visto = None;
+    let mut seen = None;
     for _ in 0..2_000 {
-        if let Ok(norte_ui_host::dto::NativeEffect::Notify { titulo, cuerpo }) = nativos.try_recv()
-        {
-            visto = Some((titulo, cuerpo));
+        if let Ok(norte_ui_host::dto::NativeEffect::Notify { title, body }) = nativos.try_recv() {
+            seen = Some((title, body));
             break;
         }
         asentar().await;
     }
-    let (titulo, cuerpo) = visto.expect("with no focus, the notice fires");
-    assert!(!titulo.is_empty(), "the notice says WHAT happened");
-    assert!(
-        cuerpo.contains("notas.txt"),
-        "and with which file: {cuerpo:?}"
-    );
+    let (title, body) = seen.expect("with no focus, the notice fires");
+    assert!(!title.is_empty(), "the notice says WHAT happened");
+    assert!(body.contains("notas.txt"), "and with which file: {body:?}");
 }
 
 /// **With just ONE pane, copying asks the desktop for the destination**
@@ -2715,24 +2711,24 @@ async fn sin_foco_el_aviso_sale_y_lleva_el_nombre() {
 /// comes in, and the transfer ends up going where it was chosen — because
 /// each half on its own says nothing about the other.
 #[tokio::test]
-async fn con_un_panel_el_destino_lo_elige_el_escritorio() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn with_one_pane_the_desktop_chooses_the_destination() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut nativos = h.native_effects();
     let mut sub = h.subscribe();
 
     // F5 with a single listing: instead of refusing, the effect fires.
-    h.dispatch(tecla("F5")).await.expect("host alive");
-    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    h.dispatch(press("F5")).await.expect("host alive");
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
         .await
         .expect("the effect fires before the timeout")
         .expect("channel alive");
-    let desde = match efecto {
-        norte_ui_host::dto::NativeEffect::PickDirectory { desde } => desde,
-        otro => panic!("expected the folder picker: {otro:?}"),
+    let from = match effect {
+        norte_ui_host::dto::NativeEffect::PickDirectory { from } => from,
+        other => panic!("expected the folder picker: {other:?}"),
     };
     assert_eq!(
-        desde.to_wire(),
+        from.to_wire(),
         "mem:///casa",
         "the picker opens where the pane is"
     );
@@ -2747,26 +2743,26 @@ async fn con_un_panel_el_destino_lo_elige_el_escritorio() {
     // What comes out is the usual confirmation, with THAT destination: the
     // reader sees where their files are going before a single byte moves,
     // which is what pins down that the path came from outside.
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let confirmacion = dialogos.last().expect("there is a confirmation");
-    let destino = confirmacion
+    let dialogs = next_dialogs(&mut sub).await;
+    let confirmation = dialogs.last().expect("there is a confirmation");
+    let dest = confirmation
         .destination
         .as_ref()
         .expect("the confirmation NAMES the destination");
     assert!(
-        destino.text.contains("/tmp"),
-        "the chosen destination is shown: {destino:?}"
+        dest.text.contains("/tmp"),
+        "the chosen destination is shown: {dest:?}"
     );
 }
 
 /// Closing the picker without choosing copies nothing: cancelling is a
 /// response.
 #[tokio::test]
-async fn cerrar_el_selector_sin_elegir_no_transfiere() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn closing_the_selector_without_choosing_does_not_transfer() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut nativos = h.native_effects();
-    h.dispatch(tecla("F5")).await.expect("host alive");
+    h.dispatch(press("F5")).await.expect("host alive");
     let _ = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
         .await
         .expect("the effect fires");
@@ -2776,11 +2772,7 @@ async fn cerrar_el_selector_sin_elegir_no_transfiere() {
         .expect("host alive");
     asentar().await;
     assert!(
-        backend
-            .transferencias
-            .lock()
-            .expect("transferencias")
-            .is_empty(),
+        backend.transfers.lock().expect("transferencias").is_empty(),
         "cancelling the picker transfers nothing"
     );
 }
@@ -2789,9 +2781,9 @@ async fn cerrar_el_selector_sin_elegir_no_transfiere() {
 /// rule as a stale dialog: on a surface that moves files, a stray message
 /// cannot start an operation.
 #[tokio::test]
-async fn un_destino_que_nadie_pidio_no_hace_nada() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn a_destination_nobody_asked_for_does_nothing() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let ack = h
         .dispatch(UiAction::DirectoryPicked {
             path: Some("/tmp".to_owned()),
@@ -2803,33 +2795,27 @@ async fn un_destino_que_nadie_pidio_no_hace_nada() {
         "with no picker open, the response is stale: {ack:?}"
     );
     asentar().await;
-    assert!(
-        backend
-            .transferencias
-            .lock()
-            .expect("transferencias")
-            .is_empty()
-    );
+    assert!(backend.transfers.lock().expect("transferencias").is_empty());
 }
 
 /// What an editor or a shell does with the files is not decided by this
 /// window, so one mounted with no effects does not launch them.
 #[tokio::test]
-async fn en_solo_lectura_no_se_lanza_nada_del_escritorio() {
-    let backend = arbol();
-    let (h, _snap) = host_solo_lectura(Arc::clone(&backend)).await;
+async fn in_read_only_nothing_from_the_desktop_is_launched() {
+    let backend = fake_tree();
+    let (h, _snap) = host_solo_read(Arc::clone(&backend)).await;
     let mut nativos = h.native_effects();
     let mut sub = h.subscribe();
     // They are not even OFFERED: the palette is built with this window's
     // effects, and offering what is going to be refused is promising
     // something that will not happen. It is the same rule that already
     // governs copying and deleting.
-    h.dispatch(tecla_mod("p", true, false))
+    h.dispatch(key_mod("p", true, false))
         .await
         .expect("host alive");
-    let _ = siguiente_paleta(&mut sub).await;
+    let _ = next_palette(&mut sub).await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let p = siguiente_foto(&mut sub).await.palette.expect("open");
+    let p = next_snapshot(&mut sub).await.palette.expect("open");
     for cmd in ["pane.open", "app.terminal"] {
         assert!(
             !p.rows.iter().any(|r| r.text == cmd),
@@ -2853,13 +2839,13 @@ async fn en_solo_lectura_no_se_lanza_nada_del_escritorio() {
 /// sit inside one. It is refused saying so, instead of opening something
 /// else — `$HOME`, typically — without warning.
 #[tokio::test]
-async fn una_ruta_que_no_es_local_no_se_abre() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn a_path_that_is_not_local_does_not_open() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut nativos = h.native_effects();
     let mut sub = h.subscribe();
     for cmd in ["pane.open", "app.terminal"] {
-        let ack = ejecutar_por_paleta_ack(&h, &mut sub, cmd).await;
+        let ack = execute_via_palette_ack(&h, &mut sub, cmd).await;
         assert!(
             matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-not-local"),
             "{cmd} over a `mem://`: {ack:?}"
@@ -2877,13 +2863,13 @@ async fn una_ruta_que_no_es_local_no_se_abre() {
 /// With nobody listening to native effects, the gesture is refused: no
 /// acknowledgment is given for something that is not going to happen.
 #[tokio::test]
-async fn sin_escritorio_detras_copiar_se_rehusa() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn without_a_desktop_behind_it_copying_is_refused() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     // NOBODY calls `native_effects()`: it is the case of a frontend that
     // does not know how to do these things.
-    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.copy-path").await;
+    let ack = execute_via_palette_ack(&h, &mut sub, "pane.copy-path").await;
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-desktop"),
         "{ack:?}"
@@ -2898,11 +2884,11 @@ async fn sin_escritorio_detras_copiar_se_rehusa() {
 /// still a fixed regime, because there is no `dialog.*` verb for "type a
 /// letter"; the test next to this one covers that.
 #[tokio::test]
-async fn una_tecla_reatada_contesta_el_dialogo() {
-    let backend = arbol();
+async fn a_rebound_key_answers_the_dialog() {
+    let backend = fake_tree();
     // A user layer that binds `s` to confirm, on top of the usual preset:
     // it is what a `keymap.toml` would do.
-    let capa = norte_frontend::keymap::parse_keymap(
+    let layer = norte_frontend::keymap::parse_keymap(
         "[dialog]\nappend_keymap = [{ on = [\"z\"], run = \"dialog.confirm\" }]\n",
     )
     .expect("the layer parses");
@@ -2910,31 +2896,31 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
         norte_frontend::keymap::presets::source("orthodox").expect("preset"),
     )
     .expect("the preset parses");
-    let dialogo = norte_frontend::keymap::Effective::build_for(
+    let dialog = norte_frontend::keymap::Effective::build_for(
         &base,
-        std::slice::from_ref(&capa),
-        norte_ui_host::commands::IMPLEMENTADOS_DIALOGO,
+        std::slice::from_ref(&layer),
+        norte_ui_host::commands::IMPLEMENTADOS_DIALOG,
         norte_frontend::keymap::Screen::Dialog,
     )
     .expect("effective");
     let (h, _snap) = UiHost::start(UiHostOptions {
         backend: Arc::clone(&backend) as Arc<dyn norte_ui_host::backend::HostBackend>,
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: dialogo,
+        keymap_dialog: dialog,
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -2942,16 +2928,16 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
     let mut sub = h.subscribe();
 
     // A delete opens its confirmation, which has NO field to type into.
-    ejecutar_por_paleta(&h, &mut sub, "pane.delete").await;
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    assert_eq!(dialogos.len(), 1, "the confirmation");
-    h.dispatch(tecla("z")).await.expect("host alive");
+    run_by_palette(&h, &mut sub, "pane.delete").await;
+    let dialogs = next_dialogs(&mut sub).await;
+    assert_eq!(dialogs.len(), 1, "the confirmation");
+    h.dispatch(press("z")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
     assert!(
-        siguiente_foto(&mut sub).await.dialogs.is_empty(),
+        next_snapshot(&mut sub).await.dialogs.is_empty(),
         "`z` bound to `dialog.confirm` answers the question"
     );
-    hasta(&backend, "the delete queued", |f| {
+    until(&backend, "the delete queued", |f| {
         (!f.borrados.lock().expect("borrados").is_empty()).then_some(())
     })
     .await;
@@ -2964,19 +2950,19 @@ async fn una_tecla_reatada_contesta_el_dialogo() {
 /// question. It is the same pair of regimes as the TUI and the 6.4
 /// `[config]` editor.
 #[tokio::test]
-async fn con_un_campo_abierto_las_teclas_no_contestan() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn with_a_field_open_keys_do_not_respond() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "pane.mkdir").await;
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = dialogos.last().expect("the name prompt");
+    run_by_palette(&h, &mut sub, "pane.mkdir").await;
+    let dialogs = next_dialogs(&mut sub).await;
+    let d = dialogs.last().expect("the name prompt");
     assert!(d.input.is_some(), "this dialog has somewhere to type");
     // Any letter at all: it neither answers nor closes.
-    h.dispatch(tecla("y")).await.expect("host alive");
+    h.dispatch(press("y")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
     assert_eq!(
-        siguiente_foto(&mut sub).await.dialogs.len(),
+        next_snapshot(&mut sub).await.dialogs.len(),
         1,
         "the prompt stays open"
     );
@@ -2989,29 +2975,29 @@ async fn con_un_campo_abierto_las_teclas_no_contestan() {
 /// arrives and that a glob that fails to compile is SAID instead of doing
 /// nothing.
 #[tokio::test]
-async fn marcar_todo_invertir_y_por_patron() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn mark_all_invert_and_by_pattern() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let marcas = |s: &norte_ui_host::ViewSnapshot| listado(s).marks;
+    let marks = |s: &norte_ui_host::ViewSnapshot| listing(s).marks;
 
-    ejecutar_por_paleta(&h, &mut sub, "mark.all").await;
+    run_by_palette(&h, &mut sub, "mark.all").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let todas = marcas(&siguiente_foto(&mut sub).await);
-    assert!(todas > 0, "marking all marks something");
+    let all = marks(&next_snapshot(&mut sub).await);
+    assert!(all > 0, "marking all marks something");
 
-    ejecutar_por_paleta(&h, &mut sub, "mark.invert").await;
+    run_by_palette(&h, &mut sub, "mark.invert").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     assert_eq!(
-        marcas(&siguiente_foto(&mut sub).await),
+        marks(&next_snapshot(&mut sub).await),
         0,
         "inverting over everything marked leaves none"
     );
 
     // By pattern: the prompt asks for the glob and `Enter` applies it.
-    ejecutar_por_paleta(&h, &mut sub, "mark.pattern-add").await;
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = dialogos.last().expect("the glob prompt");
+    run_by_palette(&h, &mut sub, "mark.pattern-add").await;
+    let dialogs = next_dialogs(&mut sub).await;
+    let d = dialogs.last().expect("the glob prompt");
     assert!(d.input.is_some());
     h.dispatch(UiAction::DialogInput {
         id: d.id,
@@ -3028,15 +3014,15 @@ async fn marcar_todo_invertir_y_por_patron() {
     .expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
     assert_eq!(
-        marcas(&siguiente_foto(&mut sub).await),
-        todas,
+        marks(&next_snapshot(&mut sub).await),
+        all,
         "`*` marks the same as marking all"
     );
 
     // And a glob that fails to compile is refused, SAYING SO.
-    ejecutar_por_paleta(&h, &mut sub, "mark.pattern-remove").await;
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = dialogos.last().expect("the prompt");
+    run_by_palette(&h, &mut sub, "mark.pattern-remove").await;
+    let dialogs = next_dialogs(&mut sub).await;
+    let d = dialogs.last().expect("the prompt");
     h.dispatch(UiAction::DialogInput {
         id: d.id,
         text: "[".to_owned(),
@@ -3064,20 +3050,20 @@ async fn marcar_todo_invertir_y_por_patron() {
 /// removing from view something still writing to disk is losing sight of
 /// exactly what has to be watched.
 #[tokio::test]
-async fn el_tablero_se_recorre_y_se_descarta() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn the_dashboard_is_traversed_and_discarded() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     // With no tasks: all three say so instead of staying silent.
     for cmd in ["task.next", "task.prev", "task.dismiss"] {
-        let ack = ejecutar_por_paleta_ack(&h, &mut sub, cmd).await;
+        let ack = execute_via_palette_ack(&h, &mut sub, cmd).await;
         assert!(matches!(ack, ActionAck::Applied { .. }), "{cmd}: {ack:?}");
     }
 
     // A live task: dismissing it is refused.
-    ejecutar_por_paleta(&h, &mut sub, "pane.mkdir").await;
-    let dialogos = siguientes_dialogos(&mut sub).await;
-    let d = dialogos.last().expect("the prompt");
+    run_by_palette(&h, &mut sub, "pane.mkdir").await;
+    let dialogs = next_dialogs(&mut sub).await;
+    let d = dialogs.last().expect("the prompt");
     h.dispatch(UiAction::DialogInput {
         id: d.id,
         text: "nueva".to_owned(),
@@ -3091,7 +3077,7 @@ async fn el_tablero_se_recorre_y_se_descarta() {
     })
     .await
     .expect("host alive");
-    let vivas = foto_hasta(&h, &mut sub, "the mkdir's task on the board", |f| {
+    let vivas = snapshot_until(&h, &mut sub, "the mkdir's task on the board", |f| {
         (!f.tasks.is_empty()).then(|| f.tasks.clone())
     })
     .await;
@@ -3100,7 +3086,7 @@ async fn el_tablero_se_recorre_y_se_descarta() {
         .iter()
         .any(|t| matches!(t.state, norte_ui_host::dto::TaskStateView::Running))
     {
-        let ack = ejecutar_por_paleta_ack(&h, &mut sub, "task.dismiss").await;
+        let ack = execute_via_palette_ack(&h, &mut sub, "task.dismiss").await;
         assert!(
             matches!(&ack, ActionAck::Unavailable { reason_key }
                 if reason_key == "host-task-running"),
@@ -3109,17 +3095,17 @@ async fn el_tablero_se_recorre_y_se_descarta() {
     }
 
     // Once it finishes, it is: the row disappears from the board.
-    foto_hasta(&h, &mut sub, "no task running", |f| {
+    snapshot_until(&h, &mut sub, "no task running", |f| {
         f.tasks
             .iter()
             .all(|t| !matches!(t.state, norte_ui_host::dto::TaskStateView::Running))
             .then_some(())
     })
     .await;
-    ejecutar_por_paleta(&h, &mut sub, "task.dismiss").await;
+    run_by_palette(&h, &mut sub, "task.dismiss").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
     assert!(
-        siguiente_foto(&mut sub).await.tasks.is_empty(),
+        next_snapshot(&mut sub).await.tasks.is_empty(),
         "the finished row is dismissed"
     );
 }
@@ -3127,18 +3113,18 @@ async fn el_tablero_se_recorre_y_se_descarta() {
 /// Splitting puts another LISTING next to it, in the same directory and
 /// with focus (#291).
 #[tokio::test]
-async fn partir_abre_otro_listado_y_le_da_el_foco() {
-    let backend = arbol();
-    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+async fn splitting_opens_another_listing_and_gives_it_focus() {
+    let backend = fake_tree();
+    let (h, snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    let antes = snap.slots.len();
-    let dir_antes = listado(&snap).path_display.clone();
+    let before = snap.slots.len();
+    let dir_before = listing(&snap).path_display.clone();
 
-    ejecutar_por_paleta(&h, &mut sub, "layout.split-v").await;
+    run_by_palette(&h, &mut sub, "layout.split-v").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(foto.slots.len(), antes + 1, "there is one more slot");
-    let listados: Vec<&norte_ui_host::dto::BrowserSlotView> = foto
+    let snapshot = next_snapshot(&mut sub).await;
+    assert_eq!(snapshot.slots.len(), before + 1, "there is one more slot");
+    let listings: Vec<&norte_ui_host::dto::BrowserSlotView> = snapshot
         .slots
         .iter()
         .filter_map(|s| match s {
@@ -3146,16 +3132,16 @@ async fn partir_abre_otro_listado_y_le_da_el_foco() {
             _ => None,
         })
         .collect();
-    assert!(listados.len() >= 2, "and it is a listing");
+    assert!(listings.len() >= 2, "and it is a listing");
     assert!(
-        listados.iter().all(|b| b.path_display == dir_antes),
-        "the new one starts where the one that was split was: {listados:?}"
+        listings.iter().all(|b| b.path_display == dir_before),
+        "the new one starts where the one that was split was: {listings:?}"
     );
     // Focus to the newborn: splitting is asking for room to work in it.
-    let enfocado = foto.focus.expect("there is focus");
+    let focused = snapshot.focus.expect("there is focus");
     assert!(
-        !foto.slots.is_empty() && enfocado != 1,
-        "focus moved to the new slot: {enfocado}"
+        !snapshot.slots.is_empty() && focused != 1,
+        "focus moved to the new slot: {focused}"
     );
 }
 
@@ -3166,17 +3152,17 @@ async fn partir_abre_otro_listado_y_le_da_el_foco() {
 /// the `Split` does not fit, it degrades to tabs, and the screen keeps
 /// showing one.
 #[tokio::test]
-async fn partir_sin_sitio_se_rehusa_y_se_dice() {
+async fn splitting_with_no_room_is_refused_and_reported() {
     // 24 rows tall for the whole body: enough for one listing and not for
     // two (`browser`'s minimum is 5, and the chrome takes its share).
-    let (h, snap) = host_con_layout(arbol(), "orthodox", (100, 9)).await;
+    let (h, snap) = host_con_layout(fake_tree(), "orthodox", (100, 9)).await;
     let mut sub = h.subscribe();
-    let antes = snap
+    let before = snap
         .slots
         .iter()
         .filter(|s| matches!(s, SlotView::Browser(_)))
         .count();
-    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "layout.split-v").await;
+    let ack = execute_via_palette_ack(&h, &mut sub, "layout.split-v").await;
     assert_eq!(
         ack,
         ActionAck::Unavailable {
@@ -3185,13 +3171,13 @@ async fn partir_sin_sitio_se_rehusa_y_se_dice() {
         "{ack:?}"
     );
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    let listados = foto
+    let snapshot = next_snapshot(&mut sub).await;
+    let listings = snapshot
         .slots
         .iter()
         .filter(|s| matches!(s, SlotView::Browser(_)))
         .count();
-    assert_eq!(listados, antes, "the tree did not keep an invisible slot");
+    assert_eq!(listings, before, "the tree did not keep an invisible slot");
 }
 
 /// Closing the LAST listing is refused, and it says so.
@@ -3199,12 +3185,12 @@ async fn partir_sin_sitio_se_rehusa_y_se_dice() {
 /// A screen with no usable listing is not a screen, it is a hang with
 /// borders — the same rule the shared layout already applies on its own.
 #[tokio::test]
-async fn no_se_cierra_el_ultimo_listado() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn the_last_listing_does_not_close() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     // `simple` has ONE listing: closing it would leave the screen with none.
-    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "layout.close-slot").await;
+    let ack = execute_via_palette_ack(&h, &mut sub, "layout.close-slot").await;
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key }
             if reason_key == "msg-layout-last-panel"),
@@ -3214,14 +3200,15 @@ async fn no_se_cierra_el_ultimo_listado() {
     // With two, closing one does work. By KEY and not by palette: splitting
     // changes the whole screen and sends its snapshot, and the palette
     // helper reads snapshots.
-    ejecutar_por_paleta(&h, &mut sub, "layout.split-h").await;
+    run_by_palette(&h, &mut sub, "layout.split-h").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let _ = siguiente_foto(&mut sub).await;
-    ejecutar_por_paleta(&h, &mut sub, "layout.close-slot").await;
+    let _ = next_snapshot(&mut sub).await;
+    run_by_palette(&h, &mut sub, "layout.close-slot").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
+    let snapshot = next_snapshot(&mut sub).await;
     assert_eq!(
-        foto.slots
+        snapshot
+            .slots
             .iter()
             .filter(|s| matches!(s, SlotView::Browser(_)))
             .count(),
@@ -3233,9 +3220,9 @@ async fn no_se_cierra_el_ultimo_listado() {
 /// The three auxiliary slots this window knows how to paint open and close
 /// with their command (#291).
 #[tokio::test]
-async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn auxiliary_slots_open_and_close() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     for (cmd, presente) in [
         (
@@ -3253,16 +3240,16 @@ async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
             s.slots.iter().any(|v| matches!(v, SlotView::Places(_)))
         }),
     ] {
-        ejecutar_por_paleta(&h, &mut sub, cmd).await;
+        run_by_palette(&h, &mut sub, cmd).await;
         h.dispatch(UiAction::Resync).await.expect("host alive");
         assert!(
-            presente(&siguiente_foto(&mut sub).await),
+            presente(&next_snapshot(&mut sub).await),
             "{cmd} opens its slot, and this window PAINTS it (not grayed out)"
         );
-        ejecutar_por_paleta(&h, &mut sub, cmd).await;
+        run_by_palette(&h, &mut sub, cmd).await;
         h.dispatch(UiAction::Resync).await.expect("host alive");
         assert!(
-            !presente(&siguiente_foto(&mut sub).await),
+            !presente(&next_snapshot(&mut sub).await),
             "{cmd} again closes it"
         );
     }
@@ -3273,10 +3260,10 @@ async fn los_huecos_auxiliares_se_abren_y_se_cierran() {
 /// Profiles live in `profiles/` of the user layer, and the host receives
 /// them already resolved (ADR 0066 D14): without handing them over, there
 /// is nowhere to look.
-pub(super) async fn host_con_capas(
-    dir_usuario: &std::path::Path,
+pub(super) async fn host_with_layers(
+    dir_user: &std::path::Path,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
-    host_con_capas_y_favoritos(dir_usuario, Vec::new()).await
+    host_with_layers_and_favorites(dir_user, Vec::new()).await
 }
 
 /// A host with TWO layers: system underneath, user on top.
@@ -3285,22 +3272,22 @@ pub(super) async fn host_con_capas(
 /// the factory value if the one below sets the same one, and that cannot be
 /// checked with a single layer. The startup configuration is taken from the
 /// theme the user wrote, which is what the window would have set.
-pub(super) async fn host_con_capas_apiladas(
-    dir_sistema: &std::path::Path,
-    dir_usuario: &std::path::Path,
+pub(super) async fn host_with_stacked_layers(
+    dir_system: &std::path::Path,
+    dir_user: &std::path::Path,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
     use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
-    let mut ajustes = ajustes_de_prueba();
+    let mut ajustes = test_settings();
     ajustes.common.ui_theme = Some("tokyonight".to_owned());
     UiHost::start(UiHostOptions {
-        backend: arbol(),
+        backend: fake_tree(),
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (120, 40),
         settings: ajustes,
@@ -3309,14 +3296,14 @@ pub(super) async fn host_con_capas_apiladas(
                 (
                     ConfigLayer::System,
                     HostPath {
-                        path: dir_sistema.to_path_buf(),
+                        path: dir_system.to_path_buf(),
                         missing: false,
                     },
                 ),
                 (
                     ConfigLayer::User,
                     HostPath {
-                        path: dir_usuario.to_path_buf(),
+                        path: dir_user.to_path_buf(),
                         missing: false,
                     },
                 ),
@@ -3326,8 +3313,8 @@ pub(super) async fn host_con_capas_apiladas(
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -3337,28 +3324,28 @@ pub(super) async fn host_con_capas_apiladas(
 /// The same one, with favorites ALREADY loaded: the window reads them at
 /// startup, so a test that only writes `norte.toml` sets up a host that does
 /// not see them.
-pub(super) async fn host_con_capas_y_favoritos(
-    dir_usuario: &std::path::Path,
-    favoritos: Vec<(&str, &str)>,
+pub(super) async fn host_with_layers_and_favorites(
+    dir_user: &std::path::Path,
+    favorites: Vec<(&str, &str)>,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
     use norte_ui_host::settings::{ConfigLayer, HostPath, HostPaths};
-    let mut ajustes = ajustes_de_prueba();
-    ajustes.common.hotlist = favoritos
+    let mut ajustes = test_settings();
+    ajustes.common.hotlist = favorites
         .into_iter()
-        .map(|(nombre, destino)| norte_config::HotlistItem {
+        .map(|(nombre, dest)| norte_config::HotlistItem {
             name: nombre.to_owned(),
-            target: VPath::parse(destino).map_err(|_| "hotlist-invalid".to_owned()),
+            target: VPath::parse(dest).map_err(|_| "hotlist-invalid".to_owned()),
         })
         .collect();
     UiHost::start(UiHostOptions {
-        backend: arbol(),
+        backend: fake_tree(),
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("orthodox").expect("layout"),
         viewport: (120, 40),
         settings: ajustes,
@@ -3366,7 +3353,7 @@ pub(super) async fn host_con_capas_y_favoritos(
             config_layers: vec![(
                 ConfigLayer::User,
                 HostPath {
-                    path: dir_usuario.to_path_buf(),
+                    path: dir_user.to_path_buf(),
                     missing: false,
                 },
             )],
@@ -3375,8 +3362,8 @@ pub(super) async fn host_con_capas_y_favoritos(
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -3389,22 +3376,22 @@ pub(super) async fn host_con_capas_y_favoritos(
 /// what is checked is that the change reaches the screen: here, through the
 /// theme, which is what shows.
 #[tokio::test]
-async fn el_selector_de_perfiles_ensena_y_lo_elegido_se_aplica() {
+async fn the_profiles_selector_shows_and_the_chosen_one_is_applied() {
     use norte_ui_host::dto::NativeEffect;
-    let raiz = tempfile::tempdir().expect("temp");
-    let fotos = raiz.path().join("profiles").join("fotos");
-    std::fs::create_dir_all(&fotos).expect("mkdir");
+    let root = tempfile::tempdir().expect("temp");
+    let snapshots = root.path().join("profiles").join("fotos");
+    std::fs::create_dir_all(&snapshots).expect("mkdir");
     std::fs::write(
-        fotos.join("norte.toml"),
+        snapshots.join("norte.toml"),
         "[profile]\ntitle = \"Fotos\"\n\n[ui]\ntheme = \"nord\"\n",
     )
     .expect("write");
 
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let (h, _snap) = host_with_layers(root.path()).await;
     let mut sub = h.subscribe();
     let mut nativos = h.native_effects();
 
-    ejecutar_por_paleta(&h, &mut sub, "profile.pick").await;
+    run_by_palette(&h, &mut sub, "profile.pick").await;
     // The list arrives from a background task: the snapshot that carries
     // it is the one to wait for, not just the next one that goes by.
     //
@@ -3416,7 +3403,7 @@ async fn el_selector_de_perfiles_ensena_y_lo_elegido_se_aplica() {
     let mut selector = None;
     for _ in 0..100 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if let Some(p) = siguiente_foto(&mut sub).await.profiles {
+        if let Some(p) = next_snapshot(&mut sub).await.profiles {
             selector = Some(p);
             break;
         }
@@ -3432,13 +3419,13 @@ async fn el_selector_de_perfiles_ensena_y_lo_elegido_se_aplica() {
     assert!(!p.rows[0].active, "not set yet");
 
     // Choosing it applies it: its `[ui] theme` reaches the host.
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
         .await
         .expect("the theme notice fires")
         .expect("channel alive");
-    let NativeEffect::ThemeChanged { name } = efecto else {
-        panic!("the notice is the theme's: {efecto:?}");
+    let NativeEffect::ThemeChanged { name } = effect else {
+        panic!("the notice is the theme's: {effect:?}");
     };
     assert_eq!(name, "nord", "the PROFILE's theme, not the previous one");
 }
@@ -3451,15 +3438,15 @@ async fn el_selector_de_perfiles_ensena_y_lo_elegido_se_aplica() {
 /// file, and this window cannot read inside the actor (rule 2): it steps
 /// out and comes back through the mailbox, like saving the theme does.
 #[tokio::test]
-async fn el_tema_de_un_perfil_puede_ser_una_ruta() {
+async fn a_profiles_theme_can_be_a_path() {
     use norte_ui_host::dto::NativeEffect;
-    let raiz = tempfile::tempdir().expect("temp");
-    let mio = raiz.path().join("mio.toml");
+    let root = tempfile::tempdir().expect("temp");
+    let mio = root.path().join("mio.toml");
     std::fs::write(&mio, "name = \"mio\"\n").expect("write theme");
-    let fotos = raiz.path().join("profiles").join("fotos");
-    std::fs::create_dir_all(&fotos).expect("mkdir");
+    let snapshots = root.path().join("profiles").join("fotos");
+    std::fs::create_dir_all(&snapshots).expect("mkdir");
     std::fs::write(
-        fotos.join("norte.toml"),
+        snapshots.join("norte.toml"),
         format!(
             "[profile]\ntitle = \"Fotos\"\n\n[ui]\ntheme = \"{}\"\n",
             mio.display()
@@ -3467,28 +3454,28 @@ async fn el_tema_de_un_perfil_puede_ser_una_ruta() {
     )
     .expect("write");
 
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+    let (h, _snap) = host_with_layers(root.path()).await;
     let mut sub = h.subscribe();
     let mut nativos = h.native_effects();
 
-    ejecutar_por_paleta(&h, &mut sub, "profile.pick").await;
+    run_by_palette(&h, &mut sub, "profile.pick").await;
     let mut abierto = false;
     for _ in 0..100 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if siguiente_foto(&mut sub).await.profiles.is_some() {
+        if next_snapshot(&mut sub).await.profiles.is_some() {
             abierto = true;
             break;
         }
     }
     assert!(abierto, "the picker opened with the list");
 
-    h.dispatch(tecla("Enter")).await.expect("host alive");
-    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    h.dispatch(press("Enter")).await.expect("host alive");
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
         .await
         .expect("the theme notice fires")
         .expect("channel alive");
-    let NativeEffect::ThemeChanged { name } = efecto else {
-        panic!("the notice is the theme's: {efecto:?}");
+    let NativeEffect::ThemeChanged { name } = effect else {
+        panic!("the notice is the theme's: {effect:?}");
     };
     assert_eq!(
         name,
@@ -3504,16 +3491,16 @@ async fn el_tema_de_un_perfil_puede_ser_una_ruta() {
 /// reflex of accepting without reading would overwrite one pointing
 /// somewhere else.
 #[tokio::test]
-async fn la_ventana_guarda_un_favorito_con_el_nombre_sugerido() {
-    let raiz = tempfile::tempdir().expect("temp");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn the_window_saves_a_favorite_with_the_suggested_name() {
+    let root = tempfile::tempdir().expect("temp");
+    let (h, _snap) = host_with_layers(root.path()).await;
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.hotlist").await;
+    run_by_palette(&h, &mut sub, "pane.hotlist").await;
     // `dialog.add` over the favorites list: in the terminal it is the same
     // popup's `a`.
-    h.dispatch(tecla("a")).await.expect("host alive");
-    let d = siguientes_dialogos(&mut sub).await;
+    h.dispatch(press("a")).await.expect("host alive");
+    let d = next_dialogs(&mut sub).await;
     assert_eq!(d[0].title_key, "modal-hotlist-name-title");
     assert_eq!(
         d[0].input.as_deref(),
@@ -3537,44 +3524,49 @@ async fn la_ventana_guarda_un_favorito_con_el_nombre_sugerido() {
     // list closes: nothing is left on screen to say "it's done". The FILE
     // is watched, which is what the test asserts, taking a turn through the
     // actor between glances instead of sleeping a fixed span.
-    let escrito = foto_hasta(&h, &mut sub, "the favorite written to norte.toml", |_| {
-        std::fs::read_to_string(raiz.path().join("norte.toml"))
+    let written = snapshot_until(&h, &mut sub, "the favorite written to norte.toml", |_| {
+        std::fs::read_to_string(root.path().join("norte.toml"))
             .ok()
             .filter(|s| s.contains("casa"))
     })
     .await;
     assert!(
-        escrito.contains("casa"),
-        "the favorite ended up in the file: {escrito}"
+        written.contains("casa"),
+        "the favorite ended up in the file: {written}"
     );
 }
 
 /// And it REMOVES one, which was the other half that was missing (#309).
 #[tokio::test]
-async fn la_ventana_quita_el_favorito_del_cursor() {
-    let raiz = tempfile::tempdir().expect("temp");
+async fn the_window_removes_the_favorite_under_the_cursor() {
+    let root = tempfile::tempdir().expect("temp");
     std::fs::write(
-        raiz.path().join("norte.toml"),
+        root.path().join("norte.toml"),
         "[[hotlist]]\nname = \"casa\"\npath = \"mem:///casa\"\n",
     )
     .expect("escribe");
-    let (h, _snap) = host_con_capas_y_favoritos(raiz.path(), vec![("casa", "mem:///casa")]).await;
+    let (h, _snap) =
+        host_with_layers_and_favorites(root.path(), vec![("casa", "mem:///casa")]).await;
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.hotlist").await;
+    run_by_palette(&h, &mut sub, "pane.hotlist").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    let filas = foto.picker.as_ref().map_or(0, |p| p.rows.len());
-    assert_eq!(filas, 1, "the list carries the favorite: {:?}", foto.picker);
+    let snapshot = next_snapshot(&mut sub).await;
+    let rows = snapshot.picker.as_ref().map_or(0, |p| p.rows.len());
+    assert_eq!(
+        rows, 1,
+        "the list carries the favorite: {:?}",
+        snapshot.picker
+    );
     // `dialog.remove`: the terminal popup's `d`.
-    let ack = h.dispatch(tecla("d")).await.expect("host alive");
+    let ack = h.dispatch(press("d")).await.expect("host alive");
     assert!(
         matches!(ack, norte_ui_host::ActionAck::Applied { .. }),
         "the picker handles the key: {ack:?}"
     );
     // Same as when adding: the open list re-seeds when the write comes back,
     // so the row leaving is the signal that the file is already updated.
-    let despues = foto_hasta(&h, &mut sub, "the list without the favorite", |f| {
+    let despues = snapshot_until(&h, &mut sub, "the list without the favorite", |f| {
         f.picker
             .as_ref()
             .is_some_and(|p| p.rows.is_empty())
@@ -3582,10 +3574,10 @@ async fn la_ventana_quita_el_favorito_del_cursor() {
     })
     .await;
 
-    let escrito = std::fs::read_to_string(raiz.path().join("norte.toml")).expect("norte.toml");
+    let written = std::fs::read_to_string(root.path().join("norte.toml")).expect("norte.toml");
     assert!(
-        !escrito.contains("casa"),
-        "the favorite left the file: {escrito}; filas={:?} msg={:?}",
+        !written.contains("casa"),
+        "the favorite left the file: {written}; filas={:?} msg={:?}",
         despues.picker.as_ref().map(|p| p.rows.len()),
         despues.status.message
     );
@@ -3596,21 +3588,21 @@ async fn la_ventana_quita_el_favorito_del_cursor() {
 /// "You stay on the one you were on" is what ADR 0079 D7 asks for a change:
 /// starting with no profile is recoverable, stopping halfway is not.
 #[tokio::test]
-async fn un_perfil_que_no_carga_deja_todo_como_estaba() {
-    let raiz = tempfile::tempdir().expect("temp");
-    std::fs::create_dir_all(raiz.path().join("profiles")).expect("mkdir");
-    let (h, _snap) = host_con_capas(raiz.path()).await;
+async fn a_profile_that_fails_to_load_leaves_everything_as_it_was() {
+    let root = tempfile::tempdir().expect("temp");
+    std::fs::create_dir_all(root.path().join("profiles")).expect("mkdir");
+    let (h, _snap) = host_with_layers(root.path()).await;
     let mut sub = h.subscribe();
 
     // With no profiles, cycling has nowhere to go — and it says so instead
     // of pretending.
-    ejecutar_por_paleta(&h, &mut sub, "profile.next").await;
+    run_by_palette(&h, &mut sub, "profile.next").await;
     // With no round count: reading `profiles/` is a background task, so
     // the notice does not arrive in the next snapshot but when that task
     // answers. With six resyncs in a row, a loaded machine used to spend
     // them all before the background thread woke up, and the test turned
     // red with nothing broken — which is how a red gets learned to ignore.
-    foto_hasta(
+    snapshot_until(
         &h,
         &mut sub,
         "the notice that there is no other profile",
@@ -3627,20 +3619,20 @@ async fn un_perfil_que_no_carga_deja_todo_como_estaba() {
 /// ever marked on it, so a copy or a delete have nothing to act on instead
 /// of acting on the parent directory.
 #[tokio::test]
-async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
-    let mut cfg = norte_ui_host::ajustes_por_defecto();
+async fn with_the_parent_row_the_listing_puts_it_first() {
+    let mut cfg = norte_ui_host::default_settings();
     cfg.common.ui_parent_entry = Some(true);
     let (_h, snap) = UiHost::start(UiHostOptions {
-        backend: arbol(),
+        backend: fake_tree(),
         // A SUBdirectory: at a root there is nowhere to go up to and the
         // row does not appear no matter how much the config turns it on.
         initial_dir: norte_proto::VPath::parse("mem:///casa").expect("wire"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings: cfg,
@@ -3648,14 +3640,14 @@ async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts");
 
-    let filas = snap
+    let rows = snap
         .slots
         .iter()
         .find_map(|v| match v {
@@ -3664,13 +3656,13 @@ async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
         })
         .expect("there is a listing");
     assert_eq!(
-        filas.first().map(|r| r.display_name.as_str()),
+        rows.first().map(|r| r.display_name.as_str()),
         Some(".."),
         "the first row is the go-up one, painted `..` and not with the \
-         parent's name: {filas:?}"
+         parent's name: {rows:?}"
     );
     assert_eq!(
-        filas[0].kind,
+        rows[0].kind,
         norte_ui_host::dto::RowKind::Dir,
         "and it is a directory: Enter goes up through the same path as any other"
     );
@@ -3682,9 +3674,9 @@ async fn con_la_fila_de_subir_el_listado_la_lleva_primera() {
 /// how much each one gets is decided by the host, which is the one holding
 /// the layout and each kind's minimums.
 #[tokio::test]
-async fn arrastrar_el_borde_reparte_los_dos_huecos() {
-    let (h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
-    let ancho = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+async fn dragging_the_edge_splits_the_two_slots() {
+    let (h, snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
+    let width = |s: &norte_ui_host::ViewSnapshot, id: u32| {
         s.layout
             .placements
             .iter()
@@ -3692,32 +3684,32 @@ async fn arrastrar_el_borde_reparte_los_dos_huecos() {
             .map(|p| p.width)
             .expect("the slot is placed")
     };
-    let izq = snap.layout.placements[0].slot_id;
-    let der = snap.layout.placements[1].slot_id;
-    let (a0, b0) = (ancho(&snap, izq), ancho(&snap, der));
+    let left = snap.layout.placements[0].slot_id;
+    let right = snap.layout.placements[1].slot_id;
+    let (a0, b0) = (width(&snap, left), width(&snap, right));
     assert_eq!(a0 + b0, 120, "both split the screen");
 
     let mut sub = h.subscribe();
     // The pointer at a third of the width.
     h.dispatch(UiAction::ResizeSlot {
-        slot_id: izq,
+        slot_id: left,
         cells: 40,
     })
     .await
     .expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let despues = siguiente_foto(&mut sub).await;
+    let despues = next_snapshot(&mut sub).await;
     // With ONE cell of margin: the pair renormalizes to weights between 1
     // and 100 and the layout splits again in integers, so a third of 120
     // lands on 39 or 40 depending on which way the rounding falls. Demanding
     // the exact cell would be demanding the drag not go through weights.
-    let ancho_izq = ancho(&despues, izq);
+    let width_left = width(&despues, left);
     assert!(
-        ancho_izq.abs_diff(40) <= 1,
-        "the border goes where the pointer says: {ancho_izq}"
+        width_left.abs_diff(40) <= 1,
+        "the border goes where the pointer says: {width_left}"
     );
     assert_eq!(
-        ancho(&despues, izq) + ancho(&despues, der),
+        width(&despues, left) + width(&despues, right),
         a0 + b0,
         "the pair occupies the same: dragging one border does not touch the rest"
     );
@@ -3730,53 +3722,53 @@ async fn arrastrar_el_borde_reparte_los_dos_huecos() {
 /// `NativeEffect::ThemeChanged` it does, and this picker is the terminal's —
 /// presets, cursor on the one that is set, and LIVE preview.
 #[tokio::test]
-async fn el_selector_de_tema_elige_y_avisa_a_quien_hospeda() {
+async fn the_theme_selector_chooses_and_notifies_the_host() {
     use norte_ui_host::dto::NativeEffect;
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
     let mut nativos = h.native_effects();
     let mut sub = h.subscribe();
 
-    ejecutar_por_paleta(&h, &mut sub, "app.theme").await;
+    run_by_palette(&h, &mut sub, "app.theme").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let abierta = siguiente_foto(&mut sub).await;
-    let tema = abierta.theme.expect("the theme screen is open");
+    let abierta = next_snapshot(&mut sub).await;
+    let theme = abierta.theme.expect("the theme screen is open");
     assert!(
-        tema.choices.len() > 1,
+        theme.choices.len() > 1,
         "there is something to choose from: {:?}",
-        tema.choices
+        theme.choices
     );
 
     // Moving down previews: the effect fires BEFORE confirming anything,
     // which is what makes the reader see the theme instead of reading its
     // name.
-    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
-    let efecto = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
+    let effect = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
         .await
         .expect("the theme notice fires")
         .expect("channel alive");
-    let NativeEffect::ThemeChanged { name } = efecto else {
-        panic!("the notice is the theme's: {efecto:?}");
+    let NativeEffect::ThemeChanged { name } = effect else {
+        panic!("the notice is the theme's: {effect:?}");
     };
     assert_eq!(
-        name, tema.choices[1],
+        name, theme.choices[1],
         "the one that ended up under the cursor, not another"
     );
 
     // And `Escape` GOES BACK to the one that was set: a picker with live
     // preview that closes leaving the last one the cursor brushed is a way
     // of changing the theme by accident.
-    h.dispatch(tecla("Escape")).await.expect("host alive");
-    let vuelta = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
+    h.dispatch(press("Escape")).await.expect("host alive");
+    let return_ = tokio::time::timeout(std::time::Duration::from_secs(2), nativos.recv())
         .await
         .expect("the return notice fires")
         .expect("channel alive");
-    let NativeEffect::ThemeChanged { name } = vuelta else {
-        panic!("the notice is the theme's: {vuelta:?}");
+    let NativeEffect::ThemeChanged { name } = return_ else {
+        panic!("the notice is the theme's: {return_:?}");
     };
-    assert_eq!(name, tema.name, "it goes back to the one that was set");
+    assert_eq!(name, theme.name, "it goes back to the one that was set");
     h.dispatch(UiAction::Resync).await.expect("host alive");
     assert!(
-        siguiente_foto(&mut sub).await.theme.is_none(),
+        next_snapshot(&mut sub).await.theme.is_none(),
         "and the screen closes"
     );
 }
@@ -3788,8 +3780,8 @@ async fn el_selector_de_tema_elige_y_avisa_a_quien_hospeda() {
 /// covered by that crate's tests — but that the window projects it,
 /// navigates it and runs it through the same path as a key.
 #[tokio::test]
-async fn el_menu_se_recorre_y_lo_elegido_corre() {
-    let (h, snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+async fn the_menu_is_traversed_and_the_chosen_one_runs() {
+    let (h, snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
     assert!(snap.menu.bar, "the bar is painted by default");
     assert_eq!(snap.menu.open, None, "and it is born closed");
     assert_eq!(
@@ -3799,9 +3791,9 @@ async fn el_menu_se_recorre_y_lo_elegido_corre() {
     );
 
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "app.menu").await;
+    run_by_palette(&h, &mut sub, "app.menu").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let abierto = siguiente_foto(&mut sub).await;
+    let abierto = next_snapshot(&mut sub).await;
     assert_eq!(abierto.menu.open, Some(0), "it drops down at the first one");
     assert!(
         !abierto.menu.items.is_empty(),
@@ -3810,42 +3802,46 @@ async fn el_menu_se_recorre_y_lo_elegido_corre() {
     );
 
     // A down arrow moves the cursor INSIDE the menu, not the listing.
-    let cursor_del_listado = |s: &norte_ui_host::ViewSnapshot| {
+    let listing_cursor = |s: &norte_ui_host::ViewSnapshot| {
         s.slots.iter().find_map(|v| match v {
             SlotView::Browser(b) => Some(b.cursor),
             _ => None,
         })
     };
-    let cursor_antes = cursor_del_listado(&abierto);
-    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+    let cursor_before = listing_cursor(&abierto);
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let movido = siguiente_foto(&mut sub).await;
-    assert_eq!(movido.menu.cursor, 1);
+    let moved = next_snapshot(&mut sub).await;
+    assert_eq!(moved.menu.cursor, 1);
     assert_eq!(
-        cursor_del_listado(&movido),
-        cursor_antes,
+        listing_cursor(&moved),
+        cursor_before,
         "the listing underneath did not move"
     );
 
     // And `Escape` closes without running anything.
-    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(press("Escape")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    assert_eq!(siguiente_foto(&mut sub).await.menu.open, None);
+    assert_eq!(next_snapshot(&mut sub).await.menu.open, None);
 }
 
 /// #324: the panel bar crosses the bridge with what the TUI paints — which
 /// panels there are, in what order, which is open and which has the
 /// keyboard — and pressing a button opens the panel through the SAME
 /// dispatch as its shortcut. The new bar travels as a PATCH in the same
-/// send that opens the panel, with `alternar_hueco` never knowing it
+/// send that opens the panel, with `toggle_slot` never knowing it
 /// exists.
 #[tokio::test]
-async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
+#[expect(
+    clippy::too_many_lines,
+    reason = "one scenario end to end; one line over since the English names made rustfmt wrap"
+)]
+async fn the_pane_bar_shows_the_panes_and_a_click_opens_them() {
     use norte_ui_host::dto::{PanelButtonState, ViewChange};
-    let (h, snap) = host_arbol(arbol()).await;
-    let barra = &snap.panel_bar;
-    assert!(barra.bar, "the bar is painted by default, like in the TUI");
-    let kinds: Vec<&str> = barra.buttons.iter().map(|b| b.kind.as_str()).collect();
+    let (h, snap) = host_tree(fake_tree()).await;
+    let bar = &snap.panel_bar;
+    assert!(bar.bar, "the bar is painted by default, like in the TUI");
+    let kinds: Vec<&str> = bar.buttons.iter().map(|b| b.kind.as_str()).collect();
     assert_eq!(
         kinds,
         [
@@ -3876,22 +3872,22 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
         ],
         "the same buttons and the same order as `panelbar::buttons`"
     );
-    let sitios = kinds.iter().position(|k| *k == "places").expect("places");
-    let boton = &barra.buttons[sitios];
+    let places = kinds.iter().position(|k| *k == "places").expect("places");
+    let boton = &bar.buttons[places];
     assert_eq!(
         boton.label, "Sitios",
         "translated into the session's language"
     );
     assert_eq!(boton.letter, "S");
-    assert_eq!(boton.state, PanelButtonState::Closed, "{barra:?}");
+    assert_eq!(boton.state, PanelButtonState::Closed, "{bar:?}");
     assert!(
-        barra.buttons.iter().all(|b| !b.attention),
-        "with no tasks or notices nothing has anything new: {barra:?}"
+        bar.buttons.iter().all(|b| !b.attention),
+        "with no tasks or notices nothing has anything new: {bar:?}"
     );
 
     let mut sub = h.subscribe();
     h.dispatch(UiAction::PanelBarActivate {
-        button: u32::try_from(sitios).expect("six buttons fit in a u32"),
+        button: u32::try_from(places).expect("six buttons fit in a u32"),
     })
     .await
     .expect("host alive");
@@ -3901,65 +3897,65 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
     // Both forms are accepted, and with a deadline: a host that did not
     // send it would leave this `recv` waiting forever, and a hung test is
     // not a red test.
-    let mut barra_nueva = None;
-    let plazo = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    while barra_nueva.is_none() {
-        let siguiente = tokio::time::timeout_at(plazo, sub.recv())
+    let mut bar_new = None;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while bar_new.is_none() {
+        let next = tokio::time::timeout_at(deadline, sub.recv())
             .await
             .expect("the new bar arrives before five seconds")
             .expect("host alive");
-        let Update::Message(m) = siguiente else {
+        let Update::Message(m) = next else {
             continue;
         };
         match m.payload {
-            UiUpdate::Snapshot(s) => barra_nueva = Some(s.panel_bar),
+            UiUpdate::Snapshot(s) => bar_new = Some(s.panel_bar),
             UiUpdate::Patch(p) => {
                 if let Some(ViewChange::PanelBar { panel_bar }) = p
                     .changes
                     .into_iter()
                     .find(|c| matches!(c, ViewChange::PanelBar { .. }))
                 {
-                    barra_nueva = Some(panel_bar);
+                    bar_new = Some(panel_bar);
                 }
             }
             UiUpdate::Notice(_) => {}
         }
     }
-    let barra = barra_nueva.expect("the bar travelled");
+    let bar = bar_new.expect("the bar travelled");
     assert_ne!(
-        barra.buttons[sitios].state,
+        bar.buttons[places].state,
         PanelButtonState::Closed,
-        "the places panel is open: {barra:?}"
+        "the places panel is open: {bar:?}"
     );
 
     // Opening the places bar triggers a volumes read that lands as ANOTHER
     // snapshot, later: it waits for the snapshot that shows the requested
     // state, not the next one that happens to be in the queue.
-    let con_sitios =
+    let with_places =
         |s: &norte_ui_host::ViewSnapshot| s.slots.iter().any(|v| matches!(v, SlotView::Places(_)));
-    let abierto = foto_hasta(&h, &mut sub, "the places slot placed", |s| {
-        con_sitios(s).then(|| s.clone())
+    let abierto = snapshot_until(&h, &mut sub, "the places slot placed", |s| {
+        with_places(s).then(|| s.clone())
     })
     .await;
     assert_ne!(
-        abierto.panel_bar.buttons[sitios].state,
+        abierto.panel_bar.buttons[places].state,
         PanelButtonState::Closed
     );
 
     // The same button again CLOSES it: it is a toggle, like its shortcut.
     let ack = h
         .dispatch(UiAction::PanelBarActivate {
-            button: u32::try_from(sitios).expect("six buttons fit in a u32"),
+            button: u32::try_from(places).expect("six buttons fit in a u32"),
         })
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "was {ack:?}");
-    let cerrado = foto_hasta(&h, &mut sub, "the places slot closed", |s| {
-        (!con_sitios(s)).then(|| s.clone())
+    let closed = snapshot_until(&h, &mut sub, "the places slot closed", |s| {
+        (!with_places(s)).then(|| s.clone())
     })
     .await;
     assert_eq!(
-        cerrado.panel_bar.buttons[sitios].state,
+        closed.panel_bar.buttons[places].state,
         PanelButtonState::Closed
     );
 
@@ -3980,23 +3976,23 @@ async fn la_barra_de_paneles_ensena_los_paneles_y_un_click_los_abre() {
 /// the hidden one brings it to the front, and pressing the visible one
 /// closes it and dissolves the group.
 #[tokio::test]
-async fn los_paneles_de_un_borde_comparten_sitio_en_pestanas() {
-    let (h, _snap) = host_arbol(arbol()).await;
+async fn panes_on_one_edge_share_room_as_tabs() {
+    let (h, _snap) = host_tree(fake_tree()).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "layout.timeline").await;
-    ejecutar_por_paleta(&h, &mut sub, "layout.metadata").await;
-    let foto = foto_hasta(&h, &mut sub, "a panels group", |s| {
+    run_by_palette(&h, &mut sub, "layout.timeline").await;
+    run_by_palette(&h, &mut sub, "layout.metadata").await;
+    let snapshot = snapshot_until(&h, &mut sub, "a panels group", |s| {
         s.layout.tabs.iter().find(|g| g.panels).cloned()
     })
     .await;
-    let titulos: Vec<&str> = foto.tabs.iter().map(|t| t.title.as_str()).collect();
+    let titles: Vec<&str> = snapshot.tabs.iter().map(|t| t.title.as_str()).collect();
     // The panel bar's names, not the kind ids.
-    assert_eq!(titulos, ["Historial", "Detalles"], "{foto:?}");
-    assert_eq!(foto.active, 1, "the one that arrives stays in front");
+    assert_eq!(titles, ["Historial", "Detalles"], "{snapshot:?}");
+    assert_eq!(snapshot.active, 1, "the one that arrives stays in front");
 
     // The timeline is hidden: pressing it SHOWS it.
-    ejecutar_por_paleta(&h, &mut sub, "layout.timeline").await;
-    let g = foto_hasta(&h, &mut sub, "the timeline in front", |s| {
+    run_by_palette(&h, &mut sub, "layout.timeline").await;
+    let g = snapshot_until(&h, &mut sub, "the timeline in front", |s| {
         s.layout
             .tabs
             .iter()
@@ -4007,8 +4003,8 @@ async fn los_paneles_de_un_borde_comparten_sitio_en_pestanas() {
     assert_eq!(g.tabs.len(), 2, "nothing closed");
 
     // Visible: now it does close it, and the group of one dissolves.
-    ejecutar_por_paleta(&h, &mut sub, "layout.timeline").await;
-    let () = foto_hasta(&h, &mut sub, "the group dissolved", |s| {
+    run_by_palette(&h, &mut sub, "layout.timeline").await;
+    let () = snapshot_until(&h, &mut sub, "the group dissolved", |s| {
         s.layout.tabs.iter().all(|g| !g.panels).then_some(())
     })
     .await;
@@ -4018,18 +4014,18 @@ async fn los_paneles_de_un_borde_comparten_sitio_en_pestanas() {
 /// pressing "split" places one more listing, and an id or a tab that do not
 /// exist are a race that asks for a snapshot.
 #[tokio::test]
-async fn los_botones_de_disposicion_y_de_pestana_se_pulsan() {
-    let (h, snap) = host_arbol(arbol()).await;
+async fn layout_and_tab_buttons_are_clickable() {
+    let (h, snap) = host_tree(fake_tree()).await;
     let ids: Vec<&str> = snap.layout_buttons.iter().map(|b| b.id.as_str()).collect();
     assert_eq!(ids, ["split-h", "split-v", "equalize", "flip", "pick"]);
     assert_eq!(snap.layout_buttons[0].label, "Partir lado a lado");
-    let listados = |s: &norte_ui_host::ViewSnapshot| {
+    let listings = |s: &norte_ui_host::ViewSnapshot| {
         s.slots
             .iter()
             .filter(|v| matches!(v, SlotView::Browser(_)))
             .count()
     };
-    let antes = listados(&snap);
+    let before = listings(&snap);
 
     let mut sub = h.subscribe();
     let ack = h
@@ -4039,12 +4035,12 @@ async fn los_botones_de_disposicion_y_de_pestana_se_pulsan() {
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "was {ack:?}");
-    let () = foto_hasta(&h, &mut sub, "one more listing", |s| {
-        (listados(s) > antes).then_some(())
+    let () = snapshot_until(&h, &mut sub, "one more listing", |s| {
+        (listings(s) > before).then_some(())
     })
     .await;
 
-    for accion in [
+    for action in [
         UiAction::LayoutButtonActivate {
             id: "no-existe".to_owned(),
         },
@@ -4053,7 +4049,7 @@ async fn los_botones_de_disposicion_y_de_pestana_se_pulsan() {
             verb: norte_ui_host::TabVerb::New,
         },
     ] {
-        let ack = h.dispatch(accion).await.expect("host alive");
+        let ack = h.dispatch(action).await.expect("host alive");
         assert!(matches!(ack, ActionAck::Stale { .. }), "was {ack:?}");
     }
 }
@@ -4063,8 +4059,8 @@ async fn los_botones_de_disposicion_y_de_pestana_se_pulsan() {
 /// narrows them. Only that listing was being measured, not the whole body,
 /// and the border was not following the pointer.
 #[tokio::test]
-async fn el_borde_de_los_detalles_se_arrastra_desde_el_segundo_listado() {
-    let (h, _) = host_arbol(arbol()).await;
+async fn the_details_edge_is_dragged_from_the_second_listing() {
+    let (h, _) = host_tree(fake_tree()).await;
     let mut sub = h.subscribe();
     let _ = h
         .dispatch(UiAction::LayoutButtonActivate {
@@ -4072,14 +4068,14 @@ async fn el_borde_de_los_detalles_se_arrastra_desde_el_segundo_listado() {
         })
         .await
         .expect("host alive");
-    ejecutar_por_paleta(&h, &mut sub, "layout.metadata").await;
+    run_by_palette(&h, &mut sub, "layout.metadata").await;
     let detalles = |s: &norte_ui_host::ViewSnapshot| {
         s.slots.iter().find_map(|v| match v {
             SlotView::Metadata(m) => Some(m.slot_id),
             _ => None,
         })
     };
-    let snap = foto_hasta(&h, &mut sub, "two listings and the details", |s| {
+    let snap = snapshot_until(&h, &mut sub, "two listings and the details", |s| {
         let n = s
             .slots
             .iter()
@@ -4089,16 +4085,16 @@ async fn el_borde_de_los_detalles_se_arrastra_desde_el_segundo_listado() {
     })
     .await;
     let meta_id = detalles(&snap).expect("details");
-    let sitio = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+    let place = |s: &norte_ui_host::ViewSnapshot, id: u32| {
         *s.layout
             .placements
             .iter()
             .find(|p| p.slot_id == id)
             .expect("placed")
     };
-    let meta = sitio(&snap, meta_id);
+    let meta = place(&snap, meta_id);
     // The listing touching the details on the left.
-    let listado = snap
+    let listing = snap
         .layout
         .placements
         .iter()
@@ -4110,59 +4106,59 @@ async fn el_borde_de_los_detalles_se_arrastra_desde_el_segundo_listado() {
     let _ = h
         .dispatch(UiAction::MoveSlot {
             slot_id: meta_id,
-            target: listado,
+            target: listing,
             zone: norte_frontend::layout::DropZone::Right,
         })
         .await
         .expect("host alive");
-    let snap = foto_hasta(&h, &mut sub, "details with weight", |s| {
-        let m = sitio(s, meta_id);
+    let snap = snapshot_until(&h, &mut sub, "details with weight", |s| {
+        let m = place(s, meta_id);
         (m.width != meta.width).then(|| s.clone())
     })
     .await;
-    let meta = sitio(&snap, meta_id);
-    let otro_ancho = snap
+    let meta = place(&snap, meta_id);
+    let other_width = snap
         .layout
         .placements
         .iter()
-        .find(|p| p.slot_id != listado && p.slot_id != meta_id && p.y == meta.y)
+        .find(|p| p.slot_id != listing && p.slot_id != meta_id && p.y == meta.y)
         .map(|p| p.width)
         .expect("the other listing");
     let ack = h
         .dispatch(UiAction::ResizeSlot {
-            slot_id: listado,
+            slot_id: listing,
             cells: meta.x + 10,
         })
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "was {ack:?}");
-    let ancho = meta.width;
-    let despues = foto_hasta(&h, &mut sub, "details about ten cells narrower", |s| {
+    let width = meta.width;
+    let despues = snapshot_until(&h, &mut sub, "details about ten cells narrower", |s| {
         let p = s.layout.placements.iter().find(|p| p.slot_id == meta_id)?;
-        (p.width + 9 <= ancho && p.width + 11 >= ancho).then(|| s.clone())
+        (p.width + 9 <= width && p.width + 11 >= width).then(|| s.clone())
     })
     .await;
     // And the other listing, which nobody grabbed, does not notice.
-    let otro = despues
+    let other = despues
         .layout
         .placements
         .iter()
-        .find(|p| p.slot_id != listado && p.slot_id != meta_id && p.y == meta.y)
+        .find(|p| p.slot_id != listing && p.slot_id != meta_id && p.y == meta.y)
         .map(|p| p.width)
         .expect("the other listing");
     assert!(
-        otro.abs_diff(otro_ancho) <= 1,
-        "the third one moved: {otro_ancho} → {otro}"
+        other.abs_diff(other_width) <= 1,
+        "the third one moved: {other_width} → {other}"
     );
 }
 
 /// Dragged sizes ARE REMEMBERED: what one window leaves in the session is
 /// what the next one opens with, until a different layout is chosen.
 #[tokio::test]
-async fn los_tamanos_arrastrados_vuelven_al_abrir() {
-    let falso = super::arbol_como_falso();
+async fn dragged_sizes_come_back_on_open() {
+    let fake = super::tree_as_fake();
     // Owner of an empty session: the only one that writes.
-    *falso.sesion.lock().expect("session") = (
+    *fake.session.lock().expect("session") = (
         norte_proto::methods::Session {
             version: 0,
             revision: 0,
@@ -4170,8 +4166,8 @@ async fn los_tamanos_arrastrados_vuelven_al_abrir() {
         },
         true,
     );
-    let falso = Arc::new(falso);
-    let (h, _) = host_arbol(Arc::clone(&falso)).await;
+    let fake = Arc::new(fake);
+    let (h, _) = host_tree(Arc::clone(&fake)).await;
     let mut sub = h.subscribe();
     let _ = h
         .dispatch(UiAction::LayoutButtonActivate {
@@ -4179,7 +4175,7 @@ async fn los_tamanos_arrastrados_vuelven_al_abrir() {
         })
         .await
         .expect("host alive");
-    let snap = foto_hasta(&h, &mut sub, "two listings", |s| {
+    let snap = snapshot_until(&h, &mut sub, "two listings", |s| {
         let n = s
             .slots
             .iter()
@@ -4188,7 +4184,7 @@ async fn los_tamanos_arrastrados_vuelven_al_abrir() {
         (n == 2).then(|| s.clone())
     })
     .await;
-    let izq = *snap
+    let left = *snap
         .layout
         .placements
         .iter()
@@ -4202,18 +4198,18 @@ async fn los_tamanos_arrastrados_vuelven_al_abrir() {
     // The border at a third.
     let _ = h
         .dispatch(UiAction::ResizeSlot {
-            slot_id: izq.slot_id,
-            cells: (izq.x + izq.width * 2) / 3,
+            slot_id: left.slot_id,
+            cells: (left.x + left.width * 2) / 3,
         })
         .await
         .expect("host alive");
-    let movido = foto_hasta(&h, &mut sub, "border moved", |s| {
+    let moved = snapshot_until(&h, &mut sub, "border moved", |s| {
         let p = s
             .layout
             .placements
             .iter()
-            .find(|p| p.slot_id == izq.slot_id)?;
-        (p.width < izq.width).then(|| s.clone())
+            .find(|p| p.slot_id == left.slot_id)?;
+        (p.width < left.width).then(|| s.clone())
     })
     .await;
     let anchos = |s: &norte_ui_host::ViewSnapshot| -> Vec<(u32, u16)> {
@@ -4227,34 +4223,34 @@ async fn los_tamanos_arrastrados_vuelven_al_abrir() {
         v
     };
     // What was written, as soon as it is written.
-    let mut escrito = None;
+    let mut written = None;
     for _ in 0..50 {
-        escrito = falso.escrito.lock().expect("escrito").clone();
-        let lleva = escrito
+        written = fake.written.lock().expect("escrito").clone();
+        let carries = written
             .as_ref()
-            .is_some_and(|b| b.to_string().contains(&format!("\"id\":{}", izq.slot_id)));
-        if lleva {
+            .is_some_and(|b| b.to_string().contains(&format!("\"id\":{}", left.slot_id)));
+        if carries {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
-    let escrito = escrito.expect("the window wrote its session");
+    let written = written.expect("the window wrote its session");
     drop(h);
 
     // Another window, over what the first one left.
-    let segundo = super::arbol_como_falso();
-    *segundo.sesion.lock().expect("session") = (
+    let segundo = super::tree_as_fake();
+    *segundo.session.lock().expect("session") = (
         norte_proto::methods::Session {
             version: norte_frontend::session::SCHEMA_VERSION,
             revision: 9,
-            body: escrito,
+            body: written,
         },
         true,
     );
-    let (_h2, snap2) = host_arbol(Arc::new(segundo)).await;
+    let (_h2, snap2) = host_tree(Arc::new(segundo)).await;
     assert_eq!(
         anchos(&snap2),
-        anchos(&movido),
+        anchos(&moved),
         "it opens with the same widths"
     );
 }
@@ -4262,31 +4258,31 @@ async fn los_tamanos_arrastrados_vuelven_al_abrir() {
 /// Regression (second capture): the HORIZONTAL border between the details
 /// and the log below moves the log up and down, grabbed from the details.
 #[tokio::test]
-async fn el_borde_del_registro_se_arrastra_desde_los_detalles() {
+async fn the_log_edge_is_dragged_from_the_details() {
     // The session tree from the capture, exactly as the window saved it.
-    let sesion = r#"{"split": {"children": [{"split": {"children": [
+    let session = r#"{"split": {"children": [{"split": {"children": [
         {"slot": {"id": 2, "kind": "browser"}}, {"slot": {"id": 1, "kind": "browser"}},
         {"slot": {"bindings": {"follows": {"role": "active"}}, "id": 5, "kind": "metadata"}}],
         "dir": "horizontal", "sizes": [{"weight": 1}, {"weight": 1}, {"weight": 1}]}},
         {"slot": {"id": 6, "kind": "log"}}, {"slot": {"id": 3, "kind": "tasks"}},
         {"slot": {"id": 4, "kind": "status"}}], "dir": "vertical",
         "sizes": [{"weight": 1}, {"fixed": 11}, "auto", {"fixed": 1}]}}"#;
-    let tree: norte_frontend::layout::Node = serde_json::from_str(sesion).expect("tree");
-    let (h, _) = super::base::host_con_arbol(arbol(), tree, (160, 50)).await;
+    let tree: norte_frontend::layout::Node = serde_json::from_str(session).expect("tree");
+    let (h, _) = super::base::host_with_tree(fake_tree(), tree, (160, 50)).await;
     let mut sub = h.subscribe();
     let _ = h.dispatch(UiAction::Resync).await;
-    let kind_de = |s: &norte_ui_host::ViewSnapshot, quiere: &str| {
-        s.slots.iter().find_map(|v| match (v, quiere) {
+    let kind_de = |s: &norte_ui_host::ViewSnapshot, wants: &str| {
+        s.slots.iter().find_map(|v| match (v, wants) {
             (SlotView::Metadata(m), "metadata") => Some(m.slot_id),
             (SlotView::Log(l), "log") => Some(l.slot_id),
             _ => None,
         })
     };
-    let snap = foto_hasta(&h, &mut sub, "detalles y registro", |s| {
+    let snap = snapshot_until(&h, &mut sub, "detalles y registro", |s| {
         (kind_de(s, "metadata").is_some() && kind_de(s, "log").is_some()).then(|| s.clone())
     })
     .await;
-    let sitio = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+    let place = |s: &norte_ui_host::ViewSnapshot, id: u32| {
         *s.layout
             .placements
             .iter()
@@ -4295,8 +4291,8 @@ async fn el_borde_del_registro_se_arrastra_desde_los_detalles() {
     };
     let meta_id = kind_de(&snap, "metadata").expect("details");
     let log_id = kind_de(&snap, "log").expect("log");
-    let meta = sitio(&snap, meta_id);
-    let log = sitio(&snap, log_id);
+    let meta = place(&snap, meta_id);
+    let log = place(&snap, log_id);
     assert_eq!(meta.y + meta.height, log.y, "the details touch the log");
     // Move the border up five rows: the log grows by five.
     let ack = h
@@ -4308,8 +4304,8 @@ async fn el_borde_del_registro_se_arrastra_desde_los_detalles() {
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "was {ack:?}");
     let alto = log.height;
-    let () = foto_hasta(&h, &mut sub, "log five rows taller", |s| {
-        (sitio(s, log_id).height == alto + 5).then_some(())
+    let () = snapshot_until(&h, &mut sub, "log five rows taller", |s| {
+        (place(s, log_id).height == alto + 5).then_some(())
     })
     .await;
 }
@@ -4317,10 +4313,10 @@ async fn el_borde_del_registro_se_arrastra_desde_los_detalles() {
 /// ADR 0138: dropping one listing below the other stacks them;
 /// `layout.flip` puts them back side by side.
 #[tokio::test]
-async fn mover_y_girar_reparten_los_listados() {
-    let (h, _) = host_arbol(arbol()).await;
+async fn move_and_rotate_redistribute_the_listings() {
+    let (h, _) = host_tree(fake_tree()).await;
     let mut sub = h.subscribe();
-    let listados = |s: &norte_ui_host::ViewSnapshot| -> Vec<u32> {
+    let listings = |s: &norte_ui_host::ViewSnapshot| -> Vec<u32> {
         s.slots
             .iter()
             .filter_map(|v| match v {
@@ -4335,22 +4331,22 @@ async fn mover_y_girar_reparten_los_listados() {
         })
         .await
         .expect("host alive");
-    let snap = foto_hasta(&h, &mut sub, "two listings", |s| {
-        (listados(s).len() == 2).then(|| s.clone())
+    let snap = snapshot_until(&h, &mut sub, "two listings", |s| {
+        (listings(s).len() == 2).then(|| s.clone())
     })
     .await;
-    let [a, b] = listados(&snap)[..] else {
+    let [a, b] = listings(&snap)[..] else {
         unreachable!("two, from the wait")
     };
-    let sitio = |s: &norte_ui_host::ViewSnapshot, id: u32| {
+    let place = |s: &norte_ui_host::ViewSnapshot, id: u32| {
         s.layout
             .placements
             .iter()
             .find(|p| p.slot_id == id)
             .map(|p| (p.x, p.y))
     };
-    let (ax, ay) = sitio(&snap, a).expect("a placed");
-    let (bx, by) = sitio(&snap, b).expect("b placed");
+    let (ax, ay) = place(&snap, a).expect("a placed");
+    let (bx, by) = place(&snap, b).expect("b placed");
     assert!(ay == by && ax < bx, "side by side at the start");
 
     let ack = h
@@ -4362,17 +4358,17 @@ async fn mover_y_girar_reparten_los_listados() {
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "was {ack:?}");
-    let () = foto_hasta(&h, &mut sub, "a below b", |s| {
-        let (ax, ay) = sitio(s, a)?;
-        let (bx, by) = sitio(s, b)?;
+    let () = snapshot_until(&h, &mut sub, "a below b", |s| {
+        let (ax, ay) = place(s, a)?;
+        let (bx, by) = place(s, b)?;
         (ax == bx && ay > by).then_some(())
     })
     .await;
 
-    ejecutar_por_paleta(&h, &mut sub, "layout.flip").await;
-    let () = foto_hasta(&h, &mut sub, "side by side again", |s| {
-        let (ax, ay) = sitio(s, a)?;
-        let (bx, by) = sitio(s, b)?;
+    run_by_palette(&h, &mut sub, "layout.flip").await;
+    let () = snapshot_until(&h, &mut sub, "side by side again", |s| {
+        let (ax, ay) = place(s, a)?;
+        let (bx, by) = place(s, b)?;
         (ay == by && ax != bx).then_some(())
     })
     .await;
@@ -4383,8 +4379,8 @@ async fn mover_y_girar_reparten_los_listados() {
 /// command; an id that is no longer there is a race and asks for a
 /// snapshot.
 #[tokio::test]
-async fn la_barra_de_estado_trae_sus_elementos_y_se_pulsan() {
-    let (h, snap) = host_arbol(arbol()).await;
+async fn the_status_bar_brings_its_items_and_they_are_clickable() {
+    let (h, snap) = host_tree(fake_tree()).await;
     let ids: Vec<&str> = snap.status_items.iter().map(|i| i.id.as_str()).collect();
     // With no marks, no tasks and no notices, those three stay silent.
     assert_eq!(
@@ -4427,13 +4423,13 @@ async fn la_barra_de_estado_trae_sus_elementos_y_se_pulsan() {
 /// directory it says so, and closing it removes it. The last of ADR 0058's
 /// seven kinds the window was not painting.
 #[tokio::test]
-async fn el_hueco_de_preview_sigue_al_cursor_y_ensena_el_visor() {
-    let mut f = Falso::default();
-    f.pon(
+async fn the_preview_slot_follows_the_cursor_and_shows_the_viewer() {
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![(b"docs".to_vec(), true), (b"main.rs".to_vec(), false)],
     );
-    f.contenido
+    f.content
         .insert("mem:///casa/main.rs".to_owned(), b"fn main() {}".to_vec());
     f.previews.insert(
         "mem:///casa/main.rs".to_owned(),
@@ -4450,11 +4446,11 @@ async fn el_hueco_de_preview_sigue_al_cursor_y_ensena_el_visor() {
         },
     );
     let f = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let (h, _snap) = host_tree(Arc::clone(&f)).await;
     let mut sub = h.subscribe();
 
     // Opening it is a catalogue command, the same one as in the TUI.
-    ejecutar_por_paleta(&h, &mut sub, "layout.preview").await;
+    run_by_palette(&h, &mut sub, "layout.preview").await;
     let preview_de = |s: &norte_ui_host::ViewSnapshot| {
         s.slots.iter().find_map(|v| match v {
             SlotView::Preview(p) => Some(p.as_ref().clone()),
@@ -4464,18 +4460,18 @@ async fn el_hueco_de_preview_sigue_al_cursor_y_ensena_el_visor() {
     // The cursor is born on `..` or on `docs`: first the note. Until the
     // listing lands there is no cursor, and THAT note is a different one
     // ("nothing selected"): it waits for the directory's.
-    let con_nota = foto_hasta(&h, &mut sub, "the preview slot over a directory", |s| {
+    let with_note = snapshot_until(&h, &mut sub, "the preview slot over a directory", |s| {
         preview_de(s).filter(|p| p.viewer.is_none() && p.note == "directorio")
     })
     .await;
-    assert!(con_nota.viewer.is_none(), "{con_nota:?}");
+    assert!(with_note.viewer.is_none(), "{with_note:?}");
 
     // Move down to the file: the slot reads it on its own, and what it
     // shows is the plugin's preview, with its fragment and its "via".
     for _ in 0..3 {
-        h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+        h.dispatch(press("ArrowDown")).await.expect("host alive");
     }
-    let con_visor = foto_hasta(&h, &mut sub, "the preview slot with the file", |s| {
+    let con_visor = snapshot_until(&h, &mut sub, "the preview slot with the file", |s| {
         preview_de(s).filter(|p| p.viewer.is_some())
     })
     .await;
@@ -4497,12 +4493,12 @@ async fn el_hueco_de_preview_sigue_al_cursor_y_ensena_el_visor() {
     );
 
     // The same command closes it, and what it was showing goes with it.
-    ejecutar_por_paleta(&h, &mut sub, "layout.preview").await;
-    let cerrado = foto_hasta(&h, &mut sub, "no preview slot", |s| {
+    run_by_palette(&h, &mut sub, "layout.preview").await;
+    let closed = snapshot_until(&h, &mut sub, "no preview slot", |s| {
         preview_de(s).is_none().then(|| s.clone())
     })
     .await;
-    assert!(cerrado.viewer.is_none(), "the BIG viewer did not open");
+    assert!(closed.viewer.is_none(), "the BIG viewer did not open");
 }
 
 /// #291, second half: with FOCUS on the docked slot, the viewer's keys move
@@ -4510,19 +4506,19 @@ async fn el_hueco_de_preview_sigue_al_cursor_y_ensena_el_visor() {
 /// focus to the listing without closing the slot (like the TUI); and with
 /// no focus, the arrows keep moving the listing.
 #[tokio::test]
-async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
-    let mut f = Falso::default();
-    f.pon("mem:///casa", vec![(b"largo.txt".to_vec(), false)]);
-    let texto = (1..=80)
+async fn the_preview_slot_with_focus_moves_with_the_viewer_keys() {
+    let mut f = Fake::default();
+    f.put("mem:///casa", vec![(b"largo.txt".to_vec(), false)]);
+    let text = (1..=80)
         .map(|i| format!("line {i}"))
         .collect::<Vec<_>>()
         .join("\n");
-    f.contenido
-        .insert("mem:///casa/largo.txt".to_owned(), texto.into_bytes());
+    f.content
+        .insert("mem:///casa/largo.txt".to_owned(), text.into_bytes());
     let f = Arc::new(f);
-    let (h, _snap) = host_arbol(Arc::clone(&f)).await;
+    let (h, _snap) = host_tree(Arc::clone(&f)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "layout.preview").await;
+    run_by_palette(&h, &mut sub, "layout.preview").await;
     let preview_de = |s: &norte_ui_host::ViewSnapshot| {
         s.slots.iter().find_map(|v| match v {
             SlotView::Preview(p) => Some(p.as_ref().clone()),
@@ -4531,9 +4527,9 @@ async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
     };
     // Move down to the file.
     for _ in 0..3 {
-        h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+        h.dispatch(press("ArrowDown")).await.expect("host alive");
     }
-    let con_visor = foto_hasta(&h, &mut sub, "the preview slot with the file", |s| {
+    let con_visor = snapshot_until(&h, &mut sub, "the preview slot with the file", |s| {
         preview_de(s).filter(|p| p.viewer.is_some())
     })
     .await;
@@ -4549,12 +4545,12 @@ async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
     // With no focus, an arrow goes to the LISTING, not the viewer. Down and
     // not up: up would change the file under the cursor, and with it what
     // the slot shows — what is measured here is who the key went to.
-    h.dispatch(tecla("ArrowDown")).await.expect("host alive");
-    let sin_foco = foto_hasta(&h, &mut sub, "the arrow went to the listing", |s| {
+    h.dispatch(press("ArrowDown")).await.expect("host alive");
+    let unfocused = snapshot_until(&h, &mut sub, "the arrow went to the listing", |s| {
         preview_de(s).filter(|p| p.viewer.as_ref().is_some_and(|v| v.first_line == 0))
     })
     .await;
-    assert!(sin_foco.viewer.is_some());
+    assert!(unfocused.viewer.is_some());
 
     // With focus on the slot: the arrow moves the viewer.
     let ack = h
@@ -4565,7 +4561,7 @@ async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
         matches!(ack, ActionAck::Applied { .. }),
         "focusing the slot: {ack:?}"
     );
-    let enfocado = foto_hasta(&h, &mut sub, "the preview slot with focus", |s| {
+    let focused = snapshot_until(&h, &mut sub, "the preview slot with focus", |s| {
         s.layout
             .placements
             .iter()
@@ -4573,17 +4569,17 @@ async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
             .then(|| s.clone())
     })
     .await;
-    assert_eq!(enfocado.focus, Some(slot));
-    let ack = h.dispatch(tecla("ArrowDown")).await.expect("host alive");
+    assert_eq!(focused.focus, Some(slot));
+    let ack = h.dispatch(press("ArrowDown")).await.expect("host alive");
     assert!(
         matches!(ack, ActionAck::Applied { .. }),
         "the arrow in the viewer: {ack:?}"
     );
-    let movido = foto_hasta(&h, &mut sub, "the docked viewer moved down a line", |s| {
+    let moved = snapshot_until(&h, &mut sub, "the docked viewer moved down a line", |s| {
         preview_de(s).filter(|p| p.viewer.as_ref().is_some_and(|v| v.first_line == 1))
     })
     .await;
-    assert_eq!(movido.viewer.expect("viewer").first_line, 1);
+    assert_eq!(moved.viewer.expect("viewer").first_line, 1);
 
     // The wheel, via the host.
     h.dispatch(UiAction::PreviewScroll {
@@ -4592,22 +4588,22 @@ async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
     })
     .await
     .expect("host alive");
-    foto_hasta(&h, &mut sub, "the wheel went down three more", |s| {
+    snapshot_until(&h, &mut sub, "the wheel went down three more", |s| {
         preview_de(s).filter(|p| p.viewer.as_ref().is_some_and(|v| v.first_line == 4))
     })
     .await;
 
     // `viewer.close` (Esc in the viewer's keymap) returns focus to the
     // listing and leaves the slot where it is.
-    h.dispatch(tecla("Escape")).await.expect("host alive");
-    let devuelto = foto_hasta(&h, &mut sub, "focus returned to the listing", |s| {
-        let activo = s
+    h.dispatch(press("Escape")).await.expect("host alive");
+    let devuelto = snapshot_until(&h, &mut sub, "focus returned to the listing", |s| {
+        let active = s
             .layout
             .placements
             .iter()
             .find(|p| p.role == Some(norte_ui_host::dto::SlotRole::Active))
             .map(|p| p.slot_id);
-        (activo.is_some() && activo != Some(slot)).then(|| s.clone())
+        (active.is_some() && active != Some(slot)).then(|| s.clone())
     })
     .await;
     assert!(preview_de(&devuelto).is_some(), "the slot is still open");
@@ -4619,59 +4615,59 @@ async fn el_hueco_de_preview_con_el_foco_se_mueve_con_las_teclas_del_visor() {
 /// gesture, and someone using two entries from the same menu pays for it
 /// every time.
 #[tokio::test]
-async fn el_menu_se_reabre_por_donde_iba() {
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+async fn the_menu_reopens_where_it_left_off() {
+    let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
     // Open, move two menus to the right and close with `Escape`.
     h.dispatch(UiAction::MenuOpen { menu: 2 })
         .await
         .expect("host alive");
-    h.dispatch(tecla("Escape")).await.expect("host alive");
+    h.dispatch(press("Escape")).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
     assert_eq!(
-        siguiente_foto(&mut sub).await.menu.open,
+        next_snapshot(&mut sub).await.menu.open,
         None,
         "closed entirely"
     );
 
     // And reopening it comes out at the same one.
-    ejecutar_por_paleta(&h, &mut sub, "app.menu").await;
+    run_by_palette(&h, &mut sub, "app.menu").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    assert_eq!(siguiente_foto(&mut sub).await.menu.open, Some(2));
+    assert_eq!(next_snapshot(&mut sub).await.menu.open, Some(2));
 }
 
 /// Alt alone (bridge 68) opens the menu like `app.menu`, and again folds it.
 #[tokio::test]
-async fn alt_solo_abre_y_pliega_el_menu() {
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+async fn alt_alone_opens_and_folds_the_menu() {
+    let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::MenuToggle).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    assert_eq!(siguiente_foto(&mut sub).await.menu.open, Some(0), "open");
+    assert_eq!(next_snapshot(&mut sub).await.menu.open, Some(0), "open");
 
     h.dispatch(UiAction::MenuToggle).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    assert_eq!(siguiente_foto(&mut sub).await.menu.open, None, "folded");
+    assert_eq!(next_snapshot(&mut sub).await.menu.open, None, "folded");
 }
 
 /// With a dialog in front, Alt alone opens nothing: F9 there is eaten by the
 /// dialog, and a menu on top of a pending question would fight it for the
 /// keyboard.
 #[tokio::test]
-async fn alt_solo_no_abre_el_menu_encima_de_un_dialogo() {
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+async fn alt_alone_does_not_open_the_menu_over_a_dialog() {
+    let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "pane.mkdir").await;
-    foto_hasta(&h, &mut sub, "the dialog is open", |s| {
+    run_by_palette(&h, &mut sub, "pane.mkdir").await;
+    snapshot_until(&h, &mut sub, "the dialog is open", |s| {
         (!s.dialogs.is_empty()).then_some(())
     })
     .await;
 
     h.dispatch(UiAction::MenuToggle).await.expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(foto.menu.open, None, "the menu does not open");
-    assert!(!foto.dialogs.is_empty(), "the dialog remains");
+    let snapshot = next_snapshot(&mut sub).await;
+    assert_eq!(snapshot.menu.open, None, "the menu does not open");
+    assert!(!snapshot.dialogs.is_empty(), "the dialog remains");
 }
 
 /// Choosing in the menu runs the command, and the menu closes BEFORE.
@@ -4680,14 +4676,14 @@ async fn alt_solo_no_abre_el_menu_encima_de_un_dialogo() {
 /// the menu would leave it eating the keys of the one that just opened. It
 /// is the same rule as the palette.
 #[tokio::test]
-async fn lo_elegido_en_el_menu_corre_y_el_menu_se_cierra_antes() {
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+async fn the_menu_choice_runs_and_the_menu_closes_first() {
+    let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
     // The "Help" menu and its first entry, which is `app.help`: it opens a
     // screen, so it serves to see that the menu does not stay on top.
-    let ayuda = norte_frontend::menu::MENUS.len() - 1;
+    let help = norte_frontend::menu::MENUS.len() - 1;
     h.dispatch(UiAction::MenuOpen {
-        menu: u32::try_from(ayuda).expect("fits"),
+        menu: u32::try_from(help).expect("fits"),
     })
     .await
     .expect("host alive");
@@ -4695,9 +4691,9 @@ async fn lo_elegido_en_el_menu_corre_y_el_menu_se_cierra_antes() {
         .await
         .expect("host alive");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    assert_eq!(foto.menu.open, None, "the menu closed");
-    assert!(foto.help.is_some(), "and what was chosen ran");
+    let snapshot = next_snapshot(&mut sub).await;
+    assert_eq!(snapshot.menu.open, None, "the menu closed");
+    assert!(snapshot.help.is_some(), "and what was chosen ran");
 }
 
 /// The PROCESSES panel is exited with the same key it was entered with.
@@ -4706,14 +4702,14 @@ async fn lo_elegido_en_el_menu_corre_y_el_menu_se_cierra_antes() {
 /// trap, and the reader is left with no way back to the listing without a
 /// mouse.
 #[tokio::test]
-async fn del_panel_de_procesos_se_sale_tabulando() {
+async fn tabbing_exits_the_processes_panel() {
     use norte_ui_host::dto::SlotRole;
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "layout.processes").await;
+    run_by_palette(&h, &mut sub, "layout.processes").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let abierto = siguiente_foto(&mut sub).await;
-    let procesos = abierto
+    let abierto = next_snapshot(&mut sub).await;
+    let processes = abierto
         .slots
         .iter()
         .find_map(|v| match v {
@@ -4722,7 +4718,7 @@ async fn del_panel_de_procesos_se_sale_tabulando() {
         })
         .expect("the panel is on screen");
 
-    let activo = |s: &norte_ui_host::ViewSnapshot| {
+    let active = |s: &norte_ui_host::ViewSnapshot| {
         s.layout
             .placements
             .iter()
@@ -4730,51 +4726,57 @@ async fn del_panel_de_procesos_se_sale_tabulando() {
             .map(|p| p.slot_id)
     };
     // Walk the screen until landing on the processes panel...
-    let mut dentro = false;
+    let mut inside = false;
     for _ in 0..6 {
-        h.dispatch(tecla_alt("o")).await.expect("host alive");
+        h.dispatch(key_alt("o")).await.expect("host alive");
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if activo(&siguiente_foto(&mut sub).await) == Some(procesos) {
-            dentro = true;
+        if active(&next_snapshot(&mut sub).await) == Some(processes) {
+            inside = true;
             break;
         }
     }
-    assert!(dentro, "the ring reaches the processes panel");
+    assert!(inside, "the ring reaches the processes panel");
 
     // ...and it leaves the same way it came in.
-    h.dispatch(tecla_alt("o")).await.expect("host alive");
-    let fuera = foto_hasta(&h, &mut sub, "focus left the panel", |foto| {
-        activo(foto).filter(|id| *id != procesos)
+    h.dispatch(key_alt("o")).await.expect("host alive");
+    let outside = snapshot_until(&h, &mut sub, "focus left the panel", |snapshot| {
+        active(snapshot).filter(|id| *id != processes)
     })
     .await;
     assert_ne!(
-        fuera, procesos,
+        outside, processes,
         "and it LEAVES it: a ring that enters and does not leave is a trap"
     );
 
     // And Tab also gets you out, even without entering: it goes back to a
     // LISTING. That is what guarantees no combination leaves the reader
     // stuck inside.
-    let mut atras = false;
+    let mut back = false;
     for _ in 0..6 {
-        h.dispatch(tecla_alt("o")).await.expect("host alive");
+        h.dispatch(key_alt("o")).await.expect("host alive");
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        if activo(&siguiente_foto(&mut sub).await) == Some(procesos) {
-            atras = true;
+        if active(&next_snapshot(&mut sub).await) == Some(processes) {
+            back = true;
             break;
         }
     }
-    assert!(atras, "back inside the panel");
-    h.dispatch(tecla("Tab")).await.expect("host alive");
-    let foto = foto_hasta(&h, &mut sub, "`Tab` gets out of the side panel", |foto| {
-        let id = activo(foto).filter(|id| *id != procesos)?;
-        foto.slots
-            .iter()
-            .any(|v| matches!(v, SlotView::Browser(b) if b.slot_id == id))
-            .then_some(id)
-    })
+    assert!(back, "back inside the panel");
+    h.dispatch(press("Tab")).await.expect("host alive");
+    let snapshot = snapshot_until(
+        &h,
+        &mut sub,
+        "`Tab` gets out of the side panel",
+        |snapshot| {
+            let id = active(snapshot).filter(|id| *id != processes)?;
+            snapshot
+                .slots
+                .iter()
+                .any(|v| matches!(v, SlotView::Browser(b) if b.slot_id == id))
+                .then_some(id)
+        },
+    )
     .await;
-    assert_ne!(foto, procesos);
+    assert_ne!(snapshot, processes);
 }
 
 /// The keyboard ring does NOT stop at the attributes sheet.
@@ -4790,16 +4792,16 @@ async fn del_panel_de_procesos_se_sale_tabulando() {
 /// registry), and a decision duplicated between frontends diverges silently
 /// (ADR 0077).
 #[tokio::test]
-async fn el_anillo_no_se_para_en_la_hoja_de_atributos() {
+async fn the_ring_does_not_stop_at_the_attributes_sheet() {
     use norte_ui_host::dto::SlotRole;
     // Two listings, so the ring has somewhere to go when it skips the sheet:
     // with only one the correct answer is "there is no other slot".
-    let (h, _snap) = host_con_layout(arbol(), "orthodox", (120, 40)).await;
+    let (h, _snap) = host_con_layout(fake_tree(), "orthodox", (120, 40)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "layout.metadata").await;
+    run_by_palette(&h, &mut sub, "layout.metadata").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let abierto = siguiente_foto(&mut sub).await;
-    let hoja = abierto
+    let abierto = next_snapshot(&mut sub).await;
+    let sheet = abierto
         .slots
         .iter()
         .find_map(|v| match v {
@@ -4811,18 +4813,18 @@ async fn el_anillo_no_se_para_en_la_hoja_de_atributos() {
     // A full lap of the ring: the sheet must not have focus at any point
     // of it.
     for _ in 0..6 {
-        ejecutar_por_paleta(&h, &mut sub, "layout.focus-next").await;
+        run_by_palette(&h, &mut sub, "layout.focus-next").await;
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let foto = siguiente_foto(&mut sub).await;
-        let activo = foto
+        let snapshot = next_snapshot(&mut sub).await;
+        let active = snapshot
             .layout
             .placements
             .iter()
             .find(|p| p.role == Some(SlotRole::Active))
             .map(|p| p.slot_id);
         assert_ne!(
-            activo,
-            Some(hoja),
+            active,
+            Some(sheet),
             "the ring stopped at the attributes sheet, which does not take keys"
         );
     }
@@ -4836,50 +4838,55 @@ async fn el_anillo_no_se_para_en_la_hoja_de_atributos() {
 /// working with one that is not visible is what this prevents — and that
 /// the view says what is there.
 #[tokio::test]
-async fn las_pestanas_se_abren_se_recorren_y_se_cierran() {
-    let backend = arbol();
-    let (h, snap) = host_arbol(Arc::clone(&backend)).await;
+async fn tabs_open_cycle_and_close() {
+    let backend = fake_tree();
+    let (h, snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     assert!(snap.layout.tabs.is_empty(), "no group, no bar");
 
-    ejecutar_por_paleta(&h, &mut sub, "pane.tab-new").await;
+    run_by_palette(&h, &mut sub, "pane.tab-new").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
-    let grupo = foto.layout.tabs.first().expect("there is a group").clone();
-    assert_eq!(grupo.tabs.len(), 2, "two tabs");
-    assert_eq!(grupo.active, 1, "the new one ends up in front");
+    let snapshot = next_snapshot(&mut sub).await;
+    let group = snapshot
+        .layout
+        .tabs
+        .first()
+        .expect("there is a group")
+        .clone();
+    assert_eq!(group.tabs.len(), 2, "two tabs");
+    assert_eq!(group.active, 1, "the new one ends up in front");
     assert_eq!(
-        Some(grupo.tabs[1].slot_id),
-        foto.focus,
+        Some(group.tabs[1].slot_id),
+        snapshot.focus,
         "and with focus: working on one that is not visible is what this prevents"
     );
 
     // Walking CYCLES.
-    ejecutar_por_paleta(&h, &mut sub, "pane.tab-next").await;
+    run_by_palette(&h, &mut sub, "pane.tab-next").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
+    let snapshot = next_snapshot(&mut sub).await;
     assert_eq!(
-        foto.layout.tabs.first().expect("group").active,
+        snapshot.layout.tabs.first().expect("group").active,
         0,
         "from the last to the first"
     );
 
     // Going to an N that does not exist is refused: guessing would mean
     // switching tabs on its own.
-    let ack = ejecutar_por_paleta_ack(&h, &mut sub, "pane.tab-goto-9").await;
+    let ack = execute_via_palette_ack(&h, &mut sub, "pane.tab-goto-9").await;
     assert!(
         matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-such-tab"),
         "{ack:?}"
     );
 
     // Closing the front one leaves one, and the group dissolves.
-    ejecutar_por_paleta(&h, &mut sub, "pane.tab-close").await;
+    run_by_palette(&h, &mut sub, "pane.tab-close").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = siguiente_foto(&mut sub).await;
+    let snapshot = next_snapshot(&mut sub).await;
     assert!(
-        foto.layout.tabs.is_empty(),
+        snapshot.layout.tabs.is_empty(),
         "a group of one is not a group: {:?}",
-        foto.layout.tabs
+        snapshot.layout.tabs
     );
 }
 
@@ -4888,45 +4895,48 @@ async fn las_pestanas_se_abren_se_recorren_y_se_cierran() {
 /// from the first is closed: the first dissolves and the second keeps its
 /// two.
 #[tokio::test]
-async fn el_boton_de_una_pestana_actua_sobre_su_grupo_y_no_sobre_el_del_foco() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn a_tab_button_acts_on_its_group_and_not_on_the_focused_one() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     // Two listings, one group in each.
-    ejecutar_por_paleta(&h, &mut sub, "layout.split-h").await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.tab-new").await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.switch").await;
-    ejecutar_por_paleta(&h, &mut sub, "pane.tab-new").await;
+    run_by_palette(&h, &mut sub, "layout.split-h").await;
+    run_by_palette(&h, &mut sub, "pane.tab-new").await;
+    run_by_palette(&h, &mut sub, "pane.switch").await;
+    run_by_palette(&h, &mut sub, "pane.tab-new").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = foto_hasta(&h, &mut sub, "two groups", |s| {
+    let snapshot = snapshot_until(&h, &mut sub, "two groups", |s| {
         (s.layout.tabs.len() == 2).then(|| s.clone())
     })
     .await;
-    let (a, b) = (foto.layout.tabs[0].clone(), foto.layout.tabs[1].clone());
-    let enfocado = foto.focus.expect("there is focus");
+    let (a, b) = (
+        snapshot.layout.tabs[0].clone(),
+        snapshot.layout.tabs[1].clone(),
+    );
+    let focused = snapshot.focus.expect("there is focus");
     // Focus is on one of the two; the OTHER one is clicked.
-    let (pulsado, otro) = if b.tabs.iter().any(|t| t.slot_id == enfocado) {
+    let (pressed, other) = if b.tabs.iter().any(|t| t.slot_id == focused) {
         (a, b)
     } else {
         (b, a)
     };
     let ack = h
         .dispatch(UiAction::TabAction {
-            slot_id: pulsado.tabs[0].slot_id,
+            slot_id: pressed.tabs[0].slot_id,
             verb: norte_ui_host::TabVerb::Close,
         })
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let foto = foto_hasta(&h, &mut sub, "one group fewer", |s| {
+    let snapshot = snapshot_until(&h, &mut sub, "one group fewer", |s| {
         (s.layout.tabs.len() == 1).then(|| s.clone())
     })
     .await;
-    let queda = &foto.layout.tabs[0];
+    let remains = &snapshot.layout.tabs[0];
     assert_eq!(
-        queda.tabs.iter().map(|t| t.slot_id).collect::<Vec<_>>(),
-        otro.tabs.iter().map(|t| t.slot_id).collect::<Vec<_>>(),
+        remains.tabs.iter().map(|t| t.slot_id).collect::<Vec<_>>(),
+        other.tabs.iter().map(|t| t.slot_id).collect::<Vec<_>>(),
         "the focused group stays whole; the clicked one closed"
     );
 }
@@ -4936,12 +4946,12 @@ async fn el_boton_de_una_pestana_actua_sobre_su_grupo_y_no_sobre_el_del_foco() {
 /// Closing the whole slot is a different command: doing it here "because
 /// there were no tabs" would close what nobody asked to close.
 #[tokio::test]
-async fn sin_grupo_los_comandos_de_pestana_lo_dicen() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn without_a_group_tab_commands_say_so() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
     for cmd in ["pane.tab-close", "pane.tab-next", "pane.tab-move-right"] {
-        let ack = ejecutar_por_paleta_ack(&h, &mut sub, cmd).await;
+        let ack = execute_via_palette_ack(&h, &mut sub, cmd).await;
         assert!(
             matches!(&ack, ActionAck::Unavailable { reason_key } if reason_key == "host-no-tabs"),
             "{cmd}: {ack:?}"
@@ -4952,40 +4962,40 @@ async fn sin_grupo_los_comandos_de_pestana_lo_dicen() {
 /// A click on a tab brings it to front; against a tree that already changed,
 /// it refuses instead of getting it right by chance.
 #[tokio::test]
-async fn un_clic_en_una_pestana_la_pone_delante() {
-    let backend = arbol();
-    let (h, _snap) = host_arbol(Arc::clone(&backend)).await;
+async fn a_click_on_a_tab_brings_it_to_front() {
+    let backend = fake_tree();
+    let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
-    ejecutar_por_paleta(&h, &mut sub, "pane.tab-new").await;
+    run_by_palette(&h, &mut sub, "pane.tab-new").await;
     h.dispatch(UiAction::Resync).await.expect("host alive");
-    let grupo = siguiente_foto(&mut sub)
+    let group = next_snapshot(&mut sub)
         .await
         .layout
         .tabs
         .first()
         .expect("group")
         .clone();
-    let primera = grupo.tabs[0].slot_id;
+    let first = group.tabs[0].slot_id;
 
     let ack = h
-        .dispatch(UiAction::SelectTab { slot_id: primera })
+        .dispatch(UiAction::SelectTab { slot_id: first })
         .await
         .expect("host alive");
     assert!(matches!(ack, ActionAck::Applied { .. }), "{ack:?}");
     // Every layout change sends its own snapshot, so the ones piling up in
     // the queue are from BEFORE: it looks for the one that already reflects
     // the click instead of reading the first one that comes out.
-    let mut visto = None;
+    let mut seen = None;
     for _ in 0..10 {
         h.dispatch(UiAction::Resync).await.expect("host alive");
-        let foto = siguiente_foto(&mut sub).await;
-        if foto.layout.tabs.first().is_some_and(|g| g.active == 0) {
-            visto = Some(foto);
+        let snapshot = next_snapshot(&mut sub).await;
+        if snapshot.layout.tabs.first().is_some_and(|g| g.active == 0) {
+            seen = Some(snapshot);
             break;
         }
     }
-    let foto = visto.expect("the click brings the first one to front");
-    assert_eq!(foto.focus, Some(primera));
+    let snapshot = seen.expect("the click brings the first one to front");
+    assert_eq!(snapshot.focus, Some(first));
 
     // A slot that is not in any group: stale, not a hit.
     let ack = h

@@ -50,9 +50,9 @@ pub fn split_name(name: &str) -> (&str, &str) {
 ///
 /// ```
 /// use norte_frontend::rename_pattern::expand;
-/// assert_eq!(expand("[N].[E]", "foto.JPG", 1), "foto.JPG");
-/// assert_eq!(expand("vacaciones-[C3].[E]", "foto.jpg", 7), "vacaciones-007.jpg");
-/// assert_eq!(expand("[N]", "notas.txt", 1), "notas");
+/// assert_eq!(expand("[N].[E]", "snapshot.JPG", 1), "snapshot.JPG");
+/// assert_eq!(expand("vacaciones-[C3].[E]", "snapshot.jpg", 7), "vacaciones-007.jpg");
+/// assert_eq!(expand("[N]", "notes.txt", 1), "notes");
 /// ```
 #[must_use]
 pub fn expand(pattern: &str, name: &str, n: usize) -> String {
@@ -109,10 +109,10 @@ fn expand_code(code: &str, base: &str, ext: &str, n: usize) -> Option<String> {
 /// ```
 /// use norte_frontend::rename_pattern::plan;
 /// let names = ["a.txt".to_owned(), "b.txt".to_owned()];
-/// let pairs = plan("nota-[C].[E]", &names, 1);
+/// let pairs = plan("note-[C].[E]", &names, 1);
 /// assert_eq!(pairs, vec![
-///     ("a.txt".to_owned(), "nota-1.txt".to_owned()),
-///     ("b.txt".to_owned(), "nota-2.txt".to_owned()),
+///     ("a.txt".to_owned(), "note-1.txt".to_owned()),
+///     ("b.txt".to_owned(), "note-2.txt".to_owned()),
 /// ]);
 /// ```
 #[must_use]
@@ -175,7 +175,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn los_tres_codigos_y_el_contador_acolchado() {
+    fn the_three_codes_and_the_padded_counter() {
         assert_eq!(expand("[N].[E]", "foto.jpg", 1), "foto.jpg");
         assert_eq!(expand("[C]-[N].[E]", "foto.jpg", 4), "4-foto.jpg");
         assert_eq!(expand("[C2]", "foto.jpg", 4), "04");
@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn la_extension_es_el_ultimo_punto_y_un_oculto_no_tiene() {
+    fn the_extension_is_the_last_dot_and_a_hidden_file_has_none() {
         assert_eq!(split_name("a.tar.gz"), ("a.tar", "gz"));
         assert_eq!(split_name("sin-extension"), ("sin-extension", ""));
         assert_eq!(split_name(".bashrc"), (".bashrc", ""));
@@ -198,7 +198,7 @@ mod tests {
     /// with brackets, and swallowing it would be losing text without
     /// saying so.
     #[test]
-    fn un_corchete_que_no_es_codigo_es_literal() {
+    fn a_bracket_that_is_not_code_is_literal() {
         assert_eq!(expand("[borrador] [N]", "a.txt", 1), "[borrador] a");
         assert_eq!(expand("[X]-[N]", "a.txt", 1), "[X]-a");
         assert_eq!(expand("sin cerrar [N", "a.txt", 1), "sin cerrar [N");
@@ -206,14 +206,14 @@ mod tests {
 
     /// The template's text may not be ASCII, and it is not split by bytes.
     #[test]
-    fn la_plantilla_admite_texto_no_ascii() {
+    fn the_template_accepts_non_ascii_text() {
         assert_eq!(expand("añó-[C]-[N].[E]", "a.txt", 2), "añó-2-a.txt");
     }
 
     /// The ones that do not change do NOT enter the plan, and the counter
     /// does not skip anything because of it.
     #[test]
-    fn el_plan_omite_lo_que_no_cambia_y_el_contador_no_salta() {
+    fn the_plan_omits_what_does_not_change_and_the_counter_does_not_skip() {
         let names = vec!["a.txt".to_owned(), "b.txt".to_owned(), "c.txt".to_owned()];
         // `b` is already named what it would come out as, so there is
         // nothing to do with it.
@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn el_contador_puede_arrancar_donde_se_diga() {
+    fn the_counter_can_start_wherever_told() {
         let names = vec!["a".to_owned()];
         assert_eq!(
             plan("[C]", &names, 10),
@@ -244,7 +244,7 @@ mod tests {
     /// name, is rejected HERE: with the human in front and before asking
     /// for any plan at all.
     #[test]
-    fn una_plantilla_imposible_se_rechaza_antes_de_pedir_plan() {
+    fn an_impossible_template_is_rejected_before_requesting_a_plan() {
         let names = vec!["a.txt".to_owned()];
         assert_eq!(check("", &names), Err(PatternError::Empty));
         assert_eq!(check("   ", &names), Err(PatternError::Empty));

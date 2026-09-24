@@ -45,7 +45,7 @@ fn secret() -> &'static [u8; 32] {
 /// different for different nodes, and with nothing inside that gives it
 /// away.
 #[must_use]
-pub fn de_nodo(id: NodeId) -> DirAnchor {
+pub fn for_node(id: NodeId) -> DirAnchor {
     use sha2::{Digest as _, Sha256};
     let mut h = Sha256::new();
     h.update(secret());
@@ -63,11 +63,11 @@ pub fn de_nodo(id: NodeId) -> DirAnchor {
 /// Does the anchor the request brings name node `id`?
 ///
 /// A malformed anchor matches nothing: no separate case is needed for it,
-/// because [`de_nodo`] never produces one, and failing closed is correct
+/// because [`for_node`] never produces one, and failing closed is correct
 /// here —the anchor exists to authorize, not to dispense—.
 #[must_use]
-pub fn casa(esperada: &DirAnchor, id: NodeId) -> bool {
-    de_nodo(id) == *esperada
+pub fn home(esperada: &DirAnchor, id: NodeId) -> bool {
+    for_node(id) == *esperada
 }
 
 /// The anchors of the directories a client has LISTED, with a cap and
@@ -210,10 +210,10 @@ mod tests {
             volume: 7,
             index: 43,
         };
-        assert_eq!(de_nodo(a), de_nodo(a));
-        assert_ne!(de_nodo(a), de_nodo(b));
-        assert!(casa(&de_nodo(a), a));
-        assert!(!casa(&de_nodo(a), b));
+        assert_eq!(for_node(a), for_node(a));
+        assert_ne!(for_node(a), for_node(b));
+        assert!(home(&for_node(a), a));
+        assert!(!home(&for_node(a), b));
     }
 
     #[test]
@@ -229,7 +229,7 @@ mod tests {
             volume: 2,
             index: 999_999,
         };
-        let (x, y) = (de_nodo(a), de_nodo(b));
+        let (x, y) = (for_node(a), for_node(b));
         assert_ne!(x, y);
         assert!(
             !x.as_str().contains("999999"),
@@ -244,8 +244,8 @@ mod tests {
             volume: 3,
             index: 3,
         };
-        assert!(!casa(&DirAnchor::new(String::new()), id));
-        assert!(!casa(&DirAnchor::new("../etc".to_owned()), id));
+        assert!(!home(&DirAnchor::new(String::new()), id));
+        assert!(!home(&DirAnchor::new("../etc".to_owned()), id));
         // Nor does the one someone would forge without the secret: the
         // bare hash of the pair, which is what someone who knows the
         // format would come up with.
@@ -263,7 +263,7 @@ mod tests {
             DirAnchor::new(hex)
         };
         assert!(
-            !casa(&no_secret, id),
+            !home(&no_secret, id),
             "without the secret, nothing is forged"
         );
     }

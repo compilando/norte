@@ -7,13 +7,13 @@
 
 use norte_config::{Layer, Layers};
 
-fn ajustes(toml: &str) -> norte_frontend::columns::ColumnsSettings {
+fn settings(toml: &str) -> norte_frontend::columns::ColumnsSettings {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::write(dir.path().join("norte.toml"), toml).expect("writes config");
-    let capas = Layers {
+    let layers = Layers {
         dirs: vec![(dir.path().to_path_buf(), Layer::User)],
     };
-    let cfg = norte_frontend::config::load(&capas).expect("valid config");
+    let cfg = norte_frontend::config::load(&layers).expect("valid config");
     norte_frontend::columns::ColumnsSettings::resolve(&cfg.common.ui_columns)
 }
 
@@ -21,8 +21,8 @@ fn ajustes(toml: &str) -> norte_frontend::columns::ColumnsSettings {
 /// (the host is the one that filters it out, because the name is painted
 /// separately).
 #[test]
-fn las_columnas_configuradas_llegan_en_orden() {
-    let st = ajustes(
+fn configured_columns_arrive_in_order() {
+    let st = settings(
         r#"
 [ui.columns]
 default = ["name", "size", "mtime", "kind"]
@@ -38,8 +38,8 @@ default = ["name", "size", "mtime", "kind"]
 
 /// Without `[ui.columns]`, the usual ones.
 #[test]
-fn sin_configuracion_quedan_las_de_fabrica() {
-    let st = ajustes("[ui]\nlang = \"es\"\n");
+fn without_configuration_the_factory_ones_remain() {
+    let st = settings("[ui]\nlang = \"es\"\n");
     let ids: Vec<String> = st
         .layout_items_for("file")
         .into_iter()

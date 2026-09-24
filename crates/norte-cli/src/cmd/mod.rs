@@ -5,7 +5,7 @@ pub(crate) mod audit;
 pub(crate) mod compare;
 pub(crate) mod connect;
 pub(crate) mod daemon;
-pub(crate) mod entorno;
+pub(crate) mod environment;
 pub(crate) mod index;
 pub(crate) mod ls;
 pub(crate) mod plugin;

@@ -1,9 +1,9 @@
 //! Compare two directories and synchronize them.
 //!
-//! Part of `controller`: these are `Estado` methods, moved here without
+//! Part of `controller`: these are `State` methods, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Enumerating them here would be a
 // forty-line list per file, in 32 files, that goes stale the moment the
 // parent imports something — `super::*` tracks it on its own.
@@ -16,19 +16,19 @@ use super::*;
 /// to discard whatever comes from a different plan.
 pub(super) struct SyncPedida {
     /// Which of this window's plans this is.
-    pub(super) epoca: u64,
+    pub(super) epoch: u64,
     /// It was abandoned before the Task came back.
     pub(super) abandonada: Arc<std::sync::atomic::AtomicBool>,
     /// The requested mode.
     modo: norte_proto::methods::SyncMode,
     /// Source root.
-    origen: VPath,
+    source: VPath,
     /// Destination root.
-    destino: VPath,
+    dest: VPath,
     /// The SOURCE's name reinterpretation, frozen when requested.
-    origen_encoding: Option<norte_encoding::NameEncoding>,
+    source_encoding: Option<norte_encoding::NameEncoding>,
     /// The DESTINATION's, which can be a different one.
-    destino_encoding: Option<norte_encoding::NameEncoding>,
+    dest_encoding: Option<norte_encoding::NameEncoding>,
 }
 
 /// A synchronization plan, with its SHARED model inside.
@@ -37,9 +37,9 @@ pub(super) struct SyncPedida {
 /// what steps there are, what blocks them, whether it can be approved and
 /// what state the Task is in. Not a single step or verdict is decided here;
 /// the core produces the plan and only it can redeem it.
-pub(super) struct Sincronizacion {
+pub(super) struct Sync {
     /// Which of this window's plans this is.
-    pub(super) epoca: u64,
+    pub(super) epoch: u64,
     /// The PLAN's Task (the apply's is a different one, and the model holds
     /// it).
     task: norte_proto::TaskId,
@@ -48,18 +48,18 @@ pub(super) struct Sincronizacion {
     /// The shared model.
     pub(super) vista: norte_frontend::sync::SyncView,
     /// The window the renderer says it is painting.
-    primera_visible: usize,
+    first_visible: usize,
     /// How many steps fit in that window.
-    ventana: usize,
+    window: usize,
     /// Its report has already been requested: it is an RPC, and a
     /// reconnection re-announces the terminal.
-    informe_pedido: bool,
+    report_requested: bool,
     /// Which CONNECTION epoch its Task lives in.
     ///
     /// After a handoff, the new daemon hands out ids starting from 1:
     /// without this, an unrelated task with the same number would close this
     /// write's history with someone else's proof.
-    epoca_conexion: u64,
+    epoch_connection: u64,
 }
 
 /// A comparison of two trees, with its SHARED pane inside.
@@ -69,10 +69,10 @@ pub(super) struct Sincronizacion {
 /// `norte_frontend::compare::ComparePane`, the same one the TUI paints.
 /// Nothing is paired up again here and no verdict is decided: the core did
 /// that, and reproducing it in the host would be a third copy.
-pub(super) struct Comparacion {
+pub(super) struct Comparison {
     /// Which of this window's comparisons this is. Same reason as a
     /// search's epoch: the Task's id arrives late.
-    pub(super) epoca: u64,
+    pub(super) epoch: u64,
     /// The daemon's Task, as soon as it is known. Zero while it is not.
     pub(super) task: norte_proto::TaskId,
     /// The view closed and whatever is left of this comparison is extra.
@@ -86,12 +86,12 @@ pub(super) struct Comparacion {
     /// to lose: batches dropped along the way.
     vista: norte_frontend::compare::CompareView,
     /// The window the renderer says it is painting.
-    primera_visible: usize,
+    first_visible: usize,
     /// How many rows fit in that window.
-    ventana: usize,
+    window: usize,
 }
 
-impl Estado {
+impl State {
     /// A comparison's Task's outcome enters the model.
     ///
     /// `finish_from_task` translates it, and that is where the difference
@@ -105,13 +105,13 @@ impl Estado {
     /// The Task's outcome says whether it ran; what was done and what was
     /// NOT is told by the report, and without it "finished" reads as
     /// "succeeded" over a destination that may have been left halfway.
-    pub(super) fn pedir_informe_de_sync(
+    pub(super) fn request_sync_report(
         &mut self,
         p: &norte_proto::TaskProgress,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
-        let Some(sinc) = self.sincronizacion.as_ref() else {
+        let Some(sinc) = self.sync.as_ref() else {
             return;
         };
         // The SAME three guards as a batch's report, and for the same
@@ -120,9 +120,9 @@ impl Estado {
         // 1) and idempotence (a reconnection re-announces the terminal, and
         // this is an RPC).
         if sinc.task != p.task_id
-            || sinc.epoca_conexion != self.epoca_conexion
+            || sinc.epoch_connection != self.epoch_connection
             || !matches!(p.kind, norte_proto::TaskKind::Sync)
-            || sinc.informe_pedido
+            || sinc.report_requested
             || !matches!(
                 sinc.vista.state,
                 norte_frontend::sync::SyncState::Applying(_)
@@ -130,21 +130,21 @@ impl Estado {
         {
             return;
         }
-        let epoca = sinc.epoca;
-        let estado = p.state.clone();
+        let epoch = sinc.epoch;
+        let state = p.state.clone();
         let id = p.task_id;
-        if let Some(s) = self.sincronizacion.as_mut() {
-            s.informe_pedido = true;
+        if let Some(s) = self.sync.as_mut() {
+            s.report_requested = true;
         }
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let informe = backend.sync_report(id).await;
+            let report = backend.sync_report(id).await;
             let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::InformeDeSync(
-                    epoca,
-                    estado,
-                    Box::new(informe),
+                .send(Message::Background(Box::new(Background::SyncReport(
+                    epoch,
+                    state,
+                    Box::new(report),
                 ))))
                 .await;
         });
@@ -152,14 +152,14 @@ impl Estado {
 
     /// The report arrived: it enters the model, which decides what phrase
     /// comes out.
-    pub(super) fn informe_de_sync(
+    pub(super) fn sync_report(
         &mut self,
-        epoca: u64,
-        estado: &norte_proto::TaskState,
-        informe: Result<norte_proto::methods::SyncReportResult, Error>,
+        epoch: u64,
+        state: &norte_proto::TaskState,
+        report: Result<norte_proto::methods::SyncReportResult, Error>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let lang = self.lang;
-        let Some(sinc) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) else {
+        let Some(sinc) = self.sync.as_mut().filter(|s| s.epoch == epoch) else {
             return Vec::new();
         };
         // `on_apply_ended` is the one that knows how to read the (outcome,
@@ -170,13 +170,13 @@ impl Estado {
         // window's language, because the model receives it as a parameter:
         // reading it from the global would have put a write's outcome in
         // another window's language.
-        if let Some(categoria) = sinc.vista.on_apply_ended(estado, informe, lang) {
-            sinc.vista.error = Some(clamp_display(categoria));
+        if let Some(category) = sinc.vista.on_apply_ended(state, report, lang) {
+            sinc.vista.error = Some(clamp_display(category));
         }
-        let cambio = ViewChange::Sync {
-            sync: self.vista_sincronizacion(),
+        let change = ViewChange::Sync {
+            sync: self.vista_sync(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
     /// A PLAN Task's outcome enters the model.
@@ -191,12 +191,9 @@ impl Estado {
     ///
     /// And by progress, not by the channel closing: a Task that dies without
     /// closing its stream used to leave the panel at "planning…" forever.
-    pub(super) fn cerrar_sincronizacion(
-        &mut self,
-        p: &norte_proto::TaskProgress,
-    ) -> Vec<ViewChange> {
+    pub(super) fn close_sync(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
         let lang = self.lang;
-        let Some(sinc) = self.sincronizacion.as_mut() else {
+        let Some(sinc) = self.sync.as_mut() else {
             return Vec::new();
         };
         if sinc.task != p.task_id {
@@ -212,13 +209,13 @@ impl Estado {
             )));
         }
         vec![ViewChange::Sync {
-            sync: self.vista_sincronizacion(),
+            sync: self.vista_sync(),
         }]
     }
 
-    pub(super) fn cerrar_comparacion(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
+    pub(super) fn close_comparison(&mut self, p: &norte_proto::TaskProgress) -> Vec<ViewChange> {
         let lang = self.lang;
-        let Some(c) = self.comparacion.as_mut() else {
+        let Some(c) = self.comparison.as_mut() else {
             return Vec::new();
         };
         if c.task != p.task_id {
@@ -228,7 +225,7 @@ impl Estado {
         c.vista
             .finish_from_task(&p.state, p.entries_done, recibidas, lang);
         vec![ViewChange::Compare {
-            compare: self.vista_comparacion(),
+            compare: self.vista_comparison(),
         }]
     }
 
@@ -252,60 +249,58 @@ impl Estado {
         clippy::too_many_lines,
         reason = "dispatcher for a screen with two key regimes"
     )]
-    pub(super) fn tecla_en_sincronizacion(
+    pub(super) fn key_in_sync(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(sinc) = self.sincronizacion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(sinc) = self.sync.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         // With the SECOND question in front, the keys belong to it: only `y`
         // answers yes, and anything else withdraws it. A question that can
         // be answered with any key is not a question.
         if sinc.vista.confirming.is_some() {
-            let si = self
-                .verbo_de_dialogo(k)
-                .is_some_and(|v| v == "dialog.approve");
-            let Some(sinc) = self.sincronizacion.as_mut() else {
-                return (Self::obsoleta(StaleAction::Modal), Vec::new());
+            let si = self.dialog_verb(k).is_some_and(|v| v == "dialog.approve");
+            let Some(sinc) = self.sync.as_mut() else {
+                return (Self::stale(StaleAction::Modal), Vec::new());
             };
             sinc.vista.confirming = None;
             if si {
-                return self.aplicar_plan(backend, buzon);
+                return self.apply_plan(backend, buzon);
             }
-            let cambio = ViewChange::Sync {
-                sync: self.vista_sincronizacion(),
+            let change = ViewChange::Sync {
+                sync: self.vista_sync(),
             };
-            return (self.aplicada(), vec![self.parche(vec![cambio])]);
+            return (self.applied(), vec![self.parche(vec![change])]);
         }
         // `Home`/`End` stay fixed keys: the shared catalog has no verb for
         // "to the start" inside a dialog.
-        let verbo = match k.key.as_str() {
+        let verb = match k.key.as_str() {
             "Home" | "home" | "End" | "end" => None,
-            _ => self.verbo_de_dialogo(k),
+            _ => self.dialog_verb(k),
         };
-        let Some(sinc) = self.sincronizacion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(sinc) = self.sync.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        match (verbo.as_deref(), k.key.as_str()) {
+        match (verb.as_deref(), k.key.as_str()) {
             // Approving the plan is `dialog.approve`, not `dialog.confirm`:
             // what is being answered here is "yes, write" over a plan
             // already in front, which is exactly what that verb names — and
             // it is the same one the SECOND question is answered with.
-            (Some("dialog.approve"), _) => self.pedir_aprobacion(backend, buzon),
+            (Some("dialog.approve"), _) => self.request_approval(backend, buzon),
             (Some("dialog.cancel"), _) => {
                 // While the daemon is WRITING, `Escape` asks to cancel and
                 // does not close: closing loses the report — and with it the
                 // count, the failures and the undo handle — over a
                 // destination rewritten halfway.
-                let escribiendo = sinc.vista.is_submitted()
+                let writing = sinc.vista.is_submitted()
                     || matches!(
                         sinc.vista.state,
                         norte_frontend::sync::SyncState::Applying(_)
                     );
-                if escribiendo {
+                if writing {
                     // The FIRST time asks to stop and does not close: closing
                     // loses the report over a destination halfway rewritten.
                     //
@@ -320,35 +315,35 @@ impl Estado {
                         sinc.vista.cancel_requested = true;
                         let task = sinc.task;
                         if task.get() != 0 {
-                            self.cancelar(task.get());
+                            self.cancel(task.get());
                         }
-                        let cambio = ViewChange::Sync {
-                            sync: self.vista_sincronizacion(),
+                        let change = ViewChange::Sync {
+                            sync: self.vista_sync(),
                         };
-                        return (self.aplicada(), vec![self.parche(vec![cambio])]);
+                        return (self.applied(), vec![self.parche(vec![change])]);
                     }
                     let task = sinc.task;
-                    self.sincronizacion = None;
+                    self.sync = None;
                     if task.get() != 0 {
-                        self.cancelar(task.get());
+                        self.cancel(task.get());
                     }
-                    let mut fuera = vec![self.parche(vec![ViewChange::Sync { sync: None }])];
+                    let mut outside = vec![self.parche(vec![ViewChange::Sync { sync: None }])];
                     // And it IS SAID what is lost by closing: the
                     // destination may have been left halfway and its report
                     // is not going to be seen anymore.
-                    fuera.extend(self.decir("msg-sync-closed-midway"));
-                    return (self.aplicada(), fuera);
+                    outside.extend(self.say("msg-sync-closed-midway"));
+                    return (self.applied(), outside);
                 }
                 if sinc.vista.cancel_requested {
                     let task = sinc.task;
                     sinc.abandonada
                         .store(true, std::sync::atomic::Ordering::SeqCst);
-                    self.sincronizacion = None;
+                    self.sync = None;
                     if task.get() != 0 {
-                        self.cancelar(task.get());
+                        self.cancel(task.get());
                     }
                     return (
-                        self.aplicada(),
+                        self.applied(),
                         vec![self.parche(vec![ViewChange::Sync { sync: None }])],
                     );
                 }
@@ -368,42 +363,42 @@ impl Estado {
                 }
                 let task = sinc.task;
                 if task.get() != 0 {
-                    self.cancelar(task.get());
+                    self.cancel(task.get());
                 }
-                let cambio = ViewChange::Sync {
-                    sync: self.vista_sincronizacion(),
+                let change = ViewChange::Sync {
+                    sync: self.vista_sync(),
                 };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.applied(), vec![self.parche(vec![change])])
             }
             (Some("dialog.down" | "dialog.up" | "dialog.page-down" | "dialog.page-up"), _)
             | (_, "Home" | "home" | "End" | "end") => {
                 let total = sinc.vista.steps().len();
                 if total == 0 {
-                    return (self.aplicada(), Vec::new());
+                    return (self.applied(), Vec::new());
                 }
                 // The scroll CAP is "how much there is minus how much fits",
                 // not "how much there is minus one": with the latter, a
                 // single arrow over a two-step plan and a window of two
                 // hundred used to stop sending the first step.
-                let tope = total.saturating_sub(sinc.ventana.max(1));
-                let pagina = sinc.ventana.max(1);
-                sinc.primera_visible = match (verbo.as_deref(), k.key.as_str()) {
-                    (Some("dialog.down"), _) => sinc.primera_visible.saturating_add(1),
-                    (Some("dialog.up"), _) => sinc.primera_visible.saturating_sub(1),
-                    (Some("dialog.page-down"), _) => sinc.primera_visible.saturating_add(pagina),
-                    (Some("dialog.page-up"), _) => sinc.primera_visible.saturating_sub(pagina),
+                let cap = total.saturating_sub(sinc.window.max(1));
+                let page = sinc.window.max(1);
+                sinc.first_visible = match (verb.as_deref(), k.key.as_str()) {
+                    (Some("dialog.down"), _) => sinc.first_visible.saturating_add(1),
+                    (Some("dialog.up"), _) => sinc.first_visible.saturating_sub(1),
+                    (Some("dialog.page-down"), _) => sinc.first_visible.saturating_add(page),
+                    (Some("dialog.page-up"), _) => sinc.first_visible.saturating_sub(page),
                     (_, "Home" | "home") => 0,
-                    _ => tope,
+                    _ => cap,
                 }
-                .min(tope);
-                let cambio = ViewChange::Sync {
-                    sync: self.vista_sincronizacion(),
+                .min(cap);
+                let change = ViewChange::Sync {
+                    sync: self.vista_sync(),
                 };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.applied(), vec![self.parche(vec![change])])
             }
             // What it does not understand is SWALLOWED: a panel that lets
             // keys through is not a screen.
-            _ => (self.aplicada(), Vec::new()),
+            _ => (self.applied(), Vec::new()),
         }
     }
 
@@ -414,14 +409,14 @@ impl Estado {
     /// plan deletes trees or leaves something with no way back. A plan that
     /// undoes in full and deletes nothing does not have it — always asking
     /// is what teaches people to answer without reading.
-    pub(super) fn pedir_aprobacion(
+    pub(super) fn request_approval(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let lang = self.lang;
-        let Some(sinc) = self.sincronizacion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(sinc) = self.sync.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         if !sinc.vista.can_approve() {
             return (
@@ -431,16 +426,16 @@ impl Estado {
                 Vec::new(),
             );
         }
-        let pregunta = sinc.vista.state.plan().and_then(|p| p.confirmation(lang));
-        match pregunta {
+        let question = sinc.vista.state.plan().and_then(|p| p.confirmation(lang));
+        match question {
             Some(c) => {
                 sinc.vista.confirming = Some(c);
-                let cambio = ViewChange::Sync {
-                    sync: self.vista_sincronizacion(),
+                let change = ViewChange::Sync {
+                    sync: self.vista_sync(),
                 };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.applied(), vec![self.parche(vec![change])])
             }
-            None => self.aplicar_plan(backend, buzon),
+            None => self.apply_plan(backend, buzon),
         }
     }
 
@@ -451,13 +446,13 @@ impl Estado {
     /// leaves a window in which a second `a` — or an `Escape` — fits between
     /// the request going out and the daemon answering, and this window reads
     /// events between keys, so it is genuinely reachable.
-    pub(super) fn aplicar_plan(
+    pub(super) fn apply_plan(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let epoca = self.sincronizacion.as_ref().map_or(0, |s| s.epoca);
-        let Some(hash) = self.sincronizacion.as_mut().and_then(|s| s.vista.submit()) else {
+        let epoch = self.sync.as_ref().map_or(0, |s| s.epoch);
+        let Some(hash) = self.sync.as_mut().and_then(|s| s.vista.submit()) else {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-sync-cannot-approve".to_owned(),
@@ -468,22 +463,24 @@ impl Estado {
         let backend2 = Arc::clone(backend);
         let buzon2 = buzon.clone();
         tokio::spawn(async move {
-            let resultado = backend2.sync_apply(hash).await;
-            match resultado {
+            let result = backend2.sync_apply(hash).await;
+            match result {
                 Ok(task) => {
                     let id = task.id;
                     let _ = buzon2
-                        .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
+                        .send(Message::TaskNew(Box::new((task, Vec::new(), None))))
                         .await;
                     let _ = buzon2
-                        .send(Mensaje::Fondo(Box::new(Fondo::SyncAplicando(epoca, id))))
+                        .send(Message::Background(Box::new(Background::SyncApplying(
+                            epoch, id,
+                        ))))
                         .await;
                 }
                 Err(e) => {
                     // Is it KNOWN that it did not write? Only if the daemon
                     // answered no. A dead transport leaves the request up in
                     // the air.
-                    let seguro = matches!(
+                    let safe = matches!(
                         e,
                         Error::PolicyDenied { .. }
                             | Error::Conflict { .. }
@@ -493,40 +490,40 @@ impl Estado {
                             | Error::Unsupported
                             | Error::EncodingLoss
                     );
-                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = buzon2.send(Message::TaskFailed(Box::new(e))).await;
                     // And the latch is released — when it should be —
                     // without this `a` stays dead forever over a plan nobody
                     // applied.
                     let _ = buzon2
-                        .send(Mensaje::Fondo(Box::new(Fondo::SyncNoAplicado(
-                            epoca, seguro,
+                        .send(Message::Background(Box::new(Background::SyncNoApplied(
+                            epoch, safe,
                         ))))
                         .await;
                 }
             }
         });
-        let cambio = ViewChange::Sync {
-            sync: self.vista_sincronizacion(),
+        let change = ViewChange::Sync {
+            sync: self.vista_sync(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// The daemon accepted the apply: the model switches to APPLYING.
-    pub(super) fn sync_aplicando(
+    pub(super) fn sync_applying(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         task: norte_proto::TaskId,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(sinc) = self.sincronizacion.as_mut().filter(|s| s.epoca == epoca) else {
+        let Some(sinc) = self.sync.as_mut().filter(|s| s.epoch == epoch) else {
             return Vec::new();
         };
         // The Task being followed switches to the APPLY's: it is what
         // `Escape` points at now, and the one the report has to be requested
         // from.
         sinc.task = task;
-        sinc.epoca_conexion = self.epoca_conexion;
+        sinc.epoch_connection = self.epoch_connection;
         if !sinc.vista.on_apply_started(task) {
             // The model DENIES it — the reader asked to stop in the window
             // during which the apply had no id yet — and then canceling it
@@ -534,12 +531,12 @@ impl Estado {
             // contract spells it out. Without this, the daemon kept
             // rewriting the destination of a plan the human cancelled.
             sinc.vista.on_apply_abandoned();
-            let (_, mut fuera) = self.cancelar(task.get());
-            fuera.extend(self.decir("msg-sync-cancelled-late"));
-            fuera.push(self.parche(vec![ViewChange::Sync {
-                sync: self.vista_sincronizacion(),
+            let (_, mut outside) = self.cancel(task.get());
+            outside.extend(self.say("msg-sync-cancelled-late"));
+            outside.push(self.parche(vec![ViewChange::Sync {
+                sync: self.vista_sync(),
             }]));
-            return fuera;
+            return outside;
         }
         // It could be born TERMINAL: the daemon completed it before
         // answering and its progress never fires. It is the same race the
@@ -548,119 +545,115 @@ impl Estado {
         let nacio = self
             .tasks
             .get(&task.get())
-            .map(|t| t.progreso.borrow().clone());
-        let mut fuera = vec![self.parche(vec![ViewChange::Sync {
-            sync: self.vista_sincronizacion(),
+            .map(|t| t.progress.borrow().clone());
+        let mut outside = vec![self.parche(vec![ViewChange::Sync {
+            sync: self.vista_sync(),
         }])];
         if let Some(p) = nacio.filter(|p| p.state.is_terminal()) {
-            self.pedir_informe_de_sync(&p, backend, buzon);
+            self.request_sync_report(&p, backend, buzon);
         }
-        fuera.extend(Vec::new());
-        fuera
+        outside.extend(Vec::new());
+        outside
     }
 
-    pub(super) fn tecla_en_comparacion(
+    pub(super) fn key_in_comparison(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if self.comparacion.is_none() {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        if self.comparison.is_none() {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         }
         // The filters' DIGITS do not go through the resolver: they are
         // positional — the nth of `CATEGORIES` — and there are no five verbs
         // to name them. It is the same decision as in the TUI.
         let digito = k.key.len() == 1 && k.key.chars().all(|c| ('1'..='5').contains(&c));
-        let verbo = if digito {
-            None
-        } else {
-            self.verbo_de_dialogo(k)
+        let verb = if digito { None } else { self.dialog_verb(k) };
+        let Some(c) = self.comparison.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(c) = self.comparacion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
-        };
-        match (verbo.as_deref(), k.key.as_str()) {
+        match (verb.as_deref(), k.key.as_str()) {
             (Some("dialog.cancel"), _) => {
                 if c.vista.cancel_requested {
                     let task = c.task;
                     c.abandonada
                         .store(true, std::sync::atomic::Ordering::SeqCst);
-                    self.comparacion = None;
+                    self.comparison = None;
                     if task.get() != 0 {
-                        self.cancelar(task.get());
+                        self.cancel(task.get());
                     }
                     return (
-                        self.aplicada(),
+                        self.applied(),
                         vec![self.parche(vec![ViewChange::Compare { compare: None }])],
                     );
                 }
                 c.vista.cancel_requested = true;
                 let task = c.task;
                 if task.get() != 0 {
-                    self.cancelar(task.get());
+                    self.cancel(task.get());
                 }
-                let cambio = ViewChange::Compare {
-                    compare: self.vista_comparacion(),
+                let change = ViewChange::Compare {
+                    compare: self.vista_comparison(),
                 };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.applied(), vec![self.parche(vec![change])])
             }
             (Some("dialog.pane"), _) => {
                 // Switching sides changes which pane `Enter` navigates to
                 // and which side the file keys operate on.
                 c.vista.pane.swap_active_side();
-                let cambio = ViewChange::Compare {
-                    compare: self.vista_comparacion(),
+                let change = ViewChange::Compare {
+                    compare: self.vista_comparison(),
                 };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.applied(), vec![self.parche(vec![change])])
             }
             (Some("dialog.confirm"), _) => {
                 let Some(id) = c.vista.pane.selected_id() else {
-                    return (self.aplicada(), Vec::new());
+                    return (self.applied(), Vec::new());
                 };
-                self.comparacion_activa(id, backend, buzon)
+                self.comparison_active(id, backend, buzon)
             }
             (Some(v @ ("dialog.up" | "dialog.down")), _) => {
-                let abajo = v == "dialog.down";
-                let visibles = c.vista.pane.visible_ids();
-                if visibles.is_empty() {
-                    return (self.aplicada(), Vec::new());
+                let down = v == "dialog.down";
+                let visible = c.vista.pane.visible_ids();
+                if visible.is_empty() {
+                    return (self.applied(), Vec::new());
                 }
                 let actual = c
                     .vista
                     .pane
                     .selected_id()
-                    .and_then(|id| visibles.iter().position(|v| *v == id))
+                    .and_then(|id| visible.iter().position(|v| *v == id))
                     .unwrap_or(0);
-                let destino = if abajo {
-                    (actual + 1).min(visibles.len() - 1)
+                let destino = if down {
+                    (actual + 1).min(visible.len() - 1)
                 } else {
                     actual.saturating_sub(1)
                 };
-                let id = visibles[destino];
+                let id = visible[destino];
                 c.vista.pane.select(id);
-                let cambio = ViewChange::Compare {
-                    compare: self.vista_comparacion(),
+                let change = ViewChange::Compare {
+                    compare: self.vista_comparison(),
                 };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.applied(), vec![self.parche(vec![change])])
             }
             // 1..5: the filters, in the categories' fixed order, same as in
             // the TUI.
             (_, d) if digito => {
                 let i = d.chars().next().and_then(|c| c.to_digit(10)).unwrap_or(1) as usize - 1;
                 let Some(cat) = norte_frontend::compare::CATEGORIES.get(i).copied() else {
-                    return (self.aplicada(), Vec::new());
+                    return (self.applied(), Vec::new());
                 };
                 c.vista.pane.toggle_filter(cat);
-                let cambio = ViewChange::Compare {
-                    compare: self.vista_comparacion(),
+                let change = ViewChange::Compare {
+                    compare: self.vista_comparison(),
                 };
-                (self.aplicada(), vec![self.parche(vec![cambio])])
+                (self.applied(), vec![self.parche(vec![change])])
             }
             // A key it does not understand is SWALLOWED just the same: a
             // panel that lets through what it does not understand is not a
             // screen, it is decoration.
-            _ => (self.aplicada(), Vec::new()),
+            _ => (self.applied(), Vec::new()),
         }
     }
 
@@ -669,86 +662,86 @@ impl Estado {
     ///
     /// Together and not four arms of the general dispatch: they are the same
     /// surface and none of them means anything without it.
-    pub(super) fn accion_de_comparacion(
+    pub(super) fn comparison_action(
         &mut self,
-        accion: &UiAction,
+        action: &UiAction,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        match accion {
-            UiAction::CompareSelectRow { id } => self.comparacion_selecciona(*id),
-            UiAction::CompareActivateRow { id } => self.comparacion_activa(*id, backend, buzon),
-            UiAction::CompareToggleFilter { category } => self.comparacion_filtra(category),
+        match action {
+            UiAction::CompareSelectRow { id } => self.comparison_selecciona(*id),
+            UiAction::CompareActivateRow { id } => self.comparison_active(*id, backend, buzon),
+            UiAction::CompareToggleFilter { category } => self.comparison_filters(category),
             UiAction::CompareSetVisibleRange { first, count } => {
-                self.comparacion_ventana(*first, *count)
+                self.comparison_window(*first, *count)
             }
             // The general dispatch only sends those four here.
-            _ => (Self::obsoleta(StaleAction::Modal), Vec::new()),
+            _ => (Self::stale(StaleAction::Modal), Vec::new()),
         }
     }
 
     /// Chooses a row from the differences panel.
-    pub(super) fn comparacion_selecciona(
+    pub(super) fn comparison_selecciona(
         &mut self,
         id: u64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(c) = self.comparacion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(c) = self.comparison.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         // `select` IGNORES an id that did not arrive, which is correct: the
         // alternative is a selection naming a nonexistent row.
         c.vista.pane.select(id);
         if c.vista.pane.selected_id() != Some(id) {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
-        let cambio = ViewChange::Compare {
-            compare: self.vista_comparacion(),
+        let change = ViewChange::Compare {
+            compare: self.vista_comparison(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Shows or hides a whole category.
-    pub(super) fn comparacion_filtra(
+    pub(super) fn comparison_filters(
         &mut self,
-        categoria: &str,
+        category: &str,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(c) = self.comparacion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(c) = self.comparison.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let Some(cat) = norte_frontend::compare::CATEGORIES
             .iter()
-            .find(|c| c.id() == categoria)
+            .find(|c| c.id() == category)
         else {
             // A category that does not exist is a renderer from another
             // version, not an order.
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         c.vista.pane.toggle_filter(*cat);
-        let cambio = ViewChange::Compare {
-            compare: self.vista_comparacion(),
+        let change = ViewChange::Compare {
+            compare: self.vista_comparison(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// The renderer says which window it paints.
-    pub(super) fn comparacion_ventana(
+    pub(super) fn comparison_window(
         &mut self,
-        primera: u64,
-        cuantas: u32,
+        first: u64,
+        how_many: u32,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(c) = self.comparacion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(c) = self.comparison.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        c.primera_visible = usize::try_from(primera).unwrap_or(0);
+        c.first_visible = usize::try_from(first).unwrap_or(0);
         // Capped: whatever the renderer says fits cannot make a patch carry
         // half a million rows.
-        c.ventana = usize::try_from(cuantas)
-            .unwrap_or(Self::VENTANA_COMPARACION)
+        c.window = usize::try_from(how_many)
+            .unwrap_or(Self::WINDOW_COMPARISON)
             .clamp(1, MAX_ROWS_PER_BATCH);
-        let cambio = ViewChange::Compare {
-            compare: self.vista_comparacion(),
+        let change = ViewChange::Compare {
+            compare: self.vista_comparison(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Opens the chosen row: navigates to the ACTIVE side's directory.
@@ -757,14 +750,14 @@ impl Estado {
     /// row if it is a directory, its parent if it is a file, and `None` when
     /// that side is empty — an orphan looked at from the side that does not
     /// have it — which does NOT fall back to the other side.
-    pub(super) fn comparacion_activa(
+    pub(super) fn comparison_active(
         &mut self,
         id: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(c) = self.comparacion.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(c) = self.comparison.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         c.vista.pane.select(id);
         let Some(destino) = c.vista.pane.navigation_target() else {
@@ -773,7 +766,7 @@ impl Estado {
                 ActionAck::Unavailable {
                     reason_key: "compare-no-target".to_owned(),
                 },
-                self.decir_con("compare-no-target", &[("side", &lado)]),
+                self.say_with("compare-no-target", &[("side", &lado)]),
             );
         };
         // The pane that navigates is the ACTIVE side's, not whichever has
@@ -781,24 +774,24 @@ impl Estado {
         // directory by pressing `Enter`. That slot is FOCUSED and navigation
         // goes through the usual path, the one that records the trail and
         // requests the listing.
-        if let Some(slot) = self.hueco_del_lado() {
+        if let Some(slot) = self.side_slot() {
             self.roles.set(RoleId::Active, SlotId(slot));
             self.reconcilia_roles();
         }
-        let mut salidas = self.navegar(&destino, Trail::Record, backend, buzon);
-        let cambio = ViewChange::Compare {
-            compare: self.vista_comparacion(),
+        let mut outputs = self.navigate(&destino, Trail::Record, backend, buzon);
+        let change = ViewChange::Compare {
+            compare: self.vista_comparison(),
         };
-        salidas.push(self.parche(vec![cambio]));
-        (self.aplicada(), salidas)
+        outputs.push(self.parche(vec![change]));
+        (self.applied(), outputs)
     }
 
     /// The slot corresponding to the comparison's ACTIVE side.
-    pub(super) fn hueco_del_lado(&self) -> Option<u32> {
-        let c = self.comparacion.as_ref()?;
+    pub(super) fn side_slot(&self) -> Option<u32> {
+        let c = self.comparison.as_ref()?;
         let izquierdo = u32::try_from(c.vista.left_pane).ok()?;
         match c.vista.pane.active_side() {
-            norte_proto::methods::Side::Right => self.hueco_destino().ok(),
+            norte_proto::methods::Side::Right => self.slot_dest().ok(),
             _ => Some(izquierdo),
         }
     }
@@ -808,16 +801,16 @@ impl Estado {
     /// The plan writes not a single byte: it says what it would do. What
     /// writes is `sync.apply`, and only against the hash this plan closes
     /// with.
-    pub(super) fn pedir_sincronizacion(
+    pub(super) fn request_sync(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // ONE at a time. Relaunching left the previous panel un-abandoned and
         // its Task uncancelled — the daemon kept walking a tree for a plan
         // that can no longer be seen — and, with a request in flight, the
         // second press killed both panels' one.
-        if self.sincronizacion.is_some() || self.sync_pedida.is_some() {
+        if self.sync.is_some() || self.sync_pedida.is_some() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-sync-already".to_owned(),
@@ -825,7 +818,7 @@ impl Estado {
                 Vec::new(),
             );
         }
-        let destino_slot = match self.hueco_destino() {
+        let dest_slot = match self.slot_dest() {
             Ok(d) => d,
             Err(reason_key) => {
                 return (
@@ -840,21 +833,21 @@ impl Estado {
         // local copy: two answers to "which of the two is rewritten" is the
         // cheapest bug to write and the most expensive to find, because both
         // produce a perfectly plausible plan.
-        let enfocado = self.hueco().pane.dir().clone();
-        let otro = self.huecos[&destino_slot].pane.dir().clone();
+        let focused = self.slot().pane.dir().clone();
+        let other = self.slots[&dest_slot].pane.dir().clone();
         // With the differences panel open the ACTIVE SIDE rules; without it,
         // the focused pane is the source. Both branches live in the shared
         // rule, and here only the data is passed to it.
-        let raices = norte_frontend::sync::sync_roots(
-            self.comparacion.as_ref().map(|c| &c.vista),
+        let roots = norte_frontend::sync::sync_roots(
+            self.comparison.as_ref().map(|c| &c.vista),
             &norte_frontend::sync::Panes {
-                focused_root: &enfocado,
+                focused_root: &focused,
                 focused_encoding: None,
-                other_root: &otro,
+                other_root: &other,
                 other_encoding: None,
             },
         );
-        let (origen, destino) = (raices.source.clone(), raices.dest.clone());
+        let (origen, destino) = (roots.source.clone(), roots.dest.clone());
         if origen == destino {
             // Overlapping roots: the daemon rejects it with
             // `OverlappingRoots` and creates no Task. This local shortcut is
@@ -868,27 +861,24 @@ impl Estado {
                 Vec::new(),
             );
         }
-        (
-            self.aplicada(),
-            self.lanzar_plan_de_sync(raices, backend, buzon),
-        )
+        (self.applied(), self.launch_sync_plan(roots, backend, buzon))
     }
 
     /// Enqueues `sync.plan` and hooks its event channel to the actor.
-    pub(super) fn lanzar_plan_de_sync(
+    pub(super) fn launch_sync_plan(
         &mut self,
-        raices: norte_frontend::sync::SyncRoots,
+        roots: norte_frontend::sync::SyncRoots,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         let norte_frontend::sync::SyncRoots {
             source: origen,
             dest: destino,
             source_encoding: origen_encoding,
             dest_encoding: destino_encoding,
-        } = raices;
-        self.epoca_busqueda += 1;
-        let epoca = self.epoca_busqueda;
+        } = roots;
+        self.epoch_search += 1;
+        let epoch = self.epoch_search;
         let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
         // `Update` and not `Mirror`: the mode that does NOT delete is the
         // one that can be the default. Choosing mirror is a decision made on
@@ -918,9 +908,11 @@ impl Estado {
                     // plan — or overlapping roots — used to leave
                     // `sync_pedida` set forever and the next attempt refused
                     // itself.
-                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = buzon2.send(Message::TaskFailed(Box::new(e))).await;
                     let _ = buzon2
-                        .send(Mensaje::Fondo(Box::new(Fondo::PlanDeSyncFallido(epoca))))
+                        .send(Message::Background(Box::new(
+                            Background::PlanDeSyncFallido(epoch),
+                        )))
                         .await;
                     return;
                 }
@@ -928,10 +920,12 @@ impl Estado {
             let id = task.id;
             let cancel = Arc::clone(&task.cancel);
             let _ = buzon2
-                .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
+                .send(Message::TaskNew(Box::new((task, Vec::new(), None))))
                 .await;
             let _ = buzon2
-                .send(Mensaje::Fondo(Box::new(Fondo::PlanDeSyncVivo(epoca, id))))
+                .send(Message::Background(Box::new(Background::PlanDeSyncVivo(
+                    epoch, id,
+                ))))
                 .await;
             if abandonada2.load(std::sync::atomic::Ordering::SeqCst) {
                 cancel();
@@ -943,8 +937,8 @@ impl Estado {
                     return;
                 }
                 if buzon2
-                    .send(Mensaje::Fondo(Box::new(Fondo::EventoDeSync(
-                        epoca,
+                    .send(Message::Background(Box::new(Background::SyncEvent(
+                        epoch,
                         Box::new(ev),
                     ))))
                     .await
@@ -958,15 +952,15 @@ impl Estado {
         // shared model uses it to discard whatever comes from another plan,
         // and with a filler id it also discarded its own — the panel stayed
         // at zero steps and the plan closed "cannot approve".
-        self.sincronizacion = None;
+        self.sync = None;
         self.sync_pedida = Some(SyncPedida {
-            epoca,
+            epoch,
             abandonada,
             modo,
-            origen,
-            destino,
-            origen_encoding,
-            destino_encoding,
+            source: origen,
+            dest: destino,
+            source_encoding: origen_encoding,
+            dest_encoding: destino_encoding,
         });
         Vec::new()
     }
@@ -978,82 +972,82 @@ impl Estado {
     /// discard whatever comes from another plan; building it earlier, with a
     /// filler id, made it discard its own batches too and the panel stayed
     /// at zero steps and closed "cannot approve".
-    pub(super) fn abrir_panel_de_sync(
+    pub(super) fn open_sync_panel(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         task: norte_proto::TaskId,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         // FILTER before TAKING: an unconditional `take()` swept away a new
         // request when an old one's Task answered, and then no panel opened
         // at all while two traversals kept walking two trees on the daemon.
-        if self.sync_pedida.as_ref().is_none_or(|p| p.epoca != epoca) {
+        if self.sync_pedida.as_ref().is_none_or(|p| p.epoch != epoch) {
             return Vec::new();
         }
         let Some(pedida) = self.sync_pedida.take() else {
             return Vec::new();
         };
-        self.sincronizacion = Some(Sincronizacion {
-            epoca,
+        self.sync = Some(Sync {
+            epoch,
             task,
             abandonada: pedida.abandonada,
             vista: norte_frontend::sync::SyncView::new(
                 task,
                 pedida.modo,
-                pedida.origen,
-                pedida.destino,
+                pedida.source,
+                pedida.dest,
                 // Each side's reinterpretations, exactly as the shared rule
                 // decided them: there are TWO because the two panes are two
                 // locations, and swapping them would name the file the
                 // write lands on with different bytes.
-                pedida.origen_encoding,
-                pedida.destino_encoding,
+                pedida.source_encoding,
+                pedida.dest_encoding,
             ),
-            primera_visible: 0,
-            ventana: Self::VENTANA_COMPARACION,
-            epoca_conexion: self.epoca_conexion,
-            informe_pedido: false,
+            first_visible: 0,
+            window: Self::WINDOW_COMPARISON,
+            epoch_connection: self.epoch_connection,
+            report_requested: false,
         });
-        let cambio = ViewChange::Sync {
-            sync: self.vista_sincronizacion(),
+        let change = ViewChange::Sync {
+            sync: self.vista_sync(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
-    pub(super) fn aplicar_evento_de_sync(
+    pub(super) fn apply_sync_event(
         &mut self,
-        epoca: u64,
+        epoch: u64,
         ev: norte_client::SyncPlanEvent,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(sinc) = self.sincronizacion.as_mut() else {
+        let Some(sinc) = self.sync.as_mut() else {
             return Vec::new();
         };
-        if sinc.epoca != epoca {
+        if sinc.epoch != epoch {
             return Vec::new();
         }
         // The SHARED model decides what gets in: it discards whatever comes
         // from another plan by its `task_id`, and it is the one that knows
         // when the plan closes.
-        let cambio = match ev {
-            norte_client::SyncPlanEvent::Steps(lote) => sinc.vista.state.on_steps(lote),
+        let change = match ev {
+            norte_client::SyncPlanEvent::Steps(batch) => sinc.vista.state.on_steps(batch),
             norte_client::SyncPlanEvent::Done(done) => sinc.vista.state.on_plan_done(done),
         };
-        if !cambio {
+        if !change {
             // That it was discarded IS STATED: a batch rejected after
             // closing is a violation of the daemon's contract, and staying
             // quiet about it hides it.
-            tracing::warn!(epoca, "a plan event was discarded");
+            tracing::warn!(epoch, "a plan event was discarded");
             return Vec::new();
         }
-        let cambio = ViewChange::Sync {
-            sync: self.vista_sincronizacion(),
+        let change = ViewChange::Sync {
+            sync: self.vista_sync(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
     /// The window's steps, projected by the SHARED model.
-    pub(super) fn pasos_proyectados(
+    pub(super) fn steps_proyectados(
         pasos: &[norte_proto::methods::SyncStep],
-        papelera: norte_proto::methods::DestTrash,
+        trash: norte_proto::methods::DestTrash,
         enc: norte_frontend::sync::SyncEncodings,
         lang: norte_i18n::Lang,
     ) -> Vec<crate::dto::SyncStepView> {
@@ -1064,7 +1058,7 @@ impl Estado {
                 // does, why, whether undo brings it back — which NEVER comes
                 // straight from `reversal`, because that is half an answer —
                 // and both spellings when there are two.
-                let c = norte_frontend::sync::render_step(paso, papelera, enc);
+                let c = norte_frontend::sync::render_step(paso, trash, enc);
                 crate::dto::SyncStepView {
                     id: c.id,
                     kind: clamp_display(norte_frontend::sync::step_label(paso.kind, lang)),
@@ -1075,8 +1069,8 @@ impl Estado {
                         clamp_display(norte_frontend::sync::reason_label(r, lang))
                     }),
                     undo: clamp_display(norte_frontend::sync::undo_label(c.undo, lang)),
-                    anchor: Self::nombre_de_ancla(c.anchor),
-                    anchor_label: Self::etiqueta_de_ancla(c.anchor, lang),
+                    anchor: Self::anchor_name(c.anchor),
+                    anchor_label: Self::anchor_label(c.anchor, lang),
                     path: clamp_display(c.rel.text.clone()),
                     path_hostile: c.rel.hostile,
                     dest_path: c.dest_rel.as_ref().map(|d| clamp_display(d.text.clone())),
@@ -1088,12 +1082,12 @@ impl Estado {
     }
 
     /// The report's failures, once there is a report.
-    pub(super) fn fallos_proyectados(
-        estado: &norte_frontend::sync::SyncState,
+    pub(super) fn failures_proyectados(
+        state: &norte_frontend::sync::SyncState,
         enc: norte_frontend::sync::SyncEncodings,
         lang: norte_i18n::Lang,
     ) -> Vec<crate::dto::SyncFailureView> {
-        let norte_frontend::sync::SyncState::Applied(a) = estado else {
+        let norte_frontend::sync::SyncState::Applied(a) = state else {
             return Vec::new();
         };
         a.report()
@@ -1105,8 +1099,8 @@ impl Estado {
                     cause: clamp_display(norte_frontend::sync::failure_cause_label(f.cause, lang)),
                     path: clamp_display(c.rel.text.clone()),
                     path_hostile: c.rel.hostile,
-                    anchor: Self::nombre_de_ancla(c.anchor),
-                    anchor_label: Self::etiqueta_de_ancla(c.anchor, lang),
+                    anchor: Self::anchor_name(c.anchor),
+                    anchor_label: Self::anchor_label(c.anchor, lang),
                 }
             })
             .collect()
@@ -1116,7 +1110,7 @@ impl Estado {
     ///
     /// `either` is stated: on a panel where an unqualified path means "from
     /// the source", staying quiet about it asserts the source.
-    pub(super) fn nombre_de_ancla(anchor: norte_frontend::sync::RelAnchor) -> String {
+    pub(super) fn anchor_name(anchor: norte_frontend::sync::RelAnchor) -> String {
         match anchor {
             norte_frontend::sync::RelAnchor::Dest => "dest".to_owned(),
             norte_frontend::sync::RelAnchor::Source => "source".to_owned(),
@@ -1131,7 +1125,7 @@ impl Estado {
     /// and a `data-` no style reads does not paint it — `either` stayed
     /// silent, which on a panel where an unqualified path means "from the
     /// source" is asserting the source.
-    pub(super) fn etiqueta_de_ancla(
+    pub(super) fn anchor_label(
         anchor: norte_frontend::sync::RelAnchor,
         lang: norte_i18n::Lang,
     ) -> String {
@@ -1139,31 +1133,31 @@ impl Estado {
     }
 
     /// The synchronization panel's projection, capped to its window.
-    pub(super) fn vista_sincronizacion(&self) -> Option<crate::dto::SyncView> {
-        let sinc = self.sincronizacion.as_ref()?;
+    pub(super) fn vista_sync(&self) -> Option<crate::dto::SyncView> {
+        let sinc = self.sync.as_ref()?;
         let v = &sinc.vista;
-        let (origen, origen_hostil) = norte_frontend::path_display(&v.source_root);
-        let (destino, destino_hostil) = norte_frontend::path_display(&v.dest_root);
+        let (origen, source_hostile) = norte_frontend::path_display(&v.source_root);
+        let (destino, dest_hostile) = norte_frontend::path_display(&v.dest_root);
         let pasos = v.steps();
-        let primera = sinc.primera_visible.min(pasos.len());
-        let hasta = primera.saturating_add(sinc.ventana).min(pasos.len());
-        let papelera = v.dest_trash();
+        let first = sinc.first_visible.min(pasos.len());
+        let until = first.saturating_add(sinc.window).min(pasos.len());
+        let trash = v.dest_trash();
         let enc = v.encodings();
-        let filas = Self::pasos_proyectados(
-            pasos.get(primera..hasta).unwrap_or_default(),
-            papelera,
+        let filas = Self::steps_proyectados(
+            pasos.get(first..until).unwrap_or_default(),
+            trash,
             enc,
             self.lang,
         );
-        let fallos = Self::fallos_proyectados(&v.state, enc, self.lang);
+        let fallos = Self::failures_proyectados(&v.state, enc, self.lang);
         Some(crate::dto::SyncView {
             source: crate::dto::DialogLine {
                 text: clamp_display(origen),
-                hostile: origen_hostil,
+                hostile: source_hostile,
             },
             dest: crate::dto::DialogLine {
                 text: clamp_display(destino),
-                hostile: destino_hostil,
+                hostile: dest_hostile,
             },
             // The mode, by the SHARED label. Falling back to "update" for a
             // mode this build cannot name would assert the SAFE half of what
@@ -1171,7 +1165,7 @@ impl Estado {
             // unknown, and the catalog itself forbids that in writing.
             mode: clamp_display(norte_frontend::sync::mode_label(v.mode, self.lang)),
             steps: filas,
-            first_visible: primera as u64,
+            first_visible: first as u64,
             // The RETAINED ones plus what the model dropped: without adding
             // them, this number and the status line's contradict each other
             // on a large plan, and both cross in the same message.
@@ -1256,7 +1250,7 @@ impl Estado {
 
     /// How many comparison rows — or a plan's steps — get through if the
     /// renderer has not said its window yet.
-    pub(super) const VENTANA_COMPARACION: usize = 200;
+    pub(super) const WINDOW_COMPARISON: usize = 200;
 
     /// Launches the two panes' comparison and opens the differences panel.
     ///
@@ -1264,12 +1258,12 @@ impl Estado {
     /// the SAME path as a transfer: two ways of deciding "the other pane"
     /// are two places they can drift apart, and with several candidates and
     /// none designated it asks to choose instead of breaking the tie.
-    pub(super) fn pedir_comparacion(
+    pub(super) fn request_comparison(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let derecha = match self.directorio_destino() {
+        let derecha = match self.directory_dest() {
             Ok(d) => d,
             Err(reason_key) => {
                 return (
@@ -1280,7 +1274,7 @@ impl Estado {
                 );
             }
         };
-        let izquierda = self.hueco().pane.dir().clone();
+        let izquierda = self.slot().pane.dir().clone();
         if izquierda == derecha {
             // The daemon would reject it just the same (`-32602`), and
             // opening a panel that promises an impossible answer is worse
@@ -1293,8 +1287,8 @@ impl Estado {
             );
         }
         (
-            self.aplicada(),
-            self.lanzar_comparacion(izquierda, derecha, backend, buzon),
+            self.applied(),
+            self.launch_comparison(izquierda, derecha, backend, buzon),
         )
     }
 
@@ -1310,44 +1304,44 @@ impl Estado {
     /// There are no affected directories to refresh: this writes nothing.
     /// Its result IS its terminal progress, which the board already knows
     /// how to read.
-    pub(super) fn contar_tamano(
+    pub(super) fn count_size(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // `marked_paths` falls back to the cursor when there are no marks:
         // the same source of "what this operates on" a transfer uses.
-        let paths: Vec<VPath> = self.hueco().pane.marked_paths();
+        let paths: Vec<VPath> = self.slot().pane.marked_paths();
         if paths.is_empty() {
             return (
                 ActionAck::Unavailable {
                     reason_key: "msg-nothing-selected".to_owned(),
                 },
-                self.decir("msg-nothing-selected"),
+                self.say("msg-nothing-selected"),
             );
         }
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let mensaje = match backend.dir_size(paths).await {
-                Ok(task) => Mensaje::TaskNueva(Box::new((task, Vec::new(), None))),
-                Err(e) => Mensaje::TaskFallida(Box::new(e)),
+            let message = match backend.dir_size(paths).await {
+                Ok(task) => Message::TaskNew(Box::new((task, Vec::new(), None))),
+                Err(e) => Message::TaskFailed(Box::new(e)),
             };
-            let _ = buzon.send(mensaje).await;
+            let _ = buzon.send(message).await;
         });
-        (self.aplicada(), Vec::new())
+        (self.applied(), Vec::new())
     }
 
     /// Enqueues `fs.compare` and hooks its row channel to the actor.
-    pub(super) fn lanzar_comparacion(
+    pub(super) fn launch_comparison(
         &mut self,
         izquierda: VPath,
         derecha: VPath,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.epoca_busqueda += 1;
-        let epoca = self.epoca_busqueda;
+        self.epoch_search += 1;
+        let epoch = self.epoch_search;
         let abandonada = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let params = norte_proto::methods::FsCompareParams {
             left: izquierda.clone(),
@@ -1368,8 +1362,8 @@ impl Estado {
             // which only looks.
             descend_orphans: None,
         };
-        self.comparacion = Some(Comparacion {
-            epoca,
+        self.comparison = Some(Comparison {
+            epoch,
             task: norte_proto::TaskId::new(0),
             abandonada: Arc::clone(&abandonada),
             vista: norte_frontend::compare::CompareView::new(
@@ -1379,12 +1373,12 @@ impl Estado {
                 // that decides which pane an `Enter` navigates to. Without
                 // it, whoever is looking at the right side lost their left
                 // directory to go see the right one's.
-                self.activo() as usize,
+                self.active() as usize,
                 None,
                 None,
             ),
-            primera_visible: 0,
-            ventana: Self::VENTANA_COMPARACION,
+            first_visible: 0,
+            window: Self::WINDOW_COMPARISON,
         });
         let backend2 = Arc::clone(backend);
         let buzon2 = buzon.clone();
@@ -1392,17 +1386,19 @@ impl Estado {
             let (task, mut rx) = match backend2.compare(params).await {
                 Ok(par) => par,
                 Err(e) => {
-                    let _ = buzon2.send(Mensaje::TaskFallida(Box::new(e))).await;
+                    let _ = buzon2.send(Message::TaskFailed(Box::new(e))).await;
                     return;
                 }
             };
             let id = task.id;
             let cancel = Arc::clone(&task.cancel);
             let _ = buzon2
-                .send(Mensaje::TaskNueva(Box::new((task, Vec::new(), None))))
+                .send(Message::TaskNew(Box::new((task, Vec::new(), None))))
                 .await;
             let _ = buzon2
-                .send(Mensaje::Fondo(Box::new(Fondo::ComparacionViva(epoca, id))))
+                .send(Message::Background(Box::new(Background::ComparisonViva(
+                    epoch, id,
+                ))))
                 .await;
             // The view may have closed while the daemon was accepting the
             // Task: in that window the actor has nobody to cancel, so
@@ -1411,15 +1407,15 @@ impl Estado {
                 cancel();
                 return;
             }
-            while let Some(lote) = rx.recv().await {
+            while let Some(batch) = rx.recv().await {
                 if abandonada.load(std::sync::atomic::Ordering::SeqCst) {
                     cancel();
                     return;
                 }
                 if buzon2
-                    .send(Mensaje::Fondo(Box::new(Fondo::FilasComparadas(
-                        epoca,
-                        Box::new(lote),
+                    .send(Message::Background(Box::new(Background::RowsComparadas(
+                        epoch,
+                        Box::new(batch),
                     ))))
                     .await
                     .is_err()
@@ -1428,53 +1424,53 @@ impl Estado {
                 }
             }
         });
-        let cambio = ViewChange::Compare {
-            compare: self.vista_comparacion(),
+        let change = ViewChange::Compare {
+            compare: self.vista_comparison(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
     /// A batch of compared rows. Matches by EPOCH, like search hits.
-    pub(super) fn aplicar_filas_comparadas(
+    pub(super) fn apply_rows_comparadas(
         &mut self,
-        epoca: u64,
-        lote: norte_proto::methods::CompareRowsBatch,
+        epoch: u64,
+        batch: norte_proto::methods::CompareRowsBatch,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Some(c) = self.comparacion.as_mut() else {
+        let Some(c) = self.comparison.as_mut() else {
             return Vec::new();
         };
-        if c.epoca != epoca {
+        if c.epoch != epoch {
             return Vec::new();
         }
         // The SHARED pane is the one that counts, filters and selects: here
         // it is only given the rows.
-        c.vista.pane.extend(lote.rows);
-        let cambio = ViewChange::Compare {
-            compare: self.vista_comparacion(),
+        c.vista.pane.extend(batch.rows);
+        let change = ViewChange::Compare {
+            compare: self.vista_comparison(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
     /// The differences panel's projection, capped to its window.
-    pub(super) fn vista_comparacion(&self) -> Option<crate::dto::CompareView> {
+    pub(super) fn vista_comparison(&self) -> Option<crate::dto::CompareView> {
         use norte_frontend::compare::{Category, cells_for};
 
-        let c = self.comparacion.as_ref()?;
-        let ahora = ahora_ms();
+        let c = self.comparison.as_ref()?;
+        let now = now_ms();
         let (izq, izq_hostil) = norte_frontend::path_display(&c.vista.left_root);
         let (der, der_hostil) = norte_frontend::path_display(&c.vista.right_root);
-        let visibles: Vec<&norte_proto::methods::CompareRow> = c.vista.pane.visible().collect();
-        let primera = c.primera_visible.min(visibles.len());
-        let hasta = primera.saturating_add(c.ventana).min(visibles.len());
-        let filas = visibles
-            .get(primera..hasta)
+        let visible: Vec<&norte_proto::methods::CompareRow> = c.vista.pane.visible().collect();
+        let first = c.first_visible.min(visible.len());
+        let until = first.saturating_add(c.window).min(visible.len());
+        let filas = visible
+            .get(first..until)
             .unwrap_or_default()
             .iter()
             .map(|r| {
                 // The cells are composed by the SHARED model: the masked
                 // names with their flag, and the two glyphs in the middle.
                 // Neither the pairing nor the verdict is recomputed here.
-                let celdas = cells_for(r, None, None);
+                let cells = cells_for(r, None, None);
                 let cara = |f: Option<&norte_frontend::compare::RowFace>| {
                     f.map(|f| crate::dto::CompareFaceView {
                         name: clamp_display(f.name.clone()),
@@ -1489,7 +1485,7 @@ impl Estado {
                                 norte_frontend::columns::format_mtime_in(
                                     ms,
                                     norte_frontend::columns::TimeFormat::Iso,
-                                    ahora,
+                                    now,
                                     self.lang,
                                 )
                             })
@@ -1514,8 +1510,8 @@ impl Estado {
                     reason: r.reason.map(|x| {
                         clamp_display(norte_frontend::compare::reason_label(x, self.lang))
                     }),
-                    left: cara(celdas.left.as_ref()),
-                    right: cara(celdas.right.as_ref()),
+                    left: cara(cells.left.as_ref()),
+                    right: cara(cells.right.as_ref()),
                     paired_under: norte_frontend::compare::paired_under_label(
                         r.paired_under,
                         self.lang,
@@ -1539,8 +1535,8 @@ impl Estado {
             right: clamp_display(der),
             right_hostile: der_hostil,
             rows: filas,
-            first_visible: primera as u64,
-            total: visibles.len() as u64,
+            first_visible: first as u64,
+            total: visible.len() as u64,
             selected: c.vista.pane.selected_id(),
             filters: filtros,
             // The phrase is composed by the SHARED model, and it is not a

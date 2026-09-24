@@ -83,15 +83,15 @@ impl Processes {
     /// use norte_frontend::processes::Processes;
     /// let mut p = Processes::default();
     /// p.mover(1, &[10, 11, 12]);
-    /// assert_eq!(p.fila(&[10, 11, 12]), Some(1));
+    /// assert_eq!(p.row(&[10, 11, 12]), Some(1));
     /// // The 10 expires, and it was ABOVE: the chosen one is still the 11.
-    /// assert_eq!(p.fila(&[11, 12]), Some(0));
+    /// assert_eq!(p.row(&[11, 12]), Some(0));
     /// // And if the chosen one leaves, the clamped position wins.
-    /// assert_eq!(p.fila(&[12]), Some(0));
-    /// assert_eq!(p.fila(&[]), None);
+    /// assert_eq!(p.row(&[12]), Some(0));
+    /// assert_eq!(p.row(&[]), None);
     /// ```
     #[must_use]
-    pub fn fila(&self, ids: &[u64]) -> Option<usize> {
+    pub fn row(&self, ids: &[u64]) -> Option<usize> {
         if ids.is_empty() {
             return None;
         }
@@ -105,19 +105,19 @@ impl Processes {
 
     /// The same, but `0` with an empty board, to index without a branch.
     ///
-    /// The difference from [`Self::fila`] is not cosmetic, and that is why
+    /// The difference from [`Self::row`] is not cosmetic, and that is why
     /// there are two: what crosses the bridge is the optional one, because an
     /// index with no row behind it paints a highlight over nothing.
     ///
     /// ```
     /// use norte_frontend::processes::Processes;
     /// let p = Processes::default();
-    /// assert_eq!(p.fila_o_cero(&[]), 0);
-    /// assert_eq!(p.fila(&[]), None);
+    /// assert_eq!(p.row_or_zero(&[]), 0);
+    /// assert_eq!(p.row(&[]), None);
     /// ```
     #[must_use]
-    pub fn fila_o_cero(&self, ids: &[u64]) -> usize {
-        self.fila(ids).unwrap_or(0)
+    pub fn row_or_zero(&self, ids: &[u64]) -> usize {
+        self.row(ids).unwrap_or(0)
     }
 
     /// Moves up one row.
@@ -127,7 +127,7 @@ impl Processes {
     /// let mut p = Processes::default();
     /// p.mover(2, &[10, 11, 12]);
     /// p.up(&[10, 11, 12]);
-    /// assert_eq!(p.fila(&[10, 11, 12]), Some(1));
+    /// assert_eq!(p.row(&[10, 11, 12]), Some(1));
     /// ```
     pub fn up(&mut self, ids: &[u64]) {
         self.mover(-1, ids);
@@ -141,7 +141,7 @@ impl Processes {
     /// p.down(&[10, 11]);
     /// p.down(&[10, 11]);
     /// p.down(&[10, 11]);
-    /// assert_eq!(p.fila(&[10, 11]), Some(1), "does not go past the bottom");
+    /// assert_eq!(p.row(&[10, 11]), Some(1), "does not go past the bottom");
     /// ```
     pub fn down(&mut self, ids: &[u64]) {
         self.mover(1, ids);
@@ -158,14 +158,14 @@ impl Processes {
     /// use norte_frontend::processes::Processes;
     /// let mut p = Processes::default();
     /// p.mover(10, &[10, 11, 12, 13]);
-    /// assert_eq!(p.fila(&[10, 11, 12, 13]), Some(3));
+    /// assert_eq!(p.row(&[10, 11, 12, 13]), Some(3));
     /// p.mover(3, &[]);
-    /// assert_eq!(p.fila(&[10, 11, 12, 13]), Some(3), "with no rows it is not forgotten");
+    /// assert_eq!(p.row(&[10, 11, 12, 13]), Some(3), "with no rows it is not forgotten");
     /// p.mover(-10, &[10, 11, 12, 13]);
-    /// assert_eq!(p.fila(&[10, 11, 12, 13]), Some(0));
+    /// assert_eq!(p.row(&[10, 11, 12, 13]), Some(0));
     /// ```
     pub fn mover(&mut self, delta: i64, ids: &[u64]) {
-        let Some(current) = self.fila(ids) else {
+        let Some(current) = self.row(ids) else {
             return;
         };
         let current = i64::try_from(current).unwrap_or(i64::MAX);
@@ -188,14 +188,14 @@ mod tests {
     fn expiring_a_row_from_above_does_not_change_the_chosen_task() {
         let mut p = Processes::default();
         p.mover(1, &[10, 11, 12, 13]);
-        assert_eq!(p.fila(&[10, 11, 12, 13]), Some(1));
+        assert_eq!(p.row(&[10, 11, 12, 13]), Some(1));
         assert_eq!(
-            p.fila(&[11, 12, 13]),
+            p.row(&[11, 12, 13]),
             Some(0),
             "the 11 is still the 11, now on a different row"
         );
         assert_eq!(
-            p.fila(&[12, 13]),
+            p.row(&[12, 13]),
             Some(1),
             "without the 11, the remembered position wins, which was 1"
         );
@@ -207,14 +207,14 @@ mod tests {
         for _ in 0..3 {
             p.down(&[10, 11]);
         }
-        assert_eq!(p.fila(&[10, 11]), Some(1));
+        assert_eq!(p.row(&[10, 11]), Some(1));
     }
 
     #[test]
     fn the_cursor_does_not_go_past_the_top() {
         let mut p = Processes::default();
         p.up(&[10, 11, 12]);
-        assert_eq!(p.fila(&[10, 11, 12]), Some(0));
+        assert_eq!(p.row(&[10, 11, 12]), Some(0));
     }
 
     /// With no rows there is no valid row, and this is what avoids the index
@@ -222,8 +222,8 @@ mod tests {
     #[test]
     fn no_rows_means_no_row() {
         let p = Processes::default();
-        assert_eq!(p.fila(&[]), None);
-        assert_eq!(p.fila_o_cero(&[]), 0);
+        assert_eq!(p.row(&[]), None);
+        assert_eq!(p.row_or_zero(&[]), 0);
     }
 
     /// The position is REMEMBERED when the chosen one is no longer there: if
@@ -234,14 +234,14 @@ mod tests {
         let mut p = Processes::default();
         let all = [10, 11, 12, 13, 14, 15];
         p.mover(4, &all);
-        assert_eq!(p.fila(&all), Some(4));
+        assert_eq!(p.row(&all), Some(4));
         assert_eq!(
-            p.fila(&[10, 11]),
+            p.row(&[10, 11]),
             Some(1),
             "clamped while there are two rows"
         );
         assert_eq!(
-            p.fila(&all),
+            p.row(&all),
             Some(4),
             "and it returns once there is room again"
         );
@@ -259,10 +259,10 @@ mod tests {
         p.mover(8, &all);
         // Both the ones above AND the chosen one leave: the clamped position wins.
         let remaining = [100, 101, 102];
-        assert_eq!(p.fila(&remaining), Some(2));
+        assert_eq!(p.row(&remaining), Some(2));
         p.up(&remaining);
         assert_eq!(
-            p.fila(&remaining),
+            p.row(&remaining),
             Some(1),
             "moves up from there, not from 8"
         );
@@ -276,6 +276,6 @@ mod tests {
         p.mover(2, &[10, 11, 12]);
         p.mover(3, &[]);
         p.up(&[]);
-        assert_eq!(p.fila(&[10, 11, 12]), Some(2));
+        assert_eq!(p.row(&[10, 11, 12]), Some(2));
     }
 }

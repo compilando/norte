@@ -7,25 +7,25 @@ use super::*;
 
 /// A host with whichever splash mode is requested.
 ///
-/// The other test constructors fix `ajustes_de_prueba()` internally, and
+/// The other test constructors fix `test_settings()` internally, and
 /// here what is being tested IS the configuration key: `brief` takes itself
 /// down, `home` stays until someone touches it, and `off` puts up nothing.
 async fn host_con_splash(
-    backend: Arc<Falso>,
+    backend: Arc<Fake>,
     mode: norte_config::load::SplashMode,
 ) -> (UiHost, norte_ui_host::ViewSnapshot) {
-    let mut settings = norte_ui_host::ajustes_por_defecto();
+    let mut settings = norte_ui_host::default_settings();
     settings.common.ui_parent_entry = Some(false);
     settings.common.ui_chrome.splash = Some(mode);
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
         settings,
@@ -33,8 +33,8 @@ async fn host_con_splash(
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -44,10 +44,10 @@ async fn host_con_splash(
 /// `off` puts up nothing: the key is honored, not negotiated.
 #[tokio::test]
 async fn off_puts_up_no_screen() {
-    let (h, _snap) = host_con_splash(arbol(), norte_config::load::SplashMode::Off).await;
+    let (h, _snap) = host_con_splash(fake_tree(), norte_config::load::SplashMode::Off).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SplashOpen).await.expect("host alive");
-    let snap = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
+    let snap = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
     assert!(snap.splash.is_none(), "with `splash = off` nothing goes up");
 }
 
@@ -60,10 +60,10 @@ async fn off_puts_up_no_screen() {
 /// pressed a key.
 #[tokio::test]
 async fn brief_says_how_much_time_is_left() {
-    let (h, _snap) = host_con_splash(arbol(), norte_config::load::SplashMode::Brief).await;
+    let (h, _snap) = host_con_splash(fake_tree(), norte_config::load::SplashMode::Brief).await;
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SplashOpen).await.expect("host alive");
-    let v = crate::sync::siguiente_foto_tras_resync(&h, &mut sub)
+    let v = crate::sync::next_snapshot_after_resync(&h, &mut sub)
         .await
         .splash
         .expect("went up");
@@ -83,28 +83,28 @@ async fn brief_says_how_much_time_is_left() {
 /// be acting on something the reader is not looking at.
 #[tokio::test]
 async fn any_key_takes_it_down_and_never_reaches_the_listing() {
-    let (h, snap) = host_con_splash(arbol(), norte_config::load::SplashMode::Home).await;
-    let before = listado(&snap).path_display.clone();
+    let (h, snap) = host_con_splash(fake_tree(), norte_config::load::SplashMode::Home).await;
+    let before = listing(&snap).path_display.clone();
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SplashOpen).await.expect("host alive");
     assert!(
-        crate::sync::siguiente_foto_tras_resync(&h, &mut sub)
+        crate::sync::next_snapshot_after_resync(&h, &mut sub)
             .await
             .splash
             .is_some(),
         "went up"
     );
 
-    h.dispatch(tecla("j")).await.expect("host alive");
-    let snap2 = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
+    h.dispatch(press("j")).await.expect("host alive");
+    let snap2 = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
     assert!(snap2.splash.is_none(), "the key took it down");
     assert_eq!(
-        listado(&snap2).cursor,
-        listado(&snap).cursor,
+        listing(&snap2).cursor,
+        listing(&snap).cursor,
         "and the key did NOT move the listing's cursor behind it"
     );
     assert_eq!(
-        listado(&snap2).path_display,
+        listing(&snap2).path_display,
         before,
         "nor navigated anywhere"
     );
@@ -116,10 +116,10 @@ async fn any_key_takes_it_down_and_never_reaches_the_listing() {
 /// the rows would be an offer that cannot be accepted.
 #[tokio::test]
 async fn at_home_a_digit_opens_its_row() {
-    let (h, snap) = host_con_splash(arbol(), norte_config::load::SplashMode::Home).await;
+    let (h, snap) = host_con_splash(fake_tree(), norte_config::load::SplashMode::Home).await;
     // A visit first: the list comes from where you USUALLY go, and a
     // freshly started host has gone nowhere.
-    let b = listado(&snap);
+    let b = listing(&snap);
     let docs = b
         .rows
         .iter()
@@ -135,12 +135,12 @@ async fn at_home_a_digit_opens_its_row() {
     asentar().await;
 
     // The subscription goes AFTER navigating: the navigation's envelopes
-    // stay queued, and `siguiente_foto` would return a snapshot from before
+    // stay queued, and `next_snapshot` would return a snapshot from before
     // the screen went up — green or red depending on what the landing left
     // behind, which is a test that proves nothing.
     let mut sub = h.subscribe();
     h.dispatch(UiAction::SplashOpen).await.expect("host alive");
-    let v = crate::sync::siguiente_foto_tras_resync(&h, &mut sub)
+    let v = crate::sync::next_snapshot_after_resync(&h, &mut sub)
         .await
         .splash
         .expect("went up");
@@ -152,7 +152,7 @@ async fn at_home_a_digit_opens_its_row() {
         .expect("there is a numbered row");
     assert!(!row.label.is_empty(), "the row says where it goes");
 
-    h.dispatch(tecla("1")).await.expect("host alive");
-    let snap2 = crate::sync::siguiente_foto_tras_resync(&h, &mut sub).await;
+    h.dispatch(press("1")).await.expect("host alive");
+    let snap2 = crate::sync::next_snapshot_after_resync(&h, &mut sub).await;
     assert!(snap2.splash.is_none(), "opening a row also takes it down");
 }

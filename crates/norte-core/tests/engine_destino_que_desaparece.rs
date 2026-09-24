@@ -37,8 +37,8 @@ use norte_core::{Actor, Engine};
 use norte_proto::{CollisionPolicy, ConflictKind, Error, TaskState, VPath};
 use norte_vfs::Provider;
 
-mod origen_a_peticion;
-use origen_a_peticion::{Mando, OrigenAPeticion};
+mod origin_on_request;
+use origin_on_request::{Command, OnRequestSource};
 
 fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
@@ -249,10 +249,12 @@ async fn if_another_folder_appears_where_the_destination_was_the_copy_stops() {
 
 /// The lone-file setup: a source that can be paused, a real local destination,
 /// and the engine joining them.
-async fn a_paused_file(dir: &std::path::Path) -> (Engine, Arc<norte_testkit::MemProvider>, Mando) {
+async fn a_paused_file(
+    dir: &std::path::Path,
+) -> (Engine, Arc<norte_testkit::MemProvider>, Command) {
     let mem = Arc::new(norte_testkit::MemProvider::new());
     // Several chunks to look like a real file; the pause does not depend on
-    // there being more than one (see `OrigenAPeticion::read`).
+    // there being more than one (see `OnRequestSource::read`).
     {
         let mut sink = mem.write(&vp("slow:///big")).await.expect("write");
         for _ in 0..8 {
@@ -262,13 +264,13 @@ async fn a_paused_file(dir: &std::path::Path) -> (Engine, Arc<norte_testkit::Mem
         }
         sink.commit().await.expect("commit");
     }
-    let (source, mando) = OrigenAPeticion::nuevo(Arc::clone(&mem));
+    let (source, command) = OnRequestSource::wrap(Arc::clone(&mem));
     let engine = Engine::new();
     engine.register_provider(
         Arc::new(norte_vfs_local::LocalProvider::rooted(dir)) as Arc<dyn Provider>
     );
     engine.register_provider(source);
-    (engine, mem, mando)
+    (engine, mem, command)
 }
 
 /// **And MOVING a file is the case that loses data.**
@@ -284,7 +286,7 @@ async fn moving_a_file_to_a_disappearing_destination_does_not_delete_the_source(
     let dir = tempfile::tempdir().expect("tempdir");
     let destination = dir.path().join("destination");
     std::fs::create_dir(&destination).expect("destination");
-    let (engine, mem, mut mando) = a_paused_file(dir.path()).await;
+    let (engine, mem, mut command) = a_paused_file(dir.path()).await;
 
     let handle = engine
         .move_with_as(
@@ -300,11 +302,11 @@ async fn moving_a_file_to_a_disappearing_destination_does_not_delete_the_source(
         .expect("enqueues");
 
     assert!(
-        mando.empezo().await,
+        command.started().await,
         "the move never got to start: this test proved nothing"
     );
     std::fs::rename(&destination, dir.path().join("trash")).expect("to the trash");
-    mando.sigue();
+    command.follows();
 
     let state = outcome(handle).await;
     assert!(
@@ -338,7 +340,7 @@ async fn copying_a_file_to_a_disappearing_destination_fails() {
     let destination = dir.path().join("destination");
     std::fs::create_dir(&destination).expect("destination");
 
-    let (engine, _mem, mut mando) = a_paused_file(dir.path()).await;
+    let (engine, _mem, mut command) = a_paused_file(dir.path()).await;
 
     let handle = engine
         .copy_with_as(
@@ -355,12 +357,12 @@ async fn copying_a_file_to_a_disappearing_destination_fails() {
 
     // The fact, not a deadline: the copy already delivered its first chunk.
     assert!(
-        mando.empezo().await,
+        command.started().await,
         "the copy never got to start: this test proved nothing"
     );
     // With the copy PAUSED halfway, the reader deletes the destination folder.
     std::fs::rename(&destination, dir.path().join("trash")).expect("to the trash");
-    mando.sigue();
+    command.follows();
 
     let state = outcome(handle).await;
     assert!(

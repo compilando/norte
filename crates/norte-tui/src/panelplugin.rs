@@ -20,12 +20,12 @@ use norte_proto::VPath;
 /// counter: here the identity is what was requested, and comparing it alone
 /// says whether the response still holds.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Firma {
+pub struct Signature {
     /// WHICH panel it is: the whole kind, `plugin:<id>:<kind>`.
     ///
     /// It is in the signature because a `SlotId` gets REUSED: presets bring
     /// small, fixed ids, so changing layout can put another plugin's panel
-    /// in the same slot. Without the kind, `hay_que_pedir` used to say
+    /// in the same slot. Without the kind, `hay_that_request` used to say
     /// nothing needed requesting — the directory and size matched — and the
     /// previous plugin's frame stayed painted, with its clickable zones,
     /// under the new one's title.
@@ -66,19 +66,19 @@ pub struct PanelRuntime {
     /// every call, in the core).
     pub state: Option<Vec<u8>>,
     /// The signature of the frame currently being shown.
-    pub mostrado: Option<Firma>,
+    pub shown: Option<Signature>,
     /// The signature of the request in flight, if there is one.
-    pub en_vuelo: Option<Firma>,
+    pub in_flight: Option<Signature>,
     /// The last signature that was ATTEMPTED and came back without a frame:
     /// the RPC failed, or no consented plugin paints that panel.
     ///
-    /// Without this, an empty attempt left no trace — `mostrado` stayed as
-    /// it was and `en_vuelo` got cleared — so the loop's next round asked
+    /// Without this, an empty attempt left no trace — `shown` stayed as
+    /// it was and `in_flight` got cleared — so the loop's next round asked
     /// for the same thing again: one RPC per painted frame, forever, with
     /// nothing on screen to explain it. And it happens without hostile
     /// plugins: a saved layout naming a panel from a plugin that is no
     /// longer there is enough.
-    pub intentado: Option<Firma>,
+    pub intentado: Option<Signature>,
 }
 
 impl PanelRuntime {
@@ -106,20 +106,20 @@ impl PanelRuntime {
         true
     }
 
-    /// Does `firma`'s frame need requesting?
+    /// Does `signature`'s frame need requesting?
     ///
     /// No, if that same one is already being shown, and no, if it was
     /// already requested: a panel that repeats on every frame would make one
     /// call to the guest per paint.
     #[must_use]
-    pub fn hay_que_pedir(&self, firma: &Firma) -> bool {
+    pub fn hay_that_request(&self, signature: &Signature) -> bool {
         // Nor what was already attempted and came back empty: a panel with
         // no plugin to paint it is not a panel that needs re-requesting on
         // every frame. When something the guest would see changes, the
         // signature will be a different one and it will be tried again.
-        self.mostrado.as_ref() != Some(firma)
-            && self.en_vuelo.as_ref() != Some(firma)
-            && self.intentado.as_ref() != Some(firma)
+        self.shown.as_ref() != Some(signature)
+            && self.in_flight.as_ref() != Some(signature)
+            && self.intentado.as_ref() != Some(signature)
     }
 }
 
@@ -130,7 +130,7 @@ impl PanelRuntime {
 /// one replaces the previous, dropping its receiver — the same rule as the
 /// docked preview. What decides whether it is needed is the signature, not
 /// the clock.
-pub fn pedir_marco(
+pub fn request_marco(
     app: &mut crate::app::App,
     backend: &norte_core::backend::Backend,
     work: &mut crate::jobs::InFlight,
@@ -145,7 +145,7 @@ pub fn pedir_marco(
     let Some(kind) = app.layout.kind_of(slot).map(|k| k.as_str().to_owned()) else {
         return;
     };
-    let Some((plugin_id, panel_kind)) = partes(&kind) else {
+    let Some((plugin_id, panel_kind)) = parts(&kind) else {
         return;
     };
     // And one live request per slot: while one is in flight, another does
@@ -153,15 +153,15 @@ pub fn pedir_marco(
     // work — the guest instantiates and runs regardless — so dragging a
     // border queued one wasm instantiation per frame. The loop's next round
     // looks again, so what is lost is one round, not the repaint.
-    if app.paneles.entry(slot).en_vuelo.is_some() {
+    if app.panels.entry(slot).in_flight.is_some() {
         return;
     }
     let res = crate::ui::resolved_for(app, painted);
     let Some(rect) = crate::ui::slot_rect(&res, slot) else {
         return;
     };
-    let rect = crate::ui::contenido_de_hueco(&app.layout, slot, rect);
-    let firma = Firma {
+    let rect = crate::ui::slot_content(&app.layout, slot, rect);
+    let signature = Signature {
         kind: kind.clone(),
         dir: app.focused().dir().clone(),
         // Without the borders: the guest describes what is INSIDE, and
@@ -191,31 +191,31 @@ pub fn pedir_marco(
     if !app.kinds.decls().iter().any(|d| d.id.as_str() == kind) {
         return;
     }
-    app.paneles.entry(slot).adoptar(&kind);
-    if !app.paneles.entry(slot).hay_que_pedir(&firma) {
+    app.panels.entry(slot).adoptar(&kind);
+    if !app.panels.entry(slot).hay_that_request(&signature) {
         return;
     }
     let params = norte_proto::methods::PluginPanelRenderParams {
         plugin_id: plugin_id.to_owned(),
         kind: panel_kind.to_owned(),
-        dir: firma.dir.clone(),
-        cols: firma.cols,
-        rows: firma.rows,
+        dir: signature.dir.clone(),
+        cols: signature.cols,
+        rows: signature.rows,
         lang: norte_frontend::frame::lang_code().to_owned(),
-        cursor_name: firma.cursor.clone(),
+        cursor_name: signature.cursor.clone(),
         // What the guest saved last time, as is: this process does not look
         // at it.
-        state: app.paneles.entry(slot).state.clone(),
+        state: app.panels.entry(slot).state.clone(),
         // ALWAYS the neutral event, today: no frontend sends `Click` or
         // `Command` to the guest yet. A clicked zone runs a catalogue
-        // command (`mouse::zona_de_panel_en`) and the guest never finds out;
+        // command (`mouse::pane_zone_in`) and the guest never finds out;
         // letting it react to its own zones is what is missing, and this is
         // the line for it.
         event: norte_proto::methods::PanelEvent::Refresh,
     };
-    app.paneles.entry(slot).en_vuelo = Some(firma.clone());
+    app.panels.entry(slot).in_flight = Some(signature.clone());
     work.panel_render = Some(crate::probes::spawn_panel_render(
-        backend, slot, firma, params,
+        backend, slot, signature, params,
     ));
 }
 
@@ -229,23 +229,23 @@ pub fn pedir_marco(
 ///
 /// In all three cases the previous frame is kept: a slow or broken plugin
 /// leaves the earlier snapshot, never a slot flickering to empty.
-pub fn aterrizar(
+pub fn land(
     app: &mut crate::app::App,
     slot: norte_frontend::layout::SlotId,
-    firma: &Firma,
+    signature: &Signature,
     res: Option<Result<Option<norte_proto::methods::PanelFrame>, norte_proto::Error>>,
 ) {
-    let panel = app.paneles.entry(slot);
+    let panel = app.panels.entry(slot);
     // A response to a request that is no longer the live one is neither
     // applied nor does it clear anything: the one in flight is a different
     // one and it is the one that rules.
-    if panel.en_vuelo.as_ref() != Some(firma) {
+    if panel.in_flight.as_ref() != Some(signature) {
         return;
     }
-    panel.en_vuelo = None;
+    panel.in_flight = None;
     // The attempt is recorded NO MATTER WHAT: this is what stops a panel
     // with no frame from being retried on every paint.
-    panel.intentado = Some(firma.clone());
+    panel.intentado = Some(signature.clone());
     let Some(Ok(Some(marco))) = res else {
         return;
     };
@@ -254,12 +254,12 @@ pub fn aterrizar(
     // kind's is not painted. With the signature carrying the kind this
     // should not be able to happen; it is checked because the data comes
     // from outside and checking it costs one line.
-    if partes(&firma.kind).map(|(id, _)| id) != Some(marco.plugin_id.as_str()) {
+    if parts(&signature.kind).map(|(id, _)| id) != Some(marco.plugin_id.as_str()) {
         return;
     }
     panel.frame = Some(marco_de_wire(&marco));
     panel.state = marco.state;
-    panel.mostrado = Some(firma.clone());
+    panel.shown = Some(signature.clone());
 }
 
 /// The wire frame, BOUNDED and SANITIZED, in the shape the terminal paints.
@@ -286,12 +286,12 @@ fn marco_de_wire(marco: &norte_proto::methods::PanelFrame) -> StyledFrame {
 /// called `a:b` could pass itself off as another one's panel.
 ///
 /// ```
-/// # use norte_tui::panelplugin::partes;
-/// assert_eq!(partes("plugin:git:status"), Some(("git", "status")));
-/// assert_eq!(partes("browser"), None);
+/// # use norte_tui::panelplugin::parts;
+/// assert_eq!(parts("plugin:git:status"), Some(("git", "status")));
+/// assert_eq!(parts("browser"), None);
 /// ```
 #[must_use]
-pub fn partes(kind: &str) -> Option<(&str, &str)> {
+pub fn parts(kind: &str) -> Option<(&str, &str)> {
     kind.strip_prefix("plugin:")?.split_once(':')
 }
 
@@ -299,8 +299,8 @@ pub fn partes(kind: &str) -> Option<(&str, &str)> {
 mod tests {
     use super::*;
 
-    fn signature(dir: &str, cursor: Option<&str>) -> Firma {
-        Firma {
+    fn signature(dir: &str, cursor: Option<&str>) -> Signature {
+        Signature {
             kind: "plugin:git:status".to_owned(),
             dir: VPath::parse(dir).expect("wire"),
             cols: 30,
@@ -320,16 +320,16 @@ mod tests {
         let f = signature("mem:///a", None);
         let mut p = PanelRuntime::default();
         assert!(
-            p.hay_que_pedir(&f),
+            p.hay_that_request(&f),
             "with nothing yet, it must be requested"
         );
 
-        p.en_vuelo = Some(f.clone());
-        assert!(!p.hay_que_pedir(&f), "already requested");
+        p.in_flight = Some(f.clone());
+        assert!(!p.hay_that_request(&f), "already requested");
 
-        p.en_vuelo = None;
-        p.mostrado = Some(f.clone());
-        assert!(!p.hay_que_pedir(&f), "already being shown");
+        p.in_flight = None;
+        p.shown = Some(f.clone());
+        assert!(!p.hay_that_request(&f), "already being shown");
     }
 
     /// Moving the cursor changes the signature: the guest receives the
@@ -337,11 +337,11 @@ mod tests {
     #[test]
     fn moving_the_cursor_requests_another_frame() {
         let p = PanelRuntime {
-            mostrado: Some(signature("mem:///a", Some("one"))),
+            shown: Some(signature("mem:///a", Some("one"))),
             ..Default::default()
         };
-        assert!(p.hay_que_pedir(&signature("mem:///a", Some("two"))));
-        assert!(p.hay_que_pedir(&signature("mem:///b", Some("one"))));
+        assert!(p.hay_that_request(&signature("mem:///a", Some("two"))));
+        assert!(p.hay_that_request(&signature("mem:///b", Some("one"))));
     }
 
     /// An attempt that comes back EMPTY is not repeated on the next frame.
@@ -353,19 +353,19 @@ mod tests {
     fn an_empty_attempt_is_not_repeated_on_every_frame() {
         let f = signature("mem:///a", None);
         let mut p = PanelRuntime {
-            en_vuelo: Some(f.clone()),
+            in_flight: Some(f.clone()),
             ..Default::default()
         };
-        p.en_vuelo = None;
+        p.in_flight = None;
         p.intentado = Some(f.clone());
         assert!(
-            !p.hay_que_pedir(&f),
+            !p.hay_that_request(&f),
             "already tried and came back with no frame"
         );
         // But whatever changes the context IS requested: the plugin could
         // have come back, and either way the guest would see something
         // else.
-        assert!(p.hay_que_pedir(&signature("mem:///b", None)));
+        assert!(p.hay_that_request(&signature("mem:///b", None)));
     }
 
     /// A slot that becomes ANOTHER plugin's inherits nothing from the
@@ -381,7 +381,7 @@ mod tests {
         assert!(p.adoptar("plugin:git:status"), "claims a fresh slot");
         p.frame = Some(StyledFrame::clamped(Vec::new(), Vec::new()));
         p.state = Some(b"git's stuff".to_vec());
-        p.mostrado = Some(signature("mem:///a", None));
+        p.shown = Some(signature("mem:///a", None));
 
         assert!(
             !p.adoptar("plugin:git:status"),
@@ -398,17 +398,17 @@ mod tests {
             "the first one's opaque state is not inherited"
         );
         assert!(p.frame.is_none(), "nor its frame, with its zones");
-        assert!(p.mostrado.is_none(), "and it requests again");
+        assert!(p.shown.is_none(), "and it requests again");
     }
 
     /// A house kind is not split: it belongs to no plugin.
     #[test]
     fn only_plugin_kinds_are_split() {
         assert_eq!(
-            partes("plugin:acme.git:status"),
+            parts("plugin:acme.git:status"),
             Some(("acme.git", "status"))
         );
-        assert_eq!(partes("plugin:sinkind"), None);
-        assert_eq!(partes("logview"), None);
+        assert_eq!(parts("plugin:sinkind"), None);
+        assert_eq!(parts("logview"), None);
     }
 }

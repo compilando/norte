@@ -13,7 +13,7 @@
 //! closest thing to a frame a host that only speaks when something changes
 //! has.
 
-// The same `impl Estado` split into pieces, with the parent's imports: see
+// The same `impl State` split into pieces, with the parent's imports: see
 // `viewer.rs`.
 #[allow(clippy::wildcard_imports)]
 use super::*;
@@ -29,7 +29,7 @@ const PREVIEW_MAX_ROWS: usize = crate::bridge::MAX_ROWS_PER_BATCH;
 
 /// What a preview slot has NOW, and what it is requesting.
 #[derive(Default)]
-pub(super) struct EstadoPreview {
+pub(super) struct StatePreview {
     /// Which path it shows (or tried to show), if any.
     shown: Option<VPath>,
     /// The viewer with what was read.
@@ -50,16 +50,16 @@ enum Wants {
     Note(&'static str),
 }
 
-impl Estado {
+impl State {
     /// The PLACED preview slots, with their width in cells.
     ///
     /// From the layout, not the tree: a slot behind a tab exists, but is not
     /// being seen, and what is not seen does not read.
-    fn huecos_de_preview(&self) -> Vec<(u32, u16)> {
-        self.reparto
+    fn preview_slots(&self) -> Vec<(u32, u16)> {
+        self.split
             .placements
             .iter()
-            .filter(|(slot, _)| kind_de(&self.arbol, *slot).is_some_and(|k| k.as_str() == KIND))
+            .filter(|(slot, _)| kind_de(&self.tree, *slot).is_some_and(|k| k.as_str() == KIND))
             .map(|(SlotId(id), r)| (*id, r.width))
             .collect()
     }
@@ -68,10 +68,10 @@ impl Estado {
     ///
     /// The link is resolved with the shared engine, like the attribute sheet:
     /// a followed slot that dies degrades to the `active` role.
-    fn quiere_preview(&self, slot: SlotId) -> Wants {
+    fn wants_preview(&self, slot: SlotId) -> Wants {
         let mut diags = Vec::new();
         let followed =
-            norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
+            norte_frontend::layout::resolve_follow(&self.tree, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active));
         // With FOCUS on the preview slot itself, the active role is it, and
         // following yourself is following nobody: so the active listing takes
@@ -83,8 +83,8 @@ impl Estado {
         // the `..` row it used to say "nothing selected" — which is false:
         // there is a row, and it leads to a folder — on every startup.
         let entry = followed
-            .and_then(|SlotId(s)| self.huecos.get(&s))
-            .or_else(|| self.huecos.get(&self.activo()))
+            .and_then(|SlotId(s)| self.slots.get(&s))
+            .or_else(|| self.slots.get(&self.active()))
             .and_then(|h| h.pane.cursor_entry());
         let Some(e) = entry else {
             return Wants::Note("preview-empty");
@@ -105,12 +105,12 @@ impl Estado {
     pub(super) fn sondear_previews(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         // A slot that no longer exists keeps nothing: neither a viewer for a
         // file nobody sees, nor a response in flight that would land on it.
         let alive: Vec<u32> = self
-            .arbol
+            .tree
             .slot_ids()
             .into_iter()
             .map(|SlotId(id)| id)
@@ -118,14 +118,14 @@ impl Estado {
         self.previews.retain(|id, _| alive.contains(id));
 
         let mut changed = false;
-        for (id, width) in self.huecos_de_preview() {
-            match self.quiere_preview(SlotId(id)) {
+        for (id, width) in self.preview_slots() {
+            match self.wants_preview(SlotId(id)) {
                 Wants::Note(key) => {
                     let state = self.previews.entry(id).or_default();
                     if state.note != Some(key) || state.viewer.is_some() {
-                        *state = EstadoPreview {
+                        *state = StatePreview {
                             note: Some(key),
-                            ..EstadoPreview::default()
+                            ..StatePreview::default()
                         };
                         changed = true;
                     }
@@ -155,7 +155,7 @@ impl Estado {
                                 len: Some(VISOR_CAP + 1),
                             }),
                         );
-                        let read_bytes = match tokio::time::timeout(PLAZO_VISOR, reading).await {
+                        let read_bytes = match tokio::time::timeout(DEADLINE_VISOR, reading).await {
                             Ok(r) => r,
                             Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
                         };
@@ -163,7 +163,7 @@ impl Estado {
                         // that does not apply is NOT an error: it falls back
                         // to the raw view.
                         let preview = match tokio::time::timeout(
-                            PLAZO_PLUGINS,
+                            DEADLINE_PLUGINS,
                             backend.plugin_preview_styled(path.clone(), columns),
                         )
                         .await
@@ -172,7 +172,7 @@ impl Estado {
                             _ => None,
                         };
                         let _ = mailbox
-                            .send(Mensaje::PreviewContenido(Box::new((
+                            .send(Message::PreviewContent(Box::new((
                                 id,
                                 (token, path, read_bytes, preview),
                             ))))
@@ -183,7 +183,7 @@ impl Estado {
         }
         if changed {
             let snap = self.snapshot();
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))]
         } else {
             Vec::new()
         }
@@ -191,7 +191,7 @@ impl Estado {
 
     /// What was read for a preview slot lands: it is shown if the token is
     /// that of THAT slot's last request, and discarded otherwise.
-    pub(super) fn aterrizar_preview(
+    pub(super) fn land_preview(
         &mut self,
         slot: u32,
         token: RequestToken,
@@ -234,14 +234,14 @@ impl Estado {
         }
         state.shown = Some(path);
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }
 
     /// How many rows fit in slot `slot`: its height minus the chrome (title
     /// and border). It is the window that travels and the page keys jump. A
     /// slot that is not placed has no height: it falls back to the cap.
     fn alto_de_preview(&self, slot: u32) -> usize {
-        self.reparto
+        self.split
             .placements
             .iter()
             .find(|(s, _)| *s == SlotId(slot))
@@ -253,9 +253,9 @@ impl Estado {
     /// The preview slot with FOCUS, if the focus is on one and it has a
     /// viewer. Without a viewer — a note — there is nothing to move, and the
     /// keys go their own way.
-    fn preview_enfocado(&self) -> Option<u32> {
+    fn preview_focused(&self) -> Option<u32> {
         let SlotId(id) = self.roles.get(norte_frontend::layout::RoleId::Active)?;
-        let is_viewer = kind_de(&self.arbol, SlotId(id)).is_some_and(|k| k.as_str() == KIND);
+        let is_viewer = kind_de(&self.tree, SlotId(id)).is_some_and(|k| k.as_str() == KIND);
         (is_viewer && self.previews.get(&id).is_some_and(|e| e.viewer.is_some())).then_some(id)
     }
 
@@ -267,40 +267,40 @@ impl Estado {
     /// reader only wanted to stop looking at is the wrong answer; closing it
     /// is `layout.preview`. `None` = focus is not on a docked viewer, or the
     /// key is not one of its own: let it go through the normal path.
-    pub(super) fn tecla_en_preview(
+    pub(super) fn key_in_preview(
         &mut self,
         k: &crate::keys::KeyInput,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
-        let slot = self.preview_enfocado()?;
+        let slot = self.preview_focused()?;
         let chord = k.to_chord().ok()?;
         let (command, count) = match self.resolver_visor.push(chord) {
             Resolution::Run { command, count } => (command, count),
             // A half-finished prefix is its own; whatever is not bound, is
             // not.
             Resolution::Pending(_) | Resolution::Counting(_) => {
-                return Some((self.aplicada(), Vec::new()));
+                return Some((self.applied(), Vec::new()));
             }
             Resolution::Unavailable { .. } | Resolution::Reset => return None,
         };
-        let effect = crate::commands::efecto_visor_de(&command, count.times())?;
+        let effect = crate::commands::viewer_effect_of(&command, count.times())?;
         let height = self.alto_de_preview(slot);
-        if matches!(effect, crate::commands::EfectoVisor::Cerrar) {
-            let listing = SlotId(self.activo());
+        if matches!(effect, crate::commands::EffectVisor::Close) {
+            let listing = SlotId(self.active());
             self.roles
                 .set(norte_frontend::layout::RoleId::Active, listing);
             self.reconcilia_roles();
-            let change = ViewChange::Layout(self.disposicion());
-            return Some((self.aplicada(), vec![self.parche(vec![change])]));
+            let change = ViewChange::Layout(self.layout());
+            return Some((self.applied(), vec![self.parche(vec![change])]));
         }
-        if let crate::commands::EfectoVisor::Hermana { adelante } = effect {
-            return Some(self.hermana_del_preview(slot, adelante));
+        if let crate::commands::EffectVisor::Sibling { forward } = effect {
+            return Some(self.preview_sibling(slot, forward));
         }
         let v = self.previews.get_mut(&slot)?.viewer.as_mut()?;
         Self::mover_visor(v, effect, height);
         let snap = self.snapshot();
         Some((
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         ))
     }
 
@@ -308,41 +308,41 @@ impl Estado {
     ///
     /// Nothing is opened here, and that is the whole difference from the full
     /// viewer: the docked one follows the active listing's CURSOR
-    /// ([`Self::quiere_preview`]), so moving the cursor IS requesting the
+    /// ([`Self::wants_preview`]), so moving the cursor IS requesting the
     /// next file, and the read is done by the next round's polling, like with
     /// any other movement.
-    fn hermana_del_preview(
+    fn preview_sibling(
         &mut self,
         slot: u32,
-        adelante: bool,
+        forward: bool,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let state = self.previews.get(&slot);
         let is_image = state
             .and_then(|e| e.viewer.as_ref())
             .is_some_and(norte_frontend::viewer::Viewer::is_image_by_bytes);
         let Some(open_path) = state.and_then(|e| e.shown.clone()) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         let wanted = if is_image {
-            norte_frontend::viewer::Clase::Imagen
+            norte_frontend::viewer::Class::Imagen
         } else {
-            norte_frontend::viewer::Clase::Otro
+            norte_frontend::viewer::Class::Other
         };
         // The listing the ladder comes from is the one THIS preview follows
-        // ([`Self::quiere_preview`]), which with a slot tied to a role is not
+        // ([`Self::wants_preview`]), which with a slot tied to a role is not
         // the active listing: reading the active one would move another
         // panel's cursor and leave this preview exactly as it was.
         let mut diags = Vec::new();
         let followed = norte_frontend::layout::resolve_follow(
-            &self.arbol,
+            &self.tree,
             SlotId(slot),
             &self.roles,
             &mut diags,
         )
         .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active))
-        .map_or_else(|| self.activo(), |SlotId(s)| s);
-        let Some(pane) = self.huecos.get(&followed).map(|h| &h.pane) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        .map_or_else(|| self.active(), |SlotId(s)| s);
+        let Some(pane) = self.slots.get(&followed).map(|h| &h.pane) else {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         let entries = pane.entries();
         // Only by what the reader SEES, like the full viewer.
@@ -351,7 +351,7 @@ impl Estado {
             .iter()
             .position(|e| e.path == open_path)
             .and_then(|from| {
-                norte_frontend::viewer::hermana(entries, visible, from, adelante, wanted)
+                norte_frontend::viewer::sibling(entries, visible, from, forward, wanted)
             });
         let Some(row) = target else {
             self.status.message = Some(clamp_display(norte_i18n::t_in(
@@ -368,27 +368,27 @@ impl Estado {
         };
         // An earlier "no more" cannot survive a jump that DID happen.
         self.status.message = None;
-        // `senalar` and not `set_cursor`: with a live filter, what the
+        // `point_at` and not `set_cursor`: with a live filter, what the
         // preview follows is the quick-search selection, and moving the real
         // cursor does not move it — the panel would stay the same while the
         // key claims it worked.
-        if let Some(h) = self.huecos.get_mut(&followed) {
-            h.pane.senalar(row);
+        if let Some(h) = self.slots.get_mut(&followed) {
+            h.pane.point_at(row);
         }
         let snap = self.snapshot();
         (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
     }
 
     /// Applies a viewer effect that is NOT closing.
     fn mover_visor(
         v: &mut norte_frontend::viewer::Viewer,
-        effect: crate::commands::EfectoVisor,
+        effect: crate::commands::EffectVisor,
         height: usize,
     ) {
-        use crate::commands::EfectoVisor;
+        use crate::commands::EffectVisor;
         // `unsigned_abs`, not `abs`: `PreviewScroll`'s delta arrives RAW from
         // the renderer, and `i64::MIN.abs()` overflows.
         let steps = |n: i64| usize::try_from(n.unsigned_abs()).unwrap_or(usize::MAX);
@@ -398,42 +398,42 @@ impl Estado {
             // their CURSOR — the docked one follows it, so moving it IS
             // requesting the next file. In neither case is there anything to
             // move in THIS viewer.
-            EfectoVisor::Cerrar | EfectoVisor::Hermana { .. } => {}
-            EfectoVisor::Linea(n) if n < 0 => v.scroll_up(steps(n)),
-            EfectoVisor::Linea(n) => v.scroll_down(steps(n)),
-            EfectoVisor::Pagina(n) if n < 0 => v.scroll_up(steps(n).saturating_mul(height)),
-            EfectoVisor::Pagina(n) => v.scroll_down(steps(n).saturating_mul(height)),
-            EfectoVisor::Columna(n) if n < 0 => v.scroll_left(steps(n)),
-            EfectoVisor::Columna(n) => v.scroll_right(steps(n)),
-            EfectoVisor::Extremo { al_final: false } => v.scroll_top(),
-            EfectoVisor::Extremo { al_final: true } => v.scroll_bottom(),
-            EfectoVisor::Hex => v.toggle_hex(),
-            EfectoVisor::Encoding => v.cycle_encoding(),
-            EfectoVisor::EncodingAuto => v.reset_encoding(),
-            EfectoVisor::Zoom { acercar: true } => v.zoom_in(),
-            EfectoVisor::Zoom { acercar: false } => v.zoom_out(),
-            EfectoVisor::ZoomAjustar => v.zoom_fit(),
+            EffectVisor::Close | EffectVisor::Sibling { .. } => {}
+            EffectVisor::Line(n) if n < 0 => v.scroll_up(steps(n)),
+            EffectVisor::Line(n) => v.scroll_down(steps(n)),
+            EffectVisor::Page(n) if n < 0 => v.scroll_up(steps(n).saturating_mul(height)),
+            EffectVisor::Page(n) => v.scroll_down(steps(n).saturating_mul(height)),
+            EffectVisor::Column(n) if n < 0 => v.scroll_left(steps(n)),
+            EffectVisor::Column(n) => v.scroll_right(steps(n)),
+            EffectVisor::Extremo { al_final: false } => v.scroll_top(),
+            EffectVisor::Extremo { al_final: true } => v.scroll_bottom(),
+            EffectVisor::Hex => v.toggle_hex(),
+            EffectVisor::Encoding => v.cycle_encoding(),
+            EffectVisor::EncodingAuto => v.reset_encoding(),
+            EffectVisor::Zoom { zoom_in: true } => v.zoom_in(),
+            EffectVisor::Zoom { zoom_in: false } => v.zoom_out(),
+            EffectVisor::ZoomFit => v.zoom_fit(),
         }
     }
 
     /// The wheel over a preview slot: `delta` lines through the HOST, which
     /// is the one who decides the visible window (like the log panel).
-    pub(super) fn desplazar_preview(
+    pub(super) fn scroll_preview(
         &mut self,
         slot: u32,
         delta: i64,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         if self.oculto(slot) {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let Some(v) = self.previews.get_mut(&slot).and_then(|e| e.viewer.as_mut()) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
-        Self::mover_visor(v, crate::commands::EfectoVisor::Linea(delta), 1);
+        Self::mover_visor(v, crate::commands::EffectVisor::Line(delta), 1);
         let snap = self.snapshot();
         (
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         )
     }
 

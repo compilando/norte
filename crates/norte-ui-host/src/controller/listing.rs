@@ -1,16 +1,16 @@
 //! Request a listing, land it, and refresh what the operation touched.
 //!
-//! Part of `controller`: these are `Estado` methods, moved here without
+//! Part of `controller`: these are `State` methods, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Enumerating them here would be a
 // forty-line list per file, in 32 files, that goes stale the moment the
 // parent imports something — `super::*` tracks it on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// Asks what a slot's directory accepts: how it folds names
     /// (#268) and whether it refuses writes.
     ///
@@ -27,13 +27,13 @@ impl Estado {
     ///
     /// A failure says nothing and breaks nothing: with no answer, nothing
     /// folds and nothing dims — exactly what used to happen before.
-    pub(super) fn pedir_capacidades(
+    pub(super) fn request_capabilities(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
-        let Some(hueco) = self.huecos.get(&slot) else {
+        let Some(hueco) = self.slots.get(&slot) else {
             return;
         };
         let dir = hueco.pane.dir().clone();
@@ -48,7 +48,7 @@ impl Estado {
             let Ok(caps) = backend.capabilities(dir.clone()).await else {
                 return;
             };
-            let _ = buzon.send(Mensaje::Capacidades(slot, dir, caps)).await;
+            let _ = buzon.send(Message::Capabilities(slot, dir, caps)).await;
         });
     }
 
@@ -62,18 +62,18 @@ impl Estado {
     /// visible: the help freezes them on open (#262), so one opened before
     /// they arrived would keep offering, for its whole life, writes this
     /// place refuses. `None` = there was nothing to say.
-    pub(super) fn aplicar_capacidades(
+    pub(super) fn apply_capabilities(
         &mut self,
         slot: u32,
         dir: &VPath,
         caps: norte_proto::Capabilities,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let h = self.huecos.get_mut(&slot)?;
+        let h = self.slots.get_mut(&slot)?;
         if h.pane.dir() != dir {
             return None;
         }
         h.caps = Some((dir.clone(), caps));
-        self.recongelar_ayuda()
+        self.recongelar_help()
     }
 
     /// What a slot's location accepts, if it is known and is of THAT place.
@@ -82,7 +82,7 @@ impl Estado {
     /// survives a `cd`, harmless: another directory's capabilities are not
     /// stale data, they are data about something else.
     fn caps_of(&self, slot: u32) -> Option<norte_proto::Capabilities> {
-        let h = self.huecos.get(&slot)?;
+        let h = self.slots.get(&slot)?;
         let (dir, caps) = h.caps.as_ref()?;
         (dir == h.pane.dir()).then_some(*caps)
     }
@@ -93,8 +93,8 @@ impl Estado {
     /// there is no destination to announce. With a destination, the renderer
     /// can say "going here" next to the spinner, which is what keeps the
     /// body's still-showing PREVIOUS listing legible in the meantime.
-    pub(super) fn cargando_hacia(
-        destino: Option<&VPath>,
+    pub(super) fn loading_toward(
+        dest: Option<&VPath>,
         enc: Option<norte_encoding::NameEncoding>,
     ) -> SlotState {
         // The VERB comes from the shared closed vocabulary, which exists
@@ -103,14 +103,14 @@ impl Estado {
         // exposed this and which the terminal names "connecting…". A
         // destination with an authority is a remote to reach; everything
         // else, a listing.
-        let kind = destino.map_or(norte_frontend::busy::BusyKind::Listing, |d| {
+        let kind = dest.map_or(norte_frontend::busy::BusyKind::Listing, |d| {
             if d.authority().is_some() {
                 norte_frontend::busy::BusyKind::Connecting
             } else {
                 norte_frontend::busy::BusyKind::Listing
             }
         });
-        let (target_display, target_hostile) = destino.map_or_else(
+        let (target_display, target_hostile) = dest.map_or_else(
             || (String::new(), false),
             |d| {
                 let (t, h) = norte_frontend::path_display_with(d, enc);
@@ -130,8 +130,8 @@ impl Estado {
     /// talking about a slot: a transfer's destination can be a directory the
     /// reader picked on the desktop (#284). What makes the answer valid is
     /// that it is FOR that path, and the stored value already carries that.
-    pub(super) fn caps_de_ruta(&self, dir: &VPath) -> Option<norte_proto::Capabilities> {
-        self.huecos
+    pub(super) fn path_caps(&self, dir: &VPath) -> Option<norte_proto::Capabilities> {
+        self.slots
             .values()
             .filter_map(|h| h.caps.as_ref())
             .find(|(p, _)| p == dir)
@@ -148,8 +148,8 @@ impl Estado {
     /// A slot that does not exist blocks nothing: that is the permissive
     /// answer, and whoever asks about a destination that is not there will
     /// find it rejected by its name (`host-no-other-slot`).
-    pub(super) fn solo_lectura(&self, slot: u32) -> bool {
-        let Some(h) = self.huecos.get(&slot) else {
+    pub(super) fn solo_read(&self, slot: u32) -> bool {
+        let Some(h) = self.slots.get(&slot) else {
             return false;
         };
         norte_frontend::availability::read_only(self.caps_of(slot), h.pane.dir().scheme())
@@ -164,14 +164,14 @@ impl Estado {
     ///
     /// `None` = it arrived LATE and another navigation superseded it.
     /// Discarded here, not hidden in the renderer.
-    pub(super) fn aterrizar_listado(
+    pub(super) fn land_listing(
         &mut self,
-        datos: RespuestaListado,
+        data: ResponseListing,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let (token, slot, dir, res) = datos;
-        if self.huecos.get(&slot).and_then(|h| h.en_vuelo) != Some(token) {
+        let (token, slot, dir, res) = data;
+        if self.slots.get(&slot).and_then(|h| h.in_flight) != Some(token) {
             return Vec::new();
         }
         // #327: the entry declares `secret = "prompt"` and none of the three
@@ -185,66 +185,66 @@ impl Estado {
         // behind is the screen that already knew how to explain itself.
         if let Err(Error::SecretNeeded { conn, endpoint }) = &res {
             let (conn, endpoint) = (conn.clone(), endpoint.clone());
-            self.aterriza_en(slot, dir.clone(), res);
+            self.lands_on(slot, dir.clone(), res);
             // The snapshot BEFORE the dialog: the slot has just changed state
             // and the dialog stacks on top. The other way around, the
             // renderer would see the question over the previous screen.
             let snap = self.snapshot();
-            let mut fuera = vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))];
-            fuera.extend(self.pedir_secreto(conn, &endpoint, slot, dir));
-            return fuera;
+            let mut outside = vec![self.over(UiUpdate::Snapshot(Box::new(snap)))];
+            outside.extend(self.request_secret(conn, &endpoint, slot, dir));
+            return outside;
         }
         // A visit to the frequent list counts when the listing ARRIVES (spec
         // 2026-09-15 D6), same as in the terminal; and a directory that no
         // longer exists also drops out of it, the same way it drops out of
         // history.
-        let pendiente = self
-            .huecos
+        let pending = self
+            .slots
             .get_mut(&slot)
-            .and_then(|h| h.visita_pendiente.take());
+            .and_then(|h| h.visita_pending.take());
         match &res {
             Ok(_) => {
-                if let Some(visitado) = pendiente {
+                if let Some(visitado) = pending {
                     self.popular.visit(&visitado);
                 }
             }
             Err(Error::NotFound) => self.popular.remove(&dir),
             Err(_) => {}
         }
-        self.aterriza_en(slot, dir, res);
-        self.pedir_capacidades(slot, backend, buzon);
+        self.lands_on(slot, dir, res);
+        self.request_capabilities(slot, backend, buzon);
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
         // And the footer's free space: this listing can be on another
         // volume (spec 2026-09-10).
-        self.pedir_volumenes_de_pie(backend, buzon);
+        self.request_footer_volumes(backend, buzon);
         // And the tree, if there is one: this listing is where the pane is
         // now looking, and the neighboring pane has to say the same thing.
-        self.seguir_ramas(slot, backend, buzon);
+        self.follow_branches(slot, backend, buzon);
         // The help facts describe the entry under the CURSOR, and this
         // listing is a different thing (#262). The snapshot below already
         // carries it re-frozen, so no patch is built here: it would spend a
         // sequence number nobody would receive.
-        self.recongelar_hechos_de_ayuda();
+        self.refreeze_help_facts();
         // A `cd` changes the whole screen — directory, rows, cursor,
         // marks — so a snapshot is sent instead of enumerating patches the
         // renderer would have to reconcile.
         let snap = self.snapshot();
-        vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))]
+        vec![self.over(UiUpdate::Snapshot(Box::new(snap)))]
     }
 
     /// What a probe found out, applied; and the next batch is requested.
     ///
     /// `MAX_SONDEOS` bounds each ROUND, not the window: without asking
     /// again, a window taller than one batch would stay half-silent.
-    pub(super) fn aterrizar_sondas(
+    pub(super) fn land_sondas(
         &mut self,
-        datos: Sondas,
+        data: Sondas,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let (dir, slot, sondas) = datos;
-        let u = self.aplicar_sondas(slot, &dir, &sondas)?;
+        let (dir, slot, sondas) = data;
+        let u = self.apply_sondas(slot, &dir, &sondas)?;
         self.sondear(slot, backend, buzon);
         self.adornar(slot, backend, buzon);
         Some(u)
@@ -257,20 +257,20 @@ impl Estado {
     /// failure the keying-by-PATH avoids, and the directory is still
     /// checked — two different directories' paths never match, but spending
     /// a whole patch to paint nothing can still be avoided.
-    pub(super) fn aplicar_adornos(
+    pub(super) fn apply_adornos(
         &mut self,
-        datos: Adornos,
+        data: Adornos,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let (generacion, slot, dir, adornos, celdas, rotulos) = datos;
+        let (generacion, slot, dir, adornos, cells, labels) = data;
         // The labels belong to the PLUGIN, not to the slot: they hold for
         // everyone's headers, and they survive even when this batch is
         // discarded as stale — a column's name does not expire with a
         // listing. They live in the SHARED model, the one that resolves a
         // column's style for both frontends.
-        let cambian_cabeceras = self.columnas.apply_plugin_headers(rotulos);
-        let hueco = self.huecos.get_mut(&slot)?;
+        let change_headers = self.columns.apply_plugin_headers(labels);
+        let hueco = self.slots.get_mut(&slot)?;
         hueco.adornando = false;
         if generacion != hueco.gen_adornos {
             // Requested BEFORE the decorations were forgotten — a plugin
@@ -283,58 +283,54 @@ impl Estado {
         if *hueco.pane.dir() != dir {
             return None;
         }
-        if adornos.is_empty() && celdas.is_empty() {
+        if adornos.is_empty() && cells.is_empty() {
             // No decorator consented and no plugin column. Not a failure and
             // repaints nothing — unless new labels arrived, which only move
             // the headers.
-            return cambian_cabeceras.then(|| {
-                let cambios = self.cabeceras_de_todos();
-                self.parche(cambios)
+            return change_headers.then(|| {
+                let changes = self.headers_of_all();
+                self.parche(changes)
             });
         }
         hueco.adornos.extend(adornos);
-        for (columna, valores) in celdas {
-            hueco
-                .celdas_plugin
-                .entry(columna)
-                .or_default()
-                .extend(valores);
+        for (column, values) in cells {
+            hueco.cells_plugin.entry(column).or_default().extend(values);
         }
         // And to the pane, which is the one that serves them: its setters
         // REPLACE, so the whole accumulated set is passed, not the batch.
         hueco.pane.set_decorations(hueco.adornos.clone());
-        hueco.pane.set_plugin_columns(hueco.celdas_plugin.clone());
+        hueco.pane.set_plugin_columns(hueco.cells_plugin.clone());
         // The ROWS, which are the only thing that changes: a badge moves
         // neither the cursor nor the directory. With new labels, the headers
         // of ALL slots also travel: a column's name does not belong to one
         // listing.
-        let mut cambios = vec![self.cambio_de_filas()];
-        if cambian_cabeceras {
-            cambios.extend(self.cabeceras_de_todos());
+        let mut changes = vec![self.row_change()];
+        if change_headers {
+            changes.extend(self.headers_of_all());
         }
-        Some(self.parche(cambios))
+        Some(self.parche(changes))
     }
 
     /// Every listing slot's header, for a patch.
-    pub(super) fn cabeceras_de_todos(&self) -> Vec<ViewChange> {
-        self.huecos
+    pub(super) fn headers_of_all(&self) -> Vec<ViewChange> {
+        self.slots
             .iter()
             .map(|(id, h)| ViewChange::Columns {
                 slot_id: *id,
-                columns: self.cabeceras(*id, h),
+                columns: self.headers(*id, h),
             })
             .collect()
     }
 
     /// One more batch of the listing that is draining in the background.
-    pub(super) fn aterrizar_lote(
+    pub(super) fn land_batch(
         &mut self,
-        datos: (RequestToken, u32, Vec<Entry>, bool),
+        data: (RequestToken, u32, Vec<Entry>, bool),
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let (token, slot, batch, ultimo) = datos;
-        let Some(u) = self.aplicar_lote(slot, token, batch, ultimo) else {
+        let (token, slot, batch, last) = data;
+        let Some(u) = self.apply_batch(slot, token, batch, last) else {
             return Vec::new();
         };
         self.sondear(slot, backend, buzon);
@@ -342,9 +338,9 @@ impl Estado {
         // The listing grew from below: if the help is in front, its facts
         // talk about a different entry (#262). There is no snapshot here to
         // drag it along, so it gets its own patch.
-        let mut salida = vec![u];
-        salida.extend(self.recongelar_ayuda());
-        salida
+        let mut output = vec![u];
+        output.extend(self.recongelar_help());
+        output
     }
 
     /// The movement, when focus is on a pane that is not a listing.
@@ -355,23 +351,23 @@ impl Estado {
     /// focus and does NOT take keys on purpose — it follows the listing's
     /// cursor, so with the keyboard inside it would stop following anything —
     /// and that decision is already made in one place.
-    pub(super) fn efecto_en_panel_enfocado(
+    pub(super) fn effect_on_focused_pane(
         &mut self,
-        efecto: Efecto,
+        effect: Effect,
     ) -> Option<(ActionAck, Vec<BridgeEnvelope<UiUpdate>>)> {
         let SlotId(id) = self.roles.get(RoleId::Active)?;
-        if self.huecos.contains_key(&id) {
+        if self.slots.contains_key(&id) {
             return None;
         }
-        let kind = kind_de(&self.arbol, SlotId(id))?;
+        let kind = kind_de(&self.tree, SlotId(id))?;
         if !self.kinds.get(&kind).is_some_and(|d| d.takes_keys) {
             return None;
         }
         if kind.as_str() == "places" {
-            return self.efecto_en_sitios(efecto);
+            return self.places_effect(effect);
         }
         if kind.as_str() == super::timeline::KIND {
-            return self.efecto_en_linea(efecto);
+            return self.timeline_effect(effect);
         }
         if kind.as_str() != "processes" {
             // Another pane that takes keys and that this host does not yet
@@ -386,38 +382,38 @@ impl Estado {
         // left — a ring that goes in and does not come out is a trap, and
         // with no mouse there was no way back.
         if !matches!(
-            efecto,
-            Efecto::Cursor(_) | Efecto::Pagina(_) | Efecto::Extremo { .. }
+            effect,
+            Effect::Cursor(_) | Effect::Page(_) | Effect::Extremo { .. }
         ) {
             return None;
         }
-        let ids = self.ids_del_tablero();
+        let ids = self.board_ids();
         if ids.is_empty() {
-            return Some((self.aplicada(), Vec::new()));
+            return Some((self.applied(), Vec::new()));
         }
         let total = i64::try_from(ids.len()).unwrap_or(i64::MAX);
         let paso = |n: i64| -> i64 { n.clamp(-total, total) };
-        let actual = i64::try_from(self.cursor_procesos.fila_o_cero(&ids)).unwrap_or(i64::MAX);
-        let delta = match efecto {
-            Efecto::Cursor(n) => paso(n),
+        let actual = i64::try_from(self.cursor_processes.row_or_zero(&ids)).unwrap_or(i64::MAX);
+        let delta = match effect {
+            Effect::Cursor(n) => paso(n),
             // A page of the processes pane is its rows: no window is
             // declared for it, and jumping more than there is means nothing.
-            Efecto::Pagina(n) => paso(n).saturating_mul(total),
-            Efecto::Extremo { al_final: false } => -actual,
-            Efecto::Extremo { al_final: true } => total - 1 - actual,
+            Effect::Page(n) => paso(n).saturating_mul(total),
+            Effect::Extremo { al_final: false } => -actual,
+            Effect::Extremo { al_final: true } => total - 1 - actual,
             // The three above are the only ones that reach here: the filter
             // is in the entry guard.
             _ => return None,
         };
-        self.cursor_procesos.mover(delta, &ids);
+        self.cursor_processes.mover(delta, &ids);
         // SNAPSHOT, not a patch. Since bridge 57 the cursor has somewhere to
         // travel (`ViewChange::Tasks`), so this is no longer "there is no
         // contract": it is that a key that only moves the selection does not
         // need to resend the whole board. Changing it is an optimization.
         let snap = self.snapshot();
         Some((
-            self.aplicada(),
-            vec![self.sobre(UiUpdate::Snapshot(Box::new(snap)))],
+            self.applied(),
+            vec![self.over(UiUpdate::Snapshot(Box::new(snap)))],
         ))
     }
 
@@ -428,20 +424,20 @@ impl Estado {
     /// slots — a layout change — asks through the SAME path: two ways of
     /// requesting a listing are two places to forget the attribute catalog
     /// or the token.
-    pub(super) fn pedir_listado(
+    pub(super) fn request_listing(
         &mut self,
         slot: u32,
         dir: &VPath,
         token: RequestToken,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
-        self.pedir_catalogo(dir, backend, buzon);
+        self.request_catalog(dir, backend, buzon);
         // WHERE it is going stays noted down: what the slot shows does not
         // change until this lands, and until then `pane.dir()` answers for
         // the directory being left behind.
-        if let Some(h) = self.huecos.get_mut(&slot) {
-            h.dir_pedido = Some(dir.clone());
+        if let Some(h) = self.slots.get_mut(&slot) {
+            h.dir_requested = Some(dir.clone());
         }
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
@@ -449,10 +445,10 @@ impl Estado {
         let attrs = self.attrs_de(&dir);
         tokio::spawn(async move {
             let stream = backend.list(dir.clone(), attrs).await;
-            let res = Estado::primera_pagina(stream, slot, token, buzon.clone()).await;
+            let res = State::first_page(stream, slot, token, buzon.clone()).await;
             // If the actor is no longer there, the answer matters to nobody.
             let _ = buzon
-                .send(Mensaje::Listado(Box::new((token, slot, dir, res))))
+                .send(Message::Listing(Box::new((token, slot, dir, res))))
                 .await;
         });
     }
@@ -468,11 +464,11 @@ impl Estado {
     /// flight, and by what it shows if not: both are "this pane's
     /// directory", and looking only at the second left unrefreshed the pane
     /// that was entering the very place the mutation changed.
-    pub(super) fn refrescar_afectados(
+    pub(super) fn refresh_afectados(
         &mut self,
         task_id: u64,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<ViewChange> {
         let afectados = match self.tasks.get(&task_id) {
             Some(t) if !t.afectados.is_empty() => t.afectados.clone(),
@@ -484,12 +480,12 @@ impl Estado {
         // one and paying the probe and the plugin decorations all over
         // again (measured at 167 ms per page of twenty). It refreshes when
         // the LAST one finishes, which is when the directory stops moving.
-        let queda_trabajo = self.tasks.iter().any(|(id, t)| {
+        let remains_work = self.tasks.iter().any(|(id, t)| {
             *id != task_id
                 && !Self::terminal(t.vista.state)
                 && t.afectados.iter().any(|d| afectados.contains(d))
         });
-        if queda_trabajo {
+        if remains_work {
             return Vec::new();
         }
         // Consumed: neither this one nor its already-finished siblings ask
@@ -500,35 +496,35 @@ impl Estado {
             }
         }
         let huecos: Vec<(u32, bool)> = self
-            .huecos
+            .slots
             .iter()
             .filter(|(_, h)| {
-                afectados.contains(h.dir_pedido.as_ref().unwrap_or_else(|| h.pane.dir()))
+                afectados.contains(h.dir_requested.as_ref().unwrap_or_else(|| h.pane.dir()))
             })
             .map(|(id, _)| (*id, self.oculto(*id)))
             .collect();
-        let mut cambios = Vec::new();
+        let mut changes = Vec::new();
         for (slot, oculto) in huecos {
             if oculto {
                 // A slot that is not visible does not request listings —
                 // what is not seen is not fetched — but it also cannot keep
                 // believing its listing is still true: it is marked LOADING,
-                // which is what `despertar_visibles` picks up as soon as it
+                // which is what `despertar_visible` picks up as soon as it
                 // comes back to the screen. Without this, a background tab
                 // over the destination directory kept showing a listing from
                 // before the copy until someone navigated by hand.
-                if let Some(h) = self.huecos.get_mut(&slot) {
-                    h.estado = Self::cargando_hacia(None, None);
+                if let Some(h) = self.slots.get_mut(&slot) {
+                    h.state = Self::loading_toward(None, None);
                 }
-                cambios.push(ViewChange::SlotState {
+                changes.push(ViewChange::SlotState {
                     slot_id: slot,
-                    state: Self::cargando_hacia(None, None),
+                    state: Self::loading_toward(None, None),
                 });
                 continue;
             }
-            cambios.extend(self.refrescar(slot, backend, buzon));
+            changes.extend(self.refresh(slot, backend, buzon));
         }
-        cambios
+        changes
     }
 
     /// Requests one SLOT's listing again, in its SAME directory.
@@ -553,18 +549,18 @@ impl Estado {
     /// losing a navigation is the application moving on its own. And there
     /// is nothing to lose: the listing about to land is newer than the
     /// mutation, or it is going somewhere else.
-    pub(super) fn refrescar(
+    pub(super) fn refresh(
         &mut self,
         slot: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<ViewChange> {
         self.token += 1;
         let token = RequestToken(self.token);
-        let Some(hueco) = self.huecos.get_mut(&slot) else {
+        let Some(hueco) = self.slots.get_mut(&slot) else {
             return Vec::new();
         };
-        if hueco.en_vuelo.is_some() {
+        if hueco.in_flight.is_some() {
             return Vec::new();
         }
         if let Some(sel) = hueco.pane.selected().map(|e| e.path.clone()) {
@@ -574,19 +570,19 @@ impl Estado {
         // `marked_paths` falls back to the cursor when there are no marks,
         // and restoring THAT would turn a refresh into a mark the reader
         // never made.
-        hueco.marcas_a_restaurar = if hueco.pane.marks_len() > 0 {
+        hueco.marks_to_restore = if hueco.pane.marks_len() > 0 {
             hueco.pane.marked_paths()
         } else {
             Vec::new()
         };
         let dir = hueco.pane.dir().clone();
-        hueco.estado = Self::cargando_hacia(None, None);
-        hueco.en_vuelo = Some(token);
+        hueco.state = Self::loading_toward(None, None);
+        hueco.in_flight = Some(token);
         hueco.drenando = Some(token);
-        self.pedir_listado(slot, &dir, token, backend, buzon);
+        self.request_listing(slot, &dir, token, backend, buzon);
         vec![ViewChange::SlotState {
             slot_id: slot,
-            state: Self::cargando_hacia(None, None),
+            state: Self::loading_toward(None, None),
         }]
     }
 
@@ -595,29 +591,29 @@ impl Estado {
     /// Of all, not just the focused one, which is what the TUI does and for
     /// the same reason: what changes a listing underneath is a change ON
     /// DISK, and a change on disk does not respect focus. Hidden ones stay
-    /// out — what is not seen is not fetched — `despertar_visibles` already
+    /// out — what is not seen is not fetched — `despertar_visible` already
     /// wakes them when the layout brings them into view.
-    pub(super) fn refrescar_visibles(
+    pub(super) fn refresh_visible(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         let slots: Vec<u32> = self
-            .huecos
+            .slots
             .keys()
             .copied()
             .filter(|id| !self.oculto(*id))
             .collect();
-        let mut cambios = Vec::new();
+        let mut changes = Vec::new();
         for slot in slots {
-            cambios.extend(self.refrescar(slot, backend, buzon));
+            changes.extend(self.refresh(slot, backend, buzon));
         }
-        if cambios.is_empty() {
+        if changes.is_empty() {
             // Everyone had something in flight: what is about to land is
             // newer than this key, so there is nothing to say or to paint.
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         }
-        (self.aplicada(), vec![self.parche(cambios)])
+        (self.applied(), vec![self.parche(changes)])
     }
 
     /// Sets aside — or brings back — the active pane's hidden entries (#107).
@@ -625,35 +621,35 @@ impl Estado {
     /// Presentation-only: the provider does not re-list, the set-aside
     /// entries stay in the model. And it is ANNOUNCED, because a listing
     /// that shrinks without saying why reads as a pane failure.
-    pub(super) fn alternar_ocultos(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let (visibles, podadas) = {
-            let hueco = self.hueco_mut();
-            let visibles = hueco.pane.toggle_hidden();
-            (visibles, hueco.pane.pruned_marks())
+    pub(super) fn toggle_hidden(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let (visible, podadas) = {
+            let hueco = self.slot_mut();
+            let visible = hueco.pane.toggle_hidden();
+            (visible, hueco.pane.pruned_marks())
         };
-        let clave = if visibles {
+        let key = if visible {
             "msg-hidden-shown"
         } else {
             "msg-hidden-hidden"
         };
-        let mut frase = norte_i18n::t_in(self.lang, clave);
+        let mut phrase = norte_i18n::t_in(self.lang, key);
         if podadas > 0 {
             // Setting the hidden ones aside PRUNES the marks of the ones
             // that leave. The contract of `PaneState::pruned_marks` is that
             // this is never silent: keeping quiet about it would send the
             // next bulk op over fewer files than the reader marked, while
             // they believe all of them are going.
-            frase.push_str(", ");
-            frase.push_str(&norte_i18n::ta_in(
+            phrase.push_str(", ");
+            phrase.push_str(&norte_i18n::ta_in(
                 self.lang,
                 "status-marks-pruned",
                 &[("n", &podadas.to_string())],
             ));
         }
-        self.status.message = Some(clamp_display(frase));
-        let filas = self.parche_filas();
-        let cambio = ViewChange::Status(self.status.clone());
-        (self.aplicada(), vec![filas, self.parche(vec![cambio])])
+        self.status.message = Some(clamp_display(phrase));
+        let rows = self.parche_rows();
+        let change = ViewChange::Status(self.status.clone());
+        (self.applied(), vec![rows, self.parche(vec![change])])
     }
 
     /// Cycles the reinterpretation of names that are not UTF-8 (#57).
@@ -661,15 +657,15 @@ impl Estado {
     /// Display-only (rule 1): what changes is how the bytes are PAINTED, not
     /// the bytes. That is why row keys stay valid and only the visible rows
     /// travel.
-    pub(super) fn ciclar_encoding(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let etiqueta = self.hueco_mut().pane.cycle_name_encoding();
-        let frase = match etiqueta {
+    pub(super) fn cycle_encoding(&mut self) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        let label = self.slot_mut().pane.cycle_name_encoding();
+        let phrase = match label {
             Some(enc) => norte_i18n::ta_in(self.lang, "msg-names-encoding", &[("enc", enc)]),
             None => norte_i18n::t_in(self.lang, "msg-names-encoding-off"),
         };
-        self.status.message = Some(clamp_display(frase));
-        let filas = self.parche_filas();
-        let cambio = ViewChange::Status(self.status.clone());
-        (self.aplicada(), vec![filas, self.parche(vec![cambio])])
+        self.status.message = Some(clamp_display(phrase));
+        let rows = self.parche_rows();
+        let change = ViewChange::Status(self.status.clone());
+        (self.applied(), vec![rows, self.parche(vec![change])])
     }
 }

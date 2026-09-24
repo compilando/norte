@@ -11,12 +11,12 @@
 use norte_tui::keymap::{Count, Effective, Resolution, Resolver, parse_chord, parse_keymap};
 use proptest::prelude::*;
 
-const COMANDOS: &[&str] = &["app.quit", "pane.switch", "cursor.up", "cursor.down"];
-const TECLAS: &[&str] = &["a", "b", "g", "q", "G", "f5", "ctrl+c", "enter", "esc"];
+const COMMANDS: &[&str] = &["app.quit", "pane.switch", "cursor.up", "cursor.down"];
+const KEYS: &[&str] = &["a", "b", "g", "q", "G", "f5", "ctrl+c", "enter", "esc"];
 
 fn arb_seq() -> impl Strategy<Value = Vec<String>> {
     proptest::collection::vec(
-        proptest::sample::select(TECLAS).prop_map(str::to_owned),
+        proptest::sample::select(KEYS).prop_map(str::to_owned),
         1..=3,
     )
 }
@@ -25,7 +25,7 @@ fn arb_bindings() -> impl Strategy<Value = Vec<(Vec<String>, String)>> {
     proptest::collection::vec(
         (
             arb_seq(),
-            proptest::sample::select(COMANDOS).prop_map(str::to_owned),
+            proptest::sample::select(COMMANDS).prop_map(str::to_owned),
         ),
         0..8,
     )
@@ -44,12 +44,12 @@ fn to_toml(section: &str, bindings: &[(Vec<String>, String)], key: &str) -> Stri
 
 proptest! {
     #[test]
-    fn keymap_aceptado_implica_resolucion_determinista(
+    fn keymap_accepted_implica_resolucion_determinista(
         pane in arb_bindings(),
         global in arb_bindings(),
         user_pre in arb_bindings(),
         user_app in arb_bindings(),
-        stream in proptest::collection::vec(proptest::sample::select(TECLAS), 0..32),
+        stream in proptest::collection::vec(proptest::sample::select(KEYS), 0..32),
     ) {
         let src = format!(
             "{}{}",
@@ -63,17 +63,17 @@ proptest! {
         );
         let file = parse_keymap(&src).expect("valid generated TOML");
         let user = parse_keymap(&user_src).expect("valid user TOML");
-        let Ok(eff) = Effective::build(&file, Some(&user), COMANDOS) else {
+        let Ok(eff) = Effective::build(&file, Some(&user), COMMANDS) else {
             // Rejected on load (ambiguous/duplicate): exactly the contract.
             return Ok(());
         };
-        let todas = || pane.iter().chain(&global).chain(&user_pre).chain(&user_app);
-        let max_len = todas().map(|(on, _)| on.len()).max().unwrap_or(0);
+        let all = || pane.iter().chain(&global).chain(&user_pre).chain(&user_app);
+        let max_len = all().map(|(on, _)| on.len()).max().unwrap_or(0);
 
         // 1) Every bound sequence walks Pending…Pending→Run (it does not
         //    matter which layer: an exact sequence that got overridden is
         //    still BOUND).
-        for (on, _) in todas() {
+        for (on, _) in all() {
             let mut r = Resolver::new(eff.clone());
             for (i, k) in on.iter().enumerate() {
                 let res = r.push(parse_chord(k).unwrap());
@@ -116,7 +116,7 @@ const MAX_COUNT: u32 = 9_999;
 /// resolution, and the only one whose count-clearing path no example pins.
 /// The other two cover both sides of the catalogue (`app.quit` does not
 /// accept a count, `cursor.down` does).
-const COMANDOS_CONTADOR: &[&str] = &["app.quit", "cursor.down", "cursor.page-down"];
+const COMMANDS_COUNTER: &[&str] = &["app.quit", "cursor.down", "cursor.page-down"];
 
 /// What this "frontend" really implements.
 const CONOCIDOS: &[&str] = &["app.quit", "cursor.down"];
@@ -127,25 +127,25 @@ const CONOCIDOS: &[&str] = &["app.quit", "cursor.down"];
 /// would go down the `else` resolving nothing. `esc` does not either: it
 /// only works as a standalone binding and the generated sequences would
 /// knock it out on load.
-const TECLAS_LIGABLES: &[&str] = &["a", "g", "q", "0", "enter"];
+const KEYS_LIGABLES: &[&str] = &["a", "g", "q", "0", "enter"];
 
 /// STREAM keys: digits (the count), bindable keys, one unbound one (`z`, a
 /// miss) and `esc` (the cancellation).
-const TECLAS_STREAM: &[&str] = &["a", "g", "q", "z", "enter", "esc"];
-const DIGITOS: &[&str] = &["0", "1", "2", "3", "5", "9"];
+const KEYS_STREAM: &[&str] = &["a", "g", "q", "z", "enter", "esc"];
+const DIGITS: &[&str] = &["0", "1", "2", "3", "5", "9"];
 
 fn arb_seq_ligable() -> impl Strategy<Value = Vec<String>> {
     proptest::collection::vec(
-        proptest::sample::select(TECLAS_LIGABLES).prop_map(str::to_owned),
+        proptest::sample::select(KEYS_LIGABLES).prop_map(str::to_owned),
         1..=3,
     )
 }
 
-fn arb_bindings_contador() -> impl Strategy<Value = Vec<(Vec<String>, String)>> {
+fn arb_bindings_counter() -> impl Strategy<Value = Vec<(Vec<String>, String)>> {
     proptest::collection::vec(
         (
             arb_seq_ligable(),
-            proptest::sample::select(COMANDOS_CONTADOR).prop_map(str::to_owned),
+            proptest::sample::select(COMMANDS_COUNTER).prop_map(str::to_owned),
         ),
         0..6,
     )
@@ -154,10 +154,10 @@ fn arb_bindings_contador() -> impl Strategy<Value = Vec<(Vec<String>, String)>> 
 /// A stream keystroke, loaded toward digits: with a uniform split almost no
 /// case would get to type five digits in a row, which is exactly where the
 /// ceiling lives.
-fn arb_pulsacion() -> impl Strategy<Value = &'static str> {
+fn arb_keypress() -> impl Strategy<Value = &'static str> {
     prop_oneof![
-        7 => proptest::sample::select(DIGITOS),
-        3 => proptest::sample::select(TECLAS_STREAM),
+        7 => proptest::sample::select(DIGITS),
+        3 => proptest::sample::select(KEYS_STREAM),
     ]
 }
 
@@ -190,10 +190,10 @@ proptest! {
     ///    and `cua` cannot grow counts behind your back. And `0` is still
     ///    bindable with counts on: both keymaps load or fail together.
     #[test]
-    fn el_contador_ni_desborda_ni_se_pega_a_la_tecla_siguiente(
-        pane in arb_bindings_contador(),
-        global in arb_bindings_contador(),
-        stream in proptest::collection::vec(arb_pulsacion(), 0..24),
+    fn the_counter_neither_overflows_nor_sticks_to_the_next_key(
+        pane in arb_bindings_counter(),
+        global in arb_bindings_counter(),
+        stream in proptest::collection::vec(arb_keypress(), 0..24),
     ) {
         let body = format!(
             "{}{}",
@@ -249,7 +249,7 @@ proptest! {
                     // 1: the count does NOT survive the command.
                     prop_assert_eq!(r.count(), None, "count alive after {:?}", res);
                     // 3: the catalogue is the authority.
-                    let acepta = norte_frontend::keymap::catalogue::lookup(command)
+                    let accepts = norte_frontend::keymap::catalogue::lookup(command)
                         .is_some_and(|d| d.counts);
                     match count {
                         // 2: neither invents…
@@ -257,11 +257,11 @@ proptest! {
                         // …nor rounds.
                         Count::Repeat(n) => {
                             prop_assert_eq!(before, Some(*n), "altered count");
-                            prop_assert!(acepta, "{command} does not accept a count and got Repeat");
+                            prop_assert!(accepts, "{command} does not accept a count and got Repeat");
                         }
                         Count::Ignored(n) => {
                             prop_assert_eq!(before, Some(*n), "altered count");
-                            prop_assert!(!acepta, "{command} accepts a count and got Ignored");
+                            prop_assert!(!accepts, "{command} accepts a count and got Ignored");
                         }
                     }
                 }

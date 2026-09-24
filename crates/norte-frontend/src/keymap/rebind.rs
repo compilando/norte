@@ -1394,7 +1394,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
     /// The fix is that the target comes from the SAME place as the cut, so
     /// the cut has to SAY which layer it pointed at.
     #[test]
-    fn el_corte_dice_a_que_capa_apunta() {
+    fn the_cut_says_which_layer_it_points_to() {
         let preset = parse_keymap(BROWSE).expect("preset");
         let user = crate::keymap::parse_keymap_layer(
             "[pane]\nprepend_keymap = [{ on = [\"mod+k\"], run = \"cursor.top\" }]\n",
@@ -1436,7 +1436,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
     /// So the cut widens by one step and the target is the LAST of
     /// `User`/`Profile` present.
     #[test]
-    fn con_perfil_activo_el_destino_es_el_perfil() {
+    fn with_active_profile_the_destination_is_the_profile() {
         let preset = parse_keymap(BROWSE).expect("preset");
         let user = crate::keymap::parse_keymap_layer(
             "[pane]\nprepend_keymap = [{ on = [\"mod+k\"], run = \"cursor.top\" }]\n",
@@ -1465,7 +1465,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
     /// target: it is still the user layer, and the profile's is not even in
     /// `kinds`.
     #[test]
-    fn sin_perfil_el_destino_sigue_siendo_el_usuario() {
+    fn without_a_profile_the_destination_is_still_the_user() {
         let preset = parse_keymap(BROWSE).expect("preset");
         let system = crate::keymap::parse_keymap_layer(
             "[pane]\nprepend_keymap = [{ on = [\"mod+j\"], run = \"cursor.top\" }]\n",
@@ -1486,7 +1486,7 @@ keymap = [{ on = ["ctrl+w"], run = "viewer.close" }]
     /// approves what it did not approve. A profile BELOW the user is not an
     /// order any resolver produces.
     #[test]
-    fn un_orden_inesperado_sigue_siendo_fail_closed() {
+    fn an_unexpected_order_is_still_fail_closed() {
         let preset = parse_keymap(BROWSE).expect("preset");
         let a = crate::keymap::parse_keymap_layer("[pane]\nprepend_keymap = []\n").expect("a");
         let b = crate::keymap::parse_keymap_layer("[pane]\nprepend_keymap = []\n").expect("b");

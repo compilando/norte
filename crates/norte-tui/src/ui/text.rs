@@ -78,7 +78,7 @@ pub(crate) fn hint_groups(hint: &str) -> Vec<&str> {
 /// `[enter] confirmar [esc]…kspace] atrás [/] filtrar`: the cut fell inside a
 /// group and left the brackets balanced, so `[esc]…kspace]` reads as a chord
 /// for a key called *kspace* that the app invented; and middle truncation
-/// eats the MIDDLE of the list, which is exactly where `[tab] otro panel`
+/// eats the MIDDLE of the list, which is exactly where `[tab] other panel`
 /// sat — the verb the whole two-pane design rests on, gone without a trace.
 ///
 /// A group is therefore emitted WHOLE or not at all, and the `…` says that

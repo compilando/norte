@@ -218,7 +218,7 @@ pub struct Engine {
     ///   it waits for approval (30 s in the daemon). A human undo waits
     ///   behind it. There is no deadlock —approving does not go through an
     ///   undo—, only waiting.
-    undo_en_curso: Arc<tokio::sync::Mutex<()>>,
+    undo_in_progress: Arc<tokio::sync::Mutex<()>>,
     /// BOUNDED ring of `archive.pack` reports, by `task_id`
     /// ([`Engine::archive_pack_report`]).
     ///
@@ -365,7 +365,7 @@ impl Engine {
             sync_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             test_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             undo_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
-            undo_en_curso: Arc::new(tokio::sync::Mutex::new(())),
+            undo_in_progress: Arc::new(tokio::sync::Mutex::new(())),
             pack_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             checksum_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
             dir_usage_reports: std::sync::Mutex::new(std::collections::VecDeque::new()),
@@ -790,7 +790,7 @@ impl Engine {
     ///
     /// # What this gate guarantees, and its deadline
     /// **"It was not unreadable the last time it was checked", and that can
-    /// be up to [`FRENO_TRAS_FALLO`](crate::embedded::FRENO_TRAS_FALLO) old.**
+    /// be up to [`FRENO_AFTER_FAILURE`](crate::embedded::FRENO_TRAS_FALLO) old.**
     /// #179's brake makes a `Busy` verdict be remembered for thirty seconds
     /// with no reopening; if in that window the file goes from BUSY to
     /// UNREADABLE —someone releases the lock and right after corrupts it—
@@ -1618,7 +1618,7 @@ impl Engine {
             .await?
             .node_id(p, norte_vfs::FollowLinks::Yes)
             .await?;
-        Ok(id.map(crate::anchor::de_nodo))
+        Ok(id.map(crate::anchor::for_node))
     }
 
     /// Reading a file as a stream (direct, no Task), with an optional
@@ -2257,9 +2257,9 @@ impl Engine {
         // that does not exist yet is the ordinary case for a mirror, and
         // bringing it down here would be a wire method that starts failing
         // where it used to answer.
-        let caps = crate::compare::degradada(dest_caps, dest.as_ref(), &params.dest);
+        let caps = crate::compare::degraded(dest_caps, dest.as_ref(), &params.dest);
         let sides = norte_compare::Sides::from_capabilities(
-            crate::compare::degradada(source_caps, source.as_ref(), &params.source),
+            crate::compare::degraded(source_caps, source.as_ref(), &params.source),
             caps,
         );
         if sides.folds_case()
@@ -2460,6 +2460,11 @@ impl Engine {
     /// (the caller's `remove`): with a single body it would have to be
     /// remembered on every `?`, which is exactly the kind of thing that gets
     /// forgotten.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one line over since the English names made rustfmt wrap; splitting it would \
+                  defeat the single-exit reason above"
+    )]
     async fn sync_apply_opened(
         &self,
         reader: crate::sync::SpoolReader,
@@ -2697,11 +2702,11 @@ impl Engine {
                 Box::pin(async move {
                     crate::pack::pack(
                         sources,
-                        crate::pack::Destino {
+                        crate::pack::Dest {
                             provider: dest_provider,
                             dest,
                         },
-                        crate::pack::Empaquetado {
+                        crate::pack::Packed {
                             base,
                             format,
                             level,
@@ -2800,11 +2805,11 @@ impl Engine {
             .file_name()
             .map(|s| s.as_bytes().to_vec())
             .ok_or(Error::InvalidPath)?;
-        let token = crate::pack::formato_de_nombre(&name).ok_or(Error::Unsupported)?;
+        let token = crate::pack::name_format(&name).ok_or(Error::Unsupported)?;
         let root = norte_proto::VPath::archive_compose(token, &params.path, &[])
             .map_err(|_| Error::InvalidPath)?;
         let provider = self.provider_for(&root).await?;
-        let checked = crate::pack::que_se_comprueba(token);
+        let checked = crate::pack::that_is_checked(token);
         let report = Arc::new(std::sync::Mutex::new(
             norte_proto::methods::ArchiveTestResult::default(),
         ));
@@ -2892,7 +2897,7 @@ impl Engine {
         let src = self.provider_for(&params.path).await?;
         // Measured BEFORE creating the Task: a rejection of the REQUEST is an
         // RPC error, not the failure of something already running.
-        crate::pack::mide_el_reparto(&*src, &params.path, params.part_bytes).await?;
+        crate::pack::measures_the_distribution(&*src, &params.path, params.part_bytes).await?;
         let dest_provider = self.provider_for(&params.dest_dir).await?;
         let key = params.dest_dir.scheme().to_owned();
         let observer = Arc::clone(&self.observer);
@@ -3352,7 +3357,7 @@ impl Engine {
         let lane = if opts.queued {
             crate::scheduler::Lane::Cola
         } else {
-            crate::scheduler::Lane::Paralelo
+            crate::scheduler::Lane::Parallel
         };
         Ok(self.sched.submit_en(
             lane,
@@ -3449,7 +3454,7 @@ impl Engine {
         let lane = if opts.queued {
             crate::scheduler::Lane::Cola
         } else {
-            crate::scheduler::Lane::Paralelo
+            crate::scheduler::Lane::Parallel
         };
         Ok(self.sched.submit_en(
             lane,
@@ -3873,11 +3878,11 @@ impl Engine {
             return Err(Error::PlanStale);
         }
         let provider = self.provider_for(dir).await?;
-        let folders = plan.carpetas(dir);
+        let folders = plan.folders(dir);
         let steps: Vec<(VPath, VPath)> = plan
-            .pasos()
+            .steps()
             .iter()
-            .map(|p| (dir.clone().join(p.current.clone()), p.destino(dir)))
+            .map(|p| (dir.clone().join(p.current.clone()), p.dest(dir)))
             .collect();
 
         // ONE gate for everything it touches — the folders it is going to
@@ -4608,7 +4613,7 @@ impl Engine {
 
         let report_task = Arc::clone(&report);
         let owner = executor.clone();
-        let in_progress = Arc::clone(&self.undo_en_curso);
+        let in_progress = Arc::clone(&self.undo_in_progress);
         let key = "undo".to_owned();
         let handle = self.sched.submit(
             &key,
@@ -4642,10 +4647,9 @@ impl Engine {
                         if ctx.cancel.is_cancelled() {
                             return Err(Error::Cancelled);
                         }
-                        let unit = match crate::undo::vigencia(unit, &already_undone) {
-                            crate::undo::Vigencia::Entera(u)
-                            | crate::undo::Vigencia::EnParte(u) => u,
-                            crate::undo::Vigencia::Deshecha => {
+                        let unit = match crate::undo::validity(unit, &already_undone) {
+                            crate::undo::Validity::Whole(u) | crate::undo::Validity::InPart(u) => u,
+                            crate::undo::Validity::Undone => {
                                 tracing::info!(
                                     %task_id,
                                     "unit already undone by another undo; skipping"
@@ -4656,7 +4660,7 @@ impl Engine {
                             // A batch half-undone by another undo: it is
                             // neither continued nor skipped — it stops, like
                             // on a drift.
-                            crate::undo::Vigencia::Parada(seq) => {
+                            crate::undo::Validity::Parada(seq) => {
                                 report_task.lock().expect("undo report lock").blocked =
                                     Some((seq, Error::PlanStale));
                                 break;

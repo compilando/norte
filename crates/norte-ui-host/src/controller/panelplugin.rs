@@ -22,7 +22,7 @@ use super::*;
 /// presets bring small, fixed ids — so without it, another plugin's panel
 /// would inherit the first one's frame and state.
 #[derive(Clone, PartialEq, Eq)]
-pub(super) struct Firma {
+pub(super) struct Signature {
     /// Which panel it is: `plugin:<id>:<kind>`.
     kind: String,
     /// The directory it looks at.
@@ -37,10 +37,10 @@ pub(super) struct Firma {
 
 /// What a panel slot has NOW and what it is requesting.
 #[derive(Default)]
-pub(super) struct EstadoPanel {
+pub(super) struct StatePanel {
     /// WHICH panel what is stored here belongs to.
     ///
-    /// A `SlotId` gets reused — `poner_arbol` changes the whole tree and
+    /// A `SlotId` gets reused — `set_tree` changes the whole tree and
     /// keeps the ids, and presets and templates bring small, fixed ids — so
     /// slot 3 can go from one plugin to another on a layout change or a
     /// restored session. Without this, A's stuff stayed here for B: its
@@ -60,22 +60,22 @@ pub(super) struct EstadoPanel {
     /// the same question: does this need requesting? Without noting the empty
     /// attempt, a panel whose plugin is no longer there would be retried on
     /// every actor message.
-    firma: Option<Firma>,
+    signature: Option<Signature>,
     /// The request in flight, with its token.
-    en_vuelo: Option<(RequestToken, Firma)>,
+    in_flight: Option<(RequestToken, Signature)>,
 }
 
-impl Estado {
+impl State {
     /// The PLACED plugin panel slots, with their kind and their size.
     ///
     /// From the layout, not the tree, like the preview: a slot behind a tab
     /// exists, but is not being seen, and what is not seen does not request.
-    fn huecos_de_panel(&self) -> Vec<(u32, String, u16, u16)> {
-        self.reparto
+    fn pane_slots(&self) -> Vec<(u32, String, u16, u16)> {
+        self.split
             .placements
             .iter()
             .filter_map(|(slot, r)| {
-                let kind = kind_de(&self.arbol, *slot)?;
+                let kind = kind_de(&self.tree, *slot)?;
                 if !kind.as_str().starts_with("plugin:") {
                     return None;
                 }
@@ -95,18 +95,18 @@ impl Estado {
     ///
     /// The link is resolved with the shared engine, same as the preview and
     /// the sheet: a followed slot that dies degrades to the `active` role.
-    fn firma_de_panel(&self, slot: SlotId, kind: &str, width: u16, height: u16) -> Firma {
+    fn pane_signature(&self, slot: SlotId, kind: &str, width: u16, height: u16) -> Signature {
         let mut diags = Vec::new();
         let followed =
-            norte_frontend::layout::resolve_follow(&self.arbol, slot, &self.roles, &mut diags)
+            norte_frontend::layout::resolve_follow(&self.tree, slot, &self.roles, &mut diags)
                 .or_else(|| self.roles.get(norte_frontend::layout::RoleId::Active));
         let slot_state = followed
-            .and_then(|SlotId(s)| self.huecos.get(&s))
-            .or_else(|| self.huecos.get(&self.activo()));
-        Firma {
+            .and_then(|SlotId(s)| self.slots.get(&s))
+            .or_else(|| self.slots.get(&self.active()));
+        Signature {
             kind: kind.to_owned(),
             dir: slot_state
-                .map_or_else(|| self.hueco().pane.dir().clone(), |h| h.pane.dir().clone()),
+                .map_or_else(|| self.slot().pane.dir().clone(), |h| h.pane.dir().clone()),
             // Without the frame: the guest describes what is INSIDE.
             cols: u32::from(width.saturating_sub(2)),
             rows: u32::from(height.saturating_sub(2)),
@@ -130,43 +130,43 @@ impl Estado {
     /// slot; while there is one, another is not started — dropping the
     /// response does not cancel the work, which is already instantiating
     /// wasm.
-    pub(super) fn sondear_paneles(
+    pub(super) fn sondear_panels(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         // The NORMAL case — no plugin panel placed and nothing stored —
         // returns without touching the tree: this runs after every actor
         // message, and walking the slots to discover there is none is paid
         // on every keystroke of every session that does not use plugins.
-        let slots = self.huecos_de_panel();
-        if slots.is_empty() && self.paneles.is_empty() {
+        let slots = self.pane_slots();
+        if slots.is_empty() && self.panels.is_empty() {
             return Vec::new();
         }
         // A slot that no longer exists keeps nothing. It matters more than in
         // the preview: what a panel keeps is its guest's OPAQUE state, and a
         // reused `SlotId` would hand it to the next plugin.
         let alive: Vec<u32> = self
-            .arbol
+            .tree
             .slot_ids()
             .into_iter()
             .map(|SlotId(id)| id)
             .collect();
-        self.paneles.retain(|id, _| alive.contains(id));
+        self.panels.retain(|id, _| alive.contains(id));
 
         for (id, kind, width, height) in slots {
-            let firma = self.firma_de_panel(SlotId(id), &kind, width, height);
-            let state = self.paneles.entry(id).or_default();
+            let signature = self.pane_signature(SlotId(id), &kind, width, height);
+            let state = self.panels.entry(id).or_default();
             // The slot changed panel: what was there belonged to ANOTHER
             // plugin and is not inherited — neither the frame, nor the opaque
             // state.
             if state.kind.as_deref() != Some(kind.as_str()) {
-                *state = EstadoPanel {
+                *state = StatePanel {
                     kind: Some(kind.clone()),
-                    ..EstadoPanel::default()
+                    ..StatePanel::default()
                 };
             }
-            if state.firma.as_ref() == Some(&firma) || state.en_vuelo.is_some() {
+            if state.signature.as_ref() == Some(&signature) || state.in_flight.is_some() {
                 continue;
             }
             // The kind is split BEFORE marking anything in flight. The other
@@ -174,21 +174,21 @@ impl Estado {
             // `plugin:git`, which a layout file can name — left the slot with
             // an in-flight request that did not exist: since a live one
             // blocks starting another, that panel never requested again.
-            let Some((plugin_id, panel_kind)) = partes(&kind) else {
+            let Some((plugin_id, panel_kind)) = parts(&kind) else {
                 continue;
             };
             self.token += 1;
             let token = RequestToken(self.token);
             let opaque_state = state.state.clone();
-            self.paneles.entry(id).or_default().en_vuelo = Some((token, firma.clone()));
+            self.panels.entry(id).or_default().in_flight = Some((token, signature.clone()));
             let params = norte_proto::methods::PluginPanelRenderParams {
                 plugin_id: plugin_id.to_owned(),
                 kind: panel_kind.to_owned(),
-                dir: firma.dir.clone(),
-                cols: firma.cols,
-                rows: firma.rows,
+                dir: signature.dir.clone(),
+                cols: signature.cols,
+                rows: signature.rows,
                 lang: norte_frontend::frame::lang_code().to_owned(),
-                cursor_name: firma.cursor.clone(),
+                cursor_name: signature.cursor.clone(),
                 state: opaque_state,
                 // A repaint from a context change is the NEUTRAL event. What
                 // is missing is the guest receiving the click and the
@@ -198,15 +198,17 @@ impl Estado {
             let backend = Arc::clone(backend);
             let mailbox = mailbox.clone();
             tokio::spawn(async move {
-                let res =
-                    match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_panel_render(params))
-                        .await
-                    {
-                        Ok(r) => r,
-                        Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
-                    };
+                let res = match tokio::time::timeout(
+                    DEADLINE_PLUGINS,
+                    backend.plugin_panel_render(params),
+                )
+                .await
+                {
+                    Ok(r) => r,
+                    Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+                };
                 let _ = mailbox
-                    .send(Mensaje::PanelContenido(Box::new((id, token, res))))
+                    .send(Message::PanelContent(Box::new((id, token, res))))
                     .await;
             });
         }
@@ -215,29 +217,29 @@ impl Estado {
 
     /// A panel's frame lands: it is shown if the token is that of THAT slot's
     /// last request, and discarded otherwise.
-    pub(super) fn aterrizar_panel(
+    pub(super) fn land_panel(
         &mut self,
         slot: u32,
         token: RequestToken,
         res: Result<Option<norte_proto::methods::PanelFrame>, Error>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let state = self.paneles.get_mut(&slot)?;
+        let state = self.panels.get_mut(&slot)?;
         // The token is compared by REFERENCE and the signature is MOVED:
         // cloning it meant cloning a path and two strings on every landing,
         // and the old one is not needed for anything else.
-        if state.en_vuelo.as_ref().map(|(t, _)| *t) != Some(token) {
+        if state.in_flight.as_ref().map(|(t, _)| *t) != Some(token) {
             return None;
         }
-        let (_, firma) = state.en_vuelo.take()?;
+        let (_, signature) = state.in_flight.take()?;
         // The attempt is recorded no matter what: without this, a panel with
         // no plugin to paint it would be retried after every actor message.
-        state.firma = Some(firma.clone());
+        state.signature = Some(signature.clone());
         let Ok(Some(frame)) = res else {
             return None;
         };
         // And that whoever was requested is the one signing it: the frame
         // says which plugin it is from.
-        if partes(&firma.kind).map(|(id, _)| id) != Some(frame.plugin_id.as_str()) {
+        if parts(&signature.kind).map(|(id, _)| id) != Some(frame.plugin_id.as_str()) {
             return None;
         }
         // An IDENTICAL frame does not move the screen, and a whole snapshot
@@ -251,7 +253,7 @@ impl Estado {
             return None;
         }
         let snap = self.snapshot();
-        Some(self.sobre(UiUpdate::Snapshot(Box::new(snap))))
+        Some(self.over(UiUpdate::Snapshot(Box::new(snap))))
     }
 
     /// A slot's panel, in the bridge's shape.
@@ -267,12 +269,12 @@ impl Estado {
         // required an alphabet of it. It is text that can carry control
         // characters and ends up in the DOM and in an `aria-label`, same as
         // an unknown kind's name, and it is treated the same.
-        let kind = kind_de(&self.arbol, SlotId(id)).map_or_else(String::new, |k| {
-            partes(k.as_str()).map_or_else(String::new, |(_, panel)| {
+        let kind = kind_de(&self.tree, SlotId(id)).map_or_else(String::new, |k| {
+            parts(k.as_str()).map_or_else(String::new, |(_, panel)| {
                 clamp_display(norte_frontend::display_name(panel.as_bytes()).0)
             })
         });
-        let state = self.paneles.get(&id);
+        let state = self.panels.get(&id);
         let lines = state
             .and_then(|e| e.frame.as_ref())
             .map(|f| {
@@ -307,22 +309,22 @@ impl Estado {
     /// and its command is run.
     ///
     /// The command does not travel over the wire: the frame has it, and it is
-    /// here. And it is filtered with [`norte_frontend::frame::zona_puede`],
+    /// here. And it is filtered with [`norte_frontend::frame::zone_can`],
     /// the same list the terminal applies — the plugin chooses the label AND
     /// the command, and nothing binds them together, so without a filter a
     /// zone that says "Refresh" could name something that copies files. The
     /// consent was to paint.
     ///
     /// What passes the filter goes through the SAME path as the menu and the
-    /// panel bar (`efecto_de` + `aplicar_efecto`): a second door into the
+    /// panel bar (`effect_of` + `apply_effect`): a second door into the
     /// catalogue would be a second dispatcher.
-    pub(super) fn clic_en_panel(
+    pub(super) fn click_on_pane(
         &mut self,
         slot: u32,
         row: u16,
         col: u16,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // A HIDDEN slot — behind a tab — keeps its frame, so its zones would
         // keep resolving even though nobody sees them. The renderer does not
@@ -332,22 +334,22 @@ impl Estado {
         // starts from the painted rectangle; here the cell arrives over the
         // wire.
         if self.oculto(slot) {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
         let command = self
-            .paneles
+            .panels
             .get(&slot)
             .and_then(|e| e.frame.as_ref())
             .and_then(|f| f.hit_at(row, col))
             .map(|h| h.command.clone())
-            .filter(|c| norte_frontend::frame::zona_puede(c));
+            .filter(|c| norte_frontend::frame::zone_can(c));
         let Some(command) = command else {
             // A cell with no zone, or a zone that names something outside its
             // scope: nothing happens, and it is not a reader error.
-            return (self.aplicada(), Vec::new());
+            return (self.applied(), Vec::new());
         };
-        match crate::commands::efecto_de(&command, 1) {
-            Some(effect) => self.aplicar_efecto(effect, backend, mailbox),
+        match crate::commands::effect_of(&command, 1) {
+            Some(effect) => self.apply_effect(effect, backend, mailbox),
             None => self.no_implementado(&command),
         }
     }
@@ -358,6 +360,6 @@ impl Estado {
 /// The separator is the FIRST `:` after the prefix, and it is unambiguous
 /// because the alphabet `KindRegistry::insert_panels` validates does not let
 /// a colon through in either the id or the kind.
-fn partes(kind: &str) -> Option<(&str, &str)> {
+fn parts(kind: &str) -> Option<(&str, &str)> {
     kind.strip_prefix("plugin:")?.split_once(':')
 }

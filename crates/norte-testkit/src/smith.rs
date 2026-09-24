@@ -78,7 +78,7 @@ enum ZipEnd {
 /// ```
 /// let bytes = norte_testkit::ZipSmith::new()
 ///     .file(b"docs/hola.txt", b"hola")
-///     .dir(b"vacio")
+///     .dir(b"empty")
 ///     .build();
 /// assert_eq!(&bytes[..4], b"PK\x03\x04");
 /// ```
@@ -1002,7 +1002,7 @@ mod tests {
     }
 
     #[test]
-    fn zip_deflate_declara_tamanos_reales() {
+    fn zip_deflate_declares_real_sizes() {
         // Simulated "deflated" shorter than the content: comp != uncomp.
         let z = ZipSmith::new()
             .file_deflate(b"f", b"0123456789", b"XYZ")
@@ -1035,7 +1035,7 @@ mod tests {
 
     #[test]
     #[should_panic(expected = "does not forge headers with a name >100")]
-    fn tar_nombre_largo_panica() {
+    fn tar_long_name_panics() {
         let _ = TarSmith::new().file(&[b'a'; 101], b"").build();
     }
 
@@ -1043,7 +1043,7 @@ mod tests {
     /// → LEN 99 (2 digits), base 98 → 101 (skips the impossible 100), base
     /// 99 → 102. The emitted record measures EXACTLY its LEN.
     #[test]
-    fn pax_len_en_transiciones_de_digitos() {
+    fn pax_len_in_digit_transitions() {
         for name_len in [91usize, 92, 93, 13] {
             let name = vec![b'n'; name_len];
             let tar = TarSmith::new().file_pax_path(&name, b"d").build();
@@ -1071,7 +1071,7 @@ mod tests {
     /// The writer produces an archive the REAL DELEGATE knows how to read. A
     /// "correct" writer by our own reading proves nothing.
     #[test]
-    fn un_delegado_real_lista_lo_que_forjamos() {
+    fn a_real_delegate_lists_what_we_forged() {
         const RAW: &[u8] = b"cp437-\xa4\xa5.txt";
         let Some(sevenz) = which_7z() else {
             eprintln!("no 7z installed: test bowing out");
@@ -1111,7 +1111,7 @@ mod tests {
     }
 
     #[test]
-    fn la_firma_es_rar5_y_el_contenido_va_crudo() {
+    fn the_signature_is_rar5_and_the_content_goes_raw() {
         let bytes = RarSmith::new().file(b"a.txt", b"STORD").build();
         assert_eq!(&bytes[..8], b"Rar!\x1a\x07\x01\x00");
         // Method 0 = stored: the content is literally right there.

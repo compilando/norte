@@ -13,70 +13,70 @@ use norte_ui_host::bridge::{ActionAck, RowKey, StaleAction};
 use norte_ui_host::controller::{UiHost, UiHostOptions, Update};
 use norte_ui_host::dto::{SlotView, UiNotice, UiUpdate};
 
-#[path = "../backend_falso/mod.rs"]
+#[path = "../backend_fake/mod.rs"]
 // One test binary, many files (wave W10): each `mod` is a section of the old
 // 22,000-line `controller.rs`, and the `use x::*` below share between
 // sections the `pub(super)` helpers that were already used throughout the
 // file. One integration file per section would be one binary per section —
 // a full crate link each (CLAUDE.md's disk budget).
-mod backend_falso;
-use backend_falso::Falso;
+mod backend_fake;
+use backend_fake::Fake;
 
-mod ajustes_escritura;
-mod ajustes_extensiones;
-mod atributos_procesos;
-mod ayuda;
+mod attributes_processes;
 mod base;
-mod busqueda;
-mod columnas;
-mod comparar;
+mod columns;
+mod compare;
 mod corpus;
-mod disposiciones;
 mod gestos;
+mod handoff;
+mod help;
 mod ir_a;
-mod linea_de_tiempo;
-mod organizar;
-mod paneles;
-mod paneles_de_plugin;
-mod registro;
-mod relevo;
-mod renombrar;
+mod keys_palette;
+mod layouts;
+mod log;
+mod organize;
+mod panels;
+mod plugin_panes;
+mod rename;
 mod revisiones;
+mod search;
+mod settings_extensions;
+mod settings_write;
 mod splash;
 mod sync;
-mod teclas_paleta;
-mod transferencias;
+mod timeline;
+mod transfers;
 mod visor;
 
-use ajustes_extensiones::*;
-use atributos_procesos::*;
-use ayuda::*;
+use attributes_processes::*;
 use base::*;
-use busqueda::*;
-use columnas::*;
-use comparar::*;
+use columns::*;
+use compare::*;
 use corpus::*;
-use disposiciones::*;
 use gestos::*;
-use paneles::*;
-use renombrar::*;
+use help::*;
+use keys_palette::*;
+use layouts::*;
+use panels::*;
+use rename::*;
 use revisiones::*;
+use search::*;
+use settings_extensions::*;
 use sync::*;
-use teclas_paleta::*;
-use transferencias::*;
+use transfers::*;
 
 /// How long ONE update is waited for before the test is given up as hung.
 ///
 /// It is a relief ceiling, not a measurement: it turns a hang into a failure
 /// with a message. It used to be 500 ms, and under the whole gate's load
-/// (6,000 tests in parallel plus the networked e2e ones) `siguiente_revision`
-/// lost it now and then in pre-push — the same family as `foto_hasta`, which
+/// (6,000 tests in parallel plus the networked e2e ones) `next_revision`
+/// lost it now and then in pre-push — the same family as `snapshot_until`, which
 /// already waited fifteen seconds for the same reason. No test uses it as a
 /// signal for "nothing is arriving".
-const ESPERA_MAX: std::time::Duration = std::time::Duration::from_secs(15);
+const WAIT_MAX: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// Column settings with these ids, for every scheme.
-fn columnas_de(ids: &[&str]) -> norte_frontend::columns::ColumnsSettings {
+fn columns_of(ids: &[&str]) -> norte_frontend::columns::ColumnsSettings {
     let cfg = norte_config::ColumnsConfig {
         default_columns: Some(ids.iter().map(|s| (*s).to_owned()).collect()),
         ..norte_config::ColumnsConfig::default()
@@ -95,31 +95,31 @@ fn dir() -> VPath {
 /// indices — row 0 is the first entry — and one more row at the start would
 /// shift them all without saying anything about what each one tests. The row
 /// has its own tests, and they are the ones that turn it on.
-fn ajustes_de_prueba() -> norte_frontend::config::FrontendConfig {
-    let mut cfg = norte_ui_host::ajustes_por_defecto();
+fn test_settings() -> norte_frontend::config::FrontendConfig {
+    let mut cfg = norte_ui_host::default_settings();
     cfg.common.ui_parent_entry = Some(false);
     cfg
 }
 
-async fn host(nombres: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapshot) {
+async fn host(names: Vec<&'static str>) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
-        backend: Falso::con(&nombres),
+        backend: Fake::con(&names),
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
@@ -175,7 +175,7 @@ async fn a_row_that_no_longer_exists_is_a_race_not_an_error() {
     let (h, snap) = host(vec!["a"]).await;
     let ack = h
         .dispatch(UiAction::SelectRow {
-            generation: listado(&snap).generation,
+            generation: listing(&snap).generation,
             slot_id: 1,
             key: RowKey(99),
         })
@@ -285,9 +285,9 @@ async fn only_the_visible_window_travels() {
 
 /// The same tree, unwrapped: for tests that need to touch its channels
 /// before starting the host.
-fn arbol_como_falso() -> Falso {
-    let mut f = Falso::default();
-    f.pon(
+fn tree_as_fake() -> Fake {
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![
             (b"docs".to_vec(), true),
@@ -295,7 +295,7 @@ fn arbol_como_falso() -> Falso {
             (vec![0x63, 0x61, 0x66, 0xC3, 0x28], false),
         ],
     );
-    f.pon(
+    f.put(
         "mem:///casa/docs",
         vec![(b"a.md".to_vec(), false), (b"b.md".to_vec(), false)],
     );
@@ -303,9 +303,9 @@ fn arbol_como_falso() -> Falso {
 }
 
 /// A two-level tree for really navigating.
-fn arbol() -> Arc<Falso> {
-    let mut f = Falso::default();
-    f.pon(
+fn fake_tree() -> Arc<Fake> {
+    let mut f = Fake::default();
+    f.put(
         "mem:///casa",
         vec![
             (b"docs".to_vec(), true),
@@ -315,39 +315,39 @@ fn arbol() -> Arc<Falso> {
             (vec![0x63, 0x61, 0x66, 0xC3, 0x28], false),
         ],
     );
-    f.pon(
+    f.put(
         "mem:///casa/docs",
         vec![(b"a.md".to_vec(), false), (b"b.md".to_vec(), false)],
     );
     Arc::new(f)
 }
 
-async fn host_arbol(backend: Arc<Falso>) -> (UiHost, norte_ui_host::ViewSnapshot) {
+async fn host_tree(backend: Arc<Fake>) -> (UiHost, norte_ui_host::ViewSnapshot) {
     UiHost::start(UiHostOptions {
         backend,
         initial_dir: dir(),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: ajustes_de_prueba(),
+        settings: test_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await
     .expect("starts")
 }
 
-fn listado(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
+fn listing(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::BrowserSlotView {
     let SlotView::Browser(b) = &snap.slots[0] else {
         panic!("the first slot is a listing");
     };
@@ -355,7 +355,7 @@ fn listado(snap: &norte_ui_host::ViewSnapshot) -> &norte_ui_host::dto::BrowserSl
 }
 
 /// Waits for the next snapshot (a navigation sends one).
-async fn siguiente_foto(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_host::ViewSnapshot {
+async fn next_snapshot(sub: &mut norte_ui_host::UiSubscription) -> norte_ui_host::ViewSnapshot {
     loop {
         match sub.recv().await.expect("the host is still alive") {
             Update::Message(m) => {

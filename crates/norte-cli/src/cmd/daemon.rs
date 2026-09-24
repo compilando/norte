@@ -187,16 +187,16 @@ pub(crate) async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::
     Ok(outcome)
 }
 
-/// A startup or provisioning [`Aviso`](norte_core::equipo::Aviso), in the
+/// A startup or provisioning [`Notice`](norte_core::team::Notice), in the
 /// operator's language. Used by `norte daemon run` and the CLI's embedded
-/// engine: both provision with `norte_core::equipo` and both warn the
+/// engine: both provision with `norte_core::team` and both warn the
 /// same way.
-pub(crate) fn warning_text(aviso: &norte_core::equipo::Aviso) -> String {
-    use norte_core::equipo::Aviso;
+pub(crate) fn warning_text(notice: &norte_core::team::Notice) -> String {
+    use norte_core::team::Notice;
     use norte_i18n::ta;
-    match aviso {
-        Aviso::SpoolsBarridos(n) => ta("cli-spool-swept", &[("count", &n.to_string())]),
-        Aviso::SpoolsAMedias {
+    match notice {
+        Notice::SpoolsSweeps(n) => ta("cli-spool-swept", &[("count", &n.to_string())]),
+        Notice::SpoolsAMedias {
             removed,
             failed,
             dir,
@@ -208,17 +208,17 @@ pub(crate) fn warning_text(aviso: &norte_core::equipo::Aviso) -> String {
                 ("path", &dir.display().to_string()),
             ],
         ),
-        Aviso::SpoolsSinBarrer { dir, error } => ta(
+        Notice::UnsweptSpools { dir, error } => ta(
             "cli-spool-sweep-failed",
             &[("path", &dir.display().to_string()), ("error", error)],
         ),
-        Aviso::SinIndice(error) => ta("cli-warn-no-index", &[("error", error)]),
-        Aviso::IaNoDisponible(error) => ta("cli-warn-ai-unavailable", &[("error", error)]),
+        Notice::NoIndex(error) => ta("cli-warn-no-index", &[("error", error)]),
+        Notice::IaNoAvailable(error) => ta("cli-warn-ai-unavailable", &[("error", error)]),
         // Already written out by `install_embed_provider`.
-        Aviso::IaEmbeddings(w) => w.clone(),
-        Aviso::IaInvalida(error) => ta("cli-warn-ai-invalid", &[("error", error)]),
-        Aviso::IaNoCargo(error) => ta("cli-warn-ai-load-failed", &[("error", error)]),
-        Aviso::ArchivoInvalido(error) => ta("cli-warn-archive-invalid", &[("error", error)]),
+        Notice::IaEmbeddings(w) => w.clone(),
+        Notice::IaInvalid(error) => ta("cli-warn-ai-invalid", &[("error", error)]),
+        Notice::IaNoCargo(error) => ta("cli-warn-ai-load-failed", &[("error", error)]),
+        Notice::ArchiveInvalid(error) => ta("cli-warn-archive-invalid", &[("error", error)]),
     }
 }
 
@@ -293,13 +293,13 @@ pub(crate) async fn daemon_cmd(
             idle_timeout,
         } => {
             // WHAT the daemon carries is decided by the core (rule 7,
-            // `norte_core::daemon::componer`); what stays here is the
+            // `norte_core::daemon::compose`); what stays here is the
             // binary's job: painting the warnings in the operator's
             // language, the log ring and the signals.
-            use norte_core::daemon::componer::{ErrorDeArranque, Opciones};
-            let mut avisos = Vec::new();
-            let compuesto = norte_core::daemon::componer(
-                Opciones {
+            use norte_core::daemon::compose::{Options, StartupError};
+            let mut notices = Vec::new();
+            let compuesto = norte_core::daemon::compose(
+                Options {
                     socket,
                     idle_timeout: (idle_timeout > 0)
                         .then(|| std::time::Duration::from_secs(idle_timeout)),
@@ -309,14 +309,14 @@ pub(crate) async fn daemon_cmd(
                     state_dir: norte_config::dirs::state_dir(),
                     config_dir: None,
                 },
-                &mut avisos,
+                &mut notices,
             )
             .await;
             // The warnings are said BEFORE checking whether it started:
             // what was found out along the way stays true even if
             // startup later fails.
-            for aviso in &avisos {
-                eprintln!("{}", warning_text(aviso));
+            for notice in &notices {
+                eprintln!("{}", warning_text(notice));
             }
             let daemon = match compuesto {
                 Ok(d) => d,
@@ -325,8 +325,8 @@ pub(crate) async fn daemon_cmd(
                 // the exclusive lock, and without this sentence the
                 // operator gets sqlx's text and no clue about what to
                 // close.
-                Err(ErrorDeArranque::Journal(causa)) => {
-                    return Err(anyhow::Error::new(causa).context(
+                Err(StartupError::Journal(cause)) => {
+                    return Err(anyhow::Error::new(cause).context(
                         "no se pudo abrir el journal (si dice «database is locked», otro \
                          proceso norte lo tiene: ¿un `ntc` embebido, u otro daemon?)",
                     ));

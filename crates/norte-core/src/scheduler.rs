@@ -87,7 +87,7 @@ impl PauseGate {
 pub enum Lane {
     /// Up to four per scheme, as always.
     #[default]
-    Paralelo,
+    Parallel,
     /// One at a time, in arrival order.
     Cola,
 }
@@ -284,7 +284,7 @@ struct SchedulerInner {
 /// every ~34 years, and uniqueness WITHIN the process is still given by the
 /// counter, not the clock. Best-effort separation, like `approvals`'s: two
 /// startups in the same millisecond collide, and that doesn't happen.
-fn semilla_de_ids() -> u64 {
+fn id_seed() -> u64 {
     /// 40 bits: ~1.1e12 ms, three orders of magnitude below 2^53.
     const MASCARA: u64 = (1 << 40) - 1;
     let millis = std::time::SystemTime::now()
@@ -301,7 +301,7 @@ impl Scheduler {
     pub fn new(permits: usize) -> Self {
         Self {
             inner: Arc::new(SchedulerInner {
-                next_id: AtomicU64::new(semilla_de_ids()),
+                next_id: AtomicU64::new(id_seed()),
                 per_provider_permits: permits.clamp(1, 4),
                 queues: Mutex::new(HashMap::new()),
             }),
@@ -327,7 +327,7 @@ impl Scheduler {
         actor: crate::journal::Actor,
         body: TaskBody,
     ) -> TaskHandle {
-        self.submit_en(Lane::Paralelo, provider_key, kind, priority, actor, body)
+        self.submit_en(Lane::Parallel, provider_key, kind, priority, actor, body)
     }
 
     /// Like [`Self::submit`], choosing how it enters (ADR 0149).
@@ -372,7 +372,7 @@ impl Scheduler {
             actor,
         };
         let queue = match lane {
-            Lane::Paralelo => self.queue_for(provider_key),
+            Lane::Parallel => self.queue_for(provider_key),
             Lane::Cola => self.queue_for(QUEUE),
         };
         {
@@ -396,7 +396,7 @@ impl Scheduler {
         // pushed. Each job carries its own span and is instrumented with
         // it below.
         let runner_queue = Arc::clone(&queue);
-        crate::blocking::spawn_raiz(async move {
+        crate::blocking::spawn_root(async move {
             let _permit = runner_queue
                 .sem
                 .acquire()

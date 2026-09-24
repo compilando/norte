@@ -120,7 +120,7 @@ macro_rules! rpc_catalog {
         $(, [$($notif:ident),* $(,)?])? ;
     )*) => {
         /// Every method of the protocol, in the order they were declared.
-        pub const CATALOGO: &[MethodInfo] = &[
+        pub const CATALOG: &[MethodInfo] = &[
             $(
                 MethodInfo {
                     name: methods::$konst,
@@ -283,20 +283,20 @@ rpc_catalog! {
 
 /// The entry of a method by its wire name.
 #[must_use]
-pub fn buscar(name: &str) -> Option<&'static MethodInfo> {
-    CATALOGO.iter().find(|m| m.name == name)
+pub fn search(name: &str) -> Option<&'static MethodInfo> {
+    CATALOG.iter().find(|m| m.name == name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// No repeated name: two entries with the same name would make `buscar`
+    /// No repeated name: two entries with the same name would make `search`
     /// answer the first and leave the other one findable by nobody.
     #[test]
     fn names_are_not_repeated() {
         let mut seen = std::collections::BTreeSet::new();
-        for m in CATALOGO {
+        for m in CATALOG {
             assert!(seen.insert(m.name), "repeated name: {}", m.name);
         }
     }
@@ -304,7 +304,7 @@ mod tests {
     /// A notification carries no result: there is nobody to answer it to.
     #[test]
     fn a_notification_has_no_result() {
-        for m in CATALOGO {
+        for m in CATALOG {
             if m.kind == Kind::Notification {
                 assert_eq!(
                     m.result(),
@@ -324,7 +324,7 @@ mod tests {
     /// which one: anything could be declared `Stream` and nothing turned red.
     #[test]
     fn a_stream_names_its_notification_and_it_exists() {
-        for m in CATALOGO {
+        for m in CATALOG {
             if m.shape == Shape::Stream && m.kind == Kind::Request {
                 assert!(
                     !m.stream_notifs.is_empty(),
@@ -333,7 +333,7 @@ mod tests {
                 );
             }
             for n in m.stream_notifs {
-                let Some(info) = buscar(n) else {
+                let Some(info) = search(n) else {
                     panic!("{} names `{n}`, which is not in the catalogue", m.name);
                 };
                 assert_eq!(
@@ -350,7 +350,7 @@ mod tests {
     /// deliver through a notification would be lying about its shape.
     #[test]
     fn only_a_stream_names_notifications() {
-        for m in CATALOGO {
+        for m in CATALOG {
             if m.shape != Shape::Stream {
                 assert!(
                     m.stream_notifs.is_empty(),
@@ -362,14 +362,14 @@ mod tests {
         }
     }
 
-    /// And `buscar` finds what is there.
+    /// And `search` finds what is there.
     #[test]
-    fn buscar_finds_by_wire_name() {
+    fn search_finds_by_wire_name() {
         assert_eq!(
-            buscar(methods::FS_STAT).map(|m| m.shape),
+            search(methods::FS_STAT).map(|m| m.shape),
             Some(Shape::Direct)
         );
-        assert_eq!(buscar(methods::FS_COPY).map(|m| m.shape), Some(Shape::Task));
-        assert_eq!(buscar("fs.does_not_exist"), None);
+        assert_eq!(search(methods::FS_COPY).map(|m| m.shape), Some(Shape::Task));
+        assert_eq!(search("fs.does_not_exist"), None);
     }
 }

@@ -107,10 +107,10 @@ const COMPUTED: &[&str] = &[
     "error::error_key",
     "availability::reason_key",
     "empty_message()",
-    // Returned by `elegir_pagina`, and it is one of `availability`'s.
-    "reason_key: clave",
+    // Returned by `choose_page`, and it is one of `availability`'s.
+    "reason_key: key",
     // The reason a dialog response did NOTHING. It comes from
-    // `bytes_del_rename` / `segmento_tecleado`, which return literal keys
+    // `bytes_del_rename` / `segment_typed`, which return literal keys
     // and so this sweep DOES see them at their origin.
     "reason_key: reason_key",
 ];

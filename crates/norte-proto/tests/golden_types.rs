@@ -5572,7 +5572,7 @@ fn sync_step_cases_acting() -> Vec<(&'static str, norte_proto::methods::SyncStep
             // The pair the pairing key joins and the wire had to be able to
             // name: the source spells the directory `NOTAS` and the
             // destination —which does not distinguish case— has it as
-            // `notas`. The step carries BOTH paths; without `dest_rel` the
+            // `notes`. The step carries BOTH paths; without `dest_rel` the
             // executor would write under the source's and create a second
             // directory alongside it.
             //

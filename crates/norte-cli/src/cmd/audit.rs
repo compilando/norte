@@ -4,7 +4,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 
-use crate::cmd::entorno::append_line_0600;
+use crate::cmd::environment::append_line_0600;
 use crate::{AuditCmd, AuditFormat};
 
 /// `norte audit <verify|export|anchor>` (M3-5, ADR 0025): operates on the

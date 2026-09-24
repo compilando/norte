@@ -33,14 +33,14 @@ pub const KIND: &str = "log";
 /// hundred because a round that does not fit loses NOTHING —what is left
 /// over follows after the cursor and is picked up by the next round— and
 /// because the panel shows at most one screen.
-pub const MAX_REMOTO: u32 = 500;
+pub const MAX_REMOTE: u32 = 500;
 
 /// Cap on the daemon lines kept in memory.
 ///
 /// The local ring already has its own; this is the same care for the remote
 /// one, because here lines ACCUMULATE round after round and with no cap a
 /// panel left open all afternoon would grow without end.
-const MAX_LINEAS_REMOTAS: usize = 2000;
+const MAX_LINES_REMOTAS: usize = 2000;
 
 /// What is known about the DAEMON's log.
 ///
@@ -52,11 +52,11 @@ const MAX_LINEAS_REMOTAS: usize = 2000;
 pub enum Servicio {
     /// Never answered: unknown.
     #[default]
-    SinRespuesta,
+    NoResponse,
     /// Serves its log: there is a second source of truth.
-    Sirve,
+    Serves,
     /// Said it has no log to serve.
-    SinAnillo,
+    NoRing,
 }
 
 /// The log panel's remote half (#328).
@@ -66,7 +66,7 @@ pub enum Servicio {
 /// and harvests everything that goes to the backend. The window carries it
 /// inside because there the actor is the only writer.
 #[derive(Debug, Default)]
-pub struct RegistroRemoto {
+pub struct LogRemote {
     /// Is there a daemon to speak of?
     ///
     /// `main` sets it once, from `Backend::is_remote`, and it does not
@@ -89,7 +89,7 @@ pub struct RegistroRemoto {
     /// It accumulates and is not re-fetched whole on every round: the probe
     /// pulls the remote ring with a cursor, so each response brings only
     /// what is new.
-    pub lineas: Vec<LogLine>,
+    pub lines: Vec<LogLine>,
     /// Where it was up to. `None` = not asked yet, which is "give me
     /// whatever there is" and is NOT the same as zero: against a ring that
     /// has already wrapped, a zero would report a false `lost` on the first
@@ -101,16 +101,16 @@ pub struct RegistroRemoto {
     ///
     /// Its own and not ours: it is global to all its clients and only goes
     /// up, so what was requested and what is set need not match.
-    pub nivel: Option<String>,
+    pub level: Option<String>,
     /// How many lines fell off behind this cursor. They accumulate: a
     /// silent gap lies about what happened.
-    pub perdidas: u64,
+    pub lost: u64,
     /// Which opening of the panel this is.
     ///
     /// Between asking and answering there is room for a close and an open,
     /// and the previous session's response has to die instead of landing
     /// —with its cursor— in the new panel.
-    pub epoca: u64,
+    pub epoch: u64,
     /// A level that has to be requested from the daemon, set by the key and
     /// drained by the loop.
     ///
@@ -118,29 +118,29 @@ pub struct RegistroRemoto {
     /// `log.level` is I/O and `App` has no backend. The last one pressed
     /// wins — asking a ring that only goes up for two levels in a row is
     /// asking for the higher one.
-    pub pide_nivel: Option<LogLevel>,
+    pub asks_level: Option<LogLevel>,
 }
 
-impl RegistroRemoto {
+impl LogRemote {
     /// Starts from scratch, keeping what is known about the daemon.
     ///
     /// The lines and the cursor belong to THIS opening; whether the daemon
     /// serves its log or not is a fact about the daemon, and forgetting it
     /// would hide the second source every time the panel is reopened.
     ///
-    /// That makes a `SinAnillo` verdict last as long as the process does,
+    /// That makes a `NoRing` verdict last as long as the process does,
     /// and it is deliberate, not an oversight: that state comes from a
     /// COMPILE-time feature of the binary on the other side of the socket
     /// (or a mount that failed on startup), so it cannot change under a
     /// live daemon. What DOES change —a daemon restarting built a different
     /// way— is a new connection, and that brings its own session. Reviewed
     /// and shelved on purpose, so it does not have to be argued again.
-    pub fn reiniciar(&mut self) {
-        self.lineas.clear();
+    pub fn restart(&mut self) {
+        self.lines.clear();
         self.cursor = None;
-        self.perdidas = 0;
-        self.pide_nivel = None;
-        self.epoca = self.epoca.wrapping_add(1);
+        self.lost = 0;
+        self.asks_level = None;
+        self.epoch = self.epoch.wrapping_add(1);
     }
 
     /// Is it worth asking it again?
@@ -158,8 +158,8 @@ impl RegistroRemoto {
     /// And a daemon that does not exist, either: without `hay_daemon` it is
     /// never asked — see that field.
     #[must_use]
-    pub const fn debe_pedir(&self) -> bool {
-        self.hay_daemon && !matches!(self.servicio, Servicio::SinAnillo)
+    pub const fn must_request(&self) -> bool {
+        self.hay_daemon && !matches!(self.servicio, Servicio::NoRing)
     }
 }
 
@@ -169,7 +169,7 @@ impl RegistroRemoto {
 /// the protocol says an unknown value must be able to ARRIVE, and losing the
 /// whole message for not understanding its label is worse than showing it
 /// with the ordinary label.
-fn linea_de_wire(l: norte_proto::methods::LogLine) -> LogLine {
+fn wire_line(l: norte_proto::methods::LogLine) -> LogLine {
     LogLine {
         epoch_ms: l.epoch_ms,
         level: LogLevel::from_wire(&l.level).unwrap_or(LogLevel::Info),
@@ -194,9 +194,9 @@ fn linea_de_wire(l: norte_proto::methods::LogLine) -> LogLine {
 /// installed in this process" sentence lives: there is no log IN MEMORY to
 /// read, and that is not the same as "nothing is being logged".
 #[must_use]
-pub fn fuente_efectiva(app: &crate::app::App) -> LogSource {
+pub fn source_efectiva(app: &crate::app::App) -> LogSource {
     match (
-        app.log_remote.servicio == Servicio::Sirve,
+        app.log_remote.servicio == Servicio::Serves,
         app.log_ring.is_some(),
     ) {
         (true, true) => app.log_panel.source(),
@@ -207,11 +207,11 @@ pub fn fuente_efectiva(app: &crate::app::App) -> LogSource {
 
 /// The local ring, already cloned. Empty if none is installed.
 ///
-/// Separate from [`visibles`] because the borrow has to be held by whoever
+/// Separate from [`visible`] because the borrow has to be held by whoever
 /// paints: `merge` returns references on purpose, and the ring already
 /// cloned once in its `snapshot`.
 #[must_use]
-pub fn instantanea(app: &crate::app::App) -> Vec<LogLine> {
+pub fn snapshot(app: &crate::app::App) -> Vec<LogLine> {
     app.log_ring
         .as_ref()
         .map(norte_config::logring::LogRing::snapshot)
@@ -221,11 +221,11 @@ pub fn instantanea(app: &crate::app::App) -> Vec<LogLine> {
 /// What the panel shows: the two sources merged and already filtered, each
 /// line with the process it came from.
 #[must_use]
-pub fn visibles<'a>(
+pub fn visible<'a>(
     app: &'a crate::app::App,
     locales: &'a [LogLine],
 ) -> Vec<(&'a LogLine, LogSource)> {
-    norte_frontend::logpanel::merge(locales, &app.log_remote.lineas, fuente_efectiva(app))
+    norte_frontend::logpanel::merge(locales, &app.log_remote.lines, source_efectiva(app))
         .into_iter()
         .filter(|(l, _)| app.log_panel.matches(l))
         .collect()
@@ -248,14 +248,14 @@ pub fn visibles<'a>(
 /// the same thing twice and do not fit. The second one wins because it
 /// explains WHY there is nothing more than this.
 #[must_use]
-pub fn etiqueta_de_fuente(app: &crate::app::App, fuente: LogSource) -> Option<String> {
+pub fn source_label(app: &crate::app::App, source: LogSource) -> Option<String> {
     if !app.log_remote.hay_daemon {
         return None;
     }
-    if app.log_remote.servicio == Servicio::SinAnillo {
+    if app.log_remote.servicio == Servicio::NoRing {
         return Some(t("log-source-unsupported"));
     }
-    Some(t(match fuente {
+    Some(t(match source {
         // Of THIS process, and saying so is the point: with `--socket`, the
         // daemon's part —the providers, the journal, the policy— is NOT
         // here, and that is the interesting half.
@@ -289,11 +289,11 @@ pub fn etiqueta_de_fuente(app: &crate::app::App, fuente: LogSource) -> Option<St
 ///
 /// By the EFFECTIVE source and not by the preference: what has truly been
 /// raised is announced. The request does go by the preference —see
-/// [`aplicar_accion`]—, because it is one of the two ways to find out
+/// [`apply_action`]—, because it is one of the two ways to find out
 /// whether that daemon knows about logging.
 #[must_use]
-pub fn aviso_de_nivel(app: &crate::app::App) -> String {
-    if fuente_efectiva(app) == LogSource::Window {
+pub fn level_notice(app: &crate::app::App) -> String {
+    if source_efectiva(app) == LogSource::Window {
         String::new()
     } else {
         t("log-source-daemon-level")
@@ -313,7 +313,7 @@ pub fn aviso_de_nivel(app: &crate::app::App) -> String {
 /// far above what this panel shows, and that gap is exactly what this
 /// sentence exists to not stay quiet about.
 #[must_use]
-pub fn nota_de_captura(app: &crate::app::App, fuente: LogSource) -> String {
+pub fn capture_note(app: &crate::app::App, source: LogSource) -> String {
     let shown = app.log_panel.level();
     let local = app
         .log_ring
@@ -322,12 +322,12 @@ pub fn nota_de_captura(app: &crate::app::App, fuente: LogSource) -> String {
         .filter(|cap| *cap > shown);
     let remote = app
         .log_remote
-        .nivel
+        .level
         .as_deref()
         .and_then(LogLevel::from_wire)
         .filter(|cap| *cap > shown);
     let phrase = |key, cap: LogLevel| ta(key, &[("level", cap.label().trim())]);
-    let parts: Vec<String> = match fuente {
+    let parts: Vec<String> = match source {
         LogSource::Window => local
             .map(|c| phrase("log-capturing", c))
             .into_iter()
@@ -356,16 +356,16 @@ pub fn nota_de_captura(app: &crate::app::App, fuente: LogSource) -> String {
 /// Each ring is mentioned only if it is being read: warning about a gap in
 /// a log that is not on screen is an alarm about nothing.
 #[must_use]
-pub fn nota_de_descartes(app: &crate::app::App, fuente: LogSource) -> String {
+pub fn discard_note(app: &crate::app::App, source: LogSource) -> String {
     let mut parts: Vec<String> = Vec::new();
     let local = app
         .log_ring
         .as_ref()
         .map_or(0, norte_config::logring::LogRing::dropped);
-    if local > 0 && fuente != LogSource::Daemon {
+    if local > 0 && source != LogSource::Daemon {
         parts.push(ta(
             // Without naming the ring when it is the only one being read.
-            if fuente == LogSource::Window {
+            if source == LogSource::Window {
                 "log-dropped"
             } else {
                 "log-dropped-window"
@@ -373,55 +373,51 @@ pub fn nota_de_descartes(app: &crate::app::App, fuente: LogSource) -> String {
             &[("n", &local.to_string())],
         ));
     }
-    if app.log_remote.perdidas > 0 && fuente != LogSource::Window {
+    if app.log_remote.lost > 0 && source != LogSource::Window {
         parts.push(ta(
             "log-missed-daemon",
-            &[("n", &app.log_remote.perdidas.to_string())],
+            &[("n", &app.log_remote.lost.to_string())],
         ));
     }
     parts.join(" · ")
 }
 
 /// Lands what the daemon answered to `log.tail` (#328).
-pub fn aterrizar_tail(
+pub fn land_tail(
     app: &mut crate::app::App,
-    epoca: u64,
+    epoch: u64,
     res: Result<norte_proto::methods::LogTailResult, norte_proto::Error>,
 ) {
-    if epoca != app.log_remote.epoca {
+    if epoch != app.log_remote.epoch {
         // From a previous opening: neither its lines nor its cursor are
         // valid anymore.
         return;
     }
     match res {
         Ok(r) => {
-            app.log_remote.servicio = Servicio::Sirve;
-            app.log_remote.nivel = Some(r.level);
+            app.log_remote.servicio = Servicio::Serves;
+            app.log_remote.level = Some(r.level);
             app.log_remote.cursor = Some(r.next);
-            app.log_remote.perdidas = app.log_remote.perdidas.saturating_add(r.lost);
+            app.log_remote.lost = app.log_remote.lost.saturating_add(r.lost);
             app.log_remote
-                .lineas
-                .extend(r.lines.into_iter().map(linea_de_wire));
+                .lines
+                .extend(r.lines.into_iter().map(wire_line));
             // The cap is applied from the front: what is old is what gets
             // dropped, same as in the ring, and it counts as lost — which is
             // what keeps the trim from leaving a silent gap.
-            let overflow = app
-                .log_remote
-                .lineas
-                .len()
-                .saturating_sub(MAX_LINEAS_REMOTAS);
+            let overflow = app.log_remote.lines.len().saturating_sub(MAX_LINES_REMOTAS);
             if overflow > 0 {
-                app.log_remote.lineas.drain(..overflow);
-                app.log_remote.perdidas = app
+                app.log_remote.lines.drain(..overflow);
+                app.log_remote.lost = app
                     .log_remote
-                    .perdidas
+                    .lost
                     .saturating_add(overflow.try_into().unwrap_or(u64::MAX));
             }
         }
         // The ONLY reachable degradation: a daemon of the same version
         // without the `logging` feature (or the embedded arm, which has no
-        // second source to offer). See `RegistroRemoto::debe_pedir`.
-        Err(norte_proto::Error::Unsupported) => app.log_remote.servicio = Servicio::SinAnillo,
+        // second source to offer). See `LogRemote::must_request`.
+        Err(norte_proto::Error::Unsupported) => app.log_remote.servicio = Servicio::NoRing,
         // Any failure —the connection dropped, the daemon is busy— is NOT
         // "this daemon has no log": saying so would accuse something that
         // fixes itself on the very next round of a permanent lack. It stays
@@ -431,20 +427,16 @@ pub fn aterrizar_tail(
 }
 
 /// Lands the level the daemon has truly set (#328).
-pub fn aterrizar_nivel(
-    app: &mut crate::app::App,
-    epoca: u64,
-    res: Result<String, norte_proto::Error>,
-) {
-    if epoca != app.log_remote.epoca {
+pub fn land_level(app: &mut crate::app::App, epoch: u64, res: Result<String, norte_proto::Error>) {
+    if epoch != app.log_remote.epoch {
         return;
     }
     match res {
-        Ok(nivel) => {
-            app.log_remote.servicio = Servicio::Sirve;
-            app.log_remote.nivel = Some(nivel);
+        Ok(level) => {
+            app.log_remote.servicio = Servicio::Serves;
+            app.log_remote.level = Some(level);
         }
-        Err(norte_proto::Error::Unsupported) => app.log_remote.servicio = Servicio::SinAnillo,
+        Err(norte_proto::Error::Unsupported) => app.log_remote.servicio = Servicio::NoRing,
         Err(_) => {}
     }
 }
@@ -453,7 +445,7 @@ pub fn aterrizar_nivel(
 ///
 /// The HEIGHT is no longer guessed here —whoever paints sets it, per frame
 /// (`LogPanel::set_viewport_rows`)—; this is only how far `PageDown` jumps.
-const PAGINA: isize = 10;
+const PAGE: isize = 10;
 
 /// What a key asks the panel for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -503,8 +495,8 @@ pub fn key(
         KeyCode::Char('/') => LogAction::StartFilter,
         KeyCode::Up => LogAction::Scroll(-1),
         KeyCode::Down => LogAction::Scroll(1),
-        KeyCode::PageUp => LogAction::Scroll(-PAGINA),
-        KeyCode::PageDown => LogAction::Scroll(PAGINA),
+        KeyCode::PageUp => LogAction::Scroll(-PAGE),
+        KeyCode::PageDown => LogAction::Scroll(PAGE),
         // `End` is "go back to the very end", which is different from
         // scrolling down a lot: after a new filter the list changes length
         // and scrolling down blind does not land right.
@@ -544,19 +536,19 @@ pub fn apply(
     // otherwise a `d` in the middle of a word would change the level instead
     // of being typed.
     if app.log_filter_input.is_some() {
-        editar_filtro(app, mods, code);
+        edit_filter(app, mods, code);
         return;
     }
-    let Some(accion) = key(code, mods) else {
+    let Some(action) = key(code, mods) else {
         // What this panel does NOT own follows its path through the keymap,
         // and this is not a detail: without it `layout.log` itself would die
         // here and the panel could not be closed with the same key that
         // opened it. A panel that keeps ALL the keys hijacks the keyboard
         // instead of taking it.
-        pasar_al_keymap(app, resolver, mods, code);
+        pass_to_keymap(app, resolver, mods, code);
         return;
     };
-    aplicar_accion(app, accion);
+    apply_action(app, action);
 }
 
 /// What each panel action does.
@@ -564,8 +556,8 @@ pub fn apply(
 /// Separate from [`apply`] so it can be tested without setting up a key
 /// resolver: what these lines decide —when the ring's level rises and when
 /// it does not— is the panel's invariant, not a key's translation.
-pub fn aplicar_accion(app: &mut crate::app::App, accion: LogAction) {
-    match accion {
+pub fn apply_action(app: &mut crate::app::App, action: LogAction) {
+    match action {
         LogAction::Level(l) => {
             app.log_panel.show_level(l);
             // And the ring captures AT LEAST that: filtering down to DEBUG
@@ -587,14 +579,14 @@ pub fn aplicar_accion(app: &mut crate::app::App, accion: LogAction) {
             // And only if there is someone to ask: with no daemon, or with
             // one that has already said it has no ring, this would be dead
             // state nobody drains.
-            if app.log_panel.source() != LogSource::Window && app.log_remote.debe_pedir() {
-                app.log_remote.pide_nivel = Some(l);
+            if app.log_panel.source() != LogSource::Window && app.log_remote.must_request() {
+                app.log_remote.asks_level = Some(l);
             }
             // And it is STATED, because that ring does not belong to this
             // process: it is global to all the daemon's clients and never
-            // goes back down. See [`aviso_de_nivel`] for why it goes to the
+            // goes back down. See [`level_notice`] for why it goes to the
             // bar and not the border.
-            let notice = aviso_de_nivel(app);
+            let notice = level_notice(app);
             if !notice.is_empty() {
                 app.message = Some(notice);
             }
@@ -606,7 +598,7 @@ pub fn aplicar_accion(app: &mut crate::app::App, accion: LogAction) {
         // really is a daemon. It is the same thing the window does, where
         // the selector simply is not painted.
         LogAction::Source => {
-            if app.log_remote.servicio == Servicio::Sirve {
+            if app.log_remote.servicio == Servicio::Serves {
                 app.log_panel.cycle_source();
             }
         }
@@ -618,8 +610,8 @@ pub fn aplicar_accion(app: &mut crate::app::App, accion: LogAction) {
             // Over the MERGED list, which is what is seen: counting only the
             // local ones would leave the cap short and a page would not
             // reach the end.
-            let local = instantanea(app);
-            let count = visibles(app, &local).len();
+            let local = snapshot(app);
+            let count = visible(app, &local).len();
             if n < 0 {
                 app.log_panel.scroll_up(n.unsigned_abs(), count);
             } else {
@@ -645,7 +637,7 @@ pub fn aplicar_accion(app: &mut crate::app::App, accion: LogAction) {
 /// Resolves through the keymap what this panel does not claim, and
 /// dispatches it the same way as the process panel (`App::processes_command`,
 /// which already handles the `layout.*` ones).
-fn pasar_al_keymap(
+fn pass_to_keymap(
     app: &mut crate::app::App,
     resolver: &mut crate::keymap::Resolver,
     mods: crossterm::event::KeyModifiers,
@@ -671,7 +663,7 @@ fn pasar_al_keymap(
 /// `Esc` cancels and leaves the PREVIOUS filter, it does not clear it:
 /// cancel means "leave it as it was", and in a log panel clearing the filter
 /// by accident dumps a thousand lines over whatever you were reading.
-fn editar_filtro(
+fn edit_filter(
     app: &mut crate::app::App,
     mods: crossterm::event::KeyModifiers,
     code: crossterm::event::KeyCode,
@@ -703,7 +695,7 @@ mod tests {
     /// The five level letters are there and are the English level's
     /// initials, which is how they are named in the log itself.
     #[test]
-    fn cada_nivel_tiene_su_letra() {
+    fn every_level_has_its_letter() {
         let expected = [
             ('e', LogLevel::Error),
             ('w', LogLevel::Warn),
@@ -724,7 +716,7 @@ mod tests {
     /// `ctrl+…` are global shortcuts. Swallowing them here would be hijacking
     /// them.
     #[test]
-    fn los_atajos_con_control_no_se_los_queda() {
+    fn control_shortcuts_are_not_kept() {
         assert_eq!(key(KeyCode::Char('c'), KeyModifiers::CONTROL), None);
         assert_eq!(key(KeyCode::Char('d'), KeyModifiers::CONTROL), None);
     }
@@ -736,7 +728,7 @@ mod tests {
     /// `None` is what sends the key to the keymap; if it ever claims an
     /// `alt+…`, this test fails.
     #[test]
-    fn los_acordes_con_modificador_siguen_su_camino() {
+    fn chords_with_a_modifier_go_their_own_way() {
         for (code, mods) in [
             (KeyCode::Char('l'), KeyModifiers::ALT),
             (KeyCode::Char('j'), KeyModifiers::ALT),
@@ -761,20 +753,20 @@ mod tests {
     /// process capturing TRACE for the rest of the session, with its cost,
     /// long after nobody is looking.
     #[test]
-    fn el_nivel_del_anillo_sube_no_baja_y_vuelve_al_cerrar() {
+    fn the_ring_level_rises_never_lowers_and_resets_on_close() {
         use norte_config::logring::LogRing;
-        let mut app = crate::app::testutil::app_dos_panes();
+        let mut app = crate::app::testutil::app_two_panes();
         let ring = LogRing::new(10);
         app.log_ring = Some(ring.clone());
         app.toggle_log(); // opens and takes the keyboard
 
-        aplicar_accion(&mut app, LogAction::Level(LogLevel::Debug));
+        apply_action(&mut app, LogAction::Level(LogLevel::Debug));
         assert_eq!(
             ring.level(),
             LogLevel::Debug,
             "asking for DEBUG did not raise it"
         );
-        aplicar_accion(&mut app, LogAction::Level(LogLevel::Warn));
+        apply_action(&mut app, LogAction::Level(LogLevel::Warn));
         assert_eq!(
             ring.level(),
             LogLevel::Debug,
@@ -795,8 +787,8 @@ mod tests {
     /// confirm. An `Enter` that cancels a copy from a log viewer is exactly
     /// the accident an allowlist exists to prevent.
     #[test]
-    fn confirmar_es_inerte_en_el_registro_y_su_propia_tecla_lo_cierra() {
-        let mut app = crate::app::testutil::app_dos_panes();
+    fn confirm_is_inert_in_the_log_and_its_own_key_closes_it() {
+        let mut app = crate::app::testutil::app_two_panes();
         app.toggle_log();
         assert!(app.log_slot().is_some(), "did not open");
 
@@ -816,14 +808,14 @@ mod tests {
     /// changes length, and going back to the end has to be a command, not a
     /// bet.
     #[test]
-    fn el_final_es_una_orden_propia() {
+    fn the_end_is_its_own_command() {
         assert_eq!(
             key(KeyCode::End, KeyModifiers::empty()),
             Some(LogAction::Follow)
         );
         assert_eq!(
             key(KeyCode::PageDown, KeyModifiers::empty()),
-            Some(LogAction::Scroll(PAGINA))
+            Some(LogAction::Scroll(PAGE))
         );
     }
 
@@ -861,7 +853,7 @@ mod tests {
     /// filter the layer goes through is where `suppaftp`'s cap lives, since
     /// it logs `PASS <password>` at TRACE level. A shortcut for tests that
     /// skipped that cap would be testing a path that does not exist.
-    fn con_lineas(ring: &norte_config::logring::LogRing, f: impl FnOnce()) {
+    fn with_lines(ring: &norte_config::logring::LogRing, f: impl FnOnce()) {
         use tracing_subscriber::layer::SubscriberExt as _;
         let s = tracing_subscriber::registry().with(norte_config::logring::ring_layer(ring));
         tracing::subscriber::with_default(s, f);
@@ -876,21 +868,21 @@ mod tests {
     /// up a small `epoch_ms` here would put the daemon in 1970 and the merge
     /// would come out backward for a reason that has nothing to do with what
     /// the test is looking at.
-    fn app_con_las_dos_fuentes() -> crate::app::App {
+    fn app_with_both_sources() -> crate::app::App {
         use norte_config::logring::LogRing;
-        let mut app = crate::app::testutil::app_dos_panes();
+        let mut app = crate::app::testutil::app_two_panes();
         let ring = LogRing::new(10);
-        con_lineas(&ring, || tracing::info!("from this terminal"));
+        with_lines(&ring, || tracing::info!("from this terminal"));
         let local_ms = ring.snapshot()[0].epoch_ms;
         app.log_ring = Some(ring);
         // What `main` sets from `Backend::is_remote`: there is a second
         // process.
         app.log_remote.hay_daemon = true;
         app.toggle_log();
-        let epoca = app.log_remote.epoca;
-        aterrizar_tail(
+        let epoch = app.log_remote.epoch;
+        land_tail(
             &mut app,
-            epoca,
+            epoch,
             Ok(tail(
                 vec![wire(local_ms + 1, "info", "from the daemon")],
                 7,
@@ -909,9 +901,9 @@ mod tests {
     /// frontend is what makes the two silently diverge.
     #[test]
     fn la_vista_mezcla_la_terminal_y_el_daemon() {
-        let app = app_con_las_dos_fuentes();
-        let local = instantanea(&app);
-        let rows = visibles(&app, &local);
+        let app = app_with_both_sources();
+        let local = snapshot(&app);
+        let rows = visible(&app, &local);
         let texts: Vec<&str> = rows.iter().map(|(l, _)| l.message.as_str()).collect();
         assert_eq!(
             texts,
@@ -926,20 +918,20 @@ mod tests {
     /// does not exist cannot be shown, and the panel reports what there is,
     /// not what was asked for. It collapses in both directions.
     #[test]
-    fn la_fuente_efectiva_colapsa_hacia_el_anillo_que_existe() {
-        let mut app = app_con_las_dos_fuentes();
-        assert_eq!(fuente_efectiva(&app), LogSource::Both, "with both rings");
+    fn the_effective_source_collapses_toward_the_ring_that_exists() {
+        let mut app = app_with_both_sources();
+        assert_eq!(source_efectiva(&app), LogSource::Both, "with both rings");
 
         app.log_ring = None;
         assert_eq!(
-            fuente_efectiva(&app),
+            source_efectiva(&app),
             LogSource::Daemon,
             "with no local ring there is nothing from this terminal to mix in"
         );
 
-        app.log_remote.servicio = Servicio::SinAnillo;
+        app.log_remote.servicio = Servicio::NoRing;
         assert_eq!(
-            fuente_efectiva(&app),
+            source_efectiva(&app),
             LogSource::Window,
             "with no log on the other side the daemon's cannot be shown"
         );
@@ -954,15 +946,15 @@ mod tests {
     /// the panel at `info` the header said `trace` while every `debug` line
     /// crossed the socket and was silently dropped.
     #[test]
-    fn el_nivel_del_daemon_va_en_la_captura_y_no_en_el_nivel() {
-        let mut app = app_con_las_dos_fuentes();
-        app.log_remote.nivel = Some("trace".to_owned());
+    fn the_daemon_level_goes_in_the_capture_and_not_in_the_level() {
+        let mut app = app_with_both_sources();
+        app.log_remote.level = Some("trace".to_owned());
         assert_eq!(
             app.log_panel.level(),
             LogLevel::Info,
             "the panel's level is moved by the keys, not the daemon"
         );
-        let note = nota_de_captura(&app, fuente_efectiva(&app));
+        let note = capture_note(&app, source_efectiva(&app));
         assert!(
             note.contains(LogLevel::Trace.label().trim()),
             "the capture note does not state the daemon's level: {note:?}"
@@ -982,21 +974,21 @@ mod tests {
     /// never goes back down, and staying quiet about it would leave that
     /// decision unannounced.
     #[test]
-    fn subir_el_anillo_del_daemon_se_anuncia_tambien_en_mezcla() {
-        let mut app = app_con_las_dos_fuentes();
-        for fuente in [LogSource::Both, LogSource::Daemon] {
-            app.log_panel.set_source(fuente);
+    fn raising_the_daemons_ring_is_announced_in_the_mix_too() {
+        let mut app = app_with_both_sources();
+        for source in [LogSource::Both, LogSource::Daemon] {
+            app.log_panel.set_source(source);
             app.message = None;
-            aplicar_accion(&mut app, LogAction::Level(LogLevel::Trace));
+            apply_action(&mut app, LogAction::Level(LogLevel::Trace));
             assert_eq!(
                 app.message.as_deref(),
                 Some(norte_i18n::t("log-source-daemon-level").as_str()),
-                "not announced with source {fuente:?}"
+                "not announced with source {source:?}"
             );
         }
         app.log_panel.set_source(LogSource::Window);
         app.message = None;
-        aplicar_accion(&mut app, LogAction::Level(LogLevel::Warn));
+        apply_action(&mut app, LogAction::Level(LogLevel::Warn));
         assert_eq!(
             app.message, None,
             "reading only this terminal, there is no other ring to raise"
@@ -1007,15 +999,15 @@ mod tests {
     /// label, which is what occupies the border: otherwise the reader
     /// would believe the interesting half simply is not happening.
     #[test]
-    fn un_daemon_sin_registro_lo_dice_la_etiqueta_de_la_fuente() {
-        let mut app = app_con_las_dos_fuentes();
+    fn a_daemon_without_a_log_is_shown_by_the_source_label() {
+        let mut app = app_with_both_sources();
         assert_eq!(
-            etiqueta_de_fuente(&app, LogSource::Both),
+            source_label(&app, LogSource::Both),
             Some(norte_i18n::t("log-source-both"))
         );
-        app.log_remote.servicio = Servicio::SinAnillo;
+        app.log_remote.servicio = Servicio::NoRing;
         assert_eq!(
-            etiqueta_de_fuente(&app, fuente_efectiva(&app)),
+            source_label(&app, source_efectiva(&app)),
             Some(norte_i18n::t("log-source-unsupported")),
             "a daemon with no log has to be stated"
         );
@@ -1032,29 +1024,29 @@ mod tests {
     /// serve its log". The correct answer is not a third sentence: it is
     /// the segment's absence, which is how it was in #326.
     #[test]
-    fn sin_daemon_no_se_sondea_ni_se_nombra_a_nadie() {
-        let mut app = crate::app::testutil::app_dos_panes();
+    fn without_a_daemon_nothing_is_polled_nor_is_anyone_named() {
+        let mut app = crate::app::testutil::app_two_panes();
         app.log_ring = Some(norte_config::logring::LogRing::new(10));
         app.toggle_log();
         assert!(!app.log_remote.hay_daemon, "by default there is no daemon");
         assert!(
-            !app.log_remote.debe_pedir(),
+            !app.log_remote.must_request(),
             "it was about to probe a daemon that does not exist"
         );
-        for fuente in [LogSource::Window, LogSource::Daemon, LogSource::Both] {
+        for source in [LogSource::Window, LogSource::Daemon, LogSource::Both] {
             assert_eq!(
-                etiqueta_de_fuente(&app, fuente),
+                source_label(&app, source),
                 None,
-                "an origin was named with a single ring ({fuente:?})"
+                "an origin was named with a single ring ({source:?})"
             );
         }
         // And the effective source cannot be anything else: `servicio`
-        // never reaches `Sirve` because nobody asks.
-        assert_eq!(fuente_efectiva(&app), LogSource::Window);
+        // never reaches `Serves` because nobody asks.
+        assert_eq!(source_efectiva(&app), LogSource::Window);
         // Nor is anyone's ring announced when the level is raised.
-        aplicar_accion(&mut app, LogAction::Level(LogLevel::Trace));
+        apply_action(&mut app, LogAction::Level(LogLevel::Trace));
         assert_eq!(app.message, None);
-        assert_eq!(app.log_remote.pide_nivel, None);
+        assert_eq!(app.log_remote.asks_level, None);
     }
 
     /// The probe checks whether the panel is VISIBLE, not whether it
@@ -1066,9 +1058,9 @@ mod tests {
     /// is not touched here—; what this test pins down is that the network
     /// cost does not depend on that bug.
     #[test]
-    fn un_panel_detras_de_una_pestana_no_se_sondea() {
+    fn a_panel_behind_a_tab_is_not_polled() {
         use norte_frontend::layout::{KindId, Node};
-        let mut app = app_con_las_dos_fuentes();
+        let mut app = app_with_both_sources();
         let id = app.log_slot().expect("the panel is open");
         assert_eq!(app.log_slot_visible(), Some(id), "visible before hiding it");
 
@@ -1103,47 +1095,47 @@ mod tests {
     /// opening of the panel lost. Adding them would give a number that is
     /// neither of the two things.
     #[test]
-    fn los_dos_contadores_se_dicen_por_separado() {
+    fn the_two_counters_are_reported_separately() {
         use norte_config::logring::LogRing;
-        let mut app = crate::app::testutil::app_dos_panes();
+        let mut app = crate::app::testutil::app_two_panes();
         let ring = LogRing::new(1);
-        con_lineas(&ring, || {
+        with_lines(&ring, || {
             for _ in 0..4 {
                 tracing::info!("x");
             }
         });
         app.log_ring = Some(ring);
         app.toggle_log();
-        let epoca = app.log_remote.epoca;
-        aterrizar_tail(&mut app, epoca, Ok(tail(Vec::new(), 9, 5)));
-        let note = nota_de_descartes(&app, LogSource::Both);
+        let epoch = app.log_remote.epoch;
+        land_tail(&mut app, epoch, Ok(tail(Vec::new(), 9, 5)));
+        let note = discard_note(&app, LogSource::Both);
         assert!(note.contains('3'), "missing the 3 local ones: {note:?}");
         assert!(note.contains('5'), "missing the daemon's 5: {note:?}");
         assert!(!note.contains('8'), "the counters were added: {note:?}");
         // And a ring that is not being read gets no warning: an alarm
         // about a gap that is not on screen is an alarm about nothing.
-        assert!(!nota_de_descartes(&app, LogSource::Window).contains('5'));
-        assert!(!nota_de_descartes(&app, LogSource::Daemon).contains('3'));
+        assert!(!discard_note(&app, LogSource::Window).contains('5'));
+        assert!(!discard_note(&app, LogSource::Daemon).contains('3'));
     }
 
     /// The cursor chains (`None` the first time, never zero) and losses
     /// ACCUMULATE: a silent gap lies about what happened.
     #[test]
-    fn el_cursor_se_encadena_y_las_perdidas_se_acumulan() {
-        let mut app = crate::app::testutil::app_dos_panes();
+    fn the_cursor_chains_and_the_losses_accumulate() {
+        let mut app = crate::app::testutil::app_two_panes();
         app.toggle_log();
         assert_eq!(
             app.log_remote.cursor, None,
             "zero is not requested the first time"
         );
-        let epoca = app.log_remote.epoca;
-        aterrizar_tail(&mut app, epoca, Ok(tail(vec![wire(1, "warn", "a")], 4, 2)));
+        let epoch = app.log_remote.epoch;
+        land_tail(&mut app, epoch, Ok(tail(vec![wire(1, "warn", "a")], 4, 2)));
         assert_eq!(app.log_remote.cursor, Some(4));
-        aterrizar_tail(&mut app, epoca, Ok(tail(vec![wire(2, "warn", "b")], 9, 3)));
+        land_tail(&mut app, epoch, Ok(tail(vec![wire(2, "warn", "b")], 9, 3)));
         assert_eq!(app.log_remote.cursor, Some(9));
-        assert_eq!(app.log_remote.perdidas, 5, "the losses did not accumulate");
+        assert_eq!(app.log_remote.lost, 5, "the losses did not accumulate");
         assert_eq!(
-            app.log_remote.lineas.len(),
+            app.log_remote.lines.len(),
             2,
             "the round does not bring only what is new"
         );
@@ -1153,30 +1145,30 @@ mod tests {
     /// comes from a compile-time feature and cannot change while that
     /// daemon lives. ANY OTHER failure is not that, and it retries.
     #[test]
-    fn un_daemon_sin_registro_deja_de_sondearse_y_un_fallo_no() {
-        let mut app = crate::app::testutil::app_dos_panes();
+    fn a_daemon_without_a_log_stops_being_polled_and_a_failure_does_not() {
+        let mut app = crate::app::testutil::app_two_panes();
         app.log_remote.hay_daemon = true;
         app.toggle_log();
-        let epoca = app.log_remote.epoca;
-        aterrizar_tail(
+        let epoch = app.log_remote.epoch;
+        land_tail(
             &mut app,
-            epoca,
+            epoch,
             Err(norte_proto::Error::Io { retryable: true }),
         );
         assert_eq!(
             app.log_remote.servicio,
-            Servicio::SinRespuesta,
+            Servicio::NoResponse,
             "a transient failure is not a permanent lack"
         );
         assert!(
-            app.log_remote.debe_pedir(),
+            app.log_remote.must_request(),
             "a failure does not turn off the probe"
         );
 
-        aterrizar_tail(&mut app, epoca, Err(norte_proto::Error::Unsupported));
-        assert_eq!(app.log_remote.servicio, Servicio::SinAnillo);
+        land_tail(&mut app, epoch, Err(norte_proto::Error::Unsupported));
+        assert_eq!(app.log_remote.servicio, Servicio::NoRing);
         assert!(
-            !app.log_remote.debe_pedir(),
+            !app.log_remote.must_request(),
             "continuing to ask would be two RPCs a second forever"
         );
     }
@@ -1186,20 +1178,20 @@ mod tests {
     /// in the new panel would leave a made-up `lost` and lines from another
     /// read.
     #[test]
-    fn la_respuesta_de_una_apertura_anterior_no_aterriza() {
-        let mut app = crate::app::testutil::app_dos_panes();
+    fn the_response_of_an_earlier_open_does_not_land() {
+        let mut app = crate::app::testutil::app_two_panes();
         app.toggle_log();
-        let old = app.log_remote.epoca;
+        let old = app.log_remote.epoch;
         app.toggle_log(); // closes: resets and changes epoch
         app.toggle_log(); // reopens
-        aterrizar_tail(
+        land_tail(
             &mut app,
             old,
             Ok(tail(vec![wire(1, "info", "from the other time")], 99, 7)),
         );
-        assert!(app.log_remote.lineas.is_empty(), "an old response landed");
+        assert!(app.log_remote.lines.is_empty(), "an old response landed");
         assert_eq!(app.log_remote.cursor, None);
-        assert_eq!(app.log_remote.perdidas, 0);
+        assert_eq!(app.log_remote.lost, 0);
     }
 
     /// Closing the panel releases the daemon's lines but does NOT forget
@@ -1207,15 +1199,15 @@ mod tests {
     /// the daemon, not about this opening, and forgetting it would hide the
     /// `s` key for half a second every time.
     #[test]
-    fn cerrar_suelta_las_lineas_pero_no_lo_que_se_sabe_del_daemon() {
-        let mut app = app_con_las_dos_fuentes();
-        assert_eq!(app.log_remote.servicio, Servicio::Sirve);
+    fn closing_releases_the_lines_but_not_what_is_known_about_the_daemon() {
+        let mut app = app_with_both_sources();
+        assert_eq!(app.log_remote.servicio, Servicio::Serves);
         app.toggle_log();
-        assert!(app.log_remote.lineas.is_empty());
+        assert!(app.log_remote.lines.is_empty());
         assert_eq!(app.log_remote.cursor, None);
         assert_eq!(
             app.log_remote.servicio,
-            Servicio::Sirve,
+            Servicio::Serves,
             "forgetting that it serves would hide the control on reopen"
         );
     }
@@ -1224,26 +1216,26 @@ mod tests {
     /// cycling through three views of the SAME ring would be a control that
     /// promises something that does not exist.
     #[test]
-    fn la_tecla_de_la_fuente_solo_significa_algo_con_daemon() {
+    fn the_source_key_only_means_something_with_a_daemon() {
         assert_eq!(
             key(KeyCode::Char('s'), KeyModifiers::empty()),
             Some(LogAction::Source)
         );
-        let mut app = crate::app::testutil::app_dos_panes();
+        let mut app = crate::app::testutil::app_two_panes();
         app.toggle_log();
-        aplicar_accion(&mut app, LogAction::Source);
+        apply_action(&mut app, LogAction::Source);
         assert_eq!(
             app.log_panel.source(),
             LogSource::Both,
             "with no daemon, the preference is not touched"
         );
 
-        let mut app = app_con_las_dos_fuentes();
-        aplicar_accion(&mut app, LogAction::Source);
+        let mut app = app_with_both_sources();
+        apply_action(&mut app, LogAction::Source);
         assert_eq!(app.log_panel.source(), LogSource::Window);
-        aplicar_accion(&mut app, LogAction::Source);
+        apply_action(&mut app, LogAction::Source);
         assert_eq!(app.log_panel.source(), LogSource::Daemon);
-        aplicar_accion(&mut app, LogAction::Source);
+        apply_action(&mut app, LogAction::Source);
         assert_eq!(
             app.log_panel.source(),
             LogSource::Both,
@@ -1259,27 +1251,27 @@ mod tests {
     /// IS a daemon, though, does matter: without it the request would be
     /// dead state nobody drains.
     #[test]
-    fn subir_el_nivel_se_lo_pide_tambien_al_daemon() {
-        let mut app = crate::app::testutil::app_dos_panes();
+    fn raising_the_level_also_asks_the_daemon() {
+        let mut app = crate::app::testutil::app_two_panes();
         app.log_remote.hay_daemon = true;
         app.toggle_log();
         assert_eq!(
             app.log_remote.servicio,
-            Servicio::SinRespuesta,
+            Servicio::NoResponse,
             "has not answered yet, and it is asked anyway"
         );
-        aplicar_accion(&mut app, LogAction::Level(LogLevel::Debug));
+        apply_action(&mut app, LogAction::Level(LogLevel::Debug));
         assert_eq!(
-            app.log_remote.pide_nivel,
+            app.log_remote.asks_level,
             Some(LogLevel::Debug),
             "the daemon was not asked"
         );
 
-        app.log_remote.pide_nivel = None;
+        app.log_remote.asks_level = None;
         app.log_panel.set_source(LogSource::Window);
-        aplicar_accion(&mut app, LogAction::Level(LogLevel::Trace));
+        apply_action(&mut app, LogAction::Level(LogLevel::Trace));
         assert_eq!(
-            app.log_remote.pide_nivel, None,
+            app.log_remote.asks_level, None,
             "reading only this terminal, there is no reason to raise anyone's global ring"
         );
     }
@@ -1287,21 +1279,21 @@ mod tests {
     /// Scrolling counts over the MERGED list: counting only the local ones
     /// leaves the cap short and a page does not reach the end.
     #[test]
-    fn el_desplazamiento_cuenta_las_dos_fuentes() {
-        let mut app = app_con_las_dos_fuentes();
+    fn the_scroll_counts_both_sources() {
+        let mut app = app_with_both_sources();
         app.log_panel.set_viewport_rows(1);
-        aplicar_accion(&mut app, LogAction::Scroll(-1));
+        apply_action(&mut app, LogAction::Scroll(-1));
         assert!(
             !app.log_panel.following(),
             "scrolling up did not detach from the end"
         );
-        let local = instantanea(&app);
+        let local = snapshot(&app);
         assert_eq!(
-            app.log_panel.window_start(visibles(&app, &local).len(), 1),
+            app.log_panel.window_start(visible(&app, &local).len(), 1),
             0,
             "with two lines and one row, scrolling up one leaves the first on top"
         );
-        aplicar_accion(&mut app, LogAction::Scroll(1));
+        apply_action(&mut app, LogAction::Scroll(1));
         assert!(
             app.log_panel.following(),
             "scrolling down to the end did not reattach it: the cap counted only the local ring"
@@ -1312,18 +1304,18 @@ mod tests {
     /// counts as lost: a panel left open all afternoon cannot grow without
     /// end, and the trim cannot leave a silent gap.
     #[test]
-    fn el_tope_remoto_tira_lo_viejo_y_lo_cuenta() {
-        let mut app = crate::app::testutil::app_dos_panes();
+    fn the_remote_cap_discards_the_old_and_counts_it() {
+        let mut app = crate::app::testutil::app_two_panes();
         app.toggle_log();
-        let epoca = app.log_remote.epoca;
-        let many: Vec<_> = (0..i64::try_from(MAX_LINEAS_REMOTAS).unwrap() + 3)
+        let epoch = app.log_remote.epoch;
+        let many: Vec<_> = (0..i64::try_from(MAX_LINES_REMOTAS).unwrap() + 3)
             .map(|i| wire(i, "info", "x"))
             .collect();
-        aterrizar_tail(&mut app, epoca, Ok(tail(many, 1, 0)));
-        assert_eq!(app.log_remote.lineas.len(), MAX_LINEAS_REMOTAS);
-        assert_eq!(app.log_remote.perdidas, 3, "the trim stayed silent");
+        land_tail(&mut app, epoch, Ok(tail(many, 1, 0)));
+        assert_eq!(app.log_remote.lines.len(), MAX_LINES_REMOTAS);
+        assert_eq!(app.log_remote.lost, 3, "the trim stayed silent");
         assert_eq!(
-            app.log_remote.lineas[0].epoch_ms, 3,
+            app.log_remote.lines[0].epoch_ms, 3,
             "the new ones were dropped instead of the old ones"
         );
     }

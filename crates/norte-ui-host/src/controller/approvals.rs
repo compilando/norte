@@ -1,26 +1,26 @@
 //! The policy approvals that arrive from the daemon.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-impl Estado {
+impl State {
     /// Requests this location's attribute catalogue, if needed.
     ///
     /// Only if there are `attr:` columns configured and its scheme's
     /// catalogue is not already held: asking for a catalogue nobody is going
     /// to read is one more trip on every `cd`.
-    pub(super) fn pedir_catalogo(
+    pub(super) fn request_catalog(
         &self,
         dir: &VPath,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) {
         if self.attrs_de(dir).is_empty() || self.catalogos.contains_key(dir.scheme()) {
             return;
@@ -34,7 +34,7 @@ impl Estado {
             // painted opaque, which is exactly what is known about them.
             if let Ok(catalog) = backend.attr_catalog(dir).await {
                 let _ = mailbox
-                    .send(Mensaje::Catalogo(Box::new((scheme, catalog))))
+                    .send(Message::Catalog(Box::new((scheme, catalog))))
                     .await;
             }
         });
@@ -47,7 +47,7 @@ impl Estado {
     /// same paths and different modes mean opposite things, so the mode goes
     /// HERE, with the subject — between path lines, a path can impersonate
     /// any other line, and this is half the decision.
-    pub(super) fn sujeto_de_aprobacion(
+    pub(super) fn approval_subject(
         &self,
         req: &norte_proto::methods::PolicyApprovalRequired,
     ) -> String {
@@ -86,8 +86,8 @@ impl Estado {
     /// `approval_id` —, and they are painted with canonical sanitizing
     /// because they are controlled by whoever requested the operation.
     // TODO(translation): review — this paragraph describes
-    /// `abrir_aprobacion` below, but it is attached, with no blank line in
-    /// between, to the doc comment for `aprobar_o_denegar` right after it; it
+    /// `open_approval` below, but it is attached, with no blank line in
+    /// between, to the doc comment for `approve_or_deny` right after it; it
     /// looks like a stale fragment left by an earlier edit.
     /// An agent approval's two answers.
     ///
@@ -96,7 +96,7 @@ impl Estado {
     /// `approve` and `deny` are named differently from `confirm`/`cancel` on
     /// purpose — on a security surface, "confirm" and "approve" should not be
     /// able to get confused in a renderer.
-    fn aprobar_o_denegar() -> Vec<DialogChoice> {
+    fn approve_or_deny() -> Vec<DialogChoice> {
         vec![
             DialogChoice {
                 id: "approve".to_owned(),
@@ -114,19 +114,19 @@ impl Estado {
         ]
     }
 
-    pub(super) fn abrir_aprobacion(
+    pub(super) fn open_approval(
         &mut self,
         req: &norte_proto::methods::PolicyApprovalRequired,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
         // The SAME approval can arrive twice: the SDK resyncs
         // `policy.pending` on every reconnection, and whatever is still alive
         // comes back through the channel. Two dialogs are two answers, and
         // the second one lands on an id the daemon already closed.
-        if self.dialogos.iter().any(|d| {
+        if self.dialogs.iter().any(|d| {
             matches!(
-                d.al_confirmar,
-                Some(Pendiente::Decidir { approval_id, .. }) if approval_id == req.approval_id
+                d.on_confirm,
+                Some(Pending::Decide { approval_id, .. }) if approval_id == req.approval_id
             )
         }) {
             return Vec::new();
@@ -138,7 +138,7 @@ impl Estado {
         // hand (#276).
         let mut agents_notice = Vec::new();
         if let Some(session) = req.session.as_deref() {
-            self.agencia.sesiones.vista(session, &req.op);
+            self.agencia.sessions.vista(session, &req.op);
             // And it is REPAINTED if the panel is open. The list changes with
             // NO gesture — this request reorders it — and a renderer that is
             // not told keeps painting the previous order: the row the reader
@@ -146,7 +146,7 @@ impl Estado {
             // `u` undoes another session's work.
             if self.agencia.panel {
                 agents_notice.push(self.parche(vec![ViewChange::Agents {
-                    agents: self.vista_agentes(),
+                    agents: self.vista_agents(),
                 }]));
             }
         }
@@ -187,10 +187,10 @@ impl Estado {
         let body: Vec<crate::dto::DialogLine> = req
             .paths
             .iter()
-            .take(Self::MAX_LINEAS_DIALOGO)
+            .take(Self::MAX_LINES_DIALOG)
             .map(|p| line(p))
             .collect();
-        let subject = line(&self.sujeto_de_aprobacion(req));
+        let subject = line(&self.approval_subject(req));
         // Who is asking is the FIRST thing needed to decide, and it used to
         // be dropped: the title says "agent approval" and without this there
         // is no way to know which agent.
@@ -208,8 +208,8 @@ impl Estado {
         // Fluent key that does not exist in any language — so a truncated
         // batch painted the raw identifier.
         let total = std::cmp::max(req.paths_total, req.paths.len() as u64);
-        let shown = req.paths.len().min(Self::MAX_LINEAS_DIALOGO);
-        let note = self.nota_de_recorte(shown, usize::try_from(total).unwrap_or(usize::MAX));
+        let shown = req.paths.len().min(Self::MAX_LINES_DIALOG);
+        let note = self.truncation_note(shown, usize::try_from(total).unwrap_or(usize::MAX));
         // How much time is left, SAID and in its own field. A decision with
         // an expiry that does not show it reads as one that waits forever,
         // and whoever comes back later presses approve on something the
@@ -235,10 +235,10 @@ impl Estado {
         // frozen phrase (#279). Only with a known TTL: counting down from a
         // made-up deadline would be worse than not counting.
         let expires_at = (req.ttl_ms > 0)
-            .then(|| i64::try_from(req.ttl_ms).ok().map(|ms| ahora_ms() + ms))
+            .then(|| i64::try_from(req.ttl_ms).ok().map(|ms| now_ms() + ms))
             .flatten();
-        let id = ModalId(self.siguiente_modal);
-        self.siguiente_modal += 1;
+        let id = ModalId(self.next_modal);
+        self.next_modal += 1;
         let view = DialogView {
             id,
             title_key: "modal-approval-title".to_owned(),
@@ -253,20 +253,20 @@ impl Estado {
             // terminal has always said so in its summary and this window did
             // not, over the same paths: the answer is now the same function.
             overflow_hostile: norte_frontend::overflow_hostile_redacted(&req.paths, shown),
-            choices: Self::aprobar_o_denegar(),
+            choices: Self::approve_or_deny(),
             input: None,
             input_hostile: false,
             input_secret: false,
             fields: Vec::new(),
             dest_check: crate::dto::DestCheckView::NotAsked,
         };
-        let dropped = self.apilar_dialogo(Dialogo {
+        let dropped = self.apilar_dialog(Dialog {
             id,
             vista: view.clone(),
-            tecleado: Tecleado::Texto(String::new()),
+            typed: Typed::Text(String::new()),
             // It opens ON ITS OWN: an agent's op brings it, not a key.
-            reconocido: false,
-            al_confirmar: Some(Pendiente::Decidir {
+            recognized: false,
+            on_confirm: Some(Pending::Decide {
                 approval_id: req.approval_id,
                 session: req.session.clone(),
             }),
@@ -281,11 +281,11 @@ impl Estado {
             let ttl = std::time::Duration::from_millis(req.ttl_ms);
             tokio::spawn(async move {
                 tokio::time::sleep(ttl).await;
-                let _ = mailbox.send(Mensaje::AprobacionCaducada(approval_id)).await;
+                let _ = mailbox.send(Message::ApprovalCaducada(approval_id)).await;
             });
         }
         let change = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+            dialogs: self.dialog_views(),
         };
         let mut outgoing = vec![self.parche(vec![change])];
         outgoing.extend(dropped);
@@ -297,28 +297,27 @@ impl Estado {
     /// `policy.decide` is not sent: the daemon already resolved it on its
     /// own — an expired TTL is a denial —, and answering about a closed id
     /// only produces an error that means nothing to whoever reads it.
-    pub(super) fn caduca_aprobacion(&mut self, approval_id: u64) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let before = self.dialogos.len();
-        self.dialogos.retain(|d| {
+    pub(super) fn expires_approval(&mut self, approval_id: u64) -> Vec<BridgeEnvelope<UiUpdate>> {
+        let before = self.dialogs.len();
+        self.dialogs.retain(|d| {
             !matches!(
-                d.al_confirmar,
-                Some(Pendiente::Decidir { approval_id: id, .. }) if id == approval_id
+                d.on_confirm,
+                Some(Pending::Decide { approval_id: id, .. }) if id == approval_id
             )
         });
-        if self.dialogos.len() == before {
+        if self.dialogs.len() == before {
             // It had already been answered: the expiry arrives and there is
             // nothing to close. It is not an error, and nothing is said.
             return Vec::new();
         }
         let change = ViewChange::Dialogs {
-            dialogs: self.vistas_de_dialogos(),
+            dialogs: self.dialog_views(),
         };
         let mut outgoing = vec![self.parche(vec![change])];
         // NAMES the one that expired (#279). With two stacked, "the approval
         // expired" does not say which one closed on its own nor which is
         // still waiting.
-        outgoing
-            .extend(self.decir_con("msg-approval-expired", &[("id", &approval_id.to_string())]));
+        outgoing.extend(self.say_with("msg-approval-expired", &[("id", &approval_id.to_string())]));
         outgoing
     }
 }

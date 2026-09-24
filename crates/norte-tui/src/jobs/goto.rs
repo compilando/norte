@@ -13,15 +13,15 @@
 //! share.
 
 use norte_core::backend::Backend;
-use norte_frontend::goto::SECCION_INDICE;
+use norte_frontend::goto::SECTION_INDEX;
 use norte_proto::Error;
 
 use crate::app::App;
-use crate::goto::MINIMO_PARA_EL_INDICE;
+use crate::goto::MINIMUM_FOR_THE_INDEX;
 use crate::jobs::{GotoIndexRun, InFlight};
 
 /// How many results are requested: the same number in both frontends.
-const CAP: u32 = norte_frontend::goto::TOPE_DEL_INDICE;
+const CAP: u32 = norte_frontend::goto::INDEX_CAP;
 
 /// Queries the index with whatever is typed right now, if it's worth it.
 ///
@@ -30,10 +30,10 @@ const CAP: u32 = norte_frontend::goto::TOPE_DEL_INDICE;
 /// requests alive, and the answer to a query that is no longer typed is of
 /// no use to anyone.
 ///
-/// Below [`MINIMO_PARA_EL_INDICE`] no query is made AND the section is
+/// Below [`MINIMUM_FOR_THE_INDEX`] no query is made AND the section is
 /// CLEARED: leaving there what answered a longer query would be showing an
 /// answer to a question that is no longer being asked.
-pub fn pedir_al_indice(app: &mut App, backend: &Backend, work: &mut InFlight) {
+pub fn ask_the_index(app: &mut App, backend: &Backend, work: &mut InFlight) {
     let Some(goto) = &mut app.goto else {
         olvidar(work);
         return;
@@ -42,10 +42,9 @@ pub fn pedir_al_indice(app: &mut App, backend: &Backend, work: &mut InFlight) {
     // A typed PATH doesn't count either: it's not a semantic query, and
     // sending it to an embeddings provider — maybe remote — is sending it
     // the name of a directory of the reader's.
-    if q.chars().count() < MINIMO_PARA_EL_INDICE || norte_frontend::goto::parece_ruta(&q).is_some()
-    {
+    if q.chars().count() < MINIMUM_FOR_THE_INDEX || norte_frontend::goto::looks_path(&q).is_some() {
         olvidar(work);
-        goto.reemplazar_seccion(SECCION_INDICE, Vec::new(), true);
+        goto.replace_section(SECTION_INDEX, Vec::new(), true);
         return;
     }
     let b = backend.clone();
@@ -105,5 +104,5 @@ pub fn harvest_goto_index(
     let Some(hits) = norte_frontend::validate_semantic_hits(hits) else {
         return;
     };
-    crate::goto::poner_indice(app, &hits);
+    crate::goto::set_index(app, &hits);
 }

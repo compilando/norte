@@ -1,9 +1,9 @@
 //! Help: topics, context and extension pages.
 //!
-//! Part of `controller`: these are `Estado` methods, moved here without
+//! Part of `controller`: these are `State` methods, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Enumerating them here would be a
 // forty-line list per file, in 32 files, that goes stale the moment the
 // parent imports something — `super::*` tracks it on its own.
@@ -11,7 +11,7 @@
 use super::*;
 use crate::dto::HelpScrollTo;
 
-impl Estado {
+impl State {
     /// Opens help on the page for the CONTEXT the reader is in.
     ///
     /// Whoever presses `F1` while looking at a question wants the answer to
@@ -19,21 +19,17 @@ impl Estado {
     /// (`dialog.confirm`, `viewer`, `browse`) and who claims it is said by
     /// the corpus itself on its front page, so adding a page for a new
     /// dialog does not touch this code.
-    pub(super) fn abrir_ayuda(
+    pub(super) fn open_help(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // Not over a dialog that is being TYPED into. Help keeps the
         // keyboard while it is open, so opening it over a text field turns
         // the `⌫` that fixes a typo into a step back in help, and the
         // `enter` that confirms into something else. The TUI forbids it by
         // name since H3c and for the same reasoning.
-        if self
-            .dialogos
-            .last()
-            .is_some_and(|d| d.vista.input.is_some())
-        {
+        if self.dialogs.last().is_some_and(|d| d.vista.input.is_some()) {
             return (
                 ActionAck::Unavailable {
                     reason_key: "host-help-over-input".to_owned(),
@@ -41,13 +37,13 @@ impl Estado {
                 Vec::new(),
             );
         }
-        let contexto = self.contexto_de_ayuda();
-        self.ayuda = Some(crate::help::Ayuda::abrir(
+        let context = self.help_context();
+        self.help = Some(crate::help::Help::open(
             self.lang,
-            contexto,
-            &self.efectivo,
-            &self.efectivo_visor,
-            self.hechos(),
+            context,
+            &self.effective,
+            &self.effective_visor,
+            self.facts(),
         ));
         // The extension catalog is requested and NOT awaited: help is
         // painted right away. The documentation is cosmetic, and a blank
@@ -57,18 +53,18 @@ impl Estado {
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let res = match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_list()).await {
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_list()).await {
                 Ok(r) => r,
                 Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
             };
             let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::PluginsDeAyuda(res))))
+                .send(Message::Background(Box::new(Background::HelpPlugins(res))))
                 .await;
         });
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
+        let change = ViewChange::Help {
+            help: self.vista_help(),
         };
-        (self.aplicada(), vec![self.parche(vec![cambio])])
+        (self.applied(), vec![self.parche(vec![change])])
     }
 
     /// Help's patch, and along the way the page that needs to be requested.
@@ -78,16 +74,16 @@ impl Estado {
     /// is not in the corpus, it has to be requested. A second path that only
     /// painted would be an extension page that stays blank depending on how
     /// it is reached.
-    pub(super) fn parche_de_ayuda(
+    pub(super) fn help_patch(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        self.pedir_pagina_de_plugin(backend, buzon);
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
+        self.request_plugin_page(backend, buzon);
+        let change = ViewChange::Help {
+            help: self.vista_help(),
         };
-        vec![self.parche(vec![cambio])]
+        vec![self.parche(vec![change])]
     }
 
     /// The catalog arrived: it enters the model and, if the reader is
@@ -96,54 +92,53 @@ impl Estado {
     /// If help closed while this was in flight, there is nothing to do: the
     /// snapshot was of an opening that no longer exists, and keeping it for
     /// the next one would show a stale catalog.
-    pub(super) fn aplicar_catalogo_de_plugins(
+    pub(super) fn apply_plugins_catalog(
         &mut self,
         res: Result<norte_proto::methods::PluginListResult, Error>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> Vec<BridgeEnvelope<UiUpdate>> {
-        let Ok(lista) = res else {
+        let Ok(list) = res else {
             return Vec::new();
         };
-        let Some(a) = self.ayuda.as_mut() else {
+        let Some(a) = self.help.as_mut() else {
             return Vec::new();
         };
-        let antes = a.estado.rows().to_vec();
-        a.set_plugins(&lista.plugins);
-        if a.estado.rows() == antes {
+        let before = a.state.rows().to_vec();
+        a.set_plugins(&list.plugins);
+        if a.state.rows() == before {
             // A catalog that adds no row — no extension, or none with a page
             // and a valid id — does not change the screen, and a patch that
             // changes nothing forces a renderer to repaint the whole help
             // for nothing.
             return Vec::new();
         }
-        self.parche_de_ayuda(backend, buzon)
+        self.help_patch(backend, buzon)
     }
 
     /// Requests the open extension's page, if there is one and it has not
     /// already been requested in this opening of help.
-    pub(super) fn pedir_pagina_de_plugin(
+    pub(super) fn request_plugin_page(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) {
-        let Some(id) = self
-            .ayuda
-            .as_mut()
-            .and_then(crate::help::Ayuda::reclamar_pagina)
-        else {
+        let Some(id) = self.help.as_mut().and_then(crate::help::Help::claim_page) else {
             return;
         };
         let backend = Arc::clone(backend);
         let buzon = buzon.clone();
         tokio::spawn(async move {
-            let res =
-                match tokio::time::timeout(PLAZO_PLUGINS, backend.plugin_help(id.clone())).await {
-                    Ok(r) => r,
-                    Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
-                };
+            let res = match tokio::time::timeout(DEADLINE_PLUGINS, backend.plugin_help(id.clone()))
+                .await
+            {
+                Ok(r) => r,
+                Err(_) => Err(Error::ProviderUnavailable { retryable: true }),
+            };
             let _ = buzon
-                .send(Mensaje::Fondo(Box::new(Fondo::PaginaDePlugin(id, res))))
+                .send(Message::Background(Box::new(Background::PluginPage(
+                    id, res,
+                ))))
                 .await;
         });
     }
@@ -152,17 +147,17 @@ impl Estado {
     /// name, which is a better answer than an error over help — and it is
     /// also what an N-1 daemon without the method sees. It is requested once
     /// per opening: closing and reopening help is the retry.
-    pub(super) fn aplicar_pagina_de_plugin(
+    pub(super) fn apply_plugin_page(
         &mut self,
         id: &str,
         res: Option<&norte_proto::methods::PluginHelpResult>,
     ) -> Option<BridgeEnvelope<UiUpdate>> {
-        let a = self.ayuda.as_mut()?;
-        a.instalar_pagina(id, res?);
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
+        let a = self.help.as_mut()?;
+        a.install_page(id, res?);
+        let change = ViewChange::Help {
+            help: self.vista_help(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
     /// Where the reader is, in the corpus's vocabulary.
@@ -171,18 +166,18 @@ impl Estado {
     /// reader is looking at. A dialog that only informs has no page of its
     /// own and falls back to the listing, which is what it was talking
     /// about.
-    pub(super) fn contexto_de_ayuda(&self) -> &'static str {
+    pub(super) fn help_context(&self) -> &'static str {
         debug_assert!(
-            CONTEXTOS.contains(&self.contexto_calculado()),
+            CONTEXTOS.contains(&self.context_computed()),
             "a context outside the declared vocabulary"
         );
-        self.contexto_calculado()
+        self.context_computed()
     }
 
     /// The computation, without the anchor.
-    pub(super) fn contexto_calculado(&self) -> &'static str {
-        if let Some(d) = self.dialogos.last() {
-            return match d.al_confirmar {
+    pub(super) fn context_computed(&self) -> &'static str {
+        if let Some(d) = self.dialogs.last() {
+            return match d.on_confirm {
                 // A transfer shares a page with deletion: both are "the
                 // question that must be answered before something changes",
                 // and the corpus has ONE page about that.
@@ -190,26 +185,26 @@ impl Estado {
                 // different (`dialog.overwrite`, `dialog.skip`…), and sending
                 // the reader to the confirm page would show them ones that do
                 // not apply.
-                Some(Pendiente::Reintentar { .. }) => "dialog.collision",
+                Some(Pending::Retry { .. }) => "dialog.collision",
                 // Closing falls here for the same reason: it is "answer
                 // before something is lost", and what is lost is a copy left
                 // halfway.
                 Some(
-                    Pendiente::Borrar { .. }
-                    | Pendiente::Transferir { .. }
-                    | Pendiente::Soltar { .. }
+                    Pending::Delete { .. }
+                    | Pending::Transferir { .. }
+                    | Pending::Release { .. }
                     // Uninstalling is a delete that asks: same page as
                     // deletion.
-                    | Pendiente::DesinstalarExtension { .. }
+                    | Pending::UninstallExtension { .. }
                     // Undoing up to a point is an accepted consequence: the
                     // same page as in the TUI.
-                    | Pendiente::DeshacerHasta { .. }
-                    | Pendiente::Salir,
+                    | Pending::UndoUntil { .. }
+                    | Pending::Exit,
                 ) => "dialog.confirm",
                 Some(
-                    Pendiente::Decidir { .. }
-                    | Pendiente::AprobarExtension { .. }
-                    | Pendiente::DeshacerSesion { .. },
+                    Pending::Decide { .. }
+                    | Pending::ApproveExtension { .. }
+                    | Pending::UndoSession { .. },
                 ) => "dialog.approval",
                 // Search shares a page with create: both are the dialog that
                 // asks you to type a name, and the corpus has ONE page about
@@ -217,51 +212,51 @@ impl Estado {
                 // Rename shares a page with create and with search: all
                 // three are the dialog that asks you to type something, and
                 // the corpus has ONE page about that.
-                Some(Pendiente::InstruccionIa { .. }) => "dialog.ai-rename",
+                Some(Pending::InstructionIa { .. }) => "dialog.ai-rename",
                 // The batch template (#310): the same page the TUI gives its
                 // prompt, the rename one.
-                Some(Pendiente::PlantillaLote { .. }) => "dialog.rename",
+                Some(Pending::TemplateBatch { .. }) => "dialog.rename",
                 // #327: the password one has its OWN page, the same one the
                 // TUI uses (`remote.md`, next to TOFU). Sending it to "type a
                 // name" would be the divergence between frontends ADR 0077
                 // exists to prevent, committed in the very change that adds
                 // its parity test.
-                Some(Pendiente::EntregarSecreto { .. }) => "dialog.ask-secret",
+                Some(Pending::DeliverSecret { .. }) => "dialog.ask-secret",
                 // #311: the checksums dialog is a READ-ONLY box over what is
                 // under the cursor, like properties.
-                Some(Pendiente::CopiarSumas { .. }) => "dialog.properties",
+                Some(Pending::CopyChecksums { .. }) => "dialog.properties",
                 Some(
-                    Pendiente::CrearDirectorio { .. }
-                    | Pendiente::CrearFichero { .. }
-                    | Pendiente::Buscar { .. }
-                    | Pendiente::Renombrar { .. }
+                    Pending::CreateDirectory { .. }
+                    | Pending::CreateFile { .. }
+                    | Pending::Search { .. }
+                    | Pending::Rename { .. }
                     // The semantic query is another dialog that asks you to
                     // type something, and the corpus has ONE page about
                     // that.
-                    | Pendiente::ConsultaSemantica
+                    | Pending::QuerySemantic
                     // Marking by pattern, same thing: a dialog that asks you
                     // to type something.
-                    | Pendiente::Patron { .. }
+                    | Pending::Patron { .. }
                     // And packing: what is typed is the container's name,
                     // which is where the format comes from.
-                    | Pendiente::Empaquetar { .. }
+                    | Pending::Pack { .. }
                     // Splitting asks for a SIZE, but it is the same dialog of
                     // a text field and a confirmation.
-                    | Pendiente::Partir { .. }
+                    | Pending::Split { .. }
                     // And saving the profile asks for a NAME, which ends up
                     // being a directory: same single-field dialog (#318).
-                    | Pendiente::GuardarPerfil
+                    | Pending::SaveProfile
                     // And a text setting's value: a prefilled field and two
                     // buttons.
-                    | Pendiente::EditarAjuste { .. }
+                    | Pending::EditSetting { .. }
                     // And permissions ask for a MODE, with the same shape
                     // (#314). The corpus documents them on the properties
                     // page, but the key CONTEXT is this one: a field and two
                     // buttons.
-                    | Pendiente::Permisos { .. }
+                    | Pending::Permissions { .. }
                     // And a favorite's name (#309): a prefilled field and two
                     // buttons, the same shape as all the ones above.
-                    | Pendiente::GuardarFavorito { .. },
+                    | Pending::SaveFavorite { .. },
                 ) => "dialog.mkdir",
                 None => "browse",
             };
@@ -291,29 +286,27 @@ impl Estado {
     /// rejection arrives with its name (`host-no-target-designated`,
     /// `host-no-other-slot`), which is information. If anyone makes the two
     /// frontends match, let it be by moving the terminal here.
-    pub(super) fn hechos(&self) -> norte_frontend::availability::Facts {
-        let hueco = self.hueco();
+    pub(super) fn facts(&self) -> norte_frontend::availability::Facts {
+        let slot = self.slot();
         // `cursor_entry`, the door for DESCRIBING: with a quick filter set
         // the raw cursor does not move and the pointed-to row is a different
         // one, so indexing `entries()` by it described an entry that is not
         // the one the reader has in front of them.
-        let entrada = hueco.pane.cursor_entry();
+        let entry = slot.pane.cursor_entry();
         norte_frontend::availability::Facts {
             // The same as what `Activate` navigates, and through the shared
             // spot: a container and a symlink are entered the same as a
             // directory (ADR 0077). Asking here by `kind == Dir` used to dim
             // `enter` over a `.zip` that the key opens without a problem.
-            enterable: entrada.is_some_and(|e| norte_frontend::nav::enter_target(e).is_some()),
-            // The SAME thing `pedir_visor` refuses, which only refuses a
+            enterable: entry.is_some_and(|e| norte_frontend::nav::enter_target(e).is_some()),
+            // The SAME thing `request_visor` refuses, which only refuses a
             // directory: a symlink opens in the viewer without a problem,
             // and dimming F3 over one said "this does not apply" about a key
             // that works. The two spots move together.
-            viewable: entrada.is_some_and(|e| e.kind != EntryKind::Dir),
-            rename_single: hueco.pane.marks_len() <= 1,
-            source_read_only: self.solo_lectura(self.activo()),
-            dest_read_only: self
-                .hueco_destino()
-                .is_ok_and(|destino| self.solo_lectura(destino)),
+            viewable: entry.is_some_and(|e| e.kind != EntryKind::Dir),
+            rename_single: slot.pane.marks_len() <= 1,
+            source_read_only: self.solo_read(self.active()),
+            dest_read_only: self.slot_dest().is_ok_and(|dest| self.solo_read(dest)),
             // `degraded` in the table means the session runs UNENCRYPTED,
             // which is none of the three states this host projects
             // (connected, retrying, lost). While the connection's wire does
@@ -335,22 +328,22 @@ impl Estado {
 
     /// Re-freezes help's facts if it is open, and returns its patch (#262).
     ///
-    /// The freezing in `abrir_ayuda` guards against the READER moving, not
+    /// The freezing in `open_help` guards against the READER moving, not
     /// against the world moving. Two of the facts — `enterable` and
     /// `viewable` — describe the entry under the cursor, and a copy or a
     /// delete that finish with help in front re-list the pane underneath:
     /// the reason phrase kept explaining why something did not apply to a
     /// selection that no longer exists. There was no wrong dispatch —
-    /// `activar_en_ayuda` asks again before running — but a screen that
+    /// `activate_in_help` asks again before running — but a screen that
     /// explains something false is a screen that lies.
-    pub(super) fn recongelar_ayuda(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
-        if !self.recongelar_hechos_de_ayuda() {
+    pub(super) fn recongelar_help(&mut self) -> Option<BridgeEnvelope<UiUpdate>> {
+        if !self.refreeze_help_facts() {
             return None;
         }
-        let cambio = ViewChange::Help {
-            help: self.vista_ayuda(),
+        let change = ViewChange::Help {
+            help: self.vista_help(),
         };
-        Some(self.parche(vec![cambio]))
+        Some(self.parche(vec![change]))
     }
 
     /// Re-freezes and does NOT build a patch. For paths that already send a
@@ -359,31 +352,31 @@ impl Estado {
     /// condition that forces the renderer to request a full snapshot.
     ///
     /// Returns whether help was open AND its facts have CHANGED.
-    pub(super) fn recongelar_hechos_de_ayuda(&mut self) -> bool {
-        if self.ayuda.is_none() {
+    pub(super) fn refreeze_help_facts(&mut self) -> bool {
+        if self.help.is_none() {
             return false;
         }
-        let hechos = self.hechos();
-        self.ayuda.as_mut().is_some_and(|a| a.recongelar(hechos))
+        let facts = self.facts();
+        self.help.as_mut().is_some_and(|a| a.recongelar(facts))
     }
 
     /// One part of a verdict's detail, in separate LINES (#273).
     ///
     /// The cause and the name go on different lines, which is how this
     /// surface separates them OUT of band: composing them into one let a
-    /// file named `✗ 4. ya existe: otro.txt` fabricate a list entry that
+    /// file named `✗ 4. ya exists: other.txt` fabricate a list entry that
     /// does not exist. The name travels alone and with its mark, the only
     /// thing a third party controls.
-    pub(super) fn lineas_de_detalle(
+    pub(super) fn detail_lines(
         &self,
-        parte: &norte_frontend::DetailPart,
+        part: &norte_frontend::DetailPart,
     ) -> Vec<crate::dto::DialogLine> {
         use norte_frontend::DetailPart;
         let plana = |texto: String| crate::dto::DialogLine {
             text: clamp_display(texto),
             hostile: false,
         };
-        match parte {
+        match part {
             DetailPart::Temp { count } => vec![plana(norte_i18n::ta_in(
                 self.lang,
                 "modal-rename-batch-temp",
@@ -396,7 +389,7 @@ impl Estado {
                 hostile,
             } => {
                 let kind = norte_i18n::t_in(self.lang, kind_key);
-                let causa = match index {
+                let cause = match index {
                     Some(n) => norte_i18n::ta_in(
                         self.lang,
                         "modal-rename-batch-collision-prefix",
@@ -409,7 +402,7 @@ impl Estado {
                     ),
                 };
                 vec![
-                    plana(causa),
+                    plana(cause),
                     crate::dto::DialogLine {
                         text: clamp_display(name.clone()),
                         hostile: *hostile,
@@ -435,9 +428,9 @@ impl Estado {
     }
 
     /// Help's projection.
-    pub(super) fn vista_ayuda(&self) -> Option<crate::dto::HelpView> {
-        let a = self.ayuda.as_ref()?;
-        Some(a.vista(self.lang, self.efectos, self.visor.is_some()))
+    pub(super) fn vista_help(&self) -> Option<crate::dto::HelpView> {
+        let a = self.help.as_ref()?;
+        Some(a.vista(self.lang, self.effects, self.visor.is_some()))
     }
 
     /// The keys while help is open.
@@ -447,56 +440,52 @@ impl Estado {
     /// "follow this link". They are the ones help itself announces in its
     /// footer (`help-hint-gui`), and that string and this `match` change
     /// together.
-    pub(super) fn tecla_en_ayuda(
+    pub(super) fn key_in_help(
         &mut self,
         k: &crate::keys::KeyInput,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
         // `Ctrl+P` leaves help for the palette, which is what its footer
         // promises. BOTH changes travel in the same patch: a renderer that
         // only received the palette one would keep painting help
         // underneath.
         if k.ctrl && !k.alt && !k.meta && k.key.eq_ignore_ascii_case("p") {
-            self.ayuda = None;
-            self.paleta = Some(norte_frontend::palette_state::Palette::with_recent(
-                self.filas_de_paleta(),
-                &self.paleta_recientes,
+            self.help = None;
+            self.palette = Some(norte_frontend::palette_state::Palette::with_recent(
+                self.palette_rows(),
+                &self.palette_recent,
             ));
-            self.pedir_filas_de_plugin(backend, buzon);
-            let cambios = vec![
+            self.request_plugin_rows(backend, buzon);
+            let changes = vec![
                 ViewChange::Help { help: None },
                 ViewChange::Palette {
-                    palette: self.vista_paleta(),
+                    palette: self.vista_palette(),
                 },
             ];
-            return (self.aplicada(), vec![self.parche(cambios)]);
+            return (self.applied(), vec![self.parche(changes)]);
         }
         // WHILE FILTERING, keys are LETTERS: resolving them through the
         // keymap would turn typing "document" into open, close and filter.
         // Only `Escape`, `Backspace` and `Enter` still mean something, and
         // those three go by name because the filter is a text field.
-        let filtrando = self.ayuda.as_ref().is_some_and(|a| a.estado.filtering());
-        let verbo = if filtrando {
-            None
-        } else {
-            self.verbo_de_dialogo(k)
+        let filtering = self.help.as_ref().is_some_and(|a| a.state.filtering());
+        let verb = if filtering { None } else { self.dialog_verb(k) };
+        let Some(a) = self.help.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        let Some(a) = self.ayuda.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
-        };
-        match (verbo.as_deref(), k.key.as_str()) {
+        match (verb.as_deref(), k.key.as_str()) {
             (Some("dialog.cancel"), _) | (None, "Escape" | "esc") => {
                 // While filtering, `esc` stops filtering and does not close:
                 // closing all of help for abandoning a search would lose the
                 // page that was being read.
-                if a.estado.filtering() {
-                    a.estado.end_filter();
+                if a.state.filtering() {
+                    a.state.end_filter();
                 } else {
-                    self.ayuda = None;
+                    self.help = None;
                 }
             }
-            (Some("dialog.pane"), _) => a.estado.toggle_focus(),
+            (Some("dialog.pane"), _) => a.state.toggle_focus(),
             // The keys that SCROLL, resolved by the reader's keymap — before,
             // the renderer handled `PageDown`, `Home`, `[`… as fixed keys,
             // and rebinding them changed the terminal and not this window.
@@ -510,34 +499,33 @@ impl Estado {
             // measures and scrolls (`HelpView::scroll`, bridge 76). The
             // arrows scroll the body only if there is nothing executable:
             // with actions, they pick one, same as in the terminal.
-            (Some(verbo @ ("dialog.down" | "dialog.up")), _)
-                if a.estado.focus() == norte_frontend::help::Focus::Body
-                    && a.estado.actions().is_empty() =>
+            (Some(verb @ ("dialog.down" | "dialog.up")), _)
+                if a.state.focus() == norte_frontend::help::Focus::Body
+                    && a.state.actions().is_empty() =>
             {
-                a.desplazar(if verbo == "dialog.down" {
+                a.scroll(if verb == "dialog.down" {
                     HelpScrollTo::LineDown
                 } else {
                     HelpScrollTo::LineUp
                 });
             }
-            (Some("dialog.down"), _) => a.estado.down(),
-            (Some("dialog.up"), _) => a.estado.up(),
+            (Some("dialog.down"), _) => a.state.down(),
+            (Some("dialog.up"), _) => a.state.up(),
             (
                 Some(
-                    verbo
-                    @ ("dialog.page-down" | "dialog.page-up" | "dialog.top" | "dialog.bottom"),
+                    verb @ ("dialog.page-down" | "dialog.page-up" | "dialog.top" | "dialog.bottom"),
                 ),
                 _,
             ) => {
-                if a.estado.focus() == norte_frontend::help::Focus::Topics {
-                    match verbo {
-                        "dialog.page-down" => a.estado.page_down(PAGINA_DE_AYUDA),
-                        "dialog.page-up" => a.estado.page_up(PAGINA_DE_AYUDA),
-                        "dialog.top" => a.estado.top(),
-                        _ => a.estado.bottom(),
+                if a.state.focus() == norte_frontend::help::Focus::Topics {
+                    match verb {
+                        "dialog.page-down" => a.state.page_down(HELP_PAGE),
+                        "dialog.page-up" => a.state.page_up(HELP_PAGE),
+                        "dialog.top" => a.state.top(),
+                        _ => a.state.bottom(),
                     }
                 } else {
-                    a.desplazar(match verbo {
+                    a.scroll(match verb {
                         "dialog.page-down" => HelpScrollTo::PageDown,
                         "dialog.page-up" => HelpScrollTo::PageUp,
                         "dialog.top" => HelpScrollTo::Top,
@@ -546,55 +534,55 @@ impl Estado {
                 }
             }
             // Sections belong to the BODY no matter who has focus.
-            (Some("dialog.section-prev"), _) => a.desplazar(HelpScrollTo::SectionPrev),
-            (Some("dialog.section-next"), _) => a.desplazar(HelpScrollTo::SectionNext),
+            (Some("dialog.section-prev"), _) => a.scroll(HelpScrollTo::SectionPrev),
+            (Some("dialog.section-next"), _) => a.scroll(HelpScrollTo::SectionNext),
             (Some("dialog.back"), _) | (None, "Backspace" | "backspace") => {
-                if a.estado.filtering() {
-                    a.estado.backspace();
-                } else if !a.estado.back() {
+                if a.state.filtering() {
+                    a.state.backspace();
+                } else if !a.state.back() {
                     // At the root, "back" is close: the reader has nowhere
                     // to go back to, and a key that does nothing reads as a
                     // frozen window.
-                    self.ayuda = None;
+                    self.help = None;
                 }
             }
             (Some("dialog.confirm"), _) | (None, "Enter" | "enter") => {
-                return self.enter_en_ayuda(backend, buzon);
+                return self.enter_in_help(backend, buzon);
             }
-            (Some("dialog.filter"), _) if !a.estado.filtering() => a.estado.start_filter(),
-            (_, otra) => {
+            (Some("dialog.filter"), _) if !a.state.filtering() => a.state.start_filter(),
+            (_, other) => {
                 // A TEXT key is a code point, not a key name (`ArrowLeft` is
                 // not typed), and it only counts with the filter open:
                 // typing "d" while reading a page cannot start filtering on
                 // its own.
-                let mut chars = otra.chars();
+                let mut chars = other.chars();
                 match (chars.next(), chars.next()) {
-                    (Some(c), None) if a.estado.filtering() && !k.ctrl && !k.alt && !k.meta => {
-                        a.estado.push_char(c);
+                    (Some(c), None) if a.state.filtering() && !k.ctrl && !k.alt && !k.meta => {
+                        a.state.push_char(c);
                     }
-                    _ => return (self.aplicada(), Vec::new()),
+                    _ => return (self.applied(), Vec::new()),
                 }
             }
         }
-        (self.aplicada(), self.parche_de_ayuda(backend, buzon))
+        (self.applied(), self.help_patch(backend, buzon))
     }
 
     /// `enter` over help: open the chosen page, follow a link, or run a
     /// command.
-    pub(super) fn enter_en_ayuda(
+    pub(super) fn enter_in_help(
         &mut self,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(a) = self.ayuda.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(a) = self.help.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        if a.estado.focus() == norte_frontend::help::Focus::Topics {
-            a.estado.open_selected();
-            return (self.aplicada(), self.parche_de_ayuda(backend, buzon));
+        if a.state.focus() == norte_frontend::help::Focus::Topics {
+            a.state.open_selected();
+            return (self.applied(), self.help_patch(backend, buzon));
         }
-        let i = a.estado.action_cursor();
-        self.activar_en_ayuda(u32::try_from(i).unwrap_or(u32::MAX), backend, buzon)
+        let i = a.state.action_cursor();
+        self.activate_in_help(u32::try_from(i).unwrap_or(u32::MAX), backend, buzon)
     }
 
     /// Acts on body row `i`, whether from `enter` or from a click.
@@ -603,96 +591,96 @@ impl Estado {
     /// whoever paints: the renderer does not attach a listener to a dimmed
     /// row, but the keyboard does not go through there, so delegating it let
     /// `enter` run a dimmed row.
-    pub(super) fn activar_en_ayuda(
+    pub(super) fn activate_in_help(
         &mut self,
         i: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let (lang, efectos, hay_visor) = (self.lang, self.efectos, self.visor.is_some());
-        let Some(a) = self.ayuda.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let (lang, effects, hay_visor) = (self.lang, self.effects, self.visor.is_some());
+        let Some(a) = self.help.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let i = i as usize;
-        let veredicto = a.accion_ejecutable(i, lang, efectos, hay_visor);
+        let verdict = a.action_executable(i, lang, effects, hay_visor);
         // Pointing at the row is the half of the click that does NOT
         // execute, and it is done the same way: after following a link, the
         // next arrow moves from where the reader pointed.
-        a.senalar(i);
-        match veredicto {
-            Ok(accion) => self.actuar_en_ayuda(Some(accion), backend, buzon),
-            Err(clave) if clave.is_empty() => {
+        a.point_at(i);
+        match verdict {
+            Ok(action) => self.act_in_help(Some(action), backend, buzon),
+            Err(key) if key.is_empty() => {
                 // A row that no longer exists: the renderer was one frame
                 // behind, and that is not an error.
-                (Self::obsoleta(StaleAction::Modal), Vec::new())
+                (Self::stale(StaleAction::Modal), Vec::new())
             }
-            Err(clave) => {
+            Err(key) => {
                 // Dimmed: the reason is stated and the page STAYS open.
                 // Closing help to refuse would take away the page with the
                 // explanation from the reader.
-                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, &clave)));
-                let cambios = vec![
+                self.status.message = Some(clamp_display(norte_i18n::t_in(self.lang, &key)));
+                let changes = vec![
                     ViewChange::Status(self.status.clone()),
                     ViewChange::Help {
-                        help: self.vista_ayuda(),
+                        help: self.vista_help(),
                     },
                 ];
                 (
-                    ActionAck::Unavailable { reason_key: clave },
-                    vec![self.parche(cambios)],
+                    ActionAck::Unavailable { reason_key: key },
+                    vec![self.parche(changes)],
                 )
             }
         }
     }
 
     /// What a body action does, whether from `enter` or from a click.
-    pub(super) fn actuar_en_ayuda(
+    pub(super) fn act_in_help(
         &mut self,
-        accion: Option<norte_frontend::help::Action>,
+        action: Option<norte_frontend::help::Action>,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        match accion {
+        match action {
             Some(norte_frontend::help::Action::Open(id)) => {
-                if let Some(a) = self.ayuda.as_mut() {
-                    a.estado.open(&id);
+                if let Some(a) = self.help.as_mut() {
+                    a.state.open(&id);
                 }
-                (self.aplicada(), self.parche_de_ayuda(backend, buzon))
+                (self.applied(), self.help_patch(backend, buzon))
             }
             Some(norte_frontend::help::Action::Run(cmd)) => {
                 // Running closes help: the command acts on the listing help
                 // was covering. The close travels FIRST and in its own
                 // patch, so the ack the effect returns still points at the
                 // update that reflects it.
-                self.ayuda = None;
-                let cierre = self.parche(vec![ViewChange::Help { help: None }]);
-                let Some(efecto) = efecto_de(&cmd, 1) else {
-                    let (ack, mut resto) = self.no_implementado(&cmd);
-                    let mut envios = vec![cierre];
-                    envios.append(&mut resto);
+                self.help = None;
+                let close = self.parche(vec![ViewChange::Help { help: None }]);
+                let Some(effect) = effect_of(&cmd, 1) else {
+                    let (ack, mut rest) = self.no_implementado(&cmd);
+                    let mut envios = vec![close];
+                    envios.append(&mut rest);
                     return (ack, envios);
                 };
-                let (ack, mut resto) = self.aplicar_efecto(efecto, backend, buzon);
-                let mut envios = vec![cierre];
-                envios.append(&mut resto);
+                let (ack, mut rest) = self.apply_effect(effect, backend, buzon);
+                let mut envios = vec![close];
+                envios.append(&mut rest);
                 (ack, envios)
             }
-            None => (self.aplicada(), Vec::new()),
+            None => (self.applied(), Vec::new()),
         }
     }
 
     /// A click on a row in help's side panel: SHOWS whatever there is, the
     /// same thing the arrow does.
-    pub(super) fn elegir_pagina(
+    pub(super) fn choose_page(
         &mut self,
         row: u32,
         backend: &Arc<dyn HostBackend>,
-        buzon: &mpsc::Sender<Mensaje>,
+        buzon: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        let Some(a) = self.ayuda.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(a) = self.help.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
-        a.estado.click_row(row as usize);
-        (self.aplicada(), self.parche_de_ayuda(backend, buzon))
+        a.state.click_row(row as usize);
+        (self.applied(), self.help_patch(backend, buzon))
     }
 }

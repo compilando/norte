@@ -53,7 +53,7 @@ type Broadcaster = Box<dyn Fn(PolicyApprovalRequired) + Send + Sync>;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {
     /// Decided: the suspended gate woke up with the answer.
-    Aplicada,
+    Applied,
     /// It was pending, but the requester is no longer listening — its TTL
     /// expired or its dispatch was cancelled. The decision had no effect.
     Vencida,
@@ -68,7 +68,7 @@ pub enum Decision {
     YaDecidida,
     /// That id was never issued in this process. A stale modal from before a
     /// daemon restart lands here.
-    Desconocida,
+    Unknown,
 }
 
 /// An approval in flight: metadata for `policy.pending` (resync) and the
@@ -186,7 +186,7 @@ impl DaemonApprovalResolver {
             // log).
             Some(e) => {
                 if e.decide.send(approve).is_ok() {
-                    Decision::Aplicada
+                    Decision::Applied
                 } else {
                     Decision::Vencida
                 }
@@ -202,7 +202,7 @@ impl DaemonApprovalResolver {
             {
                 Decision::YaDecidida
             }
-            None => Decision::Desconocida,
+            None => Decision::Unknown,
         }
     }
 
@@ -413,7 +413,7 @@ mod tests {
         let task = ask(&r);
         wait_pending(&r, 1).await;
         let id = r.pending()[0].approval_id;
-        assert_eq!(r.decide(id, true), Decision::Aplicada, "it existed");
+        assert_eq!(r.decide(id, true), Decision::Applied, "it existed");
         assert_eq!(task.await.expect("join"), ApprovalOutcome::Approved);
         // A decision consumes the id — and what a second attempt is told is
         // "someone already decided it", not "it doesn't exist" (#279): with
@@ -432,13 +432,10 @@ mod tests {
         let task = ask(&r);
         wait_pending(&r, 1).await;
         let id = r.pending()[0].approval_id;
-        assert_eq!(
-            r.decide(id.saturating_add(1000), true),
-            Decision::Desconocida
-        );
+        assert_eq!(r.decide(id.saturating_add(1000), true), Decision::Unknown);
         // And the real one is still pending: asking about another does not
         // touch it.
-        assert_eq!(r.decide(id, false), Decision::Aplicada);
+        assert_eq!(r.decide(id, false), Decision::Applied);
         let _ = task.await;
     }
 
@@ -449,7 +446,7 @@ mod tests {
         let task = ask(&r);
         wait_pending(&r, 1).await;
         let id = r.pending()[0].approval_id;
-        assert_eq!(r.decide(id, false), Decision::Aplicada);
+        assert_eq!(r.decide(id, false), Decision::Applied);
         assert_eq!(task.await.expect("join"), ApprovalOutcome::Denied);
     }
 

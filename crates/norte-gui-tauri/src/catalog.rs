@@ -151,7 +151,7 @@ impl Appearance {
 
 /// Builds the bundle for this instance, this language and this theme.
 #[must_use]
-pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog {
+pub fn catalog(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog {
     let mut strings = BTreeMap::new();
     for id in norte_i18n::message_ids(lang) {
         let text = norte_i18n::t_in(lang, &id);
@@ -180,7 +180,7 @@ pub fn catalogo(instance: &InstanceId, lang: Lang, theme: &Theme) -> HostCatalog
 impl HostCatalog {
     /// The same catalogue with the appearance the configuration says.
     ///
-    /// Separate from [`catalogo`] and not one more parameter because the
+    /// Separate from [`catalog`] and not one more parameter because the
     /// places that build a catalogue without a configuration are almost all
     /// of them — the tests — and a fourth argument that half the callers fill
     /// with a `Default` is an argument that gets forgotten where it matters.
@@ -193,14 +193,14 @@ impl HostCatalog {
 
 /// The theme's roles, as CSS variables.
 ///
-/// The mapping lives in the HOST (`pickers::roles_de_tema`) ever since its
+/// The mapping lives in the HOST (`pickers::theme_roles`) ever since its
 /// theme picker started choosing: the host then has to resolve by name a
 /// theme nobody handed it, and two lists — one to paint and one to show —
 /// would end up saying different things about the same theme. Here it is
 /// only given the shape the webview expects.
 #[must_use]
 pub fn variables(theme: &Theme) -> BTreeMap<String, String> {
-    let mut v: BTreeMap<String, String> = norte_ui_host::pickers::roles_de_tema(theme)
+    let mut v: BTreeMap<String, String> = norte_ui_host::pickers::theme_roles(theme)
         .into_iter()
         .collect();
     // `[effects] backdrop` (spec 2026-09-11, V6): the only effect this window
@@ -220,7 +220,7 @@ mod tests {
     /// no catalogue of its own to consult.
     #[test]
     fn strings_come_already_resolved() {
-        let c = catalogo(&InstanceId::new("i"), Lang::Es, &Theme::preset_default());
+        let c = catalog(&InstanceId::new("i"), Lang::Es, &Theme::preset_default());
         assert_eq!(c.bridge_version, BRIDGE_VERSION);
         assert!(!c.strings.is_empty(), "there is a catalogue");
         for (key, text) in c.strings.iter().take(20) {
@@ -231,8 +231,8 @@ mod tests {
     /// Two languages, two catalogues: the one sent is the negotiated one.
     #[test]
     fn the_language_rules() {
-        let es = catalogo(&InstanceId::new("i"), Lang::Es, &Theme::preset_default());
-        let en = catalogo(&InstanceId::new("i"), Lang::En, &Theme::preset_default());
+        let es = catalog(&InstanceId::new("i"), Lang::Es, &Theme::preset_default());
+        let en = catalog(&InstanceId::new("i"), Lang::En, &Theme::preset_default());
         assert_eq!(es.locale, "es");
         assert_eq!(en.locale, "en");
         assert_ne!(es.strings, en.strings, "not the same catalogue");

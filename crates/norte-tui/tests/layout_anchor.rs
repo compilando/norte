@@ -35,7 +35,7 @@ fn vp(wire: &str) -> VPath {
 /// With a leading ZERO on purpose: `f0` is a prefix of `f01` and of `f10`,
 /// and a `contains` over a row would not tell which of the three painted
 /// it. The fixed width makes each name findable only by itself.
-fn entradas(dir: &VPath, n: usize) -> Vec<Entry> {
+fn entries(dir: &VPath, n: usize) -> Vec<Entry> {
     (0..n)
         .map(|i| Entry {
             attrs: std::collections::BTreeMap::new(),
@@ -50,11 +50,11 @@ fn entradas(dir: &VPath, n: usize) -> Vec<Entry> {
 }
 
 /// An `App` with `n` entries in each pane.
-fn app_de_prueba_con(n: usize) -> App {
+fn test_app_with(n: usize) -> App {
     let dir = vp("file:///casa");
     App::new(
-        Pane::new(dir.clone(), entradas(&dir, n)),
-        Pane::new(dir.clone(), entradas(&dir, n)),
+        Pane::new(dir.clone(), entries(&dir, n)),
+        Pane::new(dir.clone(), entries(&dir, n)),
     )
 }
 
@@ -77,12 +77,12 @@ fn pulsar(app: &mut App, col: u16, row: u16) {
 ///
 /// Returning the buffer is not a convenience: without it the test would
 /// only check that `pane_geometry` agrees with itself.
-fn pintar(app: &mut App) -> Vec<String> {
-    pintar_en(app, W, H)
+fn paint(app: &mut App) -> Vec<String> {
+    paint_at(app, W, H)
 }
 
-/// Like [`pintar`] at any size.
-fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
+/// Like [`paint`] at any size.
+fn paint_at(app: &mut App, w: u16, h: u16) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("test terminal");
     let area = ratatui::layout::Rect::new(0, 0, w, h);
     ui::before_frame(app, area);
@@ -124,7 +124,7 @@ fn pintar_en(app: &mut App, w: u16, h: u16) -> Vec<String> {
 
 /// The chunk of row `row` occupied by a pane starting at `x` and measuring
 /// `width`. By CHARACTER: `TestBackend` gives one cell per character.
-fn recorte(lines: &[String], row: u16, x: u16, width: u16) -> String {
+fn crop(lines: &[String], row: u16, x: u16, width: u16) -> String {
     lines
         .get(row as usize)
         .map(|l| {
@@ -137,7 +137,7 @@ fn recorte(lines: &[String], row: u16, x: u16, width: u16) -> String {
 }
 
 /// The name of the entry that goes on row `offset` of pane `i`.
-fn nombre_visible(app: &App, i: usize, offset: usize) -> String {
+fn name_visible(app: &App, i: usize, offset: usize) -> String {
     let entry = &app.panes[i].entries()[offset];
     String::from_utf8_lossy(
         entry
@@ -150,40 +150,40 @@ fn nombre_visible(app: &App, i: usize, offset: usize) -> String {
 }
 
 #[test]
-fn la_geometria_declarada_coincide_con_las_filas_pintadas() {
-    let mut app = app_de_prueba_con(60);
-    let lines = pintar(&mut app);
+fn the_declared_geometry_matches_the_painted_rows() {
+    let mut app = test_app_with(60);
+    let lines = paint(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let geom = ui::pane_geometry(&app, area).expect("two panes painted");
 
     for (i, g) in geom.iter().enumerate() {
         assert!(g.list_rows > 0, "pane {i}: no listing rows");
-        let esperada = nombre_visible(&app, i, g.offset);
+        let esperada = name_visible(&app, i, g.offset);
 
         // The first listing row carries the first visible entry.
-        let primera = recorte(&lines, g.first_list_row, g.x, g.width);
+        let first = crop(&lines, g.first_list_row, g.x, g.width);
         assert!(
-            primera.contains(&esperada),
-            "pane {i}: row {} should carry {esperada:?}, carries {primera:?}",
+            first.contains(&esperada),
+            "pane {i}: row {} should carry {esperada:?}, carries {first:?}",
             g.first_list_row
         );
 
         // The row RIGHT ABOVE is chrome (column header): never a listing.
-        let header = recorte(&lines, g.first_list_row - 1, g.x, g.width);
+        let header = crop(&lines, g.first_list_row - 1, g.x, g.width);
         assert!(
             !header.contains(&esperada),
             "pane {i}: the header cannot carry listing content: {header:?}"
         );
 
         // And the row right BELOW the last listing one is the bottom border.
-        let bajo = g.first_list_row + g.list_rows;
-        let border = recorte(&lines, bajo, g.x, g.width);
+        let below = g.first_list_row + g.list_rows;
+        let border = crop(&lines, below, g.x, g.width);
         assert!(
             border.contains('─') && !border.contains(&esperada),
-            "pane {i}: row {bajo} should be the bottom border: {border:?}"
+            "pane {i}: row {below} should be the bottom border: {border:?}"
         );
         assert_eq!(
-            bajo,
+            below,
             g.y + g.height - 1,
             "pane {i}: the bottom border does not fall where the geometry says"
         );
@@ -200,9 +200,9 @@ fn la_geometria_declarada_coincide_con_las_filas_pintadas() {
 /// test the change would be invisible until someone opened a 101-column
 /// terminal.
 #[test]
-fn con_ancho_impar_los_dos_paneles_suman_el_frame() {
-    let mut app = app_de_prueba_con(60);
-    let lines = pintar_en(&mut app, 101, H);
+fn with_odd_width_the_two_panes_add_up_to_the_frame() {
+    let mut app = test_app_with(60);
+    let lines = paint_at(&mut app, 101, H);
     let area = ratatui::layout::Rect::new(0, 0, 101, H);
     let geom = ui::pane_geometry(&app, area).expect("two panes");
     assert_eq!(geom[0].x, 0);
@@ -216,7 +216,7 @@ fn con_ancho_impar_los_dos_paneles_suman_el_frame() {
         "the right one starts where the left one ends"
     );
     // And what is painted matches: the frame's last column is not left blank.
-    let border = recorte(&lines, 0, geom[1].x, geom[1].width);
+    let border = crop(&lines, 0, geom[1].x, geom[1].width);
     assert_eq!(
         border.chars().count(),
         geom[1].width as usize,
@@ -231,9 +231,9 @@ fn con_ancho_impar_los_dos_paneles_suman_el_frame() {
 /// do not show even a name with its size, and until now that was the only
 /// option.
 #[test]
-fn a_treinta_columnas_se_pinta_un_solo_pane_a_ancho_completo() {
-    let mut app = app_de_prueba_con(60);
-    let _ = pintar_en(&mut app, 30, H);
+fn at_thirty_columns_a_single_pane_paints_at_full_width() {
+    let mut app = test_app_with(60);
+    let _ = paint_at(&mut app, 30, H);
     let area = ratatui::layout::Rect::new(0, 0, 30, H);
     let geom = ui::pane_geometry(&app, area).expect("there is geometry");
     assert_eq!(geom[0].width, 30, "the one that paints takes it all");
@@ -247,10 +247,10 @@ fn a_treinta_columnas_se_pinta_un_solo_pane_a_ancho_completo() {
 /// And focus does not stay on the pane the collapse left out: that would be
 /// a keyboard moving a cursor nobody sees.
 #[test]
-fn el_foco_abandona_el_pane_que_el_colapso_dejo_fuera() {
-    let mut app = app_de_prueba_con(60);
+fn focus_leaves_the_pane_the_collapse_left_out() {
+    let mut app = test_app_with(60);
     app.set_focus(1);
-    let _ = pintar_en(&mut app, 30, H);
+    let _ = paint_at(&mut app, 30, H);
     assert_eq!(app.focus(), 0, "focus lands on the one that IS visible");
 }
 
@@ -262,12 +262,12 @@ fn el_foco_abandona_el_pane_que_el_colapso_dejo_fuera() {
 /// one row higher than what the user sees — the silent bug the geometry
 /// exists to not have.
 #[test]
-fn con_una_pestana_abierta_la_geometria_sigue_cuadrando() {
-    let mut app = app_de_prueba_con(60);
+fn with_one_tab_open_the_geometry_still_adds_up() {
+    let mut app = test_app_with(60);
     let before =
         ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("two panes")[0];
     app.tab_new();
-    let lines = pintar(&mut app);
+    let lines = paint(&mut app);
     let geom = ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("two panes");
     assert_eq!(
         geom[0].first_list_row,
@@ -279,8 +279,8 @@ fn con_una_pestana_abierta_la_geometria_sigue_cuadrando() {
         before.list_rows - 1,
         "and takes one listing row from it"
     );
-    let esperada = nombre_visible(&app, 0, geom[0].offset);
-    let row = recorte(&lines, geom[0].first_list_row, geom[0].x, geom[0].width);
+    let esperada = name_visible(&app, 0, geom[0].offset);
+    let row = crop(&lines, geom[0].first_list_row, geom[0].x, geom[0].width);
     assert!(
         row.contains(&esperada),
         "the first listing row should carry {esperada:?}, carries {row:?}"
@@ -291,26 +291,26 @@ fn con_una_pestana_abierta_la_geometria_sigue_cuadrando() {
 /// thing that was being looked at, so it does not flash empty while someone
 /// rereads.
 #[test]
-fn una_pestana_nueva_nace_llena_y_en_el_mismo_sitio() {
-    let mut app = app_de_prueba_con(60);
+fn a_new_tab_is_born_full_and_in_the_same_place() {
+    let mut app = test_app_with(60);
     let dir = app.panes[0].dir().clone();
     let n = app.panes[0].entries().len();
     app.tab_new();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(app.panes[0].dir(), &dir);
     assert_eq!(app.panes[0].entries().len(), n);
 }
 
 /// Closing the second-to-last tab dissolves the group and returns the row.
 #[test]
-fn al_cerrar_la_ultima_pestana_el_pane_recupera_su_fila() {
-    let mut app = app_de_prueba_con(60);
+fn closing_the_last_tab_the_pane_recovers_its_row() {
+    let mut app = test_app_with(60);
     let before =
         ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("two panes")[0];
     app.tab_new();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     app.tab_close();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let geom = ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("two panes");
     assert_eq!(geom[0].list_rows, before.list_rows);
 }
@@ -318,15 +318,15 @@ fn al_cerrar_la_ultima_pestana_el_pane_recupera_su_fila() {
 /// Switching tabs changes the listing that side shows, and each keeps its
 /// own cursor: there is nothing to remember because nothing was forgotten.
 #[test]
-fn cada_pestana_conserva_su_cursor() {
-    let mut app = app_de_prueba_con(60);
+fn every_tab_keeps_its_cursor() {
+    let mut app = test_app_with(60);
     app.panes[0].set_cursor(7);
     app.tab_new();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     app.panes[0].set_cursor(2);
     assert_eq!(app.panes[0].cursor(), 2, "the new tab is on its own");
     app.tab_cycle(-1);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(
         app.panes[0].cursor(),
         7,
@@ -338,13 +338,13 @@ fn cada_pestana_conserva_su_cursor() {
 /// distinct: with a single listing, "the other pane" would be this same
 /// one and a copy would target its own source.
 #[test]
-fn no_se_puede_cerrar_el_ultimo_panel() {
-    let mut app = app_de_prueba_con(60);
+fn the_last_pane_cannot_be_closed() {
+    let mut app = test_app_with(60);
     assert!(
         !app.layout_close_slot(),
         "with two panels it can no longer be done"
     );
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert!(
         ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).is_some(),
         "both are still there"
@@ -353,12 +353,12 @@ fn no_se_puede_cerrar_el_ultimo_panel() {
 
 /// Growing a panel really gives it room, and the other loses it.
 #[test]
-fn agrandar_un_panel_le_da_sitio_y_al_otro_se_lo_quita() {
-    let mut app = app_de_prueba_con(60);
+fn growing_one_pane_gives_it_room_and_takes_it_from_the_other() {
+    let mut app = test_app_with(60);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let before = ui::pane_geometry(&app, area).expect("two panes")[0].width;
     app.layout_resize(1);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let geom = ui::pane_geometry(&app, area).expect("two panes");
     assert!(geom[0].width > before, "the focused one grows");
     assert_eq!(
@@ -370,13 +370,13 @@ fn agrandar_un_panel_le_da_sitio_y_al_otro_se_lo_quita() {
 
 /// Equalizing returns them to half each.
 #[test]
-fn igualar_devuelve_los_paneles_a_la_mitad() {
-    let mut app = app_de_prueba_con(60);
+fn equalizing_returns_the_panes_to_half() {
+    let mut app = test_app_with(60);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     app.layout_resize(3);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     app.layout_equalize();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let geom = ui::pane_geometry(&app, area).expect("two panes");
     assert_eq!(geom[0].width, geom[1].width);
 }
@@ -387,19 +387,19 @@ fn igualar_devuelve_los_paneles_a_la_mitad() {
 /// and not to the listing: switching tabs would have given you the other
 /// one's history, which is the same bug as seeing its cursor.
 #[test]
-fn cada_pestana_conserva_su_historial() {
+fn every_tab_keeps_its_history() {
     use norte_proto::VPath;
-    let mut app = app_de_prueba_con(60);
+    let mut app = test_app_with(60);
     app.history[0].record(VPath::parse("mem:///una").expect("wire"));
     app.tab_new();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert!(
         app.history[0].entries().is_empty(),
         "the new tab starts with no history"
     );
     app.history[0].record(VPath::parse("mem:///otra").expect("wire"));
     app.tab_cycle(-1);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(
         app.history[0].entries().front().map(VPath::to_wire),
         Some("mem:///una".to_owned()),
@@ -414,18 +414,18 @@ fn cada_pestana_conserva_su_historial() {
 /// represent two, and a third would have been painted but out of the
 /// mouse's reach.
 #[test]
-fn partir_da_tres_paneles_y_los_tres_cuadran() {
-    let mut app = app_de_prueba_con(60);
+fn splitting_gives_three_panes_and_all_three_add_up() {
+    let mut app = test_app_with(60);
     app.layout_split(norte_frontend::layout::Dir::Horizontal);
-    let lines = pintar(&mut app);
+    let lines = paint(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let geom = ui::pane_geometry(&app, area).expect("there is geometry");
     assert_eq!(geom.len(), 3, "three panels");
     let width: u32 = geom.iter().map(|g| u32::from(g.width)).sum();
     assert_eq!(width, u32::from(W), "and they add up to the whole frame");
     for (i, g) in geom.iter().enumerate() {
-        let esperada = nombre_visible(&app, i, g.offset);
-        let row = recorte(&lines, g.first_list_row, g.x, g.width);
+        let esperada = name_visible(&app, i, g.offset);
+        let row = crop(&lines, g.first_list_row, g.x, g.width);
         assert!(
             row.contains(&esperada),
             "panel {i}: row {} should carry {esperada:?}, carries {row:?}",
@@ -437,22 +437,22 @@ fn partir_da_tres_paneles_y_los_tres_cuadran() {
 /// The newly split panel keeps focus: splitting is asking for room to work
 /// in it, not to look at it from the one next door.
 #[test]
-fn el_panel_recien_partido_se_queda_el_foco() {
-    let mut app = app_de_prueba_con(60);
+fn the_freshly_split_pane_keeps_the_focus() {
+    let mut app = test_app_with(60);
     let before = app.focused_slot();
     app.layout_split(norte_frontend::layout::Dir::Horizontal);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_ne!(app.focused_slot(), before, "focus travels to the new one");
 }
 
 /// With three panels, closing one goes back to two and focus survives.
 #[test]
-fn con_tres_paneles_cerrar_uno_vuelve_a_dos() {
-    let mut app = app_de_prueba_con(60);
+fn with_three_panes_closing_one_goes_back_to_two() {
+    let mut app = test_app_with(60);
     app.layout_split(norte_frontend::layout::Dir::Horizontal);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert!(app.layout_close_slot(), "with three it CAN be closed");
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let geom =
         ui::pane_geometry(&app, ratatui::layout::Rect::new(0, 0, W, H)).expect("there is geometry");
     assert_eq!(geom.len(), 2);
@@ -465,18 +465,18 @@ fn con_tres_paneles_cerrar_uno_vuelve_a_dos() {
 /// With three, guessing is how a copy heads toward a panel the reader did
 /// not have in mind — silent data loss.
 #[test]
-fn con_tres_paneles_no_hay_destino_hasta_que_se_designa() {
-    let mut app = app_de_prueba_con(60);
+fn with_three_panes_there_is_no_destination_until_one_is_designated() {
+    let mut app = test_app_with(60);
     assert!(app.target_index().is_some(), "with two, the other one");
     app.layout_split(norte_frontend::layout::Dir::Horizontal);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(
         app.target_index(),
         None,
         "with three, it has to be designated"
     );
     app.layout_set_target();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let dest = app.target_index().expect("designated");
     assert_ne!(dest, app.focus(), "and never itself");
 }
@@ -484,16 +484,16 @@ fn con_tres_paneles_no_hay_destino_hasta_que_se_designa() {
 /// The designated destination gets MARKED in its chrome, and only from
 /// three onward: with two it would be noise in the usual case.
 #[test]
-fn el_destino_designado_se_marca_y_solo_cuando_hace_falta() {
-    let mut app = app_de_prueba_con(60);
-    let dos = pintar(&mut app).join("\n");
-    assert!(!dos.contains("-> "), "with two panels nothing gets marked");
+fn the_designated_destination_is_marked_and_only_when_needed() {
+    let mut app = test_app_with(60);
+    let two = paint(&mut app).join("\n");
+    assert!(!two.contains("-> "), "with two panels nothing gets marked");
     app.layout_split(norte_frontend::layout::Dir::Horizontal);
     app.layout_set_target();
-    let tres = pintar(&mut app).join("\n");
+    let three = paint(&mut app).join("\n");
     assert!(
-        tres.contains("-> "),
-        "with three, the destination shows in the chrome:\n{tres}"
+        three.contains("-> "),
+        "with three, the destination shows in the chrome:\n{three}"
     );
 }
 
@@ -504,60 +504,60 @@ fn el_destino_designado_se_marca_y_solo_cuando_hace_falta() {
 /// click ends up on the next tab over: a bug that does not look like a
 /// mouse bug, but like "this changes on its own."
 #[test]
-fn los_botones_de_la_barra_de_pestanas_se_pulsan() {
-    let mut app = app_de_prueba_con(60);
+fn tab_bar_buttons_are_clickable() {
+    let mut app = test_app_with(60);
     app.tab_new();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
-    let zonas = ui::tab_zones(&app, area);
-    assert!(!zonas.is_empty(), "with tabs there are zones to click");
+    let zones = ui::tab_zones(&app, area);
+    assert!(!zones.is_empty(), "with tabs there are zones to click");
 
     // Go back to the first tab by clicking it.
-    let primera = zonas
+    let first = zones
         .iter()
         .find(|z| z.pane == 0 && z.action == ui::TabAction::Goto(0))
         .copied()
         .expect("the first tab has its zone");
     let before = app.focused_slot();
-    pulsar(&mut app, primera.x0, primera.row);
-    let _ = pintar(&mut app);
+    pulsar(&mut app, first.x0, first.row);
+    let _ = paint(&mut app);
     assert_ne!(app.focused_slot(), before, "it switched tabs");
 
     // `[+]` opens another one.
-    let zonas = ui::tab_zones(&app, area);
-    let mas = zonas
+    let zones = ui::tab_zones(&app, area);
+    let more = zones
         .iter()
         .find(|z| z.pane == 0 && z.action == ui::TabAction::New)
         .copied()
         .expect("the open button has its zone");
-    pulsar(&mut app, mas.x0, mas.row);
-    let _ = pintar(&mut app);
+    pulsar(&mut app, more.x0, more.row);
+    let _ = paint(&mut app);
     let t = ui::tab_strip_for(&app, 0).expect("there is still a group");
     assert_eq!(t.titles.len(), 3, "the button opened a third one");
 
     // `[x]` closes the active one.
-    let zonas = ui::tab_zones(&app, area);
-    let equis = zonas
+    let zones = ui::tab_zones(&app, area);
+    let equis = zones
         .iter()
         .find(|z| z.pane == 0 && z.action == ui::TabAction::Close)
         .copied()
         .expect("the close button has its zone");
     pulsar(&mut app, equis.x0, equis.row);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let t = ui::tab_strip_for(&app, 0).expect("two are left");
     assert_eq!(t.titles.len(), 2, "and the other closed it");
 }
 
 /// A click on the bar's row but OUTSIDE every zone does nothing.
 #[test]
-fn un_click_en_el_hueco_de_la_barra_no_hace_nada() {
-    let mut app = app_de_prueba_con(60);
+fn a_click_on_the_bars_gap_does_nothing() {
+    let mut app = test_app_with(60);
     app.tab_new();
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
-    let zonas = ui::tab_zones(&app, area);
-    let row = zonas[0].row;
-    let last = zonas
+    let zones = ui::tab_zones(&app, area);
+    let row = zones[0].row;
+    let last = zones
         .iter()
         .filter(|z| z.pane == 0)
         .map(|z| z.x1)
@@ -565,7 +565,7 @@ fn un_click_en_el_hueco_de_la_barra_no_hace_nada() {
         .expect("there are zones");
     let before = ui::tab_strip_for(&app, 0).expect("group").titles.len();
     pulsar(&mut app, last + 1, row);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(
         ui::tab_strip_for(&app, 0).expect("group").titles.len(),
         before
@@ -575,33 +575,33 @@ fn un_click_en_el_hueco_de_la_barra_no_hace_nada() {
 /// The menu paints with its dropdown, and the zones the mouse measures are
 /// the ones that got painted.
 #[test]
-fn el_menu_se_pinta_y_sus_zonas_coinciden() {
-    let mut app = app_de_prueba_con(60);
+fn the_menu_is_painted_and_its_zones_match() {
+    let mut app = test_app_with(60);
     app.menu = Some(norte_frontend::menu::MenuState::new());
-    let lines = pintar(&mut app);
+    let lines = paint(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
-    let zonas = ui::menu_zones(&app, area);
-    assert!(!zonas.is_empty(), "there are titles and items to click");
+    let zones = ui::menu_zones(&app, area);
+    assert!(!zones.is_empty(), "there are titles and items to click");
 
     // The first title is painted where its zone says.
-    let title = zonas
+    let title = zones
         .iter()
         .find(|z| z.hit == ui::MenuHit::Title(0))
         .copied()
         .expect("the first title has a zone");
-    let text = recorte(&lines, title.row, title.x0, title.x1 - title.x0 + 1);
+    let text = crop(&lines, title.row, title.x0, title.x1 - title.x0 + 1);
     assert!(
         text.trim() == norte_i18n::t("menu-file"),
         "the title's zone does not fall where it was painted: {text:?}"
     );
 
     // And the dropdown's first item carries its label.
-    let item = zonas
+    let item = zones
         .iter()
         .find(|z| z.hit == ui::MenuHit::Item(0))
         .copied()
         .expect("the first item has a zone");
-    let row = recorte(&lines, item.row, item.x0, item.x1 - item.x0 + 1);
+    let row = crop(&lines, item.row, item.x0, item.x1 - item.x0 + 1);
     assert!(
         !row.trim().is_empty(),
         "the dropdown did not paint its first item"
@@ -610,27 +610,27 @@ fn el_menu_se_pinta_y_sus_zonas_coinciden() {
 
 /// Clicking a title opens THAT menu; clicking outside closes the bar.
 #[test]
-fn pulsar_un_titulo_abre_su_menu_y_fuera_cierra() {
-    let mut app = app_de_prueba_con(60);
+fn pressing_a_title_opens_its_menu_and_outside_closes_it() {
+    let mut app = test_app_with(60);
     app.menu = Some(norte_frontend::menu::MenuState::new());
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
-    let zonas = ui::menu_zones(&app, area);
-    let tercero = zonas
+    let zones = ui::menu_zones(&app, area);
+    let third = zones
         .iter()
         .find(|z| z.hit == ui::MenuHit::Title(2))
         .copied()
         .expect("there is a third menu");
-    pulsar(&mut app, tercero.x0, tercero.row);
+    pulsar(&mut app, third.x0, third.row);
     assert_eq!(
         app.menu.expect("still open").menu(),
         2,
         "the one that was clicked opened"
     );
 
-    let mut app = app_de_prueba_con(60);
+    let mut app = test_app_with(60);
     app.menu = Some(norte_frontend::menu::MenuState::new());
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     // A listing row, far from the bar and the dropdown.
     pulsar(&mut app, W - 2, H - 3);
     assert!(app.menu.is_none(), "a click outside closes the menu");
@@ -639,11 +639,11 @@ fn pulsar_un_titulo_abre_su_menu_y_fuera_cierra() {
 /// An open menu keeps ALL the keys: otherwise, a command dispatched behind
 /// it would leave the bar eating the keys of what just opened.
 #[test]
-fn un_menu_abierto_es_dueno_del_teclado() {
-    let mut app = app_de_prueba_con(60);
+fn an_open_menu_owns_the_keyboard() {
+    let mut app = test_app_with(60);
     let before = app.panes[0].cursor();
     app.menu = Some(norte_frontend::menu::MenuState::new());
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(
         app.panes[0].cursor(),
         before,
@@ -658,9 +658,9 @@ fn un_menu_abierto_es_dueno_del_teclado() {
 /// changed the render on purpose — and then the new snapshot is accepted
 /// BY HAND, after looking at it, never with a blind `--accept`.
 #[test]
-fn la_pantalla_orthodox_no_se_mueve() {
-    let mut app = app_de_prueba_con(60);
-    let lines = pintar(&mut app);
+fn the_orthodox_screen_does_not_move() {
+    let mut app = test_app_with(60);
+    let lines = paint(&mut app);
     insta::assert_snapshot!("orthodox-100x30", lines.join("\n"));
 }
 
@@ -673,10 +673,10 @@ fn la_pantalla_orthodox_no_se_mueve() {
 /// existing snapshots would see it, because none of them carries a
 /// sidebar.
 #[test]
-fn la_geometria_declarada_coincide_con_lo_pintado_con_el_sidebar_abierto() {
-    let mut app = app_de_prueba_con(60);
+fn the_declared_geometry_matches_whats_painted_with_the_sidebar_open() {
+    let mut app = test_app_with(60);
     app.toggle_places();
-    let lines = pintar(&mut app);
+    let lines = paint(&mut app);
     let area = ratatui::layout::Rect::new(0, 0, W, H);
     let geom = ui::pane_geometry(&app, area).expect("two panes painted");
 
@@ -689,11 +689,11 @@ fn la_geometria_declarada_coincide_con_lo_pintado_con_el_sidebar_abierto() {
     );
 
     for (i, g) in geom.iter().enumerate() {
-        let esperada = nombre_visible(&app, i, g.offset);
-        let primera = recorte(&lines, g.first_list_row, g.x, g.width);
+        let esperada = name_visible(&app, i, g.offset);
+        let first = crop(&lines, g.first_list_row, g.x, g.width);
         assert!(
-            primera.contains(&esperada),
-            "pane {i}: row {} should carry {esperada:?}, carries {primera:?}",
+            first.contains(&esperada),
+            "pane {i}: row {} should carry {esperada:?}, carries {first:?}",
             g.first_list_row
         );
     }
@@ -718,12 +718,12 @@ fn la_geometria_declarada_coincide_con_lo_pintado_con_el_sidebar_abierto() {
 ///   tree is not touched. Before #229 these two snapshots showed three
 ///   chrome headers and not one file name.
 #[test]
-fn los_cinco_presets_pintan_lo_que_dicen() {
+fn the_five_presets_paint_what_they_say() {
     for name in norte_frontend::layout::presets::NAMES {
         for (w, h) in [(80_u16, 24_u16), (40, 10)] {
-            let mut app = app_de_prueba_con(60);
+            let mut app = test_app_with(60);
             app.set_layout(norte_frontend::layout::presets::tree(name).expect("factory"));
-            let lines = pintar_en(&mut app, w, h);
+            let lines = paint_at(&mut app, w, h);
             assert_eq!(lines.len(), h as usize, "{name} {w}x{h}");
             insta::assert_snapshot!(format!("preset-{name}-{w}x{h}"), lines.join("\n"));
         }
@@ -736,12 +736,12 @@ fn los_cinco_presets_pintan_lo_que_dicen() {
 /// stops being hypothetical, and this test is what stops it from becoming
 /// an error message again.
 #[test]
-fn con_un_solo_listado_una_copia_pregunta_el_destino() {
+fn with_a_single_listing_a_copy_asks_for_the_destination() {
     use norte_tui::app::{Modal, TransferKind};
 
-    let mut app = app_de_prueba_con(3);
+    let mut app = test_app_with(3);
     app.set_layout(norte_frontend::layout::presets::tree("simple").expect("s"));
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(app.panes.len(), 1, "a single listing");
     assert_eq!(app.target_index(), None, "and so no destination");
 
@@ -767,12 +767,12 @@ fn con_un_solo_listado_una_copia_pregunta_el_destino() {
 /// path left without confirmation, without collision handling and without
 /// undo.
 #[test]
-fn confirmar_el_destino_abre_el_modal_de_siempre() {
+fn confirming_the_destination_opens_the_usual_modal() {
     use norte_tui::app::{Modal, TransferKind};
 
-    let mut app = app_de_prueba_con(3);
+    let mut app = test_app_with(3);
     app.set_layout(norte_frontend::layout::presets::tree("simple").expect("s"));
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     app.open_transfer_dest(TransferKind::Copy);
     for _ in 0..app.panes[0].dir().to_wire().chars().count() {
         app.transfer_dest_pop();
@@ -793,13 +793,13 @@ fn confirmar_el_destino_abre_el_modal_de_siempre() {
 /// text: the text is wire form, so `é` is six characters (`%C3%A9`) and
 /// `String::pop` left `%C3%A`, which no longer parses (#246 M3).
 #[test]
-fn retroceder_sobre_un_escape_borra_la_letra_entera() {
+fn backspacing_over_an_escape_erases_the_whole_character() {
     use norte_tui::app::{Modal, TransferKind};
 
     let dir = vp("file:///caf%C3%A9");
     let mut app = App::new(
-        Pane::new(dir.clone(), entradas(&dir, 3)),
-        Pane::new(dir.clone(), entradas(&dir, 3)),
+        Pane::new(dir.clone(), entries(&dir, 3)),
+        Pane::new(dir.clone(), entries(&dir, 3)),
     );
     app.focused_mut().toggle_mark();
     app.open_transfer_dest(TransferKind::Copy);
@@ -819,10 +819,10 @@ fn retroceder_sobre_un_escape_borra_la_letra_entera() {
 /// editing used to ask to copy every mark onto itself: N failed tasks
 /// instead of one line in the dialog (#244 m6).
 #[test]
-fn confirmar_el_destino_de_origen_lo_dice_en_el_prompt() {
+fn confirming_the_source_destination_says_so_in_the_prompt() {
     use norte_tui::app::{Modal, TransferKind};
 
-    let mut app = app_de_prueba_con(3);
+    let mut app = test_app_with(3);
     app.focused_mut().toggle_mark();
     app.open_transfer_dest(TransferKind::Copy);
     assert!(!app.transfer_dest_confirm(), "it submits nothing");
@@ -836,12 +836,12 @@ fn confirmar_el_destino_de_origen_lo_dice_en_el_prompt() {
 /// An address that does not parse KEEPS what was typed and shows its
 /// diagnosis: the prompt does not close swallowing the operation.
 #[test]
-fn un_destino_que_no_es_una_direccion_deja_el_prompt_abierto() {
+fn a_destination_that_is_not_an_address_leaves_the_prompt_open() {
     use norte_tui::app::{Modal, TransferKind};
 
-    let mut app = app_de_prueba_con(3);
+    let mut app = test_app_with(3);
     app.set_layout(norte_frontend::layout::presets::tree("simple").expect("s"));
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     app.open_transfer_dest(TransferKind::Move);
     for _ in 0..app.panes[0].dir().to_wire().chars().count() {
         app.transfer_dest_pop();
@@ -867,43 +867,43 @@ fn un_destino_que_no_es_una_direccion_deja_el_prompt_abierto() {
 /// outside, a key that sometimes splits, sometimes does nothing, and other
 /// times undoes the previous action.
 #[test]
-fn partir_sin_sitio_se_niega_y_lo_dice() {
+fn splitting_with_no_room_is_denied_and_says_so() {
     use norte_frontend::layout::Dir;
 
     // 30 rows tall: room to split in two vertically, and a third time
     // already no.
-    let mut app = app_de_prueba_con(3);
-    let _ = pintar(&mut app);
-    let huecos_antes = app.layout.slot_ids().len();
+    let mut app = test_app_with(3);
+    let _ = paint(&mut app);
+    let slots_before = app.layout.slot_ids().len();
 
     app.layout_split(Dir::Vertical);
-    let _ = pintar(&mut app);
+    let _ = paint(&mut app);
     assert_eq!(
         app.layout.slot_ids().len(),
-        huecos_antes + 1,
+        slots_before + 1,
         "the first one fits"
     );
 
     // Split until the answer is no, and then NOTHING changes.
-    let mut mensajes = 0;
+    let mut messages = 0;
     for _ in 0..6 {
-        let antes = app.layout.clone();
+        let before = app.layout.clone();
         app.message = None;
         app.layout_split(Dir::Vertical);
-        let _ = pintar(&mut app);
-        if app.layout == antes {
-            mensajes += 1;
+        let _ = paint(&mut app);
+        if app.layout == before {
+            messages += 1;
             assert!(app.message.is_some(), "refusing silently is a broken key");
         }
     }
-    assert!(mensajes > 0, "in 30 rows there is a cap and it is reached");
+    assert!(messages > 0, "in 30 rows there is a cap and it is reached");
 
     // And what stayed on screen matches the model: no listing hidden by
     // the layout (the tree also carries the chrome, which is not a pane).
     let area = ratatui::layout::Rect::new(0, 0, W, H);
-    let colocados = ui::pane_geometry(&app, area).expect("geometry").len();
+    let placed = ui::pane_geometry(&app, area).expect("geometry").len();
     assert_eq!(
-        colocados,
+        placed,
         app.panes.len(),
         "every listing in the model is visible"
     );

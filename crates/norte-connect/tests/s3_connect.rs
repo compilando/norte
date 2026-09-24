@@ -64,7 +64,7 @@ fn spec_access_key(addr: SocketAddr) -> ConnectionSpec {
 }
 
 #[tokio::test]
-async fn connect_valida_y_opera() {
+async fn connect_validates_and_operates() {
     let dir = tempfile::tempdir().expect("tempdir");
     let addr = start_s3s(dir.path()).await;
     let secret = Secret::new(SK.to_string());
@@ -86,7 +86,7 @@ async fn connect_valida_y_opera() {
 /// validate sigv4 on the list, which s3s-fs does not do → nightly `MinIO`,
 /// #50.)
 #[tokio::test]
-async fn connect_endpoint_muerto_falla_en_el_probe() {
+async fn connect_to_dead_endpoint_fails_at_the_probe() {
     // Closed ephemeral port: bind-then-drop guarantees nobody is listening.
     let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let dead = probe.local_addr().expect("addr");
@@ -129,7 +129,7 @@ async fn access_key_sin_secret_es_error_local() {
 /// the static provider does not get registered and the connection
 /// authenticates with whatever the environment offers.
 #[tokio::test]
-async fn access_key_o_secret_vacios_son_error_local() {
+async fn empty_access_key_or_secret_is_local_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let addr = start_s3s(dir.path()).await;
 
@@ -179,7 +179,7 @@ async fn access_key_o_secret_vacios_son_error_local() {
 /// backs the guarantee is tested instead, which is the one that can break by
 /// oversight.
 #[tokio::test]
-async fn ningun_auth_llega_a_la_cadena_ambiente_por_descuido() {
+async fn no_auth_reaches_the_environment_chain_by_accident() {
     let dir = tempfile::tempdir().expect("tempdir");
     let addr = start_s3s(dir.path()).await;
     let secret = Secret::new(SK.to_string());
@@ -228,7 +228,7 @@ async fn ningun_auth_llega_a_la_cadena_ambiente_por_descuido() {
 /// region, the environment's). The user believes they are talking to their
 /// `MinIO`. Rejected at construction time.
 #[tokio::test]
-async fn endpoint_o_region_vacios_son_error_local() {
+async fn empty_endpoint_or_region_is_local_error() {
     let dir = tempfile::tempdir().expect("tempdir");
     let addr = start_s3s(dir.path()).await;
     let secret = Secret::new(SK.to_string());
@@ -256,15 +256,15 @@ async fn endpoint_o_region_vacios_son_error_local() {
 /// probe fails. A net that catches a future regression in `map_opendal`
 /// (e.g. to `e.to_string()`).
 #[tokio::test]
-async fn secret_access_key_nunca_en_el_error() {
-    const SECRETO: &str = "AKIA-SECRETO-QUE-NO-DEBE-FILTRARSE-42";
+async fn secret_access_key_never_in_the_error() {
+    const SECRET: &str = "AKIA-SECRETO-QUE-NO-DEBE-FILTRARSE-42";
     // Dead endpoint → the probe fails at construction/network.
     let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
     let dead = probe.local_addr().expect("addr");
     drop(probe);
     let mut spec = spec_access_key(dead);
     spec.endpoint = Some(format!("http://{dead}"));
-    let secret = Secret::new(SECRETO.to_string());
+    let secret = Secret::new(SECRET.to_string());
     let err = S3Connector::new()
         .connect(&spec, Some(&secret))
         .await
@@ -273,7 +273,7 @@ async fn secret_access_key_nunca_en_el_error() {
     let proto: norte_proto::Error = err.into();
     let proto_disp = format!("{proto:?}");
     assert!(
-        !connect_disp.contains(SECRETO) && !proto_disp.contains(SECRETO),
+        !connect_disp.contains(SECRET) && !proto_disp.contains(SECRET),
         "the secret leaked: connect={connect_disp:?} proto={proto_disp:?}"
     );
 }

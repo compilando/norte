@@ -25,7 +25,7 @@ publish = false
 
 [features]
 # Task 3.6's instrumentation: adds the `metrics` command, through which the
-# renderer returns what it measured. NOT in the default binary — the
+# renderer returns what it measured. NOT in the shipped binary — the
 # production command surface is what `tests/webview_boundary.rs` pins.
 metrics = []
 

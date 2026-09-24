@@ -127,15 +127,15 @@ pub fn tree_lines(moves: &[OrganizeMove], existing: &[String]) -> Vec<TreeLine> 
 /// folders and moves 12 files" is what a human needs to decide without
 /// counting lines.
 #[must_use]
-pub fn resumen(lineas: &[TreeLine]) -> (usize, usize) {
-    let folders = lineas.iter().filter(|l| l.kind == TreeKind::NewDir).count();
-    let files = lineas.iter().filter(|l| l.kind == TreeKind::Moved).count();
+pub fn summary(lines: &[TreeLine]) -> (usize, usize) {
+    let folders = lines.iter().filter(|l| l.kind == TreeKind::NewDir).count();
+    let files = lines.iter().filter(|l| l.kind == TreeKind::Moved).count();
     (folders, files)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{TreeKind, resumen, tree_lines};
+    use super::{TreeKind, summary, tree_lines};
     use norte_proto::methods::OrganizeMove;
 
     fn mov(current: &str, rel: &str) -> OrganizeMove {
@@ -149,8 +149,8 @@ mod tests {
     /// every row: what changes is the directory's SHAPE, and that is what
     /// has to be readable.
     #[test]
-    fn el_arbol_agrupa_por_carpeta() {
-        let lineas = tree_lines(
+    fn the_tree_groups_by_directory() {
+        let lines = tree_lines(
             &[
                 mov("a.pdf", "facturas/2026/a.pdf"),
                 mov("b.pdf", "facturas/2026/b.pdf"),
@@ -159,7 +159,7 @@ mod tests {
             &[],
         );
         let painted: Vec<(usize, &str)> =
-            lineas.iter().map(|l| (l.depth, l.text.as_str())).collect();
+            lines.iter().map(|l| (l.depth, l.text.as_str())).collect();
         assert_eq!(
             painted,
             vec![
@@ -178,27 +178,27 @@ mod tests {
     /// than it is and hides that something lands inside something that was
     /// already there.
     #[test]
-    fn una_carpeta_que_ya_existe_no_se_pinta_como_nueva() {
-        let lineas = tree_lines(
+    fn a_folder_that_already_exists_is_not_painted_as_new() {
+        let lines = tree_lines(
             &[mov("a.pdf", "facturas/a.pdf"), mov("b.txt", "nueva/b.txt")],
             &["facturas".to_owned()],
         );
-        assert_eq!(lineas[0].text, "facturas");
-        assert_eq!(lineas[0].kind, TreeKind::ExistingDir);
-        assert_eq!(lineas[2].text, "nueva");
-        assert_eq!(lineas[2].kind, TreeKind::NewDir);
+        assert_eq!(lines[0].text, "facturas");
+        assert_eq!(lines[0].kind, TreeKind::ExistingDir);
+        assert_eq!(lines[2].text, "nueva");
+        assert_eq!(lines[2].kind, TreeKind::NewDir);
     }
 
     /// And a folder that hangs from a NEW one can never be existing, even
-    /// if there is one with that name at the root: `nueva/facturas` is not
+    /// if there is one with that name at the root: `new/facturas` is not
     /// `facturas`.
     #[test]
-    fn una_carpeta_bajo_una_nueva_nunca_es_existente() {
-        let lineas = tree_lines(
+    fn a_folder_under_a_new_one_is_never_existing() {
+        let lines = tree_lines(
             &[mov("a.pdf", "nueva/facturas/a.pdf")],
             &["facturas".to_owned()],
         );
-        let facturas = lineas
+        let facturas = lines
             .iter()
             .find(|l| l.text == "facturas")
             .expect("is there");
@@ -208,23 +208,23 @@ mod tests {
     /// The summary counts new folders and moved files, which is what goes
     /// ahead of the question.
     #[test]
-    fn el_resumen_cuenta_lo_que_se_va_a_crear_y_lo_que_se_mueve() {
-        let lineas = tree_lines(
+    fn the_summary_counts_what_will_be_created_and_what_is_moved() {
+        let lines = tree_lines(
             &[
                 mov("a.pdf", "facturas/2026/a.pdf"),
                 mov("b.txt", "notas/b.txt"),
             ],
             &[],
         );
-        assert_eq!(resumen(&lineas), (3, 2), "facturas, 2026 and notas are new");
+        assert_eq!(summary(&lines), (3, 2), "facturas, 2026 and notas are new");
     }
 
     /// A destination WITHOUT a folder — a plain rename — is painted at the
     /// root.
     #[test]
-    fn un_destino_sin_carpeta_va_en_la_raiz() {
-        let lineas = tree_lines(&[mov("a.txt", "b.txt")], &[]);
-        assert_eq!(lineas.len(), 1);
-        assert_eq!((lineas[0].depth, lineas[0].kind), (0, TreeKind::Moved));
+    fn a_destination_without_a_folder_goes_at_the_root() {
+        let lines = tree_lines(&[mov("a.txt", "b.txt")], &[]);
+        assert_eq!(lines.len(), 1);
+        assert_eq!((lines[0].depth, lines[0].kind), (0, TreeKind::Moved));
     }
 }

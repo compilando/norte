@@ -1,7 +1,7 @@
 //! `connections.toml`: ONLY references (rule 10), never secrets (ADR 0015 B).
 //!
 //! ```toml
-//! [connections.trabajo]
+//! [connections.work]
 //! url = "sftp://oscar@sftp.example.com:22"
 //! auth = "key"
 //! key = "~/.ssh/id_ed25519"
@@ -549,7 +549,7 @@ mod tests {
     /// a scheme (`norte_proto::Scheme`'s alphabet), not that it be one of
     /// the core's three.
     #[test]
-    fn endpoint_acepta_el_scheme_de_un_plugin() {
+    fn endpoint_accepts_a_plugin_scheme() {
         let ep = parse_endpoint("webdav://u@files.example.com:8443").unwrap();
         assert_eq!(ep.scheme, "webdav");
         assert_eq!(ep.user.as_deref(), Some("u"));
@@ -563,7 +563,7 @@ mod tests {
     }
 
     #[test]
-    fn endpoint_invalido() {
+    fn endpoint_invalid() {
         assert!(parse_endpoint("sin-scheme").is_err());
         assert!(parse_endpoint("sftp://host:noport").is_err());
         assert!(parse_endpoint("sftp://").is_err()); // empty host
@@ -577,7 +577,7 @@ mod tests {
     /// password would end up in connections.toml, in logs or in error
     /// messages (rule 10).
     #[test]
-    fn password_inline_en_url_rechazado_sin_eco() {
+    fn inline_password_in_url_rejected_without_echo() {
         let err = parse_endpoint("sftp://u:hunter2@h").unwrap_err();
         assert!(
             !format!("{err}").contains("hunter2"),
@@ -590,7 +590,7 @@ mod tests {
     /// did not, the scheme error would carry the password into the logs
     /// (rule 10).
     #[test]
-    fn scheme_invalido_con_password_inline_no_eco() {
+    fn an_invalid_scheme_with_an_inline_password_is_not_echoed() {
         for url in ["ftps://u:hunter2@h", "http://u:hunter2@h"] {
             let err = parse_endpoint(url).unwrap_err();
             assert!(
@@ -605,7 +605,7 @@ mod tests {
     /// `|` hash) or control characters: if they slipped through, a `learn`
     /// could poison other entries.
     #[test]
-    fn host_con_caracteres_de_formato_rechazado() {
+    fn host_with_format_characters_is_rejected() {
         for url in [
             "sftp://banco.com,evil.com",
             "sftp://a b",
@@ -619,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn deny_unknown_rechaza_secreto_inline() {
+    fn deny_unknown_rejects_inline_secret() {
         // An inline `password` (rule 10) must be an ERROR, not ignored.
         let toml = r#"
             [connections.x]
@@ -657,7 +657,7 @@ mod tests {
     /// The s3 fields are optional: an sftp/ftp connections.toml without them
     /// still parses with `deny_unknown_fields`.
     #[test]
-    fn campos_s3_opcionales_no_rompen_sftp() {
+    fn optional_s3_fields_do_not_break_sftp() {
         let s: ConnectionSpec = toml::from_str(r#"url = "sftp://h""#).unwrap();
         assert_eq!(s.region, None);
         assert_eq!(s.endpoint, None);
@@ -669,7 +669,7 @@ mod tests {
     /// authority is ONLY the bucket (a user would smell like a credential,
     /// the port goes in `endpoint`).
     #[test]
-    fn s3_con_user_o_puerto_se_rechaza() {
+    fn s3_with_user_or_port_is_rejected() {
         assert!(parse_endpoint("s3://user@bucket").is_err());
         assert!(parse_endpoint("s3://bucket:9000").is_err());
         // The bare bucket is fine.
@@ -680,7 +680,7 @@ mod tests {
     /// Invalid bucket names (AWS's charset, not `known_hosts`'s lax one):
     /// uppercase, `_`, `..`, non-alphanumeric ends, length outside 3-63.
     #[test]
-    fn s3_bucket_invalido_se_rechaza() {
+    fn an_invalid_s3_bucket_is_rejected() {
         for bad in [
             "s3://MiBucket",   // uppercase
             "s3://mi_bucket",  // underscore
@@ -712,7 +712,7 @@ mod tests {
     }
 
     #[test]
-    fn load_ausente_es_vacio() {
+    fn load_ausente_es_empty() {
         let dir = tempfile::tempdir().unwrap();
         let f = ConnectionsFile::load(dir.path()).unwrap();
         assert!(f.connections.is_empty());

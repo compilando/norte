@@ -372,7 +372,7 @@ fn the_status_bar_clips_the_path_and_not_the_counter() {
 }
 
 #[test]
-fn snapshot_navegacion() {
+fn snapshot_navigation() {
     insta::assert_snapshot!(render(&app_base()));
 }
 
@@ -380,10 +380,10 @@ fn snapshot_navegacion() {
 /// — `docs` carries a badge with a recognized ROLE (theme color); `src`
 /// carries a HOSTILE badge (embedded control, longer than the 8-char cap)
 /// that must arrive already MASKED and TRUNCATED (never the raw control,
-/// never more than 8 chars); `notas.txt` carries no decoration — its row
+/// never more than 8 chars); `notes.txt` carries no decoration — its row
 /// looks exactly as it did before G3b (no extra span).
 #[test]
-fn snapshot_decoracion_de_plugin_badge_hostil_enmascarado() {
+fn snapshot_plugin_decoration_masked_hostile_badge() {
     let mut app = app_base();
     let pane = app.focused_mut();
     let by_name = |entries: &[Entry], name: &[u8]| -> VPath {
@@ -416,10 +416,10 @@ fn snapshot_decoracion_de_plugin_badge_hostil_enmascarado() {
 
 /// ADR 0105: the ICON column, to the left of the name. `src` carries an
 /// icon; `docs` carries an icon AND a badge — both slots in one row —;
-/// `notas.txt` carries no icon, and still carries the SLOT, so its name
+/// `notes.txt` carries no icon, and still carries the SLOT, so its name
 /// stays aligned with the rest. The "Name" header shifts the same amount.
 #[test]
-fn snapshot_columna_de_iconos_a_la_izquierda_del_nombre() {
+fn snapshot_icon_column_to_the_left_of_the_name() {
     let mut app = app_base();
     let pane = app.focused_mut();
     let by_name = |entries: &[Entry], name: &[u8]| -> VPath {
@@ -453,7 +453,7 @@ fn snapshot_columna_de_iconos_a_la_izquierda_del_nombre() {
 /// the matches, with the input line `/{query} n/m` at the foot and the
 /// cursor on the filtered selection; the right one stays intact.
 #[test]
-fn snapshot_quick_search_filtro() {
+fn snapshot_quick_search_filter() {
     let mut app = app_base();
     let pane = app.focused_mut();
     pane.quick_start(norte_tui::nav::Mode::Filter);
@@ -489,9 +489,9 @@ fn snapshot_search_dialog() {
 #[test]
 fn snapshot_search_pane_virtual() {
     let mut app = app_base();
-    let raiz = vp("file:///casa");
+    let root = vp("file:///casa");
     let pane = app.focused_mut();
-    pane.begin_search(raiz.clone());
+    pane.begin_search(root.clone());
     pane.extend_listing(vec![
         entry(
             &vp("file:///casa/src"),
@@ -512,7 +512,7 @@ fn snapshot_search_pane_virtual() {
 /// History popup (spec 2026-07-18, `Alt+↓`): dirs of the pane with focus,
 /// most recent first, with the cursor at the top.
 #[test]
-fn snapshot_popup_historial() {
+fn snapshot_popup_history() {
     let mut app = app_base();
     app.history[0].push(vp("file:///casa/docs"));
     app.history[0].push(vp("file:///proyectos"));
@@ -652,11 +652,11 @@ fn picker_caps_a_mile_long_opaque_id() {
 /// #108 7b: `[[ui.columns.spec]]` live in the pane — `size` with SI format
 /// ("1.5 kB", not "1.5 KiB"), custom header `Peso` (replaces "Tamaño") and
 /// fixed width 9; `kind` aligned LEFT (content after the separator, padding
-/// to the right — the right default stays pinned by `snapshot_navegacion`).
+/// to the right — the right default stays pinned by `snapshot_navigation`).
 /// The hostile header is not re-pinned here: the choke point is
 /// `ColumnsSettings::resolve` (unit test in norte-frontend).
 #[test]
-fn snapshot_columns_spec_size_si_header_custom_kind_izquierda() {
+fn snapshot_columns_spec_size_si_header_custom_kind_left() {
     let left = vp("file:///casa");
     let right = vp("file:///otro");
     let mut entries = vec![
@@ -736,7 +736,7 @@ fn snapshot_extensions_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
     let text = render_80x24(&app);
@@ -758,7 +758,7 @@ fn snapshot_extensions_80x24() {
 /// criterion as `render_enmascara_nombre_hostil` (`extensions.rs`), at the
 /// level of a whole snapshot.
 #[test]
-fn snapshot_extensions_description_hostil_80x24() {
+fn snapshot_extensions_description_hostile_80x24() {
     let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
@@ -784,7 +784,7 @@ fn snapshot_extensions_description_hostil_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: None,
     });
     let text = render_80x24(&app);
@@ -812,7 +812,7 @@ fn snapshot_extensions_description_hostil_80x24() {
 /// CHOSEN extension's settings inside its card, with the cursor on the key
 /// and the key's description below. The commands it contributes, at the
 /// foot of the card.
-fn snapshot_extensions_ficha_con_ajustes_80x24() {
+fn snapshot_extensions_card_with_settings_80x24() {
     use norte_frontend::plugin_config::{PluginConfigState, sanitize_config_keys};
     let mut app = app_base();
     let wire_keys = vec![norte_proto::methods::PluginConfigKeyWire {
@@ -848,7 +848,7 @@ fn snapshot_extensions_ficha_con_ajustes_80x24() {
         }],
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: Some(norte_tui::app::PluginConfigPanel {
             plugin_id: "org.norte.file-icons".into(),
             plugin_name: "File icons".into(),
@@ -865,7 +865,7 @@ fn snapshot_plugin_config_panel_80x24() {
         .into_iter()
         .find(|n| n.id == "rtl_override")
         .expect("corpus fixture");
-    let desc_hostil = String::from_utf8_lossy(&hostile.bytes).into_owned();
+    let desc_hostile = String::from_utf8_lossy(&hostile.bytes).into_owned();
     let mut app = app_base();
     let wire_keys = vec![
         norte_proto::methods::PluginConfigKeyWire {
@@ -885,7 +885,7 @@ fn snapshot_plugin_config_panel_80x24() {
             min: None,
             max: None,
             values: vec!["fast".into(), "thorough".into()],
-            description: Some(desc_hostil),
+            description: Some(desc_hostile),
             value: "fast".into(),
         },
     ];
@@ -893,7 +893,7 @@ fn snapshot_plugin_config_panel_80x24() {
         plugins: Vec::new(),
         errors: Vec::new(),
         cursor: 0,
-        foco: norte_tui::app::ExtFoco::Lista,
+        focus: norte_tui::app::ExtFocus::List,
         config: Some(norte_tui::app::PluginConfigPanel {
             plugin_id: "org.norte.demo".into(),
             plugin_name: "Demo".into(),
@@ -920,9 +920,9 @@ fn snapshot_plugin_config_panel_80x24() {
 #[test]
 fn popup_long_items_with_mid_ellipsis_stay_distinguishable() {
     let mut app = app_base();
-    let prefijo = "x".repeat(70); // > 62 cells inside the popup
-    app.history[0].push(vp(&format!("file:///{prefijo}/uno.txt")));
-    app.history[0].push(vp(&format!("file:///{prefijo}/dos.txt")));
+    let prefix = "x".repeat(70); // > 62 cells inside the popup
+    app.history[0].push(vp(&format!("file:///{prefix}/uno.txt")));
+    app.history[0].push(vp(&format!("file:///{prefix}/dos.txt")));
     app.open_nav_popup(norte_tui::app::NavPopupKind::History);
     let text = render(&app);
     assert!(
@@ -933,7 +933,7 @@ fn popup_long_items_with_mid_ellipsis_stay_distinguishable() {
 }
 
 #[test]
-fn snapshot_modal_colision() {
+fn snapshot_modal_collision() {
     let mut app = app_base();
     app.modal = Some(Modal::Collision {
         retry: RetrySpec {
@@ -993,15 +993,15 @@ fn snapshot_modal_transfer_name() {
 /// And with a CJK name wider than the box: the clip is STATED, the cursor
 /// survives, and the field's padding does not overflow with double cells.
 #[test]
-fn snapshot_modal_transfer_name_cjk_largo() {
+fn snapshot_modal_transfer_name_cjk_long() {
     let mut app = app_base();
-    let largo = "日本語のファイル名".repeat(6);
+    let long = "日本語のファイル名".repeat(6);
     app.modal = Some(Modal::TransferName {
         kind: TransferKind::Move,
         from: vp("file:///casa/x.txt"),
         to_dir: vp("file:///otro"),
-        name: largo.clone(),
-        original: largo.into_bytes(),
+        name: long.clone(),
+        original: long.into_bytes(),
         touched: true,
         from_marks: false,
         enc: None,
@@ -1027,12 +1027,12 @@ fn a_modals_buttons_paint_and_a_click_is_their_key() {
         permanent: false,
     });
     let area = ratatui::layout::Rect::new(0, 0, 80, 16);
-    let zonas = ui::modal_zones(&app, area);
+    let zones = ui::modal_zones(&app, area);
     assert!(
-        zonas.iter().any(|z| z.chord == "Enter") && zonas.iter().any(|z| z.chord == "Esc"),
-        "one button per verb: {zonas:?}"
+        zones.iter().any(|z| z.chord == "Enter") && zones.iter().any(|z| z.chord == "Esc"),
+        "one button per verb: {zones:?}"
     );
-    let enter = zonas.iter().find(|z| z.chord == "Enter").expect("Enter");
+    let enter = zones.iter().find(|z| z.chord == "Enter").expect("Enter");
     let mut terminal = Terminal::new(TestBackend::new(80, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
     let buf = terminal.backend().buffer();
@@ -1043,34 +1043,34 @@ fn a_modals_buttons_paint_and_a_click_is_their_key() {
         fila.contains("Enter"),
         "the button paints its chord: {fila:?}"
     );
-    let boton = app.theme.role(norte_theme::Role::Button);
-    let celda = buf[(enter.x0, enter.row)].style();
+    let button = app.theme.role(norte_theme::Role::Button);
+    let cell = buf[(enter.x0, enter.row)].style();
     assert!(
-        celda.bg == boton.bg && celda.add_modifier.contains(boton.add_modifier),
-        "the button carries the `button` role: {celda:?} vs {boton:?}"
+        cell.bg == button.bg && cell.add_modifier.contains(button.add_modifier),
+        "the button carries the `button` role: {cell:?} vs {button:?}"
     );
-    let pista = render(&app);
+    let hint = render(&app);
     assert!(
-        !pista.contains("[Enter]"),
-        "with buttons, no brackets: {pista}"
+        !hint.contains("[Enter]"),
+        "with buttons, no brackets: {hint}"
     );
 
     norte_tui::mouse::after_frame(
         &mut app,
         None,
         norte_tui::mouse::FrameZones {
-            modal: zonas.clone(),
+            modal: zones.clone(),
             ..Default::default()
         },
     );
-    let clic = crossterm::event::MouseEvent {
+    let click = crossterm::event::MouseEvent {
         kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
         column: enter.x0 + 1,
         row: enter.row,
         modifiers: crossterm::event::KeyModifiers::NONE,
     };
     assert_eq!(
-        norte_tui::mouse::handle(&mut app, clic),
+        norte_tui::mouse::handle(&mut app, click),
         norte_tui::mouse::After::SynthKey
     );
     assert_eq!(
@@ -1084,19 +1084,19 @@ fn a_modals_buttons_paint_and_a_click_is_their_key() {
 }
 
 #[test]
-fn snapshot_modal_papelera_y_permanente() {
+fn snapshot_modal_trash_and_permanent() {
     let mut app = app_base();
     app.modal = Some(Modal::ConfirmDelete {
         items: vec![vp("file:///casa/notas.txt")],
         permanent: false,
     });
-    let papelera = render(&app);
+    let trash = render(&app);
     app.modal = Some(Modal::ConfirmDelete {
         items: vec![vp("file:///casa/notas.txt")],
         permanent: true,
     });
     let permanente = render(&app);
-    insta::assert_snapshot!(format!("{papelera}\n===\n{permanente}"));
+    insta::assert_snapshot!(format!("{trash}\n===\n{permanente}"));
 }
 
 /// H3c: while a help page OPENED FROM the modal covers it, help keeps the
@@ -1120,7 +1120,7 @@ fn the_modals_footer_does_not_offer_inert_verbs_under_help() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let label = |cmd: &str| norte_i18n::t(&norte_tui::keymap::dialog_hint_id(cmd));
     let notice = norte_i18n::t("modal-hint-help-open");
-    let verbos = default_dialog_hints().approval;
+    let verbs = default_dialog_hints().approval;
 
     let mut app = app_base();
     app.modal = Some(Modal::ApproveAgentOp {
@@ -1142,8 +1142,8 @@ fn the_modals_footer_does_not_offer_inert_verbs_under_help() {
         "the footer has to say why the modal's keys do not respond:\n{tapado}"
     );
     assert!(
-        !tapado.contains(&verbos),
-        "the footer still offers the inert verbs ({verbos:?}):\n{tapado}"
+        !tapado.contains(&verbs),
+        "the footer still offers the inert verbs ({verbs:?}):\n{tapado}"
     );
     // Not even loose ones: `approve`/`deny` can only be painted by this
     // modal (help's footer lists its own, which do respond).
@@ -1173,7 +1173,7 @@ fn the_modals_footer_does_not_offer_inert_verbs_under_help() {
         "with no help on top there is nothing to close:\n{visible}"
     );
     assert!(
-        visible.contains(&verbos),
+        visible.contains(&verbs),
         "the verbs return to the footer as soon as help closes:\n{visible}"
     );
 }
@@ -1190,7 +1190,7 @@ fn no_modal_with_a_generated_hint_offers_verbs_under_help() {
     let _ = norte_i18n::force(norte_i18n::Lang::Es);
     let notice = norte_i18n::t("modal-hint-help-open");
     let hints = default_dialog_hints();
-    let modales = [
+    let modals = [
         (
             Modal::ConfirmDelete {
                 items: vec![vp("file:///casa/notas.txt")],
@@ -1234,16 +1234,16 @@ fn no_modal_with_a_generated_hint_offers_verbs_under_help() {
             hints.trust_host.clone(),
         ),
     ];
-    for (modal, verbos) in modales {
+    for (modal, verbs) in modals {
         let mut app = app_base();
         app.modal = Some(modal);
 
         // Without help: the generated footer paints whole.
         let solo = render(&app);
         assert!(
-            solo.contains(&verbos),
+            solo.contains(&verbs),
             "this modal does not paint its hint whole, so the other half of \
-             the test would prove nothing ({verbos:?}):\n{solo}"
+             the test would prove nothing ({verbs:?}):\n{solo}"
         );
 
         // With help on top: not one verb, and the notice in its place.
@@ -1254,8 +1254,8 @@ fn no_modal_with_a_generated_hint_offers_verbs_under_help() {
             "this modal does not say why its keys do not respond:\n{tapado}"
         );
         assert!(
-            !tapado.contains(&verbos),
-            "this modal still offers inert verbs ({verbos:?}):\n{tapado}"
+            !tapado.contains(&verbs),
+            "this modal still offers inert verbs ({verbs:?}):\n{tapado}"
         );
     }
 }
@@ -1293,22 +1293,22 @@ fn the_message_that_wraps_fits_in_its_box() {
         path: "repo/.norte/init.lua".into(),
         hash_abbrev: "ab12cd34ef56ab78ab12cd34ef56ab78".into(),
     });
-    let pintado = render(&app);
+    let painted = render(&app);
     // The body carries the KEYS inside, at the end: they are the last thing
     // read before granting execution permissions, so they are the first
     // thing lost if the height falls short — and `ratatui` clips at the
     // bottom without saying so.
-    let cuerpo = norte_i18n::ta(
+    let body = norte_i18n::ta(
         "modal-lua-trust-body",
         &[("path", "repo/.norte/init.lua"), ("hash", "x")],
     );
-    let ultima = cuerpo
+    let ultima = body
         .split_whitespace()
         .last()
         .expect("the body is not empty");
     assert!(
-        pintado.contains(ultima),
-        "the end of the warning did not reach the screen ({ultima:?}): {pintado}"
+        painted.contains(ultima),
+        "the end of the warning did not reach the screen ({ultima:?}): {painted}"
     );
 }
 
@@ -1404,8 +1404,8 @@ fn the_viewer_paints_the_bars_only_when_there_is_more() {
         b"hola\n".to_vec(),
         false,
     ));
-    let cabe = render(&app);
-    assert!(!cabe.contains('█'), "it all fits: no bar to drag\n{cabe}");
+    let fits = render(&app);
+    assert!(!fits.contains('█'), "it all fits: no bar to drag\n{fits}");
 
     // Tall: forty lines on a sixteen-row screen.
     let alto: Vec<u8> = (0..40)
@@ -1418,30 +1418,30 @@ fn the_viewer_paints_the_bars_only_when_there_is_more() {
     );
 
     // Wide: a two-hundred-column line on an eighty-column screen.
-    let ancho = || format!("{}\n", "x".repeat(200)).into_bytes();
-    let v = Viewer::new(vp("file:///casa/ancho.txt"), ancho(), false);
+    let width = || format!("{}\n", "x".repeat(200)).into_bytes();
+    let v = Viewer::new(vp("file:///casa/ancho.txt"), width(), false);
     assert_eq!(v.max_cols(), 200);
     app.viewer = Some(v);
-    let pintado = render(&app);
+    let painted = render(&app);
     assert!(
-        pintado.contains('█'),
-        "there is more to the RIGHT and it shows\n{pintado}"
+        painted.contains('█'),
+        "there is more to the RIGHT and it shows\n{painted}"
     );
 
     // And the thumb MOVES with the scroll: a still bar says "there is more"
     // and does not say where you are.
-    let mut v = Viewer::new(vp("file:///casa/ancho.txt"), ancho(), false);
+    let mut v = Viewer::new(vp("file:///casa/ancho.txt"), width(), false);
     v.scroll_right(150);
     app.viewer = Some(v);
     assert_ne!(
-        pintado,
+        painted,
         render(&app),
         "the horizontal thumb follows the scroll"
     );
 }
 
 #[test]
-fn snapshot_viewer_texto_y_hex() {
+fn snapshot_viewer_text_and_hex() {
     let mut app = app_base();
     app.viewer = Some(Viewer::new(
         vp("file:///casa/notas.txt"),
@@ -1460,8 +1460,8 @@ fn snapshot_viewer_texto_y_hex() {
     // `App::viewer_modo` (set on OPEN), not a live recalculation — this test
     // builds `App` by hand, so it sets the mode that `open_viewer` would have
     // left under the default `chrome`: `Auto` with no terminal probe (there
-    // is no tty in a test) is `Modo::Bloques`.
-    app.viewer_modo = norte_tui::viewer_open::Modo::Bloques;
+    // is no tty in a test) is `Modo::Blocks`.
+    app.viewer_modo = norte_tui::viewer_open::Modo::Blocks;
     let hex = render(&app);
     insta::assert_snapshot!(format!("{text}\n===\n{hex}"));
 }
@@ -1507,7 +1507,7 @@ fn open_help(app: &mut App) {
     ));
     // H3d: and the context facts freeze the same as in the binary
     // (`open_contextual_help`), so these snapshots record what a reader sees
-    // FROM `app_base` — with `file:///casa` writable, nothing dimmed by the
+    // FROM `app_base` — with `file:///home` writable, nothing dimmed by the
     // backend, and the `nav.enter`/`pane.view` rows decided by what is under
     // the cursor.
     app.freeze_help_facts();
@@ -1552,11 +1552,11 @@ fn render_buffer(app: &App) -> ratatui::buffer::Buffer {
 }
 
 #[test]
-fn snapshot_ayuda() {
+fn snapshot_help() {
     let mut app = app_base();
     open_help(&mut app);
     // Top: the corpus index, where the overlay opens.
-    let arriba = render(&app);
+    let up = render(&app);
     // Bottom: the synthetic keyboard page — the usual cheatsheet, now one
     // more sidebar entry.
     app.help
@@ -1565,7 +1565,7 @@ fn snapshot_ayuda() {
         .state
         .open(&norte_help::TopicId::new(norte_frontend::help::KEYS_ID));
     refresh_help(&mut app);
-    insta::assert_snapshot!(format!("{arriba}\n===\n{}", render(&app)));
+    insta::assert_snapshot!(format!("{up}\n===\n{}", render(&app)));
 }
 
 /// H3b, ADAPTIVE footer: help's footer offers its FIVE printable verbs and
@@ -1582,7 +1582,7 @@ fn snapshot_ayuda() {
 /// top of the ranking survive — the ones the reader CANNOT guess — and the
 /// `…` says there was clipping. At no width does half a group appear.
 ///
-/// Note: the verb labels asserted below (`bajar`, `subir`, …) are the real
+/// Note: the verb labels asserted below (`down`, `up`, …) are the real
 /// Spanish Fluent catalogue text — `vp` forces `Lang::Es` for this file, so
 /// this checks actual rendered UI output, not test prose.
 #[test]
@@ -1603,7 +1603,7 @@ fn the_help_footer_adapts_to_the_width() {
     };
 
     let width = pie_a(124, 16);
-    for verbo in [
+    for verb in [
         "índice ↔ texto",
         "bajar",
         "subir",
@@ -1613,8 +1613,8 @@ fn the_help_footer_adapts_to_the_width() {
         "cancelar",
     ] {
         assert!(
-            width.contains(verbo),
-            "a wide frame fits all seven groups, and `{verbo}` is missing: {width:?}"
+            width.contains(verb),
+            "a wide frame fits all seven groups, and `{verb}` is missing: {width:?}"
         );
     }
     assert!(
@@ -1626,11 +1626,11 @@ fn the_help_footer_adapts_to_the_width() {
     // The ones that survive are the TOP of the ranking: how you switch to
     // the text and how you scroll down it, which is what nobody guesses on a
     // screen unlike any other in the program.
-    for verbo in ["índice ↔ texto", "bajar"] {
+    for verb in ["índice ↔ texto", "bajar"] {
         assert!(
-            estrecho.contains(verbo),
+            estrecho.contains(verb),
             "at 80 columns the verbs the reader cannot guess survive, and \
-             `{verbo}` is missing: {estrecho:?}"
+             `{verb}` is missing: {estrecho:?}"
         );
     }
     assert!(
@@ -1655,7 +1655,7 @@ fn the_help_footer_adapts_to_the_width() {
 /// the footer is the LAST interior row — right below the body, whose height
 /// `ui::help_body_size` does publish. Needed so the assertion that the
 /// filter paints points at the footer and not the whole frame: see
-/// [`snapshot_ayuda_filtro_hostil`].
+/// [`snapshot_help_hostile_filter`].
 ///
 /// The VERTICAL cut did not change when sizing the sidebar by content: the
 /// language that `help_body_size` now asks for decides only the WIDTH split
@@ -1695,7 +1695,7 @@ fn help_footer_row(w: u16, h: u16) -> usize {
 /// joins rows with `\n`, which `is_terminal_hazard` (correctly) also flags
 /// as control — a blind check over the whole buffer would give a false
 /// positive from the dump's own formatting. See the same comment in
-/// `snapshot_extensions_description_hostil_80x24`.
+/// `snapshot_extensions_description_hostile_80x24`.
 ///
 /// The anti-emptiness assertion is scoped to the FOOTER, not the frame
 /// (MEDIUM review): `app_base` seeds a `\xE9.dat` entry that paints with its
@@ -1719,7 +1719,7 @@ fn help_footer_row(w: u16, h: u16) -> usize {
 /// content — and a page that passes itself off as the app's own
 /// documentation.
 #[test]
-fn snapshot_ayuda_pagina_de_plugin_hostil() {
+fn snapshot_help_hostile_plugin_page() {
     let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
@@ -1764,13 +1764,13 @@ fn snapshot_ayuda_pagina_de_plugin_hostil() {
     view.state.install_plugin_topic(parsed.topic);
     refresh_help(&mut app);
     let text = render(&app);
-    // Same PER-LINE sweep as `snapshot_ayuda_filtro_hostil`, and for the same
+    // Same PER-LINE sweep as `snapshot_help_hostile_filter`, and for the same
     // reason (the dump's `\n`s are controls).
-    for (n, linea) in text.lines().enumerate() {
+    for (n, line) in text.lines().enumerate() {
         assert!(
-            !linea.chars().any(norte_encoding::is_terminal_hazard),
+            !line.chars().any(norte_encoding::is_terminal_hazard),
             "the plugin page painted a terminal hazard (row {n}): \
-             {linea:?}\n{text}"
+             {line:?}\n{text}"
         );
     }
     // What the snapshot CANNOT assert by itself: that the page DECLARES
@@ -1786,7 +1786,7 @@ fn snapshot_ayuda_pagina_de_plugin_hostil() {
 }
 
 #[test]
-fn snapshot_ayuda_filtro_hostil() {
+fn snapshot_help_hostile_filter() {
     let rlo = norte_testkit::corpus::hostile_chords()
         .into_iter()
         .find(|c| c.id == "rlo")
@@ -1800,11 +1800,11 @@ fn snapshot_ayuda_filtro_hostil() {
     }
     refresh_help(&mut app);
     let text = render(&app);
-    for (n, linea) in text.lines().enumerate() {
+    for (n, line) in text.lines().enumerate() {
         assert!(
-            !linea.chars().any(norte_encoding::is_terminal_hazard),
+            !line.chars().any(norte_encoding::is_terminal_hazard),
             "the help overlay's footer painted a terminal hazard \
-             (row {n}, fixture {}): {linea:?}\n{text}",
+             (row {n}, fixture {}): {line:?}\n{text}",
             rlo.id
         );
     }
@@ -1899,7 +1899,7 @@ fn a_hostile_help_title_reaches_the_sidebar_raw() {
 /// Like [`render`] but over a `w`×`h` frame, laying out help for THAT frame:
 /// the overlay's geometry depends on both dimensions and the pre-render has
 /// to measure the same thing the painter does.
-fn render_ayuda(app: &mut App, w: u16, h: u16) -> String {
+fn render_help(app: &mut App, w: u16, h: u16) -> String {
     refresh_help_en(app, w, h);
     let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
     terminal.draw(|f| ui::draw(f, app)).expect("draw");
@@ -1925,15 +1925,15 @@ fn the_help_sidebar_sizes_to_its_titles() {
 
     // What the corpus rows measure: the two-cell indent plus the widest
     // title, or the widest group header if it were to win.
-    let ancho_pedido = |lang| {
+    let width_requested = |lang| {
         norte_help::topics(lang)
             .iter()
             .map(|t| 2 + t.title.width())
             .max()
             .expect("the corpus carries topics")
     };
-    let es = ancho_pedido(Lang::Es);
-    let en = ancho_pedido(Lang::En);
+    let es = width_requested(Lang::Es);
+    let en = width_requested(Lang::En);
     assert_ne!(
         es, en,
         "both corpora measure the same ({es}); with equally wide titles, a \
@@ -2002,19 +2002,19 @@ fn the_help_sidebar_sizes_to_its_titles() {
 fn with_room_no_help_title_comes_out_clipped() {
     let mut app = app_base();
     open_help(&mut app);
-    let text = render_ayuda(&mut app, 140, 40);
+    let text = render_help(&mut app, 140, 40);
     let lateral = usize::from(ui::help_sidebar_width(
         ratatui::layout::Rect::new(0, 0, 140, 40),
         norte_help::Lang::Es,
     ));
     // What precedes the sidebar on each line: the frame's border, the box's
     // border and, if the dump quotes the line, the quote mark.
-    let columna = |l: &str| l.chars().take(lateral + 4).collect::<String>();
-    for tema in norte_help::topics(norte_i18n::Lang::Es) {
+    let column = |l: &str| l.chars().take(lateral + 4).collect::<String>();
+    for theme in norte_help::topics(norte_i18n::Lang::Es) {
         assert!(
-            text.lines().any(|l| columna(l).contains(&tema.title)),
+            text.lines().any(|l| column(l).contains(&theme.title)),
             "title {:?} does not appear whole in the sidebar:\n{text}",
-            tema.title
+            theme.title
         );
     }
     assert!(
@@ -2038,7 +2038,7 @@ fn the_help_footer_places_the_reader_only_when_needed() {
     open_help(&mut app);
 
     // 80×16: the index does not come close to fitting in the body's 12 rows.
-    let text = render_ayuda(&mut app, 80, 16);
+    let text = render_help(&mut app, 80, 16);
     let view = app.help.as_ref().expect("overlay open");
     let total = view.body().0.len();
     let (_, height) =
@@ -2066,7 +2066,7 @@ fn the_help_footer_places_the_reader_only_when_needed() {
     // line that is really at the top, not that five moved.
     app.help.as_mut().expect("overlay").state.toggle_focus();
     app.help.as_mut().expect("overlay").state.page_down(5);
-    let text = render_ayuda(&mut app, 80, 16);
+    let text = render_help(&mut app, 80, 16);
     let scroll = app.help.as_ref().expect("overlay").state.body_scroll();
     assert!(scroll > 0, "the body scrolled");
     let footer = text
@@ -2084,7 +2084,7 @@ fn the_help_footer_places_the_reader_only_when_needed() {
     // writes, and a tight frame would turn "write a page" into "fix this
     // test". (And the prose's links, which since bridge 75 are rows you can
     // follow: the index links to every page.)
-    let text = render_ayuda(&mut app, 120, 110);
+    let text = render_help(&mut app, 120, 110);
     let view = app.help.as_ref().expect("overlay open");
     let total = view.body().0.len();
     let (_, height) = ui::help_body_size(
@@ -2164,7 +2164,7 @@ fn all_row_styles(buf: &ratatui::buffer::Buffer) -> Vec<Vec<ratatui::style::Styl
 /// their own unit test, and none would break if the freeze stopped being
 /// called on open.
 ///
-/// The body is walked with focus (like `snapshot_ayuda_cuerpo_con_foco`)
+/// The body is walked with focus (like `snapshot_help_body_with_focus`)
 /// because the executable rows go AFTER the prose: without scrolling, the
 /// reason exists and is not in the frame. The frame is 100×30 — a real
 /// terminal, not one generously sized to fit — and the reason comes out
@@ -2198,10 +2198,10 @@ fn help_inside_a_zip_paints_the_veto_reason() {
     let text = terminal.backend().to_string();
     let buffer = terminal.backend().buffer().clone();
 
-    let razon = norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only");
+    let reason = norte_i18n::t_in(norte_i18n::Lang::Es, "reason-read-only");
     assert!(
-        text.contains(&razon),
-        "the vetoed row has to say WHY ({razon}):\n{text}"
+        text.contains(&reason),
+        "the vetoed row has to say WHY ({reason}):\n{text}"
     );
 
     // And the OTHER half of the function: the row is DIMMED. Saying the
@@ -2217,30 +2217,30 @@ fn help_inside_a_zip_paints_the_veto_reason() {
     let styles = all_row_styles(&buffer);
     let y = rows
         .iter()
-        .position(|f| f.contains(&razon))
+        .position(|f| f.contains(&reason))
         .expect("the row with the reason falls inside the frame");
     let fg_de = |x: usize| {
         styles[y][x]
             .fg
             .expect("every painted cell has a foreground")
     };
-    let en = |aguja: &str| -> usize {
-        let byte = rows[y].find(aguja).expect("the chunk is in the row");
+    let en = |needle: &str| -> usize {
+        let byte = rows[y].find(needle).expect("the chunk is in the row");
         rows[y][..byte].chars().count()
     };
-    let atenuado = app.theme.role(norte_theme::Role::Info).fg;
+    let dimmed = app.theme.role(norte_theme::Role::Info).fg;
     let normal = app.theme.role(norte_theme::Role::Regular).fg;
-    let tecla = app.theme.role(norte_theme::Role::Mark).fg;
+    let key = app.theme.role(norte_theme::Role::Mark).fg;
     assert!(
-        atenuado != normal && atenuado != tecla,
+        dimmed != normal && dimmed != key,
         "the theme has to distinguish the three roles or this proves nothing"
     );
 
-    let x_razon = en(&razon);
-    for x in x_razon..x_razon + razon.chars().count() {
+    let x_reason = en(&reason);
+    for x in x_reason..x_reason + reason.chars().count() {
         assert_eq!(
             Some(fg_de(x)),
-            atenuado,
+            dimmed,
             "the row says the reason but paints as if it were clickable: {:?}",
             rows[y]
         );
@@ -2248,15 +2248,15 @@ fn help_inside_a_zip_paints_the_veto_reason() {
     let x_chord = en("F5");
     assert_eq!(
         Some(fg_de(x_chord)),
-        atenuado,
+        dimmed,
         "a vetoed row's chord cannot stay dressed as a key: {:?}",
         rows[y]
     );
-    assert_ne!(Some(fg_de(x_chord)), tecla);
+    assert_ne!(Some(fg_de(x_chord)), key);
 }
 
 #[test]
-fn snapshot_ayuda_cuerpo_con_foco() {
+fn snapshot_help_body_with_focus() {
     use norte_help::ChordResolver;
 
     let mut app = app_base();
@@ -2272,10 +2272,10 @@ fn snapshot_ayuda_cuerpo_con_foco() {
     // One step: the SECOND row, so this cannot pass with a painter that
     // always highlights the first.
     view.state.down();
-    let Some(norte_frontend::help::Action::Run(comando)) = view.state.action().cloned() else {
+    let Some(norte_frontend::help::Action::Run(command)) = view.state.action().cloned() else {
         panic!("the focused row is an executable row");
     };
-    assert_eq!(comando, "pane.move", "the focused row is `pane.move`'s");
+    assert_eq!(command, "pane.move", "the focused row is `pane.move`'s");
     refresh_help(&mut app);
 
     let scroll = app.help.as_ref().unwrap().state.body_scroll();
@@ -2284,7 +2284,7 @@ fn snapshot_ayuda_cuerpo_con_foco() {
         "the rows go after the prose: revealing them FORCES the body to \
          scroll (scroll={scroll})"
     );
-    let con_foco = render_buffer(&app);
+    let with_focus = render_buffer(&app);
     let text = render(&app);
 
     // And the highlight belongs to FOCUS, not to the row: with focus
@@ -2295,18 +2295,18 @@ fn snapshot_ayuda_cuerpo_con_foco() {
     // the scroll, which this test just pinned).
     app.help.as_mut().unwrap().state.toggle_focus();
     refresh_help(&mut app);
-    let sin_foco = render_buffer(&app);
+    let unfocused = render_buffer(&app);
 
-    let estilos_con = all_row_styles(&con_foco);
-    let estilos_sin = all_row_styles(&sin_foco);
-    let distintas: Vec<usize> = (0..estilos_con.len())
+    let estilos_con = all_row_styles(&with_focus);
+    let estilos_sin = all_row_styles(&unfocused);
+    let different: Vec<usize> = (0..estilos_con.len())
         .filter(|&y| estilos_con[y] != estilos_sin[y])
         .collect();
     assert_eq!(
-        distintas.len(),
+        different.len(),
         1,
         "exactly ONE row of the frame changes when focus leaves the body; \
-         {distintas:?} changed"
+         {different:?} changed"
     );
 
     // And that row is the one for the command the MODEL says has focus. The
@@ -2314,18 +2314,18 @@ fn snapshot_ayuda_cuerpo_con_foco() {
     // cannot pass with a copy of the row format that has fallen behind.
     let resolver = std::sync::Arc::clone(&app.help_chords);
     let chord = resolver
-        .chord(&comando)
-        .unwrap_or_else(|| panic!("{comando} has a chord in the orthodox preset"));
+        .chord(&command)
+        .unwrap_or_else(|| panic!("{command} has a chord in the orthodox preset"));
     // The label may come out CLIPPED ("move the selection to the other …"):
     // the key column measures whatever the theme's widest one measures, and
     // since `alt+A` paints as `Alt+Shift+A` the label has fewer columns left
     // on an 80-wide terminal. What identifies the row is how it starts.
-    let arranque = |texto: &str| texto.chars().take(16).collect::<String>();
-    let label = arranque(&resolver.label(&comando));
-    let row = &row_texts(&con_foco)[distintas[0]];
+    let startup = |texto: &str| texto.chars().take(16).collect::<String>();
+    let label = startup(&resolver.label(&command));
+    let row = &row_texts(&with_focus)[different[0]];
     assert!(
         row.contains(&chord) && row.contains(&label),
-        "the highlighted row has to be `{comando}`'s ({chord} / \
+        "the highlighted row has to be `{command}`'s ({chord} / \
          {label}…), not another one: {row:?}"
     );
     // …and NOT its neighbor's. A map shifted by one position would highlight
@@ -2335,7 +2335,7 @@ fn snapshot_ayuda_cuerpo_con_foco() {
         .chord(vecino)
         .unwrap_or_else(|| panic!("{vecino} has a chord in the orthodox preset"));
     assert!(
-        !row.contains(&arranque(&resolver.label(vecino))) && !row.contains(&chord_vecino),
+        !row.contains(&startup(&resolver.label(vecino))) && !row.contains(&chord_vecino),
         "the highlighted row is the NEIGHBORING action's: the action→line \
          map is shifted: {row:?}"
     );
@@ -2349,7 +2349,7 @@ fn snapshot_ayuda_cuerpo_con_foco() {
 /// builder the binary uses (`norte_tui::palette::build_rows`), not a copy of
 /// the format.
 #[test]
-fn snapshot_palette_abierta() {
+fn snapshot_palette_open() {
     let mut app = app_base();
     let presets = norte_tui::keymap::presets();
     let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
@@ -2374,7 +2374,7 @@ fn snapshot_palette_abierta() {
 /// that neither the title nor the `[extension]` prefix paint raw, and that
 /// the row stays distinguishable from a built-in.
 #[test]
-fn snapshot_palette_fila_de_plugin_hostil() {
+fn snapshot_palette_hostile_plugin_row() {
     let hostile = norte_testkit::corpus::hostile_names()
         .into_iter()
         .find(|n| n.id == "rtl_override")
@@ -2410,7 +2410,7 @@ fn snapshot_palette_fila_de_plugin_hostil() {
     app.palette = Some(palette);
     let text = render(&app);
     // See the equivalent comment in
-    // `snapshot_extensions_description_hostil_80x24`: the check is on the
+    // `snapshot_extensions_description_hostile_80x24`: the check is on the
     // INJECTED CHARACTER, not on "no control anywhere on the screen"
     // (`to_string()`'s line breaks are also controls, a false positive if
     // the whole buffer is scanned).
@@ -2436,7 +2436,7 @@ fn empty_cfg() -> norte_tui::config::LoadedConfig {
 /// two section headers) does not fit in the 16 rows of the rest of the
 /// file.
 #[test]
-fn snapshot_settings_abierta() {
+fn snapshot_settings_open() {
     let mut app = app_base();
     let settings =
         norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
@@ -2466,16 +2466,16 @@ fn the_settings_list_follows_the_cursor() {
     let nombre = settings.rows()[settings.visible()[ultima]].name.clone();
     app.settings = Some(settings);
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
-    let pantalla = render_80x24(&app);
+    let screen = render_80x24(&app);
     assert!(
-        pantalla.lines().any(|l| l.contains(&format!("> {nombre}"))),
-        "the cursor's row (\"{nombre}\") has to be visible, with its mark:\n{pantalla}"
+        screen.lines().any(|l| l.contains(&format!("> {nombre}"))),
+        "the cursor's row (\"{nombre}\") has to be visible, with its mark:\n{screen}"
     );
     // And the window has moved: the first row no longer fits.
     assert!(
-        !pantalla.contains("Theme                        default")
-            && !pantalla.contains("Tema                         default"),
-        "with the cursor at the end, the first row scrolls off the top:\n{pantalla}"
+        !screen.contains("Theme                        default")
+            && !screen.contains("Tema                         default"),
+        "with the cursor at the end, the first row scrolls off the top:\n{screen}"
     );
 }
 
@@ -2506,11 +2506,11 @@ fn the_section_header_comes_back_on_scroll_up() {
     // ...and going back up has to return it WHOLE, header included.
     app.settings.as_mut().expect("settings").set_cursor(0);
     ui::before_frame(&mut app, area);
-    let pantalla = render_80x24(&app);
-    let primera = norte_i18n::t("settings-section-appearance");
+    let screen = render_80x24(&app);
+    let first = norte_i18n::t("settings-section-appearance");
     assert!(
-        pantalla.contains(&primera),
-        "going back to the top has to show which section the row belongs to:\n{pantalla}"
+        screen.contains(&first),
+        "going back to the top has to show which section the row belongs to:\n{screen}"
     );
 }
 
@@ -2528,22 +2528,22 @@ fn the_pinned_header_follows_the_cursors_section() {
     ));
     let area = ratatui::layout::Rect::new(0, 0, 80, 24);
     ui::before_frame(&mut app, area);
-    let arriba = render_80x24(&app);
-    let primera = norte_i18n::t("settings-section-appearance");
+    let up = render_80x24(&app);
+    let first = norte_i18n::t("settings-section-appearance");
     assert!(
-        arriba.contains(&primera),
-        "at the top the first section (\"{primera}\") governs:\n{arriba}"
+        up.contains(&first),
+        "at the top the first section (\"{first}\") governs:\n{up}"
     );
 
     // All the way to the last row: the pinned one has to be a DIFFERENT one.
     let ultima = app.settings.as_ref().expect("settings").visible().len() - 1;
     app.settings.as_mut().expect("settings").set_cursor(ultima);
     ui::before_frame(&mut app, area);
-    let abajo = render_80x24(&app);
-    let ultima_seccion = norte_i18n::t("settings-section-plugins");
+    let down = render_80x24(&app);
+    let ultima_section = norte_i18n::t("settings-section-plugins");
     assert!(
-        abajo.contains(&ultima_seccion),
-        "at the end its own section (\"{ultima_seccion}\") governs:\n{abajo}"
+        down.contains(&ultima_section),
+        "at the end its own section (\"{ultima_section}\") governs:\n{down}"
     );
 }
 
@@ -2556,22 +2556,22 @@ fn the_section_index_disappears_on_a_narrow_terminal() {
     app.settings = Some(norte_tui::app::Settings::new(
         norte_tui::settings::build_rows(&empty_cfg(), &[]),
     ));
-    let abrir_con = norte_i18n::t("settings-section-open-with");
+    let open_with = norte_i18n::t("settings-section-open-with");
 
-    let ancha = ratatui::layout::Rect::new(0, 0, 110, 24);
-    ui::before_frame(&mut app, ancha);
-    let pantalla = render_at(&app, 110, 24);
+    let wide = ratatui::layout::Rect::new(0, 0, 110, 24);
+    ui::before_frame(&mut app, wide);
+    let screen = render_at(&app, 110, 24);
     assert!(
-        pantalla.contains(&abrir_con),
-        "the index lists the sections the cursor has not visited:\n{pantalla}"
+        screen.contains(&open_with),
+        "the index lists the sections the cursor has not visited:\n{screen}"
     );
 
     let estrecha = ratatui::layout::Rect::new(0, 0, 50, 24);
     ui::before_frame(&mut app, estrecha);
-    let pantalla = render_at(&app, 50, 24);
+    let screen = render_at(&app, 50, 24);
     assert!(
-        !pantalla.contains(&abrir_con),
-        "at 50 columns the index does not fit and the list rules:\n{pantalla}"
+        !screen.contains(&open_with),
+        "at 50 columns the index does not fit and the list rules:\n{screen}"
     );
 }
 
@@ -2591,15 +2591,15 @@ fn tab_switches_sides_and_the_arrows_walk_sections() {
     assert_eq!(s.focus(), norte_frontend::settings::Focus::Index);
     // In the index, scrolling down changes SECTION and the list follows.
     s.down();
-    let seccion = s.rows()[s.visible()[s.cursor()]].section;
-    assert_eq!(seccion, norte_frontend::settings::Section::Panes);
+    let section = s.rows()[s.visible()[s.cursor()]].section;
+    assert_eq!(section, norte_frontend::settings::Section::Panes);
 
     // And the screen shows it: the pinned header is the new section's.
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 100, 24));
-    let pantalla = render_at(&app, 100, 24);
+    let screen = render_at(&app, 100, 24);
     assert!(
-        pantalla.contains(&norte_i18n::t("settings-section-panes")),
-        "the screen follows the index:\n{pantalla}"
+        screen.contains(&norte_i18n::t("settings-section-panes")),
+        "the screen follows the index:\n{screen}"
     );
 }
 
@@ -2613,10 +2613,10 @@ fn the_footer_says_how_many_settings_show_out_of_how_many() {
     let total = settings.total();
     app.settings = Some(settings);
     ui::before_frame(&mut app, ratatui::layout::Rect::new(0, 0, 80, 24));
-    let pantalla = render_80x24(&app);
+    let screen = render_80x24(&app);
     assert!(
-        pantalla.contains(&total.to_string()),
-        "the total ({total}) is always stated:\n{pantalla}"
+        screen.contains(&total.to_string()),
+        "the total ({total}) is always stated:\n{screen}"
     );
 }
 
@@ -2649,22 +2649,22 @@ fn long_names_read_whole() {
     });
     let mut terminal = Terminal::new(TestBackend::new(100, 16)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let pantalla = terminal.backend().to_string();
+    let screen = terminal.backend().to_string();
     // Only the LEFT pane: the right one is empty, has no names to read, and
     // so keeps all of its columns.
-    let izquierdo: String = pantalla
+    let izquierdo: String = screen
         .lines()
         .map(|l| l.chars().take(51).collect::<String>() + "\n")
         .collect();
     assert!(
         izquierdo.contains("Captura de pantalla 2024.png"),
-        "the whole name, no ellipsis:\n{pantalla}"
+        "the whole name, no ellipsis:\n{screen}"
     );
     assert!(
         !izquierdo.contains("Tipo"),
-        "the class is the first thing to yield:\n{pantalla}"
+        "the class is the first thing to yield:\n{screen}"
     );
-    assert!(izquierdo.contains("Tamaño"), "the size stays:\n{pantalla}");
+    assert!(izquierdo.contains("Tamaño"), "the size stays:\n{screen}");
 }
 
 /// Menus go in sections (ADR 0125): Operate paints its labels, and the
@@ -2673,34 +2673,34 @@ fn long_names_read_whole() {
 #[test]
 fn the_menu_paints_sections_and_the_click_follows_the_command() {
     let mut app = app_base();
-    let operar = norte_frontend::menu::MENUS
+    let operate = norte_frontend::menu::MENUS
         .iter()
         .position(|m| m.title == "menu-operate")
         .expect("Operar");
     let mut m = norte_frontend::menu::MenuState::new();
-    m.open(operar);
+    m.open(operate);
     app.menu = Some(m);
     let area = ratatui::layout::Rect::new(0, 0, 80, 32);
     let mut terminal = Terminal::new(TestBackend::new(80, 32)).expect("terminal");
     terminal.draw(|f| ui::draw(f, &app)).expect("draw");
-    let pantalla = terminal.backend().to_string();
+    let screen = terminal.backend().to_string();
     assert!(
-        pantalla.contains("├─ Archivos comprimidos"),
-        "the section's label:\n{pantalla}"
+        screen.contains("├─ Archivos comprimidos"),
+        "the section's label:\n{screen}"
     );
-    let fila = pantalla
+    let fila = screen
         .lines()
         .position(|l| l.contains("Borrar ") && !l.contains("permanente"))
         .expect("the Delete row");
-    let borrar = norte_frontend::menu::MENUS[operar]
+    let delete = norte_frontend::menu::MENUS[operate]
         .items()
         .position(|id| id == "pane.delete")
         .expect("Delete in Operate");
-    let zona = ui::menu_zones(&app, area)
+    let zone = ui::menu_zones(&app, area)
         .into_iter()
         .find(|z| usize::from(z.row) == fila)
         .expect("the Delete row is clickable");
-    assert_eq!(zona.hit, ui::MenuHit::Item(borrar));
+    assert_eq!(zone.hit, ui::MenuHit::Item(delete));
 }
 
 /// S review, M3: with the settings overlay AND a modal BOTH open (key
@@ -2711,7 +2711,7 @@ fn the_menu_paints_sections_and_the_click_follows_the_command() {
 /// title ("trash") is visible in the snapshot, not buried under the
 /// settings list.
 #[test]
-fn snapshot_modal_pinta_encima_del_overlay_de_ajustes() {
+fn snapshot_modal_paints_over_the_settings_overlay() {
     let mut app = app_base();
     let settings =
         norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
@@ -2726,7 +2726,7 @@ fn snapshot_modal_pinta_encima_del_overlay_de_ajustes() {
 /// Same case as above, with the PALETTE instead of the settings overlay
 /// (`modal_preempts_palette`) — the other half of H1 MINOR-4's class.
 #[test]
-fn snapshot_modal_pinta_encima_de_la_palette() {
+fn snapshot_modal_paints_over_the_palette() {
     let mut app = app_base();
     let presets = norte_tui::keymap::presets();
     let (_, preset) = presets.iter().find(|(n, _)| *n == "orthodox").unwrap();
@@ -2753,7 +2753,7 @@ fn snapshot_modal_pinta_encima_de_la_palette() {
 /// footer (`settings-edit-hint`) paint together without stepping on each
 /// other.
 #[test]
-fn snapshot_settings_filtrada_y_editando_texto() {
+fn snapshot_settings_filtered_and_editing_text() {
     let mut app = app_base();
     let mut settings =
         norte_tui::app::Settings::new(norte_tui::settings::build_rows(&empty_cfg(), &[]));
@@ -2783,7 +2783,7 @@ fn snapshot_settings_filtrada_y_editando_texto() {
 /// A test comparison row: both sides come from the snapshot's two roots, and
 /// `reason` is filled in only where the wire requires it
 /// (`CompareRow::reason_is_consistent`).
-fn fila_compare(
+fn row_compare(
     id: u64,
     nombre: &[u8],
     verdict: norte_proto::methods::CompareVerdict,
@@ -2816,7 +2816,7 @@ fn snapshot_compare_pane() {
 
     let left = vp("file:///casa");
     let right = vp("file:///otro");
-    let row = fila_compare;
+    let row = row_compare;
 
     let mut view = norte_tui::app::CompareView::new(left, right, 0, None, None);
     view.pane.extend(vec![
@@ -2932,7 +2932,7 @@ fn paso_sync(
     step
 }
 
-fn cierre_sync(
+fn close_sync(
     counts: norte_proto::methods::SyncCounts,
     dest_trash: norte_proto::methods::DestTrash,
 ) -> norte_proto::methods::SyncPlanDone {
@@ -2959,7 +2959,7 @@ fn cierre_sync(
 /// failure the differences pane's line had when these keys were added to
 /// it.
 #[test]
-fn snapshot_sync_pane_update_con_papelera() {
+fn snapshot_sync_pane_update_with_trash() {
     use norte_proto::methods::{DestTrash, StepReversal, SyncCounts, SyncMode, SyncStepKind};
 
     let mut view = norte_tui::app::SyncView::new(
@@ -3012,7 +3012,7 @@ fn snapshot_sync_pane_update_con_papelera() {
         unknown_kind: 0,
     };
     view.state =
-        norte_frontend::sync::SyncState::ready(steps, cierre_sync(counts, DestTrash::Restorable));
+        norte_frontend::sync::SyncState::ready(steps, close_sync(counts, DestTrash::Restorable));
     view.run = norte_tui::app::SyncRunState::Done;
 
     let mut app = app_base();
@@ -3030,7 +3030,7 @@ fn snapshot_sync_pane_update_con_papelera() {
 /// the summary from leaving "nothing can be undone" off screen in the one
 /// case where not reading it costs data.
 #[test]
-fn snapshot_sync_pane_mirror_sin_papelera() {
+fn snapshot_sync_pane_mirror_without_trash() {
     use norte_proto::methods::{DestTrash, StepReversal, SyncCounts, SyncMode, SyncStepKind};
 
     let mut view = norte_tui::app::SyncView::new(
@@ -3083,7 +3083,7 @@ fn snapshot_sync_pane_mirror_sin_papelera() {
         unknown_kind: 0,
     };
     view.state =
-        norte_frontend::sync::SyncState::ready(steps, cierre_sync(counts, DestTrash::Absent));
+        norte_frontend::sync::SyncState::ready(steps, close_sync(counts, DestTrash::Absent));
     view.run = norte_tui::app::SyncRunState::Done;
     view.confirming = view
         .state

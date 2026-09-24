@@ -16,7 +16,7 @@ mod caps_at;
 #[cfg(unix)]
 mod confined;
 #[cfg(unix)]
-mod identidad;
+mod identity;
 /// Bounded reading under a directory, for the plugin-host's `location`
 /// capability (ADR 0057).
 #[cfg(unix)]

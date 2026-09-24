@@ -1533,17 +1533,17 @@ mod tests {
         // corpus decides it: this used to hard-code `copying` and went red
         // the day a page documented a command with a `z` in it, which made
         // `z` a matching prefix. The invariant never involved that word.
-        let mut ultimo_vivo = s.current().clone();
+        let mut last_vivo = s.current().clone();
         for c in "zzzz".chars() {
             if !s.rows().is_empty() {
-                ultimo_vivo = s.current().clone();
+                last_vivo = s.current().clone();
             }
             s.push_char(c);
         }
         assert!(s.rows().is_empty(), "nothing matched");
         assert_eq!(
             s.current(),
-            &ultimo_vivo,
+            &last_vivo,
             "the body keeps showing what the reader was reading"
         );
     }

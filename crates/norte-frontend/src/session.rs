@@ -152,7 +152,7 @@ pub struct SlotState {
     /// it, and because removing it later would cost bumping
     /// [`SCHEMA_VERSION`]; whoever fills it has to fill it at capture time,
     /// not here.
-    #[serde(default, with = "columnas")]
+    #[serde(default, with = "columns")]
     pub columns: Vec<ColumnId>,
     /// Whether hidden entries are shown.
     #[serde(default)]
@@ -219,7 +219,7 @@ pub struct SessionBody {
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        deserialize_with = "populares::deserialize"
+        deserialize_with = "popular::deserialize"
     )]
     pub popular: Vec<crate::history::PopularEntry>,
 }
@@ -231,7 +231,7 @@ pub struct SessionBody {
 /// have nothing to do with it. It is a list of shortcuts that gets rebuilt
 /// by walking around (spec 2026-09-15 D6); a slot's path, on the other hand,
 /// is still an error, because without it the slot is nothing.
-mod populares {
+mod popular {
     use serde::{Deserialize, Deserializer};
 
     pub(super) fn deserialize<'de, D: Deserializer<'de>>(
@@ -831,7 +831,7 @@ fn trim_history(h: &mut Vec<VPath>, cap: usize) {
 /// [`ColumnId`] deliberately has no serde of its own — its canonical form is
 /// `Display`/`FromStr`, with a pinned round-trip — and giving it a second one
 /// here would be a second vocabulary to maintain.
-mod columnas {
+mod columns {
     use serde::{Deserialize as _, Deserializer, Serializer};
 
     use crate::columns::ColumnId;
@@ -1092,16 +1092,16 @@ mod tests {
     /// The root of the envelope tests' paths: from this same repository,
     /// because a hand-filled path would measure the filler and not the
     /// case.
-    const RAIZ: &str = "file:///home/u/src/norte/crates/norte-frontend/src";
+    const ROOT: &str = "file:///home/u/src/norte/crates/norte-frontend/src";
 
     /// A slot with the history full in both directions.
     fn slot_with_full_history(id: u32) -> SlotState {
-        let mut s = slot(&format!("{RAIZ}/modulo{id}"));
+        let mut s = slot(&format!("{ROOT}/modulo{id}"));
         s.back = (0..HISTORY_CAP)
-            .map(|i| vp(&format!("{RAIZ}/modulo{id}/atras{i}")))
+            .map(|i| vp(&format!("{ROOT}/modulo{id}/atras{i}")))
             .collect();
         s.forward = (0..HISTORY_CAP)
-            .map(|i| vp(&format!("{RAIZ}/modulo{id}/alante{i}")))
+            .map(|i| vp(&format!("{ROOT}/modulo{id}/alante{i}")))
             .collect();
         s
     }
@@ -1653,7 +1653,7 @@ mod tests {
     /// A real clock, not zero: with `now_ms == 0` the sweep by age sweeps
     /// NOTHING, so a test that prunes at zero does not prove the orphan
     /// survives — it proves the subtraction never happened.
-    const AHORA: u64 = 1_750_000_000_000;
+    const NOW: u64 = 1_750_000_000_000;
 
     /// A layout that does not mention a slot does NOT erase its state:
     /// changing layouts does not drop your history.
@@ -1661,11 +1661,11 @@ mod tests {
     fn orphan_state_survives_a_layout_change() {
         let mut b = SessionBody::default();
         let mut orphan = slot("file:///lejos");
-        orphan.touched_ms = AHORA;
+        orphan.touched_ms = NOW;
         b.slots.insert(7, orphan);
         b.layouts
             .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
-        b.prune(AHORA);
+        b.prune(NOW);
         assert!(b.slots.contains_key(&7), "the orphan stays");
     }
 
@@ -1678,7 +1678,7 @@ mod tests {
         b.slots.insert(7, slot("file:///lejos"));
         b.layouts
             .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
-        b.prune(AHORA);
+        b.prune(NOW);
         assert!(
             !b.slots.contains_key(&7),
             "with no seal there is no valid age"
@@ -1726,7 +1726,7 @@ mod tests {
         b.slots.insert(1, s);
         b.layouts
             .insert("default".into(), Node::slot(SlotId(1), KindId::browser()));
-        b.prune(AHORA);
+        b.prune(NOW);
         assert!(b.slots.contains_key(&1));
     }
 

@@ -36,8 +36,8 @@ use norte_ui_host::action::UiAction;
 use norte_ui_host::dto::{SlotView, UiUpdate};
 use norte_ui_host::{UiHost, UiHostOptions, UiSubscription, Update, ViewSnapshot};
 
-mod backend_falso;
-use backend_falso::arbol_de_prueba;
+mod backend_fake;
+use backend_fake::test_tree;
 
 /// The panels that do NOT follow the listing's cursor, and why not.
 ///
@@ -219,23 +219,23 @@ async fn request_snapshot(host: &UiHost, sub: &mut UiSubscription) -> ViewSnapsh
 /// Starts a host with just the listing, over the test tree.
 async fn start() -> (UiHost, ViewSnapshot) {
     UiHost::start(UiHostOptions {
-        backend: Arc::new(arbol_de_prueba()),
+        backend: Arc::new(test_tree()),
         initial_dir: VPath::parse("mem:///casa").expect("vpath"),
-        initial_dir_pedido: false,
+        initial_dir_requested: false,
         attach: false,
         locale: "es".to_owned(),
         keymap: norte_ui_host::keys::keymap_de_preset("orthodox").expect("preset"),
         keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("orthodox").expect("preset"),
-        keymap_dialog: norte_ui_host::keys::keymap_dialogo_de_preset("orthodox").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("orthodox").expect("preset"),
         layout: norte_frontend::layout::presets::tree("simple").expect("layout"),
         viewport: (120, 40),
-        settings: norte_ui_host::ajustes_por_defecto(),
+        settings: norte_ui_host::default_settings(),
         paths: norte_ui_host::settings::HostPaths::default(),
         theme: norte_ui_host::pickers::HostTheme::default(),
         user_layouts: Vec::new(),
         profile: None,
-        columns: norte_ui_host::columnas_por_defecto(),
-        effects: norte_ui_host::commands::Efectos::Completo,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
         log_ring: None,
     })
     .await

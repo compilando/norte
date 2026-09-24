@@ -41,7 +41,7 @@ impl Row {
     /// give, and inventing text for the gap would be painting something
     /// nobody wrote.
     #[must_use]
-    pub fn inservible(name: String, reason: String) -> Self {
+    pub fn unusable(name: String, reason: String) -> Self {
         Self {
             name,
             url: String::new(),
@@ -146,7 +146,7 @@ mod tests {
     #[test]
     fn an_unusable_connection_shows_but_leads_nowhere() {
         let mut p = ConnectionsPicker::open(vec![
-            Row::inservible("broken".into(), "unknown field `password`".into()),
+            Row::unusable("broken".into(), "unknown field `password`".into()),
             Row::buena("home".into(), "sftp://home/".into()),
         ]);
         assert_eq!(p.rows().len(), 2, "the broken one stays in the list");

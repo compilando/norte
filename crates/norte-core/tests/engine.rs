@@ -67,13 +67,13 @@ async fn copy_file_happy_path() {
 async fn copy_dir_recursive_with_hostile_names() {
     let (engine, mem) = engine_with_mem();
     // 3-level tree with hostile names from the corpus.
-    let hostiles = norte_testkit::corpus::hostile_names();
+    let hostile = norte_testkit::corpus::hostile_names();
     mem.mkdir(&vp("mem:///src")).await.unwrap();
     mem.mkdir(&vp("mem:///src/sub")).await.unwrap();
     mem.mkdir(&vp("mem:///src/sub/deep")).await.unwrap();
     let root = MemProvider::root();
     let mut paths = Vec::new();
-    for (i, h) in hostiles.iter().take(3).enumerate() {
+    for (i, h) in hostile.iter().take(3).enumerate() {
         let dir = ["src", "src/sub", "src/sub/deep"][i];
         let seg = norte_proto::Segment::new(h.bytes.clone()).unwrap();
         let mut p = vp(&format!("mem:///{dir}"));
@@ -92,7 +92,7 @@ async fn copy_dir_recursive_with_hostile_names() {
     assert_eq!(handle.join().await, TaskState::Completed);
 
     // Every hostile file exists at the destination with intact bytes.
-    for (i, h) in hostiles.iter().take(3).enumerate() {
+    for (i, h) in hostile.iter().take(3).enumerate() {
         let dir = ["dst", "dst/sub", "dst/sub/deep"][i];
         let seg = norte_proto::Segment::new(h.bytes.clone()).unwrap();
         let p = vp(&format!("mem:///{dir}")).join(seg);

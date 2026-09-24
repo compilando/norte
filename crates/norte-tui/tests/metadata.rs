@@ -20,11 +20,11 @@ fn vp(wire: &str) -> VPath {
     VPath::parse(wire).expect("valid wire")
 }
 
-fn entry(dir: &VPath, nombre: &[u8], kind: EntryKind) -> Entry {
+fn entry(dir: &VPath, name: &[u8], kind: EntryKind) -> Entry {
     Entry {
         attrs: std::collections::BTreeMap::new(),
         path: dir
-            .join(Segment::new(nombre.to_vec()).expect("segment"))
+            .join(Segment::new(name.to_vec()).expect("segment"))
             .clone(),
         kind,
         size: Some(7),
@@ -32,7 +32,7 @@ fn entry(dir: &VPath, nombre: &[u8], kind: EntryKind) -> Entry {
     }
 }
 
-fn app_de_prueba() -> App {
+fn test_app() -> App {
     let left = vp("file:///izq");
     let right = vp("file:///der");
     App::new(
@@ -60,31 +60,31 @@ fn resolver(app: &mut App) -> Resolved {
 /// it travels with its SLOT: an answer applied by position lands on
 /// whoever occupies that spot when it arrives (P6 phase C's lesson).
 #[test]
-fn el_objetivo_lleva_el_hueco_de_la_hoja() {
-    let mut app = app_de_prueba();
+fn the_target_carries_the_sheets_slot() {
+    let mut app = test_app();
     app.toggle_metadata();
     app.panes[0].set_cursor(1);
     let res = resolver(&mut app);
-    let (hueco, w) = want(&app, &res).expect("there is a target");
-    assert_eq!(Some(hueco), app.metadata_slot());
-    let Want::Entry(e, subir) = w else {
+    let (slot, w) = want(&app, &res).expect("there is a target");
+    assert_eq!(Some(slot), app.metadata_slot());
+    let Want::Entry(e, up) = w else {
         panic!("an entry")
     };
-    assert!(!subir, "the cursor is on a real entry");
+    assert!(!up, "the cursor is on a real entry");
     assert_eq!(e.path, vp("file:///izq/uno.txt"));
 }
 
 /// The entry it shows is the one the listing ALREADY has: same size, same
 /// date, same bytes. This is what makes the sheet cost no read.
 #[test]
-fn lo_que_ensena_sale_del_listado_y_no_de_una_peticion() {
-    let mut app = app_de_prueba();
+fn what_it_shows_comes_from_the_listing_and_not_a_request() {
+    let mut app = test_app();
     app.toggle_metadata();
     app.panes[0].set_cursor(1);
-    let del_listado = app.panes[0].selected().expect("cursor").clone();
+    let of_the_listing = app.panes[0].selected().expect("cursor").clone();
     let res = resolver(&mut app);
     let (_, w) = want(&app, &res).expect("target");
-    assert_eq!(w, Want::Entry(Box::new(del_listado), false));
+    assert_eq!(w, Want::Entry(Box::new(of_the_listing), false));
 }
 
 /// With the `..` row on — the factory default — the cursor is born on it,
@@ -96,8 +96,8 @@ fn lo_que_ensena_sale_del_listado_y_no_de_una_peticion() {
 /// empty on every startup and after every `cd`, which is what a broken
 /// panel looks like.
 #[test]
-fn sobre_la_fila_de_subir_la_hoja_la_describe() {
-    let mut app = app_de_prueba();
+fn over_the_parent_row_the_sheet_describes_it() {
+    let mut app = test_app();
     app.set_parent_row(true);
     app.toggle_metadata();
     assert!(
@@ -106,17 +106,17 @@ fn sobre_la_fila_de_subir_la_hoja_la_describe() {
     );
     let res = resolver(&mut app);
     let (_, w) = want(&app, &res).expect("there is a target");
-    let Want::Entry(e, subir) = w else {
+    let Want::Entry(e, up) = w else {
         panic!("an entry, not the empty note")
     };
-    assert!(subir, "and it is marked as the parent row");
+    assert!(up, "and it is marked as the parent row");
     assert_eq!(e.path, vp("file:///"), "its path is the parent's");
 
     // And those rows are the same ones the window paints: the shared crate
     // decides the list, not each renderer.
-    let filas = norte_frontend::metadata::sheet(&e, subir, None, norte_i18n::Lang::Es);
+    let rows = norte_frontend::metadata::sheet(&e, up, None, norte_i18n::Lang::Es);
     assert_eq!(
-        filas.iter().map(|f| f.value.as_str()).collect::<Vec<_>>(),
+        rows.iter().map(|f| f.value.as_str()).collect::<Vec<_>>(),
         // `file` with no authority is not announced: it is the default
         // case, and its label did not distinguish anything from anything.
         ["..", "carpeta", "/"]
@@ -130,35 +130,35 @@ fn sobre_la_fila_de_subir_la_hoja_la_describe() {
 /// bare "Details" does not say whose details they are, and with two
 /// listings open the only way to know was to move the cursor and look.
 #[test]
-fn la_hoja_dice_a_que_listado_sigue() {
-    let mut app = app_de_prueba();
+fn the_sheet_says_which_listing_it_follows() {
+    let mut app = test_app();
     app.toggle_metadata();
     let res = resolver(&mut app);
-    let (ruta, hostil) = norte_tui::metadata::follows(&app, &res).expect("there is a placed slot");
-    assert_eq!(ruta, "/izq");
-    assert!(!hostil);
+    let (path, hostile) = norte_tui::metadata::follows(&app, &res).expect("there is a placed slot");
+    assert_eq!(path, "/izq");
+    assert!(!hostile);
 
     app.set_focus(1);
     let res = resolver(&mut app);
-    let (otra, _) = norte_tui::metadata::follows(&app, &res).expect("still placed");
-    assert_eq!(otra, "/der", "it follows the ACTIVE one, and says so");
+    let (other, _) = norte_tui::metadata::follows(&app, &res).expect("still placed");
+    assert_eq!(other, "/der", "it follows the ACTIVE one, and says so");
 }
 
 /// A slot behind a tab produces no target. It is the same invariant as the
 /// preview's, and is tested the same way because only a test sees a leak
 /// like that.
 #[test]
-fn una_hoja_oculta_no_produce_objetivo() {
-    let mut app = app_de_prueba();
+fn a_hidden_sheet_produces_no_target() {
+    let mut app = test_app();
     app.toggle_metadata();
     app.panes[0].set_cursor(1);
     let res = resolver(&mut app);
     assert!(want(&app, &res).is_some());
 
-    let hueco = app.metadata_slot().expect("open");
-    app.layout = app.layout.wrap_in_tabs(hueco);
+    let slot = app.metadata_slot().expect("open");
+    app.layout = app.layout.wrap_in_tabs(slot);
     app.layout = app.layout.add_tab(
-        hueco,
+        slot,
         &norte_frontend::layout::Node::slot(
             norte_frontend::layout::SlotId(900),
             norte_frontend::layout::KindId::new("tasks"),
@@ -166,7 +166,7 @@ fn una_hoja_oculta_no_produce_objetivo() {
     );
     let res = resolver(&mut app);
     assert!(
-        !res.placements.iter().any(|(id, _)| *id == hueco),
+        !res.placements.iter().any(|(id, _)| *id == slot),
         "the slot really is hidden"
     );
     assert!(want(&app, &res).is_none(), "what is not seen shows nothing");
@@ -175,7 +175,7 @@ fn una_hoja_oculta_no_produce_objetivo() {
 /// With no cursor, what was there before does not stick: it says there is
 /// nothing underneath.
 #[test]
-fn un_listado_vacio_dice_que_no_hay_nada() {
+fn an_empty_listing_says_there_is_nothing() {
     let dir = vp("file:///vacio");
     let mut app = App::new(
         Pane::new(dir.clone(), Vec::new()),
@@ -190,8 +190,8 @@ fn un_listado_vacio_dice_que_no_hay_nada() {
 /// It follows the `active` role: switching listings changes what it shows,
 /// without touching the layout.
 #[test]
-fn cambiar_de_listado_cambia_lo_que_ensena() {
-    let mut app = app_de_prueba();
+fn changing_listing_changes_what_it_shows() {
+    let mut app = test_app();
     app.toggle_metadata();
     app.panes[0].set_cursor(1);
     let res = resolver(&mut app);
@@ -209,7 +209,7 @@ fn cambiar_de_listado_cambia_lo_que_ensena() {
 /// A name that is not UTF-8 arrives byte for byte: the sheet neither
 /// reinterprets it nor loses it along the way.
 #[test]
-fn un_nombre_no_utf8_llega_entero() {
+fn a_non_utf8_name_arrives_whole() {
     let dir = vp("file:///izq");
     let hostile = entry(&dir, b"m\xffl.txt", EntryKind::File);
     let mut app = App::new(
@@ -231,8 +231,8 @@ fn un_nombre_no_utf8_llega_entero() {
 /// kept moving the neighboring listing, and a third press was needed to
 /// close what the second had not focused (#243).
 #[test]
-fn la_hoja_no_se_lleva_el_teclado_nunca() {
-    let mut app = app_de_prueba();
+fn the_sheet_never_takes_the_keyboard() {
+    let mut app = test_app();
     app.toggle_metadata();
     assert!(app.metadata_slot().is_some(), "open");
     assert_eq!(
@@ -250,9 +250,9 @@ fn la_hoja_no_se_lleva_el_teclado_nunca() {
 /// task, so it takes the keyboard on entry and the second press closes it.
 /// The tasks strip is not touched at any point.
 #[test]
-fn el_panel_de_procesos_toma_el_teclado_al_abrir() {
-    let mut app = app_de_prueba();
-    let tasks_antes = app
+fn the_processes_pane_takes_the_keyboard_on_open() {
+    let mut app = test_app();
+    let tasks_before = app
         .layout
         .slot_ids()
         .into_iter()
@@ -271,7 +271,7 @@ fn el_panel_de_procesos_toma_el_teclado_al_abrir() {
     assert!(app.processes_slot().is_none(), "closed");
     assert_eq!(app.key_owner(), KeyOwner::Panes);
 
-    let tasks_despues = app
+    let tasks_after = app
         .layout
         .slot_ids()
         .into_iter()
@@ -281,14 +281,14 @@ fn el_panel_de_procesos_toma_el_teclado_al_abrir() {
                 .is_some_and(|k| k.as_str() == "tasks")
         })
         .count();
-    assert_eq!(tasks_antes, tasks_despues, "the strip stays where it was");
+    assert_eq!(tasks_before, tasks_after, "the strip stays where it was");
 }
 
 /// Closing either of the two returns the earlier tree, with no degenerate
 /// `Split` left behind.
 #[test]
-fn cerrar_devuelve_el_arbol_de_antes() {
-    let mut app = app_de_prueba();
+fn closing_returns_the_previous_tree() {
+    let mut app = test_app();
     let before = app.layout.clone();
 
     app.toggle_metadata();

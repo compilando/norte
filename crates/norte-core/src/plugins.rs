@@ -626,7 +626,7 @@ impl PluginRegistry {
     /// columns and the panels — what a plugin offers is exactly what a human
     /// looks at BEFORE approving it.
     #[must_use]
-    fn comandos_de(c: &norte_plugin_host::Contributions) -> Vec<PluginCommandInfo> {
+    fn commands_of(c: &norte_plugin_host::Contributions) -> Vec<PluginCommandInfo> {
         c.command
             .iter()
             .map(|c| PluginCommandInfo {
@@ -706,7 +706,7 @@ impl PluginRegistry {
                     // MANIFEST ORDER (not sorted — matches how the digest
                     // treats contribution order as significant, spec §6).
                     description: e.manifest.description.clone(),
-                    commands: Self::comandos_de(&e.manifest.contributions),
+                    commands: Self::commands_of(&e.manifest.contributions),
                     // (G3c, 0.28.0) columns mirrors `Contributions.columns`
                     // the SAME way `commands` mirrors `Contributions.command`
                     // above: manifest order, discovery-only (NOT gated on
@@ -972,7 +972,7 @@ impl PluginRegistry {
     /// Validates `value` against `id`'s `[config.<key>]` schema (the SAME
     /// validation as `config.toml`, via
     /// [`norte_plugin_host::encode_wire_value`]) and, if it passes, persists
-    /// + RE-RESOLVES `settings_of`/[`Self::config_keys`] IN MEMORY so a
+    /// and RE-RESOLVES `settings_of`/[`Self::config_keys`] IN MEMORY so a
     /// future instantiation (or a `plugin.get_config` right after) sees the
     /// new value (0.28.0, G3c). Never persists if validation fails (spec S2:
     /// "validated against the schema BEFORE writing").
@@ -4240,15 +4240,15 @@ pub struct PanelCall<'a> {
     /// Which of the plugin's panels is painted.
     pub kind: &'a str,
     /// Size, language, and the row under the cursor.
-    // NOTE(translation): field name kept as `contexto` — constructed by
+    // NOTE(translation): field name kept as `context` — constructed by
     // name in core/src/daemon/server.rs (T04) and core/src/backend/plugins.rs
     // (T03), outside this task's scope. See phase-1 report.
-    pub contexto: &'a norte_plugin_host::panel_iface::PanelContext,
+    pub context: &'a norte_plugin_host::panel_iface::PanelContext,
     /// What the guest saved last time, opaque.
     pub state: &'a [u8],
     /// What triggered this repaint.
-    // NOTE(translation): field name kept as `evento`, same cross-file reason.
-    pub evento: &'a norte_plugin_host::panel_iface::PanelEvent,
+    // NOTE(translation): field name kept as `event`, same cross-file reason.
+    pub event: &'a norte_plugin_host::panel_iface::PanelEvent,
 }
 
 /// Paints an ALREADY resolved plugin's `kind` panel, blocking.
@@ -4279,9 +4279,9 @@ pub fn render_panel_blocking(
         dir,
         climb,
         kind,
-        contexto: context,
+        context,
         state,
-        evento: event,
+        event,
     } = call;
     let (id, _name, wasm, caps, settings) = resolved;
     // The PRODUCTION mint, which brings the policy's protected roots; with

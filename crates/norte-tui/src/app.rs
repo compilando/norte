@@ -531,7 +531,7 @@ pub struct App {
     /// always starting from the first would force walking the whole bar every
     /// time, and whoever uses two entries of the same menu would pay for it
     /// on every gesture.
-    pub menu_ultimo: usize,
+    pub menu_last: usize,
     /// The next `SlotId` to mint. Never decreases and never reused: a
     /// recycled id would make the orphaned state of a closed slot resurrect
     /// inside another one that has nothing to do with it.
@@ -646,7 +646,7 @@ pub struct App {
     /// Transfers that get launched go INTO THE QUEUE (ADR 0149): one at a
     /// time. Session state, not configuration: it is switched on for a while
     /// of moving things on a mechanical disk and switched off afterward.
-    pub encolar: bool,
+    pub enqueue: bool,
     /// Open viewer (F3); None = browsing.
     pub viewer: Option<crate::viewer::Viewer>,
     /// The thumbnail requested for [`Self::viewer`], if one was requested
@@ -657,16 +657,16 @@ pub struct App {
     /// [`crate::viewer::Viewer`] because that type belongs to `norte-frontend`
     /// and both frontends share it; the window paints images through its own
     /// path and does not need this field.
-    pub viewer_imagen: Option<crate::viewer_open::ImagenColocada>,
+    pub viewer_imagen: Option<crate::viewer_open::ImagenPlaced>,
     /// The file whose thumbnail arrived in a format kitty does not know how
-    /// to place, if that happened (`Miniatura::FormatoAjeno`).
+    /// to place, if that happened (`Thumbnail::FormatForeign`).
     ///
     /// The PATH travels, not a `bool`, for the same reason
     /// [`Self::viewer_imagen`] carries its own: the reader may be looking at
     /// another file while this is still standing, and a warning about the
     /// previous file describes something no longer on screen. The warning
     /// only fires when this names the file the viewer is showing.
-    pub viewer_miniatura_ajena: Option<VPath>,
+    pub viewer_thumbnail_foreign: Option<VPath>,
     /// The [`crate::viewer_open::Modo`] [`Self::viewer`] was opened with —
     /// resolved ONCE, on open (`viewer_open::open_viewer`), not recomputed on
     /// every frame.
@@ -787,7 +787,7 @@ pub struct App {
     /// the new tree against it before keeping it, so as not to hide a
     /// listing. `None` before the first one: not knowing is not the same as
     /// knowing there is none.
-    pub ultimo_frame: Option<ratatui::layout::Rect>,
+    pub last_frame: Option<ratatui::layout::Rect>,
     /// The host's volumes, cached for each panel's footer (spec 2026-09-10).
     /// Requested by the loop when [`Self::volumes_stale`] says so —on landing
     /// a listing and on refresh— never on a frame: `host.volumes` mounts and
@@ -859,7 +859,7 @@ pub struct App {
     /// the providers, the journal, the policy and the reason a connection
     /// failed are in the other process. The in-flight request does not live
     /// here but in `InFlight`, which is the one that talks to the backend.
-    pub log_remote: crate::logview::RegistroRemoto,
+    pub log_remote: crate::logview::LogRemote,
     /// What the reader is waiting on right now, if anything (#323).
     ///
     /// Set and cleared by whoever is waiting, and lasts only as long as the
@@ -1256,7 +1256,7 @@ pub struct App {
     /// one plugin panel visible: the guest's state belongs to its slot, and
     /// with tabs there are more live slots than visible ones — same as the
     /// histories.
-    pub paneles: norte_frontend::layout::BySlot<crate::panelplugin::PanelRuntime>,
+    pub panels: norte_frontend::layout::BySlot<crate::panelplugin::PanelRuntime>,
     /// The splash row the reader just picked with its number, until the loop
     /// dispatches it. Like the rest of the pending intents: the key decides,
     /// and whoever has the backend in front executes.
@@ -1354,10 +1354,10 @@ impl App {
             log_panel: norte_frontend::logpanel::LogPanel::default(),
             log_filter_input: None,
             log_ring: None,
-            log_remote: crate::logview::RegistroRemoto::default(),
+            log_remote: crate::logview::LogRemote::default(),
             busy: None,
             menu: None,
-            menu_ultimo: 0,
+            menu_last: 0,
             // The first four are the `orthodox` preset's.
             next_slot: 5,
             render_now_ms: None,
@@ -1379,11 +1379,11 @@ impl App {
             session: SessionUi::default(),
             board: crate::tasks::TaskBoard::default(),
             strip: norte_frontend::task_strip::TaskStrip::default(),
-            encolar: false,
+            enqueue: false,
             viewer: None,
             viewer_imagen: None,
-            viewer_miniatura_ajena: None,
-            viewer_modo: crate::viewer_open::Modo::Nada,
+            viewer_thumbnail_foreign: None,
+            viewer_modo: crate::viewer_open::Modo::Nothing,
             help: None,
             pending_collisions: std::collections::VecDeque::new(),
             pending_reports: std::collections::VecDeque::new(),
@@ -1400,7 +1400,7 @@ impl App {
                 ..Default::default()
             },
             status_plugins: Vec::new(),
-            ultimo_frame: None,
+            last_frame: None,
             volumes: Vec::new(),
             volumes_stale: true,
             pending_panel_command: None,
@@ -1473,7 +1473,7 @@ impl App {
             splash_until_ms: None,
             processes_auto: false,
             panel_focus: None,
-            paneles: norte_frontend::layout::BySlot::new(),
+            panels: norte_frontend::layout::BySlot::new(),
             pending_splash_row: None,
             mouse: crate::mouse::MouseState::default(),
             settings: None,
@@ -1490,7 +1490,7 @@ impl App {
     /// restored session— and forgetting the `..` row would be one half of the
     /// screen behaving differently from the other.
     #[must_use]
-    pub fn nuevo_pane(&self, dir: VPath, entries: Vec<norte_proto::Entry>) -> Pane {
+    pub fn new_pane(&self, dir: VPath, entries: Vec<norte_proto::Entry>) -> Pane {
         let mut pane = Pane::new(dir, entries);
         pane.set_parent_row(self.parent_row);
         pane
@@ -1513,10 +1513,10 @@ impl App {
     #[must_use]
     pub fn fork_pane(&self, i: usize) -> Pane {
         let p = &self.panes[i];
-        self.nuevo_pane(p.dir().clone(), p.real_entries().to_vec())
+        self.new_pane(p.dir().clone(), p.real_entries().to_vec())
     }
 
-    /// Puts into `id` a listing that was born OUTSIDE [`Self::nuevo_pane`]
+    /// Puts into `id` a listing that was born OUTSIDE [`Self::new_pane`]
     /// and applies this session's configuration to it.
     ///
     /// The three that are born outside belong to the SESSION: the one
@@ -1572,7 +1572,7 @@ impl App {
     /// makes the next opening start from the first with no apparent reason.
     pub fn close_menu(&mut self) {
         if let Some(m) = &self.menu {
-            self.menu_ultimo = m.menu();
+            self.menu_last = m.menu();
         }
         self.menu = None;
     }
@@ -1599,7 +1599,7 @@ impl App {
         if self.menu.is_some() {
             self.close_menu();
         } else {
-            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_ultimo));
+            self.menu = Some(norte_frontend::menu::MenuState::reopen_at(self.menu_last));
         }
     }
 
@@ -1670,9 +1670,9 @@ impl App {
     /// Shows the board to the lightweight progress bar (ADR 0146), with the
     /// render clock.
     pub fn note_strip(&mut self) {
-        let ahora = self.now_ms();
+        let now = self.now_ms();
         self.strip.update(
-            ahora,
+            now,
             self.board
                 .rows()
                 .iter()

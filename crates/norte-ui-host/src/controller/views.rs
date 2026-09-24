@@ -1,9 +1,9 @@
 //! Assembling the snapshot and the views that make it up.
 //!
-//! Part of `controller`: these are methods of `Estado`, moved here without
+//! Part of `controller`: these are methods of `State`, moved here without
 //! touching them (ADR 0086). The only writer is still the actor.
 
-// These modules are the same `impl Estado` split into pieces, so they use
+// These modules are the same `impl State` split into pieces, so they use
 // the same imports as the parent. Listing them here would be a forty-line
 // list per file, across 32 files, that goes out of sync the moment the
 // parent imports something — `super::*` keeps it in sync on its own.
@@ -23,7 +23,7 @@ pub(super) fn span_view(s: &norte_frontend::ansi::StyledSpan) -> crate::dto::Spa
     }
 }
 
-impl Estado {
+impl State {
     /// Projects a daemon snapshot into what the renderer paints.
     pub(super) fn vista_de(p: &norte_proto::TaskProgress) -> TaskView {
         // By the SHARED rule, which falls back to entries when there are no
@@ -33,7 +33,7 @@ impl Estado {
         let percent = norte_frontend::tasks::progress_pct(p);
         TaskView {
             task_id: p.task_id.get(),
-            kind: clase_de_task(p.kind).to_owned(),
+            kind: task_class(p.kind).to_owned(),
             state: match p.state {
                 norte_proto::TaskState::Completed => TaskStateView::Done,
                 norte_proto::TaskState::Cancelled => TaskStateView::Cancelled,
@@ -49,7 +49,7 @@ impl Estado {
             percent,
             // Empty here on purpose: the rate belongs to the LIVE task, which
             // keeps the previous snapshots, and this function only sees one.
-            // `progreso` fills them in, since it has both.
+            // `progress` fills them in, since it has both.
             rate: String::new(),
             eta: String::new(),
             detail: p.current.as_ref().map(|path| {
@@ -73,30 +73,30 @@ impl Estado {
     /// worse than showing it dimmed.
     pub(super) fn snapshot(&self) -> ViewSnapshot {
         let mut slots = Vec::new();
-        for (slot, _) in &self.reparto.placements {
+        for (slot, _) in &self.split.placements {
             let SlotId(id) = *slot;
-            if let Some(slot_state) = self.huecos.get(&id) {
+            if let Some(slot_state) = self.slots.get(&id) {
                 slots.push(SlotView::Browser(Box::new(self.browser(id, slot_state))));
                 continue;
             }
-            let kind = kind_de(&self.arbol, *slot);
+            let kind = kind_de(&self.tree, *slot);
             match kind.as_ref().map(norte_frontend::layout::KindId::as_str) {
                 Some("metadata") => {
-                    slots.push(SlotView::Metadata(Box::new(self.hoja_de_atributos(*slot))));
+                    slots.push(SlotView::Metadata(Box::new(self.attributes_sheet(*slot))));
                 }
-                Some("places") => slots.push(SlotView::Places(Box::new(self.barra_de_sitios(id)))),
+                Some("places") => slots.push(SlotView::Places(Box::new(self.places_bar(id)))),
                 Some(super::preview::KIND) => {
                     slots.push(SlotView::Preview(Box::new(self.vista_de_preview(id))));
                 }
-                Some("tree") => slots.push(SlotView::Tree(Box::new(self.arbol_de_ramas(id)))),
+                Some("tree") => slots.push(SlotView::Tree(Box::new(self.branch_tree(id)))),
                 Some(super::logpanel::KIND) => {
-                    slots.push(SlotView::Log(Box::new(self.panel_de_registro(id))));
+                    slots.push(SlotView::Log(Box::new(self.log_panel(id))));
                 }
                 Some(super::diskmap::KIND) => {
-                    slots.push(SlotView::DiskMap(Box::new(self.vista_de_mapa(id))));
+                    slots.push(SlotView::DiskMap(Box::new(self.map_view(id))));
                 }
                 Some(super::timeline::KIND) => {
-                    slots.push(SlotView::Timeline(Box::new(self.vista_de_linea(id))));
+                    slots.push(SlotView::Timeline(Box::new(self.timeline_view(id))));
                 }
                 Some(super::termpanel::KIND) => {
                     slots.push(SlotView::Terminal(Box::new(self.panel_de_terminal(id))));
@@ -106,7 +106,7 @@ impl Estado {
                     // Index over the PAINTED rows, which is what the renderer
                     // highlights. Over the whole map, with the board
                     // clamped, it pointed at a different one.
-                    cursor: self.cursor_del_tablero(),
+                    cursor: self.board_cursor(),
                 }),
                 // A panel CONTRIBUTED by a plugin (phase 3), by PREFIX: its
                 // kind is `plugin:<id>:<kind>` and is not known at compile
@@ -135,48 +135,48 @@ impl Estado {
             }
         }
         ViewSnapshot {
-            compare: self.vista_comparacion(),
-            sync: self.vista_sincronizacion(),
-            connection: self.conexion.clone(),
-            layout: self.disposicion(),
+            compare: self.vista_comparison(),
+            sync: self.vista_sync(),
+            connection: self.connection.clone(),
+            layout: self.layout(),
             slots,
-            focus: Some(self.enfocado()),
+            focus: Some(self.focused()),
             status: self.status.clone(),
             // A snapshot REPLACES whatever the renderer has, so it goes
             // whole: a resync that left out the open dialog would leave the
             // user looking at a screen with no question waiting for an
             // answer, with the destructive operation still alive. Same with
             // the board.
-            dialogs: self.vistas_de_dialogos(),
+            dialogs: self.dialog_views(),
             tasks: self.vistas_de_tasks(),
             menu: self.vista_menu(),
-            panel_bar: self.vista_barra_de_paneles(),
-            status_items: self.vista_elementos_de_estado(),
-            layout_buttons: self.vista_botones_de_disposicion(),
+            panel_bar: self.view_pane_bar(),
+            status_items: self.status_items_view(),
+            layout_buttons: self.view_layout_buttons(),
             // The stripes (spec 2026-09-20). They go in the WHOLE view and
             // not in a patch: it is configuration, and a live reload rebuilds
             // the view.
             row_stripes: self.config.common.ui_chrome.row_stripes(),
-            profiles: self.vista_perfiles(),
-            palette: self.vista_paleta(),
+            profiles: self.vista_profiles(),
+            palette: self.vista_palette(),
             goto: self.vista_ir_a(),
-            wizard: self.vista_asistente(),
+            wizard: self.vista_wizard(),
             splash: self.vista_splash(),
             whichkey: self.vista_whichkey(),
-            help: self.vista_ayuda(),
-            settings: self.vista_ajustes(),
-            extensions: self.vista_extensiones(),
-            agents: self.vista_agentes(),
-            plugin_output: self.escritorio.salida.clone(),
-            program_output: self.escritorio.programa.clone(),
-            theme: self.vista_tema(),
-            search: self.vista_busqueda(),
-            layouts: self.vista_disposiciones(),
-            columns: self.vista_columnas(),
+            help: self.vista_help(),
+            settings: self.vista_settings(),
+            extensions: self.vista_extensions(),
+            agents: self.vista_agents(),
+            plugin_output: self.desktop.output.clone(),
+            program_output: self.desktop.program.clone(),
+            theme: self.vista_theme(),
+            search: self.vista_search(),
+            layouts: self.vista_layouts(),
+            columns: self.vista_columns(),
             picker: self.vista_selector(),
             viewer: self.vista_visor(),
             ai_rename: self.vista_ia(),
-            organize: self.vista_organizar(),
+            organize: self.vista_organize(),
             locale: self.locale.clone(),
         }
     }
@@ -188,7 +188,7 @@ impl Estado {
     /// things on purpose: when the estimate and what is painted disagree, a
     /// page silently skips the clamped lines.
     pub(super) fn alto_del_visor(&self) -> usize {
-        self.visor_filas
+        self.visor_rows
             .unwrap_or_else(|| usize::from(self.viewport.1.saturating_sub(2)))
             .max(1)
     }
@@ -199,21 +199,21 @@ impl Estado {
     /// shortcut from the effective keymap, same as in the TUI: a palette
     /// built from a hand-written list shows shortcuts the user's preset does
     /// not have.
-    pub(super) fn filas_de_paleta(&self) -> Vec<norte_frontend::palette::Row> {
+    pub(super) fn palette_rows(&self) -> Vec<norte_frontend::palette::Row> {
         use norte_frontend::palette::first_chord;
         // With THIS window's effects, not with all of them: the palette used
         // to be the only door that did not go through the effective keymap,
         // so a read-only window offered copy, move and delete. `aplicar_
         // efecto`'s guard rejected them, but offering what is going to be
         // refused is promising something that is not going to happen.
-        crate::commands::todos_con(self.efectos)
+        crate::commands::all_with(self.effects)
             .into_iter()
             .map(|cmd| norte_frontend::palette::Row {
                 key: cmd.to_owned(),
                 text: cmd.to_owned(),
                 desc: norte_i18n::t_in(self.lang, &format!("help-cmd-{}", cmd.replace('.', "-"))),
-                chord: first_chord(cmd, &self.efectivo)
-                    .or_else(|| first_chord(cmd, self.resolver_visor_efectivo()))
+                chord: first_chord(cmd, &self.effective)
+                    .or_else(|| first_chord(cmd, self.resolver_visor_effective()))
                     .unwrap_or_else(|| "—".to_owned()),
                 // A command of our own is this project's vocabulary.
                 hostile: false,
@@ -222,8 +222,8 @@ impl Estado {
     }
 
     /// The viewer's effective keymap, to look up one of its commands' key.
-    pub(super) fn resolver_visor_efectivo(&self) -> &Effective {
-        &self.efectivo_visor
+    pub(super) fn resolver_visor_effective(&self) -> &Effective {
+        &self.effective_visor
     }
 
     /// A click on a row of the profile selector: selects it and activates it.
@@ -231,22 +231,22 @@ impl Estado {
     /// The GENERATION is not decorative: the list fills in from a background
     /// task, so an index from the previous screen names a different profile
     /// (ADR 0068). An old generation is rejected instead of clamped.
-    pub(super) fn activar_perfil_de_fila(
+    pub(super) fn activate_profile_from_row(
         &mut self,
         row: u32,
         generation: u64,
         backend: &Arc<dyn HostBackend>,
-        mailbox: &mpsc::Sender<Mensaje>,
+        mailbox: &mpsc::Sender<Message>,
     ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
-        if generation != self.gen_perfiles {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+        if generation != self.gen_profiles {
+            return (Self::stale(StaleAction::Generation), Vec::new());
         }
-        let Some(p) = self.selector_perfil.as_mut() else {
-            return (Self::obsoleta(StaleAction::Modal), Vec::new());
+        let Some(p) = self.selector_profile.as_mut() else {
+            return (Self::stale(StaleAction::Modal), Vec::new());
         };
         let i = row as usize;
         let Some(row) = p.rows().get(i) else {
-            return (Self::obsoleta(StaleAction::Generation), Vec::new());
+            return (Self::stale(StaleAction::Generation), Vec::new());
         };
         if row.problem.is_some() {
             return (
@@ -257,14 +257,14 @@ impl Estado {
             );
         }
         let name = row.name.clone();
-        let outgoing = self.elegir_perfil(&name, backend, mailbox);
-        (self.aplicada(), outgoing)
+        let outgoing = self.choose_profile(&name, backend, mailbox);
+        (self.applied(), outgoing)
     }
 
     /// The profile selector's projection.
-    pub(super) fn vista_perfiles(&self) -> Option<crate::dto::ProfilePickerView> {
+    pub(super) fn vista_profiles(&self) -> Option<crate::dto::ProfilePickerView> {
         use norte_frontend::profile_picker::NameClash;
-        let p = self.selector_perfil.as_ref()?;
+        let p = self.selector_profile.as_ref()?;
         Some(crate::dto::ProfilePickerView {
             rows: p
                 .rows()
@@ -299,7 +299,7 @@ impl Estado {
                 })
                 .collect(),
             cursor: p.cursor() as u64,
-            generation: self.gen_perfiles,
+            generation: self.gen_profiles,
         })
     }
 
@@ -311,7 +311,7 @@ impl Estado {
     /// one row of titles.
     pub(super) fn vista_menu(&self) -> crate::dto::MenuView {
         use norte_frontend::menu::MENUS;
-        let runnable = crate::commands::todos_con(self.efectos);
+        let runnable = crate::commands::all_with(self.effects);
         let items = self.menu.as_ref().map_or_else(Vec::new, |m| {
             MENUS.get(m.menu()).map_or_else(Vec::new, |menu| {
                 menu.items()
@@ -326,9 +326,9 @@ impl Estado {
                             &format!("menu-item-{}", id.replace('.', "-")),
                         )),
                         chord: clamp_display(
-                            norte_frontend::palette::first_chord(id, &self.efectivo)
+                            norte_frontend::palette::first_chord(id, &self.effective)
                                 .or_else(|| {
-                                    norte_frontend::palette::first_chord(id, &self.efectivo_visor)
+                                    norte_frontend::palette::first_chord(id, &self.effective_visor)
                                 })
                                 .unwrap_or_default(),
                         ),
@@ -364,8 +364,8 @@ impl Estado {
     /// dropped for lack of room is not open, #329/#331), who has the
     /// keyboard, and what has something to report without being in view. The
     /// WHAT and the ORDER belong to `norte_frontend::panelbar`, shared.
-    pub(super) fn vista_barra_de_paneles(&self) -> crate::dto::PanelBarView {
-        let buttons = self.botones_de_paneles();
+    pub(super) fn view_pane_bar(&self) -> crate::dto::PanelBarView {
+        let buttons = self.pane_buttons();
         crate::dto::PanelBarView {
             // ON by default, same as the menu bar's and the TUI's.
             bar: self.config.common.ui_panel_bar.unwrap_or(true),
@@ -388,7 +388,7 @@ impl Estado {
                         kind,
                         letter: b.letter.to_string(),
                         chord: clamp_display(
-                            norte_frontend::palette::first_chord(&b.command, &self.efectivo)
+                            norte_frontend::palette::first_chord(&b.command, &self.effective)
                                 .unwrap_or_else(|| "—".to_owned()),
                         ),
                         state: match b.state {
@@ -412,16 +412,16 @@ impl Estado {
 
     /// The status bar's items, UNCLAMPED by width: what a click resolves.
     /// From the same code as the TUI (ADR 0132).
-    pub(super) fn elementos_de_estado(&self) -> Vec<norte_frontend::statusbar::StatusItemView> {
+    pub(super) fn state_items(&self) -> Vec<norte_frontend::statusbar::StatusItemView> {
         let input = norte_frontend::statusbar::StatusInput::from_pane(
-            &self.hueco().pane,
-            self.tira.view(self.reloj_tira()),
+            &self.slot().pane,
+            self.strip.view(self.clock_strip()),
             self.status.notices_unread,
         );
         // The plugins' first (ADR 0137), like in the TUI: to the left of the
         // right half, and the first to give way.
         let mut list = norte_frontend::statusbar::plugin_items(
-            &self.hueco().pane,
+            &self.slot().pane,
             &self.config.common.ui_status_plugins,
             self.lang,
         );
@@ -436,8 +436,8 @@ impl Estado {
     /// The status bar's right half's projection (ADR 0132): what fits in half
     /// the declared width, dropped by priority with the same `fit` as the
     /// TUI's.
-    pub(super) fn vista_elementos_de_estado(&self) -> Vec<crate::dto::StatusItemView> {
-        let list = self.elementos_de_estado();
+    pub(super) fn status_items_view(&self) -> Vec<crate::dto::StatusItemView> {
+        let list = self.state_items();
         let width = usize::from(self.viewport.0);
         norte_frontend::statusbar::fit(&list, width / 2, 2)
             .into_iter()
@@ -468,14 +468,14 @@ impl Estado {
     /// The layout buttons (ADR 0133), with their menu entry's name and the
     /// LIVE keymap's shortcut. They go in the snapshot: the keymap changes
     /// with a profile or a reload, and both send a snapshot.
-    pub(super) fn vista_botones_de_disposicion(&self) -> Vec<crate::dto::ChromeButtonView> {
+    pub(super) fn view_layout_buttons(&self) -> Vec<crate::dto::ChromeButtonView> {
         norte_frontend::layoutbar::BUTTONS
             .iter()
             .map(|b| crate::dto::ChromeButtonView {
                 id: b.id.to_owned(),
                 label: clamp_display(norte_frontend::layoutbar::label(b, self.lang)),
                 chord: clamp_display(
-                    norte_frontend::palette::first_chord(b.command, &self.efectivo)
+                    norte_frontend::palette::first_chord(b.command, &self.effective)
                         .unwrap_or_else(|| "—".to_owned()),
                 ),
             })
@@ -483,24 +483,24 @@ impl Estado {
     }
 
     /// The bar's buttons, with their command: what a click resolves.
-    pub(super) fn botones_de_paneles(&self) -> Vec<norte_frontend::panelbar::PanelButton> {
+    pub(super) fn pane_buttons(&self) -> Vec<norte_frontend::panelbar::PanelButton> {
         // In SCREEN ORDER, which is the buttons' order: top to bottom and, at
         // the same height, left to right. The layout gives them in the order
         // it walks the tree, which almost always matches and does not
         // guarantee it — and "almost always" is no good for a row learned by
         // finger memory.
-        let mut placements: Vec<_> = self.reparto.placements.iter().collect();
+        let mut placements: Vec<_> = self.split.placements.iter().collect();
         placements.sort_by_key(|(_, r)| (r.y, r.x));
         let placed: Vec<String> = placements
             .iter()
-            .filter_map(|(id, _)| kind_de(&self.arbol, *id))
+            .filter_map(|(id, _)| kind_de(&self.tree, *id))
             .map(|k| k.as_str().to_owned())
             .collect();
         let open_kinds: Vec<&str> = placed.iter().map(String::as_str).collect();
         // A listing with the keyboard is not "a focused panel": the bar says
         // which PANEL the keys go to, and listings get them by default.
         let focused_kind =
-            kind_de(&self.arbol, SlotId(self.enfocado())).map(|k| k.as_str().to_owned());
+            kind_de(&self.tree, SlotId(self.focused())).map(|k| k.as_str().to_owned());
         let focused = focused_kind.as_deref().filter(|k| *k != "browser");
         // News: the log with unseen warnings, and processes with tasks on the
         // board. With the panel IN VIEW you are already seeing it: the mark
@@ -510,7 +510,7 @@ impl Estado {
         if !open_kinds.contains(&"processes") {
             attention_list.push((
                 "processes",
-                norte_frontend::panelbar::cifra(self.filas_de_tablero()),
+                norte_frontend::panelbar::figure(self.board_rows()),
             ));
         }
         if !open_kinds.contains(&super::logpanel::KIND)
@@ -518,7 +518,7 @@ impl Estado {
         {
             attention_list.push((
                 super::logpanel::KIND,
-                norte_frontend::panelbar::cifra(
+                norte_frontend::panelbar::figure(
                     ring.count_at_or_above(norte_config::logline::LogLevel::Warn),
                 ),
             ));
@@ -535,8 +535,8 @@ impl Estado {
     }
 
     /// The palette's projection.
-    pub(super) fn vista_paleta(&self) -> Option<crate::dto::PaletteView> {
-        let p = self.paleta.as_ref()?;
+    pub(super) fn vista_palette(&self) -> Option<crate::dto::PaletteView> {
+        let p = self.palette.as_ref()?;
         let rows = p.rows();
         let visible = p.visible();
         let no_query = p.query_display().is_empty();
@@ -623,7 +623,7 @@ impl Estado {
         // (`ui::panels`), and for the same reason: it is the file that was
         // opened from there.
         let (path, hostile) =
-            norte_frontend::path_display_with(&v.path, self.hueco().pane.name_encoding());
+            norte_frontend::path_display_with(&v.path, self.slot().pane.name_encoding());
         crate::dto::ViewerView {
             path_display: clamp_display(path),
             path_hostile: hostile,
@@ -651,7 +651,7 @@ impl Estado {
             // image that is announced, and the "via …" says whose it is.
             // Only in the big viewer (`con_imagen`), which is the only one
             // that serves bytes.
-            preview_by: match (con_imagen, self.miniatura.as_ref()) {
+            preview_by: match (con_imagen, self.thumbnail.as_ref()) {
                 (true, Some((_, plugin))) => clamp_display(norte_i18n::ta_in(
                     self.lang,
                     "viewer-plugin-preview",
@@ -669,14 +669,14 @@ impl Estado {
                 }),
             },
             preview_lossy: v.preview_lossy(),
-            image: match (con_imagen, self.miniatura.as_ref()) {
+            image: match (con_imagen, self.thumbnail.as_ref()) {
                 (true, Some((view, _))) => Some(view.clone()),
                 _ => image.clone().ok().flatten(),
             },
             image_refused: match &image {
                 // With a thumbnail, the reason the viewer does not paint its
                 // own stops mattering: there is an image.
-                Err(key) if !(con_imagen && self.miniatura.is_some()) => {
+                Err(key) if !(con_imagen && self.thumbnail.is_some()) => {
                     clamp_display(norte_i18n::t_in(self.lang, key))
                 }
                 _ => String::new(),

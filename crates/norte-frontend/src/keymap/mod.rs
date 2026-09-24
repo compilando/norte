@@ -79,7 +79,7 @@ pub enum KeymapError {
     /// ignoring it would be broken config with no error.
     #[error("the {layer} layer does not accept {key} (preset: keymap; usuario: prepend/append)")]
     WrongLayerKey {
-        /// `"preset"` or `"usuario"`.
+        /// `"preset"` or `"user"`.
         layer: &'static str,
         /// The extra key.
         key: &'static str,
@@ -506,14 +506,14 @@ mod tests {
     /// `mod+` is the one per-OS mechanism: a preset stays a single file. The
     /// process picks which physical modifier it means, once, at startup.
     #[test]
-    fn mod_es_ctrl_por_defecto() {
+    fn mod_is_ctrl_by_default() {
         let c = parse_chord("mod+c").unwrap();
         assert_eq!(c, parse_chord("ctrl+c").unwrap());
     }
 
     /// `cmd+` is literal, for a preset that means Cmd and nothing else.
     #[test]
-    fn cmd_es_su_propio_modificador_y_no_es_ctrl() {
+    fn cmd_is_its_own_modifier_and_is_not_ctrl() {
         let cmd = parse_chord("cmd+c").unwrap();
         let ctrl = parse_chord("ctrl+c").unwrap();
         assert_ne!(cmd, ctrl);
@@ -526,7 +526,7 @@ mod tests {
     /// the same binary. `apply` is the pure half, and it is the half worth
     /// pinning.
     #[test]
-    fn la_politica_decide_a_que_se_traduce_mod() {
+    fn the_policy_decides_what_mod_translates_to() {
         assert_eq!(
             ModKey::Ctrl.apply(Mods::default()),
             Mods {
@@ -549,7 +549,7 @@ mod tests {
     /// same story on the other side, and stays legal here only because the
     /// default policy resolves `mod` to Ctrl.
     #[test]
-    fn el_alias_cuenta_como_su_modificador_para_el_repetido() {
+    fn the_alias_counts_as_its_modifier_for_the_repeat() {
         assert!(matches!(
             parse_chord("ctrl+mod+x"),
             Err(KeymapError::BadChord { .. })
@@ -672,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn chord_new_normaliza_shift_en_chars_pero_no_en_otras_teclas() {
+    fn chord_new_normalizes_shift_in_chars_but_not_in_other_keys() {
         // A native event with Char('G')+shift: the canonical chord drops
         // shift (the char already encodes it) — parity with the TUI's old
         // `Chord::from_event` (now `Chord::new`'s default behavior).
@@ -705,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_chord_rechaza_tokens_multi_codepoint_sin_partir() {
+    fn parse_chord_rejects_multi_codepoint_tokens_without_splitting() {
         // A token that is NOT exactly one char (decomposed é = e+U+0301, or
         // a ZWJ emoji) is cleanly rejected, never truncated halfway.
         assert!(matches!(
@@ -719,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn resuelve_secuencias_multi_tecla() {
+    fn resolves_multi_key_sequences() {
         let preset = r#"
             [pane]
             keymap = [
@@ -749,7 +749,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_cancela_la_secuencia_pendiente() {
+    fn esc_cancels_the_pending_sequence() {
         let preset = r#"
             [pane]
             keymap = [
@@ -767,7 +767,7 @@ mod tests {
     }
 
     #[test]
-    fn prefijo_ambiguo_es_error_de_carga() {
+    fn ambiguous_prefix_is_a_load_error() {
         let preset = r#"
             [pane]
             keymap = [
@@ -795,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn lista_equivocada_en_una_capa_es_error() {
+    fn wrong_list_in_a_layer_is_an_error() {
         // User with `keymap` (instead of prepend/append): an error, not silence.
         let preset = r#"
             [pane]
@@ -825,7 +825,7 @@ mod tests {
     }
 
     #[test]
-    fn la_especificidad_de_contexto_prevalece_sobre_la_capa() {
+    fn context_specificity_prevails_over_the_layer() {
         // ADR 0006 (disambiguated in phase 4): layers merge PER context;
         // between contexts the specific one wins. A user append in [pane]
         // beats the preset's [global] keymap…
@@ -857,7 +857,7 @@ mod tests {
     }
 
     #[test]
-    fn esc_dentro_de_secuencia_es_error_de_carga() {
+    fn esc_inside_sequence_is_a_load_error() {
         let preset = r#"
             [pane]
             keymap = [{ on = ["a", "esc"], run = "cursor.up" }]
@@ -869,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn comando_desconocido_es_error_de_carga() {
+    fn unknown_command_is_a_load_error() {
         let preset = r#"
             [pane]
             keymap = [{ on = ["x"], run = "comando.inventado" }]
@@ -888,7 +888,7 @@ mod tests {
     /// could never register is diagnosable broken config, not a silently
     /// dead binding.
     #[test]
-    fn lua_prefijado_pasa_la_validacion_de_comandos() {
+    fn prefixed_lua_passes_command_validation() {
         let preset = r#"
             [pane]
             keymap = [{ on = ["x"], run = "lua:mi-comando.v2" }]
@@ -933,7 +933,7 @@ mod tests {
     }
 
     #[test]
-    fn capas_yazi_prepend_pisa_y_append_solo_anade() {
+    fn yazi_layers_prepend_overrides_and_append_only_adds() {
         let preset = r#"
             [pane]
             keymap = [
@@ -969,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn el_contexto_especifico_pisa_al_global_por_secuencia_exacta() {
+    fn specific_context_overrides_global_by_exact_sequence() {
         let preset = r#"
             [global]
             keymap = [
@@ -986,9 +986,9 @@ mod tests {
     }
 
     #[test]
-    fn capas_multiples_se_pliegan_por_precedencia() {
+    fn multiple_layers_fold_by_precedence() {
         // Layers in ASCENDING precedence: system, user.
-        const COMANDOS: &[&str] = &[
+        const COMMANDS: &[&str] = &[
             "app.quit",
             "cursor.up",
             "cursor.down",
@@ -1019,7 +1019,7 @@ mod tests {
         "#,
         )
         .unwrap();
-        let eff = Effective::build_layered(&preset, &[system, user], COMANDOS).unwrap();
+        let eff = Effective::build_layered(&preset, &[system, user], COMMANDS).unwrap();
         let mut r = Resolver::new(eff);
         assert_eq!(
             r.push(parse_chord("j").unwrap()),
@@ -1034,8 +1034,8 @@ mod tests {
     }
 
     #[test]
-    fn el_contexto_viewer_se_fusiona_para_su_pantalla() {
-        const COMANDOS: &[&str] = &["app.quit", "nav.enter", "cursor.top"];
+    fn the_viewer_context_merges_for_its_screen() {
+        const COMMANDS: &[&str] = &["app.quit", "nav.enter", "cursor.top"];
         let preset = parse_keymap(
             r#"
             [global]
@@ -1048,12 +1048,12 @@ mod tests {
         )
         .unwrap();
         // In Browse, global's q rules and enter exists.
-        let browse = Effective::build_for(&preset, &[], COMANDOS, Screen::Browse).unwrap();
+        let browse = Effective::build_for(&preset, &[], COMMANDS, Screen::Browse).unwrap();
         let mut r = Resolver::new(browse);
         assert_eq!(r.push(parse_chord("q").unwrap()), run("app.quit"));
         assert_eq!(r.push(parse_chord("enter").unwrap()), run("nav.enter"));
         // In Viewer, its specific q BEATS global's and enter does NOT exist.
-        let viewer = Effective::build_for(&preset, &[], COMANDOS, Screen::Viewer).unwrap();
+        let viewer = Effective::build_for(&preset, &[], COMMANDS, Screen::Viewer).unwrap();
         let mut r = Resolver::new(viewer);
         assert_eq!(r.push(parse_chord("q").unwrap()), run("cursor.top"));
         assert_eq!(r.push(parse_chord("enter").unwrap()), Resolution::Reset);
@@ -1064,8 +1064,8 @@ mod tests {
     /// appears ONCE with the command that wins (what the key really does,
     /// not what the preset says).
     #[test]
-    fn bindings_expuestos_reflejan_las_capas() {
-        const COMANDOS: &[&str] = &["cursor.down", "cursor.up", "cursor.top"];
+    fn exposed_bindings_reflect_the_layers() {
+        const COMMANDS: &[&str] = &["cursor.down", "cursor.up", "cursor.top"];
         let preset = parse_keymap(
             r#"
             [pane]
@@ -1084,7 +1084,7 @@ mod tests {
         "#,
         )
         .unwrap();
-        let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMANDOS).unwrap();
+        let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMMANDS).unwrap();
         let b = eff.bindings();
         // Shadowed: "j" appears ONCE and the user's prepend wins.
         let js: Vec<_> = b.iter().filter(|(seq, _)| seq == "j").collect();
@@ -1108,11 +1108,11 @@ mod tests {
     /// warning); project rebinds to builtins keep working; the same
     /// binding in a user layer DOES resolve.
     #[test]
-    fn lua_de_keymap_de_proyecto_se_descarta_con_aviso() {
+    fn project_keymap_lua_is_discarded_with_a_warning() {
         // A frontend that HOSTS Lua (ADR 0110): with no `LUA_HOST`, the
         // user binding would say it is not available and this test would
         // not prove the discard.
-        const COMANDOS: &[&str] = &["cursor.down", "cursor.up", LUA_HOST];
+        const COMMANDS: &[&str] = &["cursor.down", "cursor.up", LUA_HOST];
         let preset = parse_keymap(
             r#"
             [pane]
@@ -1129,7 +1129,7 @@ mod tests {
         // back to the preset's builtin — and is counted for the warning.
         let mut project = parse_keymap(layer).unwrap();
         project.mark_project();
-        let eff = Effective::build_layered(&preset, std::slice::from_ref(&project), COMANDOS)
+        let eff = Effective::build_layered(&preset, std::slice::from_ref(&project), COMMANDS)
             .expect("discarding is not a load error");
         assert_eq!(eff.discarded_lua_bindings(), 1, "counted for the warning");
         let mut r = Resolver::new(eff);
@@ -1141,7 +1141,7 @@ mod tests {
 
         // The SAME binding in a USER layer (unmarked): resolves normally.
         let user = parse_keymap(layer).unwrap();
-        let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMANDOS).unwrap();
+        let eff = Effective::build_layered(&preset, std::slice::from_ref(&user), COMMANDS).unwrap();
         assert_eq!(eff.discarded_lua_bindings(), 0);
         let mut r = Resolver::new(eff);
         assert_eq!(
@@ -1161,7 +1161,7 @@ mod tests {
         .unwrap();
         project.mark_project();
         let eff =
-            Effective::build_layered(&preset, std::slice::from_ref(&project), COMANDOS).unwrap();
+            Effective::build_layered(&preset, std::slice::from_ref(&project), COMMANDS).unwrap();
         assert_eq!(eff.discarded_lua_bindings(), 0);
         let mut r = Resolver::new(eff);
         assert_eq!(r.push(parse_chord("x").unwrap()), run("cursor.up"));
@@ -1172,7 +1172,7 @@ mod tests {
     /// (each frontend has its own catalogue). With "foo.bar" in the list:
     /// OK; without it, `UnknownCommand`.
     #[test]
-    fn build_valida_contra_el_known_commands_dado() {
+    fn build_validates_against_the_given_known_commands() {
         let preset = parse_keymap(
             r#"[pane]
 keymap = [{ on = ["x"], run = "foo.bar" }]"#,
@@ -1197,7 +1197,7 @@ keymap = [{ on = ["x"], run = "foo.bar" }]"#,
     /// explicit equivalent of the `Miss` the adapter can no longer produce
     /// on its own.
     #[test]
-    fn reset_rompe_la_secuencia_pendiente() {
+    fn reset_breaks_the_pending_sequence() {
         let kf = parse_keymap(
             r#"[pane]
 keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
@@ -1227,7 +1227,7 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
     /// never heard of is still fatal. The two halves of the old assertion are
     /// still here, both inverted.
     #[test]
-    fn un_comando_ajeno_sobrevive_venga_del_preset_o_de_una_capa() {
+    fn a_foreign_command_survives_whether_it_comes_from_the_preset_or_a_layer() {
         let preset = parse_keymap(
             "[pane]\nkeymap = [\n { on = [\"q\"], run = \"app.quit\" },\n { on = [\"f1\"], run = \"app.help\" },\n]\n",
         )
@@ -1270,7 +1270,7 @@ keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
     /// `lua:` with an invalid name (outside `[a-z0-9._-]{1,64}`) has no way
     /// to sneak in through the catalogue's door — a `lua:` is never in it.
     #[test]
-    fn lua_invalido_sigue_siendo_error() {
+    fn invalid_lua_is_still_an_error() {
         let preset = parse_keymap(
             r#"[pane]
 keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
@@ -1287,7 +1287,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
     /// `run` names in a layer must all come back as `UnknownCommand`
     /// diagnostics from a single call.
     #[test]
-    fn build_diagnostics_reporta_todos_los_desconocidos_en_una_pasada() {
+    fn build_diagnostics_reports_all_unknowns_in_one_pass() {
         let preset =
             parse_keymap("[pane]\nkeymap = [{ on = [\"q\"], run = \"app.quit\" }]\n").unwrap();
         let layer = parse_keymap(
@@ -1315,7 +1315,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
     /// `UnknownCommand` — this is exactly the non-convergent case #102's
     /// one-pass builder resolves by construction.
     #[test]
-    fn build_diagnostics_lua_charset_invalido_es_structural() {
+    fn build_diagnostics_lua_charset_invalid_es_structural() {
         let preset =
             parse_keymap("[pane]\nkeymap = [{ on = [\"x\"], run = \"lua:bad name!\" }]\n").unwrap();
         let diags = Effective::build_diagnostics(&preset, &[], &[], Screen::Browse);
@@ -1333,7 +1333,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
     /// A well-formed keymap yields NO diagnostics (the caller reports
     /// `keymap-ok`).
     #[test]
-    fn build_diagnostics_keymap_valido_sin_hallazgos() {
+    fn build_diagnostics_valid_keymap_without_findings() {
         let preset =
             parse_keymap("[pane]\nkeymap = [{ on = [\"q\"], run = \"app.quit\" }]\n").unwrap();
         let diags = Effective::build_diagnostics(&preset, &[], &["app.quit"], Screen::Browse);
@@ -1350,7 +1350,7 @@ keymap = [{ on = ["x"], run = "lua:Bad Name" }]"#,
     /// a `"g"` that swallows the first key of `"g g"` in one frontend and not
     /// in the other is exactly the drift K1 exists to kill.
     #[test]
-    fn un_binding_no_disponible_si_bloquea_el_prefijo() {
+    fn an_unavailable_binding_still_blocks_the_prefix() {
         let preset = parse_keymap(
             r#"[pane]
 keymap = [{ on = ["g"], run = "pane.pack" }]"#,
@@ -1380,7 +1380,7 @@ append_keymap = [{ on = ["g", "g"], run = "cursor.top" }]"#,
     /// "fix" it back: falling through is how a Total Commander user gets a
     /// surprise instead of an answer.
     #[test]
-    fn un_binding_no_disponible_sigue_ensombreciendo() {
+    fn an_unavailable_binding_still_shadows() {
         let preset = parse_keymap(
             r#"[pane]
 keymap = [{ on = ["x"], run = "pane.pack" }]
@@ -1412,7 +1412,7 @@ keymap = [{ on = ["x"], run = "app.quit" }]"#,
     /// catalogue (`raw.on.iter().map(parse_chord)`), so `BadChord` wins —
     /// structurally broken config is never declared "unavailable".
     #[test]
-    fn chord_malo_gana_al_comando_desconocido() {
+    fn bad_chord_wins_over_unknown_command() {
         let preset = parse_keymap(
             r#"[pane]
 keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
@@ -1427,7 +1427,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
     /// H1 (#24): the `dialog` context exists — a preset with [dialog]
     /// builds and resolves for `Screen::Dialog`.
     #[test]
-    fn dialog_context_se_parsea_y_construye() {
+    fn dialog_context_is_parsed_and_built() {
         let preset =
             parse_keymap("[dialog]\nkeymap = [{ on = [\"y\"], run = \"dialog.approve\" }]\n")
                 .unwrap();
@@ -1442,7 +1442,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
 
     /// A user layer extends [dialog] with prepend and WINS.
     #[test]
-    fn capa_puede_extender_dialog() {
+    fn layer_can_extend_dialog() {
         let preset =
             parse_keymap("[dialog]\nkeymap = [{ on = [\"y\"], run = \"dialog.approve\" }]\n")
                 .unwrap();
@@ -1580,7 +1580,7 @@ keymap = [{ on = ["megatecla"], run = "gui.unknown" }]"#,
     /// that no longer exists proves nothing: it was retired. When a
     /// promised capability exists again, its twin comes back with it.
     #[test]
-    fn un_comando_live_que_este_frontend_no_implementa_es_not_here() {
+    fn a_live_command_this_frontend_does_not_implement_is_not_here() {
         let preset = parse_keymap(
             r#"
 [global]
@@ -1600,7 +1600,7 @@ keymap = [ { on = ["f1"], run = "app.help" } ]
     /// `bindings()` keeps its old meaning — only what actually runs — so the
     /// help and the hints render exactly as before this change.
     #[test]
-    fn bindings_solo_devuelve_lo_ejecutable() {
+    fn bindings_only_returns_what_is_executable() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -1621,7 +1621,7 @@ keymap = [
     /// it" stop being the same event; they must not become the same event
     /// again.
     #[test]
-    fn un_nombre_fuera_del_catalogo_sigue_siendo_error() {
+    fn a_name_outside_the_catalogue_is_still_an_error() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -1639,7 +1639,7 @@ keymap = [ { on = ["f5"], run = "pane.copyy" } ]
     /// falling through is how a Total Commander user gets a surprise instead
     /// of an answer.
     #[test]
-    fn un_binding_no_disponible_ensombrece_al_de_global() {
+    fn an_unavailable_binding_shadows_the_global_one() {
         let preset = parse_keymap(
             r#"
 [global]
@@ -1663,7 +1663,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// Unavailable bindings take part in the prefix-free check: the shape of
     /// the map is a load-time property (ADR 0006), independent of what runs.
     #[test]
-    fn un_binding_no_disponible_sigue_contando_para_prefix_free() {
+    fn an_unavailable_binding_still_counts_toward_prefix_free() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -1682,7 +1682,7 @@ keymap = [
     /// outcome. `Reset` would be indistinguishable from an unbound key, which is
     /// precisely the silence this work exists to remove.
     #[test]
-    fn una_tecla_no_disponible_resuelve_a_unavailable() {
+    fn an_unavailable_key_resolves_to_unavailable() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -1709,7 +1709,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// The message must NAME the command and, when the reason exists, carry it —
     /// a "not available" with no subject is the silence with extra steps.
     #[test]
-    fn el_mensaje_de_no_disponible_nombra_el_comando_y_el_motivo() {
+    fn the_not_available_message_names_the_command_and_the_reason() {
         let m = unavailable_message(
             "pane.pack",
             Availability::NotBuilt {
@@ -1730,10 +1730,10 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// locale (`Lang::from_env`), so exactly one of the two is pinned and
     /// which one depends on the developer's `LANG`. A locale that dropped
     /// `{ $issue }` would silently lose the issue number — undoing, at the
-    /// last step, precisely what `todo_planned_tiene_motivo_e_issue` exists
+    /// last step, precisely what `every_planned_one_has_a_reason_and_an_issue` exists
     /// to guarantee. Pin both explicitly.
     #[test]
-    fn el_mensaje_de_no_disponible_lleva_los_tres_argumentos_en_ambos_locales() {
+    fn the_not_available_message_carries_the_three_arguments_in_both_locales() {
         for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
             let m = norte_i18n::ta_in(
                 lang,
@@ -1761,7 +1761,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// the count and which number went nowhere. "A count was ignored" tells
     /// the user nothing they can act on.
     #[test]
-    fn el_mensaje_de_contador_ignorado_nombra_comando_y_numero() {
+    fn the_ignored_counter_message_names_command_and_number() {
         let m = count_ignored_message("app.quit", 3);
         assert!(m.contains("app.quit"), "{m}");
         assert!(m.contains('3'), "{m}");
@@ -1772,7 +1772,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// the developer's `LANG`. A locale that dropped `{ $count }` would lose
     /// the number in half the world.
     #[test]
-    fn el_mensaje_de_contador_ignorado_lleva_los_dos_argumentos_en_ambos_locales() {
+    fn the_ignored_counter_message_carries_both_arguments_in_both_locales() {
         for lang in [norte_i18n::Lang::En, norte_i18n::Lang::Es] {
             let m = norte_i18n::ta_in(
                 lang,
@@ -1793,7 +1793,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// halves: the catalogue is ASCII, and a hostile `run` classifies as
     /// `UnknownCommand` rather than surfacing as `Unavailable`.
     #[test]
-    fn un_run_hostil_es_error_de_carga_jamas_una_indisponibilidad() {
+    fn a_hostile_run_is_a_load_error_never_an_unavailability() {
         for d in CATALOGUE {
             assert!(
                 d.name.bytes().all(|b| b.is_ascii_lowercase()
@@ -1865,7 +1865,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// reorders the whole status line. Trivially true today; it fails the day
     /// the chord arrives unmasked, which is the entire point.
     #[test]
-    fn el_mensaje_de_no_disponible_jamas_lleva_un_hazard_de_terminal() {
+    fn the_not_available_message_never_carries_a_terminal_hazard() {
         for d in CATALOGUE {
             for why in [
                 Availability::NotHere,
@@ -1888,7 +1888,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// The same tripwire for the SHORT form (K3b), which is now the one that
     /// reaches a pipe (`norte help keys`) and a JSON field, in both locales.
     #[test]
-    fn el_mensaje_corto_tampoco_lleva_un_hazard_de_terminal() {
+    fn the_short_message_also_does_not_carry_a_terminal_hazard() {
         for d in CATALOGUE {
             let why = match d.status {
                 Status::Live => Availability::NotHere,
@@ -1912,7 +1912,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// what the key does. A later edit back to the bare reason would restore
     /// exactly the confusion K3b removed, and would otherwise be green.
     #[test]
-    fn el_mensaje_corto_dice_que_no_esta_construido_en_ambos_locales() {
+    fn the_short_message_says_it_is_not_built_in_both_locales() {
         let why = Availability::NotBuilt {
             reason: "keymap-reason-archive-write",
             issue: 132,
@@ -1964,7 +1964,7 @@ keymap = [ { on = ["alt+f1"], run = "pane.pack" } ]
     /// `5j` runs the command five times. The count rides WITH the command; the
     /// frontend is what repeats, so no command signature changes.
     #[test]
-    fn un_contador_llega_con_el_comando() {
+    fn a_counter_arrives_with_the_command() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -1996,9 +1996,9 @@ keymap = [ { on = ["j"], run = "cursor.down" } ]
     /// meaning "go to line 12" would need the count to reach the command,
     /// which is exactly the design this task rejected. A count over
     /// `cursor.top` is therefore [`Count::Ignored`], pinned by
-    /// `un_contador_sobre_un_comando_sin_contador_no_se_traga`.
+    /// `a_counter_on_a_command_without_a_counter_is_not_swallowed`.
     #[test]
-    fn los_digitos_se_acumulan_y_sobreviven_a_una_secuencia() {
+    fn digits_accumulate_and_survive_a_sequence() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2027,7 +2027,7 @@ keymap = [ { on = ["g", "j"], run = "cursor.down" } ]
     /// sequence whose second chord is a digit, and the count would silently
     /// eat it.
     #[test]
-    fn un_digito_a_mitad_de_secuencia_es_una_tecla() {
+    fn a_digit_mid_sequence_is_a_key() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2053,7 +2053,7 @@ keymap = [ { on = ["g", "5"], run = "cursor.down" } ]
     /// A count over a command the catalogue says takes none is NOT swallowed:
     /// the command runs once and the frontend is told the count was ignored.
     #[test]
-    fn un_contador_sobre_un_comando_sin_contador_no_se_traga() {
+    fn a_counter_on_a_command_without_a_counter_is_not_swallowed() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2079,7 +2079,7 @@ keymap = [ { on = ["q"], run = "app.quit" } ]
     /// vim's "go to the first column" and mc's mask keys rely on. It does
     /// accumulate once a count is open: `10` is ten.
     #[test]
-    fn el_cero_no_abre_un_contador_pero_si_acumula() {
+    fn zero_does_not_open_a_counter_but_it_does_accumulate() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2118,7 +2118,7 @@ keymap = [
     /// Four digits is the ceiling. A fifth is dropped rather than wrapping the
     /// accumulator — 99999 must not silently become something else.
     #[test]
-    fn el_contador_topa_en_cuatro_digitos() {
+    fn the_counter_caps_at_four_digits() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2145,7 +2145,7 @@ keymap = [ { on = ["j"], run = "cursor.down" } ]
     /// Esc clears the count as well as the pending sequence. A count left
     /// stuck to the next keystroke is the worst failure this feature can have.
     #[test]
-    fn esc_limpia_el_contador() {
+    fn esc_clears_the_counter() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2171,7 +2171,7 @@ keymap = [ { on = ["j"], run = "cursor.down" } ]
     /// An unbound key clears the count too — otherwise a typo leaves a number
     /// glued to whatever you press next.
     #[test]
-    fn una_tecla_sin_binding_limpia_el_contador() {
+    fn a_key_without_a_binding_clears_the_counter() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2198,7 +2198,7 @@ keymap = [ { on = ["j"], run = "cursor.down" } ]
     /// equivalent of a miss) clears the count for the same reason an unbound
     /// key does: a number must never outlive the keystroke that ended it.
     #[test]
-    fn reset_limpia_el_contador() {
+    fn reset_clears_the_counter() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2226,7 +2226,7 @@ keymap = [ { on = ["j"], run = "cursor.down" } ]
     /// Without the preset flag a digit is just a key: `orthodox` and `cua`
     /// must not grow counts behind their users' backs.
     #[test]
-    fn sin_el_flag_del_preset_un_digito_es_una_tecla() {
+    fn without_the_presets_flag_a_digit_is_a_key() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -2248,7 +2248,7 @@ keymap = [ { on = ["5"], run = "cursor.down" } ]
     /// A digit with a modifier was never a count: `ctrl+5` is an ordinary
     /// chord, even with counts on.
     #[test]
-    fn un_digito_con_modificador_no_es_un_contador() {
+    fn a_digit_with_a_modifier_is_not_a_counter() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2272,7 +2272,7 @@ keymap = [ { on = ["ctrl+5"], run = "cursor.down" } ]
     /// The count POLICY belongs to the preset: a user layer that could flip it
     /// on would silently change what every digit key means.
     #[test]
-    fn una_capa_de_usuario_no_puede_encender_los_contadores() {
+    fn a_user_layer_cannot_turn_on_the_counters() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -2301,7 +2301,7 @@ prepend_keymap = [ { on = ["k"], run = "cursor.up" } ]
     /// not silent precedence. Same spirit as prefix-free: the conflict
     /// surfaces when the file loads, not when a finger slips.
     #[test]
-    fn un_digito_ligado_con_contadores_es_error_de_carga() {
+    fn a_digit_bound_with_counters_is_a_load_error() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2321,7 +2321,7 @@ keymap = [ { on = ["5"], run = "cursor.down" } ]
     /// `0` is exempt, because a count never starts with zero — binding it
     /// stays legal even with counts on.
     #[test]
-    fn el_cero_sigue_siendo_ligable_con_contadores() {
+    fn zero_is_still_bindable_with_counters() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2343,7 +2343,7 @@ keymap = [ { on = ["0"], run = "cursor.top" } ]
     /// `is_numeric()` in either path would make a key that loads as a binding
     /// and then resolves as a count, or the reverse.
     #[test]
-    fn un_digito_no_ascii_es_una_tecla_normal_en_los_dos_caminos() {
+    fn a_non_ascii_digit_is_a_normal_key_on_both_paths() {
         for exotic in ['\u{0665}', '\u{FF15}'] {
             let preset = parse_keymap(&format!(
                 "counts = true\n\n[pane]\nkeymap = [ {{ on = [\"{exotic}\"], run = \"cursor.down\" }} ]\n"
@@ -2367,7 +2367,7 @@ keymap = [ { on = ["0"], run = "cursor.top" } ]
     /// chord only, exactly like the accumulator, which never opens a count
     /// with a sequence in flight.
     #[test]
-    fn un_digito_a_mitad_de_secuencia_sigue_siendo_ligable_con_contadores() {
+    fn a_digit_mid_sequence_is_still_bindable_with_counters() {
         let preset = parse_keymap(
             r#"
 counts = true
@@ -2385,7 +2385,7 @@ keymap = [ { on = ["g", "5"], run = "cursor.top" } ]
     /// K2b imports four foreign keymaps, which is when this stops being
     /// theoretical.
     #[test]
-    fn un_preset_no_puede_repinar_tab() {
+    fn a_preset_cannot_rebind_tab() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -2401,7 +2401,7 @@ keymap = [ { on = ["tab"], run = "cursor.down" } ]
     /// and no bare `tab` would leave Tab sitting pending, which loses pane
     /// switching just as completely as rebinding it (specification §12).
     #[test]
-    fn tab_tampoco_puede_abrir_una_secuencia() {
+    fn tab_cannot_open_a_sequence_either() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -2417,7 +2417,7 @@ keymap = [ { on = ["tab", "j"], run = "cursor.down" } ]
     /// binds `tab` to `dialog.pane` inside `[dialog]`, and that is not pane
     /// switching — blanket-banning the key would break the dialogs we ship.
     #[test]
-    fn tab_sigue_siendo_libre_en_el_contexto_de_dialogo() {
+    fn tab_is_still_free_in_the_dialog_context() {
         let preset = parse_keymap(
             r#"
 [dialog]
@@ -2432,7 +2432,7 @@ keymap = [ { on = ["tab"], run = "dialog.pane" } ]
     /// A user layer cannot take Tab either — the rule is about the effective
     /// map, not about who wrote the line.
     #[test]
-    fn una_capa_de_usuario_tampoco_puede_tomar_tab() {
+    fn a_user_layer_cannot_take_tab_either() {
         let preset = parse_keymap(
             r#"
 [pane]
@@ -2456,7 +2456,7 @@ prepend_keymap = [ { on = ["tab"], run = "cursor.down" } ]
     /// rules are reported by the diagnostic walk too, which is the contract
     /// [`check_binding`]'s rustdoc states for every load-time rule.
     #[test]
-    fn el_diagnostico_tambien_reporta_las_dos_reglas_nuevas() {
+    fn the_diagnostic_also_reports_the_two_new_rules() {
         let digito = parse_keymap(
             r#"
 counts = true
@@ -2496,7 +2496,7 @@ keymap = [ { on = ["tab"], run = "cursor.down" } ]
     /// [`check_binding`]'s rustdoc states for every load-time rule: they share
     /// the checks precisely so they cannot drift.
     ///
-    /// `el_diagnostico_tambien_reporta_las_dos_reglas_nuevas` proves less than
+    /// `the_diagnostic_also_reports_the_two_new_rules` proves less than
     /// it looks. It pins two keymaps and asks only whether SOMETHING
     /// `Structural` came back mentioning `5` or `tab` — a `build_diagnostics`
     /// that had lost `check_sacred` but kept `check_prefix_free` would still
@@ -2508,7 +2508,7 @@ keymap = [ { on = ["tab"], run = "cursor.down" } ]
     /// both with different arguments (`check_digits_free(.., false)` in the
     /// diagnostic walk, say).
     #[test]
-    fn los_dos_cargadores_denuncian_el_mismo_defecto() {
+    fn both_loaders_report_the_same_defect() {
         const KNOWN: &[&str] = &["app.quit", "cursor.down", "cursor.top", "pane.switch"];
         // (name, preset, user layer)
         let cases: &[(&str, &str, Option<&str>)] = &[
@@ -2620,7 +2620,7 @@ keymap = [
 
     /// The three bundled presets must survive both rules unchanged.
     #[test]
-    fn los_presets_de_fabrica_pasan_las_dos_reglas_nuevas() {
+    fn the_factory_presets_pass_both_new_rules() {
         for name in presets::NAMES {
             let src = presets::source(name).expect("NAMES resolves");
             let kf = parse_keymap(src).expect("preset parses");
@@ -2647,7 +2647,7 @@ keymap = [
     /// norte has on top. This test is the line that stops that in the next
     /// preset that comes in.
     #[test]
-    fn todo_preset_alcanza_las_superficies_propias_de_norte() {
+    fn every_preset_reaches_nortes_own_surfaces() {
         // `app.help` is in the list on purpose even though all seven have
         // it today: it is the one most missed when it is missing, and the
         // test has to say so before the user does.
@@ -2680,14 +2680,14 @@ keymap = [
     /// three times (#228, #250, and the nine `ctrl+<UPPERCASE>` six presets
     /// carried that no terminal delivers).
     ///
-    /// Kept apart from `todo_preset_alcanza_las_superficies_propias_de_norte`
+    /// Kept apart from `every_preset_reaches_nortes_own_surfaces`
     /// because the argument is different: that one is about screens no
     /// original had; this is a family the originals DO have — Krusader
     /// documents it whole — and that none of the seven can afford to have
     /// half of.
     #[test]
-    fn los_siete_presets_marcan_moviendose() {
-        const FAMILIA: &[&str] = &[
+    fn all_seven_presets_mark_while_moving() {
+        const FAMILY: &[&str] = &[
             "mark.toggle-up",
             "mark.toggle-page-down",
             "mark.toggle-page-up",
@@ -2701,7 +2701,7 @@ keymap = [
             let kf = parse_keymap(src).expect("preset parses");
             let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-            for cmd in FAMILIA {
+            for cmd in FAMILY {
                 assert!(
                     eff.bindings().iter().any(|(_, c)| c == cmd),
                     "preset {name}: `{cmd}` has no key — the marking-while-moving \
@@ -2715,7 +2715,7 @@ keymap = [
     /// oversight, and here the two are told apart** (#228).
     ///
     /// The test next to this one —
-    /// [`todo_preset_alcanza_las_superficies_propias_de_norte`] — always
+    /// [`every_preset_reaches_nortes_own_surfaces`] — always
     /// demands a key, because no original had a screen of norte's own and
     /// silencing it means losing the screen. These six are different: they
     /// are commands the originals COULD have had, so inventing a chord for
@@ -2726,10 +2726,10 @@ keymap = [
     /// goes in the table with its reason; the preset tells it at length in
     /// its header. Adding a preset, or losing a key, turns RED here.
     #[test]
-    fn cada_hueco_del_nucleo_en_un_preset_esta_decidido() {
+    fn every_core_slot_in_a_preset_is_decided() {
         /// The six from #228's inventory: the ones the catalogue calls core
         /// and that the four imported presets could have brought.
-        const NUCLEO: &[&str] = &[
+        const CORE: &[&str] = &[
             "pane.compare-dirs",
             "pane.sync-dirs",
             "pane.rename",
@@ -2798,7 +2798,7 @@ keymap = [
             let kf = parse_keymap(src).expect("preset parses");
             let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
-            for cmd in NUCLEO {
+            for cmd in CORE {
                 let bound = eff.bindings().iter().any(|(_, c)| c == cmd);
                 let accepted = ACEPTADOS.iter().any(|(p, c, _)| p == name && c == cmd);
                 assert!(
@@ -2830,7 +2830,7 @@ keymap = [
     /// stops counting. K2b lands four more imported keymaps; this is the line
     /// that says which of them may flip the flag.
     #[test]
-    fn solo_vim_trae_los_contadores_encendidos() {
+    fn only_vim_ships_with_counters_turned_on() {
         let known = preset_commands(Screen::Browse);
         let known: Vec<&str> = known.iter().map(String::as_str).collect();
         for name in presets::NAMES {

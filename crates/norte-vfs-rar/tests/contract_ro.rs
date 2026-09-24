@@ -40,10 +40,10 @@ fn hostile_names() -> Vec<Vec<u8>> {
 fn canonical_rar() -> Vec<u8> {
     let mut smith = RarSmith::new()
         .dir(b"docs")
-        .file(b"docs/hello.txt", b"hello norte\n")
+        .file(b"docs/hello.txt", b"hola norte\n")
         .dir(b"docs/sub")
         .file(b"docs/sub/nested.bin", b"\x00\x01\x02\xff")
-        .file(b"empty.txt", b"")
+        .file(b"vacio.txt", b"")
         .dir(b"hostile");
     for name in hostile_names() {
         let mut full = b"hostile/".to_vec();
