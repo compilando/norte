@@ -129,11 +129,21 @@ un-undone until the reader deals with it. That is new behaviour, it is the safe
 direction, and it has to be said out loud rather than discovered: a reader told
 "identity does not see edits" would conclude the opposite of what happens.
 
-Whether a node the reader replaced should *halt* the session or be a counted
-skip that continues is a real question, and it is deliberately not answered
-here: the module blocks on every drift today — a copied file the reader deleted
-already halts an undo — so this change keeps that contract rather than carving
-an exception into it for one case. Revisiting it is #371.
+**So it is a counted skip, not a halt** (#371, decided immediately after and
+folded in). The first version blocked, on the grounds that the module blocks on
+every drift and carving an exception for one case needed its own decision. It
+got one, and the answer was the other way: a node the reader replaced is *the
+reader's own action*, not a state nobody can explain, and it is the most common
+drift there is. Halting would mean that editing one file of a two-thousand-file
+copy leaves the other 1999 undone. "I left it where it was and I am telling
+you" describes that better than "I stopped": the entry is skipped, the node
+stays, `UndoReport::skipped_not_ours` counts it (protocol 0.84.0) and the
+session carries on.
+
+A created *directory* that ends up holding one of those skipped files then hits
+the existing `has_children` guard and does block — and there the block is
+right, because "this folder has something in it that I did not put there" is
+something the reader has to look at.
 
 **Inode reuse is the remaining hole, and it is not closed.** `dev:ino` is not
 generation-safe. Delete a created file and create another at the same path and

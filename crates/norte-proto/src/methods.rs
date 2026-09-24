@@ -2294,6 +2294,12 @@ pub const CONNECTION_FAILURE_REASONS: &[&str] = &[
     "auth-rejected",
     "no-user",
     "agent",
+    // 0.84.0 (#370): la clave RSA tiene un módulo por debajo del mínimo. Es un
+    // fallo de clave que SÍ se cuenta, al revés que los demás, porque el
+    // remedio se sigue de la frase: conseguir otra clave. Un cliente N-1 no
+    // conoce la cadena y la pinta como desconocida, que sigue siendo mejor que
+    // «permiso denegado» a secas.
+    "rsa-too-small",
 ];
 /// `daemon.going_away` — el daemon avisa de que se va ANTES de dejar de
 /// aceptar (0.46.0).
@@ -8433,6 +8439,23 @@ pub struct PolicyUndoReportResult {
     /// (#65): el nodo SIGUE en el destino — deshacerlo habría sido un borrado
     /// permanente y el undo jamás destruye de forma irrecuperable.
     pub skipped_created_no_trash: u64,
+    /// Reversas de `Created` saltadas porque lo que hay en esa ruta **no es el
+    /// nodo que esa entrada creó** (0.84.0, #369/#371, ADR 0152).
+    ///
+    /// El nodo se queda y la sesión SIGUE. Es una acción del lector —él puso
+    /// ahí otra cosa— y no una divergencia que obligue a pararlo todo: si esto
+    /// bloqueara, editar un fichero copiado con cualquier editor que guarde de
+    /// forma atómica —vim, VS Code, `sed -i`, todos cambian el inodo— dejaría
+    /// sin deshacer la copia entera por un fichero.
+    ///
+    /// Es un CONTADOR y no una lista, como sus dos vecinos de arriba: las
+    /// rutas de lo que no volvió se quedan hoy dentro del proceso y no cruzan
+    /// el cable —un `VPath` de wire puede llevar userinfo (regla 10) y sacarlo
+    /// pide redactarlo antes—. Un cliente N-1 no ve este contador y lee un
+    /// undo que revirtió menos de lo que esperaba sin saber por qué, que es lo
+    /// que veía ANTES de 0.84.0 para cualquier motivo.
+    #[serde(default)]
+    pub skipped_not_ours: u64,
     /// Primer paso donde el LIFO paró (estricto), si lo hubo. El undo va de
     /// la entrada MÁS NUEVA hacia atrás: lo posterior al bloqueo en el
     /// journal ya se deshizo; lo ANTERIOR a él en el journal (seq menor)

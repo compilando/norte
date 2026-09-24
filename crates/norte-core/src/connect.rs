@@ -129,6 +129,14 @@ pub enum ConnectionFailureReason {
     NoUser,
     /// El agente SSH no pudo autenticar.
     Agent,
+    /// La clave RSA tiene un módulo por debajo del mínimo (#370).
+    ///
+    /// Lleva razón propia y no calla como el resto de los fallos de clave
+    /// porque es el único de ellos que el lector puede ACCIONAR sin mirar un
+    /// log: no es «no pude», es «esta clave es demasiado corta, pide otra». Sin
+    /// la frase se lee como «permiso denegado», que le haría buscar en el sitio
+    /// equivocado — la contraseña, el usuario, el servidor.
+    RsaTooSmall,
 }
 
 impl ConnectionFailureReason {
@@ -147,6 +155,7 @@ impl ConnectionFailureReason {
             Self::AuthRejected => "auth-rejected",
             Self::NoUser => "no-user",
             Self::Agent => "agent",
+            Self::RsaTooSmall => "rsa-too-small",
         }
     }
 
@@ -165,6 +174,7 @@ impl ConnectionFailureReason {
         Self::AuthRejected,
         Self::NoUser,
         Self::Agent,
+        Self::RsaTooSmall,
     ];
 }
 
@@ -949,6 +959,9 @@ fn razon_de(e: &norte_connect::ConnectError) -> Option<ConnectionFailureReason> 
         // o no dice nada accionable. Fundirlos borra la razón de cada uno, que
         // es justo lo que hay que releer al añadir una variante.
         C::HostKeyUnknown { .. } | C::HostKeyMismatch { .. } => None,
+        // Sí la cuenta, al revés que sus vecinas: «tu clave es demasiado
+        // corta» es accionable y «permiso denegado» manda a buscar donde no es.
+        C::RsaTooSmall { .. } => Some(R::RsaTooSmall),
         C::Config(_)
         | C::InvalidUrl(_)
         | C::Io(_)

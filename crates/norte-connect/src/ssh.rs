@@ -404,6 +404,32 @@ async fn rsa_hash(
 /// Carga la clave privada de cliente (con `~` expandido) y aplica la política
 /// de algoritmos: ed25519 siempre (ADR 0015 E); RSA solo con `allow_rsa`
 /// (ADR 0150), porque firmar con él es el camino de RUSTSEC-2023-0071.
+/// El módulo RSA más pequeño que norte firma, aun con `allow_rsa` (#370).
+///
+/// 2048 porque es el suelo de RFC 8332 §3 para `rsa-sha2-*`, el que NIST SP
+/// 800-57 dejó cuando retiró 1024 en 2013, y el que OpenSSH impone desde 2017
+/// al generar. Por debajo no es «más débil»: es una clave que nadie debería
+/// seguir usando para autenticarse contra nada.
+///
+/// **Es un límite aparte del que compra `allow_rsa`, y por eso el opt-in no lo
+/// levanta.** ADR 0150 acepta un riesgo nombrado —el canal lateral de tiempos
+/// de RUSTSEC-2023-0071— que es idéntico con 1024 bits y con 4096. Un módulo
+/// corto es otra cosa, la ADR no la menciona, y quien firmó el opt-in no la
+/// aceptó: se la llevaba en silencio.
+const RSA_MINIMO_BITS: usize = 2048;
+
+/// Los bits del módulo de una clave RSA. `None` si no es RSA o no se puede
+/// mirar.
+///
+/// Sale de la longitud en BYTES del módulo, así que redondea hacia arriba
+/// hasta siete bits. Para lo que se usa —comparar contra 2048, que es múltiplo
+/// de 8— eso no cambia ningún veredicto: una clave de 2048 da exactamente 2048
+/// y una de 1024 da exactamente 1024.
+fn bits_del_modulo(key: &PrivateKey) -> Option<usize> {
+    let rsa = key.public_key().key_data().rsa()?;
+    Some(rsa.n().as_positive_bytes()?.len() * 8)
+}
+
 async fn load_client_key(
     path: &Path,
     passphrase: Option<&Secret>,
@@ -431,7 +457,22 @@ async fn load_client_key(
     })?;
     match key.algorithm() {
         Algorithm::Ed25519 => Ok(key),
-        Algorithm::Rsa { .. } if allow_rsa => Ok(key),
+        Algorithm::Rsa { .. } if allow_rsa => {
+            // El opt-in abre RSA, no abre CUALQUIER RSA (#370). Ver
+            // `RSA_MINIMO_BITS`: es el límite que la ADR 0150 quiso poner y se
+            // le olvidó escribir.
+            match bits_del_modulo(&key) {
+                Some(bits) if bits < RSA_MINIMO_BITS => Err(ConnectError::RsaTooSmall {
+                    path: expanded,
+                    bits,
+                    minimo: RSA_MINIMO_BITS,
+                }),
+                // Sin poder mirar el módulo no se afirma nada y se deja pasar:
+                // el riesgo que `allow_rsa` ya compró sigue siendo el mismo, y
+                // negarse aquí rompería una clave buena por no saber leerla.
+                _ => Ok(key),
+            }
+        }
         other => Err(ConnectError::KeyUnsupported {
             path: expanded,
             algo: other.to_string(),

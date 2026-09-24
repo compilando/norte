@@ -220,21 +220,21 @@ independently through `PROTOCOL_VERSION`.
   fails (above) and leaves entries naming paths its bytes never reached. The
   natural next move is to recreate the folder and repeat the copy — and then
   undoing the *failed* batch trashed the good copy. A delete caused by an
-  operation that did not happen. Now the undo stops at the first entry that
-  does not match and says the path is occupied by something else. The same
-  protection covers the older, unreported case: replace a file by hand after a
-  successful copy, undo the copy, and your replacement stays.
+  operation that did not happen. Now the undo leaves those files alone, counts
+  them (`skipped_not_ours`) and carries on. The same protection covers the
+  older, unreported case: replace a file by hand after a successful copy, undo
+  the copy, and your replacement stays.
   The identity is read through the same descriptor the bytes went through, not
   by path, because in this exact case the path no longer leads there — asking
   by path leaves the entries that most need identity without any.
-  The refusal has its own subtype, `ConflictKind::NotTheSameNode` (protocol
-  0.84.0), and not the generic "already exists": on an undo, "it already
-  exists" is a tautology, while "that is not yours" is the one thing you can
-  act on.
-  **Expect it after an ordinary edit.** Editors that save atomically — vim,
-  VS Code, Emacs, `sed -i` — write a temp file and rename it over the target,
-  which is a new node. So editing a copied file and then undoing the copy now
-  stops the undo at that file and leaves everything older undone. An edit
+  It is a counted skip and not a halt (#371), because the common case is not
+  sabotage: editors that save atomically — vim, VS Code, Emacs, `sed -i` —
+  write a temp file and rename it over the target, which is a new node. So
+  editing one file of a two-thousand-file copy and then undoing it leaves that
+  one alone and undoes the rest, instead of stopping dead. A created folder
+  that ends up holding one of those files does block, on the older
+  "this folder has something I did not put there" guard, and there the block is
+  right. An edit
   written *in place* keeps the node and is invisible to the check, which is why
   the undo still goes through the trash and still refuses to fall back to a
   permanent delete where there is none (#65).

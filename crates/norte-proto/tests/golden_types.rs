@@ -338,12 +338,6 @@ fn golden_error() {
                 },
             ),
             (
-                "conflict_not_the_same_node",
-                Error::Conflict {
-                    conflict: ConflictKind::NotTheSameNode,
-                },
-            ),
-            (
                 "conflict_stale_revision",
                 Error::Conflict {
                     conflict: ConflictKind::StaleRevision,
@@ -3235,6 +3229,7 @@ fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
             undone: 3,
             skipped_irreversible: 1,
             skipped_created_no_trash: 2,
+            skipped_not_ours: 1,
             blocked: Some(UndoBlocked {
                 seq: 41,
                 error: norte_proto::Error::Conflict {
@@ -3275,6 +3270,7 @@ fn check_methods_session(fixtures: &BTreeMap<String, Value>) {
             undone: 4,
             skipped_irreversible: 0,
             skipped_created_no_trash: 0,
+            skipped_not_ours: 0,
             blocked: None,
             batch_stuck: None,
             compensations_lost: 0,
@@ -4915,11 +4911,12 @@ fn method_names_frozen() {
     assert_eq!(methods::TASK_RESUME, "task.resume");
     // 0.83.0: la cola en serie (ADR 0149).
     assert_eq!(methods::TASK_MOVE, "task.move");
-    // 0.84.0: ningún método nuevo — dos subtipos de conflicto.
+    // 0.84.0: ningún método nuevo. Un subtipo de conflicto,
     // `ConflictKind::DestinationGone` (ADR 0151), para cuando el directorio de
-    // destino deja de estar donde se pidió con la tarea ya en marcha; y
-    // `ConflictKind::NotTheSameNode` (ADR 0152), para cuando el deshacer de una
-    // creación se encuentra en esa ruta un nodo que no es el que creó.
+    // destino deja de estar donde se pidió con la tarea ya en marcha; un
+    // contador en el informe del undo, `skipped_not_ours` (ADR 0152, #371); un
+    // motivo de fallo de conexión, `rsa-too-small` (#370); y `unusable` en
+    // `connection.list`, para las entradas que el daemon no supo leer (#365).
     assert_eq!(norte_proto::PROTOCOL_VERSION, "0.84.0");
 }
 

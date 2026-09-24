@@ -1435,6 +1435,7 @@ async fn un_undo_terminado_pide_su_informe_y_dice_lo_que_no_volvio() {
             undone: 3,
             skipped_irreversible: 1,
             skipped_created_no_trash: 0,
+            skipped_not_ours: 0,
             blocked: Some(norte_proto::methods::UndoBlocked {
                 seq: 42,
                 error: norte_proto::Error::Conflict {
@@ -1569,6 +1570,7 @@ async fn un_undo_limpio_no_abre_nada() {
             undone: 4,
             skipped_irreversible: 0,
             skipped_created_no_trash: 0,
+            skipped_not_ours: 0,
             blocked: None,
             batch_stuck: None,
             compensations_lost: 0,

@@ -51,6 +51,7 @@ pub(crate) fn report_to_proto(r: UndoReport) -> norte_proto::methods::PolicyUndo
         undone: r.undone,
         skipped_irreversible: r.skipped_irreversible,
         skipped_created_no_trash: r.skipped_created_no_trash,
+        skipped_not_ours: r.skipped_not_ours,
         blocked: r
             .blocked
             .map(|(seq, error)| methods::UndoBlocked { seq, error }),
@@ -88,6 +89,10 @@ pub struct UndoReport {
     /// posterior a la creación. El nodo se queda; quien quiera borrarlo lo
     /// pide explícito (`fs.delete`).
     pub skipped_created_no_trash: u64,
+    /// Reversas de `Created` saltadas porque lo que hay en esa ruta NO es el
+    /// nodo que esa entrada creó (#369/#371, ADR 0152). El nodo se queda y la
+    /// sesión sigue.
+    pub skipped_not_ours: u64,
     /// Primer paso bloqueado (drift/conflicto): `seq` original + motivo. La
     /// sesión para ahí (estricto).
     ///
@@ -180,16 +185,6 @@ pub(crate) async fn is_free(provider: &dyn Provider, p: &VPath) -> Result<bool, 
 
 const OCCUPIED: Error = Error::Conflict {
     conflict: ConflictKind::Exists,
-};
-
-/// «Ahí hay algo, pero no es lo que esta entrada creó» (#369, ADR 0152).
-///
-/// Tiene subtipo propio y no [`OCCUPIED`] porque es lo único que el lector
-/// puede accionar: sobre un deshacer, «ya existe» es una perogrullada —claro
-/// que existe, es lo que iba a borrar— mientras que «no es tuyo» le dice que
-/// vaya a mirar ese fichero, que probablemente lo puso él.
-const NO_ES_EL_SUYO: Error = Error::Conflict {
-    conflict: ConflictKind::NotTheSameNode,
 };
 
 /// ¿`a` y `b` son el MISMO nodo? (#274)
@@ -289,6 +284,17 @@ pub(crate) enum Reverted {
     /// queda (#65). Sin compensación (no hubo efecto); un undo posterior
     /// volverá a encontrarla — honesto.
     SkippedNoTrash,
+    /// Reversa de `Created` cuyo nodo NO es el que la entrada creó (#371):
+    /// saltada, el nodo se queda, y la sesión SIGUE.
+    ///
+    /// No bloquea, y eso es una decisión. El módulo bloquea ante cualquier
+    /// deriva porque una deriva es un estado que nadie explica; esto sí tiene
+    /// explicación —lo puso el lector— y es la deriva más común que hay: todo
+    /// editor que guarde de forma atómica cambia el inodo, así que editar UN
+    /// fichero de una copia dejaría sin deshacer los otros mil novecientos
+    /// noventa y nueve. «Lo dejé donde estaba y te lo digo» describe eso mejor
+    /// que «paré».
+    SkippedNotOurs,
     /// Bloqueada por drift/conflicto. `seq` es la entrada CONCRETA que no se
     /// pudo revertir — en un lote, la del paso que se atascó, no la del lote
     /// entero: es la que el humano tiene que ir a mirar.
@@ -455,7 +461,7 @@ pub(crate) async fn revert_entry(
                             seq = entry.seq,
                             "lo que hay en esa ruta no es lo que esta entrada creó: se deja",
                         );
-                        return Ok(Reverted::blocked(entry.seq, NO_ES_EL_SUYO));
+                        return Ok(Reverted::SkippedNotOurs);
                     }
                     Ok(_) => {}
                     Err(e) => return Ok(Reverted::blocked(entry.seq, e)),
@@ -1602,6 +1608,10 @@ pub(crate) async fn revert_sync_batch(
                     .lock()
                     .expect("undo report lock")
                     .skipped_created_no_trash += 1;
+                note_unreverted(report, &entry.path);
+            }
+            Ok(Reverted::SkippedNotOurs) => {
+                report.lock().expect("undo report lock").skipped_not_ours += 1;
                 note_unreverted(report, &entry.path);
             }
             // Drift en UNA entrada. Se nombra la primera (la de `seq` mayor, o

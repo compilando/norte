@@ -545,6 +545,7 @@ failed-reason-secret-store = no se pudo leer el almacén de secretos
 failed-reason-auth-rejected = el servidor rechazó las credenciales
 failed-reason-no-user = falta el usuario
 failed-reason-agent = el agente SSH no pudo autenticar
+failed-reason-rsa-too-small = la clave RSA es demasiado corta (mínimo 2048 bits); pide una nueva
 failed-reason-unknown = motivo desconocido
 status-archive-skipped = ⚠ { $n } entradas omitidas (nombres hostiles/límites)
 status-names-encoding = nombres: { $enc }

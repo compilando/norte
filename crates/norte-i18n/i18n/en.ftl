@@ -544,6 +544,7 @@ failed-reason-secret-store = the secret store could not be read
 failed-reason-auth-rejected = the server rejected the credentials
 failed-reason-no-user = the user is missing
 failed-reason-agent = the SSH agent could not authenticate
+failed-reason-rsa-too-small = the RSA key is too short (2048 bits minimum); ask for a new one
 failed-reason-unknown = unknown reason
 status-archive-skipped = ⚠ { $n } entries omitted (hostile names/limits)
 status-names-encoding = names: { $enc }

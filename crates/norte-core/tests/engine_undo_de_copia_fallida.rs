@@ -32,7 +32,7 @@
 use std::sync::Arc;
 
 use norte_core::{Engine, Journal, SqliteJournal};
-use norte_proto::{CollisionPolicy, ConflictKind, TaskState, VPath};
+use norte_proto::{CollisionPolicy, TaskState, VPath};
 use norte_vfs::Provider;
 
 fn vp(wire: &str) -> VPath {
@@ -311,32 +311,30 @@ async fn deshacer_la_copia_fallida_no_borra_lo_que_se_puso_despues() {
         "el deshacer de una copia que FALLÓ se ha llevado un fichero que esa \
          copia nunca escribió: lo puso el lector al repetirla. Informe: {r:?}"
     );
-    // Y dicho al derecho: el deshacer se PARA y lo cuenta. Nada revertido, y
-    // un bloqueo que nombra la primera entrada que no cuadró — que es lo que
-    // el modo estricto pide de un drift y lo que hace que el lector se entere.
+    // Y dicho al derecho: nada revertido de esas rutas, todas CONTADAS, y la
+    // sesión NO se para (#371). Que no se pare importa tanto como que no
+    // borre: si esto bloqueara, editar un solo fichero copiado con cualquier
+    // editor que guarde de forma atómica —vim, VS Code, `sed -i`, todos
+    // cambian el inodo— dejaría sin deshacer la copia entera por ese uno.
     assert_eq!(
         r.undone, 0,
         "no había nada que deshacer en esas rutas: {r:?}"
     );
-    // Y por el MOTIVO que toca, que es el que el lector puede accionar. Con
-    // las rutas recreadas, el `stat` del undo las encuentra todas: si esto
-    // parase por `NotFound` estaría parando por el accidente que ADR 0152 dice
-    // que no es protección, y si parase por `Exists` diría una perogrullada
-    // —claro que existe, es lo que iba a borrar— en vez de «eso no es tuyo».
-    assert!(
-        matches!(
-            r.blocked,
-            Some((
-                _,
-                norte_proto::Error::Conflict {
-                    conflict: ConflictKind::NotTheSameNode
-                }
-            ))
-        ),
-        "tenía que parar diciendo que lo que hay ahí no es lo que creó: {r:?}"
+    // Una más que ficheros: la propia carpeta `destino` también es un
+    // `created`, y la que hay ahora la creó el lector — otro nodo, misma
+    // respuesta.
+    assert_eq!(
+        r.skipped_not_ours,
+        creados.len() as u64 + 1,
+        "se saltan TODAS y se dice cuántas, no solo la primera: {r:?}"
     );
-    // Ni uno, no «casi ninguno»: el deshacer para en el primero, así que si
-    // llegara a borrar el segundo es que la comprobación no está mirando.
+    assert!(
+        r.blocked.is_none(),
+        "y no se para: lo que hay ahí lo puso el lector, no es una divergencia \
+         que nadie pueda explicar. {r:?}"
+    );
+    // Ni uno, no «casi ninguno»: como ya no se para en el primero, esto
+    // comprueba de verdad que la comprobación mira en todas.
     for p in &creados {
         let nombre = std::str::from_utf8(&p[b"file:///destino/".len()..]).expect("utf8");
         assert!(

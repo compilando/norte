@@ -60,6 +60,37 @@ a different program instead of removing it.
    session is not. Bringing it to the TUI and window banners would redefine
    that notification for every frontend and needs its own decision.
 5. The agent keeps its ed25519-only rule (option 4 is not taken here).
+6. **A floor of 2048 bits on the modulus, which the opt-in does NOT lift**
+   (#370, added after the fact — see below). A shorter key is refused with its
+   own error, `RsaTooSmall`, which names the bit count it has and the one it
+   needs.
+
+### What this ADR got wrong, and #370 fixed
+
+As written, `allow_rsa` accepted **any** RSA key: the match arm was
+`Algorithm::Rsa { .. } if allow_rsa`, and nothing looked at the modulus. A
+1024-bit key passed.
+
+That is not the risk this ADR bought. What it bought is one risk, named and
+bounded: the Marvin timing side channel in the `rsa` crate's private-key
+operations (RUSTSEC-2023-0071), which is exactly the same at 1024 bits as at
+4096. A short modulus is a **different** risk — classical cryptographic
+weakness, not a side channel — that this document never mentioned. So whoever
+set `allow_rsa = true` consented in writing to one thing and silently got two.
+
+NIST SP 800-57 retired 1024 in 2013, RFC 8332 §3 asks for 2048 as the minimum
+for `rsa-sha2-*`, and OpenSSH has refused to generate one since 2017. The floor
+belongs in the same decision that opens the door, and it was missing.
+
+The refusal carries a reason to the reader (`rsa-too-small`, protocol 0.84.0)
+rather than dying in the log, which is the exception among key failures and
+deliberate: every other one says "permission denied", which sends the reader
+looking at the password, the user or the server. This one has a remedy that
+follows from the sentence — get another key.
+
+What is still not checked: `doctor` warns while `allow_rsa` is set but does not
+look at the key file, so it cannot grade a 2048 against a 4096. Reading the key
+there would mean handling its passphrase, which is a different job.
 
 ## Consequences
 

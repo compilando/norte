@@ -150,6 +150,33 @@ pub enum ConnectError {
         /// Algoritmo detectado (p. ej. `ssh-rsa`).
         algo: String,
     },
+    /// Clave RSA con un módulo por debajo del mínimo (#370), incluso con
+    /// `allow_rsa = true`.
+    ///
+    /// **`allow_rsa` no levanta esto, y ésa es la corrección.** La ADR 0150
+    /// compra UN riesgo, nombrado y acotado: el canal lateral de tiempos de
+    /// RUSTSEC-2023-0071 en las operaciones de clave privada del crate `rsa`.
+    /// Ese riesgo es el mismo con 1024 bits que con 4096. Un módulo de 1024 es
+    /// un riesgo DISTINTO —debilidad criptográfica clásica, no un canal
+    /// lateral— que la ADR no menciona, así que quien firmó el opt-in no lo
+    /// aceptó: se lo llevaba en silencio.
+    ///
+    /// NIST SP 800-57 retiró 1024 en 2013 y RFC 8332 §3 pide 2048 como mínimo
+    /// para `rsa-sha2-*`; OpenSSH lleva desde 2017 negándose a generarlas.
+    #[error(
+        "la clave {} tiene un módulo RSA de {bits} bits y hacen falta al menos {minimo}: \
+         pide una clave nueva al administrador del servidor (`ssh-keygen -t ed25519`, o \
+         `-t rsa -b 4096` si ese servidor no admite otra cosa)",
+        path.display()
+    )]
+    RsaTooSmall {
+        /// Ruta de la clave rechazada.
+        path: PathBuf,
+        /// Los bits que tiene.
+        bits: usize,
+        /// Los que hacen falta.
+        minimo: usize,
+    },
     /// Clave RSA permitida (`allow_rsa`), pero el servidor solo acepta firmas
     /// `ssh-rsa` con SHA-1. El opt-in de la ADR 0150 abre RSA, nunca SHA-1.
     #[error(
@@ -272,6 +299,10 @@ impl ConnectError {
             | Self::Io(_)
             | Self::KeyLoad { .. }
             | Self::KeyUnsupported { .. }
+            // Lleva RUTA, como sus dos vecinas de arriba. Los bits sí saldrían
+            // sin problema, pero la frase que hace accionable el fallo es la
+            // que dice QUÉ clave, y sin ella no vale la pena cruzar el cable.
+            | Self::RsaTooSmall { .. }
             | Self::RsaSha1Only { .. }
             | Self::Ssh(_)
             | Self::KnownHosts(_)
@@ -321,6 +352,7 @@ impl From<ConnectError> for norte_proto::Error {
             | ConnectError::SecretEmpty { .. }
             | ConnectError::SecretNotUtf8 { .. }
             | ConnectError::KeyUnsupported { .. }
+            | ConnectError::RsaTooSmall { .. }
             | ConnectError::RsaSha1Only { .. }
             | ConnectError::KeyLoad { .. } => Self::PermissionDenied,
             // NOTA (#325): `Error::SecretNeeded` no se produce aquí. Es una

@@ -4600,6 +4600,17 @@ impl Engine {
                                     .expect("undo report lock")
                                     .skipped_created_no_trash += 1;
                             }
+                            // Se cuenta y se SIGUE, al revés que un bloqueo
+                            // (#371): el nodo lo cambió el lector, no es una
+                            // divergencia sin explicar, y pararlo todo por un
+                            // fichero que él mismo editó dejaría sin deshacer
+                            // el resto de la copia.
+                            crate::undo::Reverted::SkippedNotOurs => {
+                                report_task
+                                    .lock()
+                                    .expect("undo report lock")
+                                    .skipped_not_ours += 1;
+                            }
                             crate::undo::Reverted::Blocked { seq, error } => {
                                 report_task.lock().expect("undo report lock").blocked =
                                     Some((seq, error));

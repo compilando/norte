@@ -403,6 +403,54 @@ async fn clave_rsa_con_allow_rsa_autentica() {
         .unwrap();
 }
 
+/// Fixture RSA de **1024 bits**, generada para este test y para nada más.
+///
+/// Está en el repositorio a propósito, igual que la de 2048: generar una clave
+/// en cada arranque de los tests de debug costaría más que el test, y lo que
+/// se prueba no es el generador.
+const RSA_1024_FIXTURE: &str = include_str!("fixtures/id_rsa_1024_test");
+
+/// **`allow_rsa` no abre CUALQUIER RSA** (#370).
+///
+/// Una clave de 1024 bits se rechaza aunque la conexión haya firmado el
+/// opt-in, y con un error propio: el remedio no es «activa RSA» —ya está
+/// activo— sino conseguir otra clave, y `KeyUnsupported` diría lo contrario.
+///
+/// La razón por la que el opt-in no lo levanta: ADR 0150 compra UN riesgo
+/// nombrado —el canal lateral de tiempos de RUSTSEC-2023-0071— idéntico con
+/// 1024 y con 4096 bits. Un módulo corto es otro riesgo, la ADR no lo
+/// menciona, y quien firmó el opt-in se lo llevaba sin que nadie se lo dijera.
+#[tokio::test]
+async fn una_clave_rsa_de_1024_se_rechaza_aunque_allow_rsa_este_puesto() {
+    let host_key = clave();
+    let fp = fingerprint(host_key.public_key());
+    let rsa = PrivateKey::from_openssh(RSA_1024_FIXTURE).expect("fixture RSA de 1024");
+    let port = spawn_server(host_key, Some(rsa.public_key().clone())).await;
+    let dir = tempfile::tempdir().unwrap();
+    let conn = connector(dir.path());
+    conn.trust_host_key("127.0.0.1", port, &fp).await.unwrap();
+
+    let key_path = dir.path().join("id_rsa_1024");
+    std::fs::write(&key_path, RSA_1024_FIXTURE).unwrap();
+    let spec = ConnectionSpec {
+        url: format!("sftp://{USER}@127.0.0.1:{port}"),
+        auth: AuthMethod::Key,
+        key: Some(key_path),
+        tls: TlsMode::Require,
+        allow_rsa: true,
+        ..Default::default()
+    };
+
+    let err = connect_err(&conn, &spec, None).await;
+    match err {
+        ConnectError::RsaTooSmall { bits, minimo, .. } => {
+            assert_eq!(bits, 1024, "dice cuántos tiene");
+            assert_eq!(minimo, 2048, "y cuántos hacen falta");
+        }
+        otro => panic!("tenía que decir que el módulo es corto, fue {otro:?}"),
+    }
+}
+
 /// Un servidor que solo acepta `ssh-rsa` (firma SHA-1) se rechaza con un
 /// error propio: el opt-in abre RSA, NUNCA SHA-1.
 #[tokio::test]

@@ -589,6 +589,7 @@ mod tests {
             undone: 2,
             skipped_irreversible: saltadas,
             skipped_created_no_trash: 0,
+            skipped_not_ours: 0,
             blocked: None,
             batch_stuck: None,
             compensations_lost: 0,

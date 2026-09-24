@@ -1439,6 +1439,7 @@
     "denied_total": 1,
     "skipped_created_no_trash": 2,
     "skipped_irreversible": 1,
+    "skipped_not_ours": 1,
     "undone": 3
   },
   "policy_undo_report_result_clean": {
@@ -1447,6 +1448,7 @@
     "denied_total": 0,
     "skipped_created_no_trash": 0,
     "skipped_irreversible": 0,
+    "skipped_not_ours": 0,
     "undone": 4
   },
   "policy_undo_session_params": {
