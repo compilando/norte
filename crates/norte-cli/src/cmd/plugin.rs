@@ -45,7 +45,7 @@ pub(crate) async fn plugin_cmd(
                 norte_core::plugins::install(&dir, &path, force)
             })
             .await
-            .context("instalando")?;
+            .context("installing")?;
             match report {
                 Ok(rep) => {
                     // The name comes from a third party's manifest: it is
@@ -140,7 +140,7 @@ async fn plugin_uninstall(
             let report =
                 tokio::task::spawn_blocking(move || norte_core::plugins::uninstall(&dir, &owned))
                     .await
-                    .context("desinstalando")?;
+                    .context("uninstalling")?;
             // The warning also fires when it was NOT installed: the most
             // likely way to reach `NotInstalled` is exactly ADR 0113's
             // case — a CLI with a different `NORTE_CONFIG_DIR` than the

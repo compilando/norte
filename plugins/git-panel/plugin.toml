@@ -4,7 +4,7 @@ name = "Git panel"
 publisher = "norte"
 version = "0.1.0"
 category = "panel"
-description = "El estado del repositorio en un panel: rama, commit y los últimos movimientos."
+description = "The repository's state in a panel: branch, commit and the latest moves."
 
 # The slot will be called `plugin:org.norte.git-panel:status`. The minimum is
 # declared by whoever knows it: under twenty-four columns a hash and a branch
@@ -29,4 +29,4 @@ location-root-marker = ".git"
 [config.moves]
 type = "int"
 default = 5
-description = "Cuántos movimientos recientes del reflog enseñar."
+description = "How many recent reflog moves to show."

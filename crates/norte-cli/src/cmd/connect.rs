@@ -84,7 +84,7 @@ pub(crate) fn vpath(path: &std::path::Path) -> anyhow::Result<VPath> {
         return VPath::parse(s).with_context(|| norte_i18n::ta("cli-invalid-url", &[("url", s)]));
     }
     norte_vfs_local::vpath_from_native(path)
-        .with_context(|| format!("path no representable: {}", path.display()))
+        .with_context(|| format!("unrepresentable path: {}", path.display()))
 }
 
 /// Rejects `user:pass@host` in a URL BEFORE it enters `VPath::parse`

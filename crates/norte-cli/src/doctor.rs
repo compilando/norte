@@ -139,7 +139,7 @@ pub fn check_layout(layers: &Layers) -> Vec<Finding> {
             section: "layout",
             severity: Severity::Warn,
             code: "layout-unusable",
-            detail: format!("{name}: {e} (se arrancará con «orthodox»)"),
+            detail: format!("{name}: {e} (will start with «orthodox»)"),
         }],
     }
 }
@@ -162,7 +162,7 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             severity: Severity::Warn,
             code: "columns-bad-id",
             detail: format!(
-                "[ui.columns] id no reconocido (se salta al pintar): {}",
+                "[ui.columns] unrecognized id (skipped while painting): {}",
                 sanitize_detail(raw)
             ),
         });
@@ -176,7 +176,7 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             severity: Severity::Warn,
             code: "columns-plugins-over-cap",
             detail: format!(
-                "[ui.columns] columna de plugin por encima del cap de {} por lista (ni se pinta ni se pide): {}",
+                "[ui.columns] plugin column above the cap of {} per list (neither painted nor requested): {}",
                 norte_frontend::columns::PLUGIN_COLUMNS_MAX_REQUEST,
                 sanitize_detail(raw)
             ),
@@ -191,7 +191,7 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             severity: Severity::Warn,
             code: "columns-attrs-over-cap",
             detail: format!(
-                "[ui.columns] attr por encima del cap de {} por lista (ni se pinta ni se pide): {}",
+                "[ui.columns] attr above the cap of {} per list (neither painted nor requested): {}",
                 norte_proto::attrs::ATTRS_MAX_REQUEST,
                 sanitize_detail(raw)
             ),
@@ -209,7 +209,7 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             severity: Severity::Warn,
             code: "columns-attr-id-not-wire-safe",
             detail: format!(
-                "[ui.columns] attr que parsea pero no es un id legal del wire (minúsculas con namespace, p. ej. posix.mode — la columna se salta): {}",
+                "[ui.columns] attr that parses but is not a wire-legal id (lowercase with a namespace, e.g. posix.mode — the column is skipped): {}",
                 sanitize_detail(raw)
             ),
         });
@@ -223,7 +223,7 @@ pub fn check_columns(layers: &Layers) -> Vec<Finding> {
             severity: Severity::Warn,
             code: "columns-bad-spec",
             detail: format!(
-                "[ui.columns.spec] id imposible o formato que no casa con su columna (se aplica el default al pintar): {}",
+                "[ui.columns.spec] impossible id or a format that does not match its column (the default is applied while painting): {}",
                 sanitize_detail(raw)
             ),
         });

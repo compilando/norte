@@ -60,27 +60,25 @@ pub const EFFECTS: norte_ui_host::commands::Effects = norte_ui_host::commands::E
 
 /// The command-line help. Short on purpose: what this window knows how to do
 /// is documented INSIDE (F1), not in a `--help`.
-// TODO(translation): this banner is user-visible text that does not go
-// through Fluent (reported to the controller for phase 3); left in Spanish.
 pub const USAGE: &str = "\
-norte-gui — el renderer gráfico de norte
+norte-gui — norte's graphical renderer
 
-USO:
-    norte-gui [DIR] [OPCIONES]
+USAGE:
+    norte-gui [DIR] [OPTIONS]
 
-ARGUMENTOS:
-    DIR                  Directorio de arranque (por defecto, el actual)
+ARGUMENTS:
+    DIR                  Startup directory (default: the current one)
 
-OPCIONES:
-    --socket <RUTA>      Socket del daemon (por defecto, el del sistema)
-    --layout <NOMBRE>    Disposición de arranque (por defecto, la de la config)
-    --preset <NOMBRE>    Preset de teclado (por defecto, el de la config)
-    --no-splash          Sin pantalla de inicio en este arranque
-    --profile <NOMBRE>   Perfil de configuración (por defecto, ninguno)
-    --attach             Recoge la pantalla que la terminal acaba de entregar
-                         (`app.handoff`), marcas incluidas
-    -h, --help           Esta ayuda
-    -V, --version        La versión
+OPTIONS:
+    --socket <PATH>      Daemon socket (default: the system's)
+    --layout <NAME>      Startup layout (default: the config's)
+    --preset <NAME>      Keyboard preset (default: the config's)
+    --no-splash          No splash screen on this launch
+    --profile <NAME>     Config profile (default: none)
+    --attach             Picks up the screen the terminal just handed off
+                         (`app.handoff`), marks included
+    -h, --help           This help
+    -V, --version        The version
 ";
 
 /// The command that starts the daemon, or `None` if there is no binary to

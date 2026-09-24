@@ -23,7 +23,7 @@ async fn socket_and_spawn(
         (socket, std::env::current_exe())
     })
     .await
-    .context("resolución del socket/exe")?;
+    .context("socket/exe resolution")?;
     let exe = exe.context("current_exe")?;
     let spawn_cmd = norte_core::daemon::daemon_run_argv(exe, &socket);
     Ok((socket, spawn_cmd))
@@ -46,7 +46,7 @@ pub(crate) async fn mcp_cmd(cmd: McpCmd, socket: Option<PathBuf>) -> anyhow::Res
     })
     .await
     {
-        anyhow::bail!("no se pudo arrancar/alcanzar el daemon: {e}");
+        anyhow::bail!("could not start/reach the daemon: {e}");
     }
     eprintln!(
         "{}",
@@ -55,7 +55,7 @@ pub(crate) async fn mcp_cmd(cmd: McpCmd, socket: Option<PathBuf>) -> anyhow::Res
     norte_mcp::bridge::serve_stdio(&socket, &session)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("el puente MCP terminó con error")?;
+        .context("the MCP bridge exited with an error")?;
     Ok(ExitCode::SUCCESS)
 }
 
@@ -72,7 +72,7 @@ pub(crate) async fn policy_cmd(
     let mut client = Client::connect(&socket)
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("no hay daemon en marcha")?;
+        .context("no daemon is running")?;
     client
         .initialize(norte_proto::methods::ClientInfo {
             name: "norte-cli".into(),
@@ -87,7 +87,7 @@ pub(crate) async fn policy_cmd(
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("no se pudo conceder el scope")?;
+        .context("could not grant the scope")?;
     println!("{}", norte_i18n::t("cli-scope-granted"));
     Ok(ExitCode::SUCCESS)
 }
@@ -110,7 +110,7 @@ pub(crate) async fn undo_cmd(session: &str, socket: Option<PathBuf>) -> anyhow::
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("no se pudo hablar con el daemon")?,
+        .context("could not talk to the daemon")?,
     );
     let task = backend
         .undo_session(session)
@@ -239,7 +239,7 @@ pub(crate) async fn make_backend(
     #[cfg(not(unix))]
     {
         let _ = socket;
-        anyhow::bail!("--daemon no está disponible en Windows todavía (issue #33)");
+        anyhow::bail!("--daemon is not available on Windows yet (issue #33)");
     }
     #[cfg(unix)]
     {
@@ -251,7 +251,7 @@ pub(crate) async fn make_backend(
             (socket, std::env::current_exe())
         })
         .await
-        .context("resolución del socket/exe")?;
+        .context("socket/exe resolution")?;
         let exe = exe.context("current_exe")?;
         // Auto-start: this SAME binary knows how to be a daemon, with the
         // shared argv — what starts a loose command shuts itself down.
@@ -266,7 +266,7 @@ pub(crate) async fn make_backend(
         )
         .await
         .map_err(|e| anyhow::anyhow!("{e}"))
-        .context("no se pudo hablar con el daemon")?;
+        .context("could not talk to the daemon")?;
         Ok(Backend::Remote(remote))
     }
 }
@@ -327,8 +327,8 @@ pub(crate) async fn daemon_cmd(
                 // close.
                 Err(StartupError::Journal(cause)) => {
                     return Err(anyhow::Error::new(cause).context(
-                        "no se pudo abrir el journal (si dice «database is locked», otro \
-                         proceso norte lo tiene: ¿un `ntc` embebido, u otro daemon?)",
+                        "could not open the journal (if it says «database is locked», another \
+                         norte process holds it: an embedded `ntc`, or another daemon?)",
                     ));
                 }
                 Err(e) => return Err(e.into()),
@@ -355,7 +355,7 @@ pub(crate) async fn daemon_cmd(
             // task (M5).
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                    .context("no se pudo registrar SIGTERM")?;
+                    .context("could not register SIGTERM")?;
             let shutdown = daemon.shutdown_token();
             let hard = daemon.hard_shutdown_token();
             tokio::spawn(async move {
@@ -371,7 +371,10 @@ pub(crate) async fn daemon_cmd(
                 eprintln!("{}", norte_i18n::t("cli-daemon-hard-shutdown"));
                 hard.cancel();
             });
-            daemon.run().await.context("el daemon terminó con error")?;
+            daemon
+                .run()
+                .await
+                .context("the daemon exited with an error")?;
             Ok(ExitCode::SUCCESS)
         }
         DaemonCmd::Stop {
@@ -385,11 +388,11 @@ pub(crate) async fn daemon_cmd(
                 Some(s) => s,
                 None => tokio::task::spawn_blocking(|| default_socket_path(None))
                     .await
-                    .context("resolución del socket")?,
+                    .context("socket resolution")?,
             };
             let mut client = Client::connect(&socket)
                 .await
-                .context("no hay daemon escuchando en el socket")?;
+                .context("no daemon is listening on the socket")?;
             let init = client
                 .initialize(norte_proto::methods::ClientInfo {
                     name: "norte-cli".into(),

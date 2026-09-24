@@ -19,7 +19,7 @@ pub(crate) async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Resul
                 .index_build(&root)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))
-                .context("no se pudo lanzar el index build")?;
+                .context("could not launch the index build")?;
             Ok(run_task(task, false).await)
         }
         IndexCmd::Query { path, text, limit } => {
@@ -28,7 +28,7 @@ pub(crate) async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Resul
                 .index_query(&root, &text, limit)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))
-                .context("query del índice")?;
+                .context("index query")?;
             for h in &hits {
                 let marker = match h.kind {
                     EntryKind::Dir => "d",
@@ -52,7 +52,7 @@ pub(crate) async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Resul
                 .index_embed(&root)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))
-                .context("no se pudo lanzar el index embed")?;
+                .context("could not launch the index embed")?;
             Ok(run_task(task, false).await)
         }
         IndexCmd::Semantic { text, root, k } => {
@@ -61,7 +61,7 @@ pub(crate) async fn index_cmd(backend: &Backend, cmd: IndexCmd) -> anyhow::Resul
                 .index_search_semantic(root.as_ref(), &text, k)
                 .await
                 .map_err(|e| anyhow::anyhow!("{e}"))
-                .context("búsqueda semántica")?;
+                .context("semantic search")?;
             for h in &hits {
                 // Paths with arbitrary names toward a terminal: the SAME
                 // marked masking as `norte ai rename`'s plan

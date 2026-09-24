@@ -294,9 +294,9 @@ fn render(p: &norte_proto::TaskProgress, show_bytes: bool) {
             }
             _ => format!("{} bytes", p.bytes_done),
         };
-        eprint!("\r{bytes} — {entries} entradas   ");
+        eprint!("\r{bytes} — {entries} entries   ");
     } else {
-        eprint!("\r{entries} entradas   ");
+        eprint!("\r{entries} entries   ");
     }
 }
 

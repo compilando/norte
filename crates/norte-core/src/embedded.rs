@@ -187,13 +187,13 @@ impl NoJournal {
     #[must_use]
     pub fn text(&self) -> String {
         match self {
-            Self::Busy => "otro proceso tiene el journal (un daemon, u otra sesión embebida): las \
-                           mutaciones de ESTA sesión no quedan registradas (#167)"
+            Self::Busy => "another process holds the journal (a daemon, or another embedded \
+                           session): THIS session's mutations are not being recorded (#167)"
                 .to_owned(),
             Self::Failed(reason) => format!(
-                "el journal no se pudo abrir ({reason}): esta sesión REHÚSA mutar mientras \
-                 siga así, porque nada quedaría registrado ni se podría deshacer. Arregla \
-                 lo que nombra el motivo —el directorio o el fichero— y vuelve a intentarlo \
+                "the journal could not be opened ({reason}): this session REFUSES to mutate \
+                 while that stays true, because nothing would be recorded and nothing could be \
+                 undone. Fix what the reason names —the directory or the file— and try again \
                  (#178)"
             ),
         }

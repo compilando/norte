@@ -4,7 +4,7 @@ name = "Git status"
 publisher = "norte"
 version = "0.2.0"
 category = "columns"
-description = "Marca en el panel qué ficheros cambiaron respecto al índice de git."
+description = "Marks in the panel which files changed relative to git's index."
 
 [[contributions.columns]]
 id = "git-status"
@@ -23,7 +23,7 @@ location-root-marker = ".git"
 type = "enum"
 values = ["letters", "symbols"]
 default = "letters"
-description = "Cómo se marca cada estado: letras de git, o símbolos."
+description = "How each state is marked: git's letters, or symbols."
 
 # With large `.gitignore` files the ignored mark repeats across half the
 # screen and stops saying anything: turn it off and an ignored file paints
@@ -31,4 +31,4 @@ description = "Cómo se marca cada estado: letras de git, o símbolos."
 [config.ignored]
 type = "bool"
 default = true
-description = "Marcar también los ficheros ignorados."
+description = "Also mark ignored files."

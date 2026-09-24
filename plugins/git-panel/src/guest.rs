@@ -94,13 +94,13 @@ impl PanelGuest for GitPanel {
         // so is the correct response: the slot keeps painting, with a line
         // that explains why it is empty instead of staying blank.
         let Some(loc) = location else {
-            return Ok(single_line("sin permiso de lectura", state));
+            return Ok(single_line("no read permission", state));
         };
         let Ok(head) = location::read(&loc.token, b".git/HEAD") else {
             // The root the host opened has no `.git`: it is not a
             // repository, or the location is not local (sftp, s3, inside an
             // archive).
-            return Ok(single_line("aquí no hay un repositorio", state));
+            return Ok(single_line("no repository here", state));
         };
 
         let branch = crate::head_branch(&head);
@@ -113,24 +113,24 @@ impl PanelGuest for GitPanel {
         // The branch, on the first line: it is the datum glanced at first.
         // A detached `HEAD` is said plainly, because it is a state in which
         // things get done that are later lost.
-        let label = "rama ";
+        let label = "branch ";
         match &branch {
             Some(name) => lines.push(vec![role(label, "muted"), role(name, "title")]),
             None => lines.push(vec![
                 role(label, "muted"),
-                role("(HEAD desprendido)", "warning"),
+                role("(detached HEAD)", "warning"),
             ]),
         }
 
         if let Some(sha) = &commit {
             lines.push(vec![role("commit ", "muted"), plain(sha)]);
         } else {
-            lines.push(vec![role("sin commits todavía", "muted")]);
+            lines.push(vec![role("no commits yet", "muted")]);
         }
 
         if !moves.is_empty() {
             lines.push(Vec::new());
-            lines.push(vec![role("últimos movimientos", "muted")]);
+            lines.push(vec![role("latest moves", "muted")]);
             for m in &moves {
                 // The reason is trimmed to the panel's width: the guest
                 // knows how many columns it has (`context.cols`), and a
@@ -146,7 +146,7 @@ impl PanelGuest for GitPanel {
         // where what norte did with the repository can be seen. The
         // command is from the catalogue and within what a zone may name;
         // the host would refuse any other, and rightly so.
-        let footer = "[registro]";
+        let footer = "[log]";
         let row_idx = u16::try_from(lines.len()).unwrap_or(u16::MAX);
         lines.push(vec![role(footer, "muted")]);
         hits.push(Hit {
