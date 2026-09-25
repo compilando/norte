@@ -21,7 +21,7 @@
 use crate::app::Trail;
 use crate::dispatch::dispatch;
 use crate::keymap::Command;
-use crate::navigate::{apply_cd, cd_in};
+use crate::navigate::{cd_in, settle_cd};
 use crate::refresh::reap_search_run;
 use crate::screens::drain_places_drives;
 use std::io::Write;
@@ -2057,8 +2057,9 @@ async fn dispatch_click(
         cmd,
     )
     .await;
-    apply_cd(
-        &app.panes,
+    settle_cd(
+        app,
+        backend,
         &mut work.fill,
         &mut work.decorate,
         &mut work.probed,
@@ -2245,8 +2246,9 @@ pub async fn on_mouse(
             if let Some(path) = app.places_activate() {
                 let pane = app.focus();
                 let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
-                apply_cd(
-                    &app.panes,
+                settle_cd(
+                    app,
+                    backend,
                     &mut work.fill,
                     &mut work.decorate,
                     &mut work.probed,
@@ -2263,8 +2265,9 @@ pub async fn on_mouse(
             if let Some(path) = app.tree_activate() {
                 let pane = app.focus();
                 let outcome = cd_in(app, backend, events, pane, path, Trail::Record).await;
-                apply_cd(
-                    &app.panes,
+                settle_cd(
+                    app,
+                    backend,
                     &mut work.fill,
                     &mut work.decorate,
                     &mut work.probed,

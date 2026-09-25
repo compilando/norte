@@ -13,7 +13,7 @@ use norte_proto::methods::{FsSearchParams, SearchHits};
 
 use crate::app::{App, SearchDialog, SearchState, detail_for_bar, error_category, error_message};
 use crate::fill::Fill;
-use crate::navigate::{apply_cd, cd};
+use crate::navigate::{cd, settle_cd};
 use crate::probes::{DecorateFetch, Probed};
 
 /// A live search IN PROGRESS (`Alt+F7`, liveSearch T6): the cancelable Task,
@@ -266,8 +266,9 @@ pub async fn on_search_escape(
     let prev = s.prev_dir.clone();
     *search_run = None;
     let outcome = cd(app, backend, events, prev).await;
-    apply_cd(
-        &app.panes,
+    settle_cd(
+        app,
+        backend,
         fill,
         decorate_fetch,
         last_probed,
@@ -302,8 +303,9 @@ pub async fn on_search_enter(
     *search_run = None;
     let pane = app.focus();
     let outcome = cd(app, backend, events, parent).await;
-    apply_cd(
-        &app.panes,
+    settle_cd(
+        app,
+        backend,
         fill,
         decorate_fetch,
         last_probed,

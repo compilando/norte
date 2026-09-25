@@ -28,7 +28,7 @@ use crate::keymap::{
 use crate::lua::{resolve_lua_trust, run_lua_command};
 use crate::mutations::{on_dialog_key, submit_transfer};
 use crate::nav;
-use crate::navigate::{apply_cd, cd, settle_cd};
+use crate::navigate::{cd, settle_cd};
 use crate::overlays::{close_stale_overlays, help_owns_keys, modal_wins, palette_help};
 use crate::refresh::{after_panes_refresh, reap_search_run, refresh_panes};
 use crate::screens::{
@@ -158,8 +158,9 @@ pub async fn on_key(
             match VPath::parse(&url) {
                 Ok(destination) => {
                     let outcome = cd(app, backend, events, destination).await;
-                    apply_cd(
-                        &app.panes,
+                    settle_cd(
+                        app,
+                        backend,
                         &mut work.fill,
                         &mut work.decorate,
                         &mut work.probed,
@@ -226,8 +227,9 @@ pub async fn on_key(
             key.code,
         )
         .await;
-        apply_cd(
-            &app.panes,
+        settle_cd(
+            app,
+            backend,
             &mut work.fill,
             &mut work.decorate,
             &mut work.probed,
