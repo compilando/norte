@@ -68,14 +68,9 @@ impl PreviewerGuest for Syntect {
             input.mimetype
         ));
 
-        let ps = SyntaxSet::load_defaults_newlines();
-        let ts = ThemeSet::load_defaults();
-        let theme = ts
-            .themes
-            .get("base16-ocean.dark")
-            .ok_or("base16-ocean.dark theme missing")?;
+        let (ps, theme) = highlighter()?;
         let syntax = pick_syntax(&ps, &input.mimetype, &text);
-        let mut hl = HighlightLines::new(syntax, theme);
+        let mut hl = HighlightLines::new(syntax, &theme);
 
         let mut out = String::new();
         for line in text.lines() {
@@ -89,30 +84,42 @@ impl PreviewerGuest for Syntect {
         Ok(out)
     }
 
-    // ADR 0037 (WIT 0.6.0): `render-styled` is a REQUIRED export of
-    // `previewer`. This guest does not translate its ANSI highlighting to
-    // structured spans (debt: it would need to parse SGR the same way
-    // `norte-frontend::ansi` does, out of scope for G3 Task 2) — it
-    // implements the TRIVIAL wrapper the ADR reserves for a text-only
-    // guest: one plain span per line, no `role` or `fg`. Each span's text
-    // carries `render`'s raw ANSI codes (the host would see them as
-    // literal text if something called `preview_styled` on this guest
-    // today); a future real SGR parse is the natural improvement, not
-    // required by this guest.
+    // ADR 0037 (WIT 0.6.0): the styled twin, and the one the viewer calls.
+    // The colour travels in `fg`, straight from syntect's ranges: never as
+    // escapes inside `text`, which the viewer paints as text (#373).
     fn render_styled(input: PreviewInput) -> Result<Vec<Vec<Span>>, String> {
-        let plain = Self::render(input)?;
-        Ok(plain
-            .lines()
-            .map(|l| {
-                vec![Span {
-                    text: l.to_string(),
-                    role: None,
-                    fg: None,
-                    bg: None,
-                }]
+        let text = String::from_utf8_lossy(&input.content);
+        let (ps, theme) = highlighter()?;
+        let syntax = pick_syntax(&ps, &input.mimetype, &text);
+        let mut hl = HighlightLines::new(syntax, &theme);
+        text.lines()
+            .map(|line| {
+                let ranges = hl
+                    .highlight_line(line, &ps)
+                    .map_err(|e| format!("syntect: {e}"))?;
+                Ok(ranges
+                    .into_iter()
+                    .map(|(style, piece)| Span {
+                        text: piece.to_string(),
+                        role: None,
+                        fg: Some((style.foreground.r, style.foreground.g, style.foreground.b)),
+                        bg: None,
+                    })
+                    .collect())
             })
-            .collect())
+            .collect()
     }
+}
+
+/// The syntaxes and the theme both renders use.
+fn highlighter() -> Result<(SyntaxSet, syntect::highlighting::Theme), String> {
+    let ps = SyntaxSet::load_defaults_newlines();
+    let mut ts = ThemeSet::load_defaults();
+    let theme = ts
+        .themes
+        .remove("base16-ocean.dark")
+        .ok_or("base16-ocean.dark theme missing")?;
+    Ok((ps, theme))
 }
 
 impl CommandGuest for Syntect {

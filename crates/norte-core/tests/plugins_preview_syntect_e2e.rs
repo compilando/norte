@@ -90,6 +90,32 @@ fn plugin_preview_syntect_e2e_real_wasm() {
         render.contains("42"),
         "the render includes the numeric value: {render:?}"
     );
+
+    // The STYLED twin is what the viewer calls (#373). It used to wrap
+    // `render`'s ANSI in plain spans, and the viewer printed the escapes as
+    // text: the colour has to travel in `fg`, never inside `text`.
+    let (_, _, wasm, caps, _) = reg
+        .resolve_previewer("application/json")
+        .expect("still consented");
+    let lines = rt
+        .instantiate(&wasm, caps)
+        .expect("instantiate the previewer")
+        .render_styled_preview("application/json", SAMPLE, None)
+        .expect("previewer-syntect must render styled");
+    let spans: Vec<_> = lines.iter().flatten().collect();
+    assert!(
+        spans.iter().all(|s| !s.text.contains('\x1b')),
+        "no span carries an escape sequence: {lines:?}"
+    );
+    assert!(
+        spans.iter().any(|s| s.fg.is_some()),
+        "the highlighting travels in fg: {lines:?}"
+    );
+    let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+    assert!(
+        text.contains("name") && text.contains("42"),
+        "the content survives: {text:?}"
+    );
 }
 
 /// Compiles `examples-wasm/<name>/` to `wasm32-wasip2` (release). `None`
