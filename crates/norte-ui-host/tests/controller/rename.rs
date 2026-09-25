@@ -1342,7 +1342,8 @@ async fn a_plan_that_arrives_late_does_not_reopen_what_was_closed() {
     f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.verdict = Some(verdict_ok(&pares));
-    f.delay_ia_ms = 150;
+    let gate = Arc::new(crate::backend_fake::Gate::default());
+    f.gate_ia = Some(Arc::clone(&gate));
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1352,6 +1353,7 @@ async fn a_plan_that_arrives_late_does_not_reopen_what_was_closed() {
     // plan to HAVE arrived: without that, the test would pass by not having
     // waited long enough, which is the most silent way of testing nothing.
     h.dispatch(press("Escape")).await.expect("host alive");
+    gate.open();
     until(&backend, "the late plan, already served", |f| {
         f.en_calma().then_some(())
     })
@@ -1504,7 +1506,8 @@ async fn a_plan_opens_over_the_directory_it_was_planned_for() {
     );
     f.put("mem:///casa/docs", vec![(b"a.md".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
-    f.delay_ia_ms = 150;
+    let gate = Arc::new(crate::backend_fake::Gate::default());
+    f.gate_ia = Some(Arc::clone(&gate));
     let backend = Arc::new(f);
     let (h, snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1525,6 +1528,7 @@ async fn a_plan_opens_over_the_directory_it_was_planned_for() {
     })
     .await
     .expect("host alive");
+    gate.open();
 
     let r = next_revision(&mut sub).await.expect("opens just the same");
     assert!(
@@ -1549,7 +1553,10 @@ async fn two_requests_at_once_and_the_second_still_opens() {
     f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.verdict = Some(verdict_ok(&pares));
-    f.delay_ia_ms = 120;
+    // Held: a first plan landing mid-request would take the keyboard and the
+    // second prompt would never open.
+    let gate = Arc::new(crate::backend_fake::Gate::default());
+    f.gate_ia = Some(Arc::clone(&gate));
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1557,8 +1564,12 @@ async fn two_requests_at_once_and_the_second_still_opens() {
     // Two requests in a row, without waiting for the first.
     request_plan(&h, &mut sub).await;
     request_plan(&h, &mut sub).await;
+    gate.open();
 
-    let r = next_revision(&mut sub).await.expect("the second one opens");
+    let r = snapshot_until(&h, &mut sub, "the second one opens", |snapshot| {
+        snapshot.ai_rename.clone()
+    })
+    .await;
     assert_eq!(r.total, 1);
     assert_eq!(
         backend.instructions.lock().expect("instrucciones").len(),
@@ -1676,7 +1687,16 @@ async fn discarding_a_review_does_not_kill_the_next_request() {
     f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.verdict = Some(verdict_ok(&pares));
-    f.delay_ia_ms = 120;
+    // One gate per request: plan 1 must land only once prompt 2 is open,
+    // and plan 2 only after review 1 is discarded.
+    let (g1, g2) = (
+        Arc::new(crate::backend_fake::Gate::default()),
+        Arc::new(crate::backend_fake::Gate::default()),
+    );
+    f.gates_ia
+        .lock()
+        .expect("gates_ia")
+        .extend([Arc::clone(&g1), Arc::clone(&g2)]);
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1687,6 +1707,7 @@ async fn discarding_a_review_does_not_kill_the_next_request() {
     let id2 = next_dialogs(&mut sub).await[0].id;
 
     // Review 1 lands UNDERNEATH the dialog.
+    g1.open();
     let r1 = next_revision(&mut sub).await.expect("the first opens");
     assert_eq!(r1.total, 1);
 
@@ -1705,6 +1726,7 @@ async fn discarding_a_review_does_not_kill_the_next_request() {
     .await
     .expect("host alive");
     h.dispatch(press("Escape")).await.expect("host alive");
+    g2.open();
 
     // And request 2 is still alive. The signal that CANNOT be confused with
     // a stray patch from review 1 is the core receiving a SECOND verdict:
