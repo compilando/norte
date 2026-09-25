@@ -38,6 +38,17 @@ fn ext_for_mime(mime: &str) -> Option<&'static str> {
         "text/javascript" | "application/javascript" => Some("js"),
         "text/css" => Some("css"),
         "text/markdown" => Some("md"),
+        // Source code, typed by the core from the extension (#379).
+        "text/x-rust" => Some("rs"),
+        "text/x-python" => Some("py"),
+        "text/x-go" => Some("go"),
+        "text/x-shellscript" => Some("sh"),
+        "text/x-yaml" => Some("yaml"),
+        "text/x-c" => Some("c"),
+        "text/x-c++" => Some("cpp"),
+        "text/x-java" => Some("java"),
+        "text/x-ruby" => Some("rb"),
+        "text/x-sql" => Some("sql"),
         _ => None,
     }
 }

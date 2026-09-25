@@ -132,6 +132,23 @@ fn plugin_preview_syntect_e2e_real_wasm() {
     let back: String = dense.iter().flatten().map(|s| s.text.as_str()).collect();
     assert_eq!(back, minified, "the whole line comes back");
 
+    // Rust, typed `text/x-rust` by the core (#379): it came as `text/plain`
+    // and came out in ONE colour, «via Syntect Highlighter» notwithstanding.
+    let (_, _, wasm3, caps3, _) = reg
+        .resolve_previewer("text/x-rust")
+        .expect("text/* claims source code");
+    let rust = rt
+        .instantiate(&wasm3, caps3)
+        .expect("instantiate the previewer")
+        .render_styled_preview("text/x-rust", b"fn main() {\n    let x = 42;\n}\n", None)
+        .expect("Rust renders");
+    let colours: std::collections::BTreeSet<_> =
+        rust.iter().flatten().filter_map(|s| s.fg).collect();
+    assert!(
+        colours.len() > 1,
+        "Rust is highlighted, not one colour: {rust:?}"
+    );
+
     let text: String = spans.iter().map(|s| s.text.as_str()).collect();
     assert!(
         text.contains("name") && text.contains("42"),
