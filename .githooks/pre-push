@@ -112,14 +112,21 @@ fi
 
 LOG="$(mktemp -t norte-prepush-XXXXXX.log)"
 
+# Un log para poder seguirlo con `tail -f`, pero cada paso anota su tramo:
+# la cola del log entero es la del ÚLTIMO paso, y con `ci-fast` rojo y
+# `gui-ci` verde enseñaba tests de la ventana pasando.
+rojos=()
 corre() {
     local nombre="$1"; shift
+    local desde
+    desde=$(($(wc -l <"$LOG") + 1))
     printf '  %-10s ' "$nombre"
     if "$@" >>"$LOG" 2>&1; then
         printf '\033[32mok\033[0m\n'
         return 0
     fi
     printf '\033[31mROJO\033[0m\n'
+    rojos+=("$nombre $desde $(wc -l <"$LOG")")
     return 1
 }
 
@@ -145,9 +152,20 @@ if [[ $fallo -eq 0 ]]; then
     exit 0
 fi
 
-echo
-echo "--- cola del fallo ---"
-tail -n 30 "$LOG"
+# De cada paso rojo, lo que falló; si nada lo dice, la cola de SU tramo.
+for r in "${rojos[@]}"; do
+    read -r nombre desde hasta <<<"$r"
+    tramo="$(sed -n "${desde},${hasta}p" "$LOG")"
+    echo
+    echo "--- $nombre ---"
+    # `-A1`: el mensaje de un pánico va en la línea siguiente.
+    fallos="$(grep -E -A1 'panicked at|^error(\[|:)' <<<"$tramo"; grep -E '^\s+FAIL ' <<<"$tramo" | sort -u)"
+    if [[ -n "$fallos" ]]; then
+        head -n 40 <<<"$fallos"
+    else
+        tail -n 30 <<<"$tramo"
+    fi
+done
 echo "----------------------"
 echo "log completo: $LOG"
 echo "si sabes lo que haces: git push --no-verify"
