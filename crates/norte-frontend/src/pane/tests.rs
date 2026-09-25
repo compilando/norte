@@ -1304,6 +1304,34 @@ fn quick_next_moves_the_real_cursor_with_wrap() {
     assert_eq!(p.cursor(), 0, "wrap");
 }
 
+/// Typing a name's initial (Krusader): jump, not filter, and by PREFIX —
+/// `do` lands on `docs`, never on `todo` which only contains it. Up/down
+/// walk the matches, the listing stays whole.
+#[test]
+fn type_to_search_jumps_by_prefix() {
+    let mut p = PaneState::new(
+        VPath::parse("mem:///").unwrap(),
+        vec![
+            e("mem:///todo", EntryKind::File),
+            e("mem:///docs", EntryKind::File),
+            e("mem:///dodo", EntryKind::File),
+        ],
+    );
+    let at = |p: &PaneState| {
+        String::from_utf8_lossy(p.entries()[p.cursor()].path.file_name().unwrap().as_bytes())
+            .into_owned()
+    };
+    p.type_to_search('d');
+    assert_eq!(p.quick().unwrap().mode(), crate::nav::Mode::Jump);
+    assert!(p.quick_visible().is_none(), "the listing stays whole");
+    p.quick_char('o');
+    assert_eq!(at(&p), "docs");
+    p.quick_down();
+    assert_eq!(at(&p), "dodo", "down: the next name starting with `do`");
+    p.quick_down();
+    assert_eq!(at(&p), "dodo", "and `todo` is not one of them");
+}
+
 #[test]
 fn the_quick_getter_exposes_the_live_query() {
     let mut p = pane(&["a"]);

@@ -1274,6 +1274,9 @@ pub async fn on_key(
         // instead, so the reset has to be requested explicitly,
         // never leaving a half-typed sequence alive.
         if let Some(chord) = chord_from_crossterm(key.modifiers, key.code) {
+            // Read BEFORE the push: a miss that breaks a half-typed sequence
+            // is not a letter typed onto the listing.
+            let idle = active.pending().is_empty() && active.count().is_none();
             match active.push(chord) {
                 Resolution::Run {
                     command: cmd,
@@ -1411,7 +1414,10 @@ pub async fn on_key(
                     app.clear_pending();
                     app.message = Some(unavailable_message(&command, why));
                 }
-                Resolution::Reset => app.clear_pending(),
+                Resolution::Reset => {
+                    app.clear_pending();
+                    app.type_to_search(active.effective(), idle, chord);
+                }
             }
         } else {
             active.reset();

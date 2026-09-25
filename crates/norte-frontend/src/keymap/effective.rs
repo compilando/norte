@@ -102,6 +102,8 @@ pub struct Effective {
     /// — can answer "is a bare digit a count?" without keeping the source
     /// files alive.
     counts: bool,
+    /// The preset's `type_to_search`, copied for the same reason as `counts`.
+    type_to_search: bool,
     /// `lua:` bindings DISCARDED for coming from the project layer
     /// (security, see [`KeymapFile::mark_project`]). The frontend warns
     /// about it once (never a mute discard); the concrete message is the
@@ -399,6 +401,7 @@ impl Effective {
             bindings,
             screen,
             counts: preset.counts,
+            type_to_search: preset.type_to_search,
             discarded_lua_bindings,
         })
     }
@@ -504,6 +507,46 @@ impl Effective {
     #[must_use]
     pub fn counts(&self) -> bool {
         self.counts
+    }
+
+    /// Whether this map's preset starts a prefix quick search on a printable
+    /// key no binding took (`type_to_search`). The frontends ask it when the
+    /// resolver misses on a bare character with nothing pending.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_keymap};
+    ///
+    /// let src = "type_to_search = true\n[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n";
+    /// let eff = Effective::build_for(&parse_keymap(src).unwrap(), &[], &["pane.copy"], Screen::Browse)
+    ///     .unwrap();
+    /// assert!(eff.type_to_search());
+    /// ```
+    #[must_use]
+    pub fn type_to_search(&self) -> bool {
+        self.type_to_search
+    }
+
+    /// The character to start a prefix jump with, when the resolver just
+    /// MISSED on `chord`: the preset has `type_to_search`, nothing was
+    /// half-typed before it (`idle` — a miss that breaks a sequence is not a
+    /// letter typed onto the listing) and it types a character. Whether the
+    /// listing holds the focus is each frontend's to add.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::{Effective, Screen, parse_chord, parse_keymap};
+    ///
+    /// let src = "type_to_search = true\n[pane]\nkeymap = [{ on = [\"f5\"], run = \"pane.copy\" }]\n";
+    /// let eff = Effective::build_for(&parse_keymap(src).unwrap(), &[], &["pane.copy"], Screen::Browse)
+    ///     .unwrap();
+    /// let d = parse_chord("d").unwrap();
+    /// assert_eq!(eff.typed_search_char(true, d), Some('d'));
+    /// assert_eq!(eff.typed_search_char(false, d), None, "it broke a sequence");
+    /// ```
+    #[must_use]
+    pub fn typed_search_char(&self, idle: bool, chord: super::Chord) -> Option<char> {
+        (idle && self.type_to_search)
+            .then(|| chord.typed_char())
+            .flatten()
     }
 
     /// The screen this map was built for ([`Effective::build_for`]).

@@ -15,7 +15,8 @@
 # No bare letter is ever bound: the source's own "Other
 # keys" table reserves an unmodified letter for quicksearch/quickselect/
 # quickfilter ("foo -> Quick search, quick select or quick filter"), so
-# binding one here would shadow that.
+# binding one here would shadow that. `type_to_search` below is that
+# quicksearch: a letter jumps to the names starting with it.
 #
 # F9 stays `app.terminal`, as the source attests ("F9 -> Terminal"): the
 # other six presets bind F9 to the menu (spec 2026-09-10), but a Krusader
@@ -91,6 +92,7 @@
 # Krusader pauses from its JobMan (the toolbar button), not from a key its
 # documentation names. Both are reached from the palette.
 
+type_to_search = true
 dialog_from = "orthodox"
 
 [global]

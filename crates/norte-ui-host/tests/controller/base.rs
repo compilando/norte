@@ -2243,6 +2243,82 @@ async fn the_quick_search_keeps_the_text_and_filters() {
     assert_eq!(listing(&closed).rows.len(), 3, "the listing is still whole");
 }
 
+/// In a preset with `type_to_search` (Krusader), a letter no binding took
+/// opens the search by itself and JUMPS to the name starting with it, the
+/// same as `ntc`: the listing stays whole and the cursor moves.
+#[tokio::test]
+async fn in_krusader_a_letter_jumps_to_the_name_starting_with_it() {
+    let (host, _snap) = host_krusader("simple").await;
+    let mut sub = host.subscribe();
+
+    host.dispatch(press("n")).await.expect("host alive");
+    host.dispatch(UiAction::Resync).await.expect("host alive");
+    let snap = next_snapshot(&mut sub).await;
+    let view = listing(&snap);
+    let quick = view.quick.clone().expect("the letter opened the search");
+    assert_eq!(quick.query, "n");
+    assert_eq!(quick.mode, "jump");
+    assert_eq!(view.rows.len(), 3, "the listing stays whole");
+    let RowKey(at) = view.cursor.expect("a cursor");
+    let at = usize::try_from(at).expect("fits");
+    assert_eq!(view.rows[at].display_name, "notas.txt");
+}
+
+/// A host on the Krusader preset with `layout`.
+async fn host_krusader(layout: &str) -> (UiHost, norte_ui_host::ViewSnapshot) {
+    UiHost::start(UiHostOptions {
+        backend: fake_tree(),
+        initial_dir: dir(),
+        initial_dir_requested: false,
+        attach: false,
+        locale: "es".to_owned(),
+        keymap: norte_ui_host::keys::keymap_de_preset("krusader").expect("preset"),
+        keymap_viewer: norte_ui_host::keys::keymap_visor_de_preset("krusader").expect("preset"),
+        keymap_dialog: norte_ui_host::keys::preset_dialog_keymap("krusader").expect("preset"),
+        layout: norte_frontend::layout::presets::tree(layout).expect("layout"),
+        viewport: (200, 60),
+        settings: test_settings(),
+        paths: norte_ui_host::settings::HostPaths::default(),
+        theme: norte_ui_host::pickers::HostTheme::default(),
+        user_layouts: Vec::new(),
+        profile: None,
+        columns: norte_ui_host::default_columns(),
+        effects: norte_ui_host::commands::Effects::Full,
+        log_ring: None,
+    })
+    .await
+    .expect("starts")
+}
+
+/// With the focus on a panel that is not a listing, a letter opens NO
+/// search: the host's active slot falls back to the last listing, and the
+/// search would open in a pane the reader is not in, eating the arrows.
+#[tokio::test]
+async fn with_the_focus_off_the_listings_a_letter_opens_nothing() {
+    let (host, snap) = host_krusader("full").await;
+    let mut sub = host.subscribe();
+    let slot = super::attributes_processes::sheet(&snap)
+        .expect("`full` places the sheet")
+        .slot_id;
+    host.dispatch(UiAction::FocusSlot { slot_id: slot })
+        .await
+        .expect("host alive");
+    snapshot_until(&host, &mut sub, "the sheet with focus", |s| {
+        (s.focus == Some(slot)).then_some(())
+    })
+    .await;
+
+    host.dispatch(press("n")).await.expect("host alive");
+    host.dispatch(UiAction::Resync).await.expect("host alive");
+    let after = next_snapshot(&mut sub).await;
+    assert!(
+        super::attributes_processes::primer_listing(&after)
+            .quick
+            .is_none(),
+        "no search opened behind the focused sheet"
+    );
+}
+
 /// Losing the daemon is painted AND said: noticing it only through an icon
 /// is not enough when it happens mid-operation.
 #[tokio::test]

@@ -5,12 +5,29 @@
 //! the rest of the pane, every listing method had to remember it.
 
 use super::{Mode, PaneState, QuickSearch, VPath};
+use crate::nav::Match;
 
 impl PaneState {
     /// Starts the quick search in `mode` over the current entries, folding
     /// with the currently active name reinterpretation (#98/F1).
     pub fn quick_start(&mut self, mode: Mode) {
         self.quick = Some(QuickSearch::new(mode, &self.entries, self.name_encoding));
+    }
+
+    /// A printable key no binding took, in a preset with `type_to_search`:
+    /// opens a quick search that JUMPS to the names starting with it, as
+    /// Krusader does. From then on it is an ordinary quick search. A letter
+    /// no name starts with opens nothing: an empty search would keep the
+    /// arrows until Esc, and the reader never asked for one.
+    pub fn type_to_search(&mut self, c: char) {
+        let mut q =
+            QuickSearch::with_match(Mode::Jump, Match::Prefix, &self.entries, self.name_encoding);
+        q.push_char(c);
+        if q.visible().is_empty() {
+            return;
+        }
+        self.quick = Some(q);
+        self.quick_sync_jump();
     }
 
     /// In [`Mode::Jump`] the REAL cursor follows the quick search's selection

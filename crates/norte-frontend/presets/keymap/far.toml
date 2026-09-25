@@ -6,9 +6,11 @@
 # Home/End) is not itemized in either source — both documents describe only
 # what Far adds on top of the console default, the same gap TC's and
 # Krusader's own sources left — so it is bound the same minimal way. No bare
-# letter is ever bound: Far's own "Fast find" (quicksearch by typing the
-# first letters of a name, @PanelList) claims an unmodified letter, so
-# binding one here would shadow it. F8, Shift+F8 and Shift+Del all bind
+# letter is ever bound: in Far a bare letter goes to the command line. Its
+# "Fast find" (@FastFind, jumping by the first letters of a name) is
+# Alt+letter, a family of chords the grammar cannot bind to one command, so
+# this preset does NOT set `type_to_search` (ADR 0155), which would give the
+# bare letter a meaning Far never gave it. F8, Shift+F8 and Shift+Del all bind
 # `pane.delete`: far-funccmd.txt lists the three together on ONE "Delete"
 # line under the single @DeleteFile topic, differing only in whether the
 # whole panel selection or just the file under the cursor is affected — a

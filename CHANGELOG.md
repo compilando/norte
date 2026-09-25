@@ -9,6 +9,14 @@ independently through `PROTOCOL_VERSION`.
 
 ### Added
 
+- **Type a name to jump to it, in the Krusader preset** (ADR 0155). A letter
+  opens the quick search and moves the cursor to the first name that STARTS
+  with what you typed; up/down walk the other matches and the listing stays
+  whole. Same in `ntc` and the window. Far, Norton and Total Commander send a
+  bare letter to their command line, so their presets do not do it.
+  `Ctrl+F` still searches anywhere in the name. A `keymap.toml` preset opts
+  in with `type_to_search = true`; a user layer cannot set it.
+
 - **`--lang es|en` in `ntc`, `norte` and `norte-gui`**: the language of one
   run, without touching `norte.toml` or the environment. The order is now
   the same in every binary and lives in one place (`Lang::resolve`):

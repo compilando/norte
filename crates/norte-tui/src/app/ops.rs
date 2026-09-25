@@ -227,6 +227,29 @@ impl App {
         self.focused_mut().set_sort(spec);
     }
 
+    /// `type_to_search` (Krusader, Far, Norton): a typed character that no
+    /// binding took, with nothing half-typed (`idle`), opens a quick search
+    /// on the focused listing that jumps to the names starting with it.
+    /// `false` = it was not that, and the key stays discarded.
+    pub fn type_to_search(
+        &mut self,
+        eff: &norte_frontend::keymap::Effective,
+        idle: bool,
+        chord: norte_frontend::keymap::Chord,
+    ) -> bool {
+        let Some(c) = eff.typed_search_char(idle, chord) else {
+            return false;
+        };
+        if !(self.viewer.is_none()
+            && self.key_owner() == crate::app::KeyOwner::Panes
+            && self.focused().quick().is_none())
+        {
+            return false;
+        }
+        self.focused_mut().type_to_search(c);
+        self.focused().quick().is_some()
+    }
+
     /// Opens the properties of the entry under the cursor (#139).
     ///
     /// Returns the path whose size needs counting, if it's a folder: the
@@ -371,6 +394,78 @@ mod tests {
         app.sort_focused_by(SortColumn::Extension);
         assert_eq!(app.focused().sort().column, SortColumn::Extension);
         assert_eq!(app.focused().sort().dir, SortDir::Asc);
+    }
+
+    /// An effective map with and without `type_to_search`.
+    fn eff(type_to_search: bool) -> norte_frontend::keymap::Effective {
+        use norte_frontend::keymap::{Effective, Screen, parse_keymap};
+        let src = format!(
+            "type_to_search = {type_to_search}\n[pane]\nkeymap = [{{ on = [\"f5\"], run = \"pane.copy\" }}]\n"
+        );
+        Effective::build_for(
+            &parse_keymap(&src).unwrap(),
+            &[],
+            &["pane.copy"],
+            Screen::Browse,
+        )
+        .unwrap()
+    }
+
+    fn chord(s: &str) -> norte_frontend::keymap::Chord {
+        norte_frontend::keymap::parse_chord(s).unwrap()
+    }
+
+    /// Krusader: a letter no binding took jumps to the first name STARTING
+    /// with it — `do` lands on `docs`, not on `todo` — and the listing stays
+    /// whole.
+    #[test]
+    fn an_unbound_letter_jumps_to_the_names_starting_with_it() {
+        let mut app = app_with_entries(&["todo", "docs", "dodo"]);
+        assert!(app.type_to_search(&eff(true), true, chord("d")));
+        app.focused_mut().quick_char('o');
+        let at = app.focused().selected().unwrap().path.clone();
+        assert_eq!(at.file_name().unwrap().as_bytes(), b"docs");
+        assert_eq!(
+            app.focused().quick().unwrap().mode(),
+            crate::nav::Mode::Jump
+        );
+    }
+
+    /// It never fires where it was not asked for: a preset without the key,
+    /// a sequence half-typed, a chord with ctrl, a space, or a panel other
+    /// than the listings holding the keys.
+    #[test]
+    fn type_to_search_stays_out_of_everything_else() {
+        let mut app = app_with_entries(&["docs"]);
+        assert!(!app.type_to_search(&eff(false), true, chord("d")), "preset");
+        assert!(
+            !app.type_to_search(&eff(true), false, chord("d")),
+            "pending"
+        );
+        assert!(
+            !app.type_to_search(&eff(true), true, chord("ctrl+d")),
+            "ctrl"
+        );
+        assert!(
+            !app.type_to_search(&eff(true), true, chord("space")),
+            "space"
+        );
+        app.key_owner = crate::app::KeyOwner::Places;
+        assert!(
+            !app.type_to_search(&eff(true), true, chord("d")),
+            "places holds the keys"
+        );
+        app.key_owner = crate::app::KeyOwner::Panes;
+        assert!(app.focused().quick().is_none());
+    }
+
+    /// A letter no name starts with opens nothing: a search with no match
+    /// would keep the arrows until Esc, and the reader never asked for one.
+    #[test]
+    fn a_letter_no_name_starts_with_opens_nothing() {
+        let mut app = app_with_entries(&["docs"]);
+        assert!(!app.type_to_search(&eff(true), true, chord("x")));
+        assert!(app.focused().quick().is_none());
     }
 
     /// And `dirs_first` isn't touched by any sort key: it's a preference,

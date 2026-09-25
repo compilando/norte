@@ -240,6 +240,11 @@ impl Pane {
         self.state.quick_start(mode);
     }
 
+    /// Starts a prefix jump with `c` typed (`type_to_search`). Pure delegate.
+    pub fn type_to_search(&mut self, c: char) {
+        self.state.type_to_search(c);
+    }
+
     /// A character typed with quick search active.
     pub fn quick_char(&mut self, c: char) {
         self.state.quick_char(c);

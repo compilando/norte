@@ -197,6 +197,28 @@ impl Chord {
         (self.mods, self.code)
     }
 
+    /// The character this chord TYPES, if a name could start with it: a
+    /// printable, non-blank character with no modifier (shift is already in
+    /// the character). What `type_to_search` starts a search on.
+    ///
+    /// ```
+    /// use norte_frontend::keymap::parse_chord;
+    ///
+    /// assert_eq!(parse_chord("d").unwrap().typed_char(), Some('d'));
+    /// assert_eq!(parse_chord("D").unwrap().typed_char(), Some('D'));
+    /// assert_eq!(parse_chord("ctrl+d").unwrap().typed_char(), None);
+    /// assert_eq!(parse_chord("space").unwrap().typed_char(), None);
+    /// assert_eq!(parse_chord("f5").unwrap().typed_char(), None);
+    /// ```
+    #[must_use]
+    pub fn typed_char(self) -> Option<char> {
+        let plain = !(self.mods.ctrl || self.mods.alt || self.mods.cmd);
+        match self.code {
+            KeyCode::Char(c) if plain && !c.is_whitespace() && !c.is_control() => Some(c),
+            _ => None,
+        }
+    }
+
     pub(super) fn is_bare_esc(self) -> bool {
         self.code == KeyCode::Esc && self.mods == Mods::default()
     }
