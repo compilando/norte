@@ -706,8 +706,8 @@ Arguments:
   [DIR]  Directory to start in (default: the current directory)
 
 Options:
-      --preset <NAME>    Keymap preset (orthodox|vim|cua|krusader|far|norton|total-commander);
-                         overrides norte.toml
+      --preset <NAME>    Keymap preset: orthodox, vim, cua, krusader, far,
+                         norton or total-commander; overrides norte.toml
       --layout <NAME>    Layout for this run (orthodox|simple|krusader|explorer|full,
                          or one of your own under `layouts/`); overrides norte.toml
       --profile <NAME>   Start in this profile — a directory under `profiles/`
@@ -930,14 +930,21 @@ mod tests {
     /// who reads `--help` to find out what exists.
     #[test]
     fn help_names_every_embedded_preset() {
-        let line = USAGE
+        // The flag's line and its continuation lines (indented past the
+        // flag column), up to the next flag.
+        let entry: String = USAGE
             .lines()
-            .find(|l| l.contains("--preset"))
-            .expect("--preset is in --help");
+            .skip_while(|l| !l.contains("--preset"))
+            .enumerate()
+            .take_while(|(i, l)| *i == 0 || l.starts_with("                         "))
+            .map(|(_, l)| l)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(entry.contains("--preset"), "--preset is in --help");
         for name in norte_frontend::keymap::presets::NAMES {
             assert!(
-                line.contains(name),
-                "--help does not name the {name} preset: {line}"
+                entry.contains(name),
+                "--help does not name the {name} preset: {entry}"
             );
         }
     }
