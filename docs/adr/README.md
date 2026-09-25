@@ -155,3 +155,4 @@ edits.
 | [0152](0152-an-undo-of-a-creation-checks-what-it-is-about-to-delete.md) | An undo of a creation checks what it is about to delete | accepted |
 | [0153](0153-the-subshell-is-moved-through-a-mailbox-not-by-typing.md) | The subshell is moved through a mailbox, not by typing | accepted |
 | [0154](0154-the-source-code-is-written-in-english.md) | The source code is written in English | accepted |
+| [0155](0155-typing-a-name-jumps-to-it-in-the-presets-that-reserve-letters.md) | Typing a name jumps to it, in the presets that reserve letters | accepted |

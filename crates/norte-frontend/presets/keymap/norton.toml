@@ -21,8 +21,9 @@
 # the arrows, but with no plaintext NC.HLP nothing here can attest it. It is
 # bound because a viewer that does not wrap needs both axes; treat it as
 # convention, not transcription. No bare letter is ever bound, matching
-# the other three presets' convention (NC's own quicksearch-by-typing is the
-# feature that makes it necessary here too).
+# the other three presets' convention: in NC a bare letter goes to the DOS
+# command line. NC's speed search is Alt+letter, not a bare letter, so this
+# preset does NOT set `type_to_search` (ADR 0155).
 #
 # `pane.compare-dirs` is deliberately UNBOUND here, for this file's own
 # stated rule: NC's "Compare directories" was a Commands-menu entry and no

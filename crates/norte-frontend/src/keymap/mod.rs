@@ -2269,6 +2269,27 @@ keymap = [ { on = ["ctrl+5"], run = "cursor.down" } ]
         );
     }
 
+    /// `type_to_search` belongs to the preset for the same reason as counts:
+    /// in a layer it would change what every unbound letter does.
+    #[test]
+    fn a_user_layer_cannot_turn_on_type_to_search() {
+        let preset =
+            parse_keymap("[pane]\nkeymap = [ { on = [\"f5\"], run = \"pane.copy\" } ]\n").unwrap();
+        let layer = parse_keymap("type_to_search = true\n").unwrap();
+        let e =
+            Effective::build_for(&preset, &[layer], &["pane.copy"], Screen::Browse).unwrap_err();
+        assert!(
+            matches!(
+                e,
+                KeymapError::WrongLayerKey {
+                    key: "type_to_search",
+                    ..
+                }
+            ),
+            "{e:?}"
+        );
+    }
+
     /// The count POLICY belongs to the preset: a user layer that could flip it
     /// on would silently change what every digit key means.
     #[test]
@@ -2838,6 +2859,43 @@ keymap = [
             let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
                 .unwrap_or_else(|e| panic!("{name}: {e:?}"));
             assert_eq!(eff.counts(), *name == "vim", "preset {name}");
+        }
+    }
+
+    /// Typing a name's initial is Krusader's — its source gives the bare
+    /// letter to it. Not Far's, Norton's or Total Commander's, whose bare
+    /// letter goes to the command line (their search is Alt+letter or
+    /// Ctrl+Alt+letter), and not the three native presets', which bind bare
+    /// letters: there, some letters would run a command and the rest would
+    /// search. And a preset that turns it on
+    /// binds no bare letter or digit in the panels, or that key would never
+    /// reach the search (`*`, `+` and `-` stay: numpad selection, and no
+    /// name is typed starting with them).
+    #[test]
+    fn type_to_search_is_the_imported_presets_and_they_bind_no_bare_letter() {
+        let imported = ["krusader"];
+        let known = preset_commands(Screen::Browse);
+        let known: Vec<&str> = known.iter().map(String::as_str).collect();
+        for name in presets::NAMES {
+            let src = presets::source(name).expect("NAMES resolves");
+            let kf = parse_keymap(src).expect("preset parses");
+            let eff = Effective::build_for(&kf, &[], &known, Screen::Browse)
+                .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            assert_eq!(
+                eff.type_to_search(),
+                imported.contains(name),
+                "preset {name}"
+            );
+            if !eff.type_to_search() {
+                continue;
+            }
+            for (seq, run, _) in eff.bindings_all_seq() {
+                let typed = seq.first().and_then(|c| c.typed_char());
+                assert!(
+                    !typed.is_some_and(char::is_alphanumeric),
+                    "{name}: {seq:?} -> {run} takes a typed letter"
+                );
+            }
         }
     }
 }

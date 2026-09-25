@@ -72,6 +72,11 @@
     "pane": {
       "$ref": "#/$defs/RawSection"
     },
+    "type_to_search": {
+      "default": false,
+      "description": "Whether a printable key with no binding in the panels starts a quick\nsearch that jumps to the names STARTING with it — typing a name's\ninitials, as Krusader does. Opt-in per PRESET: it only makes sense\nwhere no bare letter is bound, or some letters would run commands and\nthe rest would search.",
+      "type": "boolean"
+    },
     "viewer": {
       "$ref": "#/$defs/RawSection"
     }

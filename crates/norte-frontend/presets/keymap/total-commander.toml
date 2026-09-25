@@ -9,7 +9,10 @@
 # mirror the same minimal convention. No bare letter is ever bound: TC
 # redirects an unbound letter straight to the command line (see the source's
 # own "Letter -> Redirected to command line" line), so binding one here would
-# steal a keystroke TC gives to something else.
+# steal a keystroke TC gives to something else. For the same reason this
+# preset does NOT set `type_to_search`, which Krusader does (ADR 0155): a
+# TC letter goes to the command line, and TC's own letter search is the
+# Ctrl+Alt+Letter listed below, which is not one chord.
 #
 # `pane.mirror` is deliberately UNBOUND here (#228). The attested family in
 # that neighbourhood sends the OTHER panel to the directory of the entry under

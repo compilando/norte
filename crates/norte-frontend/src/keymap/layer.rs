@@ -74,6 +74,13 @@ pub struct KeymapFile {
     // `docs/schema/keymap.schema.json`, where our own history is noise.
     #[serde(default)]
     pub(super) counts: bool,
+    /// Whether a printable key with no binding in the panels starts a quick
+    /// search that jumps to the names STARTING with it — typing a name's
+    /// initials, as Krusader does. Opt-in per PRESET: it only makes sense
+    /// where no bare letter is bound, or some letters would run commands and
+    /// the rest would search.
+    #[serde(default)]
+    pub(super) type_to_search: bool,
     #[serde(default)]
     pub(super) global: RawSection,
     #[serde(default)]
@@ -442,6 +449,13 @@ pub(super) fn check_layer_keys(
             return Err(KeymapError::WrongLayerKey {
                 layer: "usuario",
                 key: "counts",
+            });
+        }
+        // Same as `counts`: it changes what every unbound letter does.
+        if layer.type_to_search {
+            return Err(KeymapError::WrongLayerKey {
+                layer: "usuario",
+                key: "type_to_search",
             });
         }
         // Same argument as `counts`, and one notch sharper: `dialog_from` in a

@@ -429,6 +429,9 @@ impl State {
                 Vec::new(),
             );
         };
+        // Read BEFORE the push: a miss that breaks a half-typed sequence is
+        // not a letter typed onto the listing.
+        let idle = self.resolver.pending().is_empty() && self.resolver.count().is_none();
         match self.resolver.push(chord) {
             Resolution::Run { command, count } => {
                 let times = count.times();
@@ -504,19 +507,42 @@ impl State {
                     vec![self.parche(vec![change])],
                 )
             }
-            Resolution::Reset => {
-                let had_pending = self.status.pending.take().is_some();
-                let had_panel = self.whichkey.take().is_some();
-                if had_pending || had_panel {
-                    let changes = vec![
-                        ViewChange::Status(self.status.clone()),
-                        ViewChange::WhichKey { whichkey: None },
-                    ];
-                    return (self.applied(), vec![self.parche(changes)]);
-                }
-                (self.applied(), Vec::new())
+            Resolution::Reset => self.key_missed(idle, chord),
+        }
+    }
+
+    /// A key no binding took. `idle` = nothing was half-typed before it.
+    fn key_missed(
+        &mut self,
+        idle: bool,
+        chord: norte_frontend::keymap::Chord,
+    ) -> (ActionAck, Vec<BridgeEnvelope<UiUpdate>>) {
+        // `type_to_search` (ADR 0155): a letter no binding took opens a
+        // quick search that jumps to the names starting with it — the
+        // terminal does the same. Only with a LISTING focused: `slot_mut`
+        // falls back to the last listing, and a side panel's miss would open
+        // a search in a pane the reader is not in.
+        let listing_focused = self
+            .roles
+            .get(RoleId::Active)
+            .is_some_and(|SlotId(id)| self.slots.contains_key(&id));
+        if listing_focused && let Some(c) = self.resolver.effective().typed_search_char(idle, chord)
+        {
+            self.slot_mut().pane.type_to_search(c);
+            if self.slot().pane.quick().is_some() {
+                return (self.applied(), vec![self.parche_rows()]);
             }
         }
+        let had_pending = self.status.pending.take().is_some();
+        let had_panel = self.whichkey.take().is_some();
+        if had_pending || had_panel {
+            let changes = vec![
+                ViewChange::Status(self.status.clone()),
+                ViewChange::WhichKey { whichkey: None },
+            ];
+            return (self.applied(), vec![self.parche(changes)]);
+        }
+        (self.applied(), Vec::new())
     }
 
     /// The keys while the palette is open.

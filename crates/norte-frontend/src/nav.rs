@@ -20,6 +20,17 @@ pub enum Mode {
     Jump,
 }
 
+/// Where the typed text has to be found in a name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Match {
+    /// Anywhere (`pane.quick-search`).
+    #[default]
+    Contains,
+    /// At the start: typing a name's initials, as Krusader does (the
+    /// keymap's `type_to_search`).
+    Prefix,
+}
+
 /// Name → comparison key: lossy of the last segment, NFC, lowercase, and NFC
 /// AGAIN.
 ///
@@ -89,11 +100,14 @@ fn fold_names(entries: &[Entry], enc: Option<norte_encoding::NameEncoding>) -> V
 }
 
 /// Matching over ALREADY precomputed folds (the keystroke hot path).
-fn matches_folded(query_folded: &str, folds: &[String]) -> Vec<usize> {
+fn matches_folded(query_folded: &str, folds: &[String], matching: Match) -> Vec<usize> {
     folds
         .iter()
         .enumerate()
-        .filter(|(_, f)| f.contains(query_folded))
+        .filter(|(_, f)| match matching {
+            Match::Contains => f.contains(query_folded),
+            Match::Prefix => f.starts_with(query_folded),
+        })
         .map(|(i, _)| i)
         .collect()
 }
@@ -128,6 +142,7 @@ pub fn matches(query: &[u8], entries: &[Entry]) -> Vec<usize> {
 pub struct QuickSearch {
     query: Vec<u8>,
     mode: Mode,
+    matching: Match,
     /// Comparison keys per entry (index-parallel to `entries`), recomputed
     /// ONCE per listing mutation (`new`/`refresh`), not per keystroke (#77).
     folds: Vec<String>,
@@ -148,9 +163,39 @@ impl QuickSearch {
     /// filter matches against the PAINTED text.
     #[must_use]
     pub fn new(mode: Mode, entries: &[Entry], enc: Option<norte_encoding::NameEncoding>) -> Self {
+        Self::with_match(mode, Match::Contains, entries, enc)
+    }
+
+    /// [`QuickSearch::new`] choosing where the text must match.
+    ///
+    /// ```
+    /// use norte_frontend::nav::{Match, Mode, QuickSearch};
+    /// use norte_proto::{Entry, EntryKind, VPath};
+    ///
+    /// let e = |w: &str| Entry {
+    ///     attrs: Default::default(),
+    ///     path: VPath::parse(w).unwrap(),
+    ///     kind: EntryKind::File,
+    ///     size: None,
+    ///     mtime_ms: None,
+    /// };
+    /// let entries = [e("mem:///todo"), e("mem:///docs")];
+    /// let mut q = QuickSearch::with_match(Mode::Jump, Match::Prefix, &entries, None);
+    /// q.push_char('d');
+    /// q.push_char('o');
+    /// assert_eq!(q.visible(), &[1], "`todo` contains `do` but does not start with it");
+    /// ```
+    #[must_use]
+    pub fn with_match(
+        mode: Mode,
+        matching: Match,
+        entries: &[Entry],
+        enc: Option<norte_encoding::NameEncoding>,
+    ) -> Self {
         let mut q = Self {
             query: Vec::new(),
             mode,
+            matching,
             folds: fold_names(entries, enc),
             visible: Vec::new(),
             pos: 0,
@@ -179,7 +224,7 @@ impl QuickSearch {
         self.visible = if self.query.is_empty() {
             (0..self.folds.len()).collect()
         } else {
-            matches_folded(&fold(&self.query), &self.folds)
+            matches_folded(&fold(&self.query), &self.folds, self.matching)
         };
     }
 
