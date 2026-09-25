@@ -97,18 +97,57 @@ impl PreviewerGuest for Syntect {
                 let ranges = hl
                     .highlight_line(line, &ps)
                     .map_err(|e| format!("syntect: {e}"))?;
-                Ok(ranges
-                    .into_iter()
-                    .map(|(style, piece)| Span {
-                        text: piece.to_string(),
-                        role: None,
-                        fg: Some((style.foreground.r, style.foreground.g, style.foreground.b)),
-                        bg: None,
-                    })
-                    .collect())
+                let mut spans: Vec<Span> = Vec::new();
+                for (style, piece) in ranges {
+                    let fg = (style.foreground.r, style.foreground.g, style.foreground.b);
+                    match spans.last_mut() {
+                        // Neighbours of one colour are one span: a minified
+                        // line has thousands of tokens and a handful of colours.
+                        Some(last) if last.fg == Some(fg) => last.text.push_str(piece),
+                        _ => spans.push(Span {
+                            text: piece.to_string(),
+                            role: None,
+                            fg: Some(fg),
+                            bg: None,
+                        }),
+                    }
+                }
+                Ok(fit_line(spans, line))
             })
             .collect()
     }
+}
+
+/// The host's caps per line (`norte-plugin-host`, ADR 0037): a line over
+/// either is REJECTED with the whole preview, and the viewer falls back to
+/// no highlighting at all.
+const MAX_SPANS_PER_LINE: usize = 256;
+const MAX_SPAN_BYTES: usize = 4 * 1024;
+
+/// A line the host will accept: the highlighted spans if they fit, otherwise
+/// the line uncoloured in chunks that do — one dense line loses its colour,
+/// not the whole file's. Past 256 chunks (1 MiB in one line) the rest of that
+/// line is not shown; the host's total cap is 4 MiB anyway.
+fn fit_line(spans: Vec<Span>, line: &str) -> Vec<Span> {
+    if spans.len() <= MAX_SPANS_PER_LINE && spans.iter().all(|s| s.text.len() <= MAX_SPAN_BYTES) {
+        return spans;
+    }
+    let mut chunks = Vec::new();
+    let mut rest = line;
+    while !rest.is_empty() && chunks.len() < MAX_SPANS_PER_LINE {
+        let mut end = rest.len().min(MAX_SPAN_BYTES);
+        while !rest.is_char_boundary(end) {
+            end -= 1;
+        }
+        chunks.push(Span {
+            text: rest[..end].to_string(),
+            role: None,
+            fg: None,
+            bg: None,
+        });
+        rest = &rest[end..];
+    }
+    chunks
 }
 
 /// The syntaxes and the theme both renders use.

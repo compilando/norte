@@ -111,6 +111,27 @@ fn plugin_preview_syntect_e2e_real_wasm() {
         spans.iter().any(|s| s.fg.is_some()),
         "the highlighting travels in fg: {lines:?}"
     );
+    // A minified line: thousands of tokens on one line. One span per token
+    // broke the host's 256-spans-per-line cap and the whole preview was
+    // rejected; it has to come back, coloured or not.
+    let minified = format!(
+        "{{{}}}",
+        (0..3000)
+            .map(|i| format!("\"k{i}\":{i}"))
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let (_, _, wasm2, caps2, _) = reg
+        .resolve_previewer("application/json")
+        .expect("still consented");
+    let dense = rt
+        .instantiate(&wasm2, caps2)
+        .expect("instantiate the previewer")
+        .render_styled_preview("application/json", minified.as_bytes(), None)
+        .expect("a minified line still renders");
+    let back: String = dense.iter().flatten().map(|s| s.text.as_str()).collect();
+    assert_eq!(back, minified, "the whole line comes back");
+
     let text: String = spans.iter().map(|s| s.text.as_str()).collect();
     assert!(
         text.contains("name") && text.contains("42"),
