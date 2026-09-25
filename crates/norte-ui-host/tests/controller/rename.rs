@@ -1580,7 +1580,10 @@ async fn with_a_plan_in_flight_escape_closes_the_palette() {
     f.put("mem:///casa", vec![(b"ep1.mkv".to_vec(), false)]);
     f.plan_ia = Some(vec![("ep1.mkv".to_owned(), "ep01.mkv".to_owned())]);
     f.verdict = Some(verdict_ok(&pares));
-    f.delay_ia_ms = 120;
+    // HELD, not delayed: a clock-bound "still thinking" lost the same race
+    // `with_a_plan_in_flight_escape_cancels_the_filter` explains.
+    let gate = Arc::new(crate::backend_fake::Gate::default());
+    f.gate_ia = Some(Arc::clone(&gate));
     let backend = Arc::new(f);
     let (h, _snap) = host_tree(Arc::clone(&backend)).await;
     let mut sub = h.subscribe();
@@ -1601,8 +1604,13 @@ async fn with_a_plan_in_flight_escape_closes_the_palette() {
     let snapshot = next_snapshot(&mut sub).await;
     assert!(snapshot.palette.is_none(), "Escape closed the palette");
 
-    // And the plan is still alive: it arrives and opens.
-    let r = next_revision(&mut sub).await.expect("the plan survived");
+    // And the plan is still alive: released now, it lands. Through the
+    // snapshot, for the reason the filter test gives.
+    gate.open();
+    let r = snapshot_until(&h, &mut sub, "the plan survived", |snapshot| {
+        snapshot.ai_rename.clone()
+    })
+    .await;
     assert_eq!(r.total, 1);
 }
 
