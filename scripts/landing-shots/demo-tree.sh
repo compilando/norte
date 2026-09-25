@@ -144,6 +144,11 @@ blob Downloads/norte-0.3.0-alpha.4.AppImage 25165824
 (cd Photos && zip -qr ../Downloads/wallpaper-pack.zip "2026-01 Tromsø")
 tar -C projects -cf - aurora | zstd -q -o Downloads/aurora-backup.tar.zst
 # bash's \u reads the passwd entry, not $USER: the prompt names ada by hand.
+# Fonts shoot.sh fetched (a CJK one), where fontconfig looks for a user's.
+if [ -d "${LANDING_SHOTS_FONTS:-}" ]; then
+	mkdir -p .local/share/fonts
+	cp "$LANDING_SHOTS_FONTS"/* .local/share/fonts/
+fi
 text .bashrc "export EDITOR=hx
 PS1='\\[\\e[1;32m\\]ada@norte\\[\\e[0m\\]:\\[\\e[1;34m\\]\\w\\[\\e[0m\\]\\$ '"
 

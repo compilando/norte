@@ -113,9 +113,9 @@ const en = {
       },
       {
         scene: "code",
-        kicker: "Highlighting",
-        title: "Data and markup, highlighted.",
-        body: "JSON, HTML, XML, CSS and JavaScript through syntect, running as a WASM plugin that reads that one file and nothing else.",
+        kicker: "Code",
+        title: "Source code, highlighted.",
+        body: "Rust, Python, Go, C, Java, shell, YAML, JSON and more through syntect, running as a WASM plugin that reads that one file and nothing else.",
         keys: ["F3"],
       },
       {
@@ -363,9 +363,9 @@ const es: Copy = {
       },
       {
         scene: "code",
-        kicker: "Resaltado",
-        title: "Datos y marcado, resaltados.",
-        body: "JSON, HTML, XML, CSS y JavaScript con syntect, que corre como plugin WASM y lee ese fichero y nada más.",
+        kicker: "Código",
+        title: "El código fuente, resaltado.",
+        body: "Rust, Python, Go, C, Java, shell, YAML, JSON y más con syntect, que corre como plugin WASM y lee ese fichero y nada más.",
         keys: ["F3"],
       },
       {

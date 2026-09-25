@@ -1,5 +1,4 @@
 # The window's tour, recorded as a video (RECORD=…) with a still per stop.
-# Marking by keyboard is left out: the window did not mark under xdotool (#378).
 run projects/aurora
 wait 2
 keys Home Down Down Down Down Down Down

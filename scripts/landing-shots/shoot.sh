@@ -24,6 +24,16 @@ for tool in bwrap tmux magick zip zstd; do
 	command -v "$tool" >/dev/null || { echo "shoot.sh: needs $tool" >&2; exit 1; }
 done
 [ -x "$build/ntc" ] && [ -x "$build/norte" ] || { echo "shoot.sh: build ntc and norte first" >&2; exit 1; }
+# A CJK font for ada, so 東京 is not two boxes in the window: the machine
+# taking the shots may have none, and ada's home is all the sandbox sees.
+cjk=$work/fonts/NotoSansJP-Regular.otf
+if [ ! -s "$cjk" ]; then
+	mkdir -p "$work/fonts"
+	curl -fsSL -o "$cjk" \
+		https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/JP/NotoSansJP-Regular.otf ||
+		echo "shoot.sh: no CJK font; 東京 will be boxes in the window" >&2
+fi
+export LANDING_SHOTS_FONTS=$work/fonts
 mkdir -p "$bin"
 for b in ntc norte norte-gui; do
 	if [ -x "$build/$b" ]; then cp "$build/$b" "$bin/"; fi

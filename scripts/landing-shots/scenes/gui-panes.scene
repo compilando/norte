@@ -1,5 +1,6 @@
-# The window's hero still, once per theme: the photos on the right, the
-# cursor on one of them, the Places sidebar open.
+# The window's hero still, once per theme: the photos on the right with two
+# marked, the Places sidebar, and the docked viewer showing the photo under
+# the cursor.
 run projects/aurora
 wait 2
 keys Tab
@@ -12,7 +13,12 @@ open
 keys Down
 open
 wait 2
-keys Down
+# Tromsø is .., aurora-001, aurora-002, aurora-003, fjord.
+keys Down Down
+keys Insert
+keys Insert
+keys Up Up Up
 keys M-b
-wait 2
+keys M-q
+wait 3
 shot panes

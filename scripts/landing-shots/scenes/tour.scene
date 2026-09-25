@@ -10,16 +10,18 @@ wait 1.2
 frame
 shot markdown
 keys Escape
-# stations.json, the 8th row, highlighted by the syntect plugin. Not
-# src/main.rs: the previewer gets no file name and `.rs` arrives as
-# text/plain, so Rust comes out uncoloured (#379).
-keys Home Down Down Down Down Down Down Down
+# src is .., lib.rs, main.rs, station.rs: main.rs, highlighted by syntect.
+keys Home Down
+open
+keys Down Down
 keys F3
 # The highlighter compiles its grammar on first use.
 wait 4
 frame
 shot code
 keys Escape
+keys Home
+open
 # The disk map of ada's home, measured and painted.
 keys Home
 open

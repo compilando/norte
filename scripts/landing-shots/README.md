@@ -30,7 +30,7 @@ left unapproved: `scenes/grant.scene` photographs the question.
 **Never edit `shoot.sh` while a run is going**: bash reads a script as it
 runs it. The scene files are read per step too; edit them between runs.
 
-**Known product bugs the scenes step around**, each noted where it happens:
-in the window, marking by keyboard under xdotool (#378) and the docked
-viewer's striped image (#377). When one is fixed, put its scene back — as
-the disk map (#372) and the highlighted code (#373) were.
+**A scene that steps around a bug says so, with the issue.** None does
+today: the disk map (#372), the highlighted code (#373, #379), the marks
+and the docked viewer in the window (#377, #378) were all put back once
+fixed. Shooting found nine bugs; look at the shots as a user would.
