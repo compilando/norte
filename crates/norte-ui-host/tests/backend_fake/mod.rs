@@ -299,19 +299,17 @@ pub struct Fake {
     /// Which renamer was requested, with which names: `(plugin, renamer,
     /// names)`.
     pub renamers_requests: std::sync::Mutex<Vec<(String, String, Vec<String>)>>,
-    /// How long the model TAKES. It is what opens the window in which the
-    /// reader can dismiss the review before the plan arrives.
-    pub delay_ia_ms: u64,
     /// Holds back the AI plan until the test opens it.
     ///
-    /// `delay_ia_ms` simulates latency, and that is good for seeing what
-    /// the window does WHILE the model thinks. What it is not good for is
-    /// synchronizing: a test that needs the plan to stay in flight while it
-    /// types is betting that its keystrokes take less time than the clock,
-    /// and under load that bet loses. With the gate, "still thinking" is a
-    /// fact and not a time window. Same latch [`Gate`] uses for the drain,
-    /// and for the same reason.
+    /// There is deliberately no latency knob for the model: a test that
+    /// needs the plan in flight while it types would be betting its
+    /// keystrokes beat the clock, and under load that bet lost five times.
+    /// With the gate, "still thinking" is a fact and not a time window. Same
+    /// latch [`Gate`] uses for the drain, and for the same reason.
     pub gate_ia: Option<Arc<Gate>>,
+    /// One gate per request, in order, for tests that release one plan and
+    /// hold the next. A request finding the queue empty is not held.
+    pub gates_ia: std::sync::Mutex<std::collections::VecDeque<Arc<Gate>>>,
     /// The instructions that were requested, in order.
     pub instructions: std::sync::Mutex<Vec<String>>,
     /// The NAMES that travelled with each plan (#121): empty = the whole
@@ -2217,8 +2215,8 @@ impl HostBackend for Fake {
         self.names_ia.lock().expect("nombres_ia").push(names);
         self.heartbeat();
         let plan = self.plan_ia.clone();
-        let delay = self.delay_ia_ms;
         let gate = self.gate_ia.clone();
+        let own_gate = self.gates_ia.lock().expect("gates_ia").pop_front();
         // Requesting a plan is a READ: the model mutates nothing. It counts
         // toward the same total as listings, which is what lets you wait for
         // "nothing in flight" without counting each case's responses by
@@ -2233,8 +2231,8 @@ impl HostBackend for Fake {
             if let Some(gate) = gate {
                 gate.wait().await;
             }
-            if delay > 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
+            if let Some(gate) = own_gate {
+                gate.wait().await;
             }
             served.fetch_add(1, Ordering::SeqCst);
             pulse.notify_waiters();
